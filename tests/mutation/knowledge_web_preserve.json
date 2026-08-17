@@ -1,0 +1,128 @@
+[
+  {
+    "name": "tier family-A :: a torn byte empties the whole tier read again",
+    "file": "src/knowledge_web.py",
+    "anchor": "        text = _store_text(path)\n    except FileNotFoundError:\n        return []\n    except OSError as exc:",
+    "replacement": "        text = path.read_text(encoding=\"utf-8\")\n    except Exception:\n        return []\n    except OSError as exc:",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "tier destruction :: the quarantine goes blind on a torn byte, so the rebuild wipes the tier",
+    "file": "src/knowledge_web.py",
+    "anchor": "    try:\n        text = _store_text(path)\n    except FileNotFoundError:\n        return []\n    for line in text.splitlines():",
+    "replacement": "    try:\n        text = path.read_text(encoding=\"utf-8\")\n    except Exception:\n        return []\n    for line in text.splitlines():",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "launder :: the quarantine round trip accepts a byte-tainted row",
+    "file": "src/knowledge_web.py",
+    "anchor": "            d = _loads_clean(line)\n            tl = TieredLesson(**{k: d[k] for k in\n                                 TieredLesson.__dataclass_fields__ if k in d})",
+    "replacement": "            d = json.loads(line)\n            tl = TieredLesson(**{k: d[k] for k in\n                                 TieredLesson.__dataclass_fields__ if k in d})",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "launder :: the tier read accepts a byte-tainted row into the corpus",
+    "file": "src/knowledge_web.py",
+    "anchor": "            d = _loads_clean(line)\n            tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})",
+    "replacement": "            d = json.loads(line)\n            tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "read :: the tier's skip count is computed and never announced",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if skipped:\n        log.warning(\"load_tiered_lessons(%s): %d row(s) in %s unparseable or \"",
+    "replacement": "    if False:\n        log.warning(\"load_tiered_lessons(%s): %d row(s) in %s unparseable or \"",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "stranded :: the mutate rebuild drops rows the quarantine could not move",
+    "file": "src/knowledge_web.py",
+    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "replacement": "        _quarantine_unparseable(path)\n        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "bytes :: the mutate write stops pairing surrogateescape with the byte-safe read",
+    "file": "src/knowledge_web.py",
+    "anchor": "        lessons = mutate(lessons)\n        atomic_write(path,\n                     \"\".join(json.dumps(asdict(tl)) + \"\\n\" for tl in lessons)\n                     + \"\".join(stranded),\n                     errors=\"surrogateescape\")",
+    "replacement": "        lessons = mutate(lessons)\n        atomic_write(path,\n                     \"\".join(json.dumps(asdict(tl)) + \"\\n\" for tl in lessons)\n                     + \"\".join(stranded))",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "bytes :: the sidecar append decodes strictly, so quarantine always fails on the very rows it exists for",
+    "file": "src/knowledge_web.py",
+    "anchor": "        with side.open(\"a\", encoding=\"utf-8\", errors=\"surrogateescape\") as fh:",
+    "replacement": "        with side.open(\"a\", encoding=\"utf-8\") as fh:",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "stranded :: the quarantine failure path reports the stranded rows as safely moved",
+    "file": "src/knowledge_web.py",
+    "anchor": "                    path.name, len(moved), exc)\n        return moved",
+    "replacement": "                    path.name, len(moved), exc)\n        return []",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "bump family-B :: the node bump decodes strictly again (raises past except OSError)",
+    "file": "src/knowledge_web.py",
+    "anchor": "                lines = _store_text(p).splitlines()",
+    "replacement": "                lines = p.read_text(encoding=\"utf-8\").splitlines()",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "launder :: the node bump accepts a byte-tainted target row",
+    "file": "src/knowledge_web.py",
+    "anchor": "                        d = _loads_clean(stripped)",
+    "replacement": "                        d = json.loads(stripped)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "bytes :: the node bump write stops pairing surrogateescape",
+    "file": "src/knowledge_web.py",
+    "anchor": "            atomic_write(p, \"\\n\".join(out) + (\"\\n\" if out else \"\"),\n                         errors=\"surrogateescape\")",
+    "replacement": "            atomic_write(p, \"\\n\".join(out) + (\"\\n\" if out else \"\"))",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "promote family-B :: the candidate scan decodes strictly again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for d in _read_store(p, \"promote_knowledge_candidates\"):",
+    "replacement": "    for _line in p.read_text(encoding=\"utf-8\").splitlines():\n        _line = _line.strip()\n        if not _line:\n            continue\n        d = json.loads(_line)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "nodes family-B :: the node loader decodes strictly again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for d in _read_store(p, \"load_knowledge_nodes\"):",
+    "replacement": "    for _line in p.read_text(encoding=\"utf-8\").splitlines():\n        _line = _line.strip()\n        if not _line:\n            continue\n        d = json.loads(_line)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "edges family-B :: the edge loader decodes strictly again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for d in _read_store(p, \"load_knowledge_edges\"):",
+    "replacement": "    for _line in p.read_text(encoding=\"utf-8\").splitlines():\n        _line = _line.strip()\n        if not _line:\n            continue\n        d = json.loads(_line)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "archive family-A :: a torn archive reads as empty again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for rec in _read_store(path, \"_load_archived_lessons\"):",
+    "replacement": "    try:\n        _recs = [json.loads(l) for l in path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        return []\n    for rec in _recs:",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "remint family-A :: a torn archive silently erases the strike lineage again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for rec in _read_store(path, \"_remint_watch_stamp\"):",
+    "replacement": "    try:\n        _recs = [json.loads(l) for l in path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        return None\n    for rec in _recs:",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "canon family-A :: torn canon stats read as empty again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for e in _read_store(path, \"_load_canon_stats\"):",
+    "replacement": "    try:\n        _rows = [json.loads(l) for l in path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        return stats\n    for e in _rows:",
+    "tests": "tests/test_knowledge_web.py"
+  }
+]

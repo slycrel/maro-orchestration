@@ -2009,3 +2009,228 @@ class TestPromoteKnowledgeCandidates:
         assert ctx["node_id"] == "cand1"
         assert ctx["times_applied"] == 3
         assert ctx["confidence"] == pytest.approx(0.45)
+
+
+# ---------------------------------------------------------------------------
+# Byte-safety: one crash-torn line must cost one row, never the store
+# (silent-drop arc, 2026-08-17 — knowledge_web chunk)
+# ---------------------------------------------------------------------------
+
+_TORN = b'{"torn": "\xff'  # raw non-UTF-8 byte: fails strict decode
+
+def _row_bytes(i=0, tier="medium", **over):
+    d = {"lesson_id": f"L{i}", "lesson": f"text {i}", "task_type": "general",
+         "outcome": "done", "tier": tier, "source_goal": "g",
+         "confidence": 0.8, "score": 5.0, "last_reinforced": "2026-08-15"}
+    d.update(over)
+    return json.dumps(d).encode()
+
+
+class TestTheTierSurvivesATornByte:
+    """Before 2026-08-17 one torn byte was fatal twice over: the strict
+    whole-file read made load_tiered_lessons return [] (outer except
+    swallowed the UnicodeDecodeError — 0 of 3 healthy rows, probed), and
+    _mutate_tiered_lessons then rebuilt the file from that empty load —
+    every reinforcement/GC/promotion DESTROYED the whole tier (573 bytes
+    → 0, probed). _quarantine_unparseable was equally blind, so the
+    sidecar never fired."""
+
+    def test_a_torn_byte_costs_one_row_not_the_tier(self, caplog):
+        import logging
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\n".join(_row_bytes(i) for i in range(3))
+                         + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            got = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True)
+        assert len(got) == 3
+        assert any("load_tiered_lessons" in r.message and "1 row" in r.message
+                   for r in caplog.records)
+
+    def test_a_clean_store_loads_quietly(self, caplog):
+        import logging
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n")
+        with caplog.at_level(logging.WARNING):
+            got = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True)
+        assert len(got) == 1
+        assert not caplog.records
+
+    def test_a_mutate_quarantines_the_torn_line_and_keeps_the_healthy(self):
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\n".join(_row_bytes(i) for i in range(3))
+                         + b"\n" + _TORN + b"\n")
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        after = path.read_bytes()
+        after.decode("utf-8")  # live file is clean again — no raise
+        assert sum(1 for l in after.splitlines() if b"lesson_id" in l) == 3
+        side = path.with_suffix(path.suffix + ".unparseable")
+        assert _TORN in side.read_bytes()  # original bytes, verbatim
+
+    def test_a_tainted_but_parseable_row_is_quarantined_not_laundered(self):
+        # A torn line can still be structurally valid JSON. Parsing it and
+        # re-dumping would emit the surrogate as a clean ASCII escape —
+        # silencing the corruption signal forever (the launder path).
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tainted = _row_bytes(9).replace(b"text 9", b"\xff")
+        path.write_bytes(_row_bytes(0) + b"\n" + tainted + b"\n")
+        # The pure read must also refuse it: a lesson whose text is decode
+        # garbage would otherwise ride straight into prompt injection.
+        assert [t.lesson_id for t in
+                load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True)] == ["L0"]
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        side = path.with_suffix(path.suffix + ".unparseable")
+        assert tainted in side.read_bytes()
+        path.read_bytes().decode("utf-8")  # live store clean — no raise
+
+    def test_stranded_rows_ride_the_rebuild_when_the_sidecar_fails(self, monkeypatch):
+        # The quarantine's failure path promises "leaving them in place
+        # rather than risk losing them" — the rebuild must honor that.
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n" + _TORN + b"\n")
+        real_open = Path.open
+
+        def deny_append(self, mode="r", *a, **k):
+            if "a" in mode:
+                raise OSError("sidecar disk full")
+            return real_open(self, mode, *a, **k)
+
+        monkeypatch.setattr(Path, "open", deny_append)
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        after = path.read_bytes()
+        assert _TORN in after            # preserved in place, verbatim
+        assert b'"L0"' in after          # healthy row also survived
+
+    def test_an_unreadable_store_aborts_the_mutate_instead_of_wiping_it(self, monkeypatch):
+        # Proceeding past a failed read means rebuilding from nothing — the
+        # exact empty-write destruction this fix removed. Abort loudly.
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = _row_bytes(0) + b"\n"
+        path.write_bytes(content)
+
+        def boom(_p):
+            raise OSError("transient I/O error")
+
+        monkeypatch.setattr(kw, "_store_text", boom)
+        with pytest.raises(OSError):
+            kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        monkeypatch.undo()
+        assert path.read_bytes() == content  # untouched
+
+
+class TestNodeRewritesPreserveWhatTheyCannotParse:
+    """Pins the two REVIEWED census entries in knowledge_web: the node-store
+    rewrites re-emit unmatched/unparseable lines verbatim, byte-safely."""
+
+    def test_bump_edits_the_target_and_keeps_the_torn_line(self):
+        p = kw._knowledge_nodes_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        node = json.dumps({"node_id": "N1", "node_type": "insight",
+                           "title": "t", "description": "d"}).encode()
+        p.write_bytes(node + b"\n" + _TORN + b"\n")
+        kw._bump_node_times_applied(["N1"])
+        after = p.read_bytes()
+        assert _TORN in after
+        assert b'"times_applied": 1' in after
+        with pytest.raises(UnicodeDecodeError):
+            after.decode("utf-8")  # the corruption signal is intact
+
+    def test_bump_never_launders_a_tainted_target_row(self):
+        p = kw._knowledge_nodes_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tainted = b'{"node_id": "N1", "node_type": "insight", "title": "\xff", "description": "d"}'
+        p.write_bytes(tainted + b"\n")
+        kw._bump_node_times_applied(["N1"])
+        assert p.read_bytes() == tainted + b"\n"  # untouched, unbumped
+
+    def test_promotion_flips_the_candidate_and_keeps_the_torn_line(self):
+        p = kw._knowledge_nodes_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cand = json.dumps({"node_id": "C1", "node_type": "insight",
+                           "title": "t", "description": "d",
+                           "status": "candidate", "times_applied": 2,
+                           "confidence": 0.4}).encode()
+        p.write_bytes(cand + b"\n" + _TORN + b"\n")
+        promoted = kw.promote_knowledge_candidates(adapter=None)
+        assert promoted == ["C1"]
+        after = p.read_bytes()
+        assert _TORN in after
+        assert b'"status": "active"' in after
+
+
+class TestTheKnowledgeLoadersAnnounceTheirLoss:
+    """The four pure readers used to swallow a torn byte as an empty (or
+    truncated) corpus with no announcement; the node/edge loaders RAISED
+    UnicodeDecodeError into their callers instead (probed 2026-08-17)."""
+
+    def _warned(self, caplog, what):
+        return any(what in r.message and "undecodable" in r.message
+                   for r in caplog.records)
+
+    def test_node_loader_returns_healthy_rows_and_warns(self, caplog):
+        import logging
+        p = kw._knowledge_nodes_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        node = json.dumps({"node_id": "N1", "node_type": "insight",
+                           "title": "t", "description": "d"}).encode()
+        p.write_bytes(node + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            nodes = kw.load_knowledge_nodes(status=None)
+        assert [n.node_id for n in nodes] == ["N1"]
+        assert self._warned(caplog, "load_knowledge_nodes")
+
+    def test_edge_loader_returns_healthy_rows_and_warns(self, caplog):
+        import logging
+        p = kw._knowledge_edges_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        edge = json.dumps({"source_id": "N1", "target_id": "N2",
+                           "relation": "supports"}).encode()
+        p.write_bytes(edge + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            edges = kw.load_knowledge_edges()
+        assert len(edges) == 1
+        assert self._warned(caplog, "load_knowledge_edges")
+
+    def test_archive_loader_survives_and_warns(self, caplog):
+        import logging
+        p = kw._lessons_archive_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        row = json.loads(_row_bytes(0))
+        row["archived_reason"] = "decay_gc"
+        p.write_bytes(json.dumps(row).encode() + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            got = kw._load_archived_lessons()
+        assert len(got) == 1
+        assert self._warned(caplog, "_load_archived_lessons")
+
+    def test_remint_lineage_survives_a_torn_archive(self, caplog):
+        # The remint-watch scan must still recognize a demoted lineage when
+        # the archive carries a torn line — the old shape returned None
+        # silently, erasing the strike history the Δ-gate depends on.
+        import logging
+        p = kw._lessons_archive_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        row = json.loads(_row_bytes(0))
+        row.update(archived_reason="decay_gc", archived_at="2026-08-01",
+                   delta_evidence={"route": "effect-demote"})
+        p.write_bytes(json.dumps(row).encode() + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            stamp = kw._remint_watch_stamp(row["lesson"], row["task_type"])
+        assert stamp is not None and stamp.get("strikes") == 1
+        assert self._warned(caplog, "_remint_watch_stamp")
+
+    def test_canon_stats_survives_and_warns(self, caplog):
+        import logging
+        p = kw._canon_stats_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b'{"lesson_id": "L1", "task_type": "build"}\n'
+                      + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            stats = kw._load_canon_stats()
+        assert set(stats) == {"L1"}
+        assert self._warned(caplog, "_load_canon_stats")

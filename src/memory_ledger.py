@@ -320,109 +320,22 @@ def append_task_ledger(entry: TaskLedgerEntry) -> None:
         log.debug("append_task_ledger: write failed: %s", exc)
 
 
-def _read_store(path: Path, what: str) -> List[Dict[str, Any]]:
-    """Every JSON object in a JSONL store, with any loss announced.
-
-    Goes through `jsonl_utils` so one torn byte costs one record instead of
-    the whole file. The loaders in this module used to call
-    `path.read_text()` on the entire file inside a broad `try`, which turned
-    a single non-UTF-8 byte into one of two failures, both verified by probe
-    2026-08-17 against a 41-row fixture:
-
-      * an EMPTY corpus, silently — `load_lessons`, `load_outcomes`,
-        `load_task_ledger` and `load_compressed_batches` each returned []
-        for a file holding 40 healthy rows, because `read_text` raised
-        before the loop and the outer `except Exception: pass` swallowed it;
-      * an uncaught `UnicodeDecodeError` in the CALLER —
-        `load_outcome_by_loop_id`, `outcome_row_has_step_lessons` and
-        `load_step_traces` guarded with `except OSError`, and a decode
-        error is a ValueError. (The first two were probed directly; the
-        third had the identical guard shape — adversarial review 2026-08-17
-        caught that the original count of two understated the family.)
-
-    Same Tier-0 #3 failure `jsonl_utils` was written to end, still live in
-    the flat lane because these loaders predate it.
-    """
-    from jsonl_utils import read_jsonl_tail_counted
-    rows, report = read_jsonl_tail_counted(path)
-    if report:
-        log.warning("%s: %s (%s)", what, report.summary(), path)
-    return rows
-
-
-def _store_text(path: Path) -> str:
-    """Whole-store text with undecodable bytes carried as lone surrogates.
-
-    The in-place stampers rewrite by rejoining every line, which only
-    preserves a torn line if the read survives it. A strict decode does
-    not: before this (2026-08-17 adversarial round), one non-UTF-8 byte
-    anywhere in outcomes.jsonl made all six stampers raise
-    UnicodeDecodeError — `except OSError` does not catch a ValueError —
-    so a single crash-torn append disabled verdict/lesson/supersede
-    stamping on that store until someone repaired the file by hand.
-    surrogateescape pairs with atomic_write's encoder (see file_lock) to
-    round-trip those bytes verbatim; json.loads on the affected line
-    fails like any malformed row, so the scan skips it and the rejoin
-    keeps it. Raises FileNotFoundError like read_text — callers keep
-    their existing guard.
-    """
-    return path.read_bytes().decode("utf-8", errors="surrogateescape")
-
-
-def _loads_clean(s: str):
-    """json.loads that refuses byte-tainted lines.
-
-    A line whose bytes were not valid UTF-8 reaches the per-line scanners
-    as text carrying lone surrogates (U+DC80–U+DCFF, from _store_text /
-    locked_rmw's surrogateescape decode). Such a line can still be
-    STRUCTURALLY valid JSON — `{"goal": "\\udcff"}` parses — and round 2
-    of the 2026-08-17 adversarial review showed what happens next: a
-    rewrite path that parses it re-serializes with json.dumps, which
-    emits the surrogate as a clean ASCII escape. The file decodes
-    strictly ever after, the undecodable count that announced the
-    corruption goes silent, and garbage text persists as legitimate
-    content — a lie, where the doctrine demands an announced loss.
-
-    So the scanners must treat "byte-tainted" exactly like "unparseable":
-    skip it, preserve the raw line verbatim, let the loaders keep
-    announcing it. Raising JSONDecodeError (not a bare ValueError) means
-    every existing `except json.JSONDecodeError` skip branch handles
-    taint with no new code at the call sites.
-    """
-    if any("\udc80" <= ch <= "\udcff" for ch in s):
-        raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
-                                   "bytes carried as surrogates)", s, 0)
-    return json.loads(s)
-
-
-def _rows_as(path: Path, what: str, build) -> list:
-    """`_read_store` plus a per-row constructor, counting schema drift.
-
-    Two different losses, reported separately on purpose: a row that is not
-    JSON is corruption, a row that is JSON but the current dataclass rejects
-    is schema drift. Collapsing them hides which one is happening, and drift
-    is the one that grows quietly as the schema moves.
-
-    The catch is deliberately broad — one weird row must never abort the
-    load, which is this module's whole doctrine — so it will also absorb a
-    genuine bug in `build`. The warning names the exception class for that
-    reason: `KeyError` every row is a code defect wearing a drift costume,
-    and a label that always says "schema" would hide it.
-    """
-    out, drifted, first_err = [], 0, None
-    for d in _read_store(path, what):
-        try:
-            out.append(build(d))
-        except Exception as exc:
-            drifted += 1
-            if first_err is None:
-                first_err = f"{type(exc).__name__}: {exc}"
-    if drifted:
-        log.warning("%s: %d row(s) in %s are JSON but not loadable under the "
-                    "current schema — excluded from the %d returned "
-                    "(first: %s)",
-                    what, drifted, path, len(out), first_err)
-    return out
+# The four store-hygiene helpers — announced reads (_read_store), drift
+# counting (_rows_as), byte-safe whole-store text (_store_text), and the
+# taint-refusing parse (_loads_clean) — started life in this module during
+# the 2026-08-17 stamper hardening and moved to jsonl_utils when
+# knowledge_web needed the identical treatment. The private aliases keep
+# this module's call sites and tests stable; the doctrine, probe history,
+# and docstrings live on the jsonl_utils definitions now. The probes that
+# motivated them (six stampers raising on one torn byte; four loaders
+# returning [] for a 40-row store) ran against THIS module — record:
+# docs/history/2026-08-17-memory-ledger-stamper-review.md.
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+    read_rows_as as _rows_as,
+    store_text as _store_text,
+)
 
 
 def load_task_ledger(

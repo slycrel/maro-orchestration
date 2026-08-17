@@ -85,9 +85,10 @@ _PARSE_CALLS = {
 # Local wrappers around a parse call, matched as bare names. A wrapper is
 # otherwise an evasion vector: route json.loads through a one-line helper
 # and every drop around it leaves the census. memory_ledger._loads_clean
-# (2026-08-17, byte-taint refusal) is the first; add new ones here in the
-# same diff that introduces them.
-_PARSE_WRAPPERS = {"_loads_clean"}
+# (2026-08-17, byte-taint refusal) was the first; it now lives in
+# jsonl_utils as `loads_clean`, imported under both names. Add new ones
+# here in the same diff that introduces them.
+_PARSE_WRAPPERS = {"_loads_clean", "loads_clean"}
 
 # (module filename, enclosing function) -> why the silence is correct here.
 # Entries move here OUT of UNREVIEWED_SILENT_DROPS, one at a time, with a
@@ -114,6 +115,16 @@ _STAMPER = ("in-place row stamper: the rewrite rejoins all lines, so an "
             "adversarial round caught it. Pinned by "
             "TestTheStampersPreserveWhatTheyCannotParse (three torn shapes, "
             "raw bytes included).")
+# knowledge_web's node-store rewrites share the stamper shape (byte-safe
+# read via jsonl_utils.store_text, taint-refusing loads_clean, matched rows
+# re-dumped, everything else re-emitted verbatim, surrogateescape write).
+# Pinned by TestNodeRewritesPreserveWhatTheyCannotParse in
+# tests/test_knowledge_web.py and tests/mutation/knowledge_web_preserve.json.
+_NODE_STAMPER = ("in-place node rewrite: unmatched and unparseable lines are "
+                 "re-emitted verbatim (byte-safe read + loads_clean since "
+                 "2026-08-17, so a torn or tainted line is one skippable row "
+                 "and never laundered) — no loss, nothing to announce. Pinned "
+                 "by TestNodeRewritesPreserveWhatTheyCannotParse.")
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
@@ -121,6 +132,8 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "stamp_outcome_step_lessons._stamp"): _STAMPER,
     ("memory_ledger.py", "annotate_outcome_lessons._stamp"): _STAMPER,
     ("memory_ledger.py", "annotate_outcome_extraction_failure._stamp"): _STAMPER,
+    ("knowledge_web.py", "_bump_node_times_applied"): _NODE_STAMPER,
+    ("knowledge_web.py", "promote_knowledge_candidates"): _NODE_STAMPER,
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
@@ -187,14 +200,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("knowledge_lens.py", "load_standing_rules"): 1,
     ("knowledge_lens.py", "search_decisions"): 1,
 
-    ("knowledge_web.py", "_bump_node_times_applied"): 1,
-    ("knowledge_web.py", "_load_archived_lessons"): 1,
-    ("knowledge_web.py", "_load_canon_stats"): 1,
-    ("knowledge_web.py", "_remint_watch_stamp"): 1,
-    ("knowledge_web.py", "load_knowledge_edges"): 1,
-    ("knowledge_web.py", "load_knowledge_nodes"): 1,
-    ("knowledge_web.py", "load_tiered_lessons"): 1,
-    ("knowledge_web.py", "promote_knowledge_candidates"): 2,
 
     ("llm.py", "CodexCLIAdapter._stream_events"): 1,
     ("llm.py", "_is_plain_missing_session_error"): 1,

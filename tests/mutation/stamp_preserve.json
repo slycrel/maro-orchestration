@@ -43,35 +43,35 @@
   },
   {
     "name": "read :: the SkipReport is computed and thrown away",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "    rows, report = read_jsonl_tail_counted(path)\n    if report:\n        log.warning(\"%s: %s (%s)\", what, report.summary(), path)\n    return rows",
     "replacement": "    rows, report = read_jsonl_tail_counted(path)\n    return rows",
     "tests": "tests/test_memory.py"
   },
   {
     "name": "read :: the warning does not name the store",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "        log.warning(\"%s: %s (%s)\", what, report.summary(), path)",
     "replacement": "        log.warning(\"%s: %s\", what, report.summary())",
     "tests": "tests/test_memory.py"
   },
   {
     "name": "read :: a torn store reads as empty again (the family-A bug)",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "    rows, report = read_jsonl_tail_counted(path)",
     "replacement": "    rows, report = [], None\n    try:\n        for _line in path.read_text(encoding=\"utf-8\").splitlines():\n            if _line.strip():\n                rows.append(json.loads(_line))\n    except Exception:\n        return []",
     "tests": "tests/test_memory.py"
   },
   {
     "name": "drift :: schema-rejected rows are counted but not announced",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "    if drifted:\n        log.warning(",
     "replacement": "    if False:\n        log.warning(",
     "tests": "tests/test_memory.py"
   },
   {
     "name": "drift :: a schema-rejected row aborts the whole load",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "        try:\n            out.append(build(d))\n        except Exception as exc:\n            drifted += 1",
     "replacement": "        try:\n            out.append(build(d))\n        except Exception as exc:\n            return []",
     "tests": "tests/test_memory.py"
@@ -134,7 +134,7 @@
   },
   {
     "name": "bytes :: the stamper read decodes strictly again (the round-1 HIGH)",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "    return path.read_bytes().decode(\"utf-8\", errors=\"surrogateescape\")",
     "replacement": "    return path.read_text(encoding=\"utf-8\")",
     "tests": "tests/test_memory.py"
@@ -176,7 +176,7 @@
   },
   {
     "name": "taint :: the stamper scan accepts a byte-tainted target",
-    "file": "src/memory_ledger.py",
+    "file": "src/jsonl_utils.py",
     "anchor": "    if any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in s):\n        raise json.JSONDecodeError(\"byte-tainted line (raw non-UTF-8 \"\n                                   \"bytes carried as surrogates)\", s, 0)\n    return json.loads(s)",
     "replacement": "    return json.loads(s)",
     "tests": "tests/test_memory.py"

@@ -33,6 +33,11 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 from context_budget import clip
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+    store_text as _store_text,
+)
 from memory_ledger import _MERGED_VARIANTS_CAP, _memory_dir, _text_similarity
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
@@ -959,53 +964,79 @@ def load_tiered_lessons(
         return []
 
     results: List[TieredLesson] = []
+    skipped = 0
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+        # Byte-safe: a strict read_text here raised on one crash-torn byte
+        # and the old outer `except Exception: pass` swallowed it — the
+        # WHOLE tier read as empty (probed 2026-08-17: 0 of 3 healthy rows).
+        # Worse, _mutate_tiered_lessons rebuilds the file from this load, so
+        # the empty read became an empty REWRITE: one torn byte + the next
+        # reinforcement/GC destroyed the entire tier. With surrogateescape
+        # the torn line fails per-row parse like any malformed row instead.
+        text = _store_text(path)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        log.warning("load_tiered_lessons(%s): store unreadable — treating as "
+                    "empty, but it is NOT an empty ledger: %s", tier, exc)
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            # loads_clean, not json.loads: a byte-tainted line can be
+            # structurally valid JSON, and parsing it would let a rewrite
+            # re-serialize the surrogates as clean escapes — laundering
+            # the corruption signal (see jsonl_utils.loads_clean).
+            d = _loads_clean(line)
+            tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
+            # Coerce the numeric fields HERE, inside the per-row guard.
+            # The sort at the bottom of this function is OUTSIDE it, so a
+            # single row with `"score": "high"` raised
+            # `'<' not supported between 'float' and 'str'` and took the
+            # whole raw load down — and with it every read-modify-write on
+            # the tier at once (reinforce, promote, GC, tombstone, canon,
+            # pack variant-union: 24 call sites). The ordinary read path
+            # meanwhile hid the row, so nothing ever pointed at it: the
+            # reader concealed the corruption and the writer died on it
+            # (r3 Expert QA, reproduced). A row that fails here is
+            # unparseable, and unparseable rows are moved to a
+            # quarantine sidecar rather than destroyed — see
+            # _quarantine_unparseable.
+            tl.score = float(tl.score)
+            tl.confidence = float(tl.confidence)
+            _coerce_int_fields(tl)
+            days = _days_since(tl.last_reinforced)
+            if max_age_days is not None and days > max_age_days:
+                continue  # lesson too stale
+            # Derive effective score (MEDIUM only — LONG does not decay)
+            if not raw and tier == MemoryTier.MEDIUM and days > 0:
+                tl.score = decay_score(tl.score, days)
+            if not raw and tl.score < min_score:
                 continue
-            try:
-                d = json.loads(line)
-                tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
-                # Coerce the numeric fields HERE, inside the per-row guard.
-                # The sort at the bottom of this function is OUTSIDE it, so a
-                # single row with `"score": "high"` raised
-                # `'<' not supported between 'float' and 'str'` and took the
-                # whole raw load down — and with it every read-modify-write on
-                # the tier at once (reinforce, promote, GC, tombstone, canon,
-                # pack variant-union: 24 call sites). The ordinary read path
-                # meanwhile hid the row, so nothing ever pointed at it: the
-                # reader concealed the corruption and the writer died on it
-                # (r3 Expert QA, reproduced). A row that fails here is
-                # unparseable, and unparseable rows are moved to a
-                # quarantine sidecar rather than destroyed — see
-                # _quarantine_unparseable.
-                tl.score = float(tl.score)
-                tl.confidence = float(tl.confidence)
-                _coerce_int_fields(tl)
-                days = _days_since(tl.last_reinforced)
-                if max_age_days is not None and days > max_age_days:
-                    continue  # lesson too stale
-                # Derive effective score (MEDIUM only — LONG does not decay)
-                if not raw and tier == MemoryTier.MEDIUM and days > 0:
-                    tl.score = decay_score(tl.score, days)
-                if not raw and tl.score < min_score:
-                    continue
-                if task_type and tl.task_type != task_type:
-                    continue
-                if lesson_type and tl.lesson_type != lesson_type:
-                    continue
-                results.append(tl)
-            except Exception:
+            if task_type and tl.task_type != task_type:
                 continue
-    except Exception:
-        pass
+            if lesson_type and tl.lesson_type != lesson_type:
+                continue
+            results.append(tl)
+        except Exception:
+            # Unparseable, byte-tainted, or schema-drifted — skipped on
+            # read, quarantined to the sidecar on the next rewrite.
+            # Counted so a short read is distinguishable from a short
+            # store (silent-drop census, 2026-08-17).
+            skipped += 1
+            continue
+    if skipped:
+        log.warning("load_tiered_lessons(%s): %d row(s) in %s unparseable or "
+                    "byte-tainted — skipped on read; the next rewrite moves "
+                    "them to the quarantine sidecar", tier, skipped, path)
 
     results.sort(key=lambda x: x.score, reverse=True)
     return results[:limit] if limit is not None else results
 
 
-def _quarantine_unparseable(path) -> int:
+def _quarantine_unparseable(path) -> List[str]:
     """Move store lines that fail a TieredLesson round trip to a SIDECAR.
 
     Rewrites (``_rewrite_tiered_lessons``, ``_mutate_tiered_lessons``) rebuild
@@ -1035,46 +1066,67 @@ def _quarantine_unparseable(path) -> int:
 
     Appended (never rewritten), so this is idempotent: once a row has moved
     to the sidecar the live file no longer holds it, and the next rewrite
-    finds nothing to move. Returns how many rows moved.
+    finds nothing to move.
+
+    Byte-safe (2026-08-17): the read is surrogateescape and the round trip
+    uses the taint-refusing parse, so a crash-torn line — undecodable bytes,
+    or worse, tainted-but-structurally-valid JSON — fails the round trip and
+    moves to the sidecar as its ORIGINAL BYTES (the sidecar append opts into
+    surrogateescape). Before this, the strict read here raised on one torn
+    byte, the `except Exception: return 0` swallowed it, the equally-blind
+    load returned [], and the rewrite wrote an EMPTY file: one torn byte +
+    any reinforcement/GC destroyed the entire tier (probed, 573 bytes → 0).
+
+    Returns the newline-terminated lines that are still unparseable AND
+    still in the live file — [] on success or nothing-to-move; the stranded
+    lines when the sidecar/live write failed. Rewrites MUST append the
+    returned lines verbatim to whatever they rebuild: "leaving them in
+    place rather than risk losing them" was this function's stated promise
+    on the failure path, but the callers rebuilt from the parsed list and
+    deleted them anyway. An unreadable store (OSError, not
+    FileNotFoundError) propagates — the callers hold a destructive rewrite,
+    and proceeding on a failed read is exactly the empty-write destruction
+    this fix removes.
     """
     moved: List[str] = []
     kept: List[str] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                d = json.loads(line)
-                tl = TieredLesson(**{k: d[k] for k in
-                                     TieredLesson.__dataclass_fields__ if k in d})
-                float(tl.score)
-                float(tl.confidence)
-                _coerce_int_fields(tl)
-            except Exception:
-                moved.append(line if line.endswith("\n") else line + "\n")
-            else:
-                kept.append(line if line.endswith("\n") else line + "\n")
-    except Exception:
-        return 0
+        text = _store_text(path)
+    except FileNotFoundError:
+        return []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            d = _loads_clean(line)
+            tl = TieredLesson(**{k: d[k] for k in
+                                 TieredLesson.__dataclass_fields__ if k in d})
+            float(tl.score)
+            float(tl.confidence)
+            _coerce_int_fields(tl)
+        except Exception:
+            moved.append(line if line.endswith("\n") else line + "\n")
+        else:
+            kept.append(line if line.endswith("\n") else line + "\n")
     if not moved:
-        return 0
+        return []
     from file_lock import atomic_write
     side = path.with_suffix(path.suffix + ".unparseable")
     try:
-        with side.open("a", encoding="utf-8") as fh:
+        with side.open("a", encoding="utf-8", errors="surrogateescape") as fh:
             fh.writelines(moved)
         # Only shrink the live file once the sidecar copy is durable.
-        atomic_write(path, "".join(kept))
+        atomic_write(path, "".join(kept), errors="surrogateescape")
     except Exception as exc:
         log.warning("%s: could not quarantine %d unparseable row(s) (%s) — "
                     "leaving them in place rather than risk losing them",
                     path.name, len(moved), exc)
-        return 0
+        return moved
     log.warning("%s: moved %d unparseable lesson row(s) to %s (schema drift "
                 "or corruption). They are out of every reader's way and NOT "
                 "destroyed; inspect or repair them by hand.",
                 path.name, len(moved), side.name)
-    return len(moved)
+    return []
 
 
 def unparseable_sidecar_count(tier: str = MemoryTier.MEDIUM) -> int:
@@ -1111,10 +1163,16 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
         # and were silently dropped).
         # Move unparseable rows OUT before rebuilding from the parsed list —
         # otherwise the write below deletes them (see _quarantine_unparseable).
-        _quarantine_unparseable(path)
+        # Rows the quarantine could NOT move (sidecar write failed) come back
+        # as raw lines and MUST ride the rebuild verbatim — the load below
+        # skips them, so dropping the return value here deletes them.
+        stranded = _quarantine_unparseable(path)
         if lessons is None:
             lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
+        atomic_write(path,
+                     "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     + "".join(stranded),
+                     errors="surrogateescape")
 
 
 def _mutate_tiered_lessons(tier: str, mutate) -> None:
@@ -1129,11 +1187,16 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
     with locked_write(path):
         # Quarantine BEFORE loading, while the lock is held and the old bytes
         # are still on disk: unparseable rows are not in `lessons` (load drops
-        # them) and the write below would otherwise delete them.
-        _quarantine_unparseable(path)
+        # them) and the write below would otherwise delete them. Stranded
+        # rows (quarantine attempted but the sidecar write failed) ride the
+        # rebuild verbatim for the same reason.
+        stranded = _quarantine_unparseable(path)
         lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
         lessons = mutate(lessons)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
+        atomic_write(path,
+                     "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     + "".join(stranded),
+                     errors="surrogateescape")
 
 
 # ---------------------------------------------------------------------------
@@ -1177,23 +1240,21 @@ def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLess
         return []
     field_names = {f.name for f in fields(TieredLesson)}
     by_id: Dict[str, TieredLesson] = {}
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-                if rec.get("archived_reason") not in reasons:
-                    # A later user_forget overrides an earlier decay_gc record
-                    by_id.pop(rec.get("lesson_id", ""), None)
-                    continue
-                tl = TieredLesson(**{k: v for k, v in rec.items() if k in field_names})
-                by_id[tl.lesson_id] = tl  # newest record wins (file is append-order)
-            except Exception:
-                continue
-    except Exception:
-        return []
+    drifted = 0
+    for rec in _read_store(path, "_load_archived_lessons"):
+        if rec.get("archived_reason") not in reasons:
+            # A later user_forget overrides an earlier decay_gc record
+            by_id.pop(rec.get("lesson_id", ""), None)
+            continue
+        try:
+            tl = TieredLesson(**{k: v for k, v in rec.items() if k in field_names})
+        except Exception:
+            drifted += 1
+            continue
+        by_id[tl.lesson_id] = tl  # newest record wins (file is append-order)
+    if drifted:
+        log.warning("_load_archived_lessons: %d archive row(s) in %s are JSON "
+                    "but not loadable as TieredLesson — skipped", drifted, path)
     return list(by_id.values())
 
 
@@ -1225,22 +1286,12 @@ def _remint_watch_stamp(lesson_text: str, task_type: str) -> Optional[Dict[str, 
     # user_forget override semantics from the loader are reproduced here —
     # a user-forgotten lesson never counts strikes.
     by_id: Dict[str, Dict[str, Any]] = {}
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            lid = rec.get("lesson_id") or ""
-            if rec.get("archived_reason") != "decay_gc":
-                by_id.pop(lid, None)
-                continue
-            by_id[lid] = rec  # newest record per id wins (append order)
-    except Exception:
-        return None
+    for rec in _read_store(path, "_remint_watch_stamp"):
+        lid = rec.get("lesson_id") or ""
+        if rec.get("archived_reason") != "decay_gc":
+            by_id.pop(lid, None)
+            continue
+        by_id[lid] = rec  # newest record per id wins (append order)
 
     lineage = [rec for rec in by_id.values()
                if rec.get("task_type") == task_type
@@ -3295,22 +3346,19 @@ def _load_canon_stats() -> Dict[str, Dict[str, Any]]:
     if not path.exists():
         return {}
     stats: Dict[str, Dict[str, Any]] = {}
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-                lid = e["lesson_id"]
-                if lid not in stats:
-                    stats[lid] = {"total_hits": 0, "task_types": set(), "tier": e.get("tier", MemoryTier.LONG)}
-                stats[lid]["total_hits"] += 1
-                stats[lid]["task_types"].add(e.get("task_type", "general"))
-            except Exception:
-                continue
-    except Exception:
-        pass
+    drifted = 0
+    for e in _read_store(path, "_load_canon_stats"):
+        lid = e.get("lesson_id")
+        if not lid:
+            drifted += 1
+            continue
+        if lid not in stats:
+            stats[lid] = {"total_hits": 0, "task_types": set(), "tier": e.get("tier", MemoryTier.LONG)}
+        stats[lid]["total_hits"] += 1
+        stats[lid]["task_types"].add(e.get("task_type", "general"))
+    if drifted:
+        log.warning("_load_canon_stats: %d row(s) in %s carry no lesson_id — "
+                    "skipped", drifted, path)
     return stats
 
 
@@ -3680,7 +3728,11 @@ def _bump_node_times_applied(node_ids: List[str]) -> None:
     try:
         with locked_write(p):
             try:
-                lines = p.read_text(encoding="utf-8").splitlines()
+                # Byte-safe read + taint-refusing parse: a strict read here
+                # raised UnicodeDecodeError past the `except OSError` below
+                # (probed 2026-08-17), and a tainted-but-parseable target row
+                # would have been laundered by the json.dumps re-serialize.
+                lines = _store_text(p).splitlines()
             except FileNotFoundError:
                 return
             out: List[str] = []
@@ -3688,7 +3740,7 @@ def _bump_node_times_applied(node_ids: List[str]) -> None:
                 stripped = line.strip()
                 if stripped:
                     try:
-                        d = json.loads(stripped)
+                        d = _loads_clean(stripped)
                         if isinstance(d, dict) and d.get("node_id") in wanted:
                             d["times_applied"] = int(
                                 d.get("times_applied", 0) or 0) + 1
@@ -3696,7 +3748,8 @@ def _bump_node_times_applied(node_ids: List[str]) -> None:
                     except json.JSONDecodeError:
                         pass
                 out.append(line)
-            atomic_write(p, "\n".join(out) + ("\n" if out else ""))
+            atomic_write(p, "\n".join(out) + ("\n" if out else ""),
+                         errors="surrogateescape")
     except OSError as exc:
         log.warning("knowledge_node: times_applied bump failed: %s", exc)
 
@@ -3885,15 +3938,8 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
             return 0.0  # unparseable birthdate never age-qualifies
 
     eligible: List[Dict[str, Any]] = []  # d carries _promotion_path
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(d, dict) or d.get("status") != NODE_CANDIDATE:
+    for d in _read_store(p, "promote_knowledge_candidates"):
+        if d.get("status") != NODE_CANDIDATE:
             continue
         if str(d.get("node_id", "")).startswith(LINK_FARM_PREFIX):
             continue
@@ -3976,7 +4022,9 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
     from file_lock import atomic_write, locked_write
     with locked_write(p):
         try:
-            lines = p.read_text(encoding="utf-8").splitlines()
+            # Byte-safe + taint-refusing, same as _bump_node_times_applied:
+            # the re-dump on matched rows must never launder a tainted line.
+            lines = _store_text(p).splitlines()
         except FileNotFoundError:
             return []
         out: List[str] = []
@@ -3984,7 +4032,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
             stripped = line.strip()
             if stripped:
                 try:
-                    d = json.loads(stripped)
+                    d = _loads_clean(stripped)
                     if (isinstance(d, dict) and d.get("node_id") in promoted
                             and d.get("status") == NODE_CANDIDATE):
                         d["status"] = NODE_ACTIVE
@@ -4005,7 +4053,8 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                 except json.JSONDecodeError:
                     pass
             out.append(line)
-        atomic_write(p, "\n".join(out) + ("\n" if out else ""))
+        atomic_write(p, "\n".join(out) + ("\n" if out else ""),
+                     errors="surrogateescape")
 
     for d in flipped:
         node_id = d["node_id"]
@@ -4051,26 +4100,26 @@ def load_knowledge_nodes(
         return []
 
     nodes: List[KnowledgeNode] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    drifted = 0
+    for d in _read_store(p, "load_knowledge_nodes"):
+        if status and d.get("status", NODE_ACTIVE) != status:
+            continue
+        if node_type and d.get("node_type") != node_type:
+            continue
+        if domain and d.get("domain", "") != domain:
+            continue
+        if tag and tag not in d.get("tags", []):
             continue
         try:
-            d = json.loads(line)
-            if status and d.get("status", NODE_ACTIVE) != status:
-                continue
-            if node_type and d.get("node_type") != node_type:
-                continue
-            if domain and d.get("domain", "") != domain:
-                continue
-            if tag and tag not in d.get("tags", []):
-                continue
             nodes.append(KnowledgeNode(**{
                 k: v for k, v in d.items()
                 if k in KnowledgeNode.__dataclass_fields__
             }))
-        except (json.JSONDecodeError, TypeError):
-            continue
+        except TypeError:
+            drifted += 1
+    if drifted:
+        log.warning("load_knowledge_nodes: %d row(s) in %s are JSON but not "
+                    "loadable as KnowledgeNode — skipped", drifted, p)
     return nodes
 
 
@@ -4081,20 +4130,20 @@ def load_knowledge_edges(*, node_id: Optional[str] = None) -> List[KnowledgeEdge
         return []
 
     edges: List[KnowledgeEdge] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    drifted = 0
+    for d in _read_store(p, "load_knowledge_edges"):
+        if node_id and d.get("source_id") != node_id and d.get("target_id") != node_id:
             continue
         try:
-            d = json.loads(line)
-            if node_id and d.get("source_id") != node_id and d.get("target_id") != node_id:
-                continue
             edges.append(KnowledgeEdge(**{
                 k: v for k, v in d.items()
                 if k in KnowledgeEdge.__dataclass_fields__
             }))
-        except (json.JSONDecodeError, TypeError):
-            continue
+        except TypeError:
+            drifted += 1
+    if drifted:
+        log.warning("load_knowledge_edges: %d row(s) in %s are JSON but not "
+                    "loadable as KnowledgeEdge — skipped", drifted, p)
     return edges
 
 
