@@ -1777,13 +1777,22 @@ class TestDeduplicateLessonsPreservesWhatItCannotParse:
         # against _lesson_from_row's own "absence preserved" contract.
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         path = self._lessons_path(tmp_path)
+        # A row that PARSES but is missing optional keys — the round trip
+        # through _verdict_row adds times_applied/times_reinforced, so an
+        # unconditional rewrite is visible in the bytes. A row that fails to
+        # parse would be re-emitted verbatim and prove nothing here.
         legacy = {"lesson_id": "L001", "task_type": "build", "outcome": "done",
-                  "lesson": "A row from an older schema, with keys missing."}
+                  "lesson": "A row from an older schema.", "source_goal": "g",
+                  "confidence": 0.7, "recorded_at": "2026-01-01T00:00:00+00:00"}
+        from memory_ledger import (_lesson_from_row, _verdict_row,
+                                   deduplicate_lessons)
+        assert json.dumps(_verdict_row(_lesson_from_row(legacy))) != json.dumps(legacy), \
+            "fixture no longer detects a rewrite"
         self._write(path, [legacy, "torn"])
         before = path.read_text(encoding="utf-8")
 
-        from memory_ledger import deduplicate_lessons
         stats = deduplicate_lessons()
+        assert stats["before"] == 1, "the legacy row must PARSE for this to probe anything"
         assert stats["removed_exact"] == 0 and stats["removed_near"] == 0
         assert path.read_text(encoding="utf-8") == before
 
