@@ -334,8 +334,11 @@ def _read_store(path: Path, what: str) -> List[Dict[str, Any]]:
         for a file holding 40 healthy rows, because `read_text` raised
         before the loop and the outer `except Exception: pass` swallowed it;
       * an uncaught `UnicodeDecodeError` in the CALLER —
-        `load_outcome_by_loop_id` and `outcome_row_has_step_lessons` guard
-        with `except OSError`, and a decode error is a ValueError.
+        `load_outcome_by_loop_id`, `outcome_row_has_step_lessons` and
+        `load_step_traces` guarded with `except OSError`, and a decode
+        error is a ValueError. (The first two were probed directly; the
+        third had the identical guard shape — adversarial review 2026-08-17
+        caught that the original count of two understated the family.)
 
     Same Tier-0 #3 failure `jsonl_utils` was written to end, still live in
     the flat lane because these loaders predate it.
@@ -347,6 +350,25 @@ def _read_store(path: Path, what: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _store_text(path: Path) -> str:
+    """Whole-store text with undecodable bytes carried as lone surrogates.
+
+    The in-place stampers rewrite by rejoining every line, which only
+    preserves a torn line if the read survives it. A strict decode does
+    not: before this (2026-08-17 adversarial round), one non-UTF-8 byte
+    anywhere in outcomes.jsonl made all six stampers raise
+    UnicodeDecodeError — `except OSError` does not catch a ValueError —
+    so a single crash-torn append disabled verdict/lesson/supersede
+    stamping on that store until someone repaired the file by hand.
+    surrogateescape pairs with atomic_write's encoder (see file_lock) to
+    round-trip those bytes verbatim; json.loads on the affected line
+    fails like any malformed row, so the scan skips it and the rejoin
+    keeps it. Raises FileNotFoundError like read_text — callers keep
+    their existing guard.
+    """
+    return path.read_bytes().decode("utf-8", errors="surrogateescape")
+
+
 def _rows_as(path: Path, what: str, build) -> list:
     """`_read_store` plus a per-row constructor, counting schema drift.
 
@@ -354,17 +376,26 @@ def _rows_as(path: Path, what: str, build) -> list:
     JSON is corruption, a row that is JSON but the current dataclass rejects
     is schema drift. Collapsing them hides which one is happening, and drift
     is the one that grows quietly as the schema moves.
+
+    The catch is deliberately broad — one weird row must never abort the
+    load, which is this module's whole doctrine — so it will also absorb a
+    genuine bug in `build`. The warning names the exception class for that
+    reason: `KeyError` every row is a code defect wearing a drift costume,
+    and a label that always says "schema" would hide it.
     """
-    out, drifted = [], 0
+    out, drifted, first_err = [], 0, None
     for d in _read_store(path, what):
         try:
             out.append(build(d))
-        except Exception:
+        except Exception as exc:
             drifted += 1
+            if first_err is None:
+                first_err = f"{type(exc).__name__}: {exc}"
     if drifted:
         log.warning("%s: %d row(s) in %s are JSON but not loadable under the "
-                    "current schema — excluded from the %d returned",
-                    what, drifted, path, len(out))
+                    "current schema — excluded from the %d returned "
+                    "(first: %s)",
+                    what, drifted, path, len(out), first_err)
     return out
 
 
@@ -774,7 +805,7 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
         try:
             with locked_write(path):
                 try:
-                    old = path.read_text(encoding="utf-8")
+                    old = _store_text(path)
                 except FileNotFoundError:
                     return 0
                 new = _mark(old)
@@ -877,7 +908,7 @@ def stamp_outcome_verdict(
             # the file or loop row is absent.
             with locked_write(path):
                 try:
-                    old = path.read_text(encoding="utf-8")
+                    old = _store_text(path)
                 except FileNotFoundError:
                     return OutcomeVerdictStampResult(
                         "missing", attempts=attempt)
@@ -950,7 +981,7 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
     try:
         with locked_write(path):
             try:
-                old = path.read_text(encoding="utf-8")
+                old = _store_text(path)
             except FileNotFoundError:
                 return False
             new = _stamp(old)
@@ -1013,7 +1044,7 @@ def stamp_outcome_step_lessons(loop_id: str, count: int) -> bool:
     try:
         with locked_write(path):
             try:
-                old = path.read_text(encoding="utf-8")
+                old = _store_text(path)
             except FileNotFoundError:
                 return False
             new = _stamp(old)
@@ -2070,7 +2101,7 @@ def compress_old_outcomes(
         return None
 
     try:
-        raw_lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        raw_lines = [l for l in _store_text(path).splitlines() if l.strip()]
     except Exception:
         return None
 
@@ -2353,7 +2384,7 @@ def _update_memory_index():
         lines += ["", "## Lessons Count"]
         lesson_path = _lessons_path()
         if lesson_path.exists():
-            n = sum(1 for l in lesson_path.read_text().splitlines() if l.strip())
+            n = sum(1 for l in _store_text(lesson_path).splitlines() if l.strip())
             lines.append(f"- {n} lessons stored in lessons.jsonl")
         else:
             lines.append("- 0 lessons stored")

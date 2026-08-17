@@ -110,5 +110,54 @@
     "anchor": "    return {func.split(\".\")[0] for (mod, func) in reviewed\n            if mod == \"memory_ledger.py\"} - set(covered)",
     "replacement": "    return {func.split(\".\")[0] for (mod, func) in reviewed} - set(covered)",
     "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (verdict)",
+    "file": "src/memory_ledger.py",
+    "anchor": "            updated[\"hit\"] = True\n            updated[\"row\"] = row\n            return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "            updated[\"hit\"] = True\n            updated[\"row\"] = row\n            _kept = []\n            for _l in lines:\n                try:\n                    json.loads(_l)\n                except Exception:\n                    continue\n                _kept.append(_l)\n            return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (annotate_lessons)",
+    "file": "src/memory_ledger.py",
+    "anchor": "        row[\"lessons\"] = list(lessons)\n        row[\"lesson_extraction_status\"] = \"completed\"\n        row[\"lesson_extraction_count\"] = len(lessons)\n        lines[target_idx] = json.dumps(row)\n        updated[\"hit\"] = True\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "        row[\"lessons\"] = list(lessons)\n        row[\"lesson_extraction_status\"] = \"completed\"\n        row[\"lesson_extraction_count\"] = len(lessons)\n        lines[target_idx] = json.dumps(row)\n        updated[\"hit\"] = True\n        _kept = []\n        for _l in lines:\n            try:\n                json.loads(_l)\n            except Exception:\n                continue\n            _kept.append(_l)\n        return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "vacuity :: the torn line stops the verdict scan",
+    "file": "src/memory_ledger.py",
+    "anchor": "        for i in range(len(lines) - 1, -1, -1):\n            line = lines[i].strip()\n            if not line:\n                continue\n            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                continue\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                target_idx = i\n                break\n        if target_idx is None:\n            return old\n        row = json.loads(lines[target_idx])\n        # Re-stamp honesty",
+    "replacement": "        for i in range(len(lines) - 1, -1, -1):\n            line = lines[i].strip()\n            if not line:\n                continue\n            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                break\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                target_idx = i\n                break\n        if target_idx is None:\n            return old\n        row = json.loads(lines[target_idx])\n        # Re-stamp honesty",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "bytes :: the stamper read decodes strictly again (the round-1 HIGH)",
+    "file": "src/memory_ledger.py",
+    "anchor": "    return path.read_bytes().decode(\"utf-8\", errors=\"surrogateescape\")",
+    "replacement": "    return path.read_text(encoding=\"utf-8\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "bytes :: locked_rmw decodes strictly again",
+    "file": "src/file_lock.py",
+    "anchor": "            old = path.read_bytes().decode(\"utf-8\", errors=\"surrogateescape\")",
+    "replacement": "            old = path.read_text(encoding=\"utf-8\")",
+    "tests": "tests/test_file_lock.py"
+  },
+  {
+    "name": "bytes :: atomic_write encodes strictly again",
+    "file": "src/file_lock.py",
+    "anchor": "        with os.fdopen(fd, \"w\", encoding=encoding,\n                       errors=\"surrogateescape\") as fh:",
+    "replacement": "        with os.fdopen(fd, \"w\", encoding=encoding) as fh:",
+    "tests": "tests/test_file_lock.py"
+  },
+  {
+    "name": "census :: the module key falls back to the basename",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        mod = py.relative_to(src_root).as_posix()",
+    "replacement": "        mod = py.name",
+    "tests": "tests/test_no_silent_drop.py"
   }
 ]

@@ -118,3 +118,71 @@ class TestAtomicWritePerms:
             assert (os.stat(path).st_mode & 0o777) == 0o644
         finally:
             os.umask(old)
+
+
+class TestByteSafeRmw:
+    """locked_rmw + atomic_write round-trip bytes that are not valid UTF-8.
+
+    Before 2026-08-17 the rmw read was a strict whole-file decode, so one
+    crash-torn append anywhere in a store made EVERY future rmw of that
+    store raise UnicodeDecodeError — a ValueError, invisible to the
+    `except OSError` guards most callers hold. One bad line became a
+    permanent write outage; all six memory_ledger stampers had it (found
+    by adversarial review, confirmed by probe: six stampers, six raises).
+    surrogateescape on both sides keeps the torn bytes as lone surrogates
+    through fn and writes them back verbatim.
+    """
+
+    _TORN = b'{"cut": "\xff\x80 mid-codepoint'
+
+    def test_rmw_survives_and_preserves_undecodable_bytes(self, tmp_path):
+        from file_lock import locked_rmw
+        path = tmp_path / "store.jsonl"
+        healthy = b'{"ok": 1}\n'
+        path.write_bytes(healthy + self._TORN + b"\n")
+        # Identity rewrite: before the fix this line RAISED — asserting the
+        # return would never run. The no-raise is the regression pin.
+        locked_rmw(path, lambda old: old)
+        assert path.read_bytes() == healthy + self._TORN + b"\n"
+
+    def test_fn_sees_the_torn_line_as_a_skippable_row(self, tmp_path):
+        # The contract the stampers rely on: per-line json.loads fails on
+        # the surrogate-carrying line exactly like any malformed row, so a
+        # scan-and-rejoin edits the healthy row and keeps the torn one.
+        from file_lock import locked_rmw
+        path = tmp_path / "store.jsonl"
+        path.write_bytes(b'{"ok": 1}\n' + self._TORN + b"\n")
+
+        def bump(old: str) -> str:
+            out = []
+            for line in old.splitlines():
+                try:
+                    row = json.loads(line)
+                    row["ok"] += 1
+                    out.append(json.dumps(row))
+                except (json.JSONDecodeError, ValueError):
+                    out.append(line)
+            return "\n".join(out) + "\n"
+
+        locked_rmw(path, bump)
+        assert path.read_bytes() == b'{"ok": 2}\n' + self._TORN + b"\n"
+
+    def test_atomic_write_encodes_lone_surrogates_back_to_bytes(self, tmp_path):
+        # The write half alone: without surrogateescape on the encoder, a
+        # rewrite that carried a torn line through the read half dies with
+        # UnicodeEncodeError at the last moment and the whole edit is lost.
+        from file_lock import atomic_write
+        path = tmp_path / "store.jsonl"
+        text = self._TORN.decode("utf-8", errors="surrogateescape")
+        atomic_write(path, text)
+        assert path.read_bytes() == self._TORN
+
+    def test_valid_utf8_is_untouched(self, tmp_path):
+        # surrogateescape must be a no-op for healthy stores, multibyte
+        # content included.
+        from file_lock import locked_rmw
+        path = tmp_path / "store.jsonl"
+        content = '{"note": "café ✓"}\n'
+        path.write_text(content, encoding="utf-8")
+        locked_rmw(path, lambda old: old)
+        assert path.read_text(encoding="utf-8") == content

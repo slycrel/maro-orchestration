@@ -219,6 +219,12 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     A reader (or a crash mid-write) sees either the old complete file or the
     new complete file — never a partial. Does NOT take the .lock file; pair
     with locked_write()/locked_rmw() when concurrent writers are possible.
+
+    Encodes with errors="surrogateescape", the write half of locked_rmw's
+    byte-safe read: lone surrogates produced by decoding undecodable bytes
+    are written back as the original bytes, so a rewrite that carried a torn
+    line through preserves it verbatim instead of raising UnicodeEncodeError
+    at the last moment and losing the whole rewrite. Valid text is unaffected.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,7 +245,8 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".tmp")
     try:
         os.fchmod(fd, mode)
-        with os.fdopen(fd, "w", encoding=encoding) as fh:
+        with os.fdopen(fd, "w", encoding=encoding,
+                       errors="surrogateescape") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
@@ -278,11 +285,22 @@ def locked_rmw(path: Path, fn, *, default: str = "") -> str:
     their own parsing (JSONL, markdown, ...). Keep fn cheap — it runs
     inside the critical section; never call an LLM or subprocess from it.
 
+    Byte-safe: the read decodes with errors="surrogateescape" and
+    atomic_write encodes the same way, so bytes that are not valid UTF-8
+    round-trip verbatim instead of raising. Before this (2026-08-17,
+    adversarial round on the memory_ledger chunk), one crash-torn append
+    anywhere in a store made every future rmw of that store raise
+    UnicodeDecodeError out of this function — a strict whole-file decode
+    turned one bad line into a permanent write outage. fn sees the
+    undecodable bytes as lone surrogates (U+DC80–U+DCFF); json.loads on
+    such a line fails exactly like any other malformed row, so per-row
+    scanners skip it and the rejoin preserves it.
+
     Reentrant like locked_write. Returns the new content.
     """
     with locked_write(path):
         try:
-            old = path.read_text(encoding="utf-8")
+            old = path.read_bytes().decode("utf-8", errors="surrogateescape")
         except FileNotFoundError:
             old = default
         new = fn(old)

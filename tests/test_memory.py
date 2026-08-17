@@ -1986,6 +1986,11 @@ class TestTypedLessonExtraction:
 # over one whichever direction it runs.
 _TORN = '{"loop_id": "loop-1", "outcome_id": "O-torn", "goal": "half a row'
 _TORN_TAIL = '{"loop_id": "loop-1", "outcome_id": "O-torn-2", "goal": "also cut'
+# The third shape: bytes that are not UTF-8 at all — a crash mid-append cuts
+# a multibyte sequence, not a JSON token. Distinct failure from the two
+# above: those fail json.loads; this one fails DECODE, which is upstream of
+# any per-line handling and used to kill the whole read.
+_TORN_BYTES = b'{"loop_id": "loop-1", "raw": "\xff\x80 torn mid-codepoint'
 
 
 def _outcome_row(**over):
@@ -2055,6 +2060,16 @@ class TestTheStampersPreserveWhatTheyCannotParse:
     So this is not a test of the stamping. It is the load-bearing half of
     six REVIEWED_SILENT_DROPS entries in tests/test_no_silent_drop.py, and
     if it is ever deleted those entries become unjustified.
+
+    The store carries THREE torn shapes, and each earns its place. Two are
+    valid UTF-8 with truncated JSON (_TORN/_TORN_TAIL, bracketing the
+    target because five of six stampers scan in reverse). The third is raw
+    non-UTF-8 bytes — added 2026-08-17 after an adversarial round proved
+    the ASCII fixtures were testing a failure the stampers already handled
+    while missing the one they didn't: a strict whole-file decode meant
+    one torn BYTE made all six raise UnicodeDecodeError before any scan
+    ran, a permanent stamping outage on that store. All reads here are
+    byte-mode for the same reason the fix is.
     """
 
     def _store(self, monkeypatch, tmp_path):
@@ -2063,16 +2078,19 @@ class TestTheStampersPreserveWhatTheyCannotParse:
         path = ml._outcomes_path()
         assert str(tmp_path) in str(path), f"probe escaped to the live store: {path}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        path.write_bytes(
             # Torn lines BRACKET the target (see _TORN) so both the forward
             # scanner and the five reverse ones must step over one.
-            _TORN + "\n"
-            + json.dumps(_outcome_row()) + "\n"
-            + _TORN_TAIL + "\n"
+            _TORN.encode() + b"\n"
+            + json.dumps(_outcome_row()).encode() + b"\n"
+            + _TORN_TAIL.encode() + b"\n"
             # A second row under the same handle_id: mark_outcomes_superseded
             # needs two to have anything to supersede.
-            + json.dumps(_outcome_row(outcome_id="O2", loop_id="loop-2")) + "\n",
-            encoding="utf-8",
+            + json.dumps(_outcome_row(outcome_id="O2", loop_id="loop-2")).encode()
+            + b"\n"
+            # Raw undecodable bytes, LAST so every reverse scanner must step
+            # over them before reaching any row at all.
+            + _TORN_BYTES + b"\n",
         )
         return path
 
@@ -2082,24 +2100,31 @@ class TestTheStampersPreserveWhatTheyCannotParse:
             self, monkeypatch, tmp_path, name, call, field):
         path = self._store(monkeypatch, tmp_path)
         call()
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_bytes().split(b"\n")
         # Verbatim, and still in position: the rewrite preserved order too, so
-        # a torn row is not quietly relocated to the end of the store.
-        assert lines[0] == _TORN, f"{name} destroyed the leading torn line"
-        assert lines[2] == _TORN_TAIL, f"{name} destroyed the trailing torn line"
-        assert len(lines) == 4, f"{name} changed the row count: {lines}"
+        # a torn row is not quietly relocated within the store.
+        assert lines[0] == _TORN.encode(), f"{name} destroyed the leading torn line"
+        assert lines[2] == _TORN_TAIL.encode(), f"{name} destroyed the trailing torn line"
+        assert lines[4] == _TORN_BYTES, (
+            f"{name} destroyed or reencoded the undecodable bytes")
+        assert len([l for l in lines if l]) == 5, f"{name} changed the row count"
 
     @pytest.mark.parametrize(
         "name,call,field", _stampers(), ids=[s[0] for s in _stampers()])
     def test_the_stamp_still_lands_past_the_torn_line(
             self, monkeypatch, tmp_path, name, call, field):
-        # The premise of the test above: if the torn line stopped the scan,
-        # the stamper would preserve it trivially by doing nothing at all.
+        # The premise of the test above: if a torn line stopped the scan (or
+        # crashed the read outright), the stamper would preserve everything
+        # trivially by doing nothing at all.
         path = self._store(monkeypatch, tmp_path)
         call()
-        stamped = json.loads(path.read_text(encoding="utf-8").splitlines()[1])
-        assert field in stamped, (
-            f"{name} did not reach its target past the torn line — the "
+        stamped = json.loads(path.read_bytes().split(b"\n")[1])
+        # Compare VALUES against the seed row, not key presence: the seed
+        # already carries "lessons": [], so `field in stamped` passed for
+        # annotate_outcome_lessons whether or not it stamped anything
+        # (caught by the 2026-08-17 adversarial round).
+        assert stamped.get(field) != _outcome_row().get(field), (
+            f"{name} did not change {field!r} on its target — the "
             f"preservation test above would pass vacuously")
 
     def test_every_reviewed_stamper_is_covered_here(self):

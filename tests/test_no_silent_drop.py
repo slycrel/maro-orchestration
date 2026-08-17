@@ -99,8 +99,14 @@ _PARSE_CALLS = {
 # tests/test_memory.py) and by tests/mutation/stamp_preserve.json.
 _STAMPER = ("in-place row stamper: the rewrite rejoins all lines, so an "
             "unparseable row is skipped by the search and preserved by the "
-            "write — no loss, nothing to announce. Pinned by "
-            "TestTheStampersPreserveWhatTheyCannotParse.")
+            "write — no loss, nothing to announce. Holds for undecodable "
+            "BYTES too since 2026-08-17: the read rides surrogateescape "
+            "(memory_ledger._store_text / file_lock.locked_rmw), so a torn "
+            "byte is one skippable row, not a whole-file UnicodeDecodeError "
+            "— which it was when this entry was first written, and the "
+            "adversarial round caught it. Pinned by "
+            "TestTheStampersPreserveWhatTheyCannotParse (three torn shapes, "
+            "raw bytes included).")
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
@@ -368,8 +374,14 @@ def _census(src_root: Path = None) -> Counter:
     # rglob, not glob: src/ has nested packages (maro_assets), and a store
     # reader that moves into one must stay scanned.
     for py in sorted(src_root.rglob("*.py")):
+        # Key on the path relative to src_root, not the basename: two files
+        # named store.py in different packages must not share one allowance.
+        # Same collision the 2026-08-17 function-qualification fix closed,
+        # one axis over — caught by the adversarial round on that fix. For
+        # top-level modules (all current entries) the key is unchanged.
+        mod = py.relative_to(src_root).as_posix()
         for func, _lineno in _sites(py):
-            found[(py.name, func)] += 1
+            found[(mod, func)] += 1
     return found
 
 
@@ -392,7 +404,8 @@ def _unlisted(src_root: Path = None, reviewed=None, unreviewed=None) -> list[str
     for (module, func), count in sorted(live.items()):
         excess = count - allowed.get((module, func), 0)
         if excess > 0:
-            lines = [ln for py in sorted(src_root.rglob("*.py")) if py.name == module
+            lines = [ln for py in sorted(src_root.rglob("*.py"))
+                     if py.relative_to(src_root).as_posix() == module
                      for f, ln in _sites(py) if f == func]
             out.append(f"{module}:{func}() has {count} silent per-record "
                        f"drop(s) (allowed {count - excess}) at line(s) "
@@ -578,6 +591,26 @@ class Sqlite:
         assert _unlisted(root, {}, {("store.py", "Jsonl.read_all"): 1}) == [
             "store.py:Sqlite.read_all() has 1 silent per-record drop(s) "
             "(allowed 0) at line(s) 17"
+        ]
+
+    def test_two_same_named_modules_get_two_keys(self, tmp_path):
+        # The module half of the key has the same collision the function
+        # half had: src/ holds nested packages, and two files named
+        # store.py must not share one allowance. Keys are relative paths.
+        body = """
+import json
+
+def read_all():
+    for line in []:
+        try:
+            json.loads(line)
+        except Exception:
+            continue
+"""
+        root = _src(tmp_path, **{"store.py": body, "pkg__store.py": body})
+        assert _unlisted(root, {}, {("store.py", "read_all"): 1}) == [
+            "pkg/store.py:read_all() has 1 silent per-record drop(s) "
+            "(allowed 0) at line(s) 8"
         ]
 
     def test_an_async_reader_is_scanned_too(self, tmp_path):
