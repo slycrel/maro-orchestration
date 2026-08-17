@@ -305,12 +305,12 @@ def test_typed_stamp_retries_oserror_then_converges(monkeypatch, tmp_path):
 
     calls = 0
 
-    def _flaky_atomic_write(path, content, encoding="utf-8"):
+    def _flaky_atomic_write(path, content, encoding="utf-8", **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
             raise OSError("transient lock failure")
-        return real_atomic_write(path, content, encoding=encoding)
+        return real_atomic_write(path, content, encoding=encoding, **kwargs)
 
     monkeypatch.setattr("file_lock.atomic_write", _flaky_atomic_write)
     result = stamp_outcome_verdict(
@@ -326,7 +326,7 @@ def test_typed_stamp_reports_bounded_write_failure(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-failed")
 
-    def _failed_atomic_write(path, content, encoding="utf-8"):
+    def _failed_atomic_write(path, content, encoding="utf-8", **kwargs):
         raise OSError("ledger unavailable")
 
     monkeypatch.setattr("file_lock.atomic_write", _failed_atomic_write)
