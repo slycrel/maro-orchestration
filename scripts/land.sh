@@ -177,14 +177,33 @@ if ! $SKIP_CHECKS; then
         # it and only the repo .venv has it, so a bare `python3 -m pytest`
         # made the gate unrunnable there — and an unrunnable gate that
         # refuses the land is indistinguishable from a real census failure.
-        # Resolve against the CALLER's repo (the temp worktree has no .venv).
+        # Resolve against the CALLER's repo (the temp worktree has no .venv),
+        # then against the PRIMARY checkout. That second lookup is what makes
+        # the conflict recipe this script itself prints actually work: it
+        # tells you to resolve in `git worktree add ../maro-wt-land` and land
+        # from there, but a linked worktree has no .venv either, so on the dev
+        # Mac the gate refused and the documented path dead-ended (hit
+        # 2026-08-16, landing a conflict resolution). git's common-dir is the
+        # primary repo's .git from anywhere in the worktree set, so its parent
+        # is the checkout that owns the venv.
         GATE_PY="python3"
-        if [ -x "$REPO_DIR/.venv/bin/python" ] \
-           && "$REPO_DIR/.venv/bin/python" -c "import pytest" >/dev/null 2>&1; then
-            GATE_PY="$REPO_DIR/.venv/bin/python"
-        elif ! python3 -c "import pytest" >/dev/null 2>&1; then
+        GATE_CANDIDATES=("$REPO_DIR/.venv/bin/python")
+        _COMMON="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+        if [ -n "$_COMMON" ]; then
+            _PRIMARY="$(cd "$(dirname "$_COMMON")" 2>/dev/null && pwd)"
+            [ -n "$_PRIMARY" ] && GATE_CANDIDATES+=("$_PRIMARY/.venv/bin/python")
+        fi
+        GATE_FOUND=false
+        for _cand in "${GATE_CANDIDATES[@]}"; do
+            if [ -x "$_cand" ] && "$_cand" -c "import pytest" >/dev/null 2>&1; then
+                GATE_PY="$_cand"
+                GATE_FOUND=true
+                break
+            fi
+        done
+        if ! $GATE_FOUND && ! python3 -c "import pytest" >/dev/null 2>&1; then
             echo "refuse: no interpreter with pytest for the pre-land gate" >&2
-            echo "       tried python3 and ${REPO_DIR}/.venv/bin/python." >&2
+            echo "       tried python3 and: ${GATE_CANDIDATES[*]}" >&2
             echo "       install pytest, or bypass with --skip-checks." >&2
             exit 1
         fi

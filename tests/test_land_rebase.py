@@ -13,6 +13,7 @@ the gh query would hit the real GitHub repo).
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -308,3 +309,64 @@ class TestAutoRebase:
         res = _land(b)
         assert res.returncode == 1
         assert "merge commits" in res.stderr
+
+
+class TestGateInterpreterFromAWorktree:
+    """The pre-land gate must find pytest when land.sh is invoked from a
+    LINKED worktree — which is exactly what this script's own conflict
+    recipe tells you to do.
+
+    Hit live 2026-08-16: a landing race printed "resolve in a worktree, then
+    bash scripts/land.sh HEAD", and doing that refused with "no interpreter
+    with pytest", because a linked worktree has no .venv and the lookup only
+    ever checked the caller's directory. A documented path that dead-ends is
+    worse than no documentation — you follow it mid-conflict, when you are
+    least able to debug the tool.
+    """
+
+    def _venv_shim(self, repo: Path):
+        """A .venv/bin/python in the PRIMARY checkout that has pytest."""
+        vb = repo / ".venv" / "bin"
+        vb.mkdir(parents=True)
+        shim = vb / "python"
+        # sys.executable, because it is by construction an interpreter that
+        # HAS pytest — it is the one running this test. A which("python3")
+        # shim looks right and fails: on this Mac the homebrew python3 ships
+        # without pytest, which is the whole reason the .venv lookup exists.
+        shim.write_text('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable)
+        shim.chmod(0o755)
+        return shim
+
+    def test_gate_resolves_the_primary_venv_from_a_linked_worktree(
+            self, race, tmp_path):
+        origin, a, b = race
+        self._venv_shim(b)
+        # A docs/ change is what arms the gate.
+        (b / "docs").mkdir(exist_ok=True)
+        _commit_file(b, "docs/thing.md", "---\nstatus: living\n---\n# x\n", "doc")
+
+        wt = tmp_path / "b-wt"
+        _git(b, "worktree", "add", "-q", "--detach", str(wt), "HEAD")
+        assert not (wt / ".venv").exists(), "worktree must lack a venv"
+
+        res = subprocess.run(["bash", str(_LAND), "HEAD"], cwd=wt,
+                             capture_output=True, text=True)
+        combined = res.stdout + res.stderr
+        assert "no interpreter with pytest" not in combined, (
+            "the gate still dead-ends from a worktree:\n" + combined)
+
+    def test_the_refusal_still_fires_when_nothing_has_pytest(
+            self, race, tmp_path, monkeypatch):
+        # Negative control: the fallback must not paper over a genuinely
+        # missing interpreter, or the gate becomes unskippable-but-useless.
+        origin, a, b = race
+        (b / "docs").mkdir(exist_ok=True)
+        _commit_file(b, "docs/thing.md", "---\nstatus: living\n---\n# x\n", "doc")
+        empty = tmp_path / "emptybin"
+        empty.mkdir()
+        (empty / "python3").write_text("#!/bin/sh\nexit 1\n")
+        (empty / "python3").chmod(0o755)
+        env = dict(os.environ, PATH=f"{empty}:{os.environ.get('PATH','')}")
+        res = subprocess.run(["bash", str(_LAND), "HEAD"], cwd=b,
+                             capture_output=True, text=True, env=env)
+        assert "no interpreter with pytest" in (res.stdout + res.stderr)
