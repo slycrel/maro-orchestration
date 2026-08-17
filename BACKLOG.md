@@ -218,14 +218,40 @@ Ordered open work that matters. Top of the list is next.
     with counts + WARNINGs; `lesson_sweep.json`, 24 mutations, 24/24.
     Silent-drop debt 137 → 135, and the ratchet's stale check caught both
     cleared entries on its first real use.
-    - *Remaining in `memory_ledger.py`:* 14 sites across 10 functions, all
-      pure reads (`load_lessons`, `load_outcomes`, `load_task_ledger`,
-      `load_step_traces`, `load_compressed_batches`,
-      `load_outcome_by_loop_id`, `outcome_row_has_step_lessons`,
-      `_maybe_record_skill_injection_outcomes`) plus the six
-      `_mark`/`_stamp` rewrite scans. The rewrite scans are safe by
-      construction — they edit `lines[i]` in place — so those are
-      REVIEWED candidates, not fixes.
+    - *memory_ledger CLOSED 2026-08-17 — two more bug families, both
+      found by probe before editing.* The remaining 14 sites split 8 pure
+      reads / 6 in-place stampers. The reads were worse than expected:
+      every one called `path.read_text()` on the whole file, so **one
+      non-UTF-8 byte anywhere in a store made `load_lessons`,
+      `load_outcomes`, `load_task_ledger` and `load_compressed_batches`
+      return EMPTY** (41 healthy rows → 0, the `UnicodeDecodeError`
+      swallowed by an outer `except Exception: pass`), and made
+      `load_outcome_by_loop_id` and `outcome_row_has_step_lessons`
+      **RAISE into their callers** — they guard `except OSError`, and a
+      decode error is a `ValueError`. Exactly the Tier-0 #3 failure
+      `jsonl_utils` was written to end, still live in the flat lane
+      because these loaders predate it. All eight now route through
+      `read_jsonl_tail_counted` via `_read_store` (announces the
+      SkipReport, names the store) and `_rows_as`, which reports **schema
+      drift separately from corruption** — JSON the current dataclass
+      rejects is a different loss from JSON that will not parse, and
+      collapsing them hides which one is growing.
+    - *The six stampers are REVIEWED, not fixed* — the rewrite rejoins the
+      whole `lines` list, so a torn row is skipped by the search and
+      re-emitted verbatim. But a reason string in a dict is a claim, so
+      the property is pinned by `TestTheStampersPreserveWhatTheyCannotParse`
+      (six cases, each with a premise assertion that the stamp lands *past*
+      the torn line) and by `stamp_preserve.json`. Debt 135 → 121 + 6
+      reviewed.
+    - **Writing those entries exposed a hole in the ratchet itself: the
+      census keyed on a BARE function name.** `memory_ledger.py` has five
+      distinct `_stamp` closures, so one REVIEWED entry would have blessed
+      all five — reviewing one site silently approving four nobody read,
+      the "guard that cannot fail" shape. Keys are now qualified
+      (`outer.inner`, `Class.method`), which also split
+      `memory_backends.py`'s single `read_all` entry: it had been covering
+      **both** `JSONLBackend` and `SQLiteBackend`. Two collisions in one
+      50-module scan, neither visible without going looking.
     - *Then:* the remaining ~85% of `knowledge_web.py`, `evolver_store.py`.
 
   **Three of the four surfaces swept so far were tripwires, and two could
@@ -281,8 +307,23 @@ Ordered open work that matters. Top of the list is next.
   (a) is that a count is not the *shape* — `.unlink` becoming `rmtree`
   inside an allowed function still reads as one deletion — so counting
   alone does not close the escalation hole this item is actually about.
-  A shape multiset (option (b) as written) does. **Recommendation
-  unchanged, now with the caveat that a bare count would look like a fix
+  A shape multiset (option (b) as written) does.
+
+  **Second update 2026-08-17: the key's FUNCTION half has an independent
+  defect, and it is not hypothetical either.** The silent-drop census
+  keyed on a bare function name and that turned out to merge unrelated
+  sites: five distinct `_stamp` closures in `memory_ledger.py` shared one
+  key, and `memory_backends.py`'s `read_all` entry covered both
+  `JSONLBackend` and `SQLiteBackend`. Reviewing either would have blessed
+  the other. Fixed there by qualifying the name (`outer.inner`,
+  `Class.method`). **The retention allowlist has the same latent hazard
+  and is clean today** — checked 2026-08-17, none of its 28 entries
+  resolves to more than one def in its module — so this is a
+  cheap-now/expensive-later change rather than a live bug. Fold it into
+  whichever option is chosen; the two halves of the key are independent
+  and qualification is the smaller of the two.
+
+  **Recommendation unchanged, now with the caveat that a bare count would look like a fix
   without being one.**
 
 - [ ] **Let a goal carry files — images first.** Found live: Jeremy's

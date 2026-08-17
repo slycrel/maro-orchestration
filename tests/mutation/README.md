@@ -117,6 +117,29 @@ failure the sweep exists to find.
 
 | `lesson_sweep.json` | The flat lesson corpus's two rewriting maintenance paths: `deduplicate_lessons`' preserve-in-place rewrite, unparseable count and warning, dry-run and no-op gates, and the exact/near merge semantics (task_type scoping, reinforcement accumulation, variant absorption, the 0.8 threshold); `compress_old_outcomes`' parsed-only delete set, batch membership, and `keep_recent` floor | 24 | 2026-08-16, all accounted for (21/24 on first pass, 3 real survivors closed) |
 
+| `stamp_preserve.json` | The read half of the same module plus the census key: `_read_store`/`_rows_as` (loss announced, store named, corruption vs. schema drift kept apart, one bad row not aborting the load), the six in-place stampers' preserve-and-rejoin rewrite and its scan-traversal premise, the census's qualified-name walk (`_child_scopes` boundaries, `outer.inner` composition), and the REVIEWED-coverage check | 16 | 2026-08-17, all accounted for (9/15 on first pass, one fixture defect and four genuine holes closed) |
+
+Note on `stamp_preserve.json`: the highest-value sweep of the arc so far,
+and the one that most clearly paid for itself. Six of fifteen came back
+NEEDS WORK, and the four ordinary holes were the honest kind — the fix to
+`_read_store` had been confirmed by **probe** and never by a test, so
+deleting its warning outright survived. Probing tells you the code works
+now; only a test tells you it still will.
+
+The sixth is the one worth remembering. `vacuity :: the torn line stops
+the scan` (`continue` -> `break`) SURVIVED against a fixture whose torn
+line sat at the top of the store — because five of the six stampers scan
+in **reverse** (newest row wins), so they found the target row before ever
+reaching the torn line. Every preservation assertion was passing on a file
+the scanner had never had to step over. This is the `lesson_sweep.json`
+lesson again in a new costume — a test passing for a reason unrelated to
+its docstring — but with a sharper edge: the vacuity guard I had written
+specifically to prevent it (*"the stamp still lands past the torn line"*)
+also passed, because it shared the fixture's blind spot. **A premise
+assertion built from the same fixture inherits the fixture's defects.**
+The store now brackets its target with torn lines on both sides, so
+direction cannot matter.
+
 Note on `lesson_sweep.json`: this spec exists because the silent-drop
 census pointed at `memory_ledger.py` and reading the file found
 `deduplicate_lessons` **deleting rows it could not parse** — rebuilding
