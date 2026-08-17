@@ -267,7 +267,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("router.py", "build_training_data"): 2,
 
-
     ("run_curation.py", "_load_loop_log"): 1,
     ("run_curation.py", "find_unconsumed_skill_candidates"): 1,
     ("run_curation.py", "inventory_assets"): 1,

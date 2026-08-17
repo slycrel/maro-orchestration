@@ -317,7 +317,13 @@ def _load_task(task_id: str) -> Optional[BackgroundTask]:
         return None
     # Announced byte-level read; scan in reverse for the most recent
     # version. A torn byte used to raise UnicodeDecodeError into every
-    # poll/wait caller.
+    # poll/wait caller. A torn row is dropped (announced) before this loop
+    # sees it; that cannot silently serve a STALE older row of the same
+    # task, because _append_task_log's atomic rewrite removes the older
+    # clean row in the same os.replace that lands the newest one — at most
+    # one clean row per id exists, so a task whose only row is torn reads
+    # as absent (the announced-loss direction), never as an old status
+    # (adversarial r3, 2026-08-17: mechanism traced, state unreachable).
     for d in reversed(_read_store(path, "_load_task")):
         if d.get("id") == task_id:
             try:

@@ -385,3 +385,23 @@ class TestKeyedUpsertsPreserveWhatTheyCannotParse:
         assert after.count(b'"id": "T1abcdef"') == 2  # new + tainted twin
         with pytest.raises(UnicodeDecodeError):
             after.decode("utf-8")        # corruption signal intact
+
+    def test_a_drifted_newest_row_reads_as_absent_not_stale(
+            self, tmp_path, monkeypatch, caplog):
+        # The deliberate semantic change (2026-08-17): a row that id-matches
+        # but no longer builds as BackgroundTask warns and reads as ABSENT.
+        # The old `except: continue` fell through to an OLDER valid row of
+        # the same task — serving "running" when the newest write said the
+        # task was done: a lying record.
+        import logging
+        p = tmp_path / "background-tasks.jsonl"
+        monkeypatch.setattr("background._bg_log_path", lambda: p)
+        drifted = {"id": "T1abcdef", "note": "newest write, schema-drifted"}
+        p.write_bytes(json.dumps(_task_row(status="running")).encode()
+                      + b"\n" + json.dumps(drifted).encode() + b"\n")
+        with caplog.at_level(logging.WARNING):
+            got = _load_task("T1abcdef")
+        assert got is None               # NOT the stale older "running" row
+        assert any("not loadable as" in r.message for r in caplog.records)
+        with pytest.raises(KeyError):
+            poll_background("T1abcdef")

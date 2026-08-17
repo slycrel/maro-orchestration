@@ -35,6 +35,13 @@
     "tests": "tests/test_background.py"
   },
   {
+    "name": "bg stale :: a drifted newest row falls through to a stale older version of the task",
+    "file": "src/background.py",
+    "anchor": "            except Exception as exc:\n                log.warning(\"_load_task: row %s is JSON but not loadable as \"\n                            \"BackgroundTask (%s: %s) — treating as absent\",\n                            task_id, type(exc).__name__, exc)\n                return None",
+    "replacement": "            except Exception:\n                continue",
+    "tests": "tests/test_background.py"
+  },
+  {
     "name": "bg family-B :: the task lookup raises UnicodeDecodeError into every poll caller",
     "file": "src/background.py",
     "anchor": "    for d in reversed(_read_store(path, \"_load_task\")):",
