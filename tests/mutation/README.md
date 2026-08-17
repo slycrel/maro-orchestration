@@ -112,6 +112,19 @@ failure the sweep exists to find.
 | `delta_gate_floors.json` | The Δ-gate's acting floors: `EFFECT_PROMOTE_MIN_DELTA/MIN_CALLS`, `EFFECT_DEMOTE_MAX_DELTA`, `EFFECT_INERT_MAX_ABS_DELTA/MAX_SPREAD`, and every guard in the four routes (`promote_lesson_by_effect`, `confirm_lesson_by_delta`, `demote_lesson_by_effect`, `inert_lesson_by_effect`) plus `resolve_remint_watch` — killswitches, finite-only, call floor, spread, stratum, replay-errors, boundary flags, text binding | 34 + 2 equivalent | 2026-08-16, all accounted for (33/35 on first pass — best of the arc) |
 | `jsonl_utils.json` | The shared JSONL reader (9 callers): `_iter_lines_reverse` chunk stitching + order + boundary hold-back, the one `_classify` ladder (blank / undecodable / malformed / non-dict) and which bucket each lands in, `_read`'s missing-vs-unreadable split and tail/full-scan branch, `SkipReport.dropped/__bool__/summary`, and the WARNING that names the store | 32 | 2026-08-16, all accounted for (32/32 first pass — see the note below on what that does and does not mean) |
 
+| `silent_drop_census.json` | The silent-drop tripwire itself (`tests/test_no_silent_drop.py`): the parse-call set and its nested-call walk, the control-flow-only silence test, scope walking (nested-def boundary, enclosing-loop requirement, loop propagation, `async for`/`while`), attribution to the owning function, rglob, the REVIEWED/UNREVIEWED allowance arithmetic, both censuses, and the SRC wiring | 32 | 2026-08-16, all accounted for (30/32 on first pass, both gaps were ambiguous anchors, not survivors) |
+
+Note on `silent_drop_census.json`: the two "survivors" on the first pass
+were neither survivors nor holes — the fixture proving each parser is
+covered spelled its list as `("yaml", "safe_load"), ("yaml", "load"),`,
+byte-identical to a line of `_PARSE_CALLS`, so the mutation that deletes
+that line matched twice and was SKIPPED. **A fixture can disarm its own
+mutation.** It reads as NEEDS WORK in the runner output exactly like a real
+hole, which is why the skip message is loud and why the count line
+distinguishes "accounted for" from "passed". Fixed by respelling the
+fixture's list as dotted strings; a comment in the fixture says why, since
+tuples are the obvious way to write it and someone will change it back.
+
 Note on `jsonl_utils.json`: 32/32 on the first pass is the weakest kind of
 green in this directory, and the row says so on purpose. The tests and the
 mutation list were written in the same sitting against the same reading of

@@ -181,10 +181,26 @@ Ordered open work that matters. Top of the list is next.
     see the README note on why a co-written sweep is the weak kind of
     green. Side-find: a `if buffer: yield buffer` block in
     `_iter_lines_reverse` was unreachable in unmutated code and removed.
-  - *Slice 2 — NEXT.* A census tripwire for the silent-drop shape: every
-    off-disk parse site in `src/` either routes through the honest reader
-    or carries an allowlist entry with its reason. Landing it red is
-    acceptable and probably correct.
+  - *Slice 2 — SHIPPED 2026-08-16.* `tests/test_no_silent_drop.py`, a
+    ratchet rather than the red gate that was planned. The rule is narrow
+    and stated in the docstring: an `except` handler whose `try` contains
+    a json/yaml/pickle/tomllib load, inside a loop in the same function,
+    whose body is only `pass`/`continue`/`break`. Under that rule the
+    count is **137 per-record drops in 49 modules across 122 functions**
+    (inside a wider 313 silent handlers over a parse call across 83
+    modules; the "143 across 52" in the slice-1 note was an ad-hoc scan
+    from before the rule was pinned and is superseded). All 137 land in
+    `UNREVIEWED_SILENT_DROPS` as **debt, not approval** — new ones trip,
+    fixing one means deleting its line in the same diff, and
+    `REVIEWED_SILENT_DROPS` stays empty until somebody actually looks at
+    a site and writes down why the silence is right. Keyed
+    `(module, function) -> count`, which **settles the open retention
+    allowlist-granularity decision by building option (b)** rather than
+    asking: a second drop in a listed function trips, and half-fixing one
+    trips the stale check so the freed slot can't be quietly reused.
+    20 must-detect fixtures in both directions plus a non-vacuity check
+    that SRC resolves to a real tree. `silent_drop_census.json`, 32
+    mutations, 32/32.
   - *Slice 3.* File-derived sweeps on the top stores — `memory_ledger.py`
     (16 sites, and the only copy of the learning data), the remaining
     ~85% of `knowledge_web.py`, `evolver_store.py`.
@@ -230,6 +246,21 @@ Ordered open work that matters. Top of the list is next.
   on every refactor. (b) looks like the honest-good-enough slice. Related
   limit, no action proposed: a shell-out `rm` bypasses the AST scan
   entirely — none in src/ today, verified 2026-08-16.
+
+  **Update 2026-08-16: there is now a worked precedent to decide against
+  instead of a hypothetical.** The silent-drop tripwire
+  (`tests/test_no_silent_drop.py`, same day) was built on a counting key
+  — `(module, function) -> count` — because this item recommended it.
+  Live experience so far: the baseline is 122 entries and the count adds
+  no meaningful noise, and the stale check has to compare counts rather
+  than membership, which is four extra lines. The retention list is 29
+  entries, so the cost there is smaller still. The remaining argument for
+  (a) is that a count is not the *shape* — `.unlink` becoming `rmtree`
+  inside an allowed function still reads as one deletion — so counting
+  alone does not close the escalation hole this item is actually about.
+  A shape multiset (option (b) as written) does. **Recommendation
+  unchanged, now with the caveat that a bare count would look like a fix
+  without being one.**
 
 - [ ] **Let a goal carry files — images first.** Found live: Jeremy's
   goal was *"find this pictured study"* with a screenshot of the paper's

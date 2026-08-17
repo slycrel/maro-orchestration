@@ -3396,3 +3396,31 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   sizes 1..63 across ten file shapes, then removed rather than left as a
   guard that cannot fire. README gained a convention for the HEAD trap.
   Suite +21 tests.
+- **2026-08-16 (box)** — **Tier-2 slice 2: the silent-drop tripwire**
+  (`tests/test_no_silent_drop.py`), landed as a **ratchet, not the red gate
+  I planned**. Red was the wrong instinct: the mutation sweeps aren't
+  collected by pytest, so `provenance_gate.json` could sit red as a ledger,
+  but a red *test* breaks the suite for every concurrent session in this
+  tree. A baseline that cannot grow does the same job without holding
+  anyone else hostage. The rule is deliberately narrow and written down: an
+  `except` whose `try` holds a json/yaml/pickle/tomllib load, inside a loop
+  in the same function, whose body is only `pass`/`continue`/`break`. Under
+  it: **137 per-record drops, 49 modules, 122 functions**, inside a wider
+  313 silent handlers over a parse call across 83 modules. That **corrects
+  the "143 across 52" I recorded yesterday** — an ad-hoc scan from before
+  the rule was pinned. The 137 go in as UNREVIEWED (debt, explicitly not
+  approval); REVIEWED is empty and stays empty until someone looks at a
+  site and writes the reason. Key is `(module, function) -> count`, which
+  **settles the open retention-granularity decision by building it** — and
+  the build taught something the proposal missed, now written into that
+  item: a bare count still reads `.unlink`→`rmtree` as one deletion, so
+  counting looks like a fix for the escalation hole without being one. Only
+  a shape multiset closes it. Sweep `silent_drop_census.json` 32/32, but
+  the interesting part is the two first-pass NEEDS WORK entries: **not
+  survivors — ambiguous anchors.** The fixture proving each parser is
+  covered spelled its list as tuples byte-identical to lines of
+  `_PARSE_CALLS`, so the mutations deleting those lines matched twice and
+  were skipped. **A fixture can disarm its own mutation, and it reads
+  exactly like a hole.** Also fixed `mutate.py`, which rejected
+  `"replacement": ""` as a missing field — so "this guard is not there at
+  all", the most direct mutation there is, could not be written. Suite +23.
