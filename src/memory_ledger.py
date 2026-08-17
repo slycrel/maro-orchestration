@@ -1871,20 +1871,41 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
     if not path.exists():
         return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
 
-    stats = {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+    stats = {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0,
+             "unparseable": 0}
 
     def _dedup(old: str) -> str:
+        # Every row in file order: a Lesson for the ones we could parse, the
+        # raw text for the ones we could not. Both get re-emitted below.
+        #
+        # This path used to rebuild the file from parsed rows alone, so a
+        # torn append or a schema-drifted row was DELETED by the next dedup
+        # — and `before` already excluded it, so the stats and the log could
+        # not show the loss either. lessons.jsonl is the only copy of the
+        # flat lane (2026-08-16). The three sibling rewrite paths
+        # (_rewrite_lessons_file, _reinforce_flat_row, and the _mark/_stamp
+        # in-place edits) have always preserved these; this one was the
+        # outlier, which is exactly why nobody noticed.
+        #
+        # Known limit, same as the siblings: a row no version can parse is
+        # unremovable by any flat path. The tiered store answered that with
+        # an append-only .unparseable sidecar (§14a r4) rather than
+        # carrying rows back; if the flat lane ever needs the same, do it
+        # to all four paths at once, not here alone.
+        entries: List[Any] = []
         all_lessons: List[Lesson] = []
         for line in old.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                d = json.loads(line)
-                l = _lesson_from_row(d)
-                all_lessons.append(l)
+                l = _lesson_from_row(json.loads(line))
             except Exception:
-                pass
+                entries.append(line)
+                stats["unparseable"] += 1
+                continue
+            entries.append(l)
+            all_lessons.append(l)
 
         stats["before"] = len(all_lessons)
         kept: List[Lesson] = []
@@ -1940,7 +1961,15 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
 
         stats["after"] = len(kept)
         if not dry_run and stats["after"] < stats["before"]:
-            return "\n".join(json.dumps(_verdict_row(l)) for l in kept) + "\n"
+            # Identity, not equality: `kept` holds the very objects from
+            # `entries`, and the merge MUTATES survivors (times_reinforced,
+            # merged_variants), so two rows can compare equal while only one
+            # of them survived.
+            survivors = {id(l) for l in kept}
+            out = [e if isinstance(e, str) else json.dumps(_verdict_row(e))
+                   for e in entries
+                   if isinstance(e, str) or id(e) in survivors]
+            return "\n".join(out) + ("\n" if out else "")
         return old  # dry-run or nothing removed — leave the file as-is
 
     # Parse + dedup + rewrite all under the file's lock (locked_rmw) so a
@@ -1952,23 +1981,35 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
     except Exception as exc:
         log.warning("deduplicate_lessons: write failed: %s", exc)
         if stats["before"] == 0:
-            return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+            return {"before": 0, "after": 0, "removed_exact": 0,
+                    "removed_near": 0, "unparseable": stats["unparseable"]}
 
     before = stats["before"]
     after = stats["after"]
     removed_exact = stats["removed_exact"]
     removed_near = stats["removed_near"]
+    unparseable = stats["unparseable"]
 
     log.info(
         "deduplicate_lessons: before=%d after=%d removed_exact=%d removed_near=%d dry_run=%s",
         before, after, removed_exact, removed_near, dry_run,
     )
+    if unparseable:
+        # WARNING, not part of the info line: `before` counts only rows that
+        # parsed, so without this the caller sees a smaller corpus than the
+        # file holds and no reason for the difference.
+        log.warning(
+            "deduplicate_lessons: %d row(s) in %s could not be parsed — kept "
+            "verbatim and excluded from the before=%d count",
+            unparseable, path, before,
+        )
     return {
         "before": before,
         "after": after,
         "removed_exact": removed_exact,
         "removed_near": removed_near,
         "removed_dry_run": dry_run and (removed_exact + removed_near),
+        "unparseable": unparseable,
     }
 
 
@@ -2083,13 +2124,30 @@ def compress_old_outcomes(
 
     to_compress_lines = raw_lines[:compress_count]
 
-    # Parse outcomes for metadata
+    # Parse outcomes for metadata. `parsed_lines` tracks the RAW text of the
+    # rows that parsed, because those are the only ones this call is entitled
+    # to delete below: an unparseable line contributes nothing to the batch
+    # summary, so dropping it from outcomes.jsonl would destroy it outright
+    # rather than compress it (2026-08-16 — compression trades detail for
+    # space, it does not trade a row for nothing).
     parsed: List[Dict[str, Any]] = []
+    parsed_lines: List[str] = []
+    unparseable = 0
     for line in to_compress_lines:
         try:
-            parsed.append(json.loads(line))
+            d = json.loads(line)
         except Exception:
-            pass
+            unparseable += 1
+            continue
+        parsed.append(d)
+        parsed_lines.append(line)
+
+    if unparseable:
+        log.warning(
+            "compress_old_outcomes: %d line(s) in the compression range of %s "
+            "could not be parsed — left in place, not represented in the batch",
+            unparseable, path,
+        )
 
     if not parsed:
         return None
@@ -2153,7 +2211,8 @@ def compress_old_outcomes(
     # landed mid-compression survive (keyed-merge pattern).
     _save_compressed_batch(batch)
     from file_lock import locked_rmw
-    _compressed_set = set(to_compress_lines)
+    # parsed_lines, not to_compress_lines — see the parse loop above.
+    _compressed_set = set(parsed_lines)
 
     def _drop_compressed(old: str) -> str:
         kept = [l for l in old.splitlines() if l.strip() and l not in _compressed_set]

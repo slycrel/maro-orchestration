@@ -1,6 +1,7 @@
 """Tests for Phase 5: memory.py (outcome recording, lessons, Reflexion)."""
 
 import json
+import logging
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -1534,6 +1535,7 @@ class TestDeduplicateLessons:
         kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
         assert kept[0]["times_reinforced"] == 4 + 1 + 7
 
+
     def test_oversize_exact_rerecord_is_not_a_variant(self, monkeypatch, tmp_path):
         """Fixpoint review round 2: identity is judged BEFORE clipping — a
         >500-char canonical's exact re-record must not store its own
@@ -1634,6 +1636,200 @@ class TestDeduplicateLessons:
         assert stats["removed_exact"] == 0
         assert stats["removed_near"] == 0
 
+
+class TestDeduplicateLessonsPreservesWhatItCannotParse:
+    """The sweep must not destroy rows it does not understand.
+
+    deduplicate_lessons rebuilt lessons.jsonl from the rows that parsed, so
+    a torn append or a schema-drifted row was deleted by the next dedup —
+    and `before` already excluded it, so neither the stats nor the log could
+    show the loss. lessons.jsonl is the only copy of the flat lane.
+
+    Found 2026-08-16 during the tier-2 silent-drop sweep. Its three sibling
+    rewrite paths (_rewrite_lessons_file, _reinforce_flat_row, and the
+    _mark/_stamp in-place edits) had preserved unparseable rows for months;
+    this one was the outlier, which is why the repo's own record described
+    the flat store as preserving them.
+    """
+
+    _lessons_path = TestDeduplicateLessons._lessons_path
+    _make_lesson = TestDeduplicateLessons._make_lesson
+
+    def _write(self, path, rows):
+        """Write raw lines — rows may be dicts or literal strings."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(
+            (r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows
+        ), encoding="utf-8")
+
+    def _lines(self, path):
+        return [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_a_torn_line_survives_a_dedup_that_rewrites_the_file(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        torn = '{"lesson_id": "L009", "lesson": "half a row'
+        self._write(path, [dup, torn, dict(dup, lesson_id="L002")])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+
+        # Non-vacuity: the rewrite must actually have happened, or this
+        # passes for the boring reason that nothing was written at all.
+        assert stats["removed_exact"] == 1, "the dedup did not rewrite the file"
+        assert torn in self._lines(path), "the sweep destroyed a row it could not parse"
+
+    def test_the_torn_line_keeps_its_position(self, monkeypatch, tmp_path):
+        # Order is the only thing distinguishing an old row from a new one
+        # in an append-only ledger; re-emitting survivors at the top would
+        # silently re-date the corpus.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        first = self._make_lesson("First distinct lesson here.", lesson_id="L001")
+        torn = "not json at all"
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L002")
+        self._write(path, [first, torn, dup, dict(dup, lesson_id="L003")])
+
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+
+        lines = self._lines(path)
+        assert len(lines) == 3
+        assert json.loads(lines[0])["lesson_id"] == "L001"
+        assert lines[1] == torn
+        assert json.loads(lines[2])["lesson_id"] == "L002"
+
+    def test_a_row_that_parses_but_is_not_a_lesson_survives(
+            self, monkeypatch, tmp_path):
+        # Schema drift, not corruption: valid JSON the current dataclass
+        # rejects. This is the shape that eats the corpus quietly as the
+        # schema evolves, because it looks like a normal row on disk.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        alien = '{"lesson_id": "L009", "from_a_future_schema": true, "lesson": []}'
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write(path, [dup, alien, dict(dup, lesson_id="L002")])
+
+        from memory_ledger import deduplicate_lessons, _lesson_from_row
+        with pytest.raises(Exception):
+            _lesson_from_row(json.loads(alien))  # the premise of this test
+
+        deduplicate_lessons()
+        assert alien in self._lines(path)
+
+    def test_the_unparseable_count_is_reported_not_just_absorbed(
+            self, monkeypatch, tmp_path):
+        # `before` counts only rows that parsed, so without this the caller
+        # sees a smaller corpus than the file holds and no reason why.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write(path, [dup, "torn one", dict(dup, lesson_id="L002"), "torn two"])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["unparseable"] == 2
+        assert stats["before"] == 2, "before counts parsed rows only"
+
+    def test_a_clean_corpus_reports_no_unparseable_rows(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write(path, [dup, dict(dup, lesson_id="L002")])
+
+        from memory_ledger import deduplicate_lessons
+        assert deduplicate_lessons()["unparseable"] == 0
+
+    def test_a_dry_run_never_rewrites_even_with_torn_rows(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write(path, [dup, "torn", dict(dup, lesson_id="L002")])
+        before = path.read_text(encoding="utf-8")
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons(dry_run=True)
+        assert stats["removed_exact"] == 1
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_a_file_of_nothing_but_torn_rows_is_left_alone(
+            self, monkeypatch, tmp_path):
+        # before == after == 0, so no rewrite is triggered — but if one ever
+        # were, an empty `kept` must not truncate the file to nothing.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        self._write(path, ["torn one", "torn two"])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["unparseable"] == 2
+        assert self._lines(path) == ["torn one", "torn two"]
+
+    def test_the_loss_is_announced_to_an_operator(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        dup = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write(path, [dup, "torn", dict(dup, lesson_id="L002")])
+
+        from memory_ledger import deduplicate_lessons
+        with caplog.at_level(logging.WARNING, logger="memory_ledger"):
+            deduplicate_lessons()
+        warnings = [r.getMessage() for r in caplog.records
+                    if r.levelno >= logging.WARNING]
+        assert any("could not be parsed" in m and str(path) in m for m in warnings), \
+            f"no warning naming the store: {warnings}"
+
+
+class TestCompressOldOutcomesKeepsWhatItCannotSummarise:
+    """Compression trades detail for space; it must not trade a row for
+    nothing. The rewrite dropped its whole compressed range, including lines
+    that failed to parse — and those contribute nothing to the batch
+    summary, so they were destroyed outright rather than compressed.
+    """
+
+    def _outcomes_path(self, tmp_path):
+        return tmp_path / "memory" / "outcomes.jsonl"
+
+    def _row(self, i):
+        return json.dumps({
+            "outcome_id": f"O{i:03d}", "task_type": "build", "status": "done",
+            "goal": f"goal {i}", "summary": f"summary {i}",
+            "recorded_at": f"2026-01-{(i % 28) + 1:02d}T00:00:00+00:00",
+        })
+
+    def _write(self, path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(r + "\n" for r in rows), encoding="utf-8")
+
+    def test_an_unparseable_row_in_the_compressed_range_is_left_in_place(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._outcomes_path(tmp_path)
+        torn = '{"outcome_id": "O999", "goal": "torn'
+        self._write(path, [self._row(0), torn] + [self._row(i) for i in range(1, 40)])
+
+        from memory_ledger import compress_old_outcomes
+        batch = compress_old_outcomes(threshold=10, batch_size=5, keep_recent=5)
+
+        assert batch is not None, "compression did not run — test proves nothing"
+        remaining = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert torn in remaining, "a row that could not be summarised was deleted"
+        assert self._row(0) not in remaining, "the parseable rows were not compressed"
+
+    def test_the_batch_does_not_claim_the_row_it_could_not_read(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._outcomes_path(tmp_path)
+        self._write(path, [self._row(0), "torn"] + [self._row(i) for i in range(1, 40)])
+
+        from memory_ledger import compress_old_outcomes
+        batch = compress_old_outcomes(threshold=10, batch_size=5, keep_recent=5)
+        assert batch.batch_size == len(batch.outcome_ids)
+        assert "O999" not in batch.outcome_ids
 
 class TestTypedLessonExtraction:
     """The production prompt asks for [{"lesson": ..., "type": ...}] objects;

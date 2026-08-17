@@ -40,11 +40,13 @@ Limits, stated so nobody reads more off a green run than it carries:
   * Single-object reads are out of scope. `except json.JSONDecodeError:
     return None` on a whole-config read loses everything, not one record,
     and reads as "no config" rather than "corrupt config" — a real
-    defect, a different shape. The wider count as of 2026-08-16: 313
-    silent handlers over a parse call across 83 modules, of which the
-    137 per-record drops below are the slice this gate covers. (An
-    earlier ad-hoc scan reported "143 across 52 modules" before the rule
-    was pinned down; that figure is superseded by this one.)
+    defect, a different shape. The wider count when this gate landed
+    (2026-08-16): 313 silent handlers over a parse call across 83
+    modules, of which 137 were per-record drops — the slice this gate
+    covers, and the size of the baseline it landed with. The live number
+    is whatever the dict below sums to; it only goes down. (An earlier
+    ad-hoc scan reported "143 across 52 modules" before the rule was
+    pinned down; that figure is superseded.)
   * A parse that never raises because it was pre-validated elsewhere
     still lands in the census. That is what REVIEWED is for.
 
@@ -165,11 +167,9 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("memory_backends.py", "read_all"): 2,
 
-    ("memory_ledger.py", "_dedup"): 1,
     ("memory_ledger.py", "_mark"): 1,
     ("memory_ledger.py", "_maybe_record_skill_injection_outcomes"): 1,
     ("memory_ledger.py", "_stamp"): 5,
-    ("memory_ledger.py", "compress_old_outcomes"): 1,
     ("memory_ledger.py", "load_compressed_batches"): 1,
     ("memory_ledger.py", "load_lessons"): 1,
     ("memory_ledger.py", "load_outcome_by_loop_id"): 1,
