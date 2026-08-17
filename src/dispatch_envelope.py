@@ -227,14 +227,25 @@ def store_operator_attachments(paths, *, key: str) -> List[dict]:
             raise EnvelopeError(
                 f"attachment {src.name} is {size} bytes, over the "
                 f"{_MAX_ATTACHMENT_BYTES}-byte limit")
-        data = src.read_bytes()
+        try:
+            data = src.read_bytes()
+        except OSError as exc:
+            raise EnvelopeError(f"attachment unreadable: {src}: {exc}")
         base = _safe_name(src.name)
         target = dest / base
         n = 1
         while target.exists() and target.read_bytes() != data:
             n += 1
             target = dest / f"{Path(base).stem}-{n}{Path(base).suffix}"
-        target.write_bytes(data)
+        # OSError here (disk full, permission denied on output_dir) must
+        # surface as the lane's own refusal, not a raw traceback — the CLI
+        # catches EnvelopeError and prints an actionable line; a traceback
+        # on `--attach` reads as "broken", not "fix your disk" (recovered
+        # QA finding, 2026-08-17).
+        try:
+            target.write_bytes(data)
+        except OSError as exc:
+            raise EnvelopeError(f"could not store attachment {src.name}: {exc}")
         rec = {
             "name": base,
             "path": str(target),

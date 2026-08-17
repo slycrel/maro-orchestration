@@ -90,5 +90,12 @@
   "anchor": "                if target.read_bytes() == data:\n                    continue",
   "replacement": "                continue\n                if False:\n                    continue",
   "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "an I/O failure surfaces as a raw traceback instead of the lane's refusal",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        try:\n            target.write_bytes(data)\n        except OSError as exc:\n            raise EnvelopeError(f\"could not store attachment {src.name}: {exc}\")",
+  "replacement": "        target.write_bytes(data)",
+  "tests": "tests/test_operator_attachments.py"
  }
 ]

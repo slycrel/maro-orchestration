@@ -369,3 +369,30 @@ class TestLandingKeepsBothOnCollision:
         land_operator_attachments(rd, "k2")
         bodies = {p.read_text() for p in dest.glob("f*.txt")}
         assert bodies == {"first", "second"}, bodies
+
+
+class TestIOFailuresSurfaceAsTheLanesOwnRefusal:
+    """Recovered QA finding (2026-08-17, from the ReportFindings payload the
+    harness never read): the CLI catches EnvelopeError only, so a bare
+    OSError from a full disk or unreadable file gave the operator a raw
+    traceback instead of the refusal this lane promises."""
+
+    def test_an_unreadable_file_raises_envelope_error(self, ws, tmp_path,
+                                                      monkeypatch):
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        monkeypatch.setattr(Path, "read_bytes",
+                            lambda self: (_ for _ in ()).throw(OSError("EACCES")))
+        with pytest.raises(EnvelopeError, match="unreadable"):
+            store_operator_attachments([str(f)], key="k1")
+
+    def test_a_failed_store_write_raises_envelope_error(self, ws, tmp_path,
+                                                        monkeypatch):
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        real = Path.write_bytes
+        def boom(self, data):
+            if "operator-attachments" in str(self):
+                raise OSError("ENOSPC")
+            return real(self, data)
+        monkeypatch.setattr(Path, "write_bytes", boom)
+        with pytest.raises(EnvelopeError, match="could not store"):
+            store_operator_attachments([str(f)], key="k1")
