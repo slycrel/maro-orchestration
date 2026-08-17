@@ -340,10 +340,18 @@ Ordered open work that matters. Top of the list is next.
       loads_clean swap x2, tainted-twin pins x2, mutations 16 total,
       record corrected. Rejected: get_suggestion early-exit perf.*
     - *Slice 3's named surfaces are DONE (memory_ledger 16,
-      knowledge_web 9, evolver_store 8). Remaining census debt (95
+      knowledge_web 9, evolver_store 8). Remaining census debt (92
       unreviewed sites led by skills.py 7, loop_report.py 6) is
       tripwire-guarded, not scheduled — burn down opportunistically
       when touching a file, per the census contract.*
+    - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
+      QA sibling sweep, verified over Minimalist's dissent):
+      `save_rule._upsert` + `_append_task_log._merge` were the
+      DESTRUCTIVE subset of the debt — keyed rewrites that re-dumped
+      every row (laundering) and deleted torn lines outright on every
+      save/start/poll. Reshaped to the verbatim-preserve pattern;
+      `load_rules`/`_load_task` announced; census 92+12; 4 tests, 6
+      mutations 6/6, suite 9448.*
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
