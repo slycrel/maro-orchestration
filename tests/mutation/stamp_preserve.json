@@ -1,0 +1,114 @@
+[
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (mark)",
+    "file": "src/memory_ledger.py",
+    "anchor": "            lines[i] = json.dumps(row)\n            marked[\"n\"] += 1\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "            lines[i] = json.dumps(row)\n            marked[\"n\"] += 1\n        _kept = []\n        for _l in lines:\n            try:\n                json.loads(_l)\n            except Exception:\n                continue\n            _kept.append(_l)\n        return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (stop_verdict)",
+    "file": "src/memory_ledger.py",
+    "anchor": "                row[\"stop_verdict\"] = stop_verdict\n                if stop_evidence:\n                    row[\"stop_evidence\"] = _clip(stop_evidence, 800)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "                row[\"stop_verdict\"] = stop_verdict\n                if stop_evidence:\n                    row[\"stop_evidence\"] = _clip(stop_evidence, 800)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        _kept = []\n        for _l in lines:\n            try:\n                json.loads(_l)\n            except Exception:\n                continue\n            _kept.append(_l)\n        return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (step_lessons)",
+    "file": "src/memory_ledger.py",
+    "anchor": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        _kept = []\n        for _l in lines:\n            try:\n                json.loads(_l)\n            except Exception:\n                continue\n            _kept.append(_l)\n        return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the rewrite is rebuilt from parsed rows (extraction_failure)",
+    "file": "src/memory_ledger.py",
+    "anchor": "                row[\"lesson_extraction_status\"] = \"failed\"\n                row[\"lesson_extraction_count\"] = 0\n                lines[i] = json.dumps(row)\n                updated[\"hit\"] = True\n                break\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "                row[\"lesson_extraction_status\"] = \"failed\"\n                row[\"lesson_extraction_count\"] = 0\n                lines[i] = json.dumps(row)\n                updated[\"hit\"] = True\n                break\n        _kept = []\n        for _l in lines:\n            try:\n                json.loads(_l)\n            except Exception:\n                continue\n            _kept.append(_l)\n        return \"\\n\".join(_kept) + (\"\\n\" if _kept else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: the torn line is moved to the end instead of held in place",
+    "file": "src/memory_ledger.py",
+    "anchor": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        _ok, _torn = [], []\n        for _l in lines:\n            try:\n                json.loads(_l)\n                _ok.append(_l)\n            except Exception:\n                _torn.append(_l)\n        _out = _ok + _torn\n        return \"\\n\".join(_out) + (\"\\n\" if _out else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "vacuity :: the torn line stops the scan, so nothing is ever stamped",
+    "file": "src/memory_ledger.py",
+    "anchor": "            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                continue\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                row[\"step_lesson_count\"] = int(count)",
+    "replacement": "            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                break\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                row[\"step_lesson_count\"] = int(count)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "read :: the SkipReport is computed and thrown away",
+    "file": "src/memory_ledger.py",
+    "anchor": "    rows, report = read_jsonl_tail_counted(path)\n    if report:\n        log.warning(\"%s: %s (%s)\", what, report.summary(), path)\n    return rows",
+    "replacement": "    rows, report = read_jsonl_tail_counted(path)\n    return rows",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "read :: the warning does not name the store",
+    "file": "src/memory_ledger.py",
+    "anchor": "        log.warning(\"%s: %s (%s)\", what, report.summary(), path)",
+    "replacement": "        log.warning(\"%s: %s\", what, report.summary())",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "read :: a torn store reads as empty again (the family-A bug)",
+    "file": "src/memory_ledger.py",
+    "anchor": "    rows, report = read_jsonl_tail_counted(path)",
+    "replacement": "    rows, report = [], None\n    try:\n        for _line in path.read_text(encoding=\"utf-8\").splitlines():\n            if _line.strip():\n                rows.append(json.loads(_line))\n    except Exception:\n        return []",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "drift :: schema-rejected rows are counted but not announced",
+    "file": "src/memory_ledger.py",
+    "anchor": "    if drifted:\n        log.warning(",
+    "replacement": "    if False:\n        log.warning(",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "drift :: a schema-rejected row aborts the whole load",
+    "file": "src/memory_ledger.py",
+    "anchor": "        try:\n            out.append(build(d))\n        except Exception:\n            drifted += 1",
+    "replacement": "        try:\n            out.append(build(d))\n        except Exception:\n            return []",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "census :: nested function names are not qualified",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "            visit(child, name if qual == \"<module>\" else f\"{qual}.{name}\")",
+    "replacement": "            visit(child, name)",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "census :: _child_scopes descends through a nested def",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):\n            out.append(node)\n            continue\n        stack.extend(ast.iter_child_nodes(node))",
+    "replacement": "        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):\n            out.append(node)\n        stack.extend(ast.iter_child_nodes(node))",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "census :: _child_scopes stops at if/for instead of reaching through",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    out = []\n    stack = list(ast.iter_child_nodes(scope))\n    while stack:\n        node = stack.pop()\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):",
+    "replacement": "    out = []\n    stack = [n for n in ast.iter_child_nodes(scope)\n             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]\n    while stack:\n        node = stack.pop()\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "coverage :: the uncovered-stamper check always reports clean",
+    "file": "tests/test_memory.py",
+    "anchor": "    return {func.split(\".\")[0] for (mod, func) in reviewed\n            if mod == \"memory_ledger.py\"} - set(covered)",
+    "replacement": "    return set()",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "coverage :: the check ignores which module the entry is in",
+    "file": "tests/test_memory.py",
+    "anchor": "    return {func.split(\".\")[0] for (mod, func) in reviewed\n            if mod == \"memory_ledger.py\"} - set(covered)",
+    "replacement": "    return {func.split(\".\")[0] for (mod, func) in reviewed} - set(covered)",
+    "tests": "tests/test_memory.py"
+  }
+]

@@ -1973,9 +1973,19 @@ class TestTypedLessonExtraction:
         assert result == [("odd typed", "execution", "")]
 
 
-# A line that json.loads cannot parse: truncated mid-object. Kept byte-exact
-# so the assertions below can demand it back verbatim, not merely "present".
+# Lines json.loads cannot parse: truncated mid-object. Kept byte-exact so the
+# assertions below can demand them back verbatim, not merely "present".
+#
+# There are TWO, one on each side of the target row, and that is load-bearing.
+# Five of the six stampers scan the store in REVERSE (newest row wins), so a
+# torn line placed only at the top is never traversed on the way to a target
+# below it — the scan finds its row first and the torn line is preserved by
+# accident rather than by the skip. Found 2026-08-17 when the mutation
+# "the torn line stops the scan" (`continue` -> `break`) SURVIVED against a
+# single leading torn line. Bracketing the target means every scanner steps
+# over one whichever direction it runs.
 _TORN = '{"loop_id": "loop-1", "outcome_id": "O-torn", "goal": "half a row'
+_TORN_TAIL = '{"loop_id": "loop-1", "outcome_id": "O-torn-2", "goal": "also cut'
 
 
 def _outcome_row(**over):
@@ -2020,6 +2030,17 @@ def _stampers():
     ]
 
 
+def _uncovered(reviewed, covered):
+    """REVIEWED memory_ledger stampers with no preservation case above.
+
+    A function rather than an inline `==` so the check itself is testable:
+    compared against the real module globals the two sets always match, and
+    a weakened comparison (`>=`) is indistinguishable from a correct one.
+    """
+    return {func.split(".")[0] for (mod, func) in reviewed
+            if mod == "memory_ledger.py"} - set(covered)
+
+
 class TestTheStampersPreserveWhatTheyCannotParse:
     """The six in-place stampers are REVIEWED silent drops. This is why.
 
@@ -2043,8 +2064,11 @@ class TestTheStampersPreserveWhatTheyCannotParse:
         assert str(tmp_path) in str(path), f"probe escaped to the live store: {path}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
+            # Torn lines BRACKET the target (see _TORN) so both the forward
+            # scanner and the five reverse ones must step over one.
             _TORN + "\n"
             + json.dumps(_outcome_row()) + "\n"
+            + _TORN_TAIL + "\n"
             # A second row under the same handle_id: mark_outcomes_superseded
             # needs two to have anything to supersede.
             + json.dumps(_outcome_row(outcome_id="O2", loop_id="loop-2")) + "\n",
@@ -2054,15 +2078,16 @@ class TestTheStampersPreserveWhatTheyCannotParse:
 
     @pytest.mark.parametrize(
         "name,call,field", _stampers(), ids=[s[0] for s in _stampers()])
-    def test_the_torn_line_survives_the_rewrite(
+    def test_the_torn_lines_survive_the_rewrite(
             self, monkeypatch, tmp_path, name, call, field):
         path = self._store(monkeypatch, tmp_path)
         call()
         lines = path.read_text(encoding="utf-8").splitlines()
-        # Verbatim, and still first: the rewrite preserved position too, so a
-        # torn row is not quietly relocated to the end of the store.
-        assert lines[0] == _TORN, f"{name} destroyed the torn line"
-        assert len(lines) == 3, f"{name} changed the row count: {lines}"
+        # Verbatim, and still in position: the rewrite preserved order too, so
+        # a torn row is not quietly relocated to the end of the store.
+        assert lines[0] == _TORN, f"{name} destroyed the leading torn line"
+        assert lines[2] == _TORN_TAIL, f"{name} destroyed the trailing torn line"
+        assert len(lines) == 4, f"{name} changed the row count: {lines}"
 
     @pytest.mark.parametrize(
         "name,call,field", _stampers(), ids=[s[0] for s in _stampers()])
@@ -2083,6 +2108,93 @@ class TestTheStampersPreserveWhatTheyCannotParse:
         # string in test_no_silent_drop.py points at nothing.
         sys.path.insert(0, str(Path(__file__).parent))
         from test_no_silent_drop import REVIEWED_SILENT_DROPS
-        reviewed = {func.split(".")[0] for (mod, func) in REVIEWED_SILENT_DROPS
-                    if mod == "memory_ledger.py"}
-        assert reviewed == {name for name, _c, _f in _stampers()}
+        assert _uncovered(REVIEWED_SILENT_DROPS,
+                          {n for n, _c, _f in _stampers()}) == set()
+
+    def test_the_coverage_check_can_fail(self):
+        # Otherwise the assertion above is a tautology over two constants:
+        # `==` and `>=` behave identically while the sets match, so a mutation
+        # weakening it survives. Drive it with a fabricated seventh entry.
+        seventh = {("memory_ledger.py", "stamp_something_new._stamp"): "reason"}
+        assert _uncovered(seventh, set()) == {"stamp_something_new"}
+        assert _uncovered(seventh, {"stamp_something_new"}) == set()
+        # Other modules' reviewed entries are not this class's problem.
+        assert _uncovered({("other.py", "f._g"): "r"}, set()) == set()
+
+
+class TestTheStoreReadAnnouncesItsLoss:
+    """`_read_store` is the single place the eight loaders learn about loss.
+
+    Probing showed the fix works; that is not the same as a test showing the
+    warning is emitted, and the mutation sweep said so — deleting the warning
+    entirely SURVIVED until this class existed.
+    """
+
+    def _torn_store(self, monkeypatch, tmp_path):
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = ml._outcomes_path()
+        assert str(tmp_path) in str(path), f"probe escaped to the live store: {path}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(json.dumps(_outcome_row()).encode() + b"\n"
+                         + b'{"outcome_id": "\xff"}\n')
+        return path
+
+    def test_a_dropped_row_is_logged_at_warning(self, monkeypatch, tmp_path,
+                                                caplog):
+        import memory_ledger as ml
+        self._torn_store(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            rows = ml._read_store(ml._outcomes_path(), "probe")
+        assert len(rows) == 1, "the healthy row must still come back"
+        assert any(r.levelno >= logging.WARNING and "probe" in r.getMessage()
+                   for r in caplog.records), \
+            "one row was dropped and nothing said so"
+
+    def test_the_warning_names_the_store(self, monkeypatch, tmp_path, caplog):
+        # "1 row dropped" without a path is not actionable: this process reads
+        # a dozen JSONL stores and the operator cannot tell which one is torn.
+        import memory_ledger as ml
+        path = self._torn_store(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            ml._read_store(path, "probe")
+        assert any(str(path) in r.getMessage() for r in caplog.records), \
+            f"no warning named {path}"
+
+    def test_a_clean_store_says_nothing(self, monkeypatch, tmp_path, caplog):
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = ml._outcomes_path()
+        assert str(tmp_path) in str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_outcome_row()) + "\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            assert len(ml._read_store(path, "probe")) == 1
+        assert not [r for r in caplog.records if "probe" in r.getMessage()], \
+            "an intact store must not warn — a noisy gate gets muted"
+
+    def test_a_missing_store_is_not_loss(self, monkeypatch, tmp_path, caplog):
+        # Absent != torn. SkipReport is falsy for a missing file on purpose,
+        # and warning on every not-yet-created store would drown the real one.
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with caplog.at_level(logging.WARNING):
+            assert ml._read_store(tmp_path / "nope.jsonl", "probe") == []
+        assert not [r for r in caplog.records if "probe" in r.getMessage()]
+
+    def test_schema_drift_is_reported_separately_from_corruption(
+            self, monkeypatch, tmp_path, caplog):
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = ml._outcomes_path()
+        assert str(tmp_path) in str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Valid JSON, valid dict — but not a row the constructor accepts.
+        path.write_text(json.dumps(_outcome_row()) + "\n"
+                        + json.dumps({"not": "an outcome"}) + "\n",
+                        encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            rows = ml._rows_as(path, "probe", lambda d: Outcome(**d))
+        assert len(rows) == 1, "one bad row must not abort the load"
+        assert any("schema" in r.getMessage() for r in caplog.records), \
+            "drift was silently folded into the corruption count, or dropped"
