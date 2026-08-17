@@ -350,8 +350,16 @@ Ordered open work that matters. Top of the list is next.
       DESTRUCTIVE subset of the debt — keyed rewrites that re-dumped
       every row (laundering) and deleted torn lines outright on every
       save/start/poll. Reshaped to the verbatim-preserve pattern;
-      `load_rules`/`_load_task` announced; census 92+12; 4 tests, 6
-      mutations 6/6, suite 9448.*
+      `load_rules`/`_load_task` announced; census 92+12; 5 tests, 7
+      mutations 7/7, suite 9448. Its own adversarial r3
+      (Skeptic+Architect+QA): convergent MEDIUM fixed (the deliberate
+      drift-reads-as-absent semantic was untested — reverting it passed
+      the suite; now pinned + mutation-guarded); Skeptic HIGH refuted
+      by invariant (atomic rewrite keeps at most one clean row per id,
+      so a torn newest row cannot serve a stale older one — documented
+      at the read site); 2 LOWs deferred with reasons in the commit.
+      Fixpoint declared: r3 fixes are a test, a comment, and a blank
+      line — no new code paths to re-review.*
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard

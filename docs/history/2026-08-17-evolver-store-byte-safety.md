@@ -113,7 +113,16 @@ same sibling space and called it clear ("all other locked_rmw callers
 are single-object files") — the disagreement was chased and **QA was
 right**: both are per-line JSONL merges. Both sites were already on the
 UNREVIEWED census, but they are the destructive subset of that debt;
-fixed as an immediate follow-on chunk (see its own record/commit).
+fixed as an immediate follow-on chunk (commits `2844d4bb` and the r3
+fix commit), which got its own three-lens round: convergent MEDIUM
+fixed (the drift-reads-as-absent semantic in `_load_task` was untested
+— reverting it passed the suite; now pinned and mutation-guarded), and
+a Skeptic HIGH refuted by invariant (locked_rmw writes via atomic_write,
+and the merge removes a task's older clean row in the same os.replace
+that lands its newest — at most one clean row per id, so a torn newest
+row cannot silently serve a stale older one; documented at the read
+site). Fixpoint declared after r3: its fixes are a test, a comment, and
+a blank line.
 
 ## Lesson
 
