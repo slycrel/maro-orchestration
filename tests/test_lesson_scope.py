@@ -657,13 +657,16 @@ class TestStorePersistence:
         text = "Retries against a bot-challenged endpoint never recover"
         self._seed_drift(text)
         p = _tiered_lessons_path("medium")
-        assert _quarantine_unparseable(p) == 1
+        # Returns the rows it could NOT move (2026-08-17 byte-safety chunk):
+        # [] means the move succeeded, so both drift rows must land in the
+        # sidecar and leave the live file.
+        assert _quarantine_unparseable(p) == []
         assert [r.get("lesson_id") for r in self._rows()] == ["L-good"], \
             "the live file still carries the quarantined row"
         with p.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"lesson_id": "L-drift2",
                                  "lesson": "a later drift"}) + "\n")
-        assert _quarantine_unparseable(p) == 1
+        assert _quarantine_unparseable(p) == []
         assert [r.get("lesson_id") for r in self._sidecar()] == \
             ["L-drift", "L-drift2"]
 

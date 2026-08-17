@@ -268,7 +268,36 @@ Ordered open work that matters. Top of the list is next.
       function-half collision one axis over), family B was three loaders
       not two, spec 16→23 mutations 23/23. Full record:
       `docs/history/2026-08-17-memory-ledger-stamper-review.md`.
-    - *Then:* the remaining ~85% of `knowledge_web.py`, `evolver_store.py`.
+    - *knowledge_web CLOSED 2026-08-17 — the worst finding of the arc,
+      probed live before editing:* **one crash-torn byte in a tiered
+      lessons store + the next consolidation cycle = the ENTIRE TIER
+      WIPED** (573 bytes → 0, probed). `load_tiered_lessons`' strict
+      whole-file read swallowed the decode error and returned [] for 3
+      healthy rows (family A), `_quarantine_unparseable` was blind the
+      same way, and `_mutate_tiered_lessons` — every reinforcement, GC,
+      promotion, refight — rebuilt the store from the empty load. The
+      r3/r4 quarantine sidecar never fired: it handled rows that PARSE
+      wrong, and the destruction came from bytes that DECODE wrong. The
+      guard was just more code reading the file with the same bug.
+      Node/edge loaders + `_bump_node_times_applied` raised
+      `UnicodeDecodeError` past `except OSError` (family B);
+      archive/remint/canon readers were family-A silent (the remint one
+      silently erasing Δ-gate strike lineage). Fix: the four
+      memory_ledger helpers generalized into `jsonl_utils`
+      (`read_jsonl_announced`/`read_rows_as`/`store_text`/`loads_clean`,
+      memory_ledger aliases them — 7 stamp_preserve mutations re-filed,
+      re-run 27/27); six loaders converted to announced byte-level
+      reads; quarantine round trip byte-safe + taint-refusing, sidecar
+      gets ORIGINAL bytes, and it now returns rows it could NOT move so
+      both rewrite paths carry them verbatim (its failure log already
+      promised exactly that while the callers deleted them); unreadable
+      store aborts the rewrite instead of wiping it; bump/promote
+      rewrites REVIEWED as node-stampers (byte-safe, launder-proof,
+      pinned). Census debt 121+6 → 113+8. 14 new tests,
+      `knowledge_web_preserve.json` 18 mutations 18/18 first pass.
+      Record: `docs/history/2026-08-17-knowledge-web-byte-safety.md`.
+    - *Then:* `evolver_store.py` (8 sites), the last named surface of
+      slice 3.
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
