@@ -1,0 +1,226 @@
+[
+  {
+    "name": "parsers :: nothing is recognised as a parse call",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "                if (getattr(n.func.value, \"id\", None), n.func.attr) in _PARSE_CALLS:\n                    return True\n    return False",
+    "replacement": "                pass\n    return False",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: every loop is treated as a parse loop",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "def _parses(nodes) -> bool:",
+    "replacement": "def _parses(nodes) -> bool:\n    return True",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: the parse call must be a direct statement, not nested",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        for n in ast.walk(stmt):",
+    "replacement": "        for n in [stmt]:",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: yaml.safe_load drops off the list",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    (\"yaml\", \"safe_load\"), (\"yaml\", \"load\"),",
+    "replacement": "    (\"yaml\", \"load\"),",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: pickle drops off the list",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    (\"pickle\", \"loads\"), (\"pickle\", \"load\"),",
+    "replacement": "",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: tomllib drops off the list",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    (\"tomllib\", \"loads\"), (\"tomllib\", \"load\"),",
+    "replacement": "",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "parsers :: json.load (the file-handle form) drops off the list",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    (\"json\", \"loads\"), (\"json\", \"load\"),",
+    "replacement": "    (\"json\", \"loads\"),",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "silence :: every handler counts as silent",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    return all(isinstance(s, (ast.Pass, ast.Continue, ast.Break))\n               for s in handler.body)",
+    "replacement": "    return True",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "silence :: no handler counts as silent",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    return all(isinstance(s, (ast.Pass, ast.Continue, ast.Break))\n               for s in handler.body)",
+    "replacement": "    return False",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "silence :: the check walks the handler instead of reading its statements",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    return all(isinstance(s, (ast.Pass, ast.Continue, ast.Break))\n               for s in handler.body)",
+    "replacement": "    return any(isinstance(s, (ast.Pass, ast.Continue, ast.Break))\n               for s in ast.walk(ast.Module(body=handler.body, type_ignores=[])))",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "silence :: a bare `pass` handler stops counting",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    return all(isinstance(s, (ast.Pass, ast.Continue, ast.Break))\n               for s in handler.body)",
+    "replacement": "    return all(isinstance(s, (ast.Continue, ast.Break))\n               for s in handler.body)",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: nested defs are not their own scope, so drops leak outward",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):\n            continue",
+    "replacement": "        if isinstance(node, (ast.ClassDef,)):\n            continue",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: the enclosing-loop requirement is dropped",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if isinstance(node, ast.Try) and in_loop and _parses(node.body):",
+    "replacement": "        if isinstance(node, ast.Try) and _parses(node.body):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: everything is treated as being inside a loop",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    stack = [(child, False) for child in ast.iter_child_nodes(scope)]",
+    "replacement": "    stack = [(child, True) for child in ast.iter_child_nodes(scope)]",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: `async for` is not recognised as a loop",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        in_loop = in_loop or isinstance(node, (ast.For, ast.AsyncFor, ast.While))",
+    "replacement": "        in_loop = in_loop or isinstance(node, (ast.For, ast.While))",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: `while` is not recognised as a loop",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        in_loop = in_loop or isinstance(node, (ast.For, ast.AsyncFor, ast.While))",
+    "replacement": "        in_loop = in_loop or isinstance(node, (ast.For, ast.AsyncFor))",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "scope :: loop-ness does not propagate to nested statements",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        stack.extend((child, in_loop) for child in ast.iter_child_nodes(node))",
+    "replacement": "        stack.extend((child, False) for child in ast.iter_child_nodes(node))",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "attribution :: every site is blamed on the module",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    name = getattr(scope, \"name\", \"<module>\")",
+    "replacement": "    name = \"<module>\"",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "attribution :: async functions are not scanned as scopes",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):",
+    "replacement": "        if isinstance(scope, (ast.Module, ast.FunctionDef)):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "attribution :: module-level loops are not scanned",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):",
+    "replacement": "        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "attribution :: sites are reported in walk order, not line order",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    return sorted(out, key=lambda s: s[1])",
+    "replacement": "    return out",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "census :: nested packages stop being scanned (rglob -> glob)",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    for py in sorted(src_root.rglob(\"*.py\")):\n        for func, _lineno in _sites(py):",
+    "replacement": "    for py in sorted(src_root.glob(\"*.py\")):\n        for func, _lineno in _sites(py):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "allowance :: a REVIEWED entry allows nothing",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    for key in reviewed:\n        out[key] += 1",
+    "replacement": "    pass",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "allowance :: a REVIEWED entry allows two sites",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    for key in reviewed:\n        out[key] += 1",
+    "replacement": "    for key in reviewed:\n        out[key] += 2",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "allowance :: the UNREVIEWED baseline is ignored entirely",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    out: Counter = Counter(unreviewed)",
+    "replacement": "    out: Counter = Counter()",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "unlisted :: the gate reports nothing, ever",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        excess = count - allowed.get((module, func), 0)\n        if excess > 0:",
+    "replacement": "        excess = count - allowed.get((module, func), 0)\n        if False:",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "unlisted :: one extra drop past the allowance is tolerated",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if excess > 0:",
+    "replacement": "        if excess > 1:",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "unlisted :: the message reports the allowance as the total",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "                       f\"drop(s) (allowed {count - excess}) at line(s) \"",
+    "replacement": "                       f\"drop(s) (allowed {count}) at line(s) \"",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "stale :: the stale census reports nothing, ever",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        have = live.get(key, 0)\n        if have < count:",
+    "replacement": "        have = live.get(key, 0)\n        if False:",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "stale :: only a fully-vanished site counts as stale",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "        if have < count:",
+    "replacement": "        if have == 0 and count:",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "stale :: REVIEWED entries are exempt from the stale check",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "    allowed = _listed(reviewed, unreviewed)\n    out = []\n    for key, count in sorted(allowed.items()):",
+    "replacement": "    allowed = _listed({}, unreviewed)\n    out = []\n    for key, count in sorted(allowed.items()):",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "wiring :: the gates are pointed at a tree that does not exist",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "SRC = Path(__file__).parent.parent / \"src\"",
+    "replacement": "SRC = Path(__file__).parent.parent / \"src_\"",
+    "tests": "tests/test_no_silent_drop.py"
+  }
+]

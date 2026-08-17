@@ -91,11 +91,16 @@ def _load_spec(path: Path) -> list:
         sys.exit(f"mutate: cannot read spec {path}: {exc}")
     if not isinstance(spec, list) or not spec:
         sys.exit(f"mutate: spec {path} must be a non-empty JSON list")
-    required = ("name", "file", "anchor", "replacement", "tests")
+    # "replacement" is checked for PRESENCE, not truthiness: deleting the
+    # anchored lines outright is a legitimate mutation ("this guard is not
+    # there at all"), and `""` is how you write it.
+    nonempty = ("name", "file", "anchor", "tests")
     for i, m in enumerate(spec):
-        missing = [k for k in required if not m.get(k)]
+        missing = [k for k in nonempty if not m.get(k)]
+        if "replacement" not in m:
+            missing.append("replacement")
         if missing:
-            sys.exit(f"mutate: spec entry {i} missing {', '.join(missing)}")
+            sys.exit(f"mutate: spec entry {i} missing {', '.join(sorted(missing))}")
     return spec
 
 
