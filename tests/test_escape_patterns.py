@@ -388,3 +388,49 @@ class TestPromptContract:
         from verification_agent import _VERIFY_STEP_SYSTEM
         assert "PROMISES" in _VERIFY_SYSTEM
         assert "PROMISES" in _VERIFY_STEP_SYSTEM
+
+
+class TestWriteTargetFalsePositives:
+    """A READ step must never be demoted as a missing write target.
+
+    Live specimen, 2026-08-16: a step reading an operator-attached image
+    was demoted done→blocked and retried repeatedly, after succeeding. Two
+    coincidences compounded — the path contained `/output/` (a write verb
+    in the list, supplied by the path itself) and `\\bat` matched the START
+    of "attachments", capturing a path clipped mid-word. The guard's error
+    direction matters here: a missed real write-target is caught downstream
+    by closure, while a false demotion blocks finished work.
+    """
+
+    LIVE = ("Read the image file at /home/clawd/.maro/workspace/output/"
+            "operator-attachments/attach-1786936497-3598076/"
+            "reply-with-study.png and describe its contents")
+
+    def test_the_live_specimen_names_no_write_target(self):
+        assert step_write_targets(self.LIVE) == []
+
+    def test_a_verb_that_is_only_a_path_component_does_not_arm_the_guard(self):
+        assert step_write_targets("Read /srv/output/data/report.md") == []
+        assert step_write_targets("cat /var/store/x/final.json") == []
+
+    def test_a_preposition_welded_to_a_longer_word_introduces_nothing(self):
+        # "at" starting "attachments"/"attributes" must not begin a path.
+        assert step_write_targets(
+            "write the notes -attachments/x/y.md") == []
+        assert step_write_targets(
+            "save the -attributes/deep/f.json") == []
+
+    @pytest.mark.parametrize("text,want", [
+        ("Write the summary to artifacts/report_v2.md", ["artifacts/report_v2.md"]),
+        ("save to: out/x.md", ["out/x.md"]),
+        ("export the table into data/tables/t1.csv", ["data/tables/t1.csv"]),
+        ("Store results at `build/final.json`", ["build/final.json"]),
+        ("append rows to logs/run/summary.txt", ["logs/run/summary.txt"]),
+    ])
+    def test_real_write_targets_still_caught(self, text, want):
+        # Negative control: the guard must not have been tightened into
+        # never firing — that would make it decoration.
+        assert step_write_targets(text) == want
+
+    def test_a_read_step_survives_the_full_missing_check(self, tmp_path):
+        assert missing_write_targets(self.LIVE, str(tmp_path)) == []

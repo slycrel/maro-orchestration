@@ -670,9 +670,27 @@ DELIVERABLE_PATH_TAG = "[deliverable-path-miss]"
 # Requiring the slash keeps prose like "save to disk" and bare filenames out;
 # the r4 specimen's miss was exactly a directory-qualified target
 # ("...to artifacts/report_v2.md") written to project ROOT instead.
+# Two guards on top of the verb+preposition shape, both earned by one live
+# false positive (2026-08-16). A READ step —
+#   "Read the image file at /…/output/operator-attachments/…/x.png"
+# — was demoted done→blocked as a missing write target, twice over:
+#   (1) the write verb matched the literal directory name in `/output/`,
+#       so a path can supply its own verb; `(?<![/\w])` stops a verb that
+#       is a path component.
+#   (2) `\bat` matched the START of "attachments" (the hyphen in
+#       "operator-attachments" makes a word boundary), capturing
+#       "tachments/…/x.png" — a path clipped mid-word, which then failed
+#       the existence check and demoted a step that had succeeded.
+#       Requiring real separation (space, or colon) between the
+#       preposition and the path means a preposition welded to the front
+#       of a longer word can no longer introduce one.
+# The guard errs toward NOT demoting: a missed real write-target is caught
+# downstream by closure, while a false demotion blocks finished work and
+# burns retries on a step that already did its job.
 _WRITE_TARGET_RE = re.compile(
-    r"\b(?:write|writes|save|saves|saving|store|stores|output|persist|"
-    r"export|append)\b[^.\n]{0,120}?\b(?:to|into|at|as|in)\s*:?\s*"
+    r"(?<![/\w])(?:write|writes|save|saves|saving|store|stores|output|"
+    r"persist|export|append)\b[^.\n]{0,120}?"
+    r"\b(?:to|into|at|as|in)(?:\s*:\s*|\s+)"
     r"[`'\"]?(/?(?:[\w.-]+/)+[\w.-]+\.\w{1,8})[`'\"]?",
     re.IGNORECASE)
 
