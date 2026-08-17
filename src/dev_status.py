@@ -75,7 +75,17 @@ def capability_marks(text: str) -> Dict[str, int]:
     did.
     """
     counts = {m: 0 for m in MARKS}
+    fenced = False
     for line in text.splitlines():
+        # A fenced block is documentation OF the format, not a claim in it.
+        # A doc that shows an example row inside ``` was counting that
+        # example as a real capability — the same count-the-explanation
+        # failure as the grounding paragraph (minimalist lens, 2026-08-16).
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
         claimed = False
         if line.lstrip().startswith("|") and line.count("|") >= 3:
             for cell in (c.strip() for c in line.split("|")):

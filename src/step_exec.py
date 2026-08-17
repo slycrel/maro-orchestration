@@ -695,9 +695,29 @@ _WRITE_TARGET_RE = re.compile(
     re.IGNORECASE)
 
 
+# A step that OPENS with a read verb is not promising to write anything,
+# whatever nouns follow. Needed because "output" is a noun far more often
+# than a verb: the first fix stopped `output` matching as a PATH COMPONENT
+# but "Read the output logs and check status at /tmp/x.md" still armed the
+# guard and demoted a finished read (QA lens, 2026-08-16 — the same class
+# as the live specimen, which is why closing only the specimen was not
+# enough). A genuine write hidden behind a read-shaped opener is missed
+# here and caught by closure downstream; a false demotion blocks work that
+# is already done. That asymmetry is the whole reason this errs toward not
+# firing.
+_READ_OPENER_RE = re.compile(
+    r"^\W*(?:re-?)?(?:read|reads|review|reviews|check|checks|inspect|"
+    r"inspects|examine|examines|list|lists|show|shows|print|prints|cat|"
+    r"grep|find|search|verify|verifies|confirm|confirms|compare|compares|"
+    r"look|looks|open|opens|load|loads|parse|parses|analyze|analyse)\b",
+    re.IGNORECASE)
+
+
 def step_write_targets(step_text: str) -> List[str]:
     """Explicit write-target paths named by the step text (may be empty)."""
     if not step_text:
+        return []
+    if _READ_OPENER_RE.match(step_text.strip()):
         return []
     out = []
     for m in _WRITE_TARGET_RE.finditer(step_text):

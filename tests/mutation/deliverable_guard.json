@@ -1,0 +1,23 @@
+[
+ {
+  "name": "a read-shaped step is not exempt from the write-target guard",
+  "file": "src/step_exec.py",
+  "anchor": "    if _READ_OPENER_RE.match(step_text.strip()):\n        return []",
+  "replacement": "    if False:\n        return []",
+  "tests": "tests/test_escape_patterns.py"
+ },
+ {
+  "name": "the verb lookbehind stops excluding hyphens",
+  "file": "src/step_exec.py",
+  "anchor": "    r\"(?<![/\\w-])(?:write|writes|save|saves|saving|store|stores|output|\"",
+  "replacement": "    r\"(?<![/\\w])(?:write|writes|save|saves|saving|store|stores|output|\"",
+  "tests": "tests/test_escape_patterns.py"
+ },
+ {
+  "name": "a preposition welded to a longer word can introduce a path again",
+  "file": "src/step_exec.py",
+  "anchor": "    r\"\\b(?:to|into|at|as|in)(?:\\s*:\\s*|\\s+)\"",
+  "replacement": "    r\"\\b(?:to|into|at|as|in)\\s*:?\\s*\"",
+  "tests": "tests/test_escape_patterns.py"
+ }
+]

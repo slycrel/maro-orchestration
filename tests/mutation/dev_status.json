@@ -82,5 +82,12 @@
   "anchor": "        if claimed:\n            continue",
   "replacement": "        if False:\n            continue",
   "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "fenced example rows are counted as capability claims",
+  "file": "src/dev_status.py",
+  "anchor": "        if fenced:\n            continue",
+  "replacement": "        if False:\n            continue",
+  "tests": "tests/test_dev_status.py"
  }
 ]

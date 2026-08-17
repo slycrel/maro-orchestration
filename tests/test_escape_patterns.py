@@ -436,9 +436,45 @@ class TestWriteTargetFalsePositives:
         assert missing_write_targets(self.LIVE, str(tmp_path)) == []
 
 
-def test_a_hyphenated_directory_does_not_supply_the_write_verb():
+@pytest.mark.parametrize("text", [
+    # Deliberately NOT read-shaped: the read-opener exemption would mask
+    # the hyphen rule otherwise, which is how the first fixture for this
+    # let a mutation survive — it was testing the wrong guard.
+    "Update my-output at data/report.md",
+    "Refresh the build-store in out/final.json",
+    "Rotate the log-store into archive/old.json",
+])
+def test_a_hyphenated_directory_does_not_supply_the_write_verb(text):
     # Security lens, 2026-08-16: the verb lookbehind excluded `/` and word
     # chars but not `-`, so "my-output/x.md" still armed the guard — the
     # same false-demotion class the fix was written to close.
-    assert step_write_targets("Read the file my-output/data/report.md") == []
-    assert step_write_targets("check build-store/x/final.json") == []
+    assert step_write_targets(text) == []
+
+
+class TestReadShapedStepsNameNoWriteTargets:
+    """QA lens, 2026-08-16: the first fix closed the live specimen's two
+    lexical coincidences but not the class. "output" is a noun far more
+    often than a verb, so a READ step mentioning it plus any path still
+    armed the guard and demoted finished work."""
+
+    @pytest.mark.parametrize("text", [
+        "Read the output logs and check status at /tmp/x.md for reference",
+        "Read the output and compare to notes/summary.md",
+        "Review the saved report in docs/final.md",
+        "Inspect the store output at build/state/final.json",
+        "grep the output for errors in logs/run/summary.txt",
+        "Re-read the output written to artifacts/report.md",
+    ])
+    def test_a_read_opener_names_nothing(self, text):
+        assert step_write_targets(text) == []
+
+    @pytest.mark.parametrize("text,want", [
+        ("Write the summary to artifacts/report_v2.md", ["artifacts/report_v2.md"]),
+        ("save to: out/x.md", ["out/x.md"]),
+        ("export the table into data/tables/t1.csv", ["data/tables/t1.csv"]),
+        ("append rows to logs/run/summary.txt", ["logs/run/summary.txt"]),
+        ("Store results at `build/final.json`", ["build/final.json"]),
+    ])
+    def test_write_steps_are_untouched(self, text, want):
+        # Negative control: the exemption must not swallow the guard whole.
+        assert step_write_targets(text) == want

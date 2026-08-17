@@ -16,8 +16,8 @@
  {
   "name": "a same-named attachment overwrites a different one",
   "file": "src/dispatch_envelope.py",
-  "anchor": "        while target.exists() and target.read_bytes() != data:",
-  "replacement": "        while False:",
+  "anchor": "        base = _safe_name(src.name)\n        target = dest / base\n        n = 1\n        while target.exists() and target.read_bytes() != data:",
+  "replacement": "        base = _safe_name(src.name)\n        target = dest / base\n        n = 1\n        while False:",
   "tests": "tests/test_operator_attachments.py"
  },
  {
@@ -82,6 +82,13 @@
   "file": "src/dispatch_envelope.py",
   "anchor": "    if not cleaned or set(cleaned) <= {\".\"}:",
   "replacement": "    if not cleaned:",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "landing silently drops a differing same-named file",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "                if target.read_bytes() == data:\n                    continue",
+  "replacement": "                continue\n                if False:\n                    continue",
   "tests": "tests/test_operator_attachments.py"
  }
 ]

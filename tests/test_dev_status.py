@@ -294,3 +294,23 @@ class TestOneClaimPerRow:
         # has just deleted a real counting path.
         assert ds.capability_marks(
             "> *(from the car — status: `target`)*")["target"] == 1
+
+
+class TestFencedExamplesAreNotClaims:
+    """Minimalist lens, 2026-08-16: a table shown INSIDE a ``` fence is
+    documentation of the format, not a capability claim — the same
+    count-the-explanation failure as the grounding paragraph."""
+
+    def test_a_fenced_example_row_does_not_count(self):
+        text = ("Format:\n\n```\n| goal | status |\n|---|---|\n"
+                "| example | `verified` |\n```\n\n"
+                "| real | status |\n|---|---|\n| actual | `target` |\n")
+        assert ds.capability_marks(text) == {
+            "verified": 0, "target": 1, "aspirational": 0}
+
+    def test_an_unclosed_fence_does_not_swallow_the_rest_of_the_doc(self):
+        # Degenerate input: a stray fence must not zero the whole ledger
+        # silently. It will undercount from that point — assert the shape
+        # so the behavior is known rather than discovered.
+        text = "```\n| a | `verified` |\n"
+        assert ds.capability_marks(text)["verified"] == 0

@@ -342,3 +342,30 @@ class TestAttachmentInputHardening:
         [rec] = store_operator_attachments([str(f)], key="..")
         assert "/operator-attachments/dispatch/" in rec["path"]
         assert "/operator-attachments/../" not in rec["path"]
+
+
+class TestLandingKeepsBothOnCollision:
+    """Minimalist lens, 2026-08-16: landing skipped any same-named target,
+    so two distinct files silently became one — while the storage sibling
+    disambiguates in exactly that case."""
+
+    def test_identical_bytes_are_an_idempotent_no_op(self, ws, tmp_path):
+        f = tmp_path / "f.txt"; f.write_text("same")
+        store_operator_attachments([str(f)], key="k1")
+        rd = tmp_path / "run"; rd.mkdir()
+        assert land_operator_attachments(rd, "k1") >= 1
+        assert land_operator_attachments(rd, "k1") == 0
+        assert (rd / "fetch-raw" / "operator" / "f.txt").read_text() == "same"
+
+    def test_differing_bytes_keep_both(self, ws, tmp_path):
+        rd = tmp_path / "run"; rd.mkdir()
+        f = tmp_path / "f.txt"; f.write_text("first")
+        store_operator_attachments([str(f)], key="k1")
+        land_operator_attachments(rd, "k1")
+        # A second, different file arriving under the same name.
+        dest = rd / "fetch-raw" / "operator"
+        f.write_text("second")
+        store_operator_attachments([str(f)], key="k2")
+        land_operator_attachments(rd, "k2")
+        bodies = {p.read_text() for p in dest.glob("f*.txt")}
+        assert bodies == {"first", "second"}, bodies

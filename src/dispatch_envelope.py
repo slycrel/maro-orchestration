@@ -274,9 +274,24 @@ def _land(run_dir, area: str, key: str, sub: str) -> int:
             if not f.is_file():
                 continue
             target = dest / f.name
+            data = f.read_bytes()
             if target.exists():
-                continue
-            target.write_bytes(f.read_bytes())
+                # Idempotent re-land: identical bytes are a no-op. DIFFERING
+                # bytes were also skipped, which silently dropped one of two
+                # distinct files — while the storage sibling disambiguates
+                # in exactly this case (minimalist lens, 2026-08-16). Keep
+                # both; a run tree that quietly holds one of two artifacts
+                # is worse than one holding an oddly-named pair.
+                if target.read_bytes() == data:
+                    continue
+                stem, suffix = target.stem, target.suffix
+                n = 2
+                while target.exists() and target.read_bytes() != data:
+                    target = dest / f"{stem}-{n}{suffix}"
+                    n += 1
+                if target.exists():
+                    continue
+            target.write_bytes(data)
             copied += 1
         return copied
     except Exception as exc:
