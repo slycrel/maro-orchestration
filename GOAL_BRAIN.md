@@ -3477,3 +3477,17 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   instead of assuming it, keeping the damaged file, staging rather than
   restoring, and refusing to guess on the ambiguity is why it stayed
   recoverable and why recovery was distinguishable from resurrection.
+- **2026-08-17 (Jeremy, on my proposal to mechanize away merge conflicts
+  after the fff8606 content loss): "This isn't a git problem and it's not
+  a structural problem… branch or no, a rebase + conflict resolution + FF
+  merge is the answer here. no mechanism will save you from the conflict
+  resolution work... you can mask it to pretend it doesn't exist, but
+  it's going to be there one way or another."** Decree-class: conflict
+  resolution is the work, done by reading both sides and verifying both
+  survive — never routed around with hooks, soft-reset squashes, or
+  add -A. The full pattern with its verify step is CLAUDE.md shared-tree
+  rule 4; the loss it was written from was a skipped documented rule, not
+  a git failure, and the session that proposed machinery instead is the
+  cautionary half of the record. Related same-session decree (2026-08-16):
+  NO trusted-source data class — a curated corpus is a place to look, not
+  a privileged evidence grade (BACKLOG "Reading a cited corpus" entry).

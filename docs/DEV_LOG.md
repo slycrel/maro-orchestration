@@ -18,6 +18,52 @@ still live in BACKLOG/GOAL_BRAIN; a session that ends conversationally
 still gets a line (same spirit as SF-13). Rendered to the viz server's
 Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
+## 2026-08-17
+
+**Three organic runs, an attachment lane, two review rounds, one restored
+corpus — and a day of instrument errors, each caught by the harness**
+(threads: narrative-diversity-vs-skill, path-rewrite, operator-attach,
+dev-status, review-skill). The long weekend session, Jeremy driving.
+
+Shipped: path rewriting for workspace transfer (both lanes, 42-mutation
+spec, hardened across two adversarial rounds plus one defect only the
+live corpus could show — escaped-newline left boundaries); `handle
+--attach` (a goal can carry a file; screenshots became evidence instead
+of hand transcription); `maro dev-status` (capability-led project
+readout, later moved to its own doc after its splice into this file
+manufactured conflicts); the container mount fixes (attachment areas
+ro-mounted, then SCOPED after four review lenses independently found the
+cross-run leak); the deliverable-path guard fixed twice (specimen, then
+class — read-shaped steps name no write targets); land.sh's conflict
+recipe made to actually work from a worktree. The runs answered Jeremy's
+real question (arXiv 2606.17350 vs the ste skill: largely orthogonal
+regimes, and the reply's use of the paper is a reasonable analogical
+rebuttal that overstates what was measured) and flipped the §14a stamp
+gate (0/195 → 7/202, method-only). The flat lesson ledger, destroyed by
+a concurrent session's env-var mishap, was restored 466/466 rows from
+the morning's byte-faithful archive — recovery, not resurrection, proven
+by recorded_at reaching 2026-08-15 and 84 shared ids with medium/.
+
+The failure worth remembering: fff8606 lost ledger content with NO
+conflict — `reset --soft` + `add -A` over a stale tree — and I first
+blamed git's merge model. Jeremy's pushback ("no mechanism will save you
+from the conflict resolution work") is now CLAUDE.md shared-tree rule 4,
+with the verify step. Same day, the review harness wrote off its two
+most compliant reviewers: they had reported through the ReportFindings
+tool as its contract instructs, and the harness read only stdout. All
+ten findings recovered from transcripts without a re-run; the skill now
+forbids the tool and documents the salvage path (all three copies in
+lockstep, 424e23e5).
+
+**Surprised by:** how consistently the day's errors were instrument
+errors, not object errors — a pgrep matching its own monitor loop, a
+capability count made of prose, a guard demoting the work it was
+guarding, a review harness grading obedience as failure. Every fix that
+stuck started with tracing the mechanism; every fix that didn't started
+with a plausible reading. And the archive that saved the lesson corpus
+was byte-faithful only because of a design argument won twelve hours
+before it was needed.
+
 ## 2026-07-30
 
 **System self-health lane v1 + captain's-log dual contract** — the
