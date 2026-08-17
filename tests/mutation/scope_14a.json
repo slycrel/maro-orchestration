@@ -9,29 +9,29 @@
   {
     "name": "knowledge_web :: unparseable rows destroyed again (no quarantine)",
     "file": "src/knowledge_web.py",
-    "anchor": "        _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
-    "replacement": "        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "replacement": "        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
     "tests": "tests/test_lesson_scope.py"
   },
   {
     "name": "knowledge_web :: quarantine writes the sidecar but never shrinks the live file",
     "file": "src/knowledge_web.py",
-    "anchor": "        atomic_write(path, \"\".join(kept))",
+    "anchor": "        atomic_write(path, \"\".join(kept), errors=\"surrogateescape\")",
     "replacement": "        pass",
     "tests": "tests/test_lesson_scope.py"
   },
   {
     "name": "knowledge_web :: sidecar overwritten instead of appended",
     "file": "src/knowledge_web.py",
-    "anchor": "        with side.open(\"a\", encoding=\"utf-8\") as fh:",
-    "replacement": "        with side.open(\"w\", encoding=\"utf-8\") as fh:",
+    "anchor": "            with side.open(\"a\", encoding=\"utf-8\",\n                           errors=\"surrogateescape\") as fh:",
+    "replacement": "            with side.open(\"w\", encoding=\"utf-8\",\n                           errors=\"surrogateescape\") as fh:",
     "tests": "tests/test_lesson_scope.py"
   },
   {
     "name": "knowledge_web :: int-field coercion removed (decay-cycle wedge returns)",
     "file": "src/knowledge_web.py",
-    "anchor": "                _coerce_int_fields(tl)\n                days = _days_since",
-    "replacement": "                days = _days_since",
+    "anchor": "            _coerce_int_fields(tl)\n            days = _days_since",
+    "replacement": "            days = _days_since",
     "tests": "tests/test_lesson_scope.py"
   },
   {
@@ -149,8 +149,8 @@
   {
     "name": "knowledge_web :: the heal stops warning",
     "file": "src/knowledge_web.py",
-    "anchor": "            if stored_bad:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r — \"",
-    "replacement": "            if False:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r — \"",
+    "anchor": "            if stored_bad:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r \u2014 \"",
+    "replacement": "            if False:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r \u2014 \"",
     "tests": "tests/test_lesson_scope.py"
   },
   {
@@ -177,22 +177,22 @@
   {
     "name": "tests :: the grep tripwire stops scanning the real ranker",
     "file": "src/knowledge_web.py",
-    "anchor": "    query_terms = _tokenize(query)\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal — input order",
-    "replacement": "    query_terms = _tokenize(query)\n    _unused = [getattr(l, 'scope', '') for l in lessons]\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal — input order",
+    "anchor": "    query_terms = _tokenize(query)\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal \u2014 input order",
+    "replacement": "    query_terms = _tokenize(query)\n    _unused = [getattr(l, 'scope', '') for l in lessons]\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal \u2014 input order",
     "tests": "tests/test_lesson_scope.py"
   },
   {
     "name": "knowledge_web :: load-time confidence float() removed",
     "file": "src/knowledge_web.py",
-    "anchor": "                tl.confidence = float(tl.confidence)",
-    "replacement": "                pass",
+    "anchor": "            tl.confidence = float(tl.confidence)",
+    "replacement": "            pass",
     "tests": "tests/test_lesson_scope.py"
   },
   {
     "name": "knowledge_web :: _rewrite_tiered_lessons stops quarantining",
     "file": "src/knowledge_web.py",
-    "anchor": "        _quarantine_unparseable(path)\n        if lessons is None:",
-    "replacement": "        if lessons is None:",
+    "anchor": "        stranded = _quarantine_unparseable(path)\n        if lessons is None:",
+    "replacement": "        stranded = []\n        if lessons is None:",
     "tests": "tests/test_lesson_scope.py"
   },
   {
@@ -243,6 +243,6 @@
     "anchor": "out[scope] = out.get(scope, 0) + 1",
     "replacement": "out[scope] += 1",
     "tests": "tests/test_lesson_scope.py",
-    "equivalent": "_stamp_coverage seeds out[sc]=0 for every member of _LESSON_SCOPES before the loop, and _clean_scope only returns members of that same frozenset — which camera_readout imports BY NAME from knowledge_web, so the two bindings cannot diverge in production. The .get form is defense against a future second vocabulary source."
+    "equivalent": "_stamp_coverage seeds out[sc]=0 for every member of _LESSON_SCOPES before the loop, and _clean_scope only returns members of that same frozenset \u2014 which camera_readout imports BY NAME from knowledge_web, so the two bindings cannot diverge in production. The .get form is defense against a future second vocabulary source."
   }
 ]

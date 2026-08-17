@@ -977,6 +977,13 @@ def load_tiered_lessons(
     except FileNotFoundError:
         return []
     except OSError as exc:
+        if raw:
+            # raw=True is the read-modify-write contract: the caller is
+            # about to rebuild the store from this list, and an empty list
+            # from a FAILED read becomes an empty rewrite — the tier
+            # destruction this module just closed, one function downstream
+            # (Expert QA, 2026-08-17 round). Abort the rewrite instead.
+            raise
         log.warning("load_tiered_lessons(%s): store unreadable — treating as "
                     "empty, but it is NOT an empty ledger: %s", tier, exc)
         return []
@@ -1110,18 +1117,48 @@ def _quarantine_unparseable(path) -> List[str]:
             kept.append(line if line.endswith("\n") else line + "\n")
     if not moved:
         return []
+    from collections import Counter
     from file_lock import atomic_write
     side = path.with_suffix(path.suffix + ".unparseable")
+    # Idempotent append (2026-08-17 adversarial round, 4-lens consensus): a
+    # prior PARTIAL failure — append landed, shrink did not — leaves these
+    # rows in BOTH files, and a blind re-append would duplicate them in the
+    # sidecar on every later pass, unboundedly. Multiset diff, not set: two
+    # identical torn lines in the live store are two records (retention
+    # decree). The known cost: a byte-identical torn line recurring in the
+    # live file AFTER a fully completed quarantine of its twin would be
+    # shrunk without a second sidecar copy — that needs identical corruption
+    # bytes twice, vs. guaranteed duplication on every partial failure.
     try:
-        with side.open("a", encoding="utf-8", errors="surrogateescape") as fh:
-            fh.writelines(moved)
-        # Only shrink the live file once the sidecar copy is durable.
-        atomic_write(path, "".join(kept), errors="surrogateescape")
+        have = Counter(l + "\n" for l in _store_text(side).splitlines()
+                       if l.strip())
+    except FileNotFoundError:
+        have = Counter()
+    to_append = list((Counter(moved) - have).elements())
+    try:
+        if to_append:
+            with side.open("a", encoding="utf-8",
+                           errors="surrogateescape") as fh:
+                fh.writelines(to_append)
     except Exception as exc:
         log.warning("%s: could not quarantine %d unparseable row(s) (%s) — "
                     "leaving them in place rather than risk losing them",
                     path.name, len(moved), exc)
         return moved
+    # The sidecar copy is durable from here, so the rows are NOT stranded
+    # even if the shrink below fails: returning [] lets the caller's own
+    # rebuild drop them from the live file, and the next pass's multiset
+    # diff finds nothing new to append. Returning `moved` here was the
+    # duplication bug — "stranded" must mean the sidecar does NOT hold it.
+    try:
+        # Only shrink the live file once the sidecar copy is durable.
+        atomic_write(path, "".join(kept), errors="surrogateescape")
+    except Exception as exc:
+        log.warning("%s: quarantined %d row(s) to %s but could not shrink "
+                    "the live file (%s) — rows sit in both until the next "
+                    "successful rewrite", path.name, len(moved), side.name,
+                    exc)
+        return []
     log.warning("%s: moved %d unparseable lesson row(s) to %s (schema drift "
                 "or corruption). They are out of every reader's way and NOT "
                 "destroyed; inspect or repair them by hand.",
@@ -1139,9 +1176,17 @@ def unparseable_sidecar_count(tier: str = MemoryTier.MEDIUM) -> int:
     side = _tiered_lessons_path(tier)
     side = side.with_suffix(side.suffix + ".unparseable")
     try:
-        return sum(1 for line in side.read_text(encoding="utf-8").splitlines()
+        # Byte-safe (Skeptic, 2026-08-17 round): the sidecar holds the exact
+        # raw non-UTF-8 bytes quarantine moved there, so a strict read raised
+        # and the old `except Exception: return 0` reported the count as
+        # ZERO precisely when quarantine had done its job.
+        return sum(1 for line in _store_text(side).splitlines()
                    if line.strip())
-    except Exception:
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        log.warning("unparseable_sidecar_count(%s): sidecar unreadable — "
+                    "reporting 0, but it is NOT known-empty: %s", tier, exc)
         return 0
 
 

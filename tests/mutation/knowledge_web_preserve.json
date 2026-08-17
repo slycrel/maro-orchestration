@@ -51,8 +51,8 @@
   {
     "name": "bytes :: the sidecar append decodes strictly, so quarantine always fails on the very rows it exists for",
     "file": "src/knowledge_web.py",
-    "anchor": "        with side.open(\"a\", encoding=\"utf-8\", errors=\"surrogateescape\") as fh:",
-    "replacement": "        with side.open(\"a\", encoding=\"utf-8\") as fh:",
+    "anchor": "            with side.open(\"a\", encoding=\"utf-8\",\n                           errors=\"surrogateescape\") as fh:",
+    "replacement": "            with side.open(\"a\", encoding=\"utf-8\") as fh:",
     "tests": "tests/test_knowledge_web.py"
   },
   {
@@ -123,6 +123,34 @@
     "file": "src/knowledge_web.py",
     "anchor": "    for e in _read_store(path, \"_load_canon_stats\"):",
     "replacement": "    try:\n        _rows = [json.loads(l) for l in path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        return stats\n    for e in _rows:",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "dup :: the quarantine re-appends rows already durable in the sidecar",
+    "file": "src/knowledge_web.py",
+    "anchor": "    to_append = list((Counter(moved) - have).elements())",
+    "replacement": "    to_append = list(moved)",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "dup :: a failed shrink reports sidecar-durable rows as stranded (the 4-lens consensus HIGH)",
+    "file": "src/knowledge_web.py",
+    "anchor": "                    \"successful rewrite\", path.name, len(moved), side.name,\n                    exc)\n        return []",
+    "replacement": "                    \"successful rewrite\", path.name, len(moved), side.name,\n                    exc)\n        return moved",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "count :: the sidecar census decodes strictly again (reads 0 exactly when quarantine fired)",
+    "file": "src/knowledge_web.py",
+    "anchor": "        return sum(1 for line in _store_text(side).splitlines()\n                   if line.strip())",
+    "replacement": "        return sum(1 for line in side.read_text(encoding=\"utf-8\").splitlines()\n                   if line.strip())",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "raw :: a failed read under the rmw contract returns [] again (empty rebuild)",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if raw:\n            # raw=True is the read-modify-write contract: the caller is\n",
+    "replacement": "        if False:\n            # raw=True is the read-modify-write contract: the caller is\n",
     "tests": "tests/test_knowledge_web.py"
   }
 ]

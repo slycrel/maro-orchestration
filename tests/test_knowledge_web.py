@@ -2105,6 +2105,60 @@ class TestTheTierSurvivesATornByte:
         assert _TORN in after            # preserved in place, verbatim
         assert b'"L0"' in after          # healthy row also survived
 
+    def test_a_partial_quarantine_failure_never_duplicates_the_sidecar(self, monkeypatch):
+        # The 4-lens consensus HIGH from the 2026-08-17 adversarial round:
+        # sidecar append succeeds, live shrink fails. Rows durably in the
+        # sidecar must NOT come back as "stranded" (the caller would carry
+        # them into the live file and the next pass would re-append them —
+        # unbounded duplicates in an append-only file).
+        import file_lock
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n" + _TORN + b"\n")
+        real_aw = file_lock.atomic_write
+        calls = {"n": 0}
+
+        def flaky(p, content, **kw2):
+            calls["n"] += 1
+            if calls["n"] == 1:  # the quarantine's shrink write
+                raise OSError("disk full")
+            return real_aw(p, content, **kw2)
+
+        monkeypatch.setattr(file_lock, "atomic_write", flaky)
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        side = path.with_suffix(path.suffix + ".unparseable")
+        assert side.read_bytes().count(_TORN) == 1
+        assert _TORN not in path.read_bytes()  # caller's rebuild dropped it
+        # A second, fully healthy pass must find nothing new to append.
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        assert side.read_bytes().count(_TORN) == 1
+
+    def test_the_sidecar_count_reads_its_own_bytes(self):
+        # The sidecar holds raw non-UTF-8 bytes BY DESIGN; a strict count
+        # reported 0 exactly when quarantine had fired (Skeptic HIGH).
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        side = path.with_suffix(path.suffix + ".unparseable")
+        side.write_bytes(_TORN + b"\n" + b'{"plain": "drift"}\n')
+        assert kw.unparseable_sidecar_count(MemoryTier.MEDIUM) == 2
+
+    def test_a_failed_raw_read_raises_instead_of_returning_empty(self, monkeypatch):
+        # raw=True is the rmw contract: [] from a FAILED read becomes an
+        # empty rebuild (Expert QA HIGH). Plain reads keep the warn-and-empty
+        # degradation.
+        import logging
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n")
+
+        def boom(_p):
+            raise OSError("transient I/O error")
+
+        monkeypatch.setattr(kw, "_store_text", boom)
+        with pytest.raises(OSError):
+            load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True)
+        assert load_tiered_lessons(tier=MemoryTier.MEDIUM) == []
+
     def test_an_unreadable_store_aborts_the_mutate_instead_of_wiping_it(self, monkeypatch):
         # Proceeding past a failed read means rebuilding from nothing — the
         # exact empty-write destruction this fix removed. Abort loudly.
