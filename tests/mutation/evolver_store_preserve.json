@@ -1,0 +1,86 @@
+[
+  {
+    "name": "load family-A :: a torn byte empties the suggestions read again, silently",
+    "file": "src/evolver_store.py",
+    "anchor": "    suggestions = _rows_as(p, \"load_suggestions\", Suggestion.from_dict)",
+    "replacement": "    try:\n        suggestions = [Suggestion.from_dict(json.loads(l))\n                       for l in p.read_text(encoding=\"utf-8\").splitlines()\n                       if l.strip()]\n    except Exception:\n        suggestions = []",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "get family-A :: a torn byte hides the row the auto-revert authority guard needs",
+    "file": "src/evolver_store.py",
+    "anchor": "    for d in _read_store(p, \"get_suggestion\"):",
+    "replacement": "    try:\n        _rows = [json.loads(l) for l in\n                 p.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        _rows = []\n    for d in _rows:",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "dedup :: a torn byte blinds the scan and resurrects the 81-duplicate bug",
+    "file": "src/evolver_store.py",
+    "anchor": "    seen: set = set()\n    for d in _read_store(p, \"_save_suggestions\"):\n        seen.add(_content_key(d))",
+    "replacement": "    seen: set = set()\n    try:\n        for line in p.read_text(encoding=\"utf-8\").splitlines():\n            if line.strip():\n                seen.add(_content_key(json.loads(line)))\n    except Exception:\n        pass",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "applied family-B :: the post-gate state read raises UnicodeDecodeError into callers",
+    "file": "src/evolver_store.py",
+    "anchor": "    for row in _read_store(p, \"suggestion_is_applied\"):",
+    "replacement": "    for row in [json.loads(l) for l in\n                p.read_text(encoding=\"utf-8\").splitlines() if l.strip()]:",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "apply family-B :: the snapshot read raises UnicodeDecodeError into apply_suggestion",
+    "file": "src/evolver_store.py",
+    "anchor": "    for entry in _read_store(p, \"apply_suggestion\"):",
+    "replacement": "    for entry in [json.loads(l) for l in\n                  p.read_text(encoding=\"utf-8\").splitlines() if l.strip()]:",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "merge launder :: the keyed merge id-matches a byte-tainted twin and replaces it",
+    "file": "src/evolver_store.py",
+    "anchor": "                if _loads_clean(s).get(\"suggestion_id\") == suggestion_id:",
+    "replacement": "                if json.loads(s).get(\"suggestion_id\") == suggestion_id:",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "merge dup :: the preserve branch drops what it cannot parse instead of re-emitting it",
+    "file": "src/evolver_store.py",
+    "anchor": "            except Exception:\n                pass\n            out.append(s)",
+    "replacement": "            except Exception:\n                continue\n            out.append(s)",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "revert family-B :: the change_log read raises UnicodeDecodeError into revert_suggestion",
+    "file": "src/evolver_store.py",
+    "anchor": "    entries = _read_store(cl_path, \"revert_suggestion\")",
+    "replacement": "    entries = [json.loads(l) for l in\n               cl_path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "drop launder :: the constraint drop key-matches a byte-tainted row and deletes it",
+    "file": "src/evolver_store.py",
+    "anchor": "                            d = _loads_clean(line)",
+    "replacement": "                            d = json.loads(line)",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "drop dup :: the constraint preserve branch discards unparseable lines",
+    "file": "src/evolver_store.py",
+    "anchor": "                        except Exception:\n                            pass\n                        new_lines.append(line)",
+    "replacement": "                        except Exception:\n                            continue\n                        new_lines.append(line)",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "mark launder :: _mark_reverted re-dumps a byte-tainted row as clean escapes",
+    "file": "src/evolver_store.py",
+    "anchor": "                        d = _loads_clean(line.strip())",
+    "replacement": "                        d = json.loads(line.strip())",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "mark drop :: _mark_reverted's preserve branch discards the line it cannot parse",
+    "file": "src/evolver_store.py",
+    "anchor": "                    except Exception:\n                        new_lines.append(line)",
+    "replacement": "                    except Exception:\n                        pass",
+    "tests": "tests/test_evolver_store.py"
+  }
+]

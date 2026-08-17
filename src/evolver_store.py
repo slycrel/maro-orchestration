@@ -23,6 +23,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Store-hygiene helpers shared with memory_ledger/knowledge_web (2026-08-17
+# silent-drop arc): announced byte-level reads so one torn byte costs one
+# row — not an empty corpus (load/get/save-dedup here) and not an uncaught
+# UnicodeDecodeError into callers (is_applied/apply/revert here; a decode
+# error is a ValueError, invisible to `except OSError`). Probed live against
+# this module before converting. loads_clean refuses byte-tainted lines so
+# the keyed-merge rewrites never launder one into clean escapes.
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+    read_rows_as as _rows_as,
+)
+
 log = logging.getLogger("maro.evolver")
 
 # Module-level imports for clean test patching
@@ -231,17 +244,7 @@ def load_suggestions(limit: int = 20) -> List[Suggestion]:
     p = _suggestions_path()
     if not p.exists():
         return []
-    suggestions: List[Suggestion] = []
-    try:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                try:
-                    suggestions.append(Suggestion.from_dict(json.loads(line)))
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    suggestions = _rows_as(p, "load_suggestions", Suggestion.from_dict)
     return list(reversed(suggestions))[:limit]
 
 
@@ -256,22 +259,15 @@ def get_suggestion(suggestion_id: str) -> Optional[Suggestion]:
     p = _suggestions_path()
     if not p.exists():
         return None
-    try:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
+    for d in _read_store(p, "get_suggestion"):
+        if d.get("suggestion_id") == suggestion_id:
             try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if d.get("suggestion_id") == suggestion_id:
-                try:
-                    return Suggestion.from_dict(d)
-                except Exception:
-                    return None
-    except Exception:
-        return None
+                return Suggestion.from_dict(d)
+            except Exception as exc:
+                log.warning("get_suggestion: row %s is JSON but not loadable "
+                            "as Suggestion (%s: %s) — treating as absent",
+                            suggestion_id, type(exc).__name__, exc)
+                return None
     return None
 
 
@@ -300,19 +296,13 @@ def _save_suggestions(suggestions: List[Suggestion]) -> None:
     """
     p = _suggestions_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Announced read (2026-08-17): the old blind scan meant one torn byte
+    # emptied `seen` and every re-derived suggestion resurrected as a
+    # duplicate — the exact 81-duplicate bug this dedup was built to end
+    # (probed: 2 copies after one torn byte + one re-save).
     seen: set = set()
-    if p.exists():
-        try:
-            for line in p.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    seen.add(_content_key(json.loads(line)))
-                except Exception:
-                    continue
-        except Exception:
-            pass
+    for d in _read_store(p, "_save_suggestions"):
+        seen.add(_content_key(d))
     from file_lock import locked_append
     for s in suggestions:
         key = _content_key(s.to_dict())
@@ -380,16 +370,9 @@ def suggestion_is_applied(suggestion_id: str) -> bool:
     p = _suggestions_path()
     if not p.exists():
         return False
-    try:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            if row.get("suggestion_id") == suggestion_id:
-                return row.get("applied") is True
-    except OSError:
-        return False
+    for row in _read_store(p, "suggestion_is_applied"):
+        if row.get("suggestion_id") == suggestion_id:
+            return row.get("applied") is True
     return False
 
 
@@ -645,14 +628,7 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
     # the end is a keyed merge under the lock, so suggestions appended or
     # updated by concurrent processes in between are preserved.
     d = None
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except Exception:
-            continue
+    for entry in _read_store(p, "apply_suggestion"):
         if entry.get("suggestion_id") == suggestion_id:
             d = entry
             break
@@ -841,7 +817,10 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
             if not s:
                 continue
             try:
-                if json.loads(s).get("suggestion_id") == suggestion_id:
+                # loads_clean: a byte-tainted line (locked_rmw's byte-safe
+                # read carries it as surrogates) must never id-match — it
+                # falls through and is re-emitted verbatim below.
+                if _loads_clean(s).get("suggestion_id") == suggestion_id:
                     out.append(updated_line)
                     replaced = True
                     continue
@@ -880,12 +859,7 @@ def revert_suggestion(suggestion_id: str) -> dict:
         return {"reverted": False, "behavioral": False, "category": "", "detail": "no change_log.jsonl found"}
 
     # Find the matching entry (most recent first)
-    entries = []
-    for line in cl_path.read_text(encoding="utf-8").splitlines():
-        try:
-            entries.append(json.loads(line))
-        except Exception:
-            continue
+    entries = _read_store(cl_path, "revert_suggestion")
 
     match = None
     for entry in reversed(entries):
@@ -952,7 +926,9 @@ def revert_suggestion(suggestion_id: str) -> dict:
                     new_lines = []
                     for line in old.splitlines():
                         try:
-                            d = json.loads(line)
+                            # loads_clean: a tainted line never matches the
+                            # drop key — preserved verbatim below.
+                            d = _loads_clean(line)
                             if d.get("source") == f"evolver:{suggestion_id}" or d.get("pattern", "") == suggestion_text[:200]:
                                 removed_flag["removed"] = True
                                 continue
@@ -986,7 +962,11 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 new_lines = []
                 for line in old.splitlines():
                     try:
-                        d = json.loads(line.strip())
+                        # loads_clean: this branch re-dumps EVERY parseable
+                        # row, so a tainted-but-valid line would be laundered
+                        # into clean escapes — refuse it into the preserve
+                        # branch instead.
+                        d = _loads_clean(line.strip())
                         if d.get("suggestion_id") == suggestion_id:
                             d["applied"] = False
                             d["status"] = "reverted"

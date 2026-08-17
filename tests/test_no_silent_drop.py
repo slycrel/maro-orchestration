@@ -125,6 +125,13 @@ _NODE_STAMPER = ("in-place node rewrite: unmatched and unparseable lines are "
                  "2026-08-17, so a torn or tainted line is one skippable row "
                  "and never laundered) — no loss, nothing to announce. Pinned "
                  "by TestNodeRewritesPreserveWhatTheyCannotParse.")
+_SUGGESTION_STAMPER = ("keyed-merge rewrite under locked_rmw (byte-safe): a line "
+                       "that fails the taint-refusing parse never matches the "
+                       "merge/drop key and is re-emitted verbatim — no loss, "
+                       "nothing to announce. Pinned by "
+                       "TestSuggestionRewritesPreserveWhatTheyCannotParse in "
+                       "tests/test_evolver_store.py and "
+                       "tests/mutation/evolver_store_preserve.json.")
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
@@ -134,6 +141,8 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "annotate_outcome_extraction_failure._stamp"): _STAMPER,
     ("knowledge_web.py", "_bump_node_times_applied"): _NODE_STAMPER,
     ("knowledge_web.py", "promote_knowledge_candidates"): _NODE_STAMPER,
+    ("evolver_store.py", "apply_suggestion._merge"): _SUGGESTION_STAMPER,
+    ("evolver_store.py", "revert_suggestion._drop_constraint"): _SUGGESTION_STAMPER,
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
@@ -175,14 +184,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("evolver_scans.py", "scan_calibration_log"): 1,
     ("evolver_scans.py", "scan_suggestion_outcomes"): 1,
 
-    ("evolver_store.py", "_save_suggestions"): 1,
-    ("evolver_store.py", "apply_suggestion"): 1,
-    ("evolver_store.py", "apply_suggestion._merge"): 1,
-    ("evolver_store.py", "get_suggestion"): 1,
-    ("evolver_store.py", "load_suggestions"): 1,
-    ("evolver_store.py", "revert_suggestion"): 1,
-    ("evolver_store.py", "revert_suggestion._drop_constraint"): 1,
-    ("evolver_store.py", "suggestion_is_applied"): 1,
 
     ("goal_map.py", "build_goal_map"): 2,
 
