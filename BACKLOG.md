@@ -296,6 +296,23 @@ Ordered open work that matters. Top of the list is next.
       pinned). Census debt 121+6 → 113+8. 14 new tests,
       `knowledge_web_preserve.json` 18 mutations 18/18 first pass.
       Record: `docs/history/2026-08-17-knowledge-web-byte-safety.md`.
+    - *Adversarial rounds on the knowledge_web chunk, same day (sonnet-
+      medium lane): r1 five lenses REJECT — 4-lens consensus HIGH in the
+      fix layer (quarantine partial-failure duplication: append-success +
+      shrink-failure returned durable rows as "stranded" → unbounded
+      sidecar duplicates), plus the sidecar COUNT still strict-reading
+      the bytes it exists to count (reports 0 exactly when quarantine
+      fired), the raw-read OSError swallow one function downstream of the
+      destruction fix, and SIX stale scope_14a anchors (reviewer said 4).
+      r2 three lenses on the fixes: raw=True raise had overloaded "skip
+      decay math" — five pure readers inherited crash semantics → own
+      `for_rewrite` flag (QA dissented, dissent chased, majority right);
+      sidecar dedup read now degrades the dedup not the quarantine. r3
+      declined with reasons on the record. One sweep survivor along the
+      way was honest (the dedup mutant outlived a test that never
+      re-ran quarantine over a dirty file) → both-writes-fail
+      convergence test. Final: 23/23 + 35/35 + 27/27, suite 9434.
+      Both rounds in the history record.*
     - *Then:* `evolver_store.py` (8 sites), the last named surface of
       slice 3.
 

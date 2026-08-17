@@ -95,6 +95,68 @@ Census: 8 knowledge_web entries cleared from `UNREVIEWED_SILENT_DROPS`
   `test_lesson_scope.py` updated to the new `_quarantine_unparseable`
   return contract — stranded lines, not a count).
 
+## Adversarial rounds (same-day, sonnet-medium fallback lane — codex capped)
+
+**Round 1** (5 lenses: Skeptic, Architect, Minimalist, Expert QA,
+Experimentalist on `511a87d7..a0b60a4a`): **REJECT.** All five returned
+clean; zero hallucinated findings. Accepted four:
+
+1. (4-lens consensus HIGH) `_quarantine_unparseable` held the sidecar
+   append and live shrink in one `try/except` — append-success +
+   shrink-failure returned already-durable rows as "stranded", the
+   caller carried them back into the live file, and every later pass
+   re-appended them to the append-only sidecar, unboundedly. Fixed:
+   multiset-diff idempotent append (`Counter`, so two identical torn
+   live lines stay two records), split try blocks, and "stranded"
+   strictly meaning "the sidecar does NOT hold it" — a failed shrink
+   after a durable append returns `[]` and the caller's rebuild does
+   the shrink. Documented trade: byte-identical corruption recurring
+   after a COMPLETED quarantine of its twin shrinks without a second
+   sidecar copy.
+2. (Skeptic HIGH) `unparseable_sidecar_count` strict-read the sidecar —
+   which by design holds raw bytes — reporting **0 exactly when
+   quarantine fired**. Byte-safe now.
+3. (QA HIGH) `load_tiered_lessons` swallowed OSError to `[]` on the
+   rmw path — empty rebuild, the destruction shape one function
+   downstream. Aborts now.
+4. (Experimentalist MEDIUM, undercounted) `scope_14a.json` had stale
+   anchors against the rewritten code — reviewer found 4, re-check
+   found **6**; all re-filed, sweep re-run 35/35.
+
+Rejected: converting node/edge loaders onto `read_rows_as`
+(dict-default vs dataclass-default filter semantics — a behavior risk
+for zero functional gain).
+
+The initial sweep of the fixes surfaced its own gap: the dedup-removal
+mutant SURVIVED because the first partial-failure test never re-runs
+quarantine over a still-dirty live file. A harsher both-writes-fail
+convergence test killed it — the sweep auditing its own killer tests.
+
+**Round 2** (3 lenses on the fix layer): two accepted.
+
+1. (Skeptic+Architect; QA explicitly dissented — the dissent was chased
+   and the majority was right) The `raw=True` OSError raise overloaded
+   two meanings: `raw` means "skip decay math" and five pure-read/append
+   callers pass it (`contested_lessons`, `resurrect_archived_lesson`,
+   decay-cycle LONG reads, the delta_replay CLI chain, CLI refight) —
+   all inherited crash semantics they never asked for. The abort now
+   rides its own `for_rewrite` flag, passed only by the two locked
+   rebuild paths.
+2. (3-lens consensus) The new sidecar dedup read caught only
+   `FileNotFoundError`; any other OSError crashed the lock-held rewrite
+   unclassified. Now degrades the dedup, not the quarantine (warn +
+   empty diff; worst case one duplicate sidecar row, the documented
+   trade).
+
+**Round 3 declined, reasons on the record:** both round-2 findings were
+about round-1 fixes, and the round-2 fixes are strictly narrower — the
+`for_rewrite` flag *restores* the pre-chunk degradation for pure readers
+(no new semantics anywhere), and the OSError catch is a pure widening
+with a warning. Both are pinned by tests and mutants (spec at 23/23).
+
+Final state: suite 9434 passed / 1 expected skip; sweeps 23/23 (kw),
+35/35 (scope_14a), 27/27 (stamp_preserve).
+
 ## Lesson
 
 A safety mechanism written against one corruption model (rows that
