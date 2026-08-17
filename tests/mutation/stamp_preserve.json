@@ -72,8 +72,8 @@
   {
     "name": "drift :: a schema-rejected row aborts the whole load",
     "file": "src/memory_ledger.py",
-    "anchor": "        try:\n            out.append(build(d))\n        except Exception:\n            drifted += 1",
-    "replacement": "        try:\n            out.append(build(d))\n        except Exception:\n            return []",
+    "anchor": "        try:\n            out.append(build(d))\n        except Exception as exc:\n            drifted += 1",
+    "replacement": "        try:\n            out.append(build(d))\n        except Exception as exc:\n            return []",
     "tests": "tests/test_memory.py"
   },
   {
@@ -128,8 +128,8 @@
   {
     "name": "vacuity :: the torn line stops the verdict scan",
     "file": "src/memory_ledger.py",
-    "anchor": "        for i in range(len(lines) - 1, -1, -1):\n            line = lines[i].strip()\n            if not line:\n                continue\n            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                continue\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                target_idx = i\n                break\n        if target_idx is None:\n            return old\n        row = json.loads(lines[target_idx])\n        # Re-stamp honesty",
-    "replacement": "        for i in range(len(lines) - 1, -1, -1):\n            line = lines[i].strip()\n            if not line:\n                continue\n            try:\n                row = json.loads(line)\n            except json.JSONDecodeError:\n                break\n            if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                target_idx = i\n                break\n        if target_idx is None:\n            return old\n        row = json.loads(lines[target_idx])\n        # Re-stamp honesty",
+    "anchor": "                try:\n                    row = json.loads(line)\n                except json.JSONDecodeError:\n                    continue\n                if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                    target_idx = i\n                    break\n            if target_idx is None:\n                return old\n            row = json.loads(lines[target_idx])\n            # Re-stamp honesty",
+    "replacement": "                try:\n                    row = json.loads(line)\n                except json.JSONDecodeError:\n                    break\n                if isinstance(row, dict) and row.get(\"loop_id\") == loop_id:\n                    target_idx = i\n                    break\n            if target_idx is None:\n                return old\n            row = json.loads(lines[target_idx])\n            # Re-stamp honesty",
     "tests": "tests/test_memory.py"
   },
   {
