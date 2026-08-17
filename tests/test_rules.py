@@ -348,3 +348,49 @@ def test_build_loop_context_no_rule_returns_none(tmp_path, monkeypatch):
     from agent_loop import _build_loop_context
     _, _, _, _, matched = _build_loop_context("build a completely new feature")
     assert matched is None
+
+
+# ---------------------------------------------------------------------------
+# Byte-safety (2026-08-17 silent-drop arc, adversarial r2 sibling find)
+# ---------------------------------------------------------------------------
+
+_TORN = b'{"torn": "\xff'
+
+
+class TestKeyedUpsertsPreserveWhatTheyCannotParse:
+    """Pins the REVIEWED census entry for save_rule._upsert: a byte-tainted
+    line never id-matches and is re-emitted verbatim — the old shape
+    re-dumped every row (laundering) and DELETED lines it couldn't parse."""
+
+    def test_load_rules_survives_a_torn_byte_and_warns(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        p = tmp_path / "rules.jsonl"
+        monkeypatch.setattr("rules._rules_path", lambda: p)
+        p.write_bytes(json.dumps(_make_rule(id="r1").__dict__).encode()
+                      + b"\n"
+                      + json.dumps(_make_rule(id="r2").__dict__).encode()
+                      + b"\n" + _TORN + b"\n")
+        with caplog.at_level(logging.WARNING):
+            rules = load_rules()
+        assert {r.id for r in rules} == {"r1", "r2"}
+        assert any("load_rules" in r.message and "undecodable" in r.message
+                   for r in caplog.records)
+
+    def test_the_upsert_never_launders_or_deletes(
+            self, tmp_path, monkeypatch):
+        p = tmp_path / "rules.jsonl"
+        monkeypatch.setattr("rules._rules_path", lambda: p)
+        # Clean target + tainted-but-VALID twin of the same id + torn tail.
+        tainted = json.dumps(_make_rule(id="r1").__dict__).encode().replace(
+            b"A test rule", b"A test r\xffle")
+        p.write_bytes(json.dumps(_make_rule(id="r1").__dict__).encode()
+                      + b"\n" + tainted + b"\n" + _TORN + b"\n")
+        save_rule(_make_rule(id="r1", description="updated description"))
+        after = p.read_bytes()
+        assert tainted in after          # tainted twin re-emitted verbatim
+        assert _TORN in after            # torn line NOT deleted
+        assert b"updated description" in after   # the clean row WAS replaced
+        assert after.count(b'"id": "r1"') == 2   # new row + tainted twin only
+        with pytest.raises(UnicodeDecodeError):
+            after.decode("utf-8")        # corruption signal intact

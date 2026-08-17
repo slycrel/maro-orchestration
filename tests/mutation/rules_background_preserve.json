@@ -1,0 +1,44 @@
+[
+  {
+    "name": "rules family-A :: a torn byte empties the whole rules read again",
+    "file": "src/rules.py",
+    "anchor": "    for d in _read_store(path, \"load_rules\"):",
+    "replacement": "    _rows = []\n    try:\n        _rows = [json.loads(l) for l in\n                 path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]\n    except Exception:\n        pass\n    for d in _rows:",
+    "tests": "tests/test_rules.py"
+  },
+  {
+    "name": "rules launder :: the upsert id-matches a byte-tainted twin and replaces it",
+    "file": "src/rules.py",
+    "anchor": "                if _loads_clean(s).get(\"id\") == rule.id:",
+    "replacement": "                if json.loads(s).get(\"id\") == rule.id:",
+    "tests": "tests/test_rules.py"
+  },
+  {
+    "name": "rules dup :: the upsert preserve branch discards the line it cannot parse",
+    "file": "src/rules.py",
+    "anchor": "                if _loads_clean(s).get(\"id\") == rule.id:\n                    continue  # replaced below\n            except Exception:\n                pass\n            out.append(s)",
+    "replacement": "                if _loads_clean(s).get(\"id\") == rule.id:\n                    continue  # replaced below\n            except Exception:\n                continue\n            out.append(s)",
+    "tests": "tests/test_rules.py"
+  },
+  {
+    "name": "bg launder :: the task-log merge id-matches a byte-tainted twin and replaces it",
+    "file": "src/background.py",
+    "anchor": "                if _loads_clean(s).get(\"id\") == task.id:",
+    "replacement": "                if json.loads(s).get(\"id\") == task.id:",
+    "tests": "tests/test_background.py"
+  },
+  {
+    "name": "bg dup :: the task-log preserve branch discards the line it cannot parse",
+    "file": "src/background.py",
+    "anchor": "                if _loads_clean(s).get(\"id\") == task.id:\n                    continue  # will be replaced\n            except Exception:\n                pass\n            out.append(s)",
+    "replacement": "                if _loads_clean(s).get(\"id\") == task.id:\n                    continue  # will be replaced\n            except Exception:\n                continue\n            out.append(s)",
+    "tests": "tests/test_background.py"
+  },
+  {
+    "name": "bg family-B :: the task lookup raises UnicodeDecodeError into every poll caller",
+    "file": "src/background.py",
+    "anchor": "    for d in reversed(_read_store(path, \"_load_task\")):",
+    "replacement": "    for d in reversed([json.loads(l) for l in\n                       path.read_text(encoding=\"utf-8\").splitlines()\n                       if l.strip()]):",
+    "tests": "tests/test_background.py"
+  }
+]

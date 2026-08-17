@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -24,6 +25,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+# Store-hygiene helpers (2026-08-17 silent-drop arc, adversarial r2 sibling
+# find): announced byte-level reads + taint-refusing parse so the task-log
+# merge never launders a byte-tainted row or deletes a torn line, and a
+# torn byte no longer raises UnicodeDecodeError out of _load_task.
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+)
+
+log = logging.getLogger("maro.background")
 
 
 # ---------------------------------------------------------------------------
@@ -113,20 +125,25 @@ def _append_task_log(task: BackgroundTask) -> None:
     from file_lock import locked_rmw
 
     def _merge(old: str) -> str:
-        lines: List[dict] = []
+        # Unmatched lines are re-emitted VERBATIM (2026-08-17 silent-drop
+        # arc): the old dict round trip re-dumped every row (laundering
+        # byte-tainted ones into clean escapes) and DELETED lines it
+        # couldn't parse — on a log rewritten by every start/poll, a torn
+        # line didn't survive to the next read. loads_clean refuses tainted
+        # lines, so they never id-match.
+        out: List[str] = []
         for line in old.splitlines():
-            line = line.strip()
-            if not line:
+            s = line.strip()
+            if not s:
                 continue
             try:
-                entry = json.loads(line)
-                if entry.get("id") == task.id:
+                if _loads_clean(s).get("id") == task.id:
                     continue  # will be replaced
-                lines.append(entry)
             except Exception:
-                continue
-        lines.append(_task_to_dict(task))
-        return "\n".join(json.dumps(e) for e in lines) + "\n"
+                pass
+            out.append(s)
+        out.append(json.dumps(_task_to_dict(task)))
+        return "\n".join(out) + "\n"
 
     locked_rmw(_bg_log_path(), _merge)
 
@@ -298,16 +315,16 @@ def _load_task(task_id: str) -> Optional[BackgroundTask]:
     path = _bg_log_path()
     if not path.exists():
         return None
-    # Scan in reverse to get most recent version
-    lines = path.read_text(encoding="utf-8").splitlines()
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-            if d.get("id") == task_id:
+    # Announced byte-level read; scan in reverse for the most recent
+    # version. A torn byte used to raise UnicodeDecodeError into every
+    # poll/wait caller.
+    for d in reversed(_read_store(path, "_load_task")):
+        if d.get("id") == task_id:
+            try:
                 return _dict_to_task(d)
-        except Exception:
-            continue
+            except Exception as exc:
+                log.warning("_load_task: row %s is JSON but not loadable as "
+                            "BackgroundTask (%s: %s) — treating as absent",
+                            task_id, type(exc).__name__, exc)
+                return None
     return None

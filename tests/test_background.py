@@ -339,3 +339,49 @@ def test_timeout_kill_reaps_process_group(monkeypatch, tmp_path):
         if leaked:
             time.sleep(0.2)
     assert not leaked, f"pids {leaked} from task pgroup survived killpg"
+
+
+# ---------------------------------------------------------------------------
+# Byte-safety (2026-08-17 silent-drop arc, adversarial r2 sibling find)
+# ---------------------------------------------------------------------------
+
+_TORN = b'{"torn": "\xff'
+
+
+def _task_row(tid="T1abcdef", **over):
+    d = {"id": tid, "command": "echo hi", "pid": 12345, "status": "running",
+         "started_at": "2026-08-17T00:00:00+00:00"}
+    d.update(over)
+    return d
+
+
+class TestKeyedUpsertsPreserveWhatTheyCannotParse:
+    """Pins the REVIEWED census entry for _append_task_log._merge: a
+    byte-tainted line never id-matches and is re-emitted verbatim — the
+    old shape re-dumped every row (laundering) and DELETED lines it
+    couldn't parse, on a log rewritten by every start/poll."""
+
+    def test_load_task_reads_past_a_torn_byte(self, tmp_path, monkeypatch):
+        p = tmp_path / "background-tasks.jsonl"
+        monkeypatch.setattr("background._bg_log_path", lambda: p)
+        p.write_bytes(json.dumps(_task_row()).encode() + b"\n"
+                      + _TORN + b"\n")
+        got = _load_task("T1abcdef")     # used to raise UnicodeDecodeError
+        assert got is not None and got.status == "running"
+
+    def test_the_merge_never_launders_or_deletes(self, tmp_path, monkeypatch):
+        from background import _append_task_log, _dict_to_task
+        p = tmp_path / "background-tasks.jsonl"
+        monkeypatch.setattr("background._bg_log_path", lambda: p)
+        tainted = json.dumps(_task_row()).encode().replace(
+            b"echo hi", b"echo h\xffi")
+        p.write_bytes(json.dumps(_task_row()).encode() + b"\n"
+                      + tainted + b"\n" + _TORN + b"\n")
+        _append_task_log(_dict_to_task(_task_row(status="done")))
+        after = p.read_bytes()
+        assert tainted in after          # tainted twin re-emitted verbatim
+        assert _TORN in after            # torn line NOT deleted
+        assert b'"done"' in after        # the clean row WAS replaced
+        assert after.count(b'"id": "T1abcdef"') == 2  # new + tainted twin
+        with pytest.raises(UnicodeDecodeError):
+            after.decode("utf-8")        # corruption signal intact

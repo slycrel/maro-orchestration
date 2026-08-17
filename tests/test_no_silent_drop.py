@@ -132,6 +132,17 @@ _SUGGESTION_STAMPER = ("keyed-merge rewrite under locked_rmw (byte-safe): a line
                        "TestSuggestionRewritesPreserveWhatTheyCannotParse in "
                        "tests/test_evolver_store.py and "
                        "tests/mutation/evolver_store_preserve.json.")
+# rules.py / background.py keyed upserts share the same shape (found by
+# adversarial r2 of the evolver_store chunk, 2026-08-17: the old versions
+# re-dumped every row AND deleted unparseable lines on every rewrite).
+# Pinned by TestKeyedUpsertsPreserveWhatTheyCannotParse in
+# tests/test_rules.py / tests/test_background.py and
+# tests/mutation/rules_background_preserve.json.
+_UPSERT_STAMPER = ("keyed upsert under locked_rmw (byte-safe): a line that "
+                   "fails the taint-refusing parse never matches the id and "
+                   "is re-emitted verbatim — no loss, nothing to announce. "
+                   "Pinned by TestKeyedUpsertsPreserveWhatTheyCannotParse "
+                   "and tests/mutation/rules_background_preserve.json.")
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
@@ -143,6 +154,8 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("knowledge_web.py", "promote_knowledge_candidates"): _NODE_STAMPER,
     ("evolver_store.py", "apply_suggestion._merge"): _SUGGESTION_STAMPER,
     ("evolver_store.py", "revert_suggestion._drop_constraint"): _SUGGESTION_STAMPER,
+    ("rules.py", "save_rule._upsert"): _UPSERT_STAMPER,
+    ("background.py", "_append_task_log._merge"): _UPSERT_STAMPER,
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
@@ -151,9 +164,6 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
 # accident. Fixing one means deleting its line here, in the same diff.
 UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("attribution.py", "load_attributions"): 1,
-
-    ("background.py", "_append_task_log._merge"): 1,
-    ("background.py", "_load_task"): 1,
 
     ("camera_readout.py", "_lesson_origins"): 1,
     ("camera_readout.py", "main"): 1,
@@ -257,7 +267,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("router.py", "build_training_data"): 2,
 
-    ("rules.py", "save_rule._upsert"): 1,
 
     ("run_curation.py", "_load_loop_log"): 1,
     ("run_curation.py", "find_unconsumed_skill_candidates"): 1,

@@ -34,6 +34,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+# Store-hygiene helpers (2026-08-17 silent-drop arc, adversarial r2 sibling
+# find): announced byte-level reads + taint-refusing parse so the keyed
+# upsert never launders a byte-tainted row or deletes a torn line.
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+)
+
 log = logging.getLogger("maro.rules")
 
 
@@ -82,23 +90,22 @@ def load_rules(active_only: bool = True) -> List[Rule]:
     path = _rules_path()
     if not path.exists():
         return []
+    # Announced byte-level read (2026-08-17 silent-drop arc): one torn byte
+    # used to fail the whole-file strict read — every rule lost until the
+    # next rewrite. Now it costs one row, and the loss is announced.
     rules: List[Rule] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                r = Rule(**{k: d[k] for k in Rule.__dataclass_fields__ if k in d})
-                if not active_only or r.active:
-                    rules.append(r)
-            except Exception as exc:
-                log.warning("rules.jsonl: skipping corrupted line: %s", exc)
-                continue
-    except Exception as exc:
-        log.warning("rules.jsonl: failed to read: %s", exc)
-        return []
+    drifted = 0
+    for d in _read_store(path, "load_rules"):
+        try:
+            r = Rule(**{k: d[k] for k in Rule.__dataclass_fields__ if k in d})
+        except Exception:
+            drifted += 1
+            continue
+        if not active_only or r.active:
+            rules.append(r)
+    if drifted:
+        log.warning("load_rules: %d row(s) are JSON but not loadable as "
+                    "Rule — skipped (%s)", drifted, path)
     return list(reversed(rules))
 
 
@@ -108,28 +115,33 @@ def save_rule(rule: Rule) -> None:
 
     def _upsert(old: str) -> str:
         # Read + replace INSIDE the lock — the old shape read before
-        # acquiring, so concurrent saves lost each other's rules.
-        lines: List[dict] = []
+        # acquiring, so concurrent saves lost each other's rules. Unmatched
+        # lines are re-emitted VERBATIM (2026-08-17 silent-drop arc): the
+        # old dict round trip re-dumped every row (laundering byte-tainted
+        # ones into clean escapes) and DELETED lines it couldn't parse.
+        # loads_clean refuses tainted lines, so they never id-match.
+        out: List[str] = []
         for line in old.splitlines():
-            line = line.strip()
-            if not line:
+            s = line.strip()
+            if not s:
                 continue
             try:
-                d = json.loads(line)
-                if d.get("id") == rule.id:
+                if _loads_clean(s).get("id") == rule.id:
                     continue  # replaced below
-                lines.append(d)
             except Exception:
-                continue
-        lines.append(rule.__dict__)
-        return "\n".join(json.dumps(e) for e in lines) + "\n"
+                pass
+            out.append(s)
+        out.append(json.dumps(rule.__dict__))
+        return "\n".join(out) + "\n"
 
     try:
         from file_lock import locked_rmw
         locked_rmw(path, _upsert)
     except ImportError:
-        path.write_text(_upsert(path.read_text(encoding="utf-8") if path.exists() else ""),
-                        encoding="utf-8")
+        path.write_text(
+            _upsert(path.read_text(encoding="utf-8", errors="surrogateescape")
+                    if path.exists() else ""),
+            encoding="utf-8", errors="surrogateescape")
 
 
 # ---------------------------------------------------------------------------
