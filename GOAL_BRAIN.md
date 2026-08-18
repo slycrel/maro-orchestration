@@ -3561,3 +3561,12 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   shell tasks dies with bare "Execution error" (box healthy, foreground
   identical calls fine) — review seats run foreground until understood.
   Record: `docs/history/2026-08-17-step-flags-review.md`.
+- **2026-08-18 — step-flags r3 (fix layer): PASS, fixpoint.** Single
+  Skeptic+QA seat verified the preserve-then-rebuild layer (round-trip
+  lossless, mutants non-vacuous, card file safe on the escape path) and
+  surfaced one more sibling: `mark_skill_candidate_consumed._stamp`
+  parsed with plain json.loads — torn already preserved, tainted-valid
+  laundered on the stamp rewrite. One-word loads_clean swap + pin +
+  mutant, spec 12/12. Fixpoint: the r3 fix is a one-word swap, a test,
+  and a spec entry. run_curation's card-rewrite lane is now uniformly
+  loads_clean across all three locked_rmw mergers.

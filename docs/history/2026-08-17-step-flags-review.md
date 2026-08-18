@@ -67,6 +67,23 @@ non-vacuously by the fixture's SCAVENGE_DETECTED bystander. Skeptic's
 one LOW confirmed the record's own disclosure (slice_loss reaches no
 HTML surface yet) rather than finding anything new.
 
+## Round 3 (fix layer, single Skeptic+QA seat, 2026-08-18)
+
+**PASS.** Verified the except path cannot corrupt the card file (an
+escape aborts before atomic_write), the surrogateescape round-trip is
+lossless by construction for both torn shapes, and all three
+mutant/test pairings are non-vacuous. Two accepted-as-is: a
+PLAUSIBLE-informational on a non-OSError escaping `_merge` (provably
+safe encode; caller contract already best-effort), and sidecar
+accumulation on a never-repaired card (consistent with the
+never-auto-delete posture; litter, not loss). One MEDIUM lead
+**verified real and fixed same session**:
+`mark_skill_candidate_consumed._stamp` still parsed with plain
+`json.loads` — torn cards were already preserved there, but a
+tainted-valid card would launder on the stamp rewrite. One-word
+`loads_clean` swap + pin + mutant (spec 11 → 12, DETECTED). Fixpoint
+declared: the r3 fix is a one-word swap, a test, and a spec entry.
+
 ## Health signal
 
 The r1→r2 chain is doing exactly what the sibling-sweep charter says:

@@ -388,8 +388,11 @@ Ordered open work that matters. Top of the list is next.
       (`refresh_run_card_classification._merge` parsed a torn card as
       `{}` and rewrote maintenance keys away, torn bytes overwritten);
       fixed preserve-THEN-rebuild (timestamped sidecar + WARN +
-      loads_clean; self-heal contract kept), 3 pins, spec 11/11.
-      Review record:
+      loads_clean; self-heal contract kept), 3 pins, spec 11/11. Its
+      r3 fix-layer seat: PASS + one MEDIUM lead verified
+      (`mark_skill_candidate_consumed._stamp` plain-json.loads
+      launder; one-word loads_clean swap, spec 12/12) — fixpoint
+      declared. Review record:
       `docs/history/2026-08-17-step-flags-review.md`. Remaining
       tier-3 surfaces: camera_readout frame/verdict sections (plus its
       strict run_card read in the frames walk, r2 MEDIUM),
