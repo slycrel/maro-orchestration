@@ -279,7 +279,7 @@ def test_gather_log_markers_splits_attributed_and_global(monkeypatch, tmp_path):
     captains_log.log_event("METACOGNITIVE_DECISION", "reflection", "system-lane global entry", loop_id=None)
     captains_log.log_event("STEP_TOO_BROAD", "other loop", "different loop entry", loop_id="loopB")
 
-    attributed, global_entries = lr._gather_log_markers("loopA", "2020-01-01T00:00:00+00:00")
+    attributed, global_entries, _loss = lr._gather_log_markers("loopA", "2020-01-01T00:00:00+00:00")
     assert len(attributed) == 1
     assert attributed[0]["subject"] == "step 1"
     subjects = [e["subject"] for e in global_entries]
@@ -309,7 +309,7 @@ def test_gather_log_markers_global_filter_handles_mixed_utc_offsets(monkeypatch,
     }
     monkeypatch.setattr(captains_log, "load_log", lambda **kw: [same_instant_different_offset])
 
-    attributed, global_entries = lr._gather_log_markers("someloop", "2020-01-01T00:00:00+00:00")
+    attributed, global_entries, _loss = lr._gather_log_markers("someloop", "2020-01-01T00:00:00+00:00")
     subjects = [e["subject"] for e in global_entries]
     assert "cross-offset entry" in subjects
 
@@ -1074,7 +1074,7 @@ def test_gather_log_markers_prefers_run_slice(monkeypatch, tmp_path):
     monkeypatch.setattr(captains_log, "load_log",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("load_log used despite slice")))
 
-    attributed, activity = lr._gather_log_markers("sliceloop", "2026-07-01T00:00:00+00:00", build)
+    attributed, activity, _loss = lr._gather_log_markers("sliceloop", "2026-07-01T00:00:00+00:00", build)
     assert [e["subject"] for e in attributed] == ["gate"]
     subjects = [e["subject"] for e in activity]
     assert "skillX" in subjects        # unattributed user-lane meta stays visible
@@ -1090,7 +1090,7 @@ def test_gather_log_markers_falls_back_to_load_log_without_slice(monkeypatch, tm
         {"timestamp": "2026-07-01T00:00:10+00:00", "event_type": "LOOP_CREATED",
          "subject": "from-global", "summary": "", "loop_id": "noslice"},
     ])
-    attributed, _ = lr._gather_log_markers("noslice", "2026-07-01T00:00:00+00:00", tmp_path / "build")
+    attributed, _, _loss = lr._gather_log_markers("noslice", "2026-07-01T00:00:00+00:00", tmp_path / "build")
     assert [e["subject"] for e in attributed] == ["from-global"]
 
 
@@ -1827,3 +1827,242 @@ def test_render_map_panel_caps_length(tmp_path):
     # cap is 20000 on the raw text; allow escaping/markup overhead
     assert len(html) < 30000
     assert "truncated — full map: python3 -m map_lens long1234" in html
+
+
+# ---------------------------------------------------------------------------
+# Torn-store honesty (2026-08-17, tier-3 mutation-sweep chunk). Every test
+# here pins a failure that was PROBED LIVE before the fix:
+#   - one torn byte in captains_log_slice.jsonl killed the ENTIRE report
+#     write (UnicodeDecodeError past `except OSError` in _too_broad_events);
+#   - a torn metadata.json made the run VANISH from the cross-run index;
+#   - a torn slice silently rerouted markers to the rotated global log;
+#   - a torn run_card.json silently removed the Outcome panel;
+#   - one torn manifest line silently emptied the Environment panel.
+# Fixture doctrine (tests/mutation/README.md): torn lines are RAW BYTES,
+# not just truncated JSON, and they BRACKET the healthy rows so scan
+# direction cannot rescue an assertion.
+# ---------------------------------------------------------------------------
+
+_TORN_RAW = b"\x80\xfe torn bytes \xff\n"          # crash-torn append
+_TORN_ASCII = b'{"event_type": "STEP_TOO\n'        # truncated JSON, valid UTF-8
+
+
+def _torn_jsonl(rows):
+    healthy = b"".join(json.dumps(r).encode("utf-8") + b"\n" for r in rows)
+    return _TORN_RAW + healthy + _TORN_ASCII + _TORN_RAW
+
+
+def test_torn_slice_byte_does_not_kill_the_report(monkeypatch, tmp_path):
+    """The log slice sits beside every report; it must never be the report's
+    single point of failure."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    art = tmp_path / "projects" / "torn-proj" / "artifacts"
+    art.mkdir(parents=True)
+    (art / "captains_log_slice.jsonl").write_bytes(_torn_jsonl([
+        {"event_type": "METACOGNITIVE_DECISION", "loop_id": "tornloop",
+         "timestamp": "2026-08-17T00:01:00+00:00", "subject": "retry step 1"},
+    ]))
+    result = lr.write_run_report(
+        project="torn-proj", loop_id="tornloop", goal="survive torn bytes",
+        planned_steps=["Step one"], start_ts="2026-08-17T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")], status="done",
+    )
+    assert result is not None
+    content = (art / "loop-tornloop-report.html").read_text()
+    # The healthy attributed marker still renders...
+    assert "retry step 1" in content
+    # ...and the loss is SAID, not silent (3 torn lines in the fixture).
+    assert "log line(s) unreadable" in content
+    assert "may be incomplete" in content
+
+
+def test_healthy_slice_renders_no_loss_note(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    art = tmp_path / "projects" / "ok-proj" / "artifacts"
+    art.mkdir(parents=True)
+    (art / "captains_log_slice.jsonl").write_bytes(
+        json.dumps({"event_type": "METACOGNITIVE_DECISION",
+                    "loop_id": "okloop",
+                    "timestamp": "2026-08-17T00:01:00+00:00",
+                    "subject": "clean"}).encode() + b"\n")
+    lr.write_run_report(
+        project="ok-proj", loop_id="okloop", goal="clean run",
+        planned_steps=["Step one"], start_ts="2026-08-17T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")], status="done",
+    )
+    content = (art / "loop-okloop-report.html").read_text()
+    assert "log line(s) unreadable" not in content
+
+
+def test_read_log_slice_serves_healthy_rows_despite_torn_bytes(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    rows = [{"event_type": "A", "loop_id": "x"},
+            {"event_type": "B", "loop_id": "y"}]
+    (build / "captains_log_slice.jsonl").write_bytes(_torn_jsonl(rows))
+    sliced = lr._read_log_slice(build)
+    assert sliced is not None, "torn slice must degrade, not vanish"
+    entries, skip = sliced
+    assert entries == rows
+    assert skip.dropped == 3  # two raw-byte lines + one truncated-JSON line
+
+
+def test_read_log_slice_missing_vs_empty(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    assert lr._read_log_slice(build) is None  # no slice at all
+    (build / "captains_log_slice.jsonl").write_bytes(b"")
+    sliced = lr._read_log_slice(build)
+    assert sliced is not None  # empty slice is data ("nothing logged"), not absence
+    entries, skip = sliced
+    assert entries == [] and not skip
+
+
+def test_gather_log_markers_torn_slice_still_beats_global_log(monkeypatch, tmp_path):
+    """A slice with SOME corrupt lines is still the better source; the old
+    behavior treated it as missing and silently fell back to the rotated
+    global tail."""
+    import captains_log
+
+    def _explode(*a, **k):
+        raise AssertionError("global log consulted despite a usable slice")
+
+    monkeypatch.setattr(captains_log, "load_log", _explode)
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "captains_log_slice.jsonl").write_bytes(_torn_jsonl([
+        {"event_type": "NAVIGATOR_DECIDED", "loop_id": "slic3",
+         "timestamp": "2026-08-17T00:01:00+00:00", "subject": "s"},
+    ]))
+    attributed, _activity, loss = lr._gather_log_markers(
+        "slic3", "2026-08-17T00:00:00+00:00", build)
+    assert [e["event_type"] for e in attributed] == ["NAVIGATOR_DECIDED"]
+    assert loss and loss.dropped == 3
+
+
+def test_too_broad_events_survive_torn_slice(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "captains_log_slice.jsonl").write_bytes(_torn_jsonl([
+        {"event_type": "STEP_TOO_BROAD", "loop_id": "L1",
+         "context": {"step_index": 0}},
+        {"event_type": "OTHER", "loop_id": "L1", "context": {}},
+        {"event_type": "STEP_TOO_BROAD", "loop_id": "L1",
+         "context": {"step_index": 4}},
+    ]))
+    evs = lr._too_broad_events(build, "L1")
+    assert [e["step_index"] for e in evs] == [0, 4]
+
+
+def test_index_row_survives_torn_metadata(monkeypatch, tmp_path):
+    """A run with an unreadable metadata.json must DEGRADE on the index, not
+    vanish — vanishing is indistinguishable from never having run."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("okrun", prompt="the healthy run", lane="agenda")
+    runs.write_metadata(rd, handle_id="okrun", prompt="the healthy run",
+                        status="done", ended_at="2026-08-17T00:05:00+00:00")
+    torn = runs.runs_root() / "torn-run-dir"
+    build = torn / "build"
+    build.mkdir(parents=True)
+    (torn / "metadata.json").write_bytes(
+        b'{"handle_id": "torn", "prompt": "torn \xff\x80 run"}')
+    # Its on-disk report must stay reachable from the degraded row.
+    (build / "loop-tornabcd-report.html").write_text("old report")
+
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert "the healthy run" in content
+    assert "torn-run-dir" in content
+    assert "unreadable" in content
+    assert "run data still on disk" in content
+    assert "loop-tornabcd-report.html" in content
+
+
+def test_index_row_falls_back_when_run_card_torn(monkeypatch, tmp_path, caplog):
+    import logging
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("cardrun", prompt="card run", lane="agenda")
+    runs.write_metadata(rd, handle_id="cardrun", prompt="card run",
+                        status="done", ended_at="2026-08-17T00:05:00+00:00")
+    (rd / "run_card.json").write_bytes(b'{"status": "success", \xff torn')
+    with caplog.at_level(logging.WARNING, logger="maro.loop"):
+        content = Path(lr.write_runs_index(force=True)).read_text()
+    assert "card run" in content          # the run did not vanish
+    assert "done" in content              # process status served as fallback
+    assert any("run_card.json unreadable" in r.message for r in caplog.records)
+
+
+def test_outcome_panel_honest_on_torn_run_card(tmp_path):
+    build = tmp_path / "run" / "build"
+    build.mkdir(parents=True)
+    # Missing card: absent panel is the truth (not yet curated).
+    assert lr._render_verdict(build) == ""
+    # Torn card: curation DID run — the panel must say the verdict is
+    # unavailable, not silently pretend curation never happened.
+    (build.parent / "run_card.json").write_bytes(
+        b'{"status": "success", "goal_achieved": true, \xff}')
+    html = lr._render_verdict(build)
+    assert "run_card.json exists but could not be read" in html
+
+
+def test_environment_panel_survives_torn_manifest_line(monkeypatch, tmp_path):
+    run_dir = tmp_path / "run"
+    build = run_dir / "build"
+    src = run_dir / "source"
+    build.mkdir(parents=True)
+    src.mkdir()
+    (src / "skills_manifest.jsonl").write_bytes(_torn_jsonl([
+        {"stage": "loop", "skills": [{"name": "healthy-skill"}]},
+    ]))
+    html = lr._render_environment(build)
+    assert "healthy-skill" in html               # the readable row renders
+    assert "skills-manifest line(s) unreadable" in html
+    assert "incomplete" in html
+
+
+def test_environment_panel_honest_on_torn_metadata_and_env(tmp_path):
+    run_dir = tmp_path / "run"
+    build = run_dir / "build"
+    src = run_dir / "source"
+    build.mkdir(parents=True)
+    src.mkdir()
+    (run_dir / "metadata.json").write_bytes(b'{"persona": "poe\xff"}')
+    (src / "environment.json").write_bytes(b'{"maro_git_sha": "abc\x80"}')
+    html = lr._render_environment(build)
+    assert "metadata.json unreadable" in html
+    assert "persona unknown" in html
+    assert "environment.json unreadable" in html
+
+
+def test_backfill_announces_unreadable_metadata(monkeypatch, tmp_path, caplog):
+    import logging
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    torn = runs.runs_root() / "torn-dir"
+    torn.mkdir(parents=True)
+    (torn / "metadata.json").write_bytes(b"\xff not json at all")
+    with caplog.at_level(logging.WARNING, logger="maro.loop"):
+        counts = lr.backfill_run_reports()
+    assert counts["failed"] == 0  # nothing to render; the dir is unclassifiable
+    assert any("cannot tell whether this is a NOW run" in r.message
+               for r in caplog.records)
+
+
+def test_now_report_announces_torn_metadata(monkeypatch, tmp_path, caplog):
+    import logging
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.runs_root() / "nowtorn-dir"
+    art = rd / "artifact"
+    art.mkdir(parents=True)
+    (rd / "metadata.json").write_bytes(b'{"lane": "now", \xff torn')
+    (art / "now-nowtorn.json").write_text(json.dumps({
+        "handle_id": "nowtorn", "message": "the question",
+        "result": "the answer", "created_at": "2026-08-17T00:00:00+00:00",
+        "elapsed_ms": 12}))
+    with caplog.at_level(logging.WARNING, logger="maro.loop"):
+        path = lr._write_now_report(rd, runs.runs_root())
+    assert path is not None and path.exists()
+    assert "the answer" in path.read_text()
+    assert any("metadata.json unreadable" in r.message for r in caplog.records)

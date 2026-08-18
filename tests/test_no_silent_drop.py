@@ -219,12 +219,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("loop_finalize.py", "_mint_run_risks_to_project"): 1,
 
-    ("loop_report.py", "_gather_run_summaries"): 2,
-    ("loop_report.py", "_read_log_slice"): 1,
-    ("loop_report.py", "_render_environment"): 1,
-    ("loop_report.py", "_too_broad_events"): 1,
-    ("loop_report.py", "backfill_run_reports"): 1,
-
     ("memory_backends.py", "JSONLBackend.read_all"): 1,
     ("memory_backends.py", "SQLiteBackend.read_all"): 1,
 

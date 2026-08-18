@@ -29,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from jsonl_utils import (SkipReport, loads_clean, read_jsonl_tail_counted,
+                         store_text)
 from loop_types import StepOutcome, _orch, _project_dir_root
 
 log = logging.getLogger("maro.loop")
@@ -244,7 +246,9 @@ def _step_windows(step_outcomes: List[StepOutcome], loop_start_ts: str) -> Tuple
 # Captain's log markers
 # ---------------------------------------------------------------------------
 
-def _read_log_slice(report_dir: Optional[Path]) -> Optional[List[dict]]:
+def _read_log_slice(
+    report_dir: Optional[Path],
+) -> Optional[Tuple[List[dict], SkipReport]]:
     """Read the run's own captain's-log slice, if one exists.
 
     runs.slice_log_for_run() writes <run-dir>/build/captains_log_slice.jsonl
@@ -253,34 +257,40 @@ def _read_log_slice(report_dir: Optional[Path]) -> Optional[List[dict]]:
     survives rotation of the global log, and it's already scoped to this
     run's time window. When present (the report lives in the same build/
     dir), it beats re-filtering the global log's ~1000-entry tail.
-    Returns None (not []) when the slice doesn't exist, so the caller can
-    distinguish "no slice yet" from "slice exists but is empty".
+
+    Returns None when the slice doesn't exist or can't be opened at all —
+    the global-log fallback is the right degrade for a run with no usable
+    slice. A slice with SOME corrupt lines is different: the healthy rows
+    are still the better source than the rotated global tail, so they are
+    returned along with a SkipReport of the loss (probed 2026-08-17: one
+    torn byte used to void the whole slice and silently reroute the report
+    to the global log — drift-reads-as-absent, one seam up).
     """
     if report_dir is None:
         return None
     slice_path = report_dir / "captains_log_slice.jsonl"
-    if not slice_path.exists():
+    entries, skip = read_jsonl_tail_counted(slice_path)
+    if skip.missing:
         return None
-    entries: List[dict] = []
-    try:
-        with slice_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    continue
-    except Exception:
+    if skip.unreadable:
+        log.warning("captains log slice unreadable (%s) — report falls back "
+                    "to the global log tail", slice_path)
         return None
-    return entries
+    if skip:
+        log.warning("captains log slice %s: %s", slice_path, skip.summary())
+    return entries, skip
 
 
 def _gather_log_markers(
     loop_id: str, start_ts: str, report_dir: Optional[Path] = None
-) -> Tuple[List[dict], List[dict]]:
-    """Return (attributed, run_activity) captain's-log entries for this run.
+) -> Tuple[List[dict], List[dict], Optional[SkipReport]]:
+    """Return (attributed, run_activity, slice_loss) log entries for this run.
+
+    slice_loss is the run slice's SkipReport when that source was used
+    (falsy when nothing was lost), None on the global-log path — the
+    report renders a visible integrity note from it, because a shorter
+    Decision points / Run activity section is otherwise indistinguishable
+    from a quieter run.
 
     attributed: entries whose loop_id matches this loop, chronological.
     run_activity: everything else logged during this run's window — skills
@@ -298,7 +308,7 @@ def _gather_log_markers(
     a very long/busy run could lose its earliest markers.
     """
     if not loop_id:
-        return [], []
+        return [], [], None
 
     # Audience decree (2026-07-29): the run_activity section is the report's
     # user-surfaced narrative ("what the learning system did during this
@@ -313,17 +323,18 @@ def _gather_log_markers(
         except Exception:
             return entries
 
-    slice_entries = _read_log_slice(report_dir)
-    if slice_entries is not None:
+    sliced = _read_log_slice(report_dir)
+    if sliced is not None:
+        slice_entries, slice_loss = sliced
         attributed = [e for e in slice_entries if e.get("loop_id") == loop_id]
         activity = _user_lane(
             [e for e in slice_entries if e.get("loop_id") != loop_id])
-        return attributed, activity
+        return attributed, activity, slice_loss
 
     try:
         from captains_log import load_log
     except Exception:
-        return [], []
+        return [], [], None
     since_date = (start_ts or "")[:10] or None
     try:
         # 2026-07-08 adversarial review (finding #8): this cap was stricter
@@ -331,7 +342,7 @@ def _gather_log_markers(
         # ~1000-entry rotation tail) — 1000 matches what was documented.
         entries = load_log(since=since_date, limit=1000)
     except Exception:
-        return [], []
+        return [], [], None
     attributed = [e for e in entries if e.get("loop_id") == loop_id]
     # 2026-07-08 adversarial review round 2 (Plan Critic): raw string
     # comparison on ISO timestamps only orders correctly when every producer
@@ -347,7 +358,7 @@ def _gather_log_markers(
     ]
     attributed.reverse()       # load_log is most-recent-first; report reads chronologically
     global_entries.reverse()
-    return attributed, _user_lane(global_entries)
+    return attributed, _user_lane(global_entries), None
 
 
 def _slot_markers(markers: List[dict], windows: List[Dict[str, Any]], approx: bool) -> Dict[int, List[int]]:
@@ -847,18 +858,16 @@ def _too_broad_events(report_dir: Path, loop_id: str = "") -> List[dict]:
     6x-cap firing was log-only and nothing surfaced it)."""
     out: List[dict] = []
     slice_path = report_dir / "captains_log_slice.jsonl"
-    try:
-        if not slice_path.is_file():
-            return out
-        lines = slice_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return out
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(row, dict) or row.get("event_type") != "STEP_TOO_BROAD":
+    # Byte-tolerant per-line read (probed 2026-08-17): the old strict
+    # whole-file read_text raised UnicodeDecodeError past `except OSError`
+    # on one crash-torn byte, and the escape killed the ENTIRE report write
+    # — the file that sits beside every report was the report's own
+    # single point of failure. Loss is announced by the shared reader.
+    rows, skip = read_jsonl_tail_counted(slice_path)
+    if skip:
+        log.warning("too-broad scan of %s: %s", slice_path, skip.summary())
+    for row in rows:
+        if row.get("event_type") != "STEP_TOO_BROAD":
             continue
         if loop_id and row.get("loop_id") and row.get("loop_id") != loop_id:
             continue
@@ -1117,13 +1126,27 @@ def _render_verdict(report_dir: Path) -> str:
     report usually predates it (known gap #5 in the design doc); backfilled
     reports get it because the card already exists by then.
     """
+    card_path = report_dir.parent / "run_card.json"
     try:
-        card_path = report_dir.parent / "run_card.json"
         if not card_path.exists():
-            return ""
-        card = json.loads(card_path.read_text(encoding="utf-8"))
-    except Exception:
+            return ""   # not yet curated — an absent panel is the truth
+    except OSError:
         return ""
+    try:
+        card = loads_clean(store_text(card_path))
+        if not isinstance(card, dict):
+            raise ValueError("run_card.json is not a JSON object")
+    except Exception:
+        # The card EXISTS — curation ran, a verdict was stamped — so an
+        # absent panel would misread as "not yet curated" (probed
+        # 2026-08-17: one torn byte silently removed the Outcome section).
+        log.warning("run_card.json unreadable (%s)", card_path, exc_info=True)
+        return (
+            '<h2>Outcome</h2><div class="panel"><div class="meta">'
+            '<span class="overcap">&#9888; run_card.json exists but could '
+            'not be read</span> &mdash; this run WAS curated; its verdict '
+            'is unavailable until the file is repaired</div></div>'
+        )
     badge = _render_status_badge(card.get("status") or "", card.get("success_class"))
     achieved = card.get("goal_achieved")
     achieved_str = "yes" if achieved is True else ("no" if achieved is False else "not verified")
@@ -1200,10 +1223,13 @@ def _render_environment(report_dir: Path) -> str:
     run_dir = report_dir.parent
     lines: List[str] = []
 
-    # Persona (stamped into metadata.json at selection time)
+    # Persona (stamped into metadata.json at selection time). Missing file
+    # -> silence (runs predating the capture render nothing here, by
+    # design); an EXISTING file that won't read -> an honest line, because
+    # silence there claims "no persona was stamped" (probed 2026-08-17).
     try:
-        meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
-        pname = meta.get("persona")
+        meta = loads_clean(store_text(run_dir / "metadata.json"))
+        pname = meta.get("persona") if isinstance(meta, dict) else None
         if pname:
             conf = meta.get("persona_confidence")
             conf_str = f" (conf {conf:.2f})" if isinstance(conf, (int, float)) else ""
@@ -1214,45 +1240,54 @@ def _render_environment(report_dir: Path) -> str:
                 flags.append("fallback")
             flag_str = f' <span class="meta">[{", ".join(flags)}]</span>' if flags else ""
             lines.append(f'<div class="meta"><b>Persona:</b> {_esc(str(pname))}{_esc(conf_str)}{flag_str}</div>')
-    except Exception:
+    except FileNotFoundError:
         pass
+    except Exception:
+        lines.append('<div class="meta"><span class="overcap">&#9888; '
+                     'metadata.json unreadable</span> &mdash; persona unknown'
+                     '</div>')
 
-    # Skills manifest — what actually entered prompts, post variant routing
+    # Skills manifest — what actually entered prompts, post variant routing.
+    # Byte-tolerant read: one torn line used to void the ENTIRE panel
+    # (probed 2026-08-17 — the strict read_text raised before any row
+    # rendered), silently un-claiming every injected skill.
     try:
         manifest_path = run_dir / "source" / "skills_manifest.jsonl"
-        if manifest_path.exists():
-            rows = []
-            for raw in manifest_path.read_text(encoding="utf-8").splitlines():
-                if not raw.strip():
-                    continue
-                try:
-                    rec = json.loads(raw)
-                except Exception:
-                    continue
-                for s in rec.get("skills", []):
-                    variant = s.get("variant_of")
-                    variant_str = f'variant of {variant}' if variant else ""
-                    rows.append(
-                        f'<tr><td>{_esc(rec.get("stage", ""))}</td>'
-                        f'<td>{_esc(s.get("name", "") or s.get("id", ""))}</td>'
-                        f'<td class="meta">{_esc((s.get("content_hash") or "")[:10])}</td>'
-                        f'<td class="meta">{_esc(variant_str)}</td></tr>'
-                    )
-            if rows:
-                lines.append(
-                    f'<details><summary>Skills injected ({len(rows)})</summary>'
-                    '<table class="idx-table">'
-                    '<tr><th>Stage</th><th>Skill</th><th>Hash</th><th>Variant</th></tr>'
-                    + "".join(rows) + '</table></details>'
+        recs, mskip = read_jsonl_tail_counted(manifest_path)
+        rows = []
+        for rec in recs:
+            for s in rec.get("skills", []):
+                variant = s.get("variant_of")
+                variant_str = f'variant of {variant}' if variant else ""
+                rows.append(
+                    f'<tr><td>{_esc(rec.get("stage", ""))}</td>'
+                    f'<td>{_esc(s.get("name", "") or s.get("id", ""))}</td>'
+                    f'<td class="meta">{_esc((s.get("content_hash") or "")[:10])}</td>'
+                    f'<td class="meta">{_esc(variant_str)}</td></tr>'
                 )
+        if rows:
+            lines.append(
+                f'<details><summary>Skills injected ({len(rows)})</summary>'
+                '<table class="idx-table">'
+                '<tr><th>Stage</th><th>Skill</th><th>Hash</th><th>Variant</th></tr>'
+                + "".join(rows) + '</table></details>'
+            )
+        if mskip:
+            log.warning("skills manifest %s: %s", manifest_path,
+                        mskip.summary())
+            lines.append(
+                f'<div class="meta"><span class="overcap">&#9888; '
+                f'{mskip.dropped or "all"} skills-manifest line(s) '
+                f'unreadable</span> &mdash; the list above is incomplete'
+                '</div>')
     except Exception:
         pass
 
     # Environment snapshot — the config era
+    env_path = run_dir / "source" / "environment.json"
     try:
-        env_path = run_dir / "source" / "environment.json"
         if env_path.exists():
-            env = json.loads(env_path.read_text(encoding="utf-8"))
+            env = loads_clean(store_text(env_path))
             bits = []
             sha = env.get("maro_git_sha")
             if sha:
@@ -1289,7 +1324,9 @@ def _render_environment(report_dir: Path) -> str:
                     f'<pre>{_esc_truncated(ov_json, 4000)}</pre></details>'
                 )
     except Exception:
-        pass
+        lines.append('<div class="meta"><span class="overcap">&#9888; '
+                     'environment.json unreadable</span> &mdash; config era '
+                     'unknown</div>')
 
     if not lines:
         return ""
@@ -1332,6 +1369,23 @@ def _render_run_activity(entries: List[dict]) -> str:
         '<table class="idx-table">'
         '<tr><th>Time</th><th>Type</th><th>Subject</th><th>Summary</th></tr>'
         + "".join(rows) + '</table></details>'
+    )
+
+
+def _render_log_loss_note(slice_loss: Optional[SkipReport]) -> str:
+    """Visible integrity note when the run's log slice dropped lines.
+
+    A slice with corrupt lines still serves its healthy rows (better than
+    the rotated global tail), but the sections built from it are then a
+    lower bound — and a shorter Decision points list reads exactly like a
+    quieter run unless the page says otherwise."""
+    if not slice_loss:
+        return ""
+    return (
+        f'<div class="meta"><span class="overcap">&#9888; '
+        f'{slice_loss.dropped} captain&#x27;s-log line(s) unreadable in this '
+        f'run&#x27;s log slice</span> &mdash; Decision points / Run activity '
+        f'may be incomplete (corrupt lines were skipped, not repaired)</div>'
     )
 
 
@@ -1402,7 +1456,8 @@ def _render_report_html(
     injections: Optional[List[dict]] = None,
 ) -> str:
     windows, approx = _step_windows(step_outcomes, start_ts)
-    attributed_markers, activity_entries = _gather_log_markers(loop_id, start_ts, report_dir)
+    attributed_markers, activity_entries, slice_loss = _gather_log_markers(
+        loop_id, start_ts, report_dir)
     marker_slots = _slot_markers(attributed_markers, windows, approx)
 
     done = sum(1 for s in step_outcomes if s.status == "done")
@@ -1485,6 +1540,7 @@ def _render_report_html(
 <div class="panel">{_render_step_table(project, step_outcomes, report_dir, loop_id)}</div>
 
 {_render_llm_calls(report_dir, step_outcomes)}
+{_render_log_loss_note(slice_loss)}
 {_render_decision_points(attributed_markers)}
 {_render_run_activity(activity_entries)}
 {_render_environment(report_dir)}
@@ -1616,16 +1672,32 @@ def _gather_run_summaries() -> List[dict]:
         meta_path = d / "metadata.json"
         if not meta_path.exists():
             continue
+        # Degrade, don't vanish (probed 2026-08-17): an unreadable/torn
+        # metadata.json used to `continue`, which deleted the run from the
+        # index entirely — indistinguishable from never having run, on the
+        # one page that claims to list every run. The row survives with an
+        # explicit "unreadable" status; report links below still resolve
+        # from build/ so the run's data stays reachable.
+        meta_unreadable = False
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = loads_clean(store_text(meta_path))
+            if not isinstance(meta, dict):
+                raise ValueError("metadata.json is not a JSON object")
         except Exception:
-            continue
+            log.warning("run index: metadata.json unreadable in %s — "
+                        "rendering a degraded row", d.name, exc_info=True)
+            meta, meta_unreadable = {}, True
         card: dict = {}
         card_path = d / "run_card.json"
         if card_path.exists():
             try:
-                card = json.loads(card_path.read_text(encoding="utf-8"))
+                card = loads_clean(store_text(card_path))
+                if not isinstance(card, dict):
+                    raise ValueError("run_card.json is not a JSON object")
             except Exception:
+                log.warning("run index: run_card.json unreadable in %s — "
+                            "row falls back to process metadata", d.name,
+                            exc_info=True)
                 card = {}
 
         build_dir = d / "build"
@@ -1673,8 +1745,15 @@ def _gather_run_summaries() -> List[dict]:
                     result_relpath = None
             for log_path in sorted(build_dir.glob("loop-*-log.json")):
                 try:
-                    lj = json.loads(log_path.read_text(encoding="utf-8"))
+                    lj = loads_clean(store_text(log_path))
+                    if not isinstance(lj, dict):
+                        raise ValueError("loop log is not a JSON object")
                 except Exception:
+                    # Skip-and-say: the row's token/step totals become a
+                    # lower bound, which must not read as a full total.
+                    log.warning("run index: loop log unreadable (%s) — "
+                                "totals for %s are a lower bound", log_path,
+                                d.name, exc_info=True)
                     continue
                 t = lj.get("totals", {})
                 totals["tokens_in"] += t.get("tokens_in", 0)
@@ -1716,9 +1795,12 @@ def _gather_run_summaries() -> List[dict]:
             "dir_name": d.name,
             "handle_id": meta.get("handle_id", d.name),
             "nickname": meta.get("nickname", ""),
-            "goal": meta.get("prompt", ""),
+            "goal": meta.get("prompt", "") or (
+                "(metadata.json unreadable — run data still on disk in "
+                f"{d.name}/)" if meta_unreadable else ""),
             "lane": meta.get("lane"),
-            "status": card.get("status") or meta.get("status") or "unknown",
+            "status": card.get("status") or meta.get("status")
+                      or ("unreadable" if meta_unreadable else "unknown"),
             "success_class": card.get("success_class"),
             "started_at": started_at,
             "ended_at": ended_at,
@@ -2393,7 +2475,7 @@ def _render_now_report_html(run_dir: Path, artifact: dict, meta: dict,
     if achieved is not None:
         achieved_html = f' &middot; <b>Goal achieved:</b> {"yes" if achieved else "no"}'
 
-    attributed_markers, activity_entries = _gather_log_markers(
+    attributed_markers, activity_entries, slice_loss = _gather_log_markers(
         handle_id, meta.get("started_at", "") or "", build if build.is_dir() else None
     )
     nav_html = ""
@@ -2419,6 +2501,7 @@ def _render_now_report_html(run_dir: Path, artifact: dict, meta: dict,
 <div class="panel"><pre>{_esc_truncated(result, 20000)}</pre></div>
 
 {_render_llm_calls(build, [])}
+{_render_log_loss_note(slice_loss)}
 {_render_decision_points(attributed_markers)}
 {_render_run_activity(activity_entries)}
 {_render_environment(build)}
@@ -2445,8 +2528,13 @@ def _write_now_report(run_dir: Path, root: Path) -> Optional[Path]:
     meta_path = run_dir / "metadata.json"
     if meta_path.exists():
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = loads_clean(store_text(meta_path))
+            if not isinstance(meta, dict):
+                raise ValueError("metadata.json is not a JSON object")
         except Exception:
+            log.warning("NOW report: metadata.json unreadable in %s — "
+                        "rendering from the artifact alone", run_dir.name,
+                        exc_info=True)
             meta = {}
     artifacts = sorted((run_dir / "artifact").glob("now-*.json")) if (run_dir / "artifact").is_dir() else []
     if artifacts:
@@ -2543,13 +2631,17 @@ def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) ->
         artifact_dir = d / "artifact"
         has_loop_logs = build.is_dir() and any(build.glob("loop-*-log.json"))
         has_now = artifact_dir.is_dir() and any(artifact_dir.glob("now-*.json"))
-        if not has_now:
+        if not has_now and (d / "metadata.json").exists():
             # Pre-artifact-writer NOW runs: metadata is the only marker.
             try:
-                _m = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
-                has_now = _m.get("lane") == "now"
+                _m = loads_clean(store_text(d / "metadata.json"))
+                has_now = isinstance(_m, dict) and _m.get("lane") == "now"
             except Exception:
-                pass
+                # Skip-and-say: an unreadable metadata.json means this dir
+                # cannot be classified — it is skipped, not proven non-NOW.
+                log.warning("backfill: metadata.json unreadable in %s — "
+                            "cannot tell whether this is a NOW run; skipped",
+                            d.name, exc_info=True)
         if not has_loop_logs and not has_now:
             continue
         counts["runs_scanned"] += 1
