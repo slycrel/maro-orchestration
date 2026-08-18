@@ -340,10 +340,29 @@ Ordered open work that matters. Top of the list is next.
       loads_clean swap x2, tainted-twin pins x2, mutations 16 total,
       record corrected. Rejected: get_suggestion early-exit perf.*
     - *Slice 3's named surfaces are DONE (memory_ledger 16,
-      knowledge_web 9, evolver_store 8). Remaining census debt (92
-      unreviewed sites led by skills.py 7, loop_report.py 6) is
-      tripwire-guarded, not scheduled — burn down opportunistically
-      when touching a file, per the census contract.*
+      knowledge_web 9, evolver_store 8). Remaining census debt (95
+      unreviewed sites / 87 functions + 12 reviewed as of 2026-08-17,
+      led by skills.py 7) is tripwire-guarded, not scheduled — burn
+      down opportunistically when touching a file, per the census
+      contract.*
+    - *Tier 3 (operator-facing output) OPENED 2026-08-17 with
+      `loop_report.py` as the double-payoff target: probed six live
+      torn-store defects first (worst: ONE torn byte in
+      captains_log_slice.jsonl killed the entire run report; a torn
+      metadata.json vanished the run from the index), fixed with
+      announced reads + operator-visible degrades, cleared all 6
+      loop_report census entries, and caught a second-order launder
+      (`store_text` + plain `json.loads` parses byte-tainted JSON;
+      the strict HTML writer then crashed one seam later) — all 8
+      single-file JSON reads now `loads_clean`. Landed `5cf6f60f`.
+      Sweep `loop_report_truth.json`, 37 mutations: first pass 27/37
+      (2 anchor SKIPs, 8 SURVIVED — all real, zero equivalents,
+      clustered exactly on the tier-3 thesis: printed fields and
+      index plumbing nothing asserted); closed with 7 tests + 1
+      assertion; final 37/37. Record:
+      `docs/history/2026-08-17-loop-report-truth-sweep.md`. Remaining
+      tier-3 surfaces: camera_readout frame/verdict sections,
+      captain's log render, discretion_readout, status lines.*
     - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
       QA sibling sweep, verified over Minimalist's dissent):
       `save_rule._upsert` + `_append_task_log._merge` were the

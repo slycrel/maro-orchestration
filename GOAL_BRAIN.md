@@ -3491,3 +3491,30 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   cautionary half of the record. Related same-session decree (2026-08-16):
   NO trusted-source data class — a curated corpus is a place to look, not
   a privileged evidence grade (BACKLOG "Reading a cited corpus" entry).
+- **2026-08-17 — Mutation-sweep tier 3 OPENED: loop_report torn-store
+  honesty + 37-mutation truth sweep.** Probe-first on the run report /
+  cross-run index found six live defects before any edit — worst: ONE
+  crash-torn byte in `captains_log_slice.jsonl` raised past `except
+  OSError` and the ENTIRE run report was never written; a torn
+  metadata.json made the run vanish from the index. Fixed with announced
+  byte-tolerant reads + operator-visible degrades (slice-loss integrity
+  note, `unreadable` badge row with on-disk pointer, honest Outcome
+  panel, per-section Environment honesty); all 6 loop_report silent-drop
+  census entries cleared (live census 95 unreviewed / 87 functions + 12
+  reviewed). The chunk's own tests caught a second-order LAUNDER before
+  the sweep did: `store_text` + plain `json.loads` parses byte-tainted
+  JSON and the strict HTML writer crashed one seam later — all eight
+  single-file JSON reads now `loads_clean` (first consumer of the
+  doctrine outside the store-rewrite lane). Landed `5cf6f60f`, suite
+  9462. File-derived sweep: first pass 27/37; all 8 survivors real,
+  zero equivalents, clustered exactly on the tier-3 thesis (printed
+  fields / index plumbing nothing asserted — under-counted paid calls,
+  fabricated timing windows, build/-escape links, totals `+=`→`=`,
+  constant run count); closed same-day, final 37/37. Two reusable
+  lessons recorded: runner anchors are substring matches (shallow
+  indentation matches its deeper sibling — re-anchor with a preceding
+  line), and the tainted-but-structurally-VALID fixture requirement
+  bit ME same-session (my torn-card fixture was invalid JSON, so the
+  launder mutant was unobservable until the fixture carried valid
+  structure + byte taint). Record:
+  `docs/history/2026-08-17-loop-report-truth-sweep.md`.
