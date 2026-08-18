@@ -372,10 +372,19 @@ Ordered open work that matters. Top of the list is next.
       (Architect + Minimalist convergent, 4-wants-extraction);
       (b) `run_curation.surface_step_flags` strict-reads the same
       captains_log_slice.jsonl this chunk fixed (`except OSError`
-      misses UnicodeDecodeError) — NAMED THE NEXT TIER-3 STOP.
-      Remaining tier-3 surfaces after that: camera_readout
-      frame/verdict sections, captain's log render,
-      discretion_readout, status lines.*
+      misses UnicodeDecodeError) — NAMED THE NEXT TIER-3 STOP.*
+    - *Tier-3 stop 2 SHIPPED same day (2026-08-17): the step-flags
+      lane. Probe-first found the day's worst defect —
+      `refresh_step_flags._merge` DESTROYED a torn run_card (parsed as
+      `{}`, rewrote the whole card as a step_flags stub; the backfill
+      walks every run), plus the family-B crash and the launder shape.
+      Fixed preserve-don't-destroy + announced read + card-visible
+      `slice_loss` note; census 94 unreviewed / 86 functions + 12
+      reviewed; `step_flags_truth.json` 8/8 first pass (co-written,
+      weak green). Record:
+      `docs/history/2026-08-17-step-flags-torn-store.md`. Remaining
+      tier-3 surfaces: camera_readout frame/verdict sections,
+      captain's log render, discretion_readout, status lines.*
     - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
       QA sibling sweep, verified over Minimalist's dissent):
       `save_rule._upsert` + `_append_task_log._merge` were the

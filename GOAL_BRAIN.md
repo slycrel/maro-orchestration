@@ -3532,3 +3532,18 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   jsonl_utils extraction chunk; `run_curation.surface_step_flags`
   strict-reads the same slice file — named the next tier-3 stop.
   Record: `docs/history/2026-08-17-loop-report-sweep-review.md`.
+- **2026-08-17 — Tier-3 stop 2: step-flags curation lane torn-store
+  honesty (the r1-named follow-on).** Probe-first found the WORST defect
+  of the day: `refresh_step_flags._merge` parsed a torn run_card as `{}`
+  and rewrote the whole card as a step_flags-only stub — a maintenance
+  backfill that walks EVERY run destroying one curated verdict per torn
+  card per pass (probed: 51-byte curated card → 193-byte stub). Plus the
+  familiar family-B crash (strict read past `except OSError` on the same
+  slice file loop_report just fixed) and the launder shape
+  (tainted-valid card re-dumped as clean \udcXX escapes). Fixes:
+  announced read + card-visible `slice_loss` note (lossy read always
+  writes the key — "absent = nothing fired" only truthful when every
+  line read clean); preserve-don't-destroy `_merge` via loads_clean.
+  Census 94/86+12. Spec `step_flags_truth.json` 8/8 first pass
+  (co-written, the weak green). Record:
+  `docs/history/2026-08-17-step-flags-torn-store.md`.
