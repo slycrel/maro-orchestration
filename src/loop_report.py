@@ -1688,6 +1688,7 @@ def _gather_run_summaries() -> List[dict]:
                         "rendering a degraded row", d.name, exc_info=True)
             meta, meta_unreadable = {}, True
         card: dict = {}
+        card_unreadable = False
         card_path = d / "run_card.json"
         if card_path.exists():
             try:
@@ -1698,7 +1699,7 @@ def _gather_run_summaries() -> List[dict]:
                 log.warning("run index: run_card.json unreadable in %s — "
                             "row falls back to process metadata", d.name,
                             exc_info=True)
-                card = {}
+                card, card_unreadable = {}, True
 
         build_dir = d / "build"
         reports: List[str] = []
@@ -1801,6 +1802,7 @@ def _gather_run_summaries() -> List[dict]:
             "lane": meta.get("lane"),
             "status": card.get("status") or meta.get("status")
                       or ("unreadable" if meta_unreadable else "unknown"),
+            "card_unreadable": card_unreadable,
             "success_class": card.get("success_class"),
             "started_at": started_at,
             "ended_at": ended_at,
@@ -2047,6 +2049,15 @@ def _render_index_html(summaries: List[dict]) -> str:
             f' <span class="overcap" title="{flags_n} step(s) breached the '
             f'per-step watchdog caps (time+tokens) — open the report for '
             f'details">&#9888;</span>' if flags_n else "")
+        # Adversarial r1 (Architect): the Outcome panel announces a torn
+        # run_card, so the index row for the same file must too — a badge
+        # showing raw process status with no marker reads as never-curated.
+        if s.get("card_unreadable"):
+            flag_html += (
+                ' <span class="overcap" title="run_card.json exists but '
+                'could not be read — this run WAS curated; the badge shows '
+                'raw process status until the file is repaired">'
+                '&#9888;</span>')
         rows.append(
             f'<tr{row_attr}{filter_attrs}>'
             f'<td class="meta">{_esc(_fmt_ts(s["started_at"]))}</td>'

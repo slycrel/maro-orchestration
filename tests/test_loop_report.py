@@ -1993,7 +1993,11 @@ def test_index_row_falls_back_when_run_card_torn(monkeypatch, tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="maro.loop"):
         content = Path(lr.write_runs_index(force=True)).read_text()
     assert "card run" in content          # the run did not vanish
-    assert "done" in content              # process status served as fallback
+    # Bare `"done" in content` is vacuous — the page's CSS (.badge-done)
+    # and status legend always contain it (adversarial r1, Expert QA).
+    # The row attr pins the actual fallback; the marker pins visibility.
+    assert 'data-status="done"' in content  # process status served as fallback
+    assert "run_card.json exists but could not be read" in content
     assert any("run_card.json unreadable" in r.message for r in caplog.records)
 
 

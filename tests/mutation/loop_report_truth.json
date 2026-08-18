@@ -185,6 +185,18 @@
    "replacement": "                    if not candidate.is_file():",
    "tests": "tests/test_loop_report.py"},
 
+  {"name": "index :: torn run_card marker never renders (r1 Architect)",
+   "file": "src/loop_report.py",
+   "anchor": "        if s.get(\"card_unreadable\"):",
+   "replacement": "        if False:",
+   "tests": "tests/test_loop_report.py"},
+
+  {"name": "index :: row status loses the process-metadata fallback (r1 QA de-vacuize)",
+   "file": "src/loop_report.py",
+   "anchor": "            \"status\": card.get(\"status\") or meta.get(\"status\")\n                      or (\"unreadable\" if meta_unreadable else \"unknown\"),",
+   "replacement": "            \"status\": card.get(\"status\")\n                      or (\"unreadable\" if meta_unreadable else \"unknown\"),",
+   "tests": "tests/test_loop_report.py"},
+
   {"name": "index :: totals last-loop-wins instead of accumulating",
    "file": "src/loop_report.py",
    "anchor": "                totals[\"tokens_in\"] += t.get(\"tokens_in\", 0)",
