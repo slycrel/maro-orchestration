@@ -1973,7 +1973,10 @@ def test_index_row_survives_torn_metadata(monkeypatch, tmp_path):
     content = Path(lr.write_runs_index(force=True)).read_text()
     assert "the healthy run" in content
     assert "torn-run-dir" in content
-    assert "unreadable" in content
+    # The STATUS BADGE must say unreadable — asserting the bare word would
+    # be satisfied by the goal placeholder text alone (two guards, one
+    # test: tests/mutation/README.md).
+    assert ">unreadable</span>" in content
     assert "run data still on disk" in content
     assert "loop-tornabcd-report.html" in content
 
