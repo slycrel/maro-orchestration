@@ -2010,8 +2010,12 @@ def mark_skill_candidate_consumed(handle_id: str) -> bool:
     marked = {"ok": False}
 
     def _stamp(old_text: str) -> str:
+        # loads_clean, not json.loads (r3 sibling find): a byte-tainted but
+        # structurally valid card would re-dump as clean \udcXX escapes —
+        # the launder shape. Refusal preserves the bytes; the sweep retries
+        # a repaired card on a later pass.
         try:
-            card = json.loads(old_text) if old_text else {}
+            card = loads_clean(old_text) if old_text else {}
         except ValueError:
             return old_text
         sc = card.get("skill_candidate")

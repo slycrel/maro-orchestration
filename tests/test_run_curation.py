@@ -1026,6 +1026,19 @@ class TestSkillCandidateConsumer:
         from run_curation import mark_skill_candidate_consumed
         assert mark_skill_candidate_consumed("nonexistent") is False
 
+    def test_mark_consumed_refuses_tainted_valid_card(self, workspace):
+        # r3 sibling find: a byte-tainted but structurally VALID card with a
+        # skill_candidate block would parse under plain json.loads and be
+        # re-dumped as clean \udcXX escapes (launder). loads_clean refuses;
+        # the bytes survive verbatim and the stamp reports failure.
+        from run_curation import mark_skill_candidate_consumed
+        rd = _finish("h0000u7", "g", "done", achieved=True)
+        tainted = (b'{"skill_candidate": {"flagged": true}, '
+                   b'"note": "fine \xff\x80"}')
+        (rd / "run_card.json").write_bytes(tainted)
+        assert mark_skill_candidate_consumed("h0000u7") is False
+        assert (rd / "run_card.json").read_bytes() == tainted
+
     def test_mark_consumed_no_candidate_returns_false(self, workspace):
         from run_curation import mark_skill_candidate_consumed
         _finish("h0000u4", "trivial", "done", achieved=True)

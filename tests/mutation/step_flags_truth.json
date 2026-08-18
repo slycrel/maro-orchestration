@@ -59,6 +59,12 @@
    "replacement": "                card = json.loads(old)",
    "tests": "tests/test_run_curation.py"},
 
+  {"name": "launder :: the consumed-stamp parses a byte-tainted card with plain json.loads (r3)",
+   "file": "src/run_curation.py",
+   "anchor": "            card = loads_clean(old_text) if old_text else {}",
+   "replacement": "            card = json.loads(old_text) if old_text else {}",
+   "tests": "tests/test_run_curation.py"},
+
   {"name": "destroy :: a torn card is replaced by a step_flags stub again",
    "file": "src/run_curation.py",
    "anchor": "            except (ValueError, TypeError):\n                log.warning(\"refresh_step_flags: run_card.json unreadable in \"\n                            \"%s — left untouched (flags not backfilled)\",\n                            _name)\n                return old",
