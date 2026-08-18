@@ -360,9 +360,22 @@ Ordered open work that matters. Top of the list is next.
       clustered exactly on the tier-3 thesis: printed fields and
       index plumbing nothing asserted); closed with 7 tests + 1
       assertion; final 37/37. Record:
-      `docs/history/2026-08-17-loop-report-truth-sweep.md`. Remaining
-      tier-3 surfaces: camera_readout frame/verdict sections,
-      captain's log render, discretion_readout, status lines.*
+      `docs/history/2026-08-17-loop-report-truth-sweep.md`. Adversarial
+      r1 (sonnet-medium, 5 seats): 5/5 PASS, 2 verified MEDIUMs fixed
+      same session (torn-card index row got a visible marker; a vacuous
+      `"done" in content` assertion de-vacuized) — spec now 39, record
+      `docs/history/2026-08-17-loop-report-sweep-review.md`. Deferred
+      from r1 with reasons: (a) the `loads_clean(store_text)` +
+      dict-check + warn-degrade idiom is duplicated 8× in
+      loop_report.py — extract a single-object analog of
+      `read_jsonl_announced` into jsonl_utils as its own chunk
+      (Architect + Minimalist convergent, 4-wants-extraction);
+      (b) `run_curation.surface_step_flags` strict-reads the same
+      captains_log_slice.jsonl this chunk fixed (`except OSError`
+      misses UnicodeDecodeError) — NAMED THE NEXT TIER-3 STOP.
+      Remaining tier-3 surfaces after that: camera_readout
+      frame/verdict sections, captain's log render,
+      discretion_readout, status lines.*
     - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
       QA sibling sweep, verified over Minimalist's dissent):
       `save_rule._upsert` + `_append_task_log._merge` were the

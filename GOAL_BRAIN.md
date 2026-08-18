@@ -3518,3 +3518,17 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   launder mutant was unobservable until the fixture carried valid
   structure + byte taint). Record:
   `docs/history/2026-08-17-loop-report-truth-sweep.md`.
+- **2026-08-17 — loop_report chunk adversarial r1: 5/5 PASS, one round
+  to fixpoint.** Sonnet-medium lane (codex capped), five seats
+  serialized. Both accepted MEDIUMs were CONSISTENCY misses, not
+  unprobed claims: the torn-card index row silently laundered the same
+  file the Outcome panel announces (fixed — visible marker + mutant),
+  and a `"done" in content` assertion was vacuously satisfied by page
+  CSS (de-vacuized to `data-status="done"` + marker text, new mutant
+  DETECTED — the two-guards-one-test lesson learned in the NEIGHBORING
+  test that same session, not reapplied one test down). Experimentalist
+  caught real 25/37→27/37 drift in the mutation README ledger. Spec
+  37→39. Deferred with reasons: 8× single-object read idiom wants a
+  jsonl_utils extraction chunk; `run_curation.surface_step_flags`
+  strict-reads the same slice file — named the next tier-3 stop.
+  Record: `docs/history/2026-08-17-loop-report-sweep-review.md`.
