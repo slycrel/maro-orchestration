@@ -3570,3 +3570,16 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   mutant, spec 12/12. Fixpoint: the r3 fix is a one-word swap, a test,
   and a spec entry. run_curation's card-rewrite lane is now uniformly
   loads_clean across all three locked_rmw mergers.
+- **2026-08-18 — run_card reader honesty (the two r2 MEDIUMs) SHIPPED.**
+  shadow_lane's cost-comparison read and camera_readout's frames-walk
+  read both degraded torn AND tainted-valid cards to silent
+  None/uncurated (probed). Now announced: shadow WARNs on
+  exists-but-unreadable (absent-by-age stays silent by design — pinned
+  both directions), camera counts and prints unreadable cards beside
+  its torn-frame warning ("they WERE curated"). Side effect: cleared
+  camera_readout.main's census entry — census 93 unreviewed / 85
+  functions + 12 reviewed. 5 pins with tainted-valid twins in both
+  modules; run_card_readers.json 6/6 (co-written, weak green). Suite
+  9480. Review-light by stated reason: the chunk IS a review finding,
+  applies a thrice-reviewed pattern read-only, and both launder
+  directions are mutant-pinned.

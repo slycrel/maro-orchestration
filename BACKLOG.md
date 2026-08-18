@@ -393,11 +393,17 @@ Ordered open work that matters. Top of the list is next.
       (`mark_skill_candidate_consumed._stamp` plain-json.loads
       launder; one-word loads_clean swap, spec 12/12) — fixpoint
       declared. Review record:
-      `docs/history/2026-08-17-step-flags-review.md`. Remaining
-      tier-3 surfaces: camera_readout frame/verdict sections (plus its
-      strict run_card read in the frames walk, r2 MEDIUM),
-      shadow_lane's cost-comparison run_card read (r2 MEDIUM),
-      captain's log render, discretion_readout, status lines.*
+      `docs/history/2026-08-17-step-flags-review.md`. The two r2
+      MEDIUM strict run_card readers CLOSED 2026-08-18
+      (shadow_lane._primary_comparison_fields WARNs on
+      exists-but-unreadable, absent-by-age stays silent by design;
+      camera_readout counts + prints unreadable cards beside its
+      torn-frame warning — cleared camera_readout.main's census entry
+      as a side effect, census 93 unreviewed / 85 functions + 12
+      reviewed; `run_card_readers.json` 6/6 with tainted-valid twins
+      in both modules). Remaining tier-3 surfaces: camera_readout
+      frame/verdict sections, captain's log render,
+      discretion_readout, status lines.*
     - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
       QA sibling sweep, verified over Minimalist's dissent):
       `save_rule._upsert` + `_append_task_log._merge` were the
