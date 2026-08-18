@@ -1768,11 +1768,33 @@ def refresh_run_card_classification(
     refreshed = {"card": None}
 
     def _merge(old: str) -> str:
+        # Preserve-then-rebuild (adversarial r2, Architect HIGH): the old
+        # `except: card = {}` silently DESTROYED an unreadable card twice
+        # over — maintenance-owned keys gone from the rewrite, and the torn
+        # bytes (the only copy) overwritten. Refresh exists to re-propagate
+        # verdicts after audit repair, so a corrupt card must still
+        # self-heal (pinned 2026-08-13) — but the torn original is run
+        # data: it goes to a sidecar first and the loss is WARNed, never
+        # silent. loads_clean additionally refuses byte-tainted-but-valid
+        # content that plain json.loads would launder into \udcXX escapes.
         try:
-            card = json.loads(old)
+            card = loads_clean(old)
+            if not isinstance(card, dict):
+                raise ValueError("run_card.json is not a JSON object")
         except (ValueError, TypeError):
-            card = {}
-        if not isinstance(card, dict):
+            from datetime import datetime, timezone
+            sidecar = card_path.with_name(
+                card_path.name + ".unreadable-"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+            try:
+                sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
+                kept = f"old bytes preserved at {sidecar.name}"
+            except OSError:
+                kept = "old bytes could NOT be preserved to a sidecar"
+            log.warning(
+                "refresh_run_card_classification: run_card.json unreadable "
+                "in %s — rebuilt from run data (%s); maintenance-owned keys "
+                "were not recoverable", rd.name, kept)
             card = {}
         # Only-when-stamped pure keys the rebuild OMITTED must be removed,
         # not merely left un-overwritten — a resolved verdict_pending (or a

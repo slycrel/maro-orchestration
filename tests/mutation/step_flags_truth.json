@@ -35,6 +35,24 @@
    "replacement": "        if False:\n            continue",
    "tests": "tests/test_run_curation.py"},
 
+  {"name": "launder :: classification refresh parses a byte-tainted card with plain json.loads (r2 Architect)",
+   "file": "src/run_curation.py",
+   "anchor": "        try:\n            card = loads_clean(old)",
+   "replacement": "        try:\n            card = json.loads(old)",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "destroy :: classification refresh rebuilds without the sidecar (r2 Architect)",
+   "file": "src/run_curation.py",
+   "anchor": "                sidecar.write_bytes(old.encode(\"utf-8\", \"surrogateescape\"))",
+   "replacement": "                kept = \"mutant: sidecar skipped\"",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "merge :: refresh replaces the card instead of merging over it (r2 pin)",
+   "file": "src/run_curation.py",
+   "anchor": "        card.update(deepcopy(rebuilt))",
+   "replacement": "        card = deepcopy(rebuilt)",
+   "tests": "tests/test_run_curation.py"},
+
   {"name": "launder :: backfill parses a byte-tainted card with plain json.loads",
    "file": "src/run_curation.py",
    "anchor": "                card = loads_clean(old)",

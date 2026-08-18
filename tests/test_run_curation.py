@@ -171,14 +171,60 @@ def test_classify_audit_incomplete_never_as_success(workspace):
     assert is_learnable_outcome(card) is False
 
 
-def test_classification_refresh_rebuilds_corrupt_card(workspace):
+def test_classification_refresh_rebuilds_corrupt_card(workspace, caplog):
+    import logging
     rd = _finish("h0000bad", "g", "done", achieved=False)
     (rd / "run_card.json").write_text("not json")
 
-    card = refresh_run_card_classification("h0000bad", run_dir=rd)
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        card = refresh_run_card_classification("h0000bad", run_dir=rd)
 
     assert card["success_class"] == "done-not-achieved"
     assert json.loads((rd / "run_card.json").read_text()) == card
+    # Preserve-then-rebuild (adversarial r2): self-healing stays, but the
+    # unreadable original is run data — sidecarred and WARNed, not
+    # silently overwritten by the rebuild.
+    sidecars = list(rd.glob("run_card.json.unreadable-*"))
+    assert len(sidecars) == 1
+    assert sidecars[0].read_bytes() == b"not json"
+    assert any("unreadable" in r.message for r in caplog.records)
+
+
+def test_classification_refresh_sidecars_tainted_valid_card(workspace):
+    # A byte-tainted but structurally VALID card must not be laundered into
+    # the merged rewrite (plain json.loads would re-dump the taint as clean
+    # \udcXX escapes). loads_clean refuses; the exact bytes go to the
+    # sidecar; the rebuilt card is taint-free.
+    rd = _finish("h0000bae", "g", "done", achieved=False)
+    tainted = b'{"status": "success", "_maintenance": {"note": "x \xff\x80"}}'
+    (rd / "run_card.json").write_bytes(tainted)
+
+    card = refresh_run_card_classification("h0000bae", run_dir=rd)
+
+    assert card["success_class"] == "done-not-achieved"
+    sidecars = list(rd.glob("run_card.json.unreadable-*"))
+    assert len(sidecars) == 1
+    assert sidecars[0].read_bytes() == tainted
+    rewritten = (rd / "run_card.json").read_bytes()
+    assert b"udcff" not in rewritten.lower() and b"\xff" not in rewritten
+
+
+def test_classification_refresh_merge_keeps_maintenance_keys(workspace):
+    # The healthy-card contract the destructive path was violating: keys the
+    # pure curators do not own survive the refresh merge.
+    rd = _finish("h0000baf", "g", "done", achieved=False)
+    card1 = curate_run("h0000baf")
+    assert card1 is not None
+    card_path = rd / "run_card.json"
+    on_disk = json.loads(card_path.read_text())
+    on_disk["_maintenance"] = {"promoted": ["x"]}
+    card_path.write_text(json.dumps(on_disk))
+
+    card = refresh_run_card_classification("h0000baf", run_dir=rd)
+
+    assert card["_maintenance"] == {"promoted": ["x"]}
+    assert json.loads(card_path.read_text())["_maintenance"] == {
+        "promoted": ["x"]}
 
 
 def test_classify_failed(workspace):
