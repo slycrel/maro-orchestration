@@ -53,6 +53,7 @@ log = logging.getLogger("run_curation")
 # below) and any external `run_curation.<name>` access keep working
 # (adversarial-review R1 batch-1 finding #2).
 from context_budget import clip, VERDICT_PROSE_CAP
+from jsonl_utils import loads_clean, read_jsonl_tail_counted
 from decision_prior import (
     make_decision_prior,
     load_decision_prior,
@@ -718,23 +719,27 @@ def surface_step_flags(rd: Path, meta: dict, card: dict) -> None:
     the per-run log slice, invisible to cross-run tooling. Surfacing it here is
     advisory only (no verdict or spend effect); it makes the watchdog's firings
     queryable across run cards so the caps can be tuned from data instead of
-    anecdote. Card key is absent when nothing fired — the common case stays
-    clean.
+    anecdote. Card key is absent when nothing fired AND the slice read clean —
+    the common case stays clean; a lossy read writes the key with a
+    `slice_loss` note, because "absent = nothing fired" is only a truthful
+    contract when every line was readable.
     """
     slice_path = rd / "build" / "captains_log_slice.jsonl"
-    if not slice_path.is_file():
+    # Byte-tolerant per-line read (probed 2026-08-17, adversarial r1 of the
+    # loop_report chunk): the old strict whole-file read_text raised
+    # UnicodeDecodeError past `except OSError` on one crash-torn byte — the
+    # curator FAILED in the pipeline lane and was silently skipped in the
+    # refresh_step_flags backfill lane, losing flags recoverable from the
+    # healthy lines either way.
+    rows, skip = read_jsonl_tail_counted(slice_path)
+    if skip.missing:
         return
+    if skip:
+        log.warning("surface_step_flags: %s (%s) — step_flags is a lower "
+                    "bound for this run", skip.summary(), slice_path)
     too_broad: List[dict] = []
-    try:
-        lines = slice_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(row, dict) or row.get("event_type") != "STEP_TOO_BROAD":
+    for row in rows:
+        if row.get("event_type") != "STEP_TOO_BROAD":
             continue
         ctx = row.get("context")
         ctx = ctx if isinstance(ctx, dict) else {}
@@ -745,8 +750,11 @@ def surface_step_flags(rd: Path, meta: dict, card: dict) -> None:
             "cap_elapsed_s": ctx.get("cap_elapsed_s"),
             "cap_tokens": ctx.get("cap_tokens"),
         })
-    if too_broad:
-        card["step_flags"] = {"too_broad": too_broad}
+    if too_broad or skip:
+        flags: Dict[str, Any] = {"too_broad": too_broad}
+        if skip:
+            flags["slice_loss"] = skip.summary()
+        card["step_flags"] = flags
 
 
 # --- skills-lite promotion (Rider A, post-Purgatorio decision batch) ---------
@@ -1814,13 +1822,24 @@ def refresh_step_flags(handle_id: Optional[str] = None) -> int:
             continue
         changed = {"v": False}
 
-        def _merge(old: str, _flags=probe["step_flags"], _changed=changed) -> str:
+        def _merge(old: str, _flags=probe["step_flags"], _changed=changed,
+                   _name=d.name) -> str:
+            # Preserve, don't destroy (probed 2026-08-17): the old
+            # `except: card = {}` REPLACED a torn card with a step_flags-only
+            # stub — a maintenance backfill erasing the curation verdict it
+            # was annotating. loads_clean additionally refuses byte-tainted
+            # content that plain json.loads would launder into clean-looking
+            # \udcXX escapes (verified live: both shapes). An unreadable card
+            # is left byte-identical for repair; the WARNING is the announce.
             try:
-                card = json.loads(old)
+                card = loads_clean(old)
+                if not isinstance(card, dict):
+                    raise ValueError("run_card.json is not a JSON object")
             except (ValueError, TypeError):
-                card = {}
-            if not isinstance(card, dict):
-                card = {}
+                log.warning("refresh_step_flags: run_card.json unreadable in "
+                            "%s — left untouched (flags not backfilled)",
+                            _name)
+                return old
             if card.get("step_flags") == _flags:
                 return old
             card["step_flags"] = _flags

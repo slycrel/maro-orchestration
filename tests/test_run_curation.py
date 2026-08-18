@@ -299,9 +299,13 @@ def test_step_flags_surfaced_from_slice(workspace):
         encoding="utf-8",
     )
     card = curate_run("h0000f13")
-    assert card["step_flags"] == {"too_broad": [
+    assert card["step_flags"]["too_broad"] == [
         {"step_index": 13, "elapsed_s": 190, "tokens": 1201651,
-         "cap_elapsed_s": 120, "cap_tokens": 200000}]}
+         "cap_elapsed_s": 120, "cap_tokens": 200000}]
+    # The fixture's "not json" line is a LOST record, and "absent =
+    # nothing fired" is only truthful when every line was readable — the
+    # card says what fell out (2026-08-17 torn-store honesty).
+    assert "malformed" in card["step_flags"]["slice_loss"]
 
 
 def test_step_flags_absent_when_nothing_fired(workspace):
@@ -332,6 +336,83 @@ def test_refresh_step_flags_backfills_legacy_cards(workspace):
     # maintenance state survives untouched
     assert "_maintenance" in card
     assert refresh_step_flags("h0000f15") == 0  # idempotent
+
+
+# --- Torn-store honesty (probed live 2026-08-17; three defects, three pins) --
+
+_TORN_RAW = b"\x80\xfe torn bytes \xff\n"
+
+
+def test_step_flags_survive_torn_slice_line(workspace, caplog):
+    # Probe 1: one crash-torn byte made the strict whole-file read raise
+    # UnicodeDecodeError past `except OSError` — the curator FAILED in the
+    # pipeline lane and flags recoverable from healthy lines were lost.
+    import logging
+    rd = _finish("h0000f16", "g", "done", achieved=True)
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_bytes(
+        json.dumps({"event_type": "STEP_TOO_BROAD",
+                    "context": {"step_index": 3, "elapsed_s": 10,
+                                "tokens": 9, "cap_elapsed_s": 5,
+                                "cap_tokens": 5}}).encode() + b"\n"
+        + _TORN_RAW)
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        card = curate_run("h0000f16")
+    assert card["step_flags"]["too_broad"][0]["step_index"] == 3
+    assert "undecodable" in card["step_flags"]["slice_loss"]
+    assert any("lower bound" in r.message for r in caplog.records)
+
+
+def test_step_flags_loss_only_still_writes_key(workspace):
+    # An all-torn slice with zero surviving flags must NOT read as "nothing
+    # fired" — the key appears with the loss note and an empty list.
+    rd = _finish("h0000f17", "g", "done", achieved=True)
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_bytes(_TORN_RAW)
+    card = curate_run("h0000f17")
+    assert card["step_flags"]["too_broad"] == []
+    assert "undecodable" in card["step_flags"]["slice_loss"]
+
+
+def test_refresh_step_flags_preserves_torn_card(workspace, caplog):
+    # Probe 2 (destructive): `except: card = {}` REPLACED a torn run_card
+    # with a step_flags-only stub — the backfill erased the curation verdict
+    # it was annotating. The torn card must survive byte-identical.
+    import logging
+    from run_curation import refresh_step_flags
+    rd = _finish("h0000f18", "g", "done", achieved=True)
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_text(
+        json.dumps({"event_type": "STEP_TOO_BROAD",
+                    "context": {"step_index": 1}}) + "\n", encoding="utf-8")
+    card_path = rd / "run_card.json"
+    torn = b'{"status": "success", "goal_achieved": true, \xff torn'
+    card_path.write_bytes(torn)
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        assert refresh_step_flags("h0000f18") == 0
+    assert card_path.read_bytes() == torn
+    assert any("left untouched" in r.message for r in caplog.records)
+
+
+def test_refresh_step_flags_refuses_tainted_valid_card(workspace):
+    # Probe 3 (launder): a byte-tainted but structurally VALID card parsed
+    # under plain json.loads and re-dumped as clean \udcXX escapes — taint
+    # persisting as legitimate content. loads_clean refuses; bytes survive.
+    from run_curation import refresh_step_flags
+    rd = _finish("h0000f19", "g", "done", achieved=True)
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_text(
+        json.dumps({"event_type": "STEP_TOO_BROAD",
+                    "context": {"step_index": 1}}) + "\n", encoding="utf-8")
+    card_path = rd / "run_card.json"
+    tainted = b'{"status": "success", "note": "fine \xff\x80"}'
+    card_path.write_bytes(tainted)
+    assert refresh_step_flags("h0000f19") == 0
+    assert card_path.read_bytes() == tainted
 
 
 def test_empty_run_not_mineable(workspace):

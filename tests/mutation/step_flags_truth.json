@@ -1,0 +1,49 @@
+[
+  {"name": "byte-safety :: slice scan back on a strict whole-file read",
+   "file": "src/run_curation.py",
+   "anchor": "    rows, skip = read_jsonl_tail_counted(slice_path)",
+   "replacement": "    rows, skip = ([json.loads(l) for l in slice_path.read_text(encoding=\"utf-8\").splitlines() if l.strip()] if slice_path.is_file() else [], __import__(\"jsonl_utils\").SkipReport())",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "byte-safety :: a torn slice reads as missing (silent return)",
+   "file": "src/run_curation.py",
+   "anchor": "    if skip.missing:\n        return",
+   "replacement": "    if skip.missing or skip.dropped:\n        return",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "honesty :: the lower-bound warning never fires",
+   "file": "src/run_curation.py",
+   "anchor": "    if skip:\n        log.warning(\"surface_step_flags: %s (%s) — step_flags is a lower \"",
+   "replacement": "    if False:\n        log.warning(\"surface_step_flags: %s (%s) — step_flags is a lower \"",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "honesty :: a loss-only slice reads as nothing-fired (key absent)",
+   "file": "src/run_curation.py",
+   "anchor": "    if too_broad or skip:",
+   "replacement": "    if too_broad:",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "honesty :: the slice_loss note drops off the card",
+   "file": "src/run_curation.py",
+   "anchor": "        if skip:\n            flags[\"slice_loss\"] = skip.summary()",
+   "replacement": "        if False:\n            flags[\"slice_loss\"] = skip.summary()",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "filter :: every event claims to be too-broad",
+   "file": "src/run_curation.py",
+   "anchor": "        if row.get(\"event_type\") != \"STEP_TOO_BROAD\":\n            continue",
+   "replacement": "        if False:\n            continue",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "launder :: backfill parses a byte-tainted card with plain json.loads",
+   "file": "src/run_curation.py",
+   "anchor": "                card = loads_clean(old)",
+   "replacement": "                card = json.loads(old)",
+   "tests": "tests/test_run_curation.py"},
+
+  {"name": "destroy :: a torn card is replaced by a step_flags stub again",
+   "file": "src/run_curation.py",
+   "anchor": "            except (ValueError, TypeError):\n                log.warning(\"refresh_step_flags: run_card.json unreadable in \"\n                            \"%s — left untouched (flags not backfilled)\",\n                            _name)\n                return old",
+   "replacement": "            except (ValueError, TypeError):\n                card = {}",
+   "tests": "tests/test_run_curation.py"}
+]
