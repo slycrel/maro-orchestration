@@ -17,22 +17,29 @@ def _ev(event_type, context=None, *, summary="", timestamp="2026-07-22T10:00:00+
 
 class TestMetacogSummary:
     def test_actions_and_evidence_free_retries(self):
+        # Asymmetric on purpose: TWO same-fp retries vs ONE new-evidence
+        # retry, so inverting the fingerprint comparison yields 1, not 2 —
+        # the original symmetric fixture (one of each) scored 1 under
+        # either condition and pinned neither (mutation sweep 2026-08-18).
         events = [
             _ev("METACOGNITIVE_DECISION",
                 {"action": "retry", "retries": 2,
                  "fingerprints": ["a", "b", "b"]}),   # same fp retried
             _ev("METACOGNITIVE_DECISION",
+                {"action": "retry", "retries": 3,
+                 "fingerprints": ["c", "c"]}),        # same fp retried
+            _ev("METACOGNITIVE_DECISION",
                 {"action": "retry", "retries": 1,
                  "fingerprints": ["a", "b"]}),        # new evidence
             _ev("METACOGNITIVE_DECISION",
                 {"action": "redecompose", "replan_count": 2,
-                 "fingerprints": []}),
+                 "fingerprints": ["d", "d"]}),        # same fp, NOT a retry
             _ev("METACOGNITIVE_DECISION", {"action": "budget_bump"}),
         ]
         s = dr.metacog_summary(events)
-        assert s["rows"] == 4
-        assert s["by_action"] == {"retry": 2, "redecompose": 1, "budget_bump": 1}
-        assert s["evidence_free_retries"] == 1
+        assert s["rows"] == 5
+        assert s["by_action"] == {"retry": 3, "redecompose": 1, "budget_bump": 1}
+        assert s["evidence_free_retries"] == 2
         assert s["redecompose_rows"] == 1
         assert s["max_replan_count"] == 2
 
