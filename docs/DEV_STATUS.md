@@ -2,7 +2,7 @@
 status: living
 ---
 
-## Dev status — 2026-08-17
+## Dev status — 2026-08-18
 
 *Recomputed by `maro dev-status`; not a plan, a measurement. Leads with capability because the backlog is a findings log and its job is to grow — read it as a rate, not a total.*
 
@@ -12,13 +12,13 @@ status: living
 |---|---|---|---|
 | **19** (30d: +3) | 21 | 5 | 42% |
 
-- ledger last updated 2d ago — the count above is current enough to read as real.
+- ledger last updated 3d ago — the count above is current enough to read as real.
 
 **Throughput and fan-out**
 
-- 256 commits in 7d, 690 in 30d
+- 256 commits in 7d, 692 in 30d
 - **Actionable Stack** open boxes: **61** (30d: +55)
-- net new open items per 10 commits: **+0.80** — findings are outrunning closure
+- net new open items per 10 commits: **+0.79** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page

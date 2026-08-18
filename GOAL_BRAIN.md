@@ -3547,3 +3547,17 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   Census 94/86+12. Spec `step_flags_truth.json` 8/8 first pass
   (co-written, the weak green). Record:
   `docs/history/2026-08-17-step-flags-torn-store.md`.
+- **2026-08-18 — step-flags r2: Architect HIGH, the sibling the chunk
+  skipped.** `refresh_run_card_classification._merge` carried the same
+  destructive shape one function up from the fix (torn card → `{}` →
+  maintenance keys erased, torn bytes overwritten; live from
+  audit_repair + handle drains). Fixed preserve-THEN-rebuild — the
+  self-heal contract (pinned 2026-08-13) stays, but the unreadable
+  original is sidecarred + WARNed and loads_clean blocks the launder
+  shape. 3 pins, spec 11/11, suite green. Standing lesson now thrice
+  proven across the arc: fixing the probed site is half the chunk; the
+  sibling sweep is the other half, and reviews keep finding the half
+  that was skipped. Also recorded: nested `claude -p` from BACKGROUND
+  shell tasks dies with bare "Execution error" (box healthy, foreground
+  identical calls fine) — review seats run foreground until understood.
+  Record: `docs/history/2026-08-17-step-flags-review.md`.

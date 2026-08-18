@@ -382,8 +382,18 @@ Ordered open work that matters. Top of the list is next.
       `slice_loss` note; census 94 unreviewed / 86 functions + 12
       reviewed; `step_flags_truth.json` 8/8 first pass (co-written,
       weak green). Record:
-      `docs/history/2026-08-17-step-flags-torn-store.md`. Remaining
-      tier-3 surfaces: camera_readout frame/verdict sections,
+      `docs/history/2026-08-17-step-flags-torn-store.md`. Its
+      adversarial r2 (3 seats): Architect HIGH verified — the SAME
+      destructive shape one function up
+      (`refresh_run_card_classification._merge` parsed a torn card as
+      `{}` and rewrote maintenance keys away, torn bytes overwritten);
+      fixed preserve-THEN-rebuild (timestamped sidecar + WARN +
+      loads_clean; self-heal contract kept), 3 pins, spec 11/11.
+      Review record:
+      `docs/history/2026-08-17-step-flags-review.md`. Remaining
+      tier-3 surfaces: camera_readout frame/verdict sections (plus its
+      strict run_card read in the frames walk, r2 MEDIUM),
+      shadow_lane's cost-comparison run_card read (r2 MEDIUM),
       captain's log render, discretion_readout, status lines.*
     - *rules/background follow-on SHIPPED 2026-08-17 (from evolver r2's
       QA sibling sweep, verified over Minimalist's dissent):
