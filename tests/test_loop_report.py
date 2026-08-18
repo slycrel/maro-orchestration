@@ -2002,10 +2002,21 @@ def test_outcome_panel_honest_on_torn_run_card(tmp_path):
     build.mkdir(parents=True)
     # Missing card: absent panel is the truth (not yet curated).
     assert lr._render_verdict(build) == ""
-    # Torn card: curation DID run — the panel must say the verdict is
-    # unavailable, not silently pretend curation never happened.
+    # Torn card, structurally INVALID JSON: curation DID run — the panel
+    # must say the verdict is unavailable, not silently pretend curation
+    # never happened.
     (build.parent / "run_card.json").write_bytes(
         b'{"status": "success", "goal_achieved": true, \xff}')
+    html = lr._render_verdict(build)
+    assert "run_card.json exists but could not be read" in html
+    # Torn card, byte-tainted but structurally VALID after surrogateescape
+    # (the tainted-but-valid-bystander shape): a laundering json.loads
+    # would parse this and render garbage as a legitimate verdict — only
+    # loads_clean refuses it. First sweep pass: the launder mutant
+    # SURVIVED because only the invalid shape above existed.
+    (build.parent / "run_card.json").write_bytes(
+        b'{"status": "success", "goal_achieved": true, '
+        b'"goal_verdict_summary": "looks fine \xff\x80"}')
     html = lr._render_verdict(build)
     assert "run_card.json exists but could not be read" in html
 
