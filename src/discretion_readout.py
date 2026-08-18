@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from jsonl_utils import loads_clean, store_text
+
 # Event types this readout consumes. Kept as one tuple so the loader's
 # substring prefilter and the section computers stay in sync.
 CONSUMED_EVENT_TYPES = (
@@ -61,9 +63,18 @@ def load_events(base: Optional[Path] = None,
     cov.update({"files_read": 0, "files_failed": 0, "lines_skipped": 0})
     events: List[Dict[str, Any]] = []
     for p in sorted(base.glob("captains_log*.jsonl")):
+        # Per-line byte tolerance (probed 2026-08-18): the old strict
+        # whole-file read_text made ONE crash-torn byte drop the entire
+        # archive — counted as files_failed, but every healthy line in it
+        # was lost with it. store_text never raises on decode; a tainted
+        # line that passes the prefilter is refused by loads_clean and
+        # counted in lines_skipped like any other malformed line.
+        # (Pre-existing semantics kept: lines the prefilter never admits —
+        # torn or not — are out of scope and uncounted; files_failed is
+        # now OS-level unreadability only.)
         try:
-            lines = p.read_text(encoding="utf-8").splitlines()
-        except Exception:
+            lines = store_text(p).splitlines()
+        except OSError:
             cov["files_failed"] += 1
             continue
         cov["files_read"] += 1
@@ -71,7 +82,7 @@ def load_events(base: Optional[Path] = None,
             if not any(t in line for t in CONSUMED_EVENT_TYPES):
                 continue
             try:
-                e = json.loads(line)
+                e = loads_clean(line)
             except Exception:
                 cov["lines_skipped"] += 1
                 continue
@@ -430,12 +441,17 @@ def effort_summary(entries: Optional[List[dict]] = None,
     review finding: the newest-5000 sample truncated older days with no
     caveat). ``path`` keeps the corpus coherent under --log-dir: cost
     telemetry comes from the same memory dir as the events."""
+    rows_dropped = 0
     if entries is None:
-        from jsonl_utils import read_jsonl_tail
+        from jsonl_utils import read_jsonl_tail_counted
         if path is None:
             import metrics
             path = metrics._step_costs_path()
-        entries = read_jsonl_tail(path, limit=None)
+        entries, _skip = read_jsonl_tail_counted(path, limit=None)
+        # The module's honesty rule applies to inputs (review pin on the
+        # events loader) — the EFFORT headline must say when its own
+        # source lost lines, not just log it.
+        rows_dropped = _skip.dropped
     by_day: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         day = str(e.get("recorded_at") or "")[:10]
@@ -457,6 +473,7 @@ def effort_summary(entries: Optional[List[dict]] = None,
         "total_calls": sum(by_day[d]["calls"] for d in recent),
         "total_tokens": sum(by_day[d]["tokens"] for d in recent),
         "total_cost_usd": round(sum(by_day[d]["cost_usd"] for d in recent), 4),
+        "rows_dropped": rows_dropped,
     }
 
 
@@ -546,6 +563,9 @@ def build_report(payload: Optional[Dict[str, Any]] = None) -> str:
         mix = _fmt_counts(s["models"])
         lines.append(f"  {day}  calls={s['calls']:4d} tokens={s['tokens']:>9,} "
                      f"models[{mix}] ${s['cost_usd']:.2f}")
+    if eff.get("rows_dropped"):
+        lines.append(f"  ({eff['rows_dropped']} step-cost line(s) unreadable "
+                     f"— EFFORT totals are a lower bound)")
 
     m = p["metacognition"]
     lines.append("")

@@ -363,6 +363,102 @@ class TestReportAndLoader:
         assert cov["lines_skipped"] == 1
         assert cov["files_failed"] == 0
 
+    def test_effort_window_caps_to_requested_days(self):
+        # 9 distinct days, days=7: the two oldest must fall out of the
+        # totals — without the cap the headline silently overstates the
+        # stated window.
+        entries = [
+            {"recorded_at": f"2026-07-{d:02d}T10:00:00+00:00",
+             "total_tokens": 1, "cost_usd": 0.0, "model": "m"}
+            for d in range(13, 22)]
+        s = dr.effort_summary(entries, days=7)
+        assert s["total_calls"] == 7
+        assert "2026-07-13" not in s["days"]
+        assert "2026-07-14" not in s["days"]
+
+    def test_substring_match_alone_does_not_admit_an_event(self, tmp_path):
+        # The prefilter is a speed screen, not the scope rule: a
+        # non-consumed event whose SUMMARY merely mentions a consumed type
+        # must be excluded by the event_type membership check.
+        impostor = json.dumps(_ev("NAVIGATOR_DECIDED",
+                                  {"novelty": 0.9},
+                                  summary="saw a LESSON_RECORDED go by"))
+        (tmp_path / "captains_log.jsonl").write_text(impostor + "\n",
+                                                     encoding="utf-8")
+        cov = {}
+        events = dr.load_events(tmp_path, coverage=cov)
+        assert events == []
+        assert cov["lines_skipped"] == 0       # excluded, not "malformed"
+
+    def test_report_renders_unreadable_files_note(self):
+        # The input-honesty block's UNREADABLE arm (OS-level failures).
+        payload = dr.build_payload(events=[], step_entries=[],
+                                   input_coverage={"files_read": 3,
+                                                   "files_failed": 2,
+                                                   "lines_skipped": 0})
+        report = dr.build_report(payload)
+        assert "2 file(s) UNREADABLE" in report
+        assert "denominators above are incomplete" in report
+
+    def test_torn_archive_line_costs_one_line_not_the_file(self, tmp_path):
+        # Probed 2026-08-18: the strict whole-file read_text made ONE
+        # crash-torn byte drop the entire archive — counted as
+        # files_failed, but every healthy line in it was lost with it.
+        good = json.dumps(_ev("LESSON_RECORDED", {"novelty": 0.5}))
+        (tmp_path / "captains_log.jsonl").write_bytes(
+            good.encode() + b"\n\x80\xfe torn LESSON_RECORDED line\n"
+            + good.encode() + b"\n")
+        cov = {}
+        events = dr.load_events(tmp_path, coverage=cov)
+        assert len(events) == 2                # healthy lines both recovered
+        assert cov["files_read"] == 1
+        assert cov["files_failed"] == 0        # OS-level unreadability only
+        assert cov["lines_skipped"] == 1       # the torn line, counted
+
+    def test_tainted_valid_line_refused_not_served(self, tmp_path):
+        # Launder-direction twin: byte-tainted but structurally VALID JSON
+        # parses under plain json.loads — its garbage text would ride into
+        # the report as legitimate content. loads_clean refuses; counted.
+        tainted = (b'{"event_type": "LESSON_RECORDED", "timestamp": '
+                   b'"2026-07-22T10:00:00+00:00", "summary": "x \xff\x80", '
+                   b'"context": {"novelty": 0.9}}')
+        (tmp_path / "captains_log.jsonl").write_bytes(tainted + b"\n")
+        cov = {}
+        events = dr.load_events(tmp_path, coverage=cov)
+        assert events == []
+        assert cov["lines_skipped"] == 1
+
+    def test_effort_loss_surfaced_in_payload_and_report(self, tmp_path):
+        # The module's honesty rule applies to the EFFORT input too: a torn
+        # step-cost line makes the headline a lower bound, and the report
+        # must say so — not just a log WARNING.
+        path = tmp_path / "step-costs.jsonl"
+        path.write_bytes(
+            json.dumps({"recorded_at": "2026-07-22T01:00:00+00:00",
+                        "total_tokens": 5, "cost_usd": 0.0,
+                        "model": "m"}).encode() + b"\n\xff torn cost line\n")
+        s = dr.effort_summary(path=path)
+        assert s["total_calls"] == 1
+        assert s["rows_dropped"] == 1
+        payload = dr.build_payload(events=[], step_entries=None)
+        payload["effort"] = s
+        report = dr.build_report(payload)
+        assert "step-cost line(s) unreadable" in report
+        assert "lower bound" in report
+
+    def test_effort_clean_read_has_no_loss_note(self, tmp_path):
+        # Both directions: a clean read must NOT render the loss line.
+        path = tmp_path / "step-costs.jsonl"
+        path.write_text(json.dumps(
+            {"recorded_at": "2026-07-22T01:00:00+00:00", "total_tokens": 5,
+             "cost_usd": 0.0, "model": "m"}) + "\n", encoding="utf-8")
+        s = dr.effort_summary(path=path)
+        assert s["rows_dropped"] == 0
+        payload = dr.build_payload(events=[], step_entries=None)
+        payload["effort"] = s
+        report = dr.build_report(payload)
+        assert "step-cost line(s) unreadable" not in report
+
     def test_effort_reads_full_file_not_a_tail_sample(self, tmp_path):
         # review pin (unanimous): the EFFORT headline must never be a
         # silent newest-N sample — every row in the file is tabulated.
