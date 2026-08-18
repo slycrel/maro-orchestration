@@ -1971,6 +1971,7 @@ def test_index_row_survives_torn_metadata(monkeypatch, tmp_path):
     (build / "loop-tornabcd-report.html").write_text("old report")
 
     content = Path(lr.write_runs_index(force=True)).read_text()
+    assert "2 run(s), newest first" in content   # the count includes the torn run
     assert "the healthy run" in content
     assert "torn-run-dir" in content
     # The STATUS BADGE must say unreadable — asserting the bare word would
@@ -2069,3 +2070,128 @@ def test_now_report_announces_torn_metadata(monkeypatch, tmp_path, caplog):
     assert path is not None and path.exists()
     assert "the answer" in path.read_text()
     assert any("metadata.json unreadable" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Survivor closures — loop_report_truth.json first pass (25/37). Each test
+# below kills a mutation that survived the sweep; none are equivalents.
+# ---------------------------------------------------------------------------
+
+def test_llm_calls_render_unreadable_record_row(tmp_path):
+    """A torn call record must render as an 'unreadable record' row — a
+    silent skip would make the calls table claim fewer calls than the run
+    actually recorded (and paid for)."""
+    build = tmp_path / "build"
+    calls = build / "calls"
+    calls.mkdir(parents=True)
+    (calls / "call-00001.json").write_text(json.dumps(
+        {"seq": 1, "model": "m", "backend": "b", "prompt": "healthy",
+         "tokens_in": 1, "tokens_out": 1}))
+    (calls / "call-00002.json").write_bytes(b'{"seq": 2, torn \xff\x80')
+    html = lr._render_llm_calls(build, [])
+    assert "LLM calls (2)" in html      # the table counts BOTH records
+    assert "unreadable record" in html  # ...and says which one is opaque
+
+
+def test_mixed_real_and_missing_ended_ts_forces_approximate_mode(monkeypatch, tmp_path):
+    """ONE outcome missing ended_ts must flip the whole timeline to
+    approximate — mixing real and fabricated windows could jump backward
+    (the _step_windows docstring's own contract; `any`, not `all`)."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    outcomes = [
+        _outcome("Step one", ended_ts=""),                              # missing
+        _outcome("Step two", ended_ts="2026-08-17T00:01:00+00:00"),     # real
+    ]
+    lr.write_run_report(
+        project="p", loop_id="mixedts", goal="goal",
+        planned_steps=["Step one", "Step two"],
+        start_ts="2026-08-17T00:00:00+00:00",
+        step_outcomes=outcomes, status="done",
+    )
+    content = (tmp_path / "projects" / "p" / "artifacts" / "loop-mixedts-report.html").read_text()
+    assert "approximate timing" in content
+
+
+def test_slot_markers_skipped_in_approximate_mode():
+    """Approximate windows are fabricated (cumulative-sum) — slotting real
+    marker timestamps into them would print a footnote the system knows is
+    wrong."""
+    outcomes = [_outcome("Step one", ended_ts="", elapsed_ms=60000),
+                _outcome("Step two", ended_ts="", elapsed_ms=60000)]
+    windows, approx = lr._step_windows(outcomes, "2026-08-17T00:00:00+00:00")
+    assert approx
+    markers = [{"timestamp": "2026-08-17T00:00:30+00:00", "event_type": "X"}]
+    # Premise (vacuity guard): the marker WOULD slot if the windows were
+    # trusted — otherwise this test passes for an unrelated reason.
+    assert lr._slot_markers(markers, windows, False) != {}
+    assert lr._slot_markers(markers, windows, True) == {}
+
+
+def test_index_row_status_prefers_card_over_process_metadata(monkeypatch, tmp_path):
+    """run_card's status is the curated truth; process metadata is the
+    fallback. A card WITHOUT success_class isolates the preference."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hpref", prompt="preference run", lane="agenda")
+    runs.write_metadata(rd, handle_id="hpref", prompt="preference run",
+                        status="done", ended_at="2026-08-17T00:05:00+00:00")
+    (rd / "run_card.json").write_text(json.dumps({"status": "incomplete"}))
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert ">incomplete</span>" in content
+
+
+def test_index_reports_fallback_href_is_ledger_newest_not_lexical(monkeypatch, tmp_path):
+    """When the LATEST loop's report was never rendered and there is no
+    curated result, the row must land on the newest EXISTING report by
+    ledger order — not the lexically-first filename."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hrank", prompt="rank run", lane="agenda")
+    build = rd / "build"
+    # Lexical order (aaaa < zzzz) is the OPPOSITE of ledger order.
+    (build / "loop-aaaa1111-report.html").write_text("oldest report")
+    (build / "loop-zzzz9999-report.html").write_text("newer report")
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["loops"] = [
+        {"loop_id": "aaaa1111"},   # oldest attempt
+        {"loop_id": "zzzz9999"},   # newer attempt
+        {"loop_id": "ffff0000"},   # latest attempt — report never rendered
+    ]
+    (rd / "metadata.json").write_text(json.dumps(meta))
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert 'data-href="' + rd.name + '/build/loop-zzzz9999-report.html"' in content
+
+
+def test_index_result_link_confined_to_build_tree(monkeypatch, tmp_path):
+    """A run_card result_path outside build/ (e.g. metadata.json itself)
+    must not become the row's result link — the viz server serves run
+    files by relative href, and an out-of-tree link is at best broken, at
+    worst an escape."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hesc", prompt="escape run", lane="agenda")
+    runs.write_metadata(rd, handle_id="hesc", prompt="escape run",
+                        status="done", ended_at="2026-08-17T00:05:00+00:00")
+    (rd / "run_card.json").write_text(json.dumps(
+        {"status": "done", "result_path": str(rd / "metadata.json")}))
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert ">result</a>" not in content
+
+
+def test_index_totals_accumulate_across_loops(monkeypatch, tmp_path):
+    """A handle with several loops (initial + closure/recovery) reports the
+    SUM of their tokens, not whichever loop log happened to be read last."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hsum", prompt="totals run", lane="agenda")
+    build = rd / "build"
+    (build / "loop-aaaa1111-log.json").write_text(json.dumps(
+        {"totals": {"tokens_in": 600, "tokens_out": 60,
+                    "steps_done": 1, "steps_blocked": 0}}))
+    (build / "loop-bbbb2222-log.json").write_text(json.dumps(
+        {"totals": {"tokens_in": 400, "tokens_out": 40,
+                    "steps_done": 1, "steps_blocked": 0}}))
+    summaries = lr._gather_run_summaries()
+    row = next(s for s in summaries if s["handle_id"] == "hsum")
+    assert row["totals"]["tokens_in"] == 1000
+    assert row["totals"]["tokens_out"] == 100
