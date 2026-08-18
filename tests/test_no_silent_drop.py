@@ -166,7 +166,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("attribution.py", "load_attributions"): 1,
 
     ("camera_readout.py", "_lesson_origins"): 1,
-    ("camera_readout.py", "main"): 1,
 
     ("captains_log.py", "load_log"): 1,
     ("captains_log.py", "query_log"): 1,

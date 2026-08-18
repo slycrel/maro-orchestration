@@ -405,3 +405,25 @@ class TestCameraReadout:
         # F2: the untyped selection carries its score into the join.
         assert "chosen 2.0000" in hybrid_row
         assert "chosen 0.5000" in tfidf_row
+
+    def test_unreadable_card_counted_not_uncurated(self, tmp_path, capsys):
+        # Probed 2026-08-18 (loop_report r2 MEDIUM): a torn run_card.json
+        # silently rendered the run as uncurated — same defect family as
+        # torn frame lines, which the readout already announces. The card
+        # stays None (verdict sections skip it) but the loss is printed.
+        root = tmp_path / "runs"
+        root.mkdir()
+        rd = self._mk_run(root, "r1",
+                          [self._frame("hybrid", "agenda", "a1", 1.0, ["a1"])])
+        (rd / "run_card.json").write_bytes(b'{"goal_achieved": true \xff torn')
+        # Tainted-but-VALID twin: parses under plain json.loads, so only
+        # loads_clean refusal makes this row count as unreadable.
+        rd2 = self._mk_run(root, "r2",
+                           [self._frame("hybrid", "agenda", "a2", 1.0, ["a2"])])
+        (rd2 / "run_card.json").write_bytes(
+            b'{"goal_achieved": true, "note": "fine \xff\x80"}')
+        import camera_readout
+        assert camera_readout.main(["--runs-root", str(root)]) == 0
+        out = capsys.readouterr().out
+        assert "2 run_card.json file(s) unreadable" in out
+        assert "WERE curated" in out

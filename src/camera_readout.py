@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from context_budget import clip as _clip
+from jsonl_utils import loads_clean, store_text
 
 _STOP = frozenset({
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -626,17 +627,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     per_run: List[Dict[str, Any]] = []
     n_torn_total = 0
+    n_cards_unreadable = 0
     for rd in run_dirs:
         frames, n_torn = _load_frames(rd)
         n_torn_total += n_torn
         if not frames:
             continue
         card = None
-        try:
-            card = json.loads((rd / "run_card.json").read_text(
-                encoding="utf-8"))
-        except Exception:
-            pass
+        card_path = rd / "run_card.json"
+        if card_path.is_file():
+            try:
+                card = loads_clean(store_text(card_path))
+            except Exception:
+                # Unreadable is NOT uncurated: the run WAS curated and its
+                # card is torn — count it like torn frame lines, below.
+                n_cards_unreadable += 1
         per_run.append({"dir": rd, "frames": frames, "card": card})
 
     n_frames = sum(len(r["frames"]) for r in per_run)
@@ -646,6 +651,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if n_torn_total:
         print(f"  WARNING: {n_torn_total} unparsable frame line(s) skipped "
               f"— counts below undercount actual activity")
+    if n_cards_unreadable:
+        print(f"  WARNING: {n_cards_unreadable} run_card.json file(s) "
+              f"unreadable — those runs render as uncurated below, but "
+              f"they WERE curated")
     if not per_run:
         print("no camera frames yet — the writer ships with this readout; "
               "frames appear as instrumented runs execute.")

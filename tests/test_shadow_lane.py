@@ -597,6 +597,47 @@ class TestReviewRoundPins:
         assert "ts" in row and "started_at" in row and row["ts"] != row["started_at"]
 
 
+class TestPrimaryComparisonHonesty:
+    """Probed 2026-08-18 (loop_report r2 MEDIUM): a torn/tainted run_card
+    degraded to a silent None — the comparison row could not say the
+    primary cost is unknown for a stated reason."""
+
+    def test_torn_card_warns_and_yields_none(self, tmp_path, caplog):
+        import logging
+        rd = tmp_path / "r1"
+        rd.mkdir()
+        (rd / "run_card.json").write_bytes(b'{"total_cost_usd": 1.23, \xff t')
+        with caplog.at_level(logging.WARNING, logger="maro.shadow_lane"):
+            out = shadow_lane._primary_comparison_fields(rd, {"model": "m"})
+        assert out["primary_cost_usd"] is None
+        assert any("run_card.json unreadable" in r.message
+                   for r in caplog.records)
+
+    def test_tainted_valid_card_refused_not_served(self, tmp_path, caplog):
+        # Structurally valid JSON carrying raw-byte surrogates must not be
+        # served into the ledger row as legitimate content (loads_clean).
+        import logging
+        rd = tmp_path / "r2"
+        rd.mkdir()
+        (rd / "run_card.json").write_bytes(
+            b'{"total_cost_usd": 4.56, "note": "fine \xff\x80"}')
+        with caplog.at_level(logging.WARNING, logger="maro.shadow_lane"):
+            out = shadow_lane._primary_comparison_fields(rd, {"model": "m"})
+        assert out["primary_cost_usd"] is None
+        assert any("run_card.json unreadable" in r.message
+                   for r in caplog.records)
+
+    def test_absent_card_stays_silent(self, tmp_path, caplog):
+        # Absent-by-age is the documented None case, not loss — no warning.
+        import logging
+        rd = tmp_path / "r3"
+        rd.mkdir()
+        with caplog.at_level(logging.WARNING, logger="maro.shadow_lane"):
+            out = shadow_lane._primary_comparison_fields(rd, {"model": "m"})
+        assert out["primary_cost_usd"] is None
+        assert not caplog.records
+
+
 class TestReviewRound2Pins:
     def test_resumed_run_with_stale_ended_at_not_stamped(self, tmp_path):
         """r2 Architect #1: a stuck run resumed in place keeps its stale

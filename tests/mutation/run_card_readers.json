@@ -1,0 +1,37 @@
+[
+  {"name": "shadow :: tainted-valid card served into the comparison row (launder direction)",
+   "file": "src/shadow_lane.py",
+   "anchor": "        card = loads_clean(store_text(card_path))",
+   "replacement": "        card = json.loads(store_text(card_path))",
+   "tests": "tests/test_shadow_lane.py"},
+
+  {"name": "shadow :: unreadable card degrades silently again",
+   "file": "src/shadow_lane.py",
+   "anchor": "        log.warning(\"shadow ledger: run_card.json unreadable in %s — \"\n                    \"primary_cost_usd omitted from the comparison row\",\n                    run_dir.name)",
+   "replacement": "        pass",
+   "tests": "tests/test_shadow_lane.py"},
+
+  {"name": "shadow :: absent-by-age card starts warning (drift-reads-as-absent overreach)",
+   "file": "src/shadow_lane.py",
+   "anchor": "    except FileNotFoundError:\n        pass  # absent-by-age is the documented None case, not loss",
+   "replacement": "    except ():\n        pass  # absent-by-age is the documented None case, not loss",
+   "tests": "tests/test_shadow_lane.py"},
+
+  {"name": "camera :: unreadable cards no longer counted",
+   "file": "src/camera_readout.py",
+   "anchor": "                n_cards_unreadable += 1",
+   "replacement": "                pass",
+   "tests": "tests/test_camera_log.py"},
+
+  {"name": "camera :: the unreadable-cards warning never prints",
+   "file": "src/camera_readout.py",
+   "anchor": "    if n_cards_unreadable:",
+   "replacement": "    if False:",
+   "tests": "tests/test_camera_log.py"},
+
+  {"name": "camera :: tainted-valid card served as curated (launder direction)",
+   "file": "src/camera_readout.py",
+   "anchor": "                card = loads_clean(store_text(card_path))",
+   "replacement": "                card = json.loads(store_text(card_path))",
+   "tests": "tests/test_camera_log.py"}
+]

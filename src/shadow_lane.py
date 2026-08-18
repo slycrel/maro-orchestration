@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from jsonl_utils import loads_clean, store_text
+
 log = logging.getLogger("maro.shadow_lane")
 
 ARM_STAR = "star"
@@ -668,11 +670,20 @@ def _primary_comparison_fields(run_dir: Path, meta: dict) -> dict:
         "primary_cost_usd": None,
         "primary_wall_seconds": None,
     }
+    card_path = run_dir / "run_card.json"
     try:
-        card = json.loads((run_dir / "run_card.json").read_text(encoding="utf-8"))
+        card = loads_clean(store_text(card_path))
         out["primary_cost_usd"] = card.get("total_cost_usd")
+    except FileNotFoundError:
+        pass  # absent-by-age is the documented None case, not loss
     except (OSError, ValueError):
-        pass
+        # Unreadable is NOT absent (probed 2026-08-18): the strict read
+        # degraded a torn/tainted card to a silent None — a cost-comparison
+        # row that cannot say the PRIMARY cost is unknown for a stated
+        # reason. The row still never blocks; the WARN is the announce.
+        log.warning("shadow ledger: run_card.json unreadable in %s — "
+                    "primary_cost_usd omitted from the comparison row",
+                    run_dir.name)
     try:
         _s = meta.get("started_at")
         _e = meta.get("ended_at")
