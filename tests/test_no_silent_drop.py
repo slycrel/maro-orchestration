@@ -156,6 +156,7 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("evolver_store.py", "revert_suggestion._drop_constraint"): _SUGGESTION_STAMPER,
     ("rules.py", "save_rule._upsert"): _UPSERT_STAMPER,
     ("background.py", "_append_task_log._merge"): _UPSERT_STAMPER,
+    ("skills.py", "save_skill"): _UPSERT_STAMPER,
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
@@ -167,9 +168,12 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("camera_readout.py", "_lesson_origins"): 1,
 
+    # NOTE: another session is mid-chunk on captains_log.py; these three
+    # are theirs to clear when their conversion lands (2026-08-17).
     ("captains_log.py", "load_log"): 1,
     ("captains_log.py", "query_log"): 1,
     ("captains_log.py", "timeline"): 1,
+
 
     ("constraint.py", "_load_dynamic_constraints"): 1,
 
@@ -273,13 +277,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("shadow_lane.py", "_status"): 1,
     ("shadow_lane.py", "_today_ledger_count"): 1,
 
-    ("skills.py", "_load_skill_tests"): 1,
-    ("skills.py", "get_all_skill_stats"): 1,
-    ("skills.py", "load_skill_provenance"): 1,
-    ("skills.py", "load_skills"): 1,
-    ("skills.py", "record_skill_injection_outcome"): 1,
-    ("skills.py", "record_skill_outcome"): 1,
-    ("skills.py", "save_skill"): 1,
 
     ("sprint_contract.py", "load_contracts"): 1,
 

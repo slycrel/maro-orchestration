@@ -33,6 +33,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from llm_parse import extract_json, content_or_empty
+# Store-hygiene helpers (2026-08-17 silent-drop arc): announced byte-level
+# reads + a taint-refusing parse. Probed live before converting: one torn
+# byte in skill-stats.jsonl made the keyed rebuild read an EMPTY store and
+# the next record_skill_outcome() — which fires on every skill invocation —
+# rewrote the whole file down to that one record (4 lines -> 1, silently),
+# and one torn byte in skills.jsonl made every future save_skill() raise
+# UnicodeDecodeError, write-locking the skill library until hand repair.
+from jsonl_utils import (
+    loads_clean as _loads_clean,
+    read_jsonl_announced as _read_store,
+    store_text as _store_text,
+)
 from skill_types import (  # noqa: F401 — re-exported for backward compat
     Skill, SkillStats, SkillTestCase, SkillMutationResult,
     compute_skill_hash, verify_skill_hash,
@@ -167,14 +179,13 @@ def load_skills() -> List[Skill]:
         return []
     skills = []
     seen_ids: set = set()
-    lines = path.read_text(encoding="utf-8").splitlines()
+    # Announced read: a torn byte used to raise UnicodeDecodeError into
+    # every caller of the skill library.
+    rows = _read_store(path, "load_skills")
+    drifted = 0
     # Last version of each id wins
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
+    for d in reversed(rows):
         try:
-            d = json.loads(line)
             sid = d.get("id", "")
             if sid in seen_ids:
                 continue
@@ -192,7 +203,11 @@ def load_skills() -> List[Skill]:
                     )
             skills.insert(0, skill)
         except Exception:
+            drifted += 1
             continue
+    if drifted:
+        logger.warning("[skills] load_skills: %d row(s) are JSON but not "
+                       "loadable as Skill — skipped (%s)", drifted, path)
     return skills
 
 
@@ -208,24 +223,28 @@ def save_skill(skill: Skill) -> None:
 
     path = _skills_path()
     with locked_write(path):
-        lines: List[dict] = []
+        # Unmatched lines are re-emitted VERBATIM (2026-08-17 silent-drop
+        # arc): the old shape re-dumped every row (laundering byte-tainted
+        # ones), DELETED lines it could not parse, and — because the read
+        # was a strict whole-file decode with no guard — raised
+        # UnicodeDecodeError out of every save once one torn byte landed,
+        # write-locking the skill library. loads_clean refuses tainted
+        # lines, so they never id-match.
+        out: List[str] = []
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
+            for line in _store_text(path).splitlines():
+                stripped = line.strip()
+                if not stripped:
                     continue
                 try:
-                    entry = json.loads(line)
-                    if entry.get("id") == skill.id:
+                    if _loads_clean(stripped).get("id") == skill.id:
                         continue  # replaced below
-                    lines.append(entry)
                 except Exception:
-                    continue
-        lines.append(_skill_to_dict(skill))
-        path.write_text(
-            "\n".join(json.dumps(e) for e in lines) + "\n",
-            encoding="utf-8",
-        )
+                    pass
+                out.append(stripped)
+        out.append(json.dumps(_skill_to_dict(skill)))
+        from file_lock import atomic_write
+        atomic_write(path, "\n".join(out) + "\n", errors="surrogateescape")
 
 
 # NOTE: increment_use (the only Skill.use_count writer) was removed
@@ -882,11 +901,18 @@ def load_skill_provenance(skill_name: str) -> List[Dict[str, Any]]:
     if not prov_dir.exists():
         return []
     records = []
+    unreadable = 0
     for p in sorted(prov_dir.glob(f"{skill_name}_*.json"), reverse=True):
         try:
-            records.append(json.loads(p.read_text(encoding="utf-8")))
+            records.append(json.loads(
+                p.read_text(encoding="utf-8", errors="surrogateescape")))
         except Exception:
+            unreadable += 1
             continue
+    if unreadable:
+        logger.warning("[skills] load_skill_provenance: %d provenance file(s) "
+                       "for %s are unreadable or malformed — skipped (%s)",
+                       unreadable, skill_name, prov_dir)
     return records
 
 
@@ -899,26 +925,84 @@ def _skill_stats_path() -> Path:
     return memory_dir() / "skill-stats.jsonl"
 
 
+def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
+    """Announced read of skill-stats.jsonl → ({skill_id: row}, stranded).
+
+    `stranded` carries every line the keyed rebuild cannot represent —
+    byte-tainted/unparseable rows AND rows with no skill_id — so a
+    write-back can re-emit them VERBATIM instead of deleting them.
+
+    Before this (2026-08-17): the read was a strict whole-file decode
+    wrapped in `except Exception: pass`, so one crash-torn byte left the
+    map EMPTY and the very next write rebuilt the store from it — every
+    skill's stats destroyed by a hot-path counter update. Probed live:
+    4 lines -> 1.
+    """
+    records: dict = {}
+    stranded: List[str] = []
+    try:
+        text = _store_text(path)
+    except FileNotFoundError:
+        return records, stranded
+    except OSError as exc:
+        # Unreadable store: refuse to rebuild from nothing. Raising here
+        # aborts the caller's write, which leaves the file intact — the
+        # safe direction when the alternative is a wipe.
+        raise
+    tainted = 0
+    keyless = 0
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            d = _loads_clean(s)
+            sid = d.get("skill_id", "")
+        except Exception:
+            tainted += 1
+            stranded.append(s + "\n")
+            continue
+        if not sid:
+            keyless += 1
+            stranded.append(s + "\n")
+            continue
+        records[sid] = d
+    if tainted or keyless:
+        logger.warning(
+            "[skills] skill-stats: %d unparseable/byte-tainted and %d "
+            "keyless row(s) carried through the rewrite verbatim (%s)",
+            tainted, keyless, path)
+    return records, stranded
+
+
+def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
+    """Crash-safe, byte-safe write-back of the keyed store + its strandees."""
+    from file_lock import atomic_write
+    atomic_write(
+        path,
+        "".join(json.dumps(d) + "\n" for d in records.values())
+        + "".join(stranded),
+        errors="surrogateescape",
+    )
+
+
 def get_all_skill_stats() -> List[SkillStats]:
     """Load all skill stats records from memory/skill-stats.jsonl."""
     path = _skill_stats_path()
     if not path.exists():
         return []
+    records, _stranded = _read_skill_stats(path)
     stats_map: dict = {}
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                sid = d.get("skill_id", "")
-                if sid:
-                    stats_map[sid] = SkillStats.from_dict(d)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    drifted = 0
+    for sid, d in records.items():
+        try:
+            stats_map[sid] = SkillStats.from_dict(d)
+        except Exception:
+            drifted += 1
+    if drifted:
+        logger.warning("[skills] get_all_skill_stats: %d row(s) are JSON but "
+                       "not loadable as SkillStats — skipped (%s)",
+                       drifted, path)
     return list(stats_map.values())
 
 
@@ -955,23 +1039,9 @@ def record_skill_outcome(
     path = _skill_stats_path()
 
     with locked_write(path):
-        # Load all existing records
-        all_records: dict = {}
-        if path.exists():
-            try:
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                        sid = d.get("skill_id", "")
-                        if sid:
-                            all_records[sid] = d
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+        # Announced read; `stranded` rides the rewrite verbatim so a torn
+        # or keyless row is never deleted by a counter update.
+        all_records, stranded = _read_skill_stats(path)
 
         # Find or create the record
         if skill_id in all_records:
@@ -1014,10 +1084,7 @@ def record_skill_outcome(
         # Update the map and write back (full rewrite for consistency)
         all_records[skill_id] = stats.to_dict()
         try:
-            path.write_text(
-                "\n".join(json.dumps(d) for d in all_records.values()) + "\n",
-                encoding="utf-8",
-            )
+            _write_skill_stats(path, all_records, stranded)
         except Exception as e:
             logger.warning("[skills] record_skill_outcome write failed: %s", e)
 
@@ -1037,22 +1104,9 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
     path = _skill_stats_path()
 
     with locked_write(path):
-        all_records: dict = {}
-        if path.exists():
-            try:
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                        sid = d.get("skill_id", "")
-                        if sid:
-                            all_records[sid] = d
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+        # Announced read; `stranded` rides the rewrite verbatim so a torn
+        # or keyless row is never deleted by a counter update.
+        all_records, stranded = _read_skill_stats(path)
 
         if skill_id in all_records:
             stats = SkillStats.from_dict(all_records[skill_id])
@@ -1076,10 +1130,7 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
 
         all_records[skill_id] = stats.to_dict()
         try:
-            path.write_text(
-                "\n".join(json.dumps(d) for d in all_records.values()) + "\n",
-                encoding="utf-8",
-            )
+            _write_skill_stats(path, all_records, stranded)
         except Exception as e:
             logger.warning(
                 "[skills] record_skill_injection_outcome write failed: %s", e)
@@ -1906,19 +1957,18 @@ def _load_skill_tests(skill_id: str) -> List[SkillTestCase]:
     if not path.exists():
         return []
     tests: List[SkillTestCase] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                if d.get("skill_id") == skill_id:
-                    tests.append(SkillTestCase.from_dict(d))
-            except Exception:
-                continue
-    except Exception:
-        pass
+    drifted = 0
+    for d in _read_store(path, "_load_skill_tests"):
+        if d.get("skill_id") != skill_id:
+            continue
+        try:
+            tests.append(SkillTestCase.from_dict(d))
+        except Exception:
+            drifted += 1
+    if drifted:
+        logger.warning("[skills] _load_skill_tests: %d row(s) for %s are JSON "
+                       "but not loadable as SkillTestCase — skipped (%s)",
+                       drifted, skill_id, path)
     return tests
 
 

@@ -2586,3 +2586,122 @@ class TestSkillPedigree:
                                        telemetry=telemetry)
         assert telemetry["method"] == "router"
         assert results[0].match_method == "router"
+
+
+# ---------------------------------------------------------------------------
+# Byte-safety (2026-08-17 silent-drop arc, tree-wide destructive-rewrite sweep)
+# ---------------------------------------------------------------------------
+
+_TORN = b'{"skill_id": "s9", "skill_name": "torn\xff'
+
+
+class TestTheSkillStoresSurviveATornByte:
+    """skill-stats.jsonl held the tier-destruction chain: a strict read
+    inside `except Exception: pass` left the keyed map EMPTY, and the very
+    next counter update rewrote the store from it. Probed live before the
+    fix: 4 lines -> 1, every skill's stats gone, silently. skills.jsonl held
+    the write-lock twin: one torn byte and every save_skill raised."""
+
+    @pytest.fixture(autouse=True)
+    def _ws(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+
+    def _seed_stats(self, n=3):
+        from skills import _skill_stats_path
+        p = _skill_stats_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        rows = [json.dumps({"skill_id": f"s{i}", "skill_name": f"skill-{i}",
+                            "total_uses": 10 + i, "successes": 9}).encode()
+                for i in range(1, n + 1)]
+        p.write_bytes(b"\n".join(rows) + b"\n" + _TORN + b"\n")
+        return p
+
+    def test_a_counter_update_no_longer_wipes_the_stats_store(self):
+        from skills import record_skill_outcome
+        p = self._seed_stats()
+        record_skill_outcome("s1", True)
+        after = p.read_bytes()
+        # every healthy row survived, and so did the torn one
+        for sid in (b'"s1"', b'"s2"', b'"s3"'):
+            assert sid in after
+        assert _TORN in after
+        with pytest.raises(UnicodeDecodeError):
+            after.decode("utf-8")        # corruption signal intact
+
+    def test_the_update_still_did_its_job(self):
+        from skills import record_skill_outcome, get_skill_stats
+        self._seed_stats()
+        record_skill_outcome("s1", True)
+        assert get_skill_stats("s1").total_uses == 12   # 11 + 1
+
+    def test_the_injection_counter_preserves_the_same_way(self):
+        from skills import record_skill_injection_outcome
+        p = self._seed_stats()
+        record_skill_injection_outcome("s2", True)
+        after = p.read_bytes()
+        assert b'"s1"' in after and b'"s3"' in after and _TORN in after
+
+    def test_a_keyless_row_is_carried_not_deleted(self):
+        # No skill_id means the keyed rebuild cannot represent it; the old
+        # code dropped it on the floor (`if sid:` with no else).
+        from skills import record_skill_outcome, _skill_stats_path
+        p = _skill_stats_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        keyless = json.dumps({"skill_name": "no-id-here", "total_uses": 4})
+        p.write_text(json.dumps({"skill_id": "s1", "total_uses": 1}) + "\n"
+                     + keyless + "\n", encoding="utf-8")
+        record_skill_outcome("s1", True)
+        assert "no-id-here" in p.read_text(encoding="utf-8")
+
+    def test_the_loss_is_announced(self, caplog):
+        import logging
+        from skills import record_skill_outcome
+        self._seed_stats()
+        with caplog.at_level(logging.WARNING):
+            record_skill_outcome("s1", True)
+        assert any("skill-stats" in r.message and "verbatim" in r.message
+                   for r in caplog.records)
+
+    def test_save_skill_no_longer_write_locks_the_library(self):
+        from skills import save_skill, _skills_path, Skill
+        def _mk(sid):
+            return Skill(id=sid, name=f"n{sid}", description="d",
+                         trigger_patterns=["x"], steps_template=["a"],
+                         source_loop_ids=[],
+                         created_at="2026-08-17T00:00:00+00:00")
+        save_skill(_mk("k1"))
+        p = _skills_path()
+        with p.open("ab") as f:
+            f.write(b'{"id": "k2", "name": "torn\xff' + b"\n")
+        save_skill(_mk("k3"))            # used to raise UnicodeDecodeError
+        after = p.read_bytes()
+        assert b'"k1"' in after and b'"k3"' in after
+        assert b'torn\xff' in after      # torn line NOT deleted
+
+    def test_save_skill_never_launders_a_tainted_twin(self):
+        from skills import save_skill, _skills_path, Skill, _skill_to_dict
+        sk = Skill(id="k1", name="keeper", description="d",
+                   trigger_patterns=["x"], steps_template=["a"],
+                   source_loop_ids=[],
+                   created_at="2026-08-17T00:00:00+00:00")
+        p = _skills_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tainted = json.dumps(_skill_to_dict(sk)).encode().replace(
+            b"keeper", b"keep\xffr")
+        p.write_bytes(tainted + b"\n")
+        save_skill(sk)                   # same id as the tainted twin
+        after = p.read_bytes()
+        assert tainted in after          # never id-matched, never re-dumped
+
+    def test_load_skills_reads_past_a_torn_byte(self, caplog):
+        import logging
+        from skills import save_skill, load_skills, _skills_path, Skill
+        save_skill(Skill(id="k1", name="keeper", description="d",
+                         trigger_patterns=["x"], steps_template=["a"],
+                         source_loop_ids=[],
+                         created_at="2026-08-17T00:00:00+00:00"))
+        with _skills_path().open("ab") as f:
+            f.write(b'{"id": "k2", "name": "torn\xff' + b"\n")
+        with caplog.at_level(logging.WARNING):
+            got = load_skills()          # used to raise UnicodeDecodeError
+        assert [s.id for s in got] == ["k1"]
