@@ -16,7 +16,7 @@ status: living
 
 **Throughput and fan-out**
 
-- 258 commits in 7d, 696 in 30d
+- 248 commits in 7d, 700 in 30d
 - **Actionable Stack** open boxes: **61** (30d: +55)
 - net new open items per 10 commits: **+0.79** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.

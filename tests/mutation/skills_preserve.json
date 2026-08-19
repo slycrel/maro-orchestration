@@ -1,0 +1,65 @@
+[
+  {
+    "name": "stats destruction :: the keyed read goes blind on a torn byte, so the next counter update wipes the store",
+    "file": "src/skills.py",
+    "anchor": "    try:\n        text = _store_text(path)\n    except FileNotFoundError:\n        return records, stranded",
+    "replacement": "    try:\n        text = path.read_text(encoding=\"utf-8\")\n    except Exception:\n        return records, stranded",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "stats dup :: an unparseable row is dropped from the rebuild instead of stranded",
+    "file": "src/skills.py",
+    "anchor": "            d = _loads_clean(s)\n            sid = d.get(\"skill_id\", \"\")\n        except Exception:\n            tainted += 1\n            stranded.append(s + \"\\n\")",
+    "replacement": "            d = _loads_clean(s)\n            sid = d.get(\"skill_id\", \"\")\n        except Exception:\n            tainted += 1",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "stats keyless :: a row with no skill_id is dropped on the floor again",
+    "file": "src/skills.py",
+    "anchor": "        if not sid:\n            keyless += 1\n            stranded.append(s + \"\\n\")\n            continue",
+    "replacement": "        if not sid:\n            keyless += 1\n            continue",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "stats write :: the stranded rows are not carried into the rewrite",
+    "file": "src/skills.py",
+    "anchor": "        + \"\".join(stranded),\n        errors=\"surrogateescape\",",
+    "replacement": "        ,\n        errors=\"surrogateescape\",",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "stats announce :: the carried rows are not announced",
+    "file": "src/skills.py",
+    "anchor": "    if tainted or keyless:\n        logger.warning(",
+    "replacement": "    if False:\n        logger.warning(",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "save family-B :: one torn byte write-locks the skill library again",
+    "file": "src/skills.py",
+    "anchor": "            for line in _store_text(path).splitlines():",
+    "replacement": "            for line in path.read_text(encoding=\"utf-8\").splitlines():",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "save launder :: the skill upsert id-matches a byte-tainted twin and re-dumps it",
+    "file": "src/skills.py",
+    "anchor": "                    if _loads_clean(stripped).get(\"id\") == skill.id:",
+    "replacement": "                    if json.loads(stripped).get(\"id\") == skill.id:",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "save dup :: the skill upsert deletes the line it cannot parse",
+    "file": "src/skills.py",
+    "anchor": "                    if _loads_clean(stripped).get(\"id\") == skill.id:\n                        continue  # replaced below\n                except Exception:\n                    pass\n                out.append(stripped)",
+    "replacement": "                    if _loads_clean(stripped).get(\"id\") == skill.id:\n                        continue  # replaced below\n                except Exception:\n                    continue\n                out.append(stripped)",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "load family-B :: the skill library read raises UnicodeDecodeError into every caller",
+    "file": "src/skills.py",
+    "anchor": "    rows = _read_store(path, \"load_skills\")",
+    "replacement": "    rows = [json.loads(l) for l in\n            path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]",
+    "tests": "tests/test_skills.py"
+  }
+]

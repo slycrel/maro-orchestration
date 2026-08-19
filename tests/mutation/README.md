@@ -131,6 +131,8 @@ failure the sweep exists to find.
 
 | `run_card_readers.json` | The two read-only strict run_card readers the step-flags r2 named (shadow_lane cost-comparison field, camera_readout frames walk): launder-direction reverts in both (tainted-valid twins pinned), the shadow WARN and camera count/print honesty notes, and the absent-by-age-stays-silent contract | 6 | 2026-08-18, all accounted for (6/6 first pass — co-written with its fixes, the weak green) |
 
+| `skills_preserve.json` | The skill library and skill-stats stores: the stats destruction chain (blind keyed read -> next counter update rebuilds the store from one record), the stranded-row carry in all three of its parts (unparseable rows, keyless rows, the write-back join) and its announcement, `save_skill`'s family-B write-lock revert, its launder and preserve-drop pair, and the `load_skills` family-B revert | 9 | 2026-08-17, all accounted for (9/9 first pass — each mutant dry-read against its killing assertion before the sweep) |
+
 Note on `stamp_preserve.json`: the highest-value sweep of the arc so far,
 and the one that most clearly paid for itself. Six of fifteen came back
 NEEDS WORK, and the four ordinary holes were the honest kind — the fix to
