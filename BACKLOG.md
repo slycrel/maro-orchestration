@@ -366,6 +366,44 @@ Ordered open work that matters. Top of the list is next.
       pack.py importers, workspace_import.import_ledgers,
       thread_brain._append_under) NOT yet triaged — several are
       markdown or single-object reads and likely false positives.*
+    - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
+      REJECT -> fixed. **The HIGH was the chunk's own regression**, which
+      is exactly where the watch-list says to look first: making
+      `load_skills` DEGRADE instead of raise left the in-memory list one
+      row short, and `_save_skills` — a full rewrite from that list, fed
+      by 8 call sites including `update_skill_utility` (every skill
+      match) — made the loss durable. Before the chunk: loud crash, no
+      data loss. After: silent deletion. Now strands-and-carries
+      (deliberate caller drops still drop, pinned both ways). Also
+      fixed: reads degrade / writes abort split on the OSError contract
+      (3 lenses converged — `get_all_skill_stats` had inherited the
+      writer's raise); a test for the safety-critical OSError branch
+      (Experimentalist: it had zero coverage); `save_skill`'s own census
+      reason (the shared `_UPSERT_STAMPER` pointed at another chunk's
+      test class and mutation file); and **the scanner itself** — it was
+      blind to the split-helper shape THIS chunk introduced
+      (read-helper + write-helper + orchestrator, none holding both
+      markers), found independently by 3 lenses. Rewritten to follow
+      same-module call graphs, with `tests/test_scan_destructive_-
+      rewrites.py`: 6 fixtures including the blind-spot must-detect, a
+      read-only negative control, and a regression pin that the live
+      skills helpers stay visible. Mutations 9 -> 13, 13/13.*
+    - *Deferred from r4, with reasons (all verified real, none in the
+      chunk's scope): (1) `gc_memory._gc_outcomes` strict-decodes
+      outcomes.jsonl inside a bare `except Exception: return 0,0,0` — one
+      torn byte silently DISABLES outcome retention forever, with no log
+      line at all (Skeptic + QA). Not destructive (no rewrite happens),
+      but the "silent full disable" flavor of the same debt; wants the
+      same announced-read treatment. (2) A byte-tainted twin of a live
+      skill id is preserved forever and never id-matches, so repeated
+      saves of that id accumulate duplicate rows with no repair path —
+      forensic-preservation by design and `load_skills` resolves it
+      correctly (last-wins), but the store never self-heals; wants a
+      deliberate repair verb, not a silent auto-drop. (3)
+      `memory_ledger._maybe_record_skill_injection_outcomes` writes its
+      idempotence marker only after the whole loop, so a mid-loop raise
+      leaves partial attribution uncommitted and a re-stamp
+      double-counts (Architect) — pre-existing, needs its own chunk.*
     - *Tier 3 (operator-facing output) OPENED 2026-08-17 with
       `loop_report.py` as the double-payoff target: probed six live
       torn-store defects first (worst: ONE torn byte in
