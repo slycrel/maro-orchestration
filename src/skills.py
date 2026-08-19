@@ -944,10 +944,11 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
         text = _store_text(path)
     except FileNotFoundError:
         return records, stranded
-    except OSError as exc:
+    except OSError:
         # Unreadable store: refuse to rebuild from nothing. Raising here
         # aborts the caller's write, which leaves the file intact — the
-        # safe direction when the alternative is a wipe.
+        # safe direction when the alternative is a wipe. Pure READERS
+        # catch this and degrade to empty (see get_all_skill_stats).
         raise
     tainted = 0
     keyless = 0
@@ -991,7 +992,18 @@ def get_all_skill_stats() -> List[SkillStats]:
     path = _skill_stats_path()
     if not path.exists():
         return []
-    records, _stranded = _read_skill_stats(path)
+    try:
+        records, _stranded = _read_skill_stats(path)
+    except OSError as exc:
+        # Reads degrade, writes abort. The raise in _read_skill_stats is
+        # for the two counter WRITERS (rebuilding from nothing would wipe
+        # the store); a pure read has nothing to abort, and every other
+        # reader in this module degrades to empty.
+        logger.warning("[skills] get_all_skill_stats: store unreadable "
+                       "(%s: %s) — reporting no stats, which is NOT the "
+                       "same as no stats existing (%s)",
+                       type(exc).__name__, exc, path)
+        return []
     stats_map: dict = {}
     drifted = 0
     for sid, d in records.items():
@@ -1918,15 +1930,51 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
 
 
 def _save_skills(skills: List[Skill]) -> None:
-    """Overwrite skills.jsonl with the current list (full rewrite for consistency)."""
+    """Overwrite skills.jsonl with the current list, carrying strandees.
+
+    The list a caller hands us came from load_skills(), which cannot
+    represent a row it could not parse — so a naive full rewrite from that
+    list DELETES every torn line in the store. Found by adversarial review
+    of the 2026-08-17 byte-safety chunk, and it was that chunk's own
+    regression: before it, load_skills() RAISED on a torn byte and the
+    whole load->save cycle aborted (loud, non-destructive); after it, the
+    read degraded to "one row short" and this rewrite made the loss
+    durable. Eight call sites feed this function, including
+    update_skill_utility() — which fires on every skill match.
+
+    So: re-read the store under the lock and carry forward, verbatim,
+    every line the in-memory list cannot account for.
+    """
     path = _skills_path()
     try:
-        from file_lock import locked_write
+        from file_lock import locked_write, atomic_write
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write(path):
-            path.write_text(
-                "\n".join(json.dumps(_skill_to_dict(s)) for s in skills) + "\n",
-                encoding="utf-8",
+            keep_ids = {s.id for s in skills}
+            stranded: List[str] = []
+            if path.exists():
+                for line in _store_text(path).splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        # A line we can parse is represented by the list
+                        # (or was deliberately dropped by the caller —
+                        # graduation, demotion, GC). Only lines we CANNOT
+                        # parse are unrepresentable, so only those strand.
+                        _loads_clean(stripped)
+                    except Exception:
+                        stranded.append(stripped)
+            if stranded:
+                logger.warning(
+                    "[skills] _save_skills: %d unparseable/byte-tainted "
+                    "row(s) carried through the rewrite verbatim (%s)",
+                    len(stranded), path)
+            atomic_write(
+                path,
+                "\n".join([json.dumps(_skill_to_dict(s)) for s in skills]
+                          + stranded) + "\n",
+                errors="surrogateescape",
             )
     except Exception as e:
         logger.warning("[skills] _save_skills failed: %s", e)

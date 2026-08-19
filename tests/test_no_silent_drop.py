@@ -143,6 +143,18 @@ _UPSERT_STAMPER = ("keyed upsert under locked_rmw (byte-safe): a line that "
                    "is re-emitted verbatim — no loss, nothing to announce. "
                    "Pinned by TestKeyedUpsertsPreserveWhatTheyCannotParse "
                    "and tests/mutation/rules_background_preserve.json.")
+# skills.py's upsert is the same discipline but a different code path
+# (manual locked_write + atomic_write, not locked_rmw) with its own tests,
+# so it gets its own reason rather than borrowing _UPSERT_STAMPER's
+# pointers — an auditor following the pointer must land on the real ones
+# (adversarial r4, 2026-08-17).
+_SKILL_UPSERT_STAMPER = ("keyed upsert under locked_write + atomic_write "
+                         "(byte-safe): a line that fails the taint-refusing "
+                         "parse never matches the id and is re-emitted "
+                         "verbatim — no loss, nothing to announce. Pinned by "
+                         "TestTheSkillStoresSurviveATornByte in "
+                         "tests/test_skills.py and "
+                         "tests/mutation/skills_preserve.json.")
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
@@ -156,7 +168,7 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("evolver_store.py", "revert_suggestion._drop_constraint"): _SUGGESTION_STAMPER,
     ("rules.py", "save_rule._upsert"): _UPSERT_STAMPER,
     ("background.py", "_append_task_log._merge"): _UPSERT_STAMPER,
-    ("skills.py", "save_skill"): _UPSERT_STAMPER,
+    ("skills.py", "save_skill"): _SKILL_UPSERT_STAMPER,
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when

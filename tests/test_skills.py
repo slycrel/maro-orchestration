@@ -2705,3 +2705,70 @@ class TestTheSkillStoresSurviveATornByte:
         with caplog.at_level(logging.WARNING):
             got = load_skills()          # used to raise UnicodeDecodeError
         assert [s.id for s in got] == ["k1"]
+
+    def test_a_load_save_cycle_does_not_delete_the_torn_row(self):
+        # The chunk's OWN regression, caught by adversarial review: making
+        # load_skills degrade (instead of raise) meant the in-memory list
+        # was one row short, and _save_skills rewrote the store from it —
+        # turning a loud crash into a silent deletion. Eight call sites
+        # feed _save_skills, including update_skill_utility (every match).
+        from skills import save_skill, load_skills, _save_skills, _skills_path, Skill
+        def _mk(sid):
+            return Skill(id=sid, name=f"n{sid}", description="d",
+                         trigger_patterns=["x"], steps_template=["a"],
+                         source_loop_ids=[],
+                         created_at="2026-08-17T00:00:00+00:00")
+        save_skill(_mk("k1"))
+        p = _skills_path()
+        with p.open("ab") as f:
+            f.write(b'{"id": "k2", "name": "torn\xff' + b"\n")
+        _save_skills(load_skills())
+        after = p.read_bytes()
+        assert b'torn\xff' in after       # stranded, not deleted
+        assert b'"k1"' in after
+        with pytest.raises(UnicodeDecodeError):
+            after.decode("utf-8")
+
+    def test_a_deliberate_drop_still_drops(self):
+        # The carry must not resurrect rows the CALLER meant to remove
+        # (graduation, demotion, GC all pass a shortened list).
+        from skills import save_skill, load_skills, _save_skills, _skills_path, Skill
+        def _mk(sid):
+            return Skill(id=sid, name=f"n{sid}", description="d",
+                         trigger_patterns=["x"], steps_template=["a"],
+                         source_loop_ids=[],
+                         created_at="2026-08-17T00:00:00+00:00")
+        save_skill(_mk("k1"))
+        save_skill(_mk("k2"))
+        kept = [s for s in load_skills() if s.id != "k2"]
+        _save_skills(kept)
+        after = _skills_path().read_bytes()
+        assert b'"k1"' in after and b'"k2"' not in after
+
+    def test_an_unreadable_stats_store_aborts_the_write_instead_of_wiping(
+            self, monkeypatch):
+        # The safety-critical branch: refuse to rebuild from nothing.
+        from skills import record_skill_outcome, _skill_stats_path
+        import skills as _sk
+        p = self._seed_stats()
+        before = p.read_bytes()
+        def _boom(_path):
+            raise OSError("simulated unreadable store")
+        monkeypatch.setattr(_sk, "_store_text", _boom)
+        with pytest.raises(OSError):
+            record_skill_outcome("s1", True)
+        assert p.read_bytes() == before   # byte-identical, nothing written
+
+    def test_a_pure_read_degrades_instead_of_raising(self, monkeypatch, caplog):
+        # Reads degrade, writes abort — get_all_skill_stats has nothing to
+        # abort, so it must not inherit the writer's raise.
+        import logging
+        from skills import get_all_skill_stats
+        import skills as _sk
+        self._seed_stats()
+        monkeypatch.setattr(_sk, "_store_text",
+                            lambda _p: (_ for _ in ()).throw(OSError("nope")))
+        with caplog.at_level(logging.WARNING):
+            assert get_all_skill_stats() == []
+        assert any("NOT the same as no stats existing" in r.message
+                   for r in caplog.records)
