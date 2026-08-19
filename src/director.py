@@ -262,7 +262,7 @@ _LARGE_SCOPE_SPEC_SYSTEM = textwrap.dedent("""\
 def _is_simple_directive(directive: str) -> bool:
     """Return True if the directive is simple enough to skip the Director.
 
-    Simple = single-scope, ≤ 12 words, no multi-step coordination.
+    Simple = single-scope, ≤ 15 words, no multi-step coordination.
     The Director adds overhead (SPEC + challenge + dispatch + review) that's
     wasted when the goal is already clear and bounded.
 

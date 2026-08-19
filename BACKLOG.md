@@ -44,6 +44,32 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
+
+`_review_worker_output` (`src/director.py:832`) fires a second LLM call after
+**every** `dispatch_worker` — both the initial site (`:527`) and the revision-loop
+site (`:565`) — with no gate on ticket size, triviality, or risk. On rejection the
+loop repeats the whole dispatch+review cycle (`MAX_REVIEW_ROUNDS = 2`, `:56`), so a
+rejected ticket pays it twice. That is structurally the tax Daniel Mac measured
+(https://x.com/daniel_mac8/status/2089768482824921127): spec out, then pay again to
+read the result back.
+
+A bypass does exist — `run_director(skip_if_simple=...)` routes single-scope,
+≤15-word directives straight to `run_agent_loop` (`_is_simple_directive`, `:262`) —
+but it **defaults to `False`**, where sol-advisor's comparable `solo` mode is its
+recommended default. So on our default path, on the bounded single-context tasks
+his N=10 test used, we would lose the same comparison.
+
+**Why it is not a snap fix:** the tradeoff is review-skip risk vs. token savings,
+and it deserves its own evaluation rather than a reaction to one thread. We have
+the instrumentation to actually settle it — `~/.maro/workspace/memory/step-costs.jsonl`
+carries per-call `tokens_in/out`, `cache_read_tokens`, `cost_usd`, `model`, `loop_id`
+(4,806 records as of 2026-08-19), which is more than the original experiment had.
+The honest test is a size/risk-gated review bypass measured against ungated review
+on matched tickets, scored on cost-per-accepted-outcome, not tokens.
+
+Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
+
 ### File-derived mutation coverage — sweep the rest of the tree (Jeremy, 2026-08-16)
 
 - [ ] **Run a file-derived mutation sweep over everything that hasn't
