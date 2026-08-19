@@ -390,6 +390,26 @@ def build(rd):
         elif p == "timeout-split":
             hit("exec.split")
 
+    # ---------- recorded edge trace (run-scoped, exact) ----------
+    # Since 2026-08-18 the pipeline records the transitions it actually takes
+    # (src/run_trace.py). When a run carries a trace we no longer have to infer
+    # its edges from node presence -- these are the real traversals, in the
+    # real order, and every node in them is attributed by construction.
+    edges = []
+    trace_degraded = False
+    for r in jlines(build_dir / "trace.jsonl"):
+        f, t = r.get("from"), r.get("to")
+        if not f or not t:
+            continue
+        if f == "trace.degraded":
+            trace_degraded = True
+            continue
+        edges.append({"f": f, "t": t, "ts": r.get("ts") or "",
+                      "l": r.get("loop_id") or "", "a": r.get("attrs") or {}})
+        for n in (f, t):
+            if not n.startswith("phase."):
+                hit(n)
+
     # ---------- closure verdicts file (run-scoped, authoritative) ----------
     cv = jlines(build_dir / "closure_verdicts.jsonl")
     checks = []
@@ -450,6 +470,7 @@ def build(rd):
         "checks": checks,
         "sha": ((jload(src / "environment.json") or {}).get("maro_git_sha") or "")[:12],
         "loops": loops, "visits": V,
+        "edges": edges, "trace_degraded": trace_degraded,
     }
 
 

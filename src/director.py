@@ -2016,6 +2016,25 @@ def evaluate_closure(
         verdict.confidence, verdict.checks_passed, verdict.checks_run,
         decision.reasoning[:120],
     )
+    # The verdict is persisted (closure_verdicts.jsonl + CLOSURE_VERDICT); the
+    # DECISION derived from it was not, anywhere — restart / declare-blocked /
+    # continue existed only in this log line (2026-08-18 edge census). Every
+    # closure outcome funnels through this return.
+    try:
+        from run_trace import record_edge as _rec_cl
+        _dest = {"restart": "verify.restart",
+                 "declare-blocked": "verify.contested"}.get(
+                     decision.action, "verify.stamp")
+        _rec_cl("verify.closure", _dest, loop_id=loop_id or None,
+                action=decision.action,
+                complete=bool(verdict.complete),
+                judged=bool(getattr(verdict, "judged", True)),
+                confidence=round(float(verdict.confidence or 0), 3),
+                checks_passed=verdict.checks_passed,
+                checks_run=verdict.checks_run,
+                why=decision.reasoning or "")
+    except Exception:
+        pass
     return decision
 
 

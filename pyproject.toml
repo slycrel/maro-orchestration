@@ -243,6 +243,7 @@ py-modules = [
     "rules",
     "run_curation",
     "run_lease",
+    "run_trace",
     "runs",
     "runtime_tools",
     "scheduler",

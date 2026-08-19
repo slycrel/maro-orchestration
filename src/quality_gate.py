@@ -725,6 +725,21 @@ def run_quality_gate(
                 decision = "PASS"
             log.info("quality_gate decision=%s verdict=%s confidence=%.2f threshold=%.2f reason=%r",
                      decision, verdict, confidence, confidence_threshold, reason[:80])
+            # The gate's verdict reaches the captain's log but never the run
+            # dir. Recorded here so a run's own artifacts answer "was it gated,
+            # and which way". This module has no run context of its own; the
+            # run-dir ContextVar is still pinned by handle.py at this depth,
+            # and record_edge counts the miss if it is not.
+            try:
+                from run_trace import record_edge as _rec_gate
+                _rec_gate("gate.verdict",
+                          "gate.escalate" if escalate else "gate.pass",
+                          loop_id=loop_id or None, decision=decision,
+                          verdict=verdict, confidence=round(float(confidence), 3),
+                          threshold=round(float(confidence_threshold), 3),
+                          reason=reason)
+            except Exception:
+                pass
             try:
                 from captains_log import log_event, QUALITY_GATE_VERDICT
                 log_event(

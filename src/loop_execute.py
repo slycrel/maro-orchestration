@@ -59,6 +59,15 @@ _MATERIAL_STEP_GAP_SECONDS = 600
 _CITATION_ALLOWLIST = frozenset(("__init__.py", "setup.py", "conftest.py"))
 
 
+def _trace_exec_edge(frm: str, to: str, loop_id: str, **attrs) -> None:
+    """Record an execute-phase edge. Never raises; a trace must not change a run."""
+    try:
+        from run_trace import record_edge
+        record_edge(frm, to, loop_id=loop_id or None, **attrs)
+    except Exception:
+        pass
+
+
 def cited_py_not_found(step_result: str, project: str = "") -> set:
     """Names of ``*.py`` files cited in a step result that exist nowhere we look.
 
@@ -1302,6 +1311,29 @@ def _execute_main_loop(
             break
 
         step_status = outcome["status"]
+        # One record per executed step, plus the step_exec-side demotions.
+        # Those three (async-escape, unprobed env claim, deliverable-path miss)
+        # are decided inside step_exec.execute_step, which has no ctx, no
+        # loop_id and no run-dir argument — so they are recorded here, one
+        # layer up, where the run context exists. Their only other trace is a
+        # tag prefix on stuck_reason.
+        try:
+            from run_trace import record_edge as _rec_step
+            from step_exec import (ASYNC_ESCAPE_TAG as _AET,
+                                   ENV_CLAIM_TAG as _ECT,
+                                   DELIVERABLE_PATH_TAG as _DPT)
+            _rec_step("phase.execute", "exec.step", loop_id=loop_id,
+                      step_idx=step_idx, iteration=iteration,
+                      status=step_status, item_index=item_index)
+            _sr = outcome.get("stuck_reason") or ""
+            for _tag, _label in ((_AET, "async-escape"), (_ECT, "env-claim-unprobed"),
+                                 (_DPT, "deliverable-path-miss")):
+                if _sr.startswith(_tag):
+                    _rec_step("exec.step", "exec.blocked", loop_id=loop_id,
+                              step_idx=step_idx, demotion=_label,
+                              reason=_sr)
+        except Exception as _tr_exc:
+            log.debug("edge trace for step outcome failed: %s", _tr_exc)
         _raw_result = outcome.get("result", "")
         # Guard: LLM can return a JSON schema object instead of a string value for
         # result/summary fields. If non-string, convert to empty string (result) or step_text (summary).
@@ -1322,6 +1354,8 @@ def _execute_main_loop(
                 if bool(_wf_cfg_get("validate.write_fence", True)):
                     _wf_paths = [w.get("path", "?") for w in _sc_report.writes]
                     log.warning("WRITE FENCE step=%d blocked: %s", step_idx, _wf_paths)
+                    _trace_exec_edge("exec.step", "exec.write_fence", loop_id,
+                                     step_idx=step_idx, paths=_wf_paths[:5])
                     step_status = "blocked"
                     outcome["status"] = "blocked"
                     outcome["stuck_reason"] = (
@@ -1397,6 +1431,9 @@ def _execute_main_loop(
                         "FABRICATION step=%d kind=%s: %s",
                         step_idx, _ac_verdict.kind, _ac_verdict.reason,
                     )
+                    _trace_exec_edge("exec.step", "exec.fabrication", loop_id,
+                                     step_idx=step_idx, kind=_ac_verdict.kind,
+                                     reason=_ac_verdict.reason or "")
                     step_status = "blocked"
                     outcome["status"] = "blocked"
                     outcome["stuck_reason"] = f"artifact-fabrication[{_ac_verdict.kind}]: {_ac_verdict.reason}"

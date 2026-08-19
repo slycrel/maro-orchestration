@@ -218,6 +218,20 @@ def _preflight_checks(
                 if _estimated > ctx.cost_budget + _slush:
                     log.warning("cost estimate $%.2f exceeds budget $%.2f + slush $%.2f — aborting",
                                 _estimated, ctx.cost_budget, _slush)
+                    # This return abandons the run before any step, without
+                    # advancing the phase and without writing a manifest — it
+                    # was the only terminal in the pipeline leaving no durable
+                    # record at all (2026-08-18 edge census).
+                    try:
+                        from run_trace import record_edge
+                        record_edge("plan.decompose", "plan.cost_gate",
+                                    loop_id=ctx.loop_id,
+                                    estimated_usd=round(float(_estimated), 4),
+                                    budget_usd=round(float(ctx.cost_budget), 4),
+                                    slush_usd=round(float(_slush), 4),
+                                    steps=len(steps))
+                    except Exception:
+                        pass
                     return steps, {}, LoopResult(
                         loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
                         status="stuck",

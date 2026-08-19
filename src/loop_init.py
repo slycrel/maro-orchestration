@@ -43,7 +43,8 @@ _CONFIG_ABSENT = object()       # distinguishes missing key from explicit null
 
 def _stamp_refusal_verdict(verdict: str, evidence: str,
                            pause_reason: str = "",
-                           reopen_payload: Optional[dict] = None) -> None:
+                           reopen_payload: Optional[dict] = None,
+                           *, edge_to: str = "", loop_id: str = "") -> None:
     """Persist a pre-start refusal's stop verdict to run metadata.
 
     Pre-start refusals return a LoopResult without ever reaching
@@ -67,6 +68,17 @@ def _stamp_refusal_verdict(verdict: str, evidence: str,
         )
     except Exception:
         pass
+    # A pre-start refusal returns without ever advancing the phase, so the
+    # phase track simply stops — indistinguishable from a crash. Record the
+    # branch that actually ended the run. Every refusal funnels through here.
+    if edge_to:
+        try:
+            from run_trace import record_edge
+            record_edge("plan.loop_created", edge_to, loop_id=loop_id or None,
+                        verdict=verdict, evidence=evidence,
+                        pause_reason=pause_reason or "")
+        except Exception:
+            pass
 
 
 def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
@@ -188,7 +200,8 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                         "kind": "budget-daily",
                         "daily_cap_usd": round(float(_daily_cap), 2),
                         "spent_usd": round(float(_spent), 2),
-                    })
+                    },
+                    edge_to="plan.budget_gate", loop_id=ctx.loop_id)
                 return LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,
@@ -315,7 +328,8 @@ def _initialize_loop(
             log.warning("loop refused to start — kill switch active: %s", _ks_msg)
             _stamp_refusal_verdict(
                 "external-interrupt", f"kill switch active: {_ks_msg}",
-                pause_reason=PAUSE_OP_MANUAL)
+                pause_reason=PAUSE_OP_MANUAL,
+                edge_to="plan.killswitch", loop_id=ctx.loop_id)
             return ctx, LoopResult(
                 loop_id=ctx.loop_id,
                 goal=goal,
@@ -449,7 +463,9 @@ def _initialize_loop(
                 if verbose:
                     print(f"[maro] {_busy}", file=sys.stderr, flush=True)
                 _stamp_refusal_verdict("external-interrupt", str(_busy),
-                                       pause_reason=PAUSE_ERR_BUSY)
+                                       pause_reason=PAUSE_ERR_BUSY,
+                                       edge_to="plan.busy_refused",
+                                       loop_id=ctx.loop_id)
                 return ctx, LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,

@@ -618,4 +618,14 @@ class LoopStateMachine(LoopContext):
             raise InvalidTransitionError(
                 f"Invalid loop phase transition: {self.phase!r} → {new_phase!r}"
             )
+        prior = self.phase
         self.phase = new_phase
+        # The phase track was in-memory only until 2026-08-18 — this is the one
+        # place every legal transition passes through, so recording it here
+        # covers all of them at once and cannot drift from the state machine.
+        try:
+            from run_trace import record_edge
+            record_edge(f"phase.{prior}", f"phase.{new_phase}",
+                        loop_id=getattr(self, "loop_id", None) or None)
+        except Exception:
+            pass

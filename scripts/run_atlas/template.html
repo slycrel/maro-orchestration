@@ -180,6 +180,8 @@ button{font:inherit;color:inherit}
 #edges path.branch{stroke:var(--line)}
 .overlay #edges path{opacity:.28}
 .overlay #edges path.lit{opacity:1;stroke:var(--wire);stroke-width:2}
+/* a recorded traversal is drawn solid; an inferred one keeps its kind's dash */
+.overlay #edges path.lit.recorded{stroke-dasharray:none;stroke-width:2.4}
 #edges text{fill:var(--ink-3);font-family:"IBM Plex Mono",monospace;font-size:9.5px}
 .overlay #edges text{opacity:.3}
 .overlay #edges text.lit{opacity:1;fill:var(--wire)}
@@ -339,8 +341,23 @@ const PHASES = [
   ["plan.recall","Recall (loop)",2,0,"flow","loop_planning.py:493 recall(slice=\"loop\")"],
   ["plan.skills","Skill routing / A-B",3,0,"flow","source/skills_manifest.jsonl"],
   ["plan.decompose","Decompose",0,1,"flow","planner.decompose · loop_planning.py:409"],
-  ["plan.cuts","Cuts drawn",1,1,"flow","constraint.py cuts-first · CUTS_DRAWN"],
+  ["plan.cuts","Cuts drawn",1,1,"flow","planner.py cuts-first · CUTS_DRAWN"],
   ["plan.manifest","Plan manifest",2,1,"flow","loop_artifacts.py:63 _write_plan_manifest"],
+  ["plan.killswitch","Kill switch",0,2,"stop","loop_init.py:311 — refuses before any spend"],
+  ["plan.budget_gate","Daily budget gate",1,2,"stop","loop_init.py:167 — spend_today ≥ cap"],
+  ["plan.busy_refused","Project busy",2,2,"stop","loop_init.py:407 admission gate"],
+  ["plan.cost_gate","Cost estimate over budget",3,2,"stop","loop_planning.py:216 — aborts before step 1"],
+ ]},
+ {id:"phase", tag:"—", name:"Phase track",
+  desc:"the LoopPhase state machine — recorded since 2026-08-18, in-memory only before that",
+  cols:4, nodes:[
+  ["phase.init","init",0,0,"flow","LoopPhase.INIT"],
+  ["phase.decompose","decompose",1,0,"flow","LoopPhase.DECOMPOSE"],
+  ["phase.pre_flight","pre_flight",2,0,"flow","LoopPhase.PRE_FLIGHT"],
+  ["phase.parallel","parallel",3,0,"branch","LoopPhase.PARALLEL — early return, bypasses finalize"],
+  ["phase.prepare","prepare",0,1,"flow","LoopPhase.PREPARE"],
+  ["phase.execute","execute",1,1,"flow","LoopPhase.EXECUTE"],
+  ["phase.finalize","finalize",2,1,"flow","LoopPhase.FINALIZE"],
  ]},
  {id:"exec", tag:"D–F", name:"Execute",
   desc:"the while-remaining-steps loop: act, observe, decide — and every way a step can go wrong",
@@ -370,6 +387,7 @@ const PHASES = [
   ["exec.nav_escalate","Navigator escalates",3,4,"stop","NAVIGATOR_ACTED — honest stop"],
   ["exec.stuck","Declared stuck",4,4,"stop","loop_status=stuck"],
   ["exec.never_ran","Never reached execute",0,5,"stop","no loop log — NOW lane, stranded, refused"],
+  ["exec.parallel","Parallel fan-out / DAG",1,5,"branch","loop_parallel.py — early return, skips finalize"],
  ]},
  {id:"fin", tag:"G", name:"Finalize",
   desc:"result written, run diagnosed, facts landed, worktrees merged back",
@@ -448,6 +466,16 @@ const EDGES = [
  ["route.persona","route.recall"],["route.recall","route.scope_ok"],
  ["route.recall","route.scope_fail","branch"],["route.recall","route.scope_skip","branch"],
  ["route.scope_ok","plan.loop_created"],["route.scope_fail","plan.loop_created"],
+ ["plan.loop_created","plan.killswitch","stop"],
+ ["plan.loop_created","plan.budget_gate","stop"],
+ ["plan.loop_created","plan.busy_refused","stop"],
+ ["plan.decompose","plan.cost_gate","stop"],
+ ["phase.init","phase.decompose"],["phase.decompose","phase.pre_flight"],
+ ["phase.pre_flight","phase.parallel","branch"],["phase.pre_flight","phase.prepare"],
+ ["phase.parallel","phase.prepare"],["phase.prepare","phase.execute"],
+ ["phase.execute","phase.finalize"],["phase.execute","exec.step"],
+ ["phase.parallel","exec.parallel","branch"],
+ ["exec.parallel","fin.result"],["exec.parallel","fin.partial"],
  ["plan.loop_created","plan.fence"],["plan.fence","plan.recall"],
  ["plan.recall","plan.skills"],["plan.skills","plan.decompose"],
  ["plan.decompose","plan.cuts"],["plan.cuts","plan.manifest"],
@@ -473,7 +501,10 @@ const EDGES = [
  ["exec.nav_escalate","fin.partial"],["exec.budget_break","fin.partial"],
  ["exec.never_ran","close.terminal","stop"],
  ["fin.result","fin.diagnose"],["fin.partial","fin.diagnose"],
- ["fin.result","fin.checkpoint"],["fin.diagnose","fin.world_facts"],
+ ["fin.result","fin.checkpoint"],
+ // world_facts lands BEFORE diagnose (loop_finalize.py:352 runs, then
+ // _finalize_loop reaches _diagnose) — the arrow used to point the other way.
+ ["fin.world_facts","fin.diagnose"],
  ["fin.diagnose","fin.auto_recovery","branch"],
  ["fin.auto_recovery","exec.step","loop","one low-risk re-run"],
  ["fin.diagnose","fin.stop_verdict"],["fin.stop_verdict","fin.pause","stop"],
@@ -680,6 +711,11 @@ function drawEdges(){
     const r = d.getBoundingClientRect();
     return {x:(r.left-cr.left)/zoom, y:(r.top-cr.top)/zoom, w:r.width/zoom, h:r.height/zoom};
   };
+  // A run that carries a recorded trace (src/run_trace.py) tells us exactly
+  // which edges it crossed; without one we fall back to "both endpoints were
+  // visited", which is an inference, not a record.
+  const recorded = selected && selected.edges && selected.edges.length
+    ? new Set(selected.edges.map(e => e.f + ">" + e.t)) : null;
   const frag = document.createDocumentFragment();
   const seen = new Set();
   EDGES.forEach(([a,b,kind,label]) => {
@@ -688,7 +724,7 @@ function drawEdges(){
     if (A.band && B.band && NODEMETA[a].phase === NODEMETA[b].phase) return;
     const key = [Math.round(A.x),Math.round(A.y),Math.round(B.x),Math.round(B.y),kind].join();
     if (seen.has(key)) return; seen.add(key);
-    const lit = vis && vis[a] && vis[b];
+    const lit = recorded ? recorded.has(a + ">" + b) : (vis && vis[a] && vis[b]);
     const ax = A.x + A.w/2, ay = A.y + A.h, bx = B.x + B.w/2, by = B.y;
     let d;
     if (by > ay - 4){                                   // forward / downward
@@ -701,7 +737,8 @@ function drawEdges(){
     }
     const p = document.createElementNS("http://www.w3.org/2000/svg","path");
     p.setAttribute("d", d);
-    p.setAttribute("class", (kind||"flow") + (lit ? " lit" : ""));
+    p.setAttribute("class", (kind||"flow") + (lit ? " lit" : "")
+                   + (lit && recorded ? " recorded" : ""));
     p.setAttribute("marker-end","url(#ah)");
     frag.append(p);
     if (label && (detail === 2 || lit)){
@@ -787,7 +824,7 @@ function renderInspector(){
     l.append(el("h4",null,"Legend"));
     const mk = (cls, txt) => { const d = el("div","lg");
       d.append(Object.assign(el("i"),{className:cls}), el("span",null,txt)); return d; };
-    l.append(mk("", "edge this run traveled"));
+    l.append(mk("", "edge this run traveled — solid = recorded, from the run's own trace"));
     l.append(mk("dash", "node lit by an unattributed event — see the caveat below"));
     l.append(mk("grey", "edge in the topology, not traveled"));
     const sw = el("div","lg");
@@ -857,7 +894,17 @@ function renderInspector(){
   add2("calls", r.ncalls || null);
   add2("cost (card)", r.usd != null ? fmtUSD(r.usd) : null);
   add2("cost (log)", r.usd_log != null ? fmtUSD(r.usd_log) : null);
+  const nEdges = (r.edges || []).length;
+  add2("edges", nEdges
+    ? `${nEdges} recorded` + (r.trace_degraded ? " (INCOMPLETE)" : "")
+    : "inferred — run predates the trace");
   out.append(kv2);
+  if (r.trace_degraded){
+    const w = el("div","note"); w.style.marginTop = "6px";
+    w.innerHTML = "<b>trace incomplete:</b> at least one edge failed to record "
+      + "for this run, so a missing edge here is not evidence it was not taken.";
+    out.append(w);
+  }
   if (r.summary){ const s = el("div","note"); s.style.marginTop = "7px";
     s.textContent = r.summary; out.append(s); }
   if (r.gaps && r.gaps.length){

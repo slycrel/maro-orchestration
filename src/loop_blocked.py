@@ -64,6 +64,20 @@ class BlockedStepContext:
     replan_count: int = 0
 
 
+def _trace_return(frm: str, ctx, **attrs) -> None:
+    """Record a recovery branch handing control back to the execute loop.
+
+    The re-queue itself was previously invisible: the blocked StepOutcome was
+    persisted, but nothing recorded that the step went back around.
+    """
+    try:
+        from run_trace import record_edge
+        record_edge(frm, "exec.step",
+                    loop_id=getattr(ctx, "loop_id", "") or None, **attrs)
+    except Exception:
+        pass
+
+
 def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     """Phase F11: Process a blocked step — retry, split, redecompose, or terminal.
 
@@ -187,6 +201,29 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 _decision = _act_override
     except Exception as _nav_exc:
         log.debug("blocked-step navigator shadow skipped: %s", _nav_exc)
+
+    # Record the branch actually taken out of a blocked step. This is the
+    # richest decision point in the loop and the whole recovery subgraph
+    # funnels through it, so one record here covers retry / redecompose /
+    # split / stuck for every serial run. Placed AFTER the navigator override
+    # so it reports the final decision, not the heuristic's proposal.
+    try:
+        from run_trace import record_edge as _rec_edge
+        _final_action = "retry" if _decision.retry else (
+            "redecompose" if _decision.redecompose else (
+                "split" if _decision.split_into else "stuck"))
+        _rec_edge("exec.step", "exec.blocked", loop_id=ctx.loop_id,
+                  step_idx=step_idx, retries=_prior_retries,
+                  reason=outcome.get("stuck_reason") or "")
+        _rec_edge("exec.blocked", f"exec.{_final_action}", loop_id=ctx.loop_id,
+                  step_idx=step_idx, retries=_prior_retries,
+                  replan_count=replan_count,
+                  navigator_overrode=(_final_action != _heuristic_action),
+                  heuristic_action=_heuristic_action,
+                  why=_decision.metacognitive_reason or "")
+    except Exception as _tr_exc:
+        log.debug("edge trace for blocked step failed: %s", _tr_exc)
+
     _recovery_delta = 0
 
     if _decision.retry:
@@ -222,6 +259,8 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         remaining_steps.insert(0, step_text)
         remaining_indices.insert(0, item_index)
         step_idx -= 1
+        _trace_return("exec.retry", ctx, step_idx=step_idx,
+                      attempt=_prior_retries + 1)
         if ctx.verbose:
             _br = outcome.get("stuck_reason", "blocked")
             print(f"[maro] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
@@ -266,6 +305,8 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     remaining_steps.insert(0, _new_step)
                     remaining_indices.insert(0, -1)
                 manifest_steps.extend(_sub_shaped)
+                _trace_return("exec.redecompose", ctx, step_idx=step_idx,
+                              sub_steps=len(_sub_shaped))
                 replan_count += 1
                 log.info("mid-loop re-decompose: step %d → %d sub-steps (replan #%d)",
                          step_idx, len(_sub_shaped), replan_count)
@@ -344,6 +385,8 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             remaining_steps.insert(0, _new_step)
             remaining_indices.insert(0, -1)
         manifest_steps.extend(_split_shaped)
+        _trace_return("exec.split", ctx, step_idx=step_idx,
+                      fragments=len(_split_shaped))
         # Same re-arm as the retry branch — split halves must see the failed
         # step's context (adversarial review 2026-07-15).
         ctx.pending_context.extend(list(blk.delivered_contributions))
@@ -389,6 +432,26 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             _decision.stop_verdict,
             _decision.metacognitive_reason or _stuck_reason,
         )
+    # Name the terminal precisely. `stuck` is the generic landing; the tagged
+    # reasons are distinct dead ends the recovery tree reached deliberately,
+    # and collapsing them loses why the run stopped.
+    try:
+        from run_trace import record_edge as _rec_edge
+        _term = "exec.stuck"
+        _up = _stuck_reason.upper()
+        if "MISSING_INPUT" in _up:
+            _term = "exec.missing_input"
+        elif "TIMEOUT" in _up:
+            _term = "exec.timeout"
+        elif _decision.stop_verdict == "out-of-budget":
+            _term = "exec.budget_break"
+        _rec_edge("exec.blocked" if not _decision.advance else "exec.step",
+                  _term, loop_id=ctx.loop_id, step_idx=step_idx,
+                  stop_verdict=_decision.stop_verdict or "",
+                  advance=bool(_decision.advance),
+                  reason=_stuck_reason)
+    except Exception:
+        pass
     failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
     if item_index >= 0:
         try:

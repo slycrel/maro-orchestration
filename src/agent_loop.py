@@ -489,6 +489,29 @@ def run_agent_loop(
                 resolve_tools_fn=_resolve_tools,
             )
             if _parallel_result is not None:
+                # Record the fan-out itself and the terminal it returns from.
+                # The phase never leaves "parallel" and none of the execute /
+                # finalize / verify edges exist on this path, so without this a
+                # fan-out run's trace ends at phase.parallel and reads exactly
+                # like a crashed serial run (2026-08-18 edge census).
+                try:
+                    from run_trace import record_edge as _rec_par
+                    _par_steps = list(_parallel_result.steps or [])
+                    _rec_par("phase.parallel", "exec.parallel",
+                             loop_id=ctx.loop_id,
+                             steps=len(_par_steps),
+                             blocked=sum(1 for _s in _par_steps
+                                         if getattr(_s, "status", "") == "blocked"),
+                             mode="dag" if _use_dag else "fanout")
+                    _rec_par("exec.parallel",
+                             "fin.partial" if _parallel_result.status != "done"
+                             else "fin.result",
+                             loop_id=ctx.loop_id,
+                             status=_parallel_result.status,
+                             bypassed_finalize=True,
+                             stuck_reason=_parallel_result.stuck_reason or "")
+                except Exception as _tr_exc:
+                    log.debug("edge trace for parallel path failed: %s", _tr_exc)
                 # 2026-07-08 adversarial review (finding #1): this early return
                 # bypasses _build_result_and_finalize() entirely — true for every
                 # finalize side effect (telegram notify, introspection, Reflexion
@@ -642,6 +665,17 @@ def run_agent_loop(
                     _new_params = dict(_recovery.params)
                     _new_max_steps = _new_params.pop("max_steps", max_steps)
                     _new_max_iter = _new_params.pop("max_iterations", max_iterations)
+                    # The child re-run inherits this run-dir, so its rows
+                    # interleave into the same trace. Mark the hand-off or the
+                    # second loop's edges look like a continuation of the first.
+                    try:
+                        from run_trace import record_edge as _rec_rec
+                        _rec_rec("fin.diagnose", "fin.auto_recovery",
+                                 loop_id=ctx.loop_id,
+                                 parent_loop_id=ctx.loop_id,
+                                 max_steps=_new_max_steps)
+                    except Exception:
+                        pass
                     # _recovery_in_progress=True guards against infinite recursion —
                     # passed as a call-stack-local arg (not shared mutable state) so
                     # concurrent run_agent_loop calls (run_parallel_loops) can't race.

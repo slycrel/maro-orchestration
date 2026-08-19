@@ -38,10 +38,17 @@ inlined page runs ~2.2 MB for 788 runs.
 
 ## The reconstruction problem
 
-**`LoopPhase` is never persisted.** `ctx.phase` is in-memory only; `set_phase()`
-mutates it and nothing writes it to disk. This is the single fact that shapes
-the whole tool: there is no recorded phase track to replay, so every node in
-the atlas is *inferred* from artifacts that do survive —
+> **Superseded in part, 2026-08-18.** Runs from that date carry a recorded edge
+> trace (`build/trace.jsonl`, `docs/RUN_TRACE.md`) — including the phase track,
+> which `set_phase` now persists. For those runs the atlas reads the real
+> traversals instead of inferring them, and draws them solid. Everything below
+> still describes the ~788 runs that predate the trace, and the fallback path
+> for any run whose trace is missing or marked degraded.
+
+**`LoopPhase` was never persisted.** `ctx.phase` was in-memory only; `set_phase()`
+mutated it and nothing wrote it to disk. This is the single fact that shaped
+the whole tool: with no recorded phase track to replay, every node in the atlas
+had to be *inferred* from artifacts that do survive —
 
 | Source | What it establishes |
 |---|---|
@@ -53,10 +60,8 @@ the atlas is *inferred* from artifacts that do survive —
 | `build/captains_log_slice.jsonl` | the event stream (`METACOGNITIVE_DECISION`, `CLOSURE_VERDICT`, …) |
 | file presence | `source/scope.md`, `source/cuts.md`, `RESULT.md` vs `PARTIAL.md`, … |
 
-Any future "just read the phase off the run" plan is a dead end unless someone
-adds the write. That would be a small change (`stamp_run_metadata` at each
-`set_phase`) and would make this tool's inference layer mostly redundant — worth
-knowing before anyone reinvents it.
+That write now exists (`src/run_trace.py`, wired into `set_phase` itself), so
+the inference layer below is the *fallback*, not the primary path.
 
 ## Evidence strength: attributed vs windowed
 
@@ -89,10 +94,11 @@ run closes and belongs to whatever ran next.
 
 ## What the atlas does not claim
 
-- **Edges light when both endpoints were visited.** That is an inference from
-  node presence, not a recorded transition. Within-phase ordering is not
-  persisted, so a lit edge means "this run was at both ends", not "it crossed
-  here at this moment."
+- **Edges light when both endpoints were visited** — *for runs with no recorded
+  trace*. That is an inference from node presence, not a recorded transition: a
+  lit edge means "this run was at both ends", not "it crossed here at this
+  moment". Runs carrying a trace light exactly the edges they recorded, drawn
+  solid, and the inspector says which of the two you are looking at.
 - **Retries are counted from the step log, not from the event field.**
   `METACOGNITIVE_DECISION.context.retries` is the *prior* count and tops out at
   1 in the corpus; true attempts come from counting duplicate step `text` at

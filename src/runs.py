@@ -1361,6 +1361,24 @@ def close_run(
         write_reports_for_run_dir(run_dir(handle_id))
     except Exception:
         pass
+    # Record the terminal. Deliberately once per ACTUAL close, not once per
+    # run: on the answer-first path (notify.verdict_followup) close_run fires
+    # twice — first stamping "done" with success_class done-verdict-pending
+    # before closure has run, then again after the verdict with the real
+    # class. Both are true at the time they happen, and a reader that assumed
+    # one terminal per run would have to pick one and be wrong. Append order
+    # is the record, so the last row is the outcome that stands.
+    try:
+        from run_trace import record_edge
+        _cls = (card or {}).get("success_class") if isinstance(card, dict) else None
+        _rd = run_dir(handle_id)
+        record_edge("close.curate", "close.terminal", run_dir=_rd,
+                    handle_id=handle_id, status=status)
+        record_edge("close.terminal", f"term.{_cls or status or 'unknown'}",
+                    run_dir=_rd, handle_id=handle_id,
+                    success_class=_cls or "", status=status)
+    except Exception:
+        pass
     return card
 
 
