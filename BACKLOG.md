@@ -345,6 +345,27 @@ Ordered open work that matters. Top of the list is next.
       led by skills.py 7) is tripwire-guarded, not scheduled — burn
       down opportunistically when touching a file, per the census
       contract.*
+    - *Tree-wide DESTRUCTIVE-subset sweep 2026-08-17 (the evolver r2
+      lesson generalized: the dangerous shape is not silence, it is
+      drop + write-back — a dropped row in a read is recoverable, a
+      dropped row in a rewrite is gone). Wrote an AST scanner for
+      parse-loops that drop AND write back; 58 drop sites narrowed to
+      ~25 write-back candidates. Top hit: **skills.py — the
+      knowledge_web tier-destruction chain in a hotter store.** Probed
+      live: one torn byte + one `record_skill_outcome` (fires on EVERY
+      skill invocation) took skill-stats.jsonl from 4 lines to 1,
+      silently; and one torn byte made every `save_skill` raise,
+      write-locking the skill library until hand repair. SHIPPED:
+      shared `_read_skill_stats`/`_write_skill_stats` (stranded rows —
+      unparseable AND keyless — ride the rewrite verbatim), all 7
+      skills.py census sites cleared, 8 tests,
+      `skills_preserve.json` 9 mutations 9/9 first pass. Scanner kept
+      at `scripts/scan_destructive_rewrites.py`; remaining RISK
+      candidates (interrupt.py, gc_memory.py,
+      orch_items.append_next_items, run_curation.promote_skills_lite,
+      pack.py importers, workspace_import.import_ledgers,
+      thread_brain._append_under) NOT yet triaged — several are
+      markdown or single-object reads and likely false positives.*
     - *Tier 3 (operator-facing output) OPENED 2026-08-17 with
       `loop_report.py` as the double-payoff target: probed six live
       torn-store defects first (worst: ONE torn byte in
