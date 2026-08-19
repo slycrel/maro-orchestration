@@ -1,0 +1,1027 @@
+<title>Maro Run Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#eef1f3; --surface:#ffffff; --surface-2:#e4e9ec; --sunk:#dde3e7;
+  --line:#c6d0d6; --line-soft:#dbe3e7;
+  --ink:#16202a; --ink-2:#4a5b68; --ink-3:#76899a;
+  --wire:#b5591c;            /* the traced run path -- hot copper */
+  --wire-soft:#e8b98f;
+  --struct:#5d7a8c;          /* static topology */
+  --ok:#1f7a5c; --warn:#a1791a; --bad:#a63248; --esc:#6a52a8;
+  --heat-0:#dfe6ea; --shadow:0 1px 2px rgba(22,32,42,.08),0 8px 24px rgba(22,32,42,.06);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0e1418; --surface:#161e24; --surface-2:#1d272e; --sunk:#111920;
+    --line:#2c3a44; --line-soft:#243038;
+    --ink:#e3ebef; --ink-2:#9fb2be; --ink-3:#6d8391;
+    --wire:#e0913f; --wire-soft:#7a4d1e;
+    --struct:#7d9dae;
+    --ok:#3fae83; --warn:#d3a63c; --bad:#e0657c; --esc:#a48ce0;
+    --heat-0:#1b242b; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0e1418; --surface:#161e24; --surface-2:#1d272e; --sunk:#111920;
+  --line:#2c3a44; --line-soft:#243038;
+  --ink:#e3ebef; --ink-2:#9fb2be; --ink-3:#6d8391;
+  --wire:#e0913f; --wire-soft:#7a4d1e;
+  --struct:#7d9dae;
+  --ok:#3fae83; --warn:#d3a63c; --bad:#e0657c; --esc:#a48ce0;
+  --heat-0:#1b242b; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,.disp{font-family:Archivo,"IBM Plex Sans",sans-serif;text-wrap:balance}
+.mono,code{font-family:"IBM Plex Mono",ui-monospace,monospace}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--wire);outline-offset:2px}
+
+/* ---------- shell ---------- */
+.shell{display:grid;grid-template-columns:300px minmax(0,1fr) 340px;height:100vh;height:100dvh}
+@media (max-width:1180px){
+  .shell{grid-template-columns:1fr;height:auto}
+  .rail,.inspector{max-height:none;border:0;border-bottom:1px solid var(--line)}
+}
+.rail,.inspector{background:var(--surface);overflow-y:auto;overflow-x:hidden}
+.rail{border-right:1px solid var(--line)}
+.inspector{border-left:1px solid var(--line)}
+.stage{display:flex;flex-direction:column;min-width:0;background:var(--ground)}
+
+/* ---------- masthead ---------- */
+.mast{padding:18px 18px 14px;border-bottom:1px solid var(--line)}
+.mast h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.015em}
+.mast .sub{color:var(--ink-3);font-size:11.5px;margin-top:3px;letter-spacing:.03em;text-transform:uppercase}
+
+/* ---------- filters ---------- */
+.filters{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+.filters input[type=search]{
+  width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px;
+  background:var(--sunk);color:var(--ink);font-size:13px;font-family:inherit
+}
+.chipset{display:flex;flex-wrap:wrap;gap:4px}
+.chip{
+  border:1px solid var(--line);background:transparent;color:var(--ink-2);
+  padding:2.5px 7px;border-radius:20px;font-size:11px;cursor:pointer;
+  font-family:"IBM Plex Mono",monospace;letter-spacing:.01em
+}
+.chip:hover{border-color:var(--struct);color:var(--ink)}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.flabel{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:600}
+.cohort{font-size:11.5px;color:var(--ink-2)}
+.cohort b{color:var(--wire);font-family:"IBM Plex Mono",monospace}
+
+/* ---------- run list ---------- */
+.runlist{padding:6px 10px 30px}
+.run{
+  width:100%;text-align:left;display:grid;grid-template-columns:4px 1fr auto;gap:8px;
+  align-items:center;padding:7px 8px;border:0;border-radius:6px;background:transparent;
+  cursor:pointer;margin-bottom:1px
+}
+.run:hover{background:var(--surface-2)}
+.run[aria-current=true]{background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--wire)}
+.run .bar{width:4px;height:26px;border-radius:2px;background:var(--ink-3)}
+.run .t{min-width:0}
+.run .nm{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run .mt{font-size:10px;color:var(--ink-3);font-family:"IBM Plex Mono",monospace;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run .rt{font-size:10px;color:var(--ink-3);font-family:"IBM Plex Mono",monospace;text-align:right}
+.cls-success .bar,.cls-done .bar{background:var(--ok)}
+.cls-partial .bar,.cls-done-unverified .bar,.cls-incomplete .bar{background:var(--warn)}
+.cls-failed .bar,.cls-done-not-achieved .bar,.cls-stuck .bar,.cls-error .bar{background:var(--bad)}
+.cls-interrupted .bar,.cls-clarification_needed .bar,.cls-stranded .bar{background:var(--esc)}
+
+/* ---------- toolbar ---------- */
+.toolbar{
+  display:flex;align-items:center;gap:14px;padding:9px 16px;
+  border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap
+}
+.seg{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:4px 10px;font-size:11.5px;cursor:pointer;
+  font-family:"IBM Plex Mono",monospace;color:var(--ink-2)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--surface)}
+.tbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:600}
+.zoomctl{margin-left:auto;display:flex;align-items:center;gap:6px}
+.zoomctl button{border:1px solid var(--line);background:transparent;border-radius:4px;
+  width:24px;height:24px;cursor:pointer;line-height:1}
+.zoomctl .z{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3);min-width:38px;text-align:center}
+
+/* ---------- map ---------- */
+.viewport{flex:1;overflow:hidden;position:relative;cursor:grab;min-height:520px}
+.viewport.drag{cursor:grabbing}
+.canvas{position:absolute;top:0;left:0;transform-origin:0 0;padding:26px 26px 60px;width:1180px}
+#edges{position:absolute;inset:0;overflow:visible;pointer-events:none;z-index:0}
+/* bands stay transparent so the edge layer beneath them reads between the chips;
+   the chips themselves are opaque and sit above it */
+.band{
+  position:relative;z-index:1;background:transparent;border:1px solid var(--line);
+  border-radius:9px;margin-bottom:26px
+}
+.band > header{
+  display:flex;align-items:baseline;gap:10px;padding:9px 13px;cursor:pointer;
+  border-bottom:1px solid transparent;background:var(--surface);border-radius:8px 8px 0 0
+}
+.band.open > header{border-bottom-color:var(--line-soft)}
+.band .ph{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-3);
+  border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.band h3{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.band .desc{font-size:11.5px;color:var(--ink-3);flex:1;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.band .tally{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-2);white-space:nowrap}
+.band .caret{color:var(--ink-3);font-size:11px;transition:transform .18s}
+.band.open .caret{transform:rotate(90deg)}
+.nodes{display:none;padding:13px;gap:9px;grid-auto-rows:minmax(0,auto)}
+.band.open .nodes{display:grid}
+
+/* node chips */
+.node{
+  position:relative;z-index:1;border:1px solid var(--line);border-radius:6px;padding:6px 8px 7px;
+  background:var(--surface);min-height:52px;display:flex;flex-direction:column;gap:3px;
+  transition:opacity .18s,box-shadow .18s,border-color .18s;cursor:default;
+  box-shadow:var(--shadow)
+}
+.node .nl{font-size:12px;font-weight:500;line-height:1.25}
+.node .nn{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--ink-3);
+  display:flex;justify-content:space-between;gap:6px;align-items:center}
+.node .heat{height:3px;border-radius:2px;background:var(--heat-0);overflow:hidden;margin-top:auto}
+.node .heat i{display:block;height:100%;background:var(--struct);border-radius:2px}
+.node[data-kind=stop]{border-style:dashed}
+.node[data-kind=term] .nl{font-weight:600}
+
+/* overlay states */
+.overlay .node{opacity:.34}
+.overlay .node.on{opacity:1;border-color:var(--wire);background:var(--surface);
+  box-shadow:0 0 0 1px var(--wire), 0 0 14px -4px var(--wire)}
+.overlay .node.on .heat i{background:var(--wire)}
+.overlay .node.on.windowed{border-style:dashed;box-shadow:0 0 0 1px var(--wire-soft)}
+.node .badge{
+  position:absolute;top:-7px;right:6px;font-family:"IBM Plex Mono",monospace;font-size:9.5px;
+  background:var(--wire);color:#fff;border-radius:9px;padding:0 5px;line-height:15px;display:none
+}
+.overlay .node.on .badge{display:block}
+.node.on.windowed .badge{background:var(--wire-soft);color:var(--ink)}
+.node .val{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--wire);display:none;
+  line-height:1.3;word-break:break-word}
+.overlay .node.on .val:not(:empty){display:block}
+
+/* edges */
+#edges path{fill:none;stroke:var(--line);stroke-width:1.4}
+#edges path.loop{stroke-dasharray:4 4}
+#edges path.branch{stroke:var(--line)}
+.overlay #edges path{opacity:.28}
+.overlay #edges path.lit{opacity:1;stroke:var(--wire);stroke-width:2}
+#edges text{fill:var(--ink-3);font-family:"IBM Plex Mono",monospace;font-size:9.5px}
+.overlay #edges text{opacity:.3}
+.overlay #edges text.lit{opacity:1;fill:var(--wire)}
+
+/* ---------- inspector ---------- */
+.insp-sec{padding:13px 15px;border-bottom:1px solid var(--line-soft)}
+.insp-sec h4{margin:0 0 7px;font-family:Archivo,sans-serif;font-size:10.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11.5px}
+.kv dt{color:var(--ink-3);font-family:"IBM Plex Mono",monospace;font-size:10.5px}
+.kv dd{margin:0;font-family:"IBM Plex Mono",monospace;font-size:11px;overflow-wrap:anywhere}
+.goal{font-size:12.5px;line-height:1.5;color:var(--ink)}
+.verdict{display:inline-block;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:600;
+  font-family:"IBM Plex Mono",monospace}
+.v-ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.v-bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+.v-warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.v-esc{background:color-mix(in srgb,var(--esc) 18%,transparent);color:var(--esc)}
+
+/* step timeline */
+.steps{display:flex;flex-direction:column;gap:3px}
+.step{display:grid;grid-template-columns:26px 1fr auto;gap:7px;align-items:center;
+  font-size:11px;padding:3px 4px;border-radius:4px;background:var(--sunk);cursor:pointer;
+  border-left:3px solid var(--struct);text-align:left;border-top:0;border-right:0;border-bottom:0;width:100%}
+.step:hover{background:var(--surface-2)}
+.step.done{border-left-color:var(--ok)}
+.step.blocked{border-left-color:var(--bad)}
+.step.retryN{border-left-style:dashed}
+.step .it{font-family:"IBM Plex Mono",monospace;color:var(--ink-3);font-size:10px}
+.step .tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step .du{font-family:"IBM Plex Mono",monospace;color:var(--ink-3);font-size:10px}
+.step.exp .tx{white-space:normal}
+.loophdr{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-2);
+  margin:9px 0 4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tag{font-family:"IBM Plex Mono",monospace;font-size:9.5px;border:1px solid var(--line);
+  border-radius:3px;padding:0 4px;color:var(--ink-3)}
+.check{display:grid;grid-template-columns:auto 1fr;gap:6px;font-size:11px;padding:2px 0;align-items:start}
+.dot{width:7px;height:7px;border-radius:50%;margin-top:5px}
+.d-pass{background:var(--ok)}.d-fail{background:var(--bad)}.d-inconclusive{background:var(--warn)}
+.empty{color:var(--ink-3);font-size:11.5px;font-style:italic}
+
+/* legend / caveats */
+.note{font-size:11px;color:var(--ink-3);line-height:1.5}
+.note b{color:var(--ink-2);font-weight:600}
+details.caveat summary{cursor:pointer;font-size:11px;color:var(--ink-2);
+  font-family:"IBM Plex Mono",monospace;padding:3px 0}
+details.caveat[open] summary{margin-bottom:6px}
+.lg{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-2);margin-bottom:4px}
+.lg i{width:16px;height:0;border-top:2px solid var(--wire);display:inline-block;flex:none}
+.lg i.dash{border-top-style:dashed;border-color:var(--wire-soft)}
+.lg i.grey{border-color:var(--line)}
+.lg span.sw{width:12px;height:12px;border-radius:3px;background:var(--struct);flex:none}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="shell">
+  <!-- ================= left rail ================= -->
+  <aside class="rail">
+    <div class="mast">
+      <h1>Maro Run Atlas</h1>
+      <div class="sub" id="corpus">loading</div>
+    </div>
+    <div class="filters">
+      <input type="search" id="q" placeholder="Search goal text, id, project…" aria-label="Search runs">
+      <div>
+        <div class="flabel">Lane</div>
+        <div class="chipset" id="f-lane"></div>
+      </div>
+      <div>
+        <div class="flabel">Outcome</div>
+        <div class="chipset" id="f-cls"></div>
+      </div>
+      <div>
+        <div class="flabel">Month</div>
+        <div class="chipset" id="f-mon"></div>
+      </div>
+      <div class="cohort" id="cohort"></div>
+    </div>
+    <div class="runlist" id="runlist"></div>
+  </aside>
+
+  <!-- ================= stage ================= -->
+  <main class="stage">
+    <div class="toolbar">
+      <span class="tbl">Detail</span>
+      <div class="seg" id="detail">
+        <button data-d="0" aria-pressed="false">Phases</button>
+        <button data-d="1" aria-pressed="true">Traveled</button>
+        <button data-d="2" aria-pressed="false">Everything</button>
+      </div>
+      <span class="tbl">Heat</span>
+      <div class="seg" id="heatmode">
+        <button data-h="cohort" aria-pressed="true">Cohort</button>
+        <button data-h="all" aria-pressed="false">All runs</button>
+      </div>
+      <div class="zoomctl">
+        <button id="zout" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        <span class="z" id="zlabel">100%</span>
+        <button id="zin" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="zfit" title="Fit to width" aria-label="Fit to width">⤢</button>
+      </div>
+    </div>
+    <div class="viewport" id="viewport">
+      <div class="canvas" id="canvas">
+        <svg id="edges" aria-hidden="true"></svg>
+        <div id="bands"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= inspector ================= -->
+  <aside class="inspector" id="inspector"></aside>
+</div>
+
+<script>
+const DATA = __DATA__;
+
+/* ============================================================
+   TOPOLOGY -- the static process map.
+   Anchors are the code locations the node was read from.
+   ============================================================ */
+const PHASES = [
+ {id:"intake", tag:"R0", name:"Intake & run birth",
+  desc:"work arrives, the run-dir is created and pinned",
+  cols:4, nodes:[
+  ["intake.arrive","Work arrives",0,0,"entry","handle.py:807 handle()"],
+  ["intake.cli","CLI invocation",1,0,"entry","cli.py:659 _cmd_run"],
+  ["intake.listener","Telegram / Slack",2,0,"entry","telegram_listener.py:441 · slack_listener.py:311"],
+  ["intake.queue","Task queue drain",3,0,"entry","handle_queue.py:428 drain_task_store"],
+  ["intake.scheduler","Scheduler / heartbeat",1,1,"entry","scheduler.py:298 · heartbeat.py:1205"],
+  ["intake.navigator","Dispatch navigator",2,1,"branch","handle.py:3958 _navigator_act_dispatch"],
+  ["intake.nav_escalate","Escalate, never runs",3,1,"stop","move=escalate & conf ≥ 0.9"],
+  ["intake.guard_refuse","Recall guard refuses",0,1,"stop","handle_queue.py:295 3 fails in 60 min"],
+  ["intake.open_run","open_run()",0,2,"flow","runs.py:1166 creates the run-dir"],
+ ]},
+ {id:"route", tag:"R1", name:"Routing & pre-loop gates",
+  desc:"lane classification, clarity, persona, scope — everything before the loop",
+  cols:4, nodes:[
+  ["route.classify","Lane classify",0,0,"branch","intent.classify · handle.py:1260"],
+  ["route.now","NOW lane",1,0,"flow","handle.py:353 _run_now — one call, no loop"],
+  ["route.now_verify","NOW self-verdict",2,0,"branch","handle.py:591 _verify_now_outcome"],
+  ["route.agenda","AGENDA lane",0,1,"flow","handle.py:1791 — the full loop"],
+  ["route.clarity","Clarity gate",1,1,"branch","intent.check_goal_clarity · handle.py:1841"],
+  ["route.clarify_stop","Ask & stop",2,1,"stop","status=clarification_needed"],
+  ["route.rewrite","Goal rewrite (BLE)",3,1,"flow","intent.rewrite_imperative_goal"],
+  ["route.persona","Persona select",0,2,"flow","persona_for_goal · handle.py:2098"],
+  ["route.recall","Recall (dispatch)",1,2,"flow","recall.recall(slice=\"dispatch\")"],
+  ["route.scope_ok","Scope generated",2,2,"flow","Phase 65 · SCOPE_GENERATED"],
+  ["route.scope_fail","Scope parse failed",3,2,"branch","build/scope-raw-FAILED.txt — degraded"],
+  ["route.scope_skip","Scope skipped",3,3,"branch","SCOPE_SKIPPED"],
+ ]},
+ {id:"plan", tag:"A–C", name:"Init · Decompose · Pre-flight",
+  desc:"kill-switch, budget, admission, fence, then the plan itself",
+  cols:4, nodes:[
+  ["plan.loop_created","Loop created",0,0,"flow","loop_init.py:249 · LOOP_CREATED"],
+  ["plan.fence","Execution fence",1,0,"flow","agent_loop.py:259 set_default_subprocess_cwd"],
+  ["plan.recall","Recall (loop)",2,0,"flow","loop_planning.py:493 recall(slice=\"loop\")"],
+  ["plan.skills","Skill routing / A-B",3,0,"flow","source/skills_manifest.jsonl"],
+  ["plan.decompose","Decompose",0,1,"flow","planner.decompose · loop_planning.py:409"],
+  ["plan.cuts","Cuts drawn",1,1,"flow","constraint.py cuts-first · CUTS_DRAWN"],
+  ["plan.manifest","Plan manifest",2,1,"flow","loop_artifacts.py:63 _write_plan_manifest"],
+ ]},
+ {id:"exec", tag:"D–F", name:"Execute",
+  desc:"the while-remaining-steps loop: act, observe, decide — and every way a step can go wrong",
+  cols:5, nodes:[
+  ["exec.step","Step executes",0,0,"flow","step_exec.py:1257 execute_step"],
+  ["exec.session_reuse","Executor session reused",1,0,"flow","loop_execute.py:255"],
+  ["exec.inject","Steps injected mid-plan",2,0,"flow","index = −1 in the loop log"],
+  ["exec.boundary","Boundary expanded",3,0,"flow","loop_execute.py:590 · BOUNDARY_EXPANDED"],
+  ["exec.reanchor","Milestone re-anchor",4,0,"flow","loop_execute.py:674"],
+  ["exec.validate","Validation ladder",0,1,"flow","VALIDATION_LADDER"],
+  ["exec.ralph","Ralph verify",1,1,"branch","loop_post_step.py:826 — FAIL demotes done→blocked"],
+  ["exec.advisor","Strategic advisor",2,1,"flow","llm.advisor_call"],
+  ["exec.director","Adaptive supervision",3,1,"branch","director.director_evaluate"],
+  ["exec.navigator","Navigator decides",4,1,"branch","NAVIGATOR_DECIDED"],
+  ["exec.too_broad","Step too broad",0,2,"flow","STEP_TOO_BROAD — cap breach"],
+  ["exec.scavenge","Scavenge detected",1,2,"flow","SCAVENGE_DETECTED — fence probe"],
+  ["exec.write_fence","Write blocked",2,2,"branch","FENCE_WRITE_BLOCKED"],
+  ["exec.fabrication","Fabrication caught",3,2,"branch","loop_execute.py:1365 artifact check"],
+  ["exec.blocked","Step blocked",0,3,"branch","loop_blocked.py:67 _process_blocked_step"],
+  ["exec.retry","Retry (tier up)",1,3,"loop","METACOGNITIVE_DECISION action=retry"],
+  ["exec.redecompose","Re-decompose",2,3,"loop","action=redecompose"],
+  ["exec.split","Split step",3,3,"loop","action=split"],
+  ["exec.budget_ladder","Budget extended",4,3,"loop","BUDGET_EXTENDED — extend→pause→kill"],
+  ["exec.timeout","Timeout",0,4,"stop","stuck_reason TIMEOUT"],
+  ["exec.missing_input","Missing input",1,4,"stop","MISSING_INPUT — refuse to fabricate"],
+  ["exec.budget_break","Budget exceeded",2,4,"stop","cost/token ceiling"],
+  ["exec.nav_escalate","Navigator escalates",3,4,"stop","NAVIGATOR_ACTED — honest stop"],
+  ["exec.stuck","Declared stuck",4,4,"stop","loop_status=stuck"],
+  ["exec.never_ran","Never reached execute",0,5,"stop","no loop log — NOW lane, stranded, refused"],
+ ]},
+ {id:"fin", tag:"G", name:"Finalize",
+  desc:"result written, run diagnosed, facts landed, worktrees merged back",
+  cols:4, nodes:[
+  ["fin.result","RESULT.md",0,0,"flow","loop_finalize.py:290 — success path"],
+  ["fin.partial","PARTIAL.md",1,0,"flow","non-success path"],
+  ["fin.checkpoint","Checkpoint kept",2,0,"flow","build/checkpoint.json — retention decree"],
+  ["fin.diagnose","Diagnosis",3,0,"flow","introspect.diagnose_loop · DIAGNOSIS"],
+  ["fin.world_facts","World facts landed",0,1,"flow","world_facts.land_facts — verdict-independent"],
+  ["fin.auto_recovery","Auto-recovery re-run",1,1,"loop","agent_loop.py:623 — low-risk only, once"],
+  ["fin.stop_verdict","Stop verdict stamped",2,1,"flow","stamp_run_stop_verdict"],
+  ["fin.pause","Typed pause",3,1,"stop","pause_reason — continuation lane resumes"],
+ ]},
+ {id:"verify", tag:"R3–R4", name:"Closure verification & verdict",
+  desc:"did the goal actually get achieved? mechanical checks, then a judged verdict",
+  cols:4, nodes:[
+  ["verify.plan","Closure plan",0,0,"flow","closure_verify.py:872 — generates checks"],
+  ["verify.closure","Closure verdict",1,0,"branch","CLOSURE_VERDICT · complete × confidence"],
+  ["verify.audit","Verdict audit",2,0,"branch","closure_verify.py:1400 — auditor can cancel"],
+  ["verify.downgrade","Deterministic downgrade",3,0,"branch","behavioral / diagnosis gap"],
+  ["verify.restart","Closure restart",0,1,"loop","director.py:1945 — capped at depth 3"],
+  ["verify.provenance","Provenance guard",1,1,"branch","handle.py:2889 — named file absent"],
+  ["verify.stamp","Verdict stamped",2,1,"flow","stamp_run_verdict + persist outcome"],
+  ["verify.contested","Verdict contested",3,1,"stop","excluded from learning"],
+ ]},
+ {id:"gate", tag:"R5", name:"Quality gate",
+  desc:"a skeptic pass over the delivered answer; may re-run the whole thing one tier up",
+  cols:4, nodes:[
+  ["gate.verdict","Gate verdict",0,0,"branch","quality_gate.py:697 PASS / ESCALATE"],
+  ["gate.crossref","Second family / cross-ref",1,0,"flow","recorded, rarely acted on"],
+  ["gate.claims","Claim probe",2,0,"flow","CLAIM_PROBED — dismissed / blocked"],
+  ["gate.pass","Pass",0,1,"flow","confidence below the 0.75 bar"],
+  ["gate.escalate","Escalate",1,1,"branch","conf ≥ 0.75"],
+  ["gate.overruled","Closure overrules gate",2,1,"branch","QUALITY_GATE_OVERRULED"],
+  ["gate.escalate_rerun","Re-run one tier up",3,1,"loop","→ <project>-escalated"],
+ ]},
+ {id:"close", tag:"R6", name:"Close-out & learning",
+  desc:"curate the run card, notify, then drain the deferred learning tail",
+  cols:4, nodes:[
+  ["close.curate","Run curated",0,0,"flow","run_curation.curate_run → run_card.json"],
+  ["close.learning","Deferred learning drains",1,0,"flow","lessons · skills · knowledge nodes"],
+  ["close.no_verdict","Finished without verdict",2,0,"stop","runs.py:1256 tripwire"],
+  ["close.stranded","Stranded, GC swept",3,0,"stop","stranded_detected_at"],
+  ["close.terminal","Run closed",0,1,"flow","runs.close_run"],
+ ]},
+ {id:"term", tag:"—", name:"Outcome",
+  desc:"curated success_class (2026-07 onward) above; raw status for older runs below",
+  cols:5, nodes:[
+  ["term.success","success",0,0,"term","run_card.success_class"],
+  ["term.partial","partial",1,0,"term","run_card.success_class"],
+  ["term.done-unverified","done-unverified",2,0,"term","shipped, never judged"],
+  ["term.done-not-achieved","done-not-achieved",3,0,"term","finished but goal missed"],
+  ["term.failed","failed",4,0,"term","run_card.success_class"],
+  ["term.done","done (raw)",0,1,"term","pre-run-card runs"],
+  ["term.stuck","stuck (raw)",1,1,"term","pre-run-card runs"],
+  ["term.error","error (raw)",2,1,"term","pre-run-card runs"],
+  ["term.stranded","stranded",3,1,"term","started_at == ended_at"],
+  ["term.incomplete","incomplete",4,1,"term","demoted by provenance"],
+  ["term.clarification_needed","clarification_needed",0,2,"term","stopped at the clarity gate"],
+  ["term.interrupted","interrupted",1,2,"term","kill switch / timeout"],
+  ["term.unknown","unknown",2,2,"term","unclassifiable"],
+ ]},
+];
+
+const EDGES = [
+ ["intake.arrive","intake.cli"],["intake.arrive","intake.listener"],
+ ["intake.arrive","intake.queue"],["intake.arrive","intake.scheduler"],
+ ["intake.queue","intake.navigator"],["intake.navigator","intake.nav_escalate","stop"],
+ ["intake.arrive","intake.guard_refuse","stop"],
+ ["intake.cli","intake.open_run"],["intake.navigator","intake.open_run"],
+ ["intake.open_run","route.classify"],
+ ["route.classify","route.now","branch"],["route.classify","route.agenda","branch"],
+ ["route.now","route.now_verify"],["route.now_verify","route.agenda","loop","not achieved"],
+ ["route.agenda","route.clarity"],["route.clarity","route.clarify_stop","stop"],
+ ["route.clarity","route.rewrite"],["route.rewrite","route.persona"],
+ ["route.persona","route.recall"],["route.recall","route.scope_ok"],
+ ["route.recall","route.scope_fail","branch"],["route.recall","route.scope_skip","branch"],
+ ["route.scope_ok","plan.loop_created"],["route.scope_fail","plan.loop_created"],
+ ["plan.loop_created","plan.fence"],["plan.fence","plan.recall"],
+ ["plan.recall","plan.skills"],["plan.skills","plan.decompose"],
+ ["plan.decompose","plan.cuts"],["plan.cuts","plan.manifest"],
+ ["plan.manifest","exec.step"],
+ ["exec.step","exec.session_reuse"],["exec.step","exec.inject"],
+ ["exec.step","exec.boundary"],["exec.step","exec.reanchor"],
+ ["exec.step","exec.validate"],["exec.step","exec.ralph"],
+ ["exec.step","exec.advisor"],["exec.step","exec.director"],
+ ["exec.step","exec.too_broad"],["exec.step","exec.scavenge"],
+ ["exec.step","exec.write_fence"],["exec.step","exec.fabrication"],
+ ["exec.ralph","exec.blocked","branch","FAIL"],
+ ["exec.step","exec.blocked","branch"],
+ ["exec.blocked","exec.retry","branch"],["exec.blocked","exec.redecompose","branch"],
+ ["exec.blocked","exec.split","branch"],["exec.blocked","exec.budget_ladder","branch"],
+ ["exec.blocked","exec.navigator","branch"],
+ ["exec.retry","exec.step","loop","same step, tier up"],
+ ["exec.redecompose","exec.step","loop","new sub-steps"],
+ ["exec.split","exec.step","loop","fragments"],
+ ["exec.blocked","exec.timeout","stop"],["exec.blocked","exec.missing_input","stop"],
+ ["exec.budget_ladder","exec.budget_break","stop"],
+ ["exec.navigator","exec.nav_escalate","stop"],["exec.blocked","exec.stuck","stop"],
+ ["exec.step","fin.result"],["exec.stuck","fin.partial"],
+ ["exec.nav_escalate","fin.partial"],["exec.budget_break","fin.partial"],
+ ["exec.never_ran","close.terminal","stop"],
+ ["fin.result","fin.diagnose"],["fin.partial","fin.diagnose"],
+ ["fin.result","fin.checkpoint"],["fin.diagnose","fin.world_facts"],
+ ["fin.diagnose","fin.auto_recovery","branch"],
+ ["fin.auto_recovery","exec.step","loop","one low-risk re-run"],
+ ["fin.diagnose","fin.stop_verdict"],["fin.stop_verdict","fin.pause","stop"],
+ ["fin.world_facts","verify.plan"],["fin.stop_verdict","verify.plan"],
+ ["verify.plan","verify.closure"],["verify.closure","verify.audit","branch"],
+ ["verify.closure","verify.downgrade","branch"],
+ ["verify.closure","verify.restart","loop"],
+ ["verify.restart","plan.loop_created","loop","re-enter the loop"],
+ ["verify.closure","verify.stamp"],["verify.provenance","verify.stamp","branch"],
+ ["verify.stamp","verify.contested","stop"],
+ ["verify.stamp","gate.verdict"],
+ ["gate.verdict","gate.crossref"],["gate.verdict","gate.claims"],
+ ["gate.verdict","gate.pass","branch"],["gate.verdict","gate.escalate","branch"],
+ ["gate.escalate","gate.overruled","branch"],
+ ["gate.escalate","gate.escalate_rerun","branch"],
+ ["gate.escalate_rerun","plan.loop_created","loop","one tier up"],
+ ["gate.pass","close.curate"],["gate.overruled","close.curate"],
+ ["close.curate","close.learning"],["close.learning","close.terminal"],
+ ["close.curate","close.no_verdict","stop"],["close.curate","close.stranded","stop"],
+ ["close.terminal","term.success"],["close.terminal","term.partial"],
+ ["close.terminal","term.done-unverified"],["close.terminal","term.done-not-achieved"],
+ ["close.terminal","term.failed"],["close.terminal","term.done"],
+ ["close.terminal","term.stuck"],["close.terminal","term.error"],
+ ["close.terminal","term.stranded"],["close.terminal","term.incomplete"],
+ ["close.terminal","term.clarification_needed"],["close.terminal","term.interrupted"],
+ ["close.terminal","term.unknown"],
+];
+
+const NODEMETA = {};
+PHASES.forEach(p => p.nodes.forEach(n =>
+  NODEMETA[n[0]] = {phase:p.id, label:n[1], col:n[2], row:n[3], kind:n[4], anchor:n[5]}));
+
+/* ============================================================ state */
+let cohort = DATA.runs.slice();
+let selected = null;
+let detail = 1;            // 0 phases only · 1 traveled · 2 everything
+let heatMode = "cohort";
+let zoom = 1, panX = 0, panY = 0;
+const openBands = new Set(PHASES.map(p => p.id));
+
+const $ = s => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if(c) e.className = c;
+  if(x != null) e.textContent = x; return e; };
+const fmtUSD = v => v == null ? "—" : "$" + (+v).toFixed(v < 1 ? 3 : 2);
+const fmtMs = v => v == null ? "—" : v < 1000 ? v + "ms"
+  : v < 60000 ? (v/1000).toFixed(1) + "s"
+  : Math.floor(v/60000) + "m" + String(Math.round(v%60000/1000)).padStart(2,"0") + "s";
+const day = r => (r.started || "").slice(0, 10);
+const mon = r => (r.started || "").slice(0, 7);
+
+/* ============================================================ build the map */
+function buildBands(){
+  const host = $("#bands"); host.innerHTML = "";
+  PHASES.forEach(p => {
+    const band = el("section", "band"); band.dataset.phase = p.id;
+    const h = el("header");
+    h.append(el("span","ph",p.tag), el("h3",null,p.name), el("span","desc",p.desc),
+             el("span","tally"), el("span","caret","›"));
+    h.addEventListener("click", () => {
+      openBands.has(p.id) ? openBands.delete(p.id) : openBands.add(p.id);
+      band.classList.toggle("open", openBands.has(p.id));
+      requestAnimationFrame(drawEdges);
+    });
+    const nodes = el("div","nodes");
+    nodes.style.gridTemplateColumns = `repeat(${p.cols},minmax(0,1fr))`;
+    p.nodes.forEach(n => {
+      const [id,label,col,row,kind,anchor] = n;
+      const d = el("div","node"); d.dataset.node = id; d.dataset.kind = kind;
+      d.style.gridColumn = col+1; d.style.gridRow = row+1;
+      d.title = id + "\n" + anchor;
+      d.append(el("div","nl",label));
+      const val = el("div","val"); d.append(val);
+      const nn = el("div","nn");
+      nn.append(el("span","pct"), el("span","cnt"));
+      d.append(nn);
+      const heat = el("div","heat"); heat.append(el("i")); d.append(heat);
+      const badge = el("span","badge"); d.append(badge);
+      nodes.append(d);
+    });
+    band.append(h, nodes);
+    band.classList.toggle("open", openBands.has(p.id));
+    host.append(band);
+  });
+}
+
+/* ============================================================ heat + overlay */
+function nodeCounts(runs){
+  const c = {};
+  runs.forEach(r => { for (const k in r.visits) c[k] = (c[k]||0)+1; });
+  return c;
+}
+let allCounts = null;
+
+function paint(){
+  const counts = heatMode === "all"
+    ? (allCounts ||= nodeCounts(DATA.runs))
+    : nodeCounts(cohort);
+  const denom = heatMode === "all" ? DATA.runs.length : Math.max(cohort.length,1);
+  const vis = selected ? selected.visits : null;
+  $("#canvas").parentElement.classList.toggle("overlay", !!selected);
+
+  document.querySelectorAll(".node").forEach(d => {
+    const id = d.dataset.node, n = counts[id] || 0, pct = denom ? n/denom : 0;
+    d.querySelector(".heat i").style.width = (pct*100).toFixed(1) + "%";
+    d.querySelector(".pct").textContent = n ? Math.round(pct*100) + "%" : "";
+    d.querySelector(".cnt").textContent = n ? n : "0";
+    const v = vis && vis[id];
+    d.classList.toggle("on", !!v);
+    d.classList.toggle("windowed", !!(v && v.e === "w"));
+    d.querySelector(".badge").textContent = v && v.n > 1 ? "×" + v.n : "";
+    d.querySelector(".val").textContent = v ? attrLine(id, v.a || {}) : "";
+    // detail level
+    let show = true;
+    if (detail === 1 && selected) show = !!v;
+    else if (detail === 1 && !selected) show = n > 0;
+    else if (detail === 0) show = false;
+    d.style.display = show ? "" : "none";
+  });
+
+  PHASES.forEach(p => {
+    const band = document.querySelector(`.band[data-phase="${p.id}"]`);
+    const ids = p.nodes.map(n => n[0]);
+    const touched = ids.filter(i => counts[i]).length;
+    const onHere = vis ? ids.filter(i => vis[i]).length : 0;
+    band.querySelector(".tally").textContent = selected
+      ? `${onHere}/${ids.length} traveled`
+      : `${touched}/${ids.length} nodes used`;
+
+    // collapsed bands still have to earn their line: when a run is selected the
+    // subtitle becomes what that run actually did here.
+    const d = band.querySelector(".desc");
+    if (selected){
+      const parts = [];
+      p.nodes.forEach(n => {
+        const v = vis[n[0]]; if (!v) return;
+        let s = n[1];
+        if (v.n > 1) s += " ×" + v.n;
+        const a = attrLine(n[0], v.a || {});
+        if (a) s += " (" + a + ")";
+        parts.push(s);
+      });
+      d.textContent = parts.length ? parts.join("  ·  ") : "not traveled";
+      d.style.color = parts.length ? "var(--wire)" : "var(--ink-3)";
+      d.title = parts.join("\n");
+    } else {
+      d.textContent = p.desc; d.style.color = ""; d.title = "";
+    }
+    band.style.opacity = (selected && !onHere) ? .55 : 1;
+    const hasVisible = ids.some(i => {
+      const d = document.querySelector(`.node[data-node="${i}"]`);
+      return d && d.style.display !== "none";
+    });
+    band.classList.toggle("open", openBands.has(p.id) && hasVisible && detail !== 0);
+  });
+  requestAnimationFrame(drawEdges);
+}
+
+function attrLine(id, a){
+  const bits = [];
+  const push = (k,v) => { if (v !== undefined && v !== null && v !== "") bits.push(k+" "+v); };
+  if (id === "verify.closure"){
+    push("complete", a.complete); push("conf", a.conf);
+    if (a.run != null) bits.push(`checks ${a.passed ?? "?"}/${a.run}`);
+    push("inconclusive", a.inc); push("gaps", a.gaps); push("skip", a.skip);
+  } else if (id === "gate.verdict"){ push("", a.decision); push("conf", a.conf); }
+  else if (id === "verify.stamp"){ push("via", a.source); push("achieved", a.achieved); }
+  else if (id === "plan.loop_created"){ push("", a.reason); push("depth", a.depth); push("max", a.max_steps); }
+  else if (id === "route.persona"){ push("", a.persona); push("conf", a.conf); }
+  else if (id === "fin.diagnose"){ push("", a.cls); push("", a.sev); }
+  else if (id === "fin.stop_verdict"){ push("", a.verdict); }
+  else if (id === "fin.pause"){ push("", a.reason); }
+  else if (id === "exec.step"){ push("", (a.steps||"") && a.steps+" steps"); }
+  else if (id === "exec.boundary"){ push("", a.sub != null ? a.sub+" sub-steps" : ""); }
+  else if (id === "exec.too_broad"){ push("step", a.idx); push("", a.secs != null ? a.secs+"s" : ""); }
+  else if (id === "exec.navigator" || id === "intake.navigator"){ push("", a.move); push("conf", a.conf); }
+  else if (id === "close.terminal"){ push("", a.cls); }
+  else if (id === "intake.arrive"){ push("", a.label); }
+  else if (id === "verify.downgrade"){ push("", a.reason); }
+  return bits.join(" · ").slice(0, 90);
+}
+
+/* ============================================================ edges */
+function drawEdges(){
+  const svg = $("#edges"), canvas = $("#canvas");
+  const cr = canvas.getBoundingClientRect();
+  svg.setAttribute("width", canvas.offsetWidth);
+  svg.setAttribute("height", canvas.offsetHeight);
+  svg.innerHTML = `<defs>
+    <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6"
+            orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z" fill="context-stroke"/></marker>
+  </defs>`;
+  const vis = selected ? selected.visits : null;
+  const box = id => {
+    const d = document.querySelector(`.node[data-node="${id}"]`);
+    if (!d || d.style.display === "none" || !d.offsetParent) {
+      // fall back to the collapsed band so cross-phase flow still reads
+      const m = NODEMETA[id]; if (!m) return null;
+      const b = document.querySelector(`.band[data-phase="${m.phase}"]`);
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return {x:(r.left-cr.left)/zoom, y:(r.top-cr.top)/zoom,
+              w:r.width/zoom, h:r.height/zoom, band:true};
+    }
+    const r = d.getBoundingClientRect();
+    return {x:(r.left-cr.left)/zoom, y:(r.top-cr.top)/zoom, w:r.width/zoom, h:r.height/zoom};
+  };
+  const frag = document.createDocumentFragment();
+  const seen = new Set();
+  EDGES.forEach(([a,b,kind,label]) => {
+    const A = box(a), B = box(b);
+    if (!A || !B) return;
+    if (A.band && B.band && NODEMETA[a].phase === NODEMETA[b].phase) return;
+    const key = [Math.round(A.x),Math.round(A.y),Math.round(B.x),Math.round(B.y),kind].join();
+    if (seen.has(key)) return; seen.add(key);
+    const lit = vis && vis[a] && vis[b];
+    const ax = A.x + A.w/2, ay = A.y + A.h, bx = B.x + B.w/2, by = B.y;
+    let d;
+    if (by > ay - 4){                                   // forward / downward
+      const m = (ay + by) / 2;
+      d = `M${ax} ${ay} C${ax} ${m} ${bx} ${m} ${bx} ${by}`;
+    } else {                                            // back edge -- right gutter
+      const gx = canvas.offsetWidth - 8;
+      const sy = A.y + A.h/2, ey = B.y + B.h/2;
+      d = `M${A.x+A.w} ${sy} C${gx} ${sy} ${gx} ${ey} ${B.x+B.w} ${ey}`;
+    }
+    const p = document.createElementNS("http://www.w3.org/2000/svg","path");
+    p.setAttribute("d", d);
+    p.setAttribute("class", (kind||"flow") + (lit ? " lit" : ""));
+    p.setAttribute("marker-end","url(#ah)");
+    frag.append(p);
+    if (label && (detail === 2 || lit)){
+      const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+      t.setAttribute("x", (ax+bx)/2 + 6);
+      t.setAttribute("y", (ay+by)/2);
+      t.setAttribute("class", lit ? "lit" : "");
+      t.textContent = label; frag.append(t);
+    }
+  });
+  svg.append(frag);
+}
+
+/* ============================================================ run list */
+function passes(r, q, lanes, clss, mons){
+  if (lanes.size && !lanes.has(r.lane)) return false;
+  const c = r.cls || r.status || "unknown";
+  if (clss.size && !clss.has(c)) return false;
+  if (mons.size && !mons.has(mon(r))) return false;
+  if (q){
+    const hay = (r.prompt + " " + r.id + " " + (r.project||"") + " " + r.nick).toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+const active = {lane:new Set(), cls:new Set(), mon:new Set()};
+
+function refilter(){
+  const q = $("#q").value.trim().toLowerCase();
+  cohort = DATA.runs.filter(r => passes(r, q, active.lane, active.cls, active.mon));
+  const withLoop = cohort.filter(r => r.loops && r.loops.length).length;
+  $("#cohort").innerHTML =
+    `<b>${cohort.length}</b> of ${DATA.runs.length} runs · <b>${withLoop}</b> reached the loop`;
+  renderList(); paint();
+}
+
+function renderList(){
+  const host = $("#runlist"); host.innerHTML = "";
+  const sorted = cohort.slice().sort((a,b) => (b.started||"").localeCompare(a.started||""));
+  sorted.slice(0, 400).forEach(r => {
+    const c = r.cls || r.status || "unknown";
+    const b = el("button","run cls-" + c);
+    b.setAttribute("aria-current", selected && selected.nick === r.nick);
+    b.append(el("span","bar"));
+    const t = el("div","t");
+    t.append(el("div","nm", r.prompt.split("\n")[0].slice(0,90) || r.nick));
+    t.append(el("div","mt", `${day(r)} · ${r.lane} · ${c}${r.nsteps ? " · " + r.nsteps + " steps" : ""}`));
+    b.append(t);
+    b.append(el("div","rt", r.usd != null ? fmtUSD(r.usd) : ""));
+    b.addEventListener("click", () => select(r));
+    host.append(b);
+  });
+  if (sorted.length > 400){
+    const n = el("div","note"); n.style.padding = "8px";
+    n.textContent = `showing the 400 most recent of ${sorted.length} — narrow the filters to see the rest`;
+    host.append(n);
+  }
+  if (!sorted.length) host.append(Object.assign(el("div","empty","no runs match"), {style:"padding:10px"}));
+}
+
+function select(r){
+  selected = (selected && selected.nick === r.nick) ? null : r;
+  history.replaceState(null, "", selected ? "#run=" + selected.nick : "#");
+  renderList(); paint(); renderInspector();
+}
+
+/* ============================================================ inspector */
+function renderInspector(){
+  const host = $("#inspector"); host.innerHTML = "";
+  if (!selected){
+    const s = el("div","insp-sec");
+    s.append(el("h4",null,"Reading the atlas"));
+    const p = el("div","note");
+    p.innerHTML = `The map is the whole process every maro run can travel — nine phases,
+      from a goal arriving to a stamped outcome. Bars under each node show how much of the
+      current cohort passed through it, so the shape of the traffic <em>is</em> the answer to
+      "which possibilities does this process actually use."
+      <br><br>Pick a run on the left to light its route in copper.`;
+    s.append(p);
+    host.append(s);
+
+    const l = el("div","insp-sec");
+    l.append(el("h4",null,"Legend"));
+    const mk = (cls, txt) => { const d = el("div","lg");
+      d.append(Object.assign(el("i"),{className:cls}), el("span",null,txt)); return d; };
+    l.append(mk("", "edge this run traveled"));
+    l.append(mk("dash", "node lit by an unattributed event — see the caveat below"));
+    l.append(mk("grey", "edge in the topology, not traveled"));
+    const sw = el("div","lg");
+    sw.append(Object.assign(el("span","sw")), el("span",null,"bar = share of the cohort passing here"));
+    l.append(sw);
+    host.append(l);
+
+    const c = el("div","insp-sec");
+    const det = el("details","caveat");
+    det.append(Object.assign(el("summary"),{textContent:"What this map can and cannot tell you"}));
+    const body = el("div","note");
+    body.innerHTML = `
+      <p><b>Phases are inferred, not recorded.</b> <code>LoopPhase</code> lives in memory only —
+      nothing writes it to disk. Every node here is reconstructed from artifacts that <em>do</em>
+      persist: the loop log, the captain's-log slice, closure verdicts, call records, the run card.</p>
+      <p><b>Schema drift is severe.</b> Only 8 of ~40 <code>metadata.json</code> keys appear in all
+      788 runs. Run cards start in July 2026; closure verdicts reach 87% only in August.
+      April–June runs give you steps and events but no verdict and no cost — their maps are
+      genuinely sparser, not less traveled.</p>
+      <p><b>Dashed nodes are windowed, not attributed.</b> The captain's-log slice is a byte range
+      of the <em>global</em> log from the run's start offset to EOF, so it carries concurrent runs'
+      events and a post-<code>ended_at</code> learning tail. Events carrying this run's
+      <code>loop_id</code> are solid; events with no <code>loop_id</code> that merely fall inside the
+      run's time window are dashed. Roughly 85% of log lines never carry a loop_id, so the dashed
+      state is common and it is a real uncertainty.</p>
+      <p><b>Two cost numbers disagree.</b> The run card sums <code>step-costs.jsonl</code> by
+      loop_id; the loop log carries the backend-reported figure. Of comparable runs only ~8% agree
+      within 10%. Both are shown; neither is silently preferred.</p>
+      <p><b>Edges light when both endpoints were visited.</b> That is an inference from node
+      presence, not a recorded transition — ordering within a phase is not persisted.</p>`;
+    det.append(body); c.append(det); host.append(c);
+    return;
+  }
+
+  const r = selected;
+  const head = el("div","insp-sec");
+  head.append(el("h4",null,"Goal"));
+  head.append(el("div","goal", r.prompt || "(no prompt recorded)"));
+  const kv = el("dl","kv");
+  const add = (k,v) => { if (v == null || v === "") return;
+    kv.append(el("dt",null,k), el("dd",null,String(v))); };
+  add("run", r.nick); add("started", (r.started||"").replace("T"," ").slice(0,19));
+  add("lane", r.lane); add("project", r.project); add("persona", r.persona);
+  add("model", r.model); add("git", r.sha);
+  head.append(el("div", null, " "), kv);
+  host.append(head);
+
+  const out = el("div","insp-sec");
+  out.append(el("h4",null,"Outcome"));
+  const cls = r.cls || r.status || "unknown";
+  const vcls = /success|^done$/.test(cls) ? "v-ok"
+    : /fail|stuck|error|not-achieved/.test(cls) ? "v-bad"
+    : /partial|unverified|incomplete/.test(cls) ? "v-warn" : "v-esc";
+  const vd = el("div"); vd.append(Object.assign(el("span","verdict " + vcls), {textContent:cls}));
+  if (r.achieved != null){
+    vd.append(document.createTextNode(" "));
+    vd.append(Object.assign(el("span","verdict " + (r.achieved ? "v-ok" : "v-bad")),
+      {textContent: "goal_achieved=" + r.achieved}));
+  }
+  out.append(vd);
+  const kv2 = el("dl","kv");
+  const add2 = (k,v) => { if (v == null || v === "") return;
+    kv2.append(el("dt",null,k), el("dd",null,String(v))); };
+  add2("verdict via", r.vsource || "never stamped");
+  add2("stop", r.stop); add2("pause", r.pause);
+  add2("steps", r.nsteps ? `${r.nsteps} (${r.nblocked} blocked)` : null);
+  add2("calls", r.ncalls || null);
+  add2("cost (card)", r.usd != null ? fmtUSD(r.usd) : null);
+  add2("cost (log)", r.usd_log != null ? fmtUSD(r.usd_log) : null);
+  out.append(kv2);
+  if (r.summary){ const s = el("div","note"); s.style.marginTop = "7px";
+    s.textContent = r.summary; out.append(s); }
+  if (r.gaps && r.gaps.length){
+    const g = el("div","note"); g.style.marginTop = "6px";
+    g.innerHTML = "<b>gaps:</b> " + r.gaps.map(x => String(x).slice(0,120)).join(" · ");
+    out.append(g);
+  }
+  host.append(out);
+
+  if (r.checks && r.checks.length){
+    const c = el("div","insp-sec");
+    c.append(el("h4",null,"Closure checks"));
+    r.checks.forEach(ck => {
+      const row = el("div","check");
+      row.append(Object.assign(el("span","dot d-" + (ck.o||"inconclusive"))));
+      row.append(el("span",null, ck.d + (ck.x != null ? `  (exit ${ck.x})` : "")));
+      c.append(row);
+    });
+    host.append(c);
+  }
+
+  const st = el("div","insp-sec");
+  st.append(el("h4",null,"Step timeline"));
+  if (!r.loops || !r.loops.length){
+    st.append(el("div","empty","this run never reached the execute loop"));
+  } else {
+    r.loops.forEach(lp => {
+      const h = el("div","loophdr");
+      h.append(el("span",null, lp.id));
+      if (lp.reason) h.append(el("span","tag", lp.reason));
+      h.append(el("span","tag", lp.status));
+      h.append(el("span","tag", fmtMs(lp.ms)));
+      if (lp.approx) h.append(Object.assign(el("span","tag","approx timing"),
+        {title:"at least one step has no ended_ts — durations are a cumulative-sum estimate that absorbs replans and verification into the preceding step"}));
+      st.append(h);
+      const wrap = el("div","steps");
+      lp.steps.forEach(s => {
+        const b = el("button","step " + (s.st||"") + (s.rep > 1 ? " retryN" : ""));
+        b.append(el("span","it", "#" + s.it));
+        b.append(el("span","tx", (s.ix === -1 ? "↳ " : "") + (s.t || "(no text)")
+                   + (s.rep > 1 ? `   [attempt ${s.rep}]` : "")));
+        b.append(el("span","du", fmtMs(s.ms)));
+        b.addEventListener("click", () => b.classList.toggle("exp"));
+        b.title = `iteration ${s.it} · ledger index ${s.ix}`
+          + (s.ix === -1 ? " (injected mid-plan)" : "")
+          + `\nstatus ${s.st} · ${fmtMs(s.ms)}`
+          + (s.usd != null ? ` · ${fmtUSD(s.usd)}` : "")
+          + (s.ti ? ` · ${s.ti.toLocaleString()} tok in` : "");
+        wrap.append(b);
+      });
+      st.append(wrap);
+      if (lp.stuck){
+        const sr = el("div","note"); sr.style.marginTop = "6px";
+        sr.innerHTML = "<b>stuck:</b> " + lp.stuck;
+        st.append(sr);
+      }
+    });
+  }
+  host.append(st);
+
+  const back = el("div","insp-sec");
+  const b = el("button","chip","← back to the cohort view");
+  b.addEventListener("click", () => select(r));
+  back.append(b); host.append(back);
+}
+
+/* ============================================================ chrome */
+function buildFilters(){
+  const mk = (host, vals, key) => {
+    vals.forEach(v => {
+      const c = el("button","chip", v.k + " " + v.n);
+      c.setAttribute("aria-pressed","false");
+      c.addEventListener("click", () => {
+        const on = c.getAttribute("aria-pressed") === "true";
+        c.setAttribute("aria-pressed", String(!on));
+        on ? active[key].delete(v.k) : active[key].add(v.k);
+        refilter();
+      });
+      host.append(c);
+    });
+  };
+  const tally = f => {
+    const m = {};
+    DATA.runs.forEach(r => { const k = f(r); if(k) m[k] = (m[k]||0)+1; });
+    return Object.entries(m).sort((a,b) => b[1]-a[1]).map(([k,n]) => ({k,n}));
+  };
+  mk($("#f-lane"), tally(r => r.lane), "lane");
+  mk($("#f-cls"), tally(r => r.cls || r.status || "unknown"), "cls");
+  mk($("#f-mon"), tally(mon).sort((a,b) => b.k.localeCompare(a.k)), "mon");
+  $("#q").addEventListener("input", refilter);
+}
+
+function applyZoom(){
+  $("#canvas").style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+  $("#zlabel").textContent = Math.round(zoom*100) + "%";
+}
+function setZoom(z, cx, cy){
+  const vp = $("#viewport").getBoundingClientRect();
+  cx = cx ?? vp.width/2; cy = cy ?? vp.height/2;
+  const k = z / zoom;
+  panX = cx - (cx - panX) * k; panY = cy - (cy - panY) * k;
+  zoom = z; applyZoom();
+}
+function initChrome(){
+  $("#zin").onclick = () => setZoom(Math.min(2.2, zoom*1.2));
+  $("#zout").onclick = () => setZoom(Math.max(0.28, zoom/1.2));
+  $("#zfit").onclick = () => {
+    const vp = $("#viewport").getBoundingClientRect();
+    zoom = Math.min(1, (vp.width - 20) / $("#canvas").offsetWidth);
+    panX = 0; panY = 0; applyZoom();
+  };
+  const vp = $("#viewport");
+  vp.addEventListener("wheel", e => {
+    if (!e.ctrlKey && !e.metaKey){ panY -= e.deltaY; panX -= e.deltaX; applyZoom(); e.preventDefault(); return; }
+    e.preventDefault();
+    const r = vp.getBoundingClientRect();
+    setZoom(Math.max(0.28, Math.min(2.2, zoom * (e.deltaY < 0 ? 1.1 : 1/1.1))),
+            e.clientX - r.left, e.clientY - r.top);
+  }, {passive:false});
+  let drag = null;
+  vp.addEventListener("pointerdown", e => {
+    if (e.target.closest(".band > header") || e.target.closest("button")) return;
+    drag = {x:e.clientX, y:e.clientY, px:panX, py:panY};
+    vp.classList.add("drag"); vp.setPointerCapture(e.pointerId);
+  });
+  vp.addEventListener("pointermove", e => {
+    if (!drag) return;
+    panX = drag.px + (e.clientX - drag.x); panY = drag.py + (e.clientY - drag.y); applyZoom();
+  });
+  vp.addEventListener("pointerup", () => { drag = null; vp.classList.remove("drag"); });
+
+  $("#detail").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    detail = +b.dataset.d;
+    [...$("#detail").children].forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    if (detail === 2) PHASES.forEach(p => openBands.add(p.id));
+    paint();
+  });
+  $("#heatmode").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    heatMode = b.dataset.h;
+    [...$("#heatmode").children].forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    paint();
+  });
+  window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
+}
+
+/* ============================================================ go */
+const months = [...new Set(DATA.runs.map(mon).filter(Boolean))].sort();
+$("#corpus").textContent =
+  `${DATA.runs.length} runs · ${months[0]} – ${months[months.length-1]}`;
+buildBands(); buildFilters(); initChrome(); refilter();
+
+// deep link: #run=<rundir name> opens straight to that trace
+const want = decodeURIComponent((location.hash.match(/run=(.+)$/) || [])[1] || "");
+if (want){
+  const r = DATA.runs.find(x => x.nick === want || x.id === want);
+  if (r){ selected = r; renderList(); paint(); }
+}
+renderInspector();
+$("#zfit").click();
+setTimeout(() => { $("#zfit").click(); drawEdges(); }, 120);
+// re-fit once webfonts land, since they change chip heights
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => {
+  requestAnimationFrame(drawEdges);
+});
+</script>

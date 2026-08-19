@@ -35,6 +35,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What does an escalation payload carry? (single-chasm decision line, family-ROI recurrence line) | `history/2026-07-27-escalation-payload.md` (§9.6 simple-first; three emit sites; telegram leads with the ask) |
 | What did the §9.6 adversarial review find? (diagnose_loop side effect, unreadable-ledger false "first", useless count cap) | `history/2026-07-27-escalation-payload-adversarial-review.md` (3 findings, 3/3 verified, 0 hallucinated; fourteenth clean round) |
 | What open threads exist, in what state? (premise-drift finds, ACTIVE/PARKED split, marker-convention rules) | `history/2026-07-28-thread-census.md` (star use #3; 56 threads / 7 states; 7 premise-drifts, 1 closed on the spot; 8 doc currency fixes; 10/10 sweep spot-checks held) |
+| Where did a given run actually go, and which paths does the process really use? | `RUN_ATLAS.md` (living; process map + run overlay, `scripts/run_atlas/` — note `LoopPhase` is never persisted, every node is inferred) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | What do those goals add up to, and what's the next bridge? (C0–C5 checkpoints, per-chasm ladders, tech-tree nodes) | `CAPABILITY_LADDER.md` (progression map; CAPABILITIES.md stays the goal well) |
