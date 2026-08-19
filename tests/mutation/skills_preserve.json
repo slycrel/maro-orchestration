@@ -61,5 +61,33 @@
     "anchor": "    rows = _read_store(path, \"load_skills\")",
     "replacement": "    rows = [json.loads(l) for l in\n            path.read_text(encoding=\"utf-8\").splitlines() if l.strip()]",
     "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "save-cycle destruction :: _save_skills rewrites from the short list and deletes the torn row",
+    "file": "src/skills.py",
+    "anchor": "                    except Exception:\n                        stranded.append(stripped)",
+    "replacement": "                    except Exception:\n                        pass",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "save-cycle carry :: the stranded rows never reach the rewrite",
+    "file": "src/skills.py",
+    "anchor": "                \"\\n\".join([json.dumps(_skill_to_dict(s)) for s in skills]\n                          + stranded) + \"\\n\",",
+    "replacement": "                \"\\n\".join([json.dumps(_skill_to_dict(s)) for s in skills]\n                          ) + \"\\n\",",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "reader direction :: a pure read inherits the writer's raise instead of degrading",
+    "file": "src/skills.py",
+    "anchor": "    except OSError as exc:\n        # Reads degrade, writes abort.",
+    "replacement": "    except _NeverRaised as exc:\n        # Reads degrade, writes abort.",
+    "tests": "tests/test_skills.py"
+  },
+  {
+    "name": "writer direction :: the unreadable store is rebuilt from nothing again (the wipe)",
+    "file": "src/skills.py",
+    "anchor": "    except OSError:\n        # Unreadable store: refuse to rebuild from nothing.",
+    "replacement": "    except OSError:\n        return records, stranded\n    except _Unused:\n        # Unreadable store: refuse to rebuild from nothing.",
+    "tests": "tests/test_skills.py"
   }
 ]
