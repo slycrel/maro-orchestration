@@ -37,8 +37,8 @@
   {
     "name": "save family-B :: one torn byte write-locks the skill library again",
     "file": "src/skills.py",
-    "anchor": "            for line in _store_text(path).splitlines():",
-    "replacement": "            for line in path.read_text(encoding=\"utf-8\").splitlines():",
+    "anchor": "        out: List[str] = []\n        if path.exists():\n            for line in _store_text(path).splitlines():",
+    "replacement": "        out: List[str] = []\n        if path.exists():\n            for line in path.read_text(encoding=\"utf-8\").splitlines():",
     "tests": "tests/test_skills.py"
   },
   {
