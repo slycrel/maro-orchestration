@@ -503,7 +503,53 @@ def _prior_custody(ws: Path) -> list:
 # Export
 # ---------------------------------------------------------------------------
 
-def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
+def _tokenize_member(src: Path, rel: str, tok_map, state: dict):
+    """Substituted temp copy of `src`, or None to ship it unchanged.
+
+    Owned vs observed is honoured BY CONSTRUCTION rather than by a field list.
+    Only paths under our OWN roots are substituted, and an observed path --
+    a scavenge hit, a write-fence violation -- is flagged precisely because it
+    lies OUTSIDE the fence, so it carries no root prefix and is left verbatim.
+    The evidence survives; only our own references become portable. A
+    violation that IS under a root (a write into another run's dir) stays
+    fully identified, just root-relative, and expands back exactly.
+
+    Reuses path_rewrite's screens so binaries are decided by one policy: the
+    skip-suffix list plus a whole-file NUL sniff, hardened after a
+    NUL-free-header binary let a path get spliced into its tail.
+    """
+    import path_rewrite
+    import path_tokens as _pt
+    if path_rewrite.skip_reason(rel, src):
+        return None
+    try:
+        if src.stat().st_size > path_rewrite._DEFAULT_MAX_FILE_BYTES:
+            return None
+        data = src.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None
+
+    # Fail CLOSED: a token already in the content means substitution would not
+    # be invertible, and a non-invertible archive is worse than none.
+    _pt.assert_no_collision([data], tok_map)
+
+    new, count = tok_map.substitute(data)
+    if not count:
+        return None
+    state["n"] += count
+    for root, token in tok_map.pairs:
+        c = data.count(root.encode())
+        if c:
+            state["counts"][token] = state["counts"].get(token, 0) + c
+    out = Path(state["tmpd"]) / f"tok-{len(state['files']):06d}.bin"
+    out.write_bytes(new)
+    return out
+
+
+def export_workspace(output_path: Path = None, verbose: bool = False,
+                     tokenize: bool = True) -> Path:
     """Export workspace + user-tier metadata to a tar.gz archive."""
     from config import _maro_dir, _user_config_path, workspace_root
     from orch_items import repo_root
@@ -525,6 +571,25 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     db_files: list[tuple[str, Path]] = []
     sidecars: list[tuple[str, Path]] = []
     external_symlinks: list[dict] = []
+    # Root-placeholder substitution (docs/PATH_PORTABILITY_DESIGN.md). Members
+    # holding an absolute root are deferred here and re-added from a
+    # substituted temp copy -- the SAME deferral idiom the .db snapshot pass
+    # uses. The live workspace is never written to.
+    import path_tokens as _pt
+    _tok_map = _pt.build_map(
+        {
+            "workspace_root": str(ws),
+            "maro_user_dir": str(_maro_dir()),
+            "repo_root": str(repo_root()),
+        },
+        # The spelling the operator actually used. config resolves symlinks;
+        # records hold whatever string produced them, and on a symlinked root
+        # (macOS /var -> /private/var) those differ and nothing matches.
+        extra_roots={"workspace_root": [v for v in
+                                        (os.environ.get("MARO_WORKSPACE"),)
+                                        if v]},
+    ) if tokenize else _pt.TokenMap([])
+    tok_state: dict = {"tmpd": None, "files": [], "counts": {}, "n": 0}
 
     def _abs_for(rel: str) -> Path:
         return ws / Path(*_rel_parts(rel))
@@ -556,6 +621,12 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
             (db_files if name.endswith(".db") else sidecars).append(
                 (rel, _abs_for(rel)))
             return None
+        if tarinfo.isfile() and _tok_map and tok_state["tmpd"] is not None:
+            src = _abs_for(rel)
+            sub = _tokenize_member(src, rel, _tok_map, tok_state)
+            if sub is not None:
+                tok_state["files"].append((rel, src, sub))
+                return None          # re-added from the substituted copy below
         if tarinfo.isfile():
             file_count += 1
             total_bytes += tarinfo.size
@@ -574,7 +645,24 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     user_config_redactions = 0
     with tarfile.open(output_path, "w:gz") as tar, \
             tempfile.TemporaryDirectory(prefix="maro-export-db-") as tmpd:
+        tok_state["tmpd"] = tmpd
         tar.add(str(ws), arcname="workspace", filter=_filter)
+
+        # Second pass: add each substituted copy under the SOURCE
+        # file's metadata, so mode and mtime survive exactly as the
+        # .db snapshot pass preserves them.
+        for rel, src, subpath in tok_state["files"]:
+            ti = _deref_hardlink(tar.gettarinfo(str(src), arcname=rel),
+                                 subpath)
+            ti.size = subpath.stat().st_size
+            with open(subpath, "rb") as fh:
+                tar.addfile(ti, fh)
+            file_count += 1
+            total_bytes += ti.size
+            manifest_entries.append(
+                (str(Path(*_rel_parts(rel))), ti.size))
+            if verbose:
+                print(f"  tok:  {rel} ({ti.size:,} bytes)", file=sys.stderr)
 
         # Snapshot pass: each .db goes in via the sqlite backup API so the
         # archived copy is consistent even mid-run. On success its -wal/-shm
@@ -726,6 +814,16 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                                   "bytes, meta, or link targets; "
                                   "self-attested, UNSIGNED integrity hint"),
             },
+            # The substitution table. An importer (or any direct archive
+            # reader) expands with this; `canonical` marks which root
+            # expansion restores, so aliasing the pre-rename repo name does
+            # not silently equate two names.
+            "path_tokens": {
+                "applied": bool(tok_state["n"]),
+                "roots": _tok_map.as_manifest(),
+                "occurrences": tok_state["counts"],
+                "members_rewritten": len(tok_state["files"]),
+            },
             "meta": {
                 "user_config": user_config_present,
                 "user_config_redactions": user_config_redactions,
@@ -780,6 +878,11 @@ def _validate_provenance(obj):
         "exporter": obj.get("exporter", "?"),
         "source": _d("source"),
         "contents": _d("contents"),
+        # Whitelisted readers drop what they do not name: path_tokens was
+        # written by export and silently discarded here, so import saw no
+        # token table and left placeholders in the live workspace. Caught by
+        # the tripwire test, which is the only thing that would have.
+        "path_tokens": _d("path_tokens"),
         "meta": _d("meta"),
         "custody": custody,
     }
@@ -1193,6 +1296,40 @@ def import_workspace(
         # shape digest below still reads archive member sizes rather than
         # rewritten bytes.
         rw_report = None
+        # Expand root placeholders first. A v3 archive ships tokenized
+        # content plus the root table; expanding is exact by construction, so
+        # this is a restore, not a best-effort rewrite. Legacy archives carry
+        # no token table and fall through to path_rewrite unchanged.
+        tok_expanded = 0
+        _tok_meta = (prov or {}).get("path_tokens") or {}
+        if _tok_meta.get("applied"):
+            import path_tokens as _pt
+            # rewrite_paths=False means "give me the source's view, do not
+            # make it true here" -- so expand to the roots the archive came
+            # from. With the token table that reproduces the source bytes
+            # EXACTLY, which the old best-effort rewrite could only approximate
+            # by leaving them untouched.
+            _exp_roots = ((prov or {}).get("source") or {}) if not rewrite_paths else {
+                "workspace_root": str(ws),
+                "maro_user_dir": str(_maro_dir()),
+                "repo_root": str(repo_root()),
+            }
+            _local = _pt.build_map(_exp_roots, aliases=False)
+            for _m, _rel in safe_members:
+                if not _m.isreg():
+                    continue
+                _abs = ws / Path(*_rel_parts(_rel))
+                try:
+                    _data = _abs.read_bytes()
+                except OSError:
+                    continue
+                _new, _c = _local.expand(_data)
+                if _c:
+                    _abs.write_bytes(_new)
+                    tok_expanded += _c
+            print(f"  path tokens: expanded {tok_expanded} occurrence(s) "
+                  f"against this install's roots", file=sys.stderr)
+
         if rewrite_paths and prov is not None:
             import path_rewrite
             rw_map = path_rewrite.build_map(
@@ -1285,7 +1422,11 @@ def import_workspace(
                 event = {
                     "event": "import", "at": _utcnow(), "by": _identity(),
                     "dest": str(ws), "shape_verified": shape_ok,
-                    "transformed": bool(rw_report
+                    # A token expansion is a transform exactly like a
+                    # rewrite: once it has run, the copy no longer holds the
+                    # source's paths. Recording only rw_report would have made
+                    # a tokenized import look untransformed.
+                    "transformed": bool(tok_expanded and rewrite_paths) or bool(rw_report
                                         and rw_report.files_rewritten),
                 }
                 if rw_report is not None:

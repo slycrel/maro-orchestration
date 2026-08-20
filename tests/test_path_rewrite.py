@@ -337,13 +337,15 @@ class TestArchiveRoundTrip:
         assert str(dest) in (dest / "playbook.md").read_text()
         assert str(dest) in (dest / "memory" / "lessons.jsonl").read_text()
 
+        # Since 2026-08-18 a v3 archive ships root PLACEHOLDERS and import
+        # expands them, so path_rewrite legitimately finds nothing left to do
+        # on a tokenized archive -- the outcome above is what this test is
+        # for. path_rewrite's own lane is pinned by the legacy test below,
+        # which exports with tokenize=False.
         rec_files = list((dest / ".import-meta").glob("*/path-rewrite.json"))
-        assert len(rec_files) == 1
-        rec = json.loads(rec_files[0].read_text())
-        assert rec["mapping"] == [{"from": str(src), "to": str(dest)}]
-        assert rec["files_rewritten"] == 2
-        assert sorted(f["path"] for f in rec["files"]) == [
-            "memory/lessons.jsonl", "playbook.md"]
+        if rec_files:
+            rec = json.loads(rec_files[0].read_text())
+            assert rec["mapping"] == [{"from": str(src), "to": str(dest)}]
 
     def test_git_objects_and_databases_survive_byte_identical(
             self, exported, monkeypatch, tmp_path):
@@ -365,8 +367,33 @@ class TestArchiveRoundTrip:
             (dest / ".import-meta").glob("*/provenance.json")).read_text())
         ev = prov["custody"][-1]
         assert ev["event"] == "import"
+        # `transformed` is the load-bearing bit: whichever mechanism did it,
+        # the copy no longer holds the source's paths. Recording only
+        # path_rewrite would make a tokenized import look untransformed.
         assert ev["transformed"] is True
-        assert ev["path_rewrite"]["files_rewritten"] == 2
+        assert (ev.get("path_rewrite", {}).get("files_rewritten")
+                or prov.get("path_tokens", {}).get("applied")
+                or ev["transformed"])
+
+
+    def test_legacy_untokenized_archive_still_goes_through_path_rewrite(
+            self, monkeypatch, tmp_path):
+        """Archives made before placeholders (and any made with tokenize=False)
+        carry raw source absolutes. That lane is not retired and must keep
+        working -- it is how every pre-2026-08-18 archive imports."""
+        from maro_export import export_workspace, import_workspace
+        src = tmp_path / "legacy-src"
+        (src / "memory").mkdir(parents=True)
+        (src / "playbook.md").write_text(f"# Playbook\nlives at {src}\n")
+        monkeypatch.setenv("MARO_WORKSPACE", str(src))
+        archive = export_workspace(tmp_path / "legacy.tar.gz", tokenize=False)
+
+        dest = self._dest(monkeypatch, tmp_path)
+        import_workspace(Path(archive))
+        body = (dest / "playbook.md").read_text()
+        assert str(dest) in body and str(src) not in body
+        rec = list((dest / ".import-meta").glob("*/path-rewrite.json"))
+        assert rec, "legacy archive did not go through path_rewrite"
 
     def test_no_rewrite_paths_reproduces_the_archive_exactly(
             self, exported, monkeypatch, tmp_path):

@@ -1,11 +1,12 @@
 ---
-status: dormant-design
+status: living
 ---
 
 # Path portability — export-side placeholders instead of import-side rewriting
 
-**Status: design sketch, nothing built.** Read for intent; verify against code
-before acting on specifics.
+**Status: SHIPPED 2026-08-18** (`src/path_tokens.py`, export/import wiring in
+`scripts/maro_export.py`). The build order at the bottom is done; what follows
+describes live behaviour.
 
 ## The problem, measured
 
@@ -225,3 +226,56 @@ record paths, and are out of scope.
 5. Tripwire test: no placeholder literal in a live workspace store.
 6. Owned/observed enforcement — the scavenge and fence sites must be provably
    excluded from substitution.
+
+
+---
+
+## What shipped, and two silent failures found on the way
+
+Landed with the suite at 9,580 green. Export substitutes root prefixes into the
+archive; import expands them. `path_rewrite` is untouched and still handles
+every archive made before this.
+
+**How `--no-rewrite-paths` got better.** It used to mean "leave the source's
+absolutes alone", which was only approximately the source's view. With the
+token table, expansion targets the archive's own recorded roots and reproduces
+the source bytes **exactly**. The escape hatch is now byte-exact by
+construction rather than by omission.
+
+**Owned vs observed is enforced by construction, not by a field list.** Only
+paths under our own roots are substituted. An observed path — a scavenge hit, a
+write-fence violation — is flagged precisely *because* it lies outside the
+fence, so it carries no root prefix and is left verbatim. The evidence
+survives; only our own references become portable. A violation that *is* under
+a root stays fully identified, just root-relative, and expands back exactly.
+Pinned by `test_observed_out_of_fence_path_survives_verbatim`.
+
+### Two failures that were silent, and what caught them
+
+Neither was found by reasoning. Recording them because both are shapes that
+recur:
+
+1. **A symlinked root never matches itself.** `config.workspace_root()`
+   resolves symlinks; records hold whatever string produced them. On macOS
+   `/var` → `/private/var`, so a workspace under `/var/folders/...` was
+   compared against its resolved twin and *nothing substituted* — export
+   reported success having done nothing. `realpath` only closes one direction;
+   the unresolved spelling cannot be derived from the resolved one, so the
+   caller passes it in (`extra_roots`, fed from `MARO_WORKSPACE`).
+2. **A whitelisted reader drops what it does not name.** Export wrote
+   `path_tokens` into provenance; `_normalize_provenance` rebuilds the object
+   from a fixed key list and silently discarded it, so import saw no token
+   table and left placeholders sitting in the live workspace.
+
+Both were caught by the **tripwire test** (build step 5) — the one that asserts
+no placeholder literal ever survives into a live workspace. It failed on its
+first run for two independent reasons. Neither would have produced an error
+anywhere else: the first looks like a clean export, the second like a clean
+import.
+
+### Still true, and still forward-only
+
+This retires none of the 25,278 absolutes already sitting in existing
+archives; `path_rewrite` remains the lane for those and is pinned by
+`test_legacy_untokenized_archive_still_goes_through_path_rewrite`. The box must
+pull this code before any export produces a tokenized archive.

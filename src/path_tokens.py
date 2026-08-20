@@ -134,11 +134,21 @@ class TokenMap:
                 for r, t in self.pairs]
 
 
-def build_map(roots: Dict[str, str], *, aliases: bool = True) -> TokenMap:
+def build_map(roots: Dict[str, str], *, aliases: bool = True,
+              extra_roots: Optional[Dict[str, Iterable[str]]] = None) -> TokenMap:
     """Pair each known root with its placeholder.
 
     `roots` is role -> absolute path (provenance already records exactly this).
     A role with no path is skipped rather than guessed at.
+
+    `extra_roots` adds further SOURCE spellings for a role that must also
+    match -- they substitute to the same token but never become canonical.
+    The caller supplies these because only it knows them: a workspace can be
+    recorded resolved (`config.workspace_root()`) while the content holds the
+    unresolved form the operator actually set in `MARO_WORKSPACE`, and a
+    symlinked root then never matches itself. Nothing derives the unresolved
+    form from the resolved one, so guessing is not an option -- it has to be
+    passed in.
     """
     pairs: List[Tuple[str, str]] = []
     canonical: Dict[str, str] = {}
@@ -151,6 +161,28 @@ def build_map(roots: Dict[str, str], *, aliases: bool = True) -> TokenMap:
             continue          # a single-component root is a system dir, not an install root
         pairs.append((root, token))
         canonical[token] = root          # the real root, never an alias
+        # Symlink-resolved twin. A root can be recorded in one form while the
+        # content records the other -- on macOS `/var` is a symlink to
+        # `/private/var`, so a workspace under `/var/folders/...` never matched
+        # its own recorded root and substitution silently did nothing. Found by
+        # the live-workspace tripwire, not by reasoning. Canonical stays the
+        # configured form; the twin is only an additional match source.
+        try:
+            real = os.path.realpath(root).rstrip("/")
+            if real and real != root:
+                pairs.append((real, token))
+        except OSError:
+            pass
+        for extra in (extra_roots or {}).get(role, ()):
+            e = str(extra).rstrip("/")
+            if e and e != root and e != "/":
+                pairs.append((e, token))
+                try:
+                    er = os.path.realpath(e).rstrip("/")
+                    if er and er not in (e, root):
+                        pairs.append((er, token))
+                except OSError:
+                    pass
         if aliases:
             for alt in ALIASES.get(role, ()):
                 parent, name = os.path.split(root)
