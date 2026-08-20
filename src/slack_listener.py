@@ -308,7 +308,8 @@ def _run_natural(text: str, *, dry_run: bool, project: str, verbose: bool) -> st
             return f"Error: {e}"
     elif handle is not None:
         try:
-            result = handle(text, project=project, dry_run=dry_run, verbose=verbose)
+            result = handle(text, project=project, dry_run=dry_run, verbose=verbose,
+                            origin={"source": "slack"})
             return result.result or "(no response)"
         except Exception as e:
             return f"Error: {e}"

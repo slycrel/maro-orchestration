@@ -494,10 +494,12 @@ def _process_message(
                     response = conductor_resp.message or "(no response)"
                 except Exception:
                     # Fallback to handle
-                    result = handle(text, project=project, dry_run=False, verbose=verbose)
+                    result = handle(text, project=project, dry_run=False, verbose=verbose,
+                                  origin={"source": "telegram"})
                     response = result.result or "(no response)"
             else:
-                result = handle(text, project=project, dry_run=False, verbose=verbose)
+                result = handle(text, project=project, dry_run=False, verbose=verbose,
+                                  origin={"source": "telegram"})
                 response = result.result or "(no response)"
     except Exception as e:
         response = f"Error: {e}"

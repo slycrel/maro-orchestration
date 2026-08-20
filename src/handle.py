@@ -1842,6 +1842,15 @@ def _handle_impl(
             try:
                 from intent import check_goal_clarity
                 _clarity = check_goal_clarity(message, adapter=adapter)
+                # A CLEAR verdict recorded nothing, so "the gate passed it" and
+                # "the gate never ran" looked identical afterwards.
+                try:
+                    from run_trace import record_edge as _rec
+                    _rec("route.agenda", "route.clarity", handle_id=handle_id,
+                         clear=bool(_clarity.get("clear")),
+                         question=_clarity.get("question", "") if not _clarity.get("clear") else "")
+                except Exception:
+                    pass
                 if not _clarity.get("clear"):
                     _q = _clarity.get("question", "Could you clarify the goal?")
                     if verbose:
@@ -1891,9 +1900,28 @@ def _handle_impl(
             try:
                 from intent import rewrite_imperative_goal
                 _rewritten = rewrite_imperative_goal(message, adapter=adapter)
+                # The rewrite left no record at all: metadata.prompt keeps the
+                # raw input, so a rewritten goal and an untouched one were
+                # indistinguishable afterwards. (The atlas used to infer this
+                # from source/resolved_intent.md, which the SCOPE pass writes
+                # -- a false positive by construction.)
+                try:
+                    from run_trace import record_edge as _rec
+                    _rec("route.clarity", "route.rewrite",
+                         handle_id=handle_id,
+                         rewritten=bool(_rewritten != message),
+                         goal_before=message if _rewritten != message else "",
+                         goal_after=_rewritten if _rewritten != message else "")
+                except Exception:
+                    pass
                 if _rewritten != message:
                     if verbose:
                         print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
+                    try:
+                        from runs import stamp_run_metadata as _srm
+                        _srm({"goal_rewritten": True, "goal_after_rewrite": _rewritten})
+                    except Exception:
+                        pass
                     message = _rewritten
             except Exception:
                 pass  # rewrite failures must never block a run

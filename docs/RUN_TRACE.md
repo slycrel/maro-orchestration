@@ -119,3 +119,95 @@ BACKLOG's **"Phase Transition Contracts"** item defers typed contracts and hard
 gates between phases until "operational data shows which gates actually
 matter". This is that data: the trace records which transitions real runs take,
 how often each branch fires, and which phases are entered and abandoned.
+
+---
+
+# Run metadata completeness (2026-08-18)
+
+Jeremy, on reviewing the edge trace: *"I could make some guesses at where these
+came from, but we shouldn't have to guess… we're not telling the origin story
+well here at all with our persisted data; that's not hard, we just aren't
+addressing it."*
+
+The edges were the missing verbs; these are the missing nouns. Each item below
+is a field whose absence forced a guess, with what was measured before the fix.
+
+## Captain's-log attribution
+
+**Measured over 6,593 rows:** timestamps were on 100% of rows — the gap was
+never timestamps. It was *run attribution*. `loop_id` was on 60%, and it comes
+from a ContextVar scoped to `run_agent_loop`, so anything emitted outside the
+loop had none at all:
+
+| event | had a loop_id |
+|---|---|
+| `SCOPE_GENERATED` | 0 / 233 |
+| `CLAIM_PROBED` | 0 / 309 |
+| `SCOPE_PARSE_FAILED` | 0 / 42 |
+| `METACOGNITIVE_DECISION` | 64 / 532 |
+| `LOOP_CREATED`, `DIAGNOSIS`, `QUALITY_GATE_VERDICT` | 100% |
+
+No row carried a `handle_id` at all. `log_event` now stamps one from the
+run-dir ContextVar, which is pinned at `open_run` — far earlier and far wider
+than `loop_id_scope` — so rows emitted during routing, clarity, scope and
+dispatch can finally name their run. This is what lets a consumer *filter* a
+log slice instead of inferring membership from a timestamp window.
+
+## Per-step metadata
+
+`StepOutcome` gained four things it should always have had:
+
+- **`started_ts`** — it had only `ended_ts`, so one step missing it degraded
+  the *whole run's* timeline to a cumulative-sum estimate. Worse, the interval
+  between one step's end and the next step's start — where replans,
+  verification and hooks actually happen — was invisible by construction.
+- **`model` + `model_tier` + `tier_escalated_from`** — cost was recorded, the
+  model that spent it was not. Adapters carry a tier (`model_key`) and resolve
+  the concrete model per backend, so both are now captured. The escalated-from
+  field makes the cheap→mid→power retry ladder measurable for the first time:
+  "did tiering up actually help" was previously unanswerable.
+- **`venue`** — `container:<name>` or `host`. `source/environment.json` already
+  captured container *intent* (`executor.container`), and that is genuinely
+  useful, but intent is not outcome: under mode `on` a call still degrades to
+  the host when docker is down, the auth breaker is tripped, or the scratch
+  clone is suppressed. `container_exec.resolve_container_run` now records the
+  venue it resolved to, and the step carries it. The C4 flip is gated on
+  burn-in evidence, and `totals.steps_containerized` is the numerator for it.
+
+Totals gained `steps_containerized`, `steps_on_host` and
+`steps_tier_escalated`.
+
+## Provenance
+
+**Measured: 85 of 788 runs recorded an entry point, and all 85 said
+`user_goal`** — which is the task-queue lane, not a human at a terminal. The
+Telegram, Slack and scheduler lanes passed no origin at all, so a dispatched
+run was indistinguishable from a hand-typed one forever after. All three now
+name themselves; the scheduler also carries its `job_id`.
+
+## Gates that decided silently
+
+"Did not run" and "ran and found nothing" were indistinguishable for several
+decisions. Now recorded via the edge trace:
+
+- **the clarity gate passing CLEAR** (only the unclear branch left a trace)
+- **the BLE imperative rewrite**, both outcomes — and when it does rewrite, the
+  rewritten goal is stamped to metadata. Previously `metadata.prompt` kept the
+  raw input and nothing recorded that a rewrite had happened.
+- **which planner produced the plan** — preset pipeline, deterministic rule
+  template, or an LLM decompose. All three produced an identical-looking step
+  list, so "was this plan reasoned or replayed" could not be answered.
+
+## Two defects this pass corrected in the atlas
+
+Both were mine, from the run-atlas chunk:
+
+1. **`route.rewrite` was a false positive by construction.** It keyed off
+   `source/resolved_intent.md`, which the *scope* pass writes — so it lit
+   whenever scope succeeded (264 runs against scope's 282, a similarity that
+   should have been questioned). The rewrite now records itself; nothing is
+   inferred from that file.
+2. **Unrecognised origins rendered as "CLI invocation".** The entry map fell
+   through to `intake.cli`, so all 85 origin-carrying runs displayed as CLI
+   when every one of them was queue-drained. The map is now explicit and an
+   unmapped source is named rather than assigned a lane.

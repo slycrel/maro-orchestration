@@ -125,6 +125,24 @@ class StepOutcome:
                                  # replans) into the wrong step's segment.
     executor_session_id: str = ""
     executor_session_resumed: bool = False
+    # Origin-story fields (2026-08-18). started_ts pairs with ended_ts so a
+    # timeline is measured rather than derived: with only ended_ts, ONE step
+    # missing it degraded the whole run to a cumulative-sum estimate that
+    # silently folded replans, verification and hooks into the preceding
+    # step's duration. The gap BETWEEN started_ts and the previous ended_ts is
+    # where that work actually lives, and it was invisible by construction.
+    started_ts: str = ""
+    # Which model actually produced this step, and the tier it was resolved
+    # from. Cost was recorded but the tier that produced it was not, so the
+    # cheap->mid->power retry ladder could not be evaluated at all.
+    model: str = ""
+    model_tier: str = ""
+    tier_escalated_from: str = ""
+    # "container:<name>" | "host" | "" (unknown/not an executor call). Config
+    # records container INTENT; the per-call decision can still degrade to the
+    # host (docker down, auth breaker, suppressed clone), so intent was never
+    # an answer to "did this step actually run isolated".
+    venue: str = ""
     artifact_check: str = ""     # "judged" | "unjudged" | "" (check not run —
                                  # gate off, step not done, or no result).
                                  # Persisted so the fail-open denominator is
@@ -151,6 +169,11 @@ def step_from_decompose(
     executor_session_id: str = "",
     executor_session_resumed: bool = False,
     ended_ts: Optional[str] = None,
+    started_ts: str = "",
+    model: str = "",
+    model_tier: str = "",
+    tier_escalated_from: str = "",
+    venue: str = "",
     artifact_check: str = "",
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
@@ -185,6 +208,11 @@ def step_from_decompose(
         executor_session_id=executor_session_id,
         executor_session_resumed=executor_session_resumed,
         ended_ts=ended_ts if ended_ts is not None else datetime.now(timezone.utc).isoformat(),
+        started_ts=started_ts,
+        model=model,
+        model_tier=model_tier,
+        tier_escalated_from=tier_escalated_from,
+        venue=venue,
         artifact_check=artifact_check,
     )
 

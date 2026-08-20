@@ -574,6 +574,25 @@ def log_event(
         "audience": ("user" if event_type in USER_SURFACED_EVENTS
                      else "system"),
     }
+    # Run attribution (2026-08-18). The log is one global JSONL that
+    # `runs.slice_log_for_run` carves per run by BYTE OFFSET, so a slice
+    # carries concurrent runs' rows and a post-ended_at tail. loop_id was the
+    # only linkage and it is set by an ambient ContextVar scoped to
+    # run_agent_loop, so everything emitted outside the loop had none at all:
+    # measured over 6,593 rows, 60% carried loop_id, and SCOPE_GENERATED
+    # (0/233), CLAIM_PROBED (0/309) and METACOGNITIVE_DECISION (64/532) were
+    # effectively unattributable. handle_id comes from the run-dir ContextVar,
+    # which is pinned at open_run — far earlier and far wider than
+    # loop_id_scope — so a row can now name its run even when no loop exists
+    # (routing, clarity, scope, dispatch) and a reader can filter instead of
+    # guessing from a timestamp window.
+    try:
+        from runs import current_handle_id as _chid
+        _hid = _chid()
+        if _hid:
+            entry["handle_id"] = _hid
+    except Exception:
+        pass
     if context:
         entry["context"] = context
     if note:

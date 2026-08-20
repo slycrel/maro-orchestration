@@ -16,6 +16,7 @@ import logging
 from context_budget import clip
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -889,7 +890,19 @@ def _execute_main_loop(
                       file=_sys.stderr, flush=True)
 
         step_start = time.monotonic()
+        # Wall-clock twin of step_start: monotonic measures duration, this
+        # places the step on a real timeline. Recording only ended_ts meant a
+        # single missing value degraded the WHOLE run to a cumulative-sum
+        # estimate, and the gap between steps -- where replans, verification
+        # and hooks actually live -- was invisible by construction.
+        _step_started_ts = datetime.now(timezone.utc).isoformat()
+        try:
+            from container_exec import reset_venue as _reset_venue
+            _reset_venue()   # so a step that made no executor call reads "", not the previous step's venue
+        except Exception:
+            pass
         # Per-step model selection (Phase F5)
+        _tier_before_step = _step_tier_overrides.get(step_text, "") or _session_tier_floor or ""
         _step_adapter = _select_step_adapter(
             ctx, step_text, step_idx,
             step_tier_overrides=_step_tier_overrides,
@@ -1055,6 +1068,32 @@ def _execute_main_loop(
         step_elapsed = int((time.monotonic() - step_start) * 1000)
         # Step end for the time-gap contributor at the merge point above.
         _prev_step_ended_monotonic = time.monotonic()
+
+        # Origin-story stamps for this step (2026-08-18). All three were
+        # decided during the call above and then thrown away:
+        #   venue  — container_exec records the venue the executor call
+        #            actually resolved to. Config carries container INTENT;
+        #            mode "on" still degrades to the host when docker is down,
+        #            the auth breaker is tripped, or the clone is suppressed.
+        #   model  — the model that actually produced the step. Cost was
+        #            recorded, the model that spent it was not.
+        #   tier   — with the tier this step was escalated FROM, so the
+        #            cheap->mid->power retry ladder is finally measurable.
+        try:
+            from container_exec import last_venue as _last_venue
+            _step_venue = _last_venue()
+        except Exception:
+            _step_venue = ""
+        # Adapters carry the TIER (model_key) and resolve the concrete model
+        # per backend; there is no `.model` attribute to read.
+        _step_tier = getattr(_step_adapter, "model_key", "") or ""
+        _step_backend = getattr(_step_adapter, "backend", "") or ""
+        try:
+            from llm import resolve_model as _resolve_model
+            _step_model = _resolve_model(_step_backend, _step_tier) if _step_tier else ""
+        except Exception:
+            _step_model = ""
+        _step_tier_from = _tier_before_step if _tier_before_step != _step_tier else ""
 
         # Scavenging diagnostic (BACKLOG #1): flag out-of-fence file access from
         # the real tool transcript. Detection never changes step status; the
@@ -1903,6 +1942,11 @@ def _execute_main_loop(
             executor_session_id=outcome.get("executor_session_id", ""),
             executor_session_resumed=bool(
                 outcome.get("executor_session_resumed", False)),
+            started_ts=_step_started_ts,
+            model=_step_model,
+            model_tier=_step_tier,
+            tier_escalated_from=_step_tier_from,
+            venue=_step_venue,
             artifact_check=outcome.get("artifact_check", ""),
         ))
 

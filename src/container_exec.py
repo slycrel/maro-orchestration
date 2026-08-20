@@ -1057,7 +1057,44 @@ def container_name(loop_id: str, seq: int) -> str:
     return f"{NAME_PREFIX}{safe}-{os.getpid()}-{seq}"
 
 
+# Where the last executor call actually ran, for THIS context. The config
+# records container INTENT; this records the OUTCOME, which can differ every
+# call (docker down, auth breaker tripped, clone suppressed all degrade to the
+# host under mode "on"). Read by step_exec so the venue lands on the step
+# record instead of having to be guessed from the config dump afterwards.
+_last_venue: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "maro_last_venue", default="")
+
+
+def last_venue() -> str:
+    """"container:<name>" | "host" | "" (no executor call resolved yet)."""
+    return _last_venue.get()
+
+
+def reset_venue() -> None:
+    _last_venue.set("")
+
+
 def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
+    """Record the venue this call resolved to, then return it (see _resolve).
+
+    Wrapper rather than a stamp at each return: the inner function has five
+    exit paths (two host returns, one container return, two raises) and a
+    stamp per path is exactly the kind of thing that goes stale when a sixth
+    is added.
+    """
+    try:
+        name = _resolve_container_run(no_tools, executor)
+    except Exception:
+        # require-mode refusal: the call does not happen at all.
+        _last_venue.set("refused")
+        raise
+    if executor and not no_tools:
+        _last_venue.set(f"container:{name}" if name else "host")
+    return name
+
+
+def _resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
     """Decide whether this call runs in a container; return its name or None
     (host path). Raises ContainerUnavailable for require-mode + no docker.
 

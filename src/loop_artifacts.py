@@ -215,6 +215,20 @@ def _write_loop_log(
                     # run-visibility report: when this step finished, for
                     # timeline positioning (loop_report.py)
                     "ended_ts": getattr(s, "ended_ts", ""),
+                    # Origin story (2026-08-18). started_ts makes the timeline
+                    # measured instead of derived; the gap to the previous
+                    # step's ended_ts is the replan/verify/hook time that the
+                    # cumulative-sum fallback used to fold into a step's own
+                    # duration. venue is where the executor call ACTUALLY ran
+                    # (config records intent; mode "on" degrades to host when
+                    # docker is down). model/tier make the cheap->mid->power
+                    # retry ladder measurable — cost was recorded, the model
+                    # that spent it was not.
+                    "started_ts": getattr(s, "started_ts", ""),
+                    "venue": getattr(s, "venue", ""),
+                    "model": getattr(s, "model", ""),
+                    "model_tier": getattr(s, "model_tier", ""),
+                    "tier_escalated_from": getattr(s, "tier_escalated_from", ""),
                     # fail-open denominator (2026-08-06 readout): "judged" |
                     # "unjudged" | "" (check not run for this step)
                     "artifact_check": getattr(s, "artifact_check", ""),
@@ -231,6 +245,15 @@ def _write_loop_log(
                 "executor_session_resumed_steps": sum(
                     1 for s in steps
                     if getattr(s, "executor_session_resumed", False)),
+                # How many steps actually ran isolated. The C4 flip is gated on
+                # burn-in evidence and this is the numerator for it.
+                "steps_containerized": sum(
+                    1 for s in steps
+                    if str(getattr(s, "venue", "")).startswith("container:")),
+                "steps_on_host": sum(
+                    1 for s in steps if getattr(s, "venue", "") == "host"),
+                "steps_tier_escalated": sum(
+                    1 for s in steps if getattr(s, "tier_escalated_from", "")),
                 # judged + unjudged < len(steps) is normal: steps the check
                 # never sees (gate off, blocked, empty result) count neither.
                 "artifact_checks_judged": sum(

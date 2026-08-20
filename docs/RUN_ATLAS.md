@@ -60,6 +60,11 @@ had to be *inferred* from artifacts that do survive —
 | `build/captains_log_slice.jsonl` | the event stream (`METACOGNITIVE_DECISION`, `CLOSURE_VERDICT`, …) |
 | file presence | `source/scope.md`, `source/cuts.md`, `RESULT.md` vs `PARTIAL.md`, … |
 
+Two inferences here were wrong and were corrected on 2026-08-18 (see
+`RUN_TRACE.md`): `route.rewrite` was keyed off an artifact the *scope* pass
+writes, and an unrecognised `origin.source` rendered as a CLI invocation. Both
+are now recorded rather than inferred.
+
 That write now exists (`src/run_trace.py`, wired into `set_phase` itself), so
 the inference layer below is the *fallback*, not the primary path.
 

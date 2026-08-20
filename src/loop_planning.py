@@ -390,6 +390,20 @@ def _decompose_goal(
     else:
         steps = None
 
+    # Which planner produced this plan. Three very different provenances --
+    # an operator-supplied pipeline, a deterministic rule template, and an LLM
+    # decompose -- all produced an identical-looking step list afterwards, so
+    # "was this plan reasoned or replayed" was unanswerable from the record.
+    try:
+        from run_trace import record_edge as _rec_plan
+        if steps is not None:
+            _rec_plan("plan.skills", "plan.decompose", loop_id=ctx.loop_id,
+                      source="preset" if (preset_steps is not None and preset_steps) else "rule",
+                      rule=getattr(_matched_rule, "name", "") if _matched_rule else "",
+                      steps=len(steps))
+    except Exception:
+        pass
+
     if steps is None:
         # Planning runs once per loop and biases every subsequent step. Use the
         # central role→model policy (assign_model_by_role("planner") → MODEL_POWER)

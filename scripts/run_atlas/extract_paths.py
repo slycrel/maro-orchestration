@@ -130,14 +130,25 @@ def build(rd):
     origin = meta.get("origin") or {}
     osrc = origin.get("source") or ""
     hit("intake.arrive", label=osrc or "unrecorded")
-    # `origin` was added late -- absence means "not recorded", NOT "came from the CLI".
+    # `origin` was added late -- absence means "not recorded", NOT "came from
+    # the CLI". An UNRECOGNISED value is not the CLI either: the old default
+    # rendered all 85 origin-carrying runs as "CLI invocation" when every one
+    # of them said `user_goal`, which is the task-queue lane.
+    _ENTRY = {
+        "cli-run": "intake.cli", "cli-resume": "intake.cli", "cli": "intake.cli",
+        "telegram": "intake.listener", "slack": "intake.listener",
+        "user_goal": "intake.queue", "task_store": "intake.queue",
+        "queue": "intake.queue", "loop_continuation": "intake.queue",
+        "loop_escalation": "intake.queue",
+        "scheduler": "intake.scheduler", "heartbeat": "intake.scheduler",
+    }
     if osrc:
-        hit({
-            "telegram": "intake.listener", "slack": "intake.listener",
-            "task_store": "intake.queue", "queue": "intake.queue",
-            "scheduler": "intake.scheduler", "heartbeat": "intake.scheduler",
-            "loop_continuation": "intake.queue", "loop_escalation": "intake.queue",
-        }.get(osrc, "intake.cli"), src=osrc)
+        _node = _ENTRY.get(osrc)
+        if _node:
+            hit(_node, src=osrc)
+        else:
+            # Name it rather than guessing a lane for it.
+            hit("intake.arrive", src=osrc, unmapped_source=osrc)
     nav = origin.get("dispatch_navigator") or {}
     if nav:
         hit("intake.navigator", move=nav.get("move"), conf=nav.get("confidence"))
@@ -166,8 +177,12 @@ def build(rd):
         hit("route.agenda")
     if meta.get("status") == "clarification_needed":
         hit("route.clarify_stop", q=(meta.get("clarification_question") or "")[:160])
+    # NOTE: source/resolved_intent.md is written by the SCOPE pass
+    # (handle.py), NOT by the BLE imperative rewriter -- keying route.rewrite
+    # off it lit the node whenever scope succeeded. The rewrite now records
+    # itself via run_trace; nothing is inferred from that file any more.
     if (src / "resolved_intent.md").exists():
-        hit("route.rewrite")
+        hit("route.scope_ok")
     if (src / "scope.md").exists():
         hit("route.scope_ok")
     if (build_dir / "scope-raw-FAILED.txt").exists():

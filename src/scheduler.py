@@ -331,7 +331,11 @@ def drain_due_jobs(
 
             def _run_job(g: str = goal, jid: str = job_id) -> None:
                 try:
-                    result = handle(g)
+                    # A scheduled run looked identical to a hand-typed one in
+                    # metadata: origin was never passed, so "where did this
+                    # come from" was unanswerable for the whole lane.
+                    result = handle(g, origin={"source": "scheduler",
+                                               "job_id": jid})
                     log.info("scheduler: job %s completed status=%s", jid, result.status)
                 except Exception as exc:
                     log.warning("scheduler: job %s failed: %s", jid, exc)

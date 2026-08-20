@@ -127,7 +127,10 @@ def test_run_natural_via_handle_returns_result_string():
         with patch.object(slack_listener, "handle", return_value=fake_result) as mock_handle:
             result = slack_listener._run_natural("hello", dry_run=True, project="p", verbose=True)
     assert result == "handle says hi"
-    mock_handle.assert_called_once_with("hello", project="p", dry_run=True, verbose=True)
+    # origin is load-bearing: without it a Slack-dispatched run was
+    # indistinguishable from a hand-typed one in metadata.
+    mock_handle.assert_called_once_with("hello", project="p", dry_run=True,
+                                        verbose=True, origin={"source": "slack"})
 
 
 def test_dispatch_slash_help_returns_text():
