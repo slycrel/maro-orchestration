@@ -304,3 +304,91 @@ def test_absent_token_metadata_is_accepted():
     spec = importlib.util.spec_from_file_location("maro_export_v2", EXPORT)
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     assert mod._validate_path_tokens({}) == []
+
+
+# ==================================================== round 2 (2026-08-20)
+
+def _forge_provenance(arc: Path, out: Path, mutate):
+    """Rewrite meta/provenance.json inside a copy of an archive."""
+    import tarfile as _tf
+    with _tf.open(arc, "r:gz") as src, _tf.open(out, "w:gz") as dst:
+        for m in src.getmembers():
+            data = src.extractfile(m).read() if m.isreg() else None
+            if m.name.endswith("meta/provenance.json"):
+                prov = json.loads(data)
+                mutate(prov)
+                data = json.dumps(prov, indent=2).encode()
+                m.size = len(data)
+            dst.addfile(m, __import__("io").BytesIO(data) if data is not None else None)
+
+
+def _seed(ws):
+    (ws / "memory" / "x.jsonl").write_text(f"{ws}/runs/a\n")
+
+
+def test_forged_metadata_leaves_the_live_workspace_byte_unchanged(ws, tmp_path):
+    """The round-1 test called the validator as a UNIT, so it passed even with
+    the validator sitting after extraction. This drives the real flow: a
+    sentinel file in the destination must survive a refused import."""
+    _seed(ws)
+    good = tmp_path / "good.tar.gz"
+    assert _run(["export", "--output", str(good)], ws).returncode == 0
+    bad = tmp_path / "bad.tar.gz"
+    _forge_provenance(good, bad, lambda p: p["path_tokens"].__setitem__("applied", "false"))
+
+    dest = tmp_path / "live"; (dest / "memory").mkdir(parents=True)
+    sentinel = dest / "memory" / "keep.txt"
+    sentinel.write_text("PRECIOUS")
+    r = _run(["import", str(bad)], dest)
+
+    assert r.returncode != 0
+    assert sentinel.read_text() == "PRECIOUS"
+    assert not (dest / "runs").exists(), "archive was extracted despite refusal"
+    assert not list(dest.parent.glob("*.import-staging-*")), "staging left behind"
+
+
+def test_forged_metadata_does_not_move_the_workspace_aside_under_clean(ws, tmp_path):
+    """--clean used to rename the live workspace away BEFORE validation, so a
+    refused import still cost the operator their workspace location."""
+    _seed(ws)
+    good = tmp_path / "good.tar.gz"
+    assert _run(["export", "--output", str(good)], ws).returncode == 0
+    bad = tmp_path / "bad.tar.gz"
+    _forge_provenance(good, bad,
+                      lambda p: p["path_tokens"].__setitem__("alias_normalized", "boom"))
+
+    dest = tmp_path / "live2"; (dest / "memory").mkdir(parents=True)
+    (dest / "memory" / "keep.txt").write_text("PRECIOUS")
+    r = _run(["import", str(bad), "--clean"], dest)
+
+    assert r.returncode != 0
+    assert (dest / "memory" / "keep.txt").read_text() == "PRECIOUS"
+    assert not list(dest.parent.glob("*.pre-import-*")), "workspace was moved aside"
+
+
+def test_format_must_agree_with_whether_tokens_were_applied(ws, tmp_path):
+    """Bumping the version only helps if v3 and 'carries placeholders' are the
+    same statement. A v2 archive carrying applied tokens was expanded anyway."""
+    _seed(ws)
+    good = tmp_path / "good.tar.gz"
+    assert _run(["export", "--output", str(good)], ws).returncode == 0
+    bad = tmp_path / "downgraded.tar.gz"
+    _forge_provenance(good, bad, lambda p: p.__setitem__("format", 2))
+
+    dest = tmp_path / "live3"; dest.mkdir()
+    r = _run(["import", str(bad)], dest)
+    assert r.returncode != 0
+    assert "format" in (r.stderr + r.stdout)
+
+
+def test_a_good_archive_still_imports_after_all_this(ws, tmp_path):
+    """Negative control: the refusals above must not be refusing everything."""
+    _seed(ws)
+    arc = tmp_path / "ok.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    dest = tmp_path / "live4"; dest.mkdir()
+    r = _run(["import", str(arc)], dest)
+    assert r.returncode == 0, r.stderr
+    body = (dest / "memory" / "x.jsonl").read_text()
+    assert f"{dest}/runs/a" in body and "%%MARO_" not in body
+    assert not list(dest.parent.glob("*.import-staging-*"))

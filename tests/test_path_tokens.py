@@ -182,3 +182,26 @@ def test_canonical_spellings_round_trip_byte_identically():
     sub, _ = m.substitute(src)
     back, _ = m.expand(sub)
     assert back == src
+
+
+@pytest.mark.parametrize("payload,should_match", [
+    (b"/owned/child", True), (b"/owned", True), (b'"/owned/x"', True),
+    (b"/owned\n", True), (b"/owned ", True), (b"/owned)", True),
+    (b"/owned,", True), (b"/owned:", True),
+    ("/ownedé/x".encode(), False),          # non-ASCII component -- round 2
+    ("/ownedñ".encode(), False),
+    (b"/owned\xff\xfe", False),             # arbitrary high bytes
+    (b"/owned%2Fchild", False),             # percent-encoded, not a boundary
+    (b"/owned\\child", False),              # backslash is a legal POSIX name byte
+    (b"/owned-other/x", False), (b"/ownedX", False), (b"/owned.bak", False),
+])
+def test_boundary_is_defined_positively_not_by_an_ascii_blocklist(
+        payload, should_match):
+    """The first fix listed the bytes that CONTINUE a component -- an open set
+    that named ASCII only, so `/ownedé/x` matched on its leading UTF-8 byte and
+    had its evidence rewritten. Boundaries are now an explicit delimiter set."""
+    m = pt.build_map({"workspace_root": "/owned"}, aliases=False)
+    out, n = m.substitute(payload)
+    assert bool(n) is should_match, (payload, out)
+    if not should_match:
+        assert out == payload

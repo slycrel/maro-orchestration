@@ -73,6 +73,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import re
 import sys
 import tarfile
@@ -967,6 +968,23 @@ def _validate_path_tokens(meta) -> list:
     if not isinstance(members, list) or not all(
             isinstance(x, str) for x in members):
         problems.append("members must be a list of strings")
+    else:
+        # These keys select which extracted files get rewritten, so they are
+        # as trust-sensitive as the archive's member names. Round 2 found
+        # `../outside` and duplicates both accepted.
+        seen = set()
+        for x in members:
+            if not x or x.startswith("/") or ".." in Path(x).parts:
+                problems.append(f"unsafe member key: {x!r}")
+            if x in seen:
+                problems.append(f"duplicate member key: {x!r}")
+            seen.add(x)
+    known_tokens = set()
+    try:
+        import path_tokens as _pt
+        known_tokens = set(_pt.TOKENS.values())
+    except Exception:
+        pass
     n = meta.get("members_rewritten")
     if not isinstance(n, int) or isinstance(n, bool) or n < 0:
         problems.append(f"members_rewritten must be a non-negative int, got {n!r}")
@@ -978,6 +996,46 @@ def _validate_path_tokens(meta) -> list:
             isinstance(v, int) and not isinstance(v, bool) and v >= 0
             for v in occ.values()):
         problems.append("occurrences must map tokens to non-negative ints")
+    elif known_tokens:
+        for k in occ:
+            if k not in known_tokens:
+                problems.append(f"occurrences names an unknown token: {k!r}")
+    # alias_normalized was the one field added last and validated not at all;
+    # import called .values() on it, so a string here raised AttributeError
+    # AFTER the expanded bytes had already been written (round 2).
+    alias = meta.get("alias_normalized", {})
+    if not isinstance(alias, dict) or not all(
+            isinstance(k, str) for k in alias) or not all(
+            isinstance(v, int) and not isinstance(v, bool) and v >= 0
+            for v in alias.values()):
+        problems.append(
+            "alias_normalized must map root strings to non-negative ints")
+    return problems
+
+
+def _validate_format_coupling(prov, tok_meta) -> list:
+    """The archive's declared format must MEAN something about its content.
+
+    Bumping ARCHIVE_FORMAT to 3 only helps if v3 and "carries placeholders"
+    are the same statement. Round 2 (2026-08-20) found the only gate was
+    `format > ARCHIVE_FORMAT`, so `format: 2` carrying `applied: true` was
+    accepted and destructively expanded, and a v3 archive whose token block
+    had been dropped imported "successfully" with literal placeholders left
+    in the workspace.
+    """
+    if not prov:
+        return []
+    fmt = prov.get("format")
+    applied = bool((tok_meta or {}).get("applied") is True)
+    problems = []
+    if applied and fmt != ARCHIVE_FORMAT:
+        problems.append(
+            f"archive declares format {fmt!r} but carries applied path "
+            f"tokens, which is format {ARCHIVE_FORMAT}")
+    if fmt == ARCHIVE_FORMAT and not applied:
+        problems.append(
+            f"archive declares format {ARCHIVE_FORMAT} but carries no applied "
+            "path tokens — its token block may have been dropped in transit")
     return problems
 
 
@@ -1314,6 +1372,23 @@ def import_workspace(
                   "read. Nothing was changed.", file=sys.stderr)
             sys.exit(1)
 
+        # --- preflight: everything that can refuse must refuse HERE ------
+        # Round 2 (2026-08-20) found the validator sitting AFTER extraction and
+        # after --clean had already moved the live workspace aside, while its
+        # own comment claimed it failed closed "before the workspace is
+        # touched". A guard that runs after the damage is not a guard. Nothing
+        # below this block mutates anything.
+        _tok_meta = (prov or {}).get("path_tokens") or {}
+        _tok_problems = _validate_path_tokens(_tok_meta)
+        _tok_problems += _validate_format_coupling(prov, _tok_meta)
+        if _tok_problems:
+            print("Error: archive path_tokens metadata is invalid, refusing "
+                  "to import:", file=sys.stderr)
+            for _p in _tok_problems:
+                print(f"  - {_p}", file=sys.stderr)
+            print("Nothing was changed.", file=sys.stderr)
+            sys.exit(1)
+
         # Format gate: refuse a newer archive rather than half-importing it.
         if prov is not None and prov["format"] > ARCHIVE_FORMAT:
             print(f"Error: archive format {prov['format']} is newer than "
@@ -1338,29 +1413,17 @@ def import_workspace(
                 continue
             safe_members.append((member, rel))
 
-        # --- mutation begins --------------------------------------------
-        if ws.exists() and any(ws.iterdir()):
-            if clean:
-                base = ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S")
-                aside = ws.with_name(base)
-                n = 1
-                while aside.exists():
-                    n += 1
-                    aside = ws.with_name(f"{base}-{n}")
-                ws.rename(aside)
-                print(f"--clean: existing workspace moved aside to {aside} "
-                      f"(nothing deleted; rename back to recover)",
-                      file=sys.stderr)
-            else:
-                print(
-                    "WARNING: importing into a non-empty workspace — this "
-                    "MERGES: archive files overwrite, existing files not in "
-                    "the archive remain (an unmarked hybrid). Pass --clean "
-                    "to move the existing workspace aside first.",
-                    file=sys.stderr,
-                )
-
         print(f"Importing {archive_path} → {ws}", file=sys.stderr)
+
+        # Extract and transform OUTSIDE the live workspace, then install. A
+        # failure anywhere below leaves the workspace exactly as it was --
+        # which is what makes "fails closed" true of the filesystem and not
+        # just of the process (round 2, 2026-08-20).
+        _stage = ws.with_name(ws.name + f".import-staging-{os.getpid()}")
+        if _stage.exists():
+            shutil.rmtree(_stage, ignore_errors=True)
+        _stage.mkdir(parents=True)
+        _install_target, ws = ws, _stage
         ws.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
@@ -1408,8 +1471,10 @@ def import_workspace(
             import path_tokens as _pt
             # rewrite_paths=False means "give me the source's view, do not make
             # it true here" -- so expand to the roots the archive came from.
+            # `ws` is the STAGING tree here; the paths must be made true for
+            # where the workspace will actually live.
             _exp_roots = ((prov or {}).get("source") or {}) if not rewrite_paths else {
-                "workspace_root": str(ws),
+                "workspace_root": str(_install_target),
                 "maro_user_dir": str(_maro_dir()),
                 "repo_root": str(repo_root()),
             }
@@ -1465,7 +1530,7 @@ def import_workspace(
             import path_rewrite
             rw_map = path_rewrite.build_map(
                 prov["source"],
-                {"workspace_root": str(ws),
+                {"workspace_root": str(_install_target),
                  "maro_user_dir": str(_maro_dir()),
                  "repo_root": str(repo_root())},
             )
@@ -1497,6 +1562,50 @@ def import_workspace(
         else:
             print("  path rewrite: disabled (--no-rewrite-paths) — embedded "
                   "paths still name the source machine", file=sys.stderr)
+
+        # --- install: the first and only mutation of the live workspace ---
+        # Everything above ran against the staging tree. Only now, with every
+        # member extracted, validated, expanded and rewritten, does the real
+        # workspace change.
+        _staged_tree, ws = ws, _install_target
+        try:
+            if ws.exists() and any(ws.iterdir()):
+                if clean:
+                    base = ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S")
+                    aside = ws.with_name(base)
+                    n = 1
+                    while aside.exists():
+                        n += 1
+                        aside = ws.with_name(f"{base}-{n}")
+                    ws.rename(aside)
+                    print(f"--clean: existing workspace moved aside to {aside} "
+                          f"(nothing deleted; rename back to recover)",
+                          file=sys.stderr)
+                    _staged_tree.rename(ws)
+                else:
+                    print(
+                        "WARNING: importing into a non-empty workspace — this "
+                        "MERGES: archive files overwrite, existing files not in "
+                        "the archive remain (an unmarked hybrid). Pass --clean "
+                        "to move the existing workspace aside first.",
+                        file=sys.stderr,
+                    )
+                    # Per-file merge. Not atomic as a whole -- a merge into a
+                    # live tree cannot be -- but every byte written here has
+                    # already been validated and transformed, so a crash can
+                    # only leave a partial copy of GOOD data, never a
+                    # half-expanded or unvalidated one.
+                    shutil.copytree(_staged_tree, ws, dirs_exist_ok=True,
+                                    symlinks=True)
+                    shutil.rmtree(_staged_tree, ignore_errors=True)
+            else:
+                if ws.exists():
+                    ws.rmdir()
+                _staged_tree.rename(ws)
+        except Exception:
+            print(f"  install failed — staged tree kept at {_staged_tree} "
+                  f"(nothing was removed)", file=sys.stderr)
+            raise
 
         # --- meta staging (non-destructive, fresh per import) -----------
         staged_count = 0

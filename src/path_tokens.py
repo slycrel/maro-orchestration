@@ -82,16 +82,20 @@ ALIASES: Dict[str, Tuple[str, ...]] = {
 }
 
 
-# Bytes that would extend a path component. A root followed by one of these
-# is a DIFFERENT path (`/owned` vs `/owned-other`, `/w` vs `/w2`), so the root
-# did not actually end there and must not be replaced. Anything else -- `/`,
-# a quote, whitespace, end of data -- is a real boundary.
-_CONTINUATION = rb"A-Za-z0-9._~\-"
+# A root only ends where a path component ends. Defined POSITIVELY: the match
+# must be followed by one of these delimiters, or by end of data. The first
+# version listed the bytes that CONTINUE a component instead, which is an open
+# set -- it named ASCII only, so `/ownedé/x` (a different directory) matched on
+# its leading UTF-8 byte and had its evidence rewritten (round 2, 2026-08-20).
+# Anything not named here -- any high byte, `%`, `\`, `-`, `.`, alphanumerics --
+# continues the component and blocks the match. That errs toward NOT
+# substituting, which leaves an absolute path: the status quo, never data loss.
+_DELIMITERS = rb"/\s\"'`,;:()\[\]{}<>|=*?!&\$@#\n\r\t"
 
 
 @lru_cache(maxsize=256)
 def _boundary_re(root: str):
-    return re.compile(re.escape(root.encode()) + rb"(?![" + _CONTINUATION + rb"])")
+    return re.compile(re.escape(root.encode()) + rb"(?=[" + _DELIMITERS + rb"]|$)")
 
 
 class TokenCollision(RuntimeError):

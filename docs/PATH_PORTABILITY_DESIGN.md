@@ -318,3 +318,61 @@ the drop but not the trust boundary that had caused it.
 **What the fixes are not.** They are themselves unreviewed. Across ~50 recorded
 rounds the prior round's fix layer is the likeliest home of the next round's
 worst finding, and this round's changes touch the same seams the HIGHs did.
+
+---
+
+## Round 2, 2026-08-20 — the staged-install restructure
+
+Round 2 reviewed the **whole arc including round 1's fixes**, which is what
+surfaced the real defect: **four of its five HIGHs were in the fix layer.** The
+statistic held exactly — the prior round's fixes are the likeliest home of the
+next round's worst finding.
+
+The decisive one: `_validate_path_tokens` was placed where the code already
+was — *after* extraction and after `--clean` had renamed the live workspace
+aside — while its own comment claimed it failed closed "before the workspace is
+touched". A guard that runs after the damage is not a guard, and the round-1
+test called the validator as a *unit*, so it passed with the validator in
+entirely the wrong place.
+
+**The fix is structural, not another guard.** Import no longer mutates the live
+workspace as it goes:
+
+1. **Preflight** — provenance load, token schema, format↔token coupling. Every
+   refusal happens here, before anything is created.
+2. **Stage** — extract into `<ws>.import-staging-<pid>`, a sibling of the
+   workspace.
+3. **Transform** — expand placeholders and run the legacy `path_rewrite` in the
+   staging tree. Destination roots are the *install target*, not the staging
+   path.
+4. **Install** — the first and only mutation of the live workspace: `--clean`
+   moves the old one aside and renames staging into place; a merge copies the
+   staged tree over. A failure at any earlier step leaves the workspace
+   untouched and keeps the staged tree for inspection.
+
+That single change closes R2-H1 and bounds the blast radius of H3 and H5
+together, rather than adding three more guards to a pipeline that mutates as it
+reads.
+
+The rest of round 2, each re-probed as fixed:
+
+| # | Defect | Fix |
+|---|---|---|
+| R2-H4 | The boundary class was an ASCII **blocklist**, so `/ownedé/x` matched on its leading UTF-8 byte and had its evidence rewritten | boundaries defined **positively** as an explicit delimiter set; any unlisted byte (high bytes, `%`, `\`, `.`) blocks the match. Errs toward not substituting, which leaves an absolute path — the status quo, never data loss |
+| R2-H2 | `format: 2` carrying applied tokens was accepted and expanded; `format: 3` with the token block dropped imported "successfully" with placeholders left behind | `_validate_format_coupling` — v3 iff tokens applied, checked both directions |
+| R2-H3 | Member keys allowed `../outside` and duplicates; `occurrences` keys were unbound to real tokens | all three validated |
+| R2-H5 | `alias_normalized` — the field added last — was validated not at all, and `.values()` on a string raised `AttributeError` *after* the expanded bytes were written | validated as a mapping of strings to non-negative ints |
+
+**A defect I introduced while fixing these, worth recording.** Wiring the
+refusal through the CLI's exit code looked right and was wrong:
+`import_workspace` returns the **extracted-file count**, not a status, so
+`sys.exit(import_workspace(...))` made a successful one-file import exit 1.
+Refusals now use `sys.exit(1)` like every other refusal in that function. The
+lesson is small and general — check what a function's return value *means*
+before treating it as a status.
+
+Tests now drive the **real import flow** rather than the validator in
+isolation: a forged archive must leave a sentinel file byte-unchanged, must not
+move the workspace aside under `--clean`, must not leave a staging tree, and a
+good archive must still import — the negative control proving the refusals are
+not refusing everything.
