@@ -994,9 +994,14 @@ class TestTheMergeDoesNotDeleteWhatItCannotRead:
                            "message": "go", "applied": False,
                            "created_at": "2026-01-01T00:00:00+00:00"})
         p = tmp_path / "interrupts.jsonl"
-        p.write_text(good + "\n \n", encoding="utf-8")
+        # An explicit escape, and one that cannot appear anywhere else in
+        # the file: the first cut of this test used a literal space, which
+        # every json.dumps row already contains, so the assertion could not
+        # fail. The mutation sweep caught it — both merge mutants survived.
+        blank = "\u00a0"
+        p.write_text(good + "\n" + blank + "\n", encoding="utf-8")
 
         getattr(InterruptQueue(queue_path=p), verb)()
 
-        assert " " in p.read_text(encoding="utf-8"), \
+        assert blank in p.read_text(encoding="utf-8"), \
             "a row this merge could not read was deleted by the rewrite"

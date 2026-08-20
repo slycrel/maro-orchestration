@@ -900,13 +900,6 @@
     "replacement": "    clean_names = clean_names - shadow"
   },
   {
-    "name": "scanner bindings :: a parameter of THIS function is not a binding",
-    "file": "scripts/scan_destructive_rewrites.py",
-    "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "    for a in getattr(getattr(fn, \"args\", None), \"args\", []) or []:\n        binds.setdefault(a.arg, []).append(_UNRESOLVED)",
-    "replacement": "    for a in []:\n        binds.setdefault(a.arg, []).append(_UNRESOLVED)"
-  },
-  {
     "name": "scanner call graph :: one function per name, last one wins",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",

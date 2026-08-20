@@ -193,8 +193,6 @@ def _binding_census(fn) -> "dict[str, list]":
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
                             ast.ClassDef)):
             binds.setdefault(n.name, []).append(_UNRESOLVED)
-    for a in getattr(getattr(fn, "args", None), "args", []) or []:
-        binds.setdefault(a.arg, []).append(_UNRESOLVED)
     return binds
 
 

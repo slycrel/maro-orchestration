@@ -2781,6 +2781,22 @@ class TestTheCarriedRowKeepsItsOwnBytes:
     to touch them — and `splitlines()` in the same loop would have split a
     row containing U+2028 into two invalid fragments."""
 
+    def test_the_full_rewrite_strands_the_row_exactly(self, tmp_path,
+                                                      monkeypatch):
+        """`_save_skills` is the other writer, and its log line says
+        "verbatim". The sweep found it stripping the row it carried."""
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        torn = "\u00a0{not json"
+        f.write_text(torn + "\n", encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+
+        skills_mod._save_skills([])
+
+        after = f.read_text(encoding="utf-8")
+        assert torn in after, "\"carried verbatim\" rewrote the row's bytes"
+
     def test_a_stranded_row_is_written_back_exactly(self, tmp_path,
                                                     monkeypatch):
         import skills as skills_mod
