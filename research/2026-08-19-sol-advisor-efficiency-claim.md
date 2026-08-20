@@ -6,6 +6,19 @@
 
 # Sol-advisor efficiency claim vs. Maro's orchestration design
 
+> **Follow-up, 2026-08-20.** Reading this prompted Jeremy to state the target
+> architecture (cheap/local step work under a 1–3 shot high-tier plan) — recorded
+> as a GOAL_BRAIN decision. Checking whether we could get there surfaced history
+> this analysis did not have: per-step cheap tiering was **built** (Phase 57,
+> `classify_step_model`) and **deliberately removed** 2026-07-21 (`b6fd4881`)
+> under the 2026-07-20 "execution defaults unified at MID" decree, after Haiku
+> measured **4.4× tokens** vs Sonnet on the same goal
+> (`docs/history/2026-03-31-factory-mode-findings.md` §3). So "route step work to
+> a cheaper model" is a *settled* question here, not an open one — re-test against
+> that baseline rather than rebuilding. A second finding: the post-run "async
+> tail" only reorders in-process, so a blocking caller still waits for it — 53% of
+> this very run's wall clock. Both are BACKLOG items.
+
 Source: Daniel Mac (@daniel_mac8), 2026-08-18, testing DannyMac180/sol-advisor (Codex plugin, 658 lines, zero executable orchestration code — a single-session prompt contract, no scheduler/state/memory/retry machinery).
 
 ## 1. What the experiment measured, and what it didn't

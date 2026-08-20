@@ -2,6 +2,22 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
+**Next directed chunk (Jeremy, 2026-08-20): make the post-run tail
+actually async.** Takes priority over resuming the treasure-map arc
+below. The current "async tail" only *reorders* — it defers the tail
+until after the notification, then drains it synchronously in-process
+(`handle.py:190/194`), so notify consumers benefit and anything waiting
+on process exit does not. Measured: 53% of a run's wall clock spent
+post-deliverable. Jeremy's call on shape: *"is this an exec level spawn
+of another process to make it truly async in cases like that? Seems
+like something that's solveable with a little effort."* Design + the
+module-identity rationale for why a separate process is the clean fix
+(not a workaround) are in BACKLOG § "The 'async tail' is not async".
+Parked alongside it, awaiting Jeremy's read (READING_QUEUE row
+2026-08-20): whether to re-test cheap-tier step execution against the
+recorded 4.4× baseline — that one needs him because it means reversing
+his own MID-floor decree.
+
 Last updated: 2026-08-15 — **Treasure-map arc (multi-chunk build; this
 file resumes as its queue per the 08-11 note below).** Jeremy's decree:
 "let's get this treasure map implemented; modular, maintainable,
