@@ -273,7 +273,7 @@ def loads_clean(s: str):
       which we discard by an implementation detail, is not something this
       layer may decide: it is a corrupt row, and corrupt rows strand.
     """
-    if any("\udc80" <= ch <= "\udcff" for ch in s):
+    if any("\ud800" <= ch <= "\udfff" for ch in s):
         raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
                                    "bytes carried as surrogates)", s, 0)
     value = json.loads(s, object_pairs_hook=_no_duplicate_names)
@@ -295,14 +295,31 @@ def _no_duplicate_names(pairs):
 
 
 def _carries_surrogate(value) -> bool:
-    """Any lone surrogate anywhere in a parsed row — keys included."""
-    if isinstance(value, str):
-        return any("\ud800" <= ch <= "\udfff" for ch in value)
-    if isinstance(value, dict):
-        return any(_carries_surrogate(k) or _carries_surrogate(v)
-                   for k, v in value.items())
-    if isinstance(value, (list, tuple)):
-        return any(_carries_surrogate(v) for v in value)
+    """Any lone surrogate anywhere in a parsed row — keys included.
+
+    Iterative on purpose. Adversarial r6 (2026-08-20, 2 lenses, probed): the
+    recursive version blew the interpreter's stack on JSON nested ~600 deep
+    — which `json.loads` itself parses without complaint — and RecursionError
+    is not a JSONDecodeError, so it flew straight through the `except
+    (json.JSONDecodeError, TypeError)` that every caller in this codebase
+    uses to strand a bad row. Probed: one valid, deeply nested line took
+    `InterruptQueue.poll()` down before it could announce anything, which is
+    the silent control-channel loss this whole arc is about. A shared helper
+    with 84 call sites does not get to raise something its callers do not
+    catch.
+    """
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if any("\ud800" <= ch <= "\udfff" for ch in v):
+                return True
+        elif isinstance(v, dict):
+            for k, val in v.items():
+                stack.append(k)
+                stack.append(val)
+        elif isinstance(v, (list, tuple)):
+            stack.extend(v)
     return False
 
 

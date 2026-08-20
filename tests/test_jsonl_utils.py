@@ -380,3 +380,38 @@ class TestLoadsCleanRefusesTheTwoShapesR5Found:
         from jsonl_utils import loads_clean
 
         loads_clean(line)
+
+
+class TestTheTaintCheckCannotBeTheThingThatBreaks:
+    """Adversarial r6 (2026-08-20, 2 lenses, probed) on r5's own fix. A shared
+    helper with 84 call sites does not get to raise something its callers do
+    not catch — every one of them strands a bad row via `except
+    (json.JSONDecodeError, TypeError)`, and RecursionError is neither."""
+
+    def test_deep_nesting_that_json_accepts_is_not_a_crash(self):
+        from jsonl_utils import loads_clean
+
+        # ~600 deep: json.loads parses it, the recursive walk blew the stack,
+        # and InterruptQueue.poll() died before it could announce anything.
+        line = "[" * 600 + '"\\u000a"' + "]" * 600
+        json.loads(line)                      # the premise, stated out loud
+        loads_clean(line)
+
+    def test_it_still_finds_a_surrogate_buried_deep(self):
+        """The must-detect half: iterating instead of recursing must not
+        make the check shallower."""
+        from jsonl_utils import loads_clean
+
+        line = "[" * 400 + '"\\udcff"' + "]" * 400
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(line)
+
+    @pytest.mark.parametrize("raw", ["\ud800", "\udbff", "\udc80", "\udfff"])
+    def test_the_raw_scan_covers_the_whole_surrogate_block(self, raw):
+        """r5 scanned only U+DC80–U+DCFF, the range surrogateescape produces.
+        A lone HIGH surrogate reaching this helper from anywhere else was
+        admitted and re-dumped as a clean-looking escape (r6, Architect)."""
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean('{"x": "' + raw + '"}')

@@ -583,6 +583,75 @@ r5's own rewrites — and were re-anchored against the current files before the
 sweep was called green; a SKIP is not a pass, and a spec that silently skips
 is the same failure as a scanner that reports zero.
 
+## Adversarial round 6 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r5 fix layer, with the five-for-five pattern stated in the
+prompt as the standing prior. **REJECT.** Six findings, all six reproduced
+before being touched, zero hallucinations for the second round running.
+
+- **Absence is not a default for the fields this verb acts on** (4 lenses,
+  HIGH, probed). r5's move from "check the constructed Skill" to "check the
+  stored value" was right, and dropped a guard on the way out: `if name in d`
+  means an ABSENT field is simply fine. For `content_hash` and `created_at`
+  it is not. A missing hash makes `_skill_hash_is_stale` answer "not stale"
+  (it has nothing to compare); `created_at` is the tiebreaker; and **both are
+  deliberately excluded from `_dedup_identity`**, so neither absence shows up
+  as a difference. Probed end to end: a row identical to a healthy one but
+  with `content_hash` omitted and a later `created_at` validated, counted as
+  non-stale, grouped, won, and deleted the verified row. r4's constructor-
+  first check had caught this by accident — `dict_to_skill` defaults the
+  field to `""` and the empty check fired. Both are now required outright.
+  Live store: 423/423 rows carry both, so nothing real is stranded.
+
+  This is the sharpest instance yet of the pattern the whole arc keeps
+  finding, because the guard was not overlooked — it was *load-bearing under
+  a different name*, and the refactor that made the check more correct
+  removed the accident that had been doing the work.
+
+- **The taint check could take the channel down** (2 lenses, HIGH, probed).
+  r5's `_carries_surrogate` recursed. JSON nested ~600 deep — which
+  `json.loads` parses without complaint — blew the interpreter stack, and
+  `RecursionError` is not a `JSONDecodeError`, so it flew straight through
+  the `except (json.JSONDecodeError, TypeError)` that every caller uses to
+  strand a bad row. Probed: one valid line took `InterruptQueue.poll()` down
+  before it could announce anything. Now iterative. A shared helper with 84
+  call sites does not get to raise something its callers do not catch.
+
+- **The raw scan covered a quarter of the surrogate block** (Architect, LOW
+  but exact). It checked U+DC80–U+DCFF, the range `surrogateescape`
+  produces. A lone HIGH surrogate arriving from anywhere else was admitted
+  and re-dumped as a clean-looking escape — the launder this helper exists to
+  prevent. Now the whole U+D800–U+DFFF block; the valid-pair control
+  (`😀` → 😀) proves the check is about LONE surrogates.
+
+- **The tiebreaker compared text, not time** (Failure Operator, HIGH,
+  probed). `score_skill` ranked `created_at` as a string.
+  `2026-01-01T00:00:00+14:00` sorts after `2025-12-31T23:00:00-12:00`
+  lexically and before it in real time, so the older row was kept and the
+  newer deleted — both rows valid, both timestamps legal ISO-8601, nothing in
+  the output saying which one went. Ranks by parsed instant now, naive
+  timestamps read as UTC (both shapes are in the live store, and `max()` over
+  mixed awareness raises).
+
+- **Two more ways past the scanner** (4 lenses + 2 lenses). r5's "no bare
+  `json.loads`" rule matched one spelling, so `import json as j` and
+  `from json import loads` walked past it and an unguarded rewrite was
+  certified OK for mentioning `loads_clean` elsewhere. Chasing spellings is
+  the losing half of that trade — ANY `loads` call that is not the clean
+  wrapper now counts as unguarded, whatever module it came from. And r5's
+  separator resolution kept the LAST binding found in AST-walk order, which
+  is not control flow: `if newline: sep = "\n" else: sep = ","`, and a plain
+  later reassignment, each made a live JSONL rewrite vanish from the scan
+  entirely — the exact must-detect shape r5 had just added. A name buys
+  silence only when exactly one binding in the function proves it
+  non-newline. Counting bindings is not flow analysis; it is a refusal to
+  pretend.
+
+**Receipts:** mutation spec 69 → 76, `76/76 accounted for` (two existing
+mutants came back SKIP from r6's own rewrites and were re-anchored first).
+Blast radius of the stricter scanner on the real tree: **zero** — 77 RISK
+sites before and after, none gained, none lost, manifest still green.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -596,13 +665,14 @@ from a tool nobody has falsified is worth nothing. This triage is the
 falsification pass, and its durable output is the FP table above — so the next
 person to run the scanner starts from 63 known-benign sites, not 63 unknowns.
 
-The second lesson is from the five rounds, not the scan: **every round's top
+The second lesson is from the six rounds, not the scan: **every round's top
 finding was a defect the previous round's fix introduced** — r1 found the lock
 that r0's fix scoped too narrowly, r2 found the `applied` flag that r1's fix
 inverted, r3 found that r2's "validation" validated nothing, r4 found that r3's
 validation proved well-formedness and called it provenance, r5 found that r4's
 provenance key was a denylist and that its de-duplicated announcement had left
-one branch mute. None was in the original code. Review the fix layer first; it is the only part of the change
+one branch mute, r6 found that r5's more-correct validator had removed the
+accident that was doing the work. None was in the original code. Review the fix layer first; it is the only part of the change
 that has never been read by anyone but its author, and it was written under
 the pressure of a finding, which is exactly the condition that produces the
 mirror-image bug. Three for three is no longer a coincidence, and the r3
@@ -630,3 +700,16 @@ that requires the unguarded call to be absent rather than the guarded one to
 be present. On the live store the strict version costs nothing — measured,
 not assumed, because "it would be too strict" is exactly the claim that needs
 an executing line.
+
+The fifth is r6's, and it is the one that makes this arc worth six rounds:
+**a correct refactor can delete a guard that was load-bearing under another
+name.** r5 replaced "validate the constructed Skill" with "validate the
+stored row" — strictly more correct, and it silently removed the
+required-field check, because the old version had been enforcing it by
+accident (`dict_to_skill` defaulted a missing hash to `""`, and the empty
+check fired on the default). Nothing in the diff looked like a removal.
+Nothing in the tests failed. The guard that vanished was one the round
+before had specifically added. When a check moves, the question is not "is
+the new check better" but "what was the old one catching that nobody wrote
+down" — and the only reliable way to answer it is a mutation the old code
+kills and the new code does not.

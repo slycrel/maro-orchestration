@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -785,12 +786,25 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
     else:
         print("No duplicates found")
 
-    # Scoring: prefer recent + high success rate + high use count
+    # Scoring: prefer recent + high success rate + high use count.
+    #
+    # "Recent" means the INSTANT, not the string. Adversarial r6 (2026-08-20,
+    # Failure Operator, probed): `2026-01-01T00:00:00+14:00` sorts after
+    # `2025-12-31T23:00:00-12:00` lexically and before it in real time, so
+    # the older row was kept and the newer deleted. Both rows validate, both
+    # timestamps are legal ISO-8601, and nothing in the output says which one
+    # went. Every row reaching here has already been proven to carry a
+    # parseable `created_at` (validate_skill_row), so this cannot raise;
+    # naive timestamps are treated as UTC rather than crashing the mixed
+    # comparison, which is the only choice available once both shapes are in
+    # the store.
     def score_skill(skill):
-        created_at = skill.get("created_at", "")
+        moment = datetime.fromisoformat(skill.get("created_at", ""))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
         success_rate = float(skill.get("success_rate", 0))
         use_count = int(skill.get("use_count", 0))
-        return (created_at, success_rate, use_count)
+        return (moment, success_rate, use_count)
 
     total_dup_removed = 0
     for skills in duplicates.values():

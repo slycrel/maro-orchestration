@@ -804,6 +804,57 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       unproven. And measure the strictness rather than assuming it —
       "that would be too strict" is exactly the claim that needs an
       executing line.*
+    - *Its adversarial r6 (2026-08-20, FIVE codex seats on the r5 fix
+      layer): **REJECT — sixth round, sixth fix-layer HIGH.** Six
+      findings, all six reproduced, zero hallucinations for the second
+      round running. (1) **Absence is not a default for the fields this
+      verb ACTS ON.** r5's raw-value checks used `if name in d`, so an
+      absent field was fine — but a missing `content_hash` makes the
+      stale check answer "not stale" (nothing to compare), `created_at`
+      is the tiebreaker, and BOTH are excluded from the dedup identity,
+      so neither absence shows up as a difference. Probed end to end: a
+      clone with the hash omitted and a later timestamp validated,
+      grouped, won, and DELETED the verified row. Both required now;
+      the live store carries both on 423/423. (2) **The taint check
+      could take the channel down**: `_carries_surrogate` recursed,
+      JSON nested ~600 deep (which json.loads parses fine) blew the
+      stack, and RecursionError is not a JSONDecodeError — so it flew
+      through the `except (JSONDecodeError, TypeError)` every caller
+      uses to strand a bad row, killing InterruptQueue.poll() before it
+      could announce. Iterative now; a shared helper with 84 call sites
+      does not get to raise what its callers do not catch. (3) The raw
+      scan covered only U+DC80-DCFF (the surrogateescape range), so a
+      lone HIGH surrogate from anywhere else was admitted and re-dumped
+      as a clean escape — whole U+D800-DFFF block now. (4) **The
+      tiebreaker compared TEXT, not time**:
+      `2026-01-01T00:00:00+14:00` sorts after
+      `2025-12-31T23:00:00-12:00` lexically and BEFORE it in real time,
+      so the older row was kept and the newer deleted — both valid,
+      nothing in the output saying which went; ranks by parsed instant
+      now (naive read as UTC — both shapes are live and max() over
+      mixed awareness raises). (5+6) Scanner: the "no bare json.loads"
+      rule matched ONE SPELLING, so `import json as j` and `from json
+      import loads` walked past it — any non-clean `loads` call counts
+      now, whatever module; and separator resolution kept the LAST
+      binding in AST-walk order (not control flow), so a conditional
+      binding or a later reassignment made a live JSONL rewrite vanish
+      from the scan — one binding proving non-newline, or it is
+      framing. Receipts: spec 69 -> 76, 76/76 (2 SKIPs re-anchored
+      first); scanner blast radius on the real tree ZERO (77 RISK
+      before and after, manifest green).*
+    - *Carried lesson from r6, the one that makes six rounds worth it:
+      **a correct refactor can delete a guard that was load-bearing
+      under another name.** r5 replaced "validate the constructed
+      Skill" with "validate the stored row" — strictly more correct —
+      and silently removed the required-field check, because the old
+      version had enforced it BY ACCIDENT (dict_to_skill defaulted a
+      missing hash to "", and the empty check fired on the default).
+      Nothing in the diff looked like a removal; no test failed; and
+      the guard that vanished was one the previous round had
+      specifically added. When a check MOVES, the question is not "is
+      the new check better" but "what was the old one catching that
+      nobody wrote down" — and the only reliable answer is a mutation
+      the old code kills and the new code does not.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making

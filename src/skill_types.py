@@ -312,6 +312,24 @@ def validate_skill_row(d: dict) -> Skill:
     for name in ("id", "name", "description"):
         if name not in d:
             raise KeyError(name)     # dict_to_skill's required keys, up front
+    for name in ("content_hash", "created_at"):
+        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of
+        # these are fields the destructive caller ACTS ON: a missing
+        # content_hash makes `_skill_hash_is_stale` answer "not stale" (it
+        # has nothing to compare), and created_at is the tiebreaker that
+        # decides which row of a duplicate group survives. Both are also
+        # deliberately excluded from `_dedup_identity`, so neither absence
+        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,
+        # probed) chained exactly that: a row identical to a healthy one but
+        # with `content_hash` omitted and a later `created_at` validated,
+        # counted as non-stale, grouped, won, and DELETED the verified row.
+        # r4's constructor-first check happened to catch this — `dict_to_skill`
+        # defaults the field to "" and the empty check fired — so r5's move to
+        # raw values, which was right, silently dropped a guard on the way.
+        if name not in d:
+            raise KeyError(f"{name} is required to take part in a removal "
+                           f"decision (absent is not empty, and neither is "
+                           f"proof)")
     for name in _STR_FIELDS:
         _raw_check(d, name, lambda v: isinstance(v, str), "a string")
     for name in ("id", "name", "content_hash"):

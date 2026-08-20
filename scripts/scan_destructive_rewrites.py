@@ -141,11 +141,23 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         see. Only a separator PROVEN to be something other than a newline
         buys silence.
         """
-        consts = {}                                # sep = "\n" style locals
+        # A name buys silence only when ONE binding in the whole function
+        # proves it non-newline. Adversarial r6 (2026-08-20, 2 lenses,
+        # probed): the first cut kept the LAST assignment seen in AST order,
+        # which is not control flow — `if newline: sep = "\n" else: sep =
+        # ","` and a plain later `sep = ","` both made a live JSONL rewrite
+        # vanish from the scan entirely. Counting bindings is not flow
+        # analysis either; it just refuses to pretend. Two bindings means
+        # unresolved, and unresolved means framing.
+        binds = {}
         for n in ast.walk(fn):
-            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) \
-                    and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
-                consts[n.targets[0].id] = n.value.value
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                    and isinstance(n.targets[0], ast.Name):
+                name = n.targets[0].id
+                binds.setdefault(name, []).append(
+                    n.value.value if isinstance(n.value, ast.Constant)
+                    else _UNRESOLVED)
+        consts = {k: v[0] for k, v in binds.items() if len(v) == 1}
         file_handles = set()                       # names bound from open()
         for n in ast.walk(fn):
             for target, value in _bindings(n):
@@ -175,7 +187,7 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
                     if a.value in ("\n", b"\n"):
                         return True
                 elif isinstance(a, ast.Name):
-                    if consts.get(a.id, "\n") in ("\n", b"\n"):
+                    if consts.get(a.id, "\n") in ("\n", b"\n", _UNRESOLVED):
                         return True               # unresolved -> assume framing
                 else:
                     return True                    # unresolvable expression
@@ -202,6 +214,9 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
 
 
 
+_UNRESOLVED = object()
+
+
 def _bindings(node):
     """(target, value) pairs for assignments and `with ... as` clauses."""
     if isinstance(node, ast.Assign):
@@ -222,10 +237,31 @@ def _is_open_call(node) -> bool:
 
 
 def _bare_json_loads(fn) -> bool:
+    """Does this function parse with anything other than the taint-refusing
+    wrapper?
+
+    Adversarial r6 (2026-08-20, 4 lenses, probed) broke the first cut four
+    ways: it matched only the literal spelling `json.loads`, so
+    `import json as j`, `from json import loads`, and every aliased variant
+    walked past it and the function was certified OK for merely mentioning
+    `loads_clean` elsewhere. Chasing spellings is the losing half of that
+    trade — the rule is now the other way round. ANY call named `loads` that
+    is not the clean wrapper counts as unguarded, whatever module it came
+    from, because `yaml.loads` and `pickle.loads` are not safer than
+    `json.loads` for this purpose. The scanner's job is to say "someone
+    should read this", and it is allowed to be wrong in that direction.
+    """
     for n in ast.walk(fn):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
-                and n.func.attr == "loads" and isinstance(n.func.value, ast.Name) \
-                and n.func.value.id == "json":
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        name = f.attr if isinstance(f, ast.Attribute) else \
+            (f.id if isinstance(f, ast.Name) else None)
+        if name is None:
+            continue
+        if name in CLEAN_MARKERS or name.lstrip("_") in CLEAN_MARKERS:
+            continue
+        if name == "loads" or name.endswith("_loads"):
             return True
     return False
 

@@ -465,3 +465,72 @@ class TestTheOkVerdictIsNotBoughtByMentioningTheGuard:
                '        out.append(line)\n'
                '    atomic_write(path, "\\n".join(out))\n')
         assert _scan(src).get("poll") == "OK"
+
+
+class TestTheOkVerdictSurvivesAnImportRefactor:
+    """Adversarial r6 (2026-08-20, 4 lenses, probed): r5's "no bare
+    json.loads" rule matched one spelling, so `import json as j` and
+    `from json import loads` walked past it and an unguarded destructive
+    rewrite was certified OK for mentioning `loads_clean` elsewhere. Chasing
+    spellings is the losing half of the trade: the rule is now that ANY
+    `loads` call which is not the clean wrapper counts as unguarded."""
+
+    BODY = ('    out = []\n'
+            '    for line in path.read_text().split("\\n"):\n'
+            '        try:\n            %s(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n'
+            '    atomic_write(path, "\\n".join(out))\n')
+
+    @pytest.mark.parametrize("label,head,parse", [
+        ("module alias", "import json as j\n", "j.loads"),
+        ("direct import", "from json import loads\n", "loads"),
+        ("aliased direct import", "from json import loads as parse\n", "parse_loads"),
+        ("the original spelling", "import json\n", "json.loads"),
+        ("another parser entirely", "import yaml\n", "yaml.loads"),
+    ])
+    def test_an_unguarded_parse_is_never_ok(self, label, head, parse):
+        src = head + 'def rewrite(path):\n    loads_clean("unrelated")\n' \
+              + self.BODY % parse
+        assert _scan(src).get("rewrite") == "RISK", label
+
+    @pytest.mark.parametrize("parse", ["loads_clean", "_loads_clean"])
+    def test_the_clean_wrapper_still_earns_ok(self, parse):
+        """Negative control — a rule that never says OK tells a triager
+        nothing."""
+        src = "def rewrite(path):\n" + self.BODY % parse
+        assert _scan(src).get("rewrite") == "OK"
+
+
+class TestASeparatorIsOnlyProvenWhenNothingElseTouchesIt:
+    """Adversarial r6 (2 lenses, probed): r5 resolved a name separator by
+    keeping the LAST assignment found in AST-walk order, which is not control
+    flow. A conditional binding and a plain later reassignment each made a
+    live JSONL rewrite vanish from the scan — the exact must-detect shape r5
+    had just added."""
+
+    BODY = ('    out = []\n'
+            '    for line in path.read_text().split(sep):\n'
+            '        try:\n            json.loads(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n'
+            '    atomic_write(path, "\\n".join(out))\n')
+
+    @pytest.mark.parametrize("label,src", [
+        ("conditional binding",
+         'def rewrite(path, newline):\n    if newline:\n        sep = "\\n"\n'
+         '    else:\n        sep = ","\n' + BODY),
+        ("reassigned after use",
+         'def rewrite(path):\n    sep = "\\n"\n' + BODY + '    sep = ","\n'),
+        ("bound from a call",
+         'def rewrite(path):\n    sep = pick_separator()\n' + BODY),
+        ("a parameter",
+         "def rewrite(path, sep):\n" + BODY),
+    ])
+    def test_an_unproven_separator_is_framing(self, label, src):
+        assert _scan(src).get("rewrite") == "RISK", label
+
+    def test_one_unconditional_non_newline_binding_still_buys_silence(self):
+        """Negative control: this is the only shape that proves it."""
+        src = 'def rewrite(path):\n    sep = ","\n' + self.BODY
+        assert "rewrite" not in _scan(src)

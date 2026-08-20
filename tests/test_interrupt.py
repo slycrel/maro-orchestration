@@ -899,3 +899,28 @@ class TestAQueueOfNothingButUnreadableRowsStillSpeaks:
             assert q.poll() == []
             assert q.clear() == 0
         assert self._warnings(caplog) == []
+
+
+class TestOneValidRowCannotTakeTheChannelDown:
+    """Adversarial r6 (Failure Operator, probed): a legal, deeply nested JSON
+    row made the r5 taint walk raise RecursionError inside the preflight.
+    poll() catches JSONDecodeError and TypeError, so the operator's queue
+    died with no delivery and no announcement — the silent control-channel
+    loss this arc exists to prevent, reintroduced by its own guard."""
+
+    def test_a_deeply_nested_row_does_not_kill_poll(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+
+        deep = json.dumps({"id": "junk", "source": "operator", "intent": "stop",
+                           "message": "x", "applied": False,
+                           "payload": json.loads("[" * 600 + '"a"' + "]" * 600)})
+        good = json.dumps({"id": "ok", "source": "operator", "intent": "stop",
+                           "message": "go", "applied": False,
+                           "created_at": "2026-01-01T00:00:00+00:00"})
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(deep + "\n" + good + "\n", encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            delivered = [i.id for i in InterruptQueue(queue_path=p).poll()]
+
+        assert "ok" in delivered, "a valid STOP was lost to the taint check"

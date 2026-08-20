@@ -438,8 +438,8 @@
   {
     "name": "loads_clean escaped taint (keys) :: only string VALUES are walked",
     "file": "src/jsonl_utils.py",
-    "anchor": "        return any(_carries_surrogate(k) or _carries_surrogate(v)\n                   for k, v in value.items())",
-    "replacement": "        return any(_carries_surrogate(v) for v in value.values())",
+    "anchor": "            for k, val in v.items():\n                stack.append(k)\n                stack.append(val)",
+    "replacement": "            for val in v.values():\n                stack.append(val)",
     "tests": "tests/test_jsonl_utils.py"
   },
   {
@@ -473,8 +473,8 @@
   {
     "name": "scanner framing (variable sep) :: an unresolvable separator buys silence",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "                elif isinstance(a, ast.Name):\n                    if consts.get(a.id, \"\\n\") in (\"\\n\", b\"\\n\"):\n                        return True               # unresolved -> assume framing\n                else:\n                    return True                    # unresolvable expression",
-    "replacement": "                elif isinstance(a, ast.Name):\n                    if consts.get(a.id) in (\"\\n\", b\"\\n\"):\n                        return True",
+    "anchor": "                elif isinstance(a, ast.Name):\n                    if consts.get(a.id, \"\\n\") in (\"\\n\", b\"\\n\", _UNRESOLVED):\n                        return True               # unresolved -> assume framing\n                else:\n                    return True                    # unresolvable expression",
+    "replacement": "                pass",
     "tests": "tests/test_scan_destructive_rewrites.py"
   },
   {
@@ -482,6 +482,55 @@
     "file": "scripts/scan_destructive_rewrites.py",
     "anchor": "        clean = any(m in dump for m in CLEAN_MARKERS) and not _bare_json_loads(fn)",
     "replacement": "        clean = any(m in dump for m in CLEAN_MARKERS)",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "doctor validator (required) :: an absent content_hash or created_at is a default again",
+    "file": "src/skill_types.py",
+    "anchor": "    for name in (\"content_hash\", \"created_at\"):\n        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of\n        # these are fields the destructive caller ACTS ON: a missing\n        # content_hash makes `_skill_hash_is_stale` answer \"not stale\" (it\n        # has nothing to compare), and created_at is the tiebreaker that\n        # decides which row of a duplicate group survives. Both are also\n        # deliberately excluded from `_dedup_identity`, so neither absence\n        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,\n        # probed) chained exactly that: a row identical to a healthy one but\n        # with `content_hash` omitted and a later `created_at` validated,\n        # counted as non-stale, grouped, won, and DELETED the verified row.\n        # r4's constructor-first check happened to catch this \u2014 `dict_to_skill`\n        # defaults the field to \"\" and the empty check fired \u2014 so r5's move to\n        # raw values, which was right, silently dropped a guard on the way.\n        if name not in d:\n            raise KeyError(f\"{name} is required to take part in a removal \"\n                           f\"decision (absent is not empty, and neither is \"\n                           f\"proof)\")",
+    "replacement": "    pass",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor tiebreak :: created_at ranks as text, so offsets reverse the order",
+    "file": "src/doctor.py",
+    "anchor": "        moment = datetime.fromisoformat(skill.get(\"created_at\", \"\"))\n        if moment.tzinfo is None:\n            moment = moment.replace(tzinfo=timezone.utc)\n        success_rate = float(skill.get(\"success_rate\", 0))\n        use_count = int(skill.get(\"use_count\", 0))\n        return (moment, success_rate, use_count)",
+    "replacement": "        moment = skill.get(\"created_at\", \"\")\n        success_rate = float(skill.get(\"success_rate\", 0))\n        use_count = int(skill.get(\"use_count\", 0))\n        return (moment, success_rate, use_count)",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "loads_clean recursion :: the taint walk recurses and dies on deep JSON",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    stack = [value]\n    while stack:\n        v = stack.pop()\n        if isinstance(v, str):\n            if any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in v):\n                return True\n        elif isinstance(v, dict):\n            for k, val in v.items():\n                stack.append(k)\n                stack.append(val)\n        elif isinstance(v, (list, tuple)):\n            stack.extend(v)\n    return False",
+    "replacement": "    if isinstance(value, str):\n        return any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in value)\n    if isinstance(value, dict):\n        return any(_carries_surrogate(k) or _carries_surrogate(v)\n                   for k, v in value.items())\n    if isinstance(value, (list, tuple)):\n        return any(_carries_surrogate(v) for v in value)\n    return False",
+    "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py"
+  },
+  {
+    "name": "loads_clean raw range :: only the surrogateescape range is scanned again",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in s):",
+    "replacement": "    if any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in s):",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "scanner sep bindings :: the last assignment seen wins again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "        binds = {}\n        for n in ast.walk(fn):\n            if isinstance(n, ast.Assign) and len(n.targets) == 1 \\\n                    and isinstance(n.targets[0], ast.Name):\n                name = n.targets[0].id\n                binds.setdefault(name, []).append(\n                    n.value.value if isinstance(n.value, ast.Constant)\n                    else _UNRESOLVED)\n        consts = {k: v[0] for k, v in binds.items() if len(v) == 1}",
+    "replacement": "        consts = {}\n        for n in ast.walk(fn):\n            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) \\\\\n                    and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):\n                consts[n.targets[0].id] = n.value.value",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner sep unresolved :: an unresolvable binding stops meaning framing",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "                    if consts.get(a.id, \"\\n\") in (\"\\n\", b\"\\n\", _UNRESOLVED):\n                        return True               # unresolved -> assume framing",
+    "replacement": "                    if consts.get(a.id, \"\\n\") in (\"\\n\", b\"\\n\"):\n                        return True               ",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner parser spelling :: only literal json.loads counts as unguarded again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "        if name == \"loads\" or name.endswith(\"_loads\"):\n            return True",
+    "replacement": "        if name == \"loads\" and isinstance(f, ast.Attribute) \\\n                and isinstance(f.value, ast.Name) and f.value.id == \"json\":\n            return True",
     "tests": "tests/test_scan_destructive_rewrites.py"
   }
 ]

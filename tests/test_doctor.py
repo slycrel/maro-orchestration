@@ -829,3 +829,87 @@ class TestTheValidatorProvesTheStoredValueNotTheCoercedOne:
             row = _make_skill("sk", "n", correct_hash=True)
             row.update(over)
             validate_skill_row(row)
+
+
+class TestAbsenceIsNotADefaultForTheFieldsThisVerbActsOn:
+    """Adversarial r6 (2026-08-20, 4 lenses, probed) on the r5 fix layer.
+    r5's move to raw-value checks was right and dropped a guard on the way:
+    `if name in d` means an ABSENT field is fine, and for these two that is
+    not a default, it is an absence of proof. A missing `content_hash` makes
+    the stale check answer "not stale" (nothing to compare); `created_at` is
+    the tiebreaker. Both are excluded from the dedup identity, so neither
+    absence shows up as a difference — the forged row simply wins."""
+
+    @pytest.mark.parametrize("missing", ["content_hash", "created_at"])
+    def test_the_validator_refuses_the_row(self, missing):
+        from skill_types import validate_skill_row
+
+        row = _make_skill("sk", "n", correct_hash=True)
+        row.pop(missing)
+        with pytest.raises(KeyError):
+            validate_skill_row(row)
+
+    @pytest.mark.parametrize("missing", ["content_hash", "created_at"])
+    def test_a_hashless_later_twin_does_not_evict_the_verified_row(
+            self, missing, tmp_path, capsys):
+        """The literal end-to-end path r6 probed: both rows must survive."""
+        healthy = _make_skill("healthy", "s", correct_hash=True)
+        forged = dict(healthy, id="forged", created_at="2030-01-01T00:00:00")
+        forged.pop(missing)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(healthy) + "\n" + json.dumps(forged) + "\n",
+                     encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        text = f.read_text()
+        assert '"healthy"' in text, "the verified row was deleted"
+        assert '"forged"' in text, "the unprovable row was destroyed, not stranded"
+        assert "kept as-is" in capsys.readouterr().out.lower()
+
+
+class TestTheTiebreakIsTheInstantNotTheString:
+    """Adversarial r6 (Failure Operator, probed): `score_skill` compared
+    `created_at` as text. `2026-01-01T00:00:00+14:00` sorts AFTER
+    `2025-12-31T23:00:00-12:00` lexically and BEFORE it in real time, so the
+    older row was kept and the newer deleted — both rows valid, both
+    timestamps legal ISO-8601, and nothing in the output saying which went."""
+
+    def _pair(self, tmp_path, newer_at, older_at):
+        newer = dict(_make_skill("newer", "same", correct_hash=True),
+                     created_at=newer_at)
+        older = dict(_make_skill("older", "same", correct_hash=True),
+                     created_at=older_at)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(newer) + "\n" + json.dumps(older) + "\n",
+                     encoding="utf-8")
+        return f
+
+    def test_offsets_do_not_reverse_the_order(self, tmp_path):
+        f = self._pair(tmp_path, "2025-12-31T23:00:00-12:00",
+                       "2026-01-01T00:00:00+14:00")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        kept = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
+        assert kept == ["newer"], "the lexically-later but older row won"
+
+    def test_the_ordinary_case_still_keeps_the_newer_row(self, tmp_path):
+        """Negative control — the fix must not invert the normal ordering."""
+        f = self._pair(tmp_path, "2030-01-01T00:00:00+00:00",
+                       "2020-01-01T00:00:00+00:00")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        kept = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
+        assert kept == ["newer"]
+
+    def test_a_naive_and_an_aware_timestamp_compare_without_crashing(self, tmp_path):
+        """Both shapes are in the live store. `max()` over mixed tz-awareness
+        raises TypeError, which would take the whole repair verb down."""
+        f = self._pair(tmp_path, "2030-01-01T00:00:00", "2020-01-01T00:00:00+00:00")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        kept = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
+        assert kept == ["newer"]
