@@ -431,7 +431,7 @@
   {
     "name": "loads_clean escaped taint :: a surrogate written as \\\\uDCxx is admitted",
     "file": "src/jsonl_utils.py",
-    "anchor": "    if \"\\\\u\" in s and _carries_surrogate(value):\n        raise json.JSONDecodeError(\"byte-tainted line (surrogate written as \"\n                                   \"a \\\\uDCxx escape)\", s, 0)\n",
+    "anchor": "    if (\"\\\\ud\" in s or \"\\\\uD\" in s) and _carries_surrogate(value):\n        raise json.JSONDecodeError(\"byte-tainted line (surrogate written as \"\n                                   \"a \\\\uDCxx escape)\", s, 0)\n",
     "replacement": "",
     "tests": "tests/test_jsonl_utils.py"
   },
@@ -508,8 +508,8 @@
   {
     "name": "loads_clean raw range :: only the surrogateescape range is scanned again",
     "file": "src/jsonl_utils.py",
-    "anchor": "    if any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in s):",
-    "replacement": "    if any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in s):",
+    "anchor": "    if s.isascii():\n        return False\n    try:\n        s.encode(\"utf-8\")\n    except UnicodeEncodeError:\n        return True\n    return False",
+    "replacement": "    return any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in s)",
     "tests": "tests/test_jsonl_utils.py"
   },
   {
@@ -1017,5 +1017,12 @@
     "anchor": "        from jsonl_utils import read_jsonl_announced\n        path = self._path(collection)\n        if not path.exists():\n            return []\n        return read_jsonl_announced(path, f\"JSONLBackend.read_all({collection})\")",
     "replacement": "        path = self._path(collection)\n        if not path.exists():\n            return []\n        records = []\n        try:\n            for line in path.read_text(encoding=\"utf-8\").splitlines():\n                line = line.strip()\n                if not line:\n                    continue\n                try:\n                    records.append(json.loads(line))\n                except json.JSONDecodeError:\n                    pass\n        except OSError:\n            pass\n        return records",
     "tests": "tests/test_memory_backend.py"
+  },
+  {
+    "name": "loads_clean escape gate :: the uppercase spelling of the escape walks past",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if (\"\\\\ud\" in s or \"\\\\uD\" in s) and _carries_surrogate(value):",
+    "replacement": "    if \"\\\\ud\" in s and _carries_surrogate(value):",
+    "tests": "tests/test_jsonl_utils.py"
   }
 ]

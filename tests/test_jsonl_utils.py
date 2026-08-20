@@ -401,7 +401,14 @@ class TestTheTaintCheckCannotBeTheThingThatBreaks:
 
         # ~600 deep: json.loads parses it, the recursive walk blew the stack,
         # and InterruptQueue.poll() died before it could announce anything.
-        line = "[" * 600 + '"\\u000a"' + "]" * 600
+        #
+        # The payload is a valid surrogate PAIR, and it has to be: r10
+        # tightened the walk's gate from `\u` to `\ud`/`\uD` for speed, and
+        # the old `\u000a` payload stopped reaching the walk at all — the
+        # mutation sweep caught this test going vacuous the same round the
+        # gate changed. A pair contains `\ud`, so the gate fires and the walk
+        # runs, and json.loads has already joined it, so nothing is tainted.
+        line = "[" * 600 + '"\\ud83d\\ude00"' + "]" * 600
         json.loads(line)                      # the premise, stated out loud
         loads_clean(line)
 
@@ -413,6 +420,16 @@ class TestTheTaintCheckCannotBeTheThingThatBreaks:
         line = "[" * 400 + '"\\udcff"' + "]" * 400
         with pytest.raises(json.JSONDecodeError):
             loads_clean(line)
+
+    def test_the_escape_gate_is_not_case_sensitive(self):
+        """r10 narrowed the escaped-surrogate gate from `\\u` to `\\ud` to keep
+        the deep walk off the hot path. JSON hex digits may be UPPERCASE, so
+        the narrowed gate has two spellings and only one of them is the one
+        you think to write."""
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean('{"x": "\\uDCFF"}')
 
     @pytest.mark.parametrize("raw", ["\ud800", "\udbff", "\udc80", "\udfff"])
     def test_the_raw_scan_covers_the_whole_surrogate_block(self, raw):

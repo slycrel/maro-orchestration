@@ -2866,7 +2866,7 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
     `validate_skill_row`'s own docstring has stated since r3, applied to the
     two callers that were still using the constructor."""
 
-    def _store(self, tmp_path, monkeypatch):
+    def _store(self, tmp_path, monkeypatch, drift_first=True):
         import skills as skills_mod
 
         f = tmp_path / "skills.jsonl"
@@ -2878,9 +2878,38 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
         skills_mod.save_skill(good)
         row = json.loads(f.read_text(encoding="utf-8").strip())
         drift = dict(row, id="drift", utility_score="nope")
-        f.write_text(json.dumps(drift) + "\n" + json.dumps(row) + "\n",
+        rows = [drift, row] if drift_first else [row, drift]
+        f.write_text("".join(json.dumps(r) + "\n" for r in rows),
                      encoding="utf-8")
         return skills_mod, f
+
+    def test_a_loadable_row_this_writer_cannot_PROVE_is_still_carried(
+            self, tmp_path, monkeypatch):
+        """The distinguishing case for `validate_skill_row` over
+        `dict_to_skill`, which the r10 sweep showed the other tests could not
+        tell apart: `description` is a NUMBER. `dict_to_skill` assigns it
+        happily, so the row loads and its id IS in the caller's list — and
+        under the constructor it would be re-serialised from the loaded
+        Skill, which silently drops every key `skill_to_dict` does not
+        write. Under the proof it rides through byte for byte."""
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        skills_mod.save_skill(skills_mod.Skill(
+            id="x", name="n", description="d", trigger_patterns=[],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00"))
+        row = json.loads(f.read_text(encoding="utf-8").strip())
+        row["description"] = 7
+        row["operator_note"] = "keep this row"
+        f.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+        skills_mod._save_skills(skills_mod.load_skills())
+
+        after = f.read_text(encoding="utf-8")
+        assert '"operator_note": "keep this row"' in after, \
+            "a row this writer cannot prove was re-serialised, losing a field"
 
     def test_the_full_rewrite_keeps_it(self, tmp_path, monkeypatch):
         skills_mod, f = self._store(tmp_path, monkeypatch)
@@ -2899,12 +2928,16 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
         TAIL is not preservation — it is a promotion. `doctor` has preserved
         ordinals since r7; the skills writer appended strandees after every
         live skill (adversarial r10, Minimalist)."""
-        skills_mod, f = self._store(tmp_path, monkeypatch)
+        skills_mod, f = self._store(tmp_path, monkeypatch, drift_first=False)
 
         skills_mod._save_skills(skills_mod.load_skills())
 
         lines = f.read_text(encoding="utf-8").rstrip("\n").split("\n")
-        assert '"utility_score": "nope"' in lines[0], \
+        # SECOND, deliberately. With the carried row first, appending it to
+        # the tail lands it in the same place and the assertion cannot fail
+        # — which is how the first version of this test passed the mutation
+        # that removed ordinal preservation entirely.
+        assert '"utility_score": "nope"' in lines[1], \
             f"the carried row was moved: {lines}"
 
     def test_a_single_skill_save_keeps_it_too(self, tmp_path, monkeypatch):
@@ -2961,8 +2994,13 @@ class TestABrokenRowDoesNotHideAWorkingOne:
             steps_template=["s"], source_loop_ids=[],
             created_at="2026-01-01T00:00:00+00:00"))
         row = json.loads(f.read_text(encoding="utf-8").strip())
+        # `utility_score` is cast with float() inside dict_to_skill, so this
+        # is a row load_skills genuinely CANNOT build. The first version of
+        # this test used `steps_template="not a list"`, which dict_to_skill
+        # assigns without complaint — the row loaded fine and the test could
+        # not fail (r10 mutation sweep).
         with f.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(dict(row, steps_template="not a list")) + "\n")
+            fh.write(json.dumps(dict(row, utility_score="nope")) + "\n")
 
         loaded = skills_mod.load_skills()
 
@@ -2996,7 +3034,13 @@ class TestTheSkillStatsRewriteKeepsWhatItCannotRead:
         import skills as skills_mod
 
         f = tmp_path / "skill-stats.jsonl"
-        row = json.dumps({"skill_id": "b", "note": "x\u2028y"})
+        # ensure_ascii=False, or the fixture never contains a U+2028 at all
+        # — json.dumps escapes it to the six ASCII characters `\u2028` by
+        # default, splitlines() does not break on those, and the test passes
+        # on the defect. The r10 mutation sweep caught exactly that.
+        row = json.dumps({"skill_id": "b", "note": "x\u2028y"},
+                         ensure_ascii=False)
+        assert "\u2028" in row, "fixture drifted — no U+2028 in the row"
         f.write_text(row + "\n", encoding="utf-8")
 
         records, stranded = skills_mod._read_skill_stats(f)
