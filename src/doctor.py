@@ -638,19 +638,47 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
     # whole verb with UnicodeDecodeError. Deliberate drops (stale-hash,
     # duplicates) still drop; what this verb was never asked to delete now
     # rides the rewrite verbatim.
+    # The read happens INSIDE the lock, and the lock is held through the
+    # rewrite. Adversarial round 2026-08-20, 5/5 consensus HIGH: taking the
+    # lock only around the write left a window where a save_skill() landing
+    # between the snapshot and the lock was overwritten by the stale
+    # snapshot — a lost update in a verb whose whole job is repair, and the
+    # exact "loud read becomes silent deletion downstream" shape the arc
+    # exists to remove. Probed: a skill saved mid-cleanup did not survive.
+    from file_lock import locked_write, atomic_write
     from jsonl_utils import loads_clean as _loads_clean, store_text as _store_text
-    all_skills = []
-    stranded: "list[str]" = []
-    for line in _store_text(workspace_skills).splitlines():
-        line = line.strip()
-        if line:
+
+    with locked_write(workspace_skills):
+        all_skills = []
+        stranded: "list[str]" = []
+        # split("\n"), not splitlines(): JSONL frames on LF alone, while
+        # splitlines() also breaks on U+2028/U+2029 and friends, which are
+        # legal INSIDE a JSON string — a rewrite would turn one such row
+        # into two invalid fragments. The raw line is what gets carried;
+        # only a stripped copy is offered to the parser.
+        for raw in _store_text(workspace_skills).split("\n"):
+            line = raw.strip()
+            if not line:
+                continue
             try:
-                all_skills.append(_loads_clean(line))
+                row = _loads_clean(line)
+                if not isinstance(row, dict):
+                    # `[]`, `null` and `"x"` are valid JSON but not rows;
+                    # without this they reached .get() and crashed the verb.
+                    raise TypeError(f"not a JSON object: {type(row).__name__}")
+                all_skills.append(row)
             except Exception as e:
-                stranded.append(line)
+                stranded.append(raw)
                 print(f"Unparseable line kept as-is (not removed): {e}")
 
-    print(f"Loaded {len(all_skills)} skills")
+        print(f"Loaded {len(all_skills)} skills")
+        _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write)
+
+
+def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
+    """Classify and rewrite. Split out only so the lock's scope is one
+    `with` block; the caller holds the lock for the whole of this."""
+    from collections import defaultdict
 
     # Pass 1: remove stale-hash skills (test fixtures that leaked in)
     stale = [s for s in all_skills if _skill_hash_is_stale(s)]
@@ -660,8 +688,14 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
             print(f"  {s.get('id', '?'):12} '{s.get('name', '?')}' — stored hash doesn't match content")
     else:
         print("No stale-hash skills found")
-    stale_ids = {s.get("id") for s in stale}
-    clean = [s for s in all_skills if s.get("id") not in stale_ids]
+    # Filter by ROW, not by id. Adversarial round 2026-08-20 (Minimalist,
+    # verified): an id set removed EVERY row carrying a stale row's id, so a
+    # healthy skill sharing that id was destroyed too — and the closing
+    # summary counted only the stale one. Probed: 2 rows in, 0 left, "1
+    # removed" reported. Duplicate ids are not hypothetical here: a
+    # byte-tainted twin never id-matches on rewrite, so ids do accumulate.
+    stale_rows = {id(s) for s in stale}
+    clean = [s for s in all_skills if id(s) not in stale_rows]
 
     # Pass 2: deduplicate by content_hash
     by_hash: dict = defaultdict(list)
@@ -693,17 +727,16 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
         total_dup_removed += removed
         print(f"  {hash_val[:16]}... : keeping best of {len(skills)} copies of '{best.get('name', '?')}'")
 
-    # Rewrite with clean, deduped set — plus every row we could not read,
-    # verbatim. Under the file's lock and via atomic_write: the bare
-    # write_text this replaced raced concurrent save_skill/_save_skills
-    # calls (skills.jsonl is written on every skill match) and could not
-    # encode the surrogates a byte-safe read now carries.
-    from file_lock import locked_write, atomic_write
+    # Rewrite with the clean, deduped set — plus every row we could not
+    # read, byte for byte. The caller holds the lock across this write and
+    # the read that produced `all_skills`, so no concurrent save_skill can
+    # land between them; atomic_write's surrogateescape encoder is what
+    # lets the carried rows round-trip (the bare write_text this replaced
+    # could do neither).
     kept = [max(skills, key=score_skill) for skills in by_hash.values()]
     output_lines = [json.dumps(skill) for skill in kept] + stranded
-    with locked_write(workspace_skills):
-        atomic_write(workspace_skills, "\n".join(output_lines) + "\n",
-                     errors="surrogateescape")
+    atomic_write(workspace_skills, "\n".join(output_lines) + "\n",
+                 errors="surrogateescape")
     total_removed = len(stale) + total_dup_removed
     print(
         f"Cleaned: {len(kept)} skills remain "

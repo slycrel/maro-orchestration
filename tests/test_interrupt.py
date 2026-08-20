@@ -525,3 +525,66 @@ class TestTheInterruptChannelSurvivesATornByte:
             InterruptQueue(queue_path=p).peek()
 
         assert any("cannot be delivered" in r.message for r in caplog.records), caplog.text
+
+
+class TestTheInterruptChannelSurvivesAJsonValueThatIsNotARow:
+    """Adversarial round 2026-08-20, three lenses convergent and verified.
+
+    `loads_clean` refuses byte taint, not wrong SHAPE. `[]`, `null` and
+    `"x"` are all valid, taint-free JSON, and every one of them reached
+    `.get()` and raised AttributeError — which peek's handler does not catch,
+    so the control channel went down exactly as it did on a torn byte. The
+    byte-safety fix had closed one door and left the one beside it open.
+    """
+
+    def _row(self, iid: str, message: str, **over) -> dict:
+        d = {"id": iid, "message": message, "source": "cli", "intent": "additive",
+             "new_steps": [], "replacement_goal": None,
+             "timestamp": "2026-08-19T00:00:00+00:00", "applied": False}
+        d.update(over)
+        return d
+
+    def test_a_non_object_row_costs_one_interrupt_not_the_channel(self, tmp_path):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_bytes((json.dumps(self._row("i1", "stop the loop")) + "\n"
+                       + "[]\nnull\n\"x\"\n").encode())
+
+        pending = InterruptQueue(queue_path=p).poll()  # used to raise
+
+        assert [i.id for i in pending] == ["i1"]
+        after = p.read_text()
+        assert "[]" in after and "null" in after, "carried, not dropped"
+
+    def test_a_string_applied_flag_does_not_swallow_a_stop(self, tmp_path):
+        """`"applied": "false"` is legal JSON and truthy. Reading it as
+        applied meant a STOP was silently never delivered, with no warning."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_bytes((json.dumps(
+            self._row("i9", "STOP", intent="stop", applied="false")) + "\n").encode())
+
+        assert [i.id for i in InterruptQueue(queue_path=p).peek()] == ["i9"]
+
+    def test_an_already_applied_row_is_still_not_redelivered(self, tmp_path):
+        """The strict-True check must not turn every row back into pending."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_bytes((json.dumps(self._row("done", "old", applied=True)) + "\n").encode())
+
+        assert InterruptQueue(queue_path=p).peek() == []
+        assert InterruptQueue(queue_path=p).poll() == []
+
+    def test_a_row_carrying_a_unicode_line_separator_is_not_split(self, tmp_path):
+        """JSONL frames on LF. splitlines() also breaks on U+2028/U+2029,
+        which are legal inside a JSON string, so a rewrite would turn one
+        valid row into two invalid fragments."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        row = json.dumps(self._row("i1", "line break"), ensure_ascii=False)
+        p.write_bytes((row + "\n").encode())
+
+        pending = InterruptQueue(queue_path=p).poll()
+
+        assert [i.id for i in pending] == ["i1"]
+        assert len([l for l in p.read_text().split("\n") if l.strip()]) == 1

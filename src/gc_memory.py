@@ -62,6 +62,7 @@ class GCReport:
     outcomes_total: int = 0
     outcomes_removed: int = 0
     outcomes_retained: int = 0
+    outcomes_uncollectable: int = 0   # kept because unreadable — can never age out
     lessons_gc_removed: int = 0       # below GC_THRESHOLD
     narrative_logs_removed: int = 0
     bytes_freed: int = 0
@@ -73,6 +74,9 @@ class GCReport:
         status = "DRY RUN — " if self.dry_run else ""
         lines.append(f"{status}GC Summary")
         lines.append(f"  outcomes:   {self.outcomes_removed}/{self.outcomes_total} removed ({self.outcomes_retained} retained)")
+        if self.outcomes_uncollectable:
+            lines.append(f"  UNREADABLE: {self.outcomes_uncollectable} outcome row(s) kept "
+                         f"but uncollectable — they can never age out")
         lines.append(f"  lessons:    {self.lessons_gc_removed} below-threshold entries removed")
         lines.append(f"  narratives: {self.narrative_logs_removed} daily log(s) removed")
         if self.bytes_freed:
@@ -91,16 +95,23 @@ def _gc_outcomes(
     retain_days: int = DEFAULT_OUTCOMES_RETAIN_DAYS,
     *,
     dry_run: bool = True,
+    stats: Optional[dict] = None,
 ) -> tuple[int, int, int]:
-    """Return (total, removed, freed_bytes). Rewrites file if not dry_run."""
+    """Return (total, removed, freed_bytes). Rewrites file if not dry_run.
+
+    `stats`, when given, receives ``{"uncollectable": n}`` — rows kept
+    because they could not be read. Those rows can never age out, so a store
+    accumulating them grows without bound; three adversarial lenses
+    (2026-08-20) independently called that out. The retention decree forbids
+    deleting them, so the answer is visibility, not collection: the count
+    reaches the operator through GCReport instead of only a log line. A
+    quarantine/repair verb is the follow-on (BACKLOG), not a silent drop.
+    """
     path = _outcomes_path()
     if not path.exists():
         return 0, 0, 0
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    keep = []
-    dropped = []
-    total = 0
 
     # Byte-safe read (2026-08-20, destructive-rewrite sweep triage). This was
     # a strict decode inside `except Exception: return 0, 0, 0`, so ONE
@@ -108,62 +119,90 @@ def _gc_outcomes(
     # retention forever: every later GC reported (0, 0, 0) — "nothing to
     # collect" — with no log line at all, and the store grew without bound.
     # Probed 2026-08-20: (2, 1, 0) before the torn append, (0, 0, 0) after.
+    def _classify(text: str) -> "tuple[list[str], int, int]":
+        """(lines to keep, total scanned, unreadable count).
+
+        split("\\n"), not splitlines(): JSONL frames on LF alone, and
+        splitlines() also breaks on U+2028/U+2029, which are legal inside a
+        JSON string — rejoining after such a split would rewrite one valid
+        row as two invalid fragments.
+        """
+        keep: "list[str]" = []
+        total = unreadable = 0
+        for raw in text.split("\n"):
+            line = raw.strip()
+            if not line:
+                continue
+            total += 1
+            try:
+                # loads_clean, not json.loads: a byte-tainted row's timestamp
+                # cannot be trusted to authorize its own deletion, so taint
+                # falls to the keep-conservatively branch with the rest.
+                d = _loads_clean(line)
+                if not isinstance(d, dict):
+                    raise TypeError(f"not a JSON object: {type(d).__name__}")
+                ts_str = d.get("recorded_at") or d.get("timestamp", "")
+                if ts_str:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts >= cutoff:
+                        keep.append(raw)
+                    # else: too old — collected
+                else:
+                    keep.append(raw)  # no timestamp → keep conservatively
+            except Exception:
+                unreadable += 1
+                keep.append(raw)  # parse error → keep conservatively
+        return keep, total, unreadable
+
+    def _announce(unreadable: int) -> None:
+        if unreadable:
+            log.warning("gc: %d unparseable/byte-tainted row(s) in %s — kept, "
+                        "never collected (they carry no trustworthy timestamp)",
+                        unreadable, path)
+
     try:
         text = _store_text(path)
     except OSError as exc:
         log.warning("gc: cannot read %s (%s) — skipping outcomes GC",
                     path, exc)
         return 0, 0, 0
-    unreadable = 0
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        total += 1
-        try:
-            # loads_clean, not json.loads: a byte-tainted row's timestamp
-            # cannot be trusted to authorize its own deletion, so taint
-            # falls to the keep-conservatively branch with the rest.
-            d = _loads_clean(line)
-            ts_str = d.get("recorded_at") or d.get("timestamp", "")
-            if ts_str:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                if ts >= cutoff:
-                    keep.append(line)
-                else:
-                    dropped.append(line)  # too old
-            else:
-                keep.append(line)  # no timestamp → keep conservatively
-        except Exception:
-            unreadable += 1
-            keep.append(line)  # parse error → keep conservatively
-    if unreadable:
-        log.warning("gc: %d unparseable/byte-tainted row(s) in %s — kept, "
-                    "never collected (they carry no trustworthy timestamp)",
-                    unreadable, path)
-
+    keep, total, unreadable = _classify(text)
     removed = total - len(keep)
-    freed = 0
+    _announce(unreadable)
+    if stats is not None:
+        stats["uncollectable"] = unreadable
 
-    if removed > 0 and not dry_run:
-        # Merge under the lock: drop exactly the lines we judged too old.
-        # Appends landing during the scan aren't in drop_set → they survive
-        # (record_outcome runs concurrently via locked_append).
-        from file_lock import locked_rmw
-        drop_set = set(dropped)
-        original_size = path.stat().st_size
+    if dry_run or removed <= 0:
+        return total, removed, 0
 
-        def _trim(old: str) -> str:
-            kept = [l for l in old.splitlines() if l.strip() and l.strip() not in drop_set]
-            return "\n".join(kept) + ("\n" if kept else "")
+    # Classify AGAIN inside the lock, and rewrite from THAT classification.
+    # Adversarial round 2026-08-20 (Skeptic + Experimentalist, verified): the
+    # previous shape scanned outside the lock and then deleted lines matching
+    # a value-keyed drop_set, so an identical row appended after the scan was
+    # deleted with the old one it happened to equal — outcomes rows carry no
+    # identity that distinguishes them. Probed: 1 old row + 1 identical
+    # concurrent append -> 0 rows left, reported as "removed 1". Reclassifying
+    # under the lock removes the window entirely, and the returned counts now
+    # describe the mutation that actually happened.
+    from file_lock import locked_rmw
+    locked: "dict[str, int]" = {}
+    original_size = path.stat().st_size
 
-        try:
-            locked_rmw(path, _trim)
-        except OSError:
-            return total, 0, 0
-        freed = original_size - path.stat().st_size
+    def _trim(old: str) -> str:
+        kept, t, u = _classify(old)
+        locked["total"], locked["unreadable"] = t, u
+        locked["removed"] = t - len(kept)
+        return "\n".join(kept) + ("\n" if kept else "")
 
-    return total, removed, freed
+    try:
+        locked_rmw(path, _trim)
+    except OSError:
+        return total, 0, 0
+    _announce(locked.get("unreadable", 0) - unreadable)
+    if stats is not None:
+        stats["uncollectable"] = locked.get("unreadable", unreadable)
+    freed = original_size - path.stat().st_size
+    return locked.get("total", total), locked.get("removed", removed), freed
 
 
 def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
@@ -254,7 +293,10 @@ def run_gc(
     report = GCReport(dry_run=dry_run)
 
     try:
-        total, removed, freed = _gc_outcomes(retain_days=outcomes_retain_days, dry_run=dry_run)
+        _oc_stats: dict = {}
+        total, removed, freed = _gc_outcomes(
+            retain_days=outcomes_retain_days, dry_run=dry_run, stats=_oc_stats)
+        report.outcomes_uncollectable = _oc_stats.get("uncollectable", 0)
         report.outcomes_total = total
         report.outcomes_removed = removed
         report.outcomes_retained = total - removed

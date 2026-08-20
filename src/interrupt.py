@@ -268,6 +268,18 @@ class Interrupt:
 _LOCK = threading.Lock()
 
 
+def _is_applied(d: dict) -> bool:
+    """Has this row already been delivered?
+
+    Strictly `True`, not truthiness. Adversarial round 2026-08-20 (verified):
+    `d.get("applied", False)` read the STRING "false" — legal JSON, and what a
+    hand-edited or foreign-written row can easily carry — as applied, so a
+    STOP interrupt was silently never delivered and nothing warned. Our own
+    writer emits a real boolean, so nothing that Maro wrote changes meaning.
+    """
+    return d.get("applied") is True
+
+
 class InterruptQueue:
     """File-backed interrupt queue. Thread-safe, process-safe via line-append."""
 
@@ -345,22 +357,25 @@ class InterruptQueue:
             def _mark_applied(old: str) -> str:
                 pending.clear()
                 updated = []
-                for line in old.splitlines():
-                    if not line.strip():
+                for raw in old.split("\n"):
+                    if not raw.strip():
                         continue
                     try:
                         # loads_clean, not json.loads: this merge re-dumps
                         # EVERY row it parses, so a byte-tainted-but-valid row
                         # would come back as clean \udcXX escapes and the
                         # corruption signal would be erased forever. Refusing
-                        # taint sends it down the preserve branch below.
-                        d = _loads_clean(line)
-                        if not d.get("applied", False):
+                        # taint sends it down the preserve branch below, which
+                        # re-emits the RAW line — not a stripped copy.
+                        d = _loads_clean(raw)
+                        if not isinstance(d, dict):
+                            raise TypeError("not a JSON object")
+                        if not _is_applied(d):
                             d["applied"] = True
                             pending.append(Interrupt.from_dict(d))
                         updated.append(json.dumps(d))
                     except (json.JSONDecodeError, TypeError):
-                        updated.append(line)
+                        updated.append(raw)
                 return ("\n".join(updated) + "\n") if updated else ""
 
             try:
@@ -384,7 +399,14 @@ class InterruptQueue:
         for line in lines:
             try:
                 d = _loads_clean(line)
-                if not d.get("applied", False):
+                if not isinstance(d, dict):
+                    # `[]`, `null` and `"x"` are valid JSON but not rows.
+                    # Without this they reached .get() and raised
+                    # AttributeError — which this handler does not catch, so
+                    # the control channel went down exactly as it did on a
+                    # torn byte (adversarial round 2026-08-20, verified).
+                    raise TypeError(f"not a JSON object: {type(d).__name__}")
+                if not _is_applied(d):
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
                 dropped += 1
@@ -404,17 +426,19 @@ class InterruptQueue:
             def _mark_applied(old: str) -> str:
                 counted["n"] = 0
                 updated = []
-                for line in old.splitlines():
-                    if not line.strip():
+                for raw in old.split("\n"):
+                    if not raw.strip():
                         continue
                     try:
-                        d = _loads_clean(line)  # never launder a tainted twin
-                        if not d.get("applied", False):
+                        d = _loads_clean(raw)  # never launder a tainted twin
+                        if not isinstance(d, dict):
+                            raise TypeError("not a JSON object")
+                        if not _is_applied(d):
                             d["applied"] = True
                             counted["n"] += 1
                         updated.append(json.dumps(d))
                     except (json.JSONDecodeError, TypeError):
-                        updated.append(line)
+                        updated.append(raw)
                 return ("\n".join(updated) + "\n") if updated else ""
 
             try:
@@ -448,9 +472,14 @@ class InterruptQueue:
         # reaching a running loop. loop_post_step logs an ERROR per step, so
         # it was not silent, but the channel stayed dead until hand repair.
         # Now one torn byte costs one interrupt.
+        # split("\n"), not splitlines(): JSONL frames on LF alone, while
+        # splitlines() also breaks on U+2028/U+2029, which are legal inside a
+        # JSON string — a rewrite after such a split turns one valid row into
+        # two invalid fragments (adversarial round 2026-08-20, verified).
+        # Lines are returned RAW; callers strip only a parsing copy, so what
+        # rides a rewrite is byte-for-byte what was on disk.
         from jsonl_utils import store_text
-        text = store_text(self.path).strip()
-        return [l for l in text.splitlines() if l.strip()] if text else []
+        return [l for l in store_text(self.path).split("\n") if l.strip()]
 
 
 # ---------------------------------------------------------------------------

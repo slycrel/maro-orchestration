@@ -338,3 +338,106 @@ class TestTheSkillsCleanupSurvivesATornByte:
         resolved = _workspace_skills_path()
         assert str(resolved).startswith(str(tmp_path)), resolved
         assert resolved.name == "skills.jsonl"
+
+
+class TestTheCleanupVerbHoldsItsLock:
+    """Adversarial round 2026-08-20, 5/5 consensus HIGH.
+
+    The first version of the byte-safety fix took the lock only around the
+    WRITE, so a save_skill() landing between the snapshot and the lock was
+    overwritten by the stale snapshot — a lost update in a verb whose whole
+    job is repair.
+
+    This test must fork a real subprocess. locked_write is REENTRANT, so an
+    in-process writer acquires the lock the cleanup already holds and its
+    append is overwritten no matter how correct the code is — an in-process
+    probe of this cannot fail and would be worse than no test.
+    """
+
+    def test_a_concurrent_save_from_another_process_is_not_lost(self, tmp_path, capsys):
+        import subprocess
+        import sys as _sys
+        import time
+
+        import jsonl_utils
+        import doctor as _doctor
+
+        src = str(Path(__file__).parent.parent / "src")
+        skills_file = tmp_path / "skills.jsonl"
+        first = _make_skill("skfirst", "already here", correct_hash=True)
+        skills_file.write_text(json.dumps(first) + "\n", encoding="utf-8")
+
+        arrival = json.dumps(_make_skill("sklate", "arrived mid-cleanup", correct_hash=True))
+        writer = (
+            f"import sys; sys.path.insert(0, {src!r})\n"
+            "from pathlib import Path\n"
+            "from file_lock import locked_append\n"
+            f"locked_append(Path({str(skills_file)!r}), {arrival!r})\n"
+        )
+
+        real_store_text = jsonl_utils.store_text
+        started = {}
+
+        def racing(path):
+            text = real_store_text(path)
+            started["proc"] = subprocess.Popen([_sys.executable, "-c", writer])
+            time.sleep(1.0)  # let the other process reach the lock
+            return text
+
+        monkey = jsonl_utils.store_text
+        jsonl_utils.store_text = racing
+        try:
+            # cleanup imports store_text inside the function, so patching the
+            # module attribute is enough — but assert we actually raced.
+            cleanup_workspace_skills(skills_path=skills_file)
+        finally:
+            jsonl_utils.store_text = monkey
+            if "proc" in started:
+                started["proc"].wait(timeout=30)
+
+        assert "proc" in started, "the racing hook never ran — test is vacuous"
+        names = [json.loads(l)["name"] for l in skills_file.read_text().splitlines() if l.strip()]
+        assert "arrived mid-cleanup" in names, (
+            "a save from another process was overwritten by cleanup's snapshot")
+        assert "already here" in names
+
+
+class TestTheCleanupVerbRemovesRowsNotIds:
+    def test_a_healthy_skill_sharing_an_id_with_a_stale_one_survives(self, tmp_path, capsys):
+        """Adversarial round 2026-08-20 (Minimalist, verified): filtering by
+        id removed EVERY row carrying a stale row's id, and reported only the
+        stale one. Probed: 2 rows in, 0 left, "1 removed"."""
+        skills_file = tmp_path / "skills.jsonl"
+        stale = _make_skill("same", "stale copy", correct_hash=False)
+        healthy = _make_skill("same", "healthy copy", correct_hash=True)
+        skills_file.write_text(json.dumps(stale) + "\n" + json.dumps(healthy) + "\n",
+                               encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        names = [json.loads(l)["name"] for l in skills_file.read_text().splitlines() if l.strip()]
+        assert names == ["healthy copy"], names
+        assert "1 stale-hash" in capsys.readouterr().out
+
+    def test_a_json_value_that_is_not_an_object_does_not_crash_the_verb(self, tmp_path, capsys):
+        """`[]`, `null` and `"x"` are valid JSON but not rows."""
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True))
+        skills_file.write_bytes((good + "\n[]\nnull\n\"x\"\n").encode())
+
+        cleanup_workspace_skills(skills_path=skills_file)  # used to raise
+
+        after = skills_file.read_text()
+        assert "[]" in after and "null" in after, "non-row JSON must be carried, not dropped"
+        assert good in after
+
+    def test_a_padded_row_is_carried_byte_for_byte(self, tmp_path, capsys):
+        """'Verbatim' must mean verbatim — the first fix stripped the line."""
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True))
+        padded = '   {"id": "skhalf", "name": "half   '
+        skills_file.write_bytes((good + "\n" + padded + "\n").encode())
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        assert padded in skills_file.read_text()

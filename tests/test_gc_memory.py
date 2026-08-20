@@ -344,3 +344,70 @@ class TestOutcomesGcSurvivesATornByte:
         after = (mem / "outcomes.jsonl").read_bytes()
         assert tainted in after, "kept verbatim, not re-dumped as clean escapes"
         assert b"udcff" not in after.lower()
+
+
+class TestOutcomesGcReportsWhatItActuallyDid:
+    """Adversarial round 2026-08-20 (Skeptic + Experimentalist).
+
+    The finding was half right, and the half that held is the one that
+    mattered. The claim "a post-scan append is deleted with the old row it
+    equals" cannot cost data — an outcomes line identical to an old one
+    carries that same old timestamp, so collecting it is correct. But the
+    RETURNED COUNTS were computed from the out-of-lock scan, so GC could
+    delete two rows and report one. Reclassifying inside the lock removes
+    the value-identity dependence and makes the counts describe the
+    mutation that actually happened.
+    """
+
+    def test_the_counts_describe_the_rewrite_not_the_scan(self, monkeypatch, tmp_path):
+        import gc_memory as _gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        old_line = json.dumps({
+            "goal": "dup", "status": "done",
+            "recorded_at": (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()})
+        (mem / "outcomes.jsonl").write_text(old_line + "\n")
+
+        real = _gc._store_text
+        landed = {}
+
+        def racing(path):
+            text = real(path)
+            from file_lock import locked_append
+            locked_append(path, old_line)   # lands after the scan
+            landed["yes"] = True
+            return text
+
+        monkeypatch.setattr(_gc, "_store_text", racing)
+        total, removed, _ = _gc._gc_outcomes(retain_days=90, dry_run=False)
+
+        assert landed, "the racing hook never ran — test is vacuous"
+        assert (total, removed) == (2, 2), (
+            f"reported ({total}, {removed}) for a rewrite that removed 2 rows")
+
+    def test_uncollectable_rows_reach_the_operator(self, monkeypatch, tmp_path):
+        """They can never age out, so a store accumulating them grows without
+        bound. The retention decree forbids deleting them — so they must at
+        least be visible, not just logged."""
+        from gc_memory import run_gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=1)
+        with open(mem / "outcomes.jsonl", "ab") as f:
+            f.write(b'{"goal": "torn\xff", "status": "done"}\n')
+
+        report = run_gc(dry_run=True)
+
+        assert report.outcomes_uncollectable == 1
+        assert "UNREADABLE" in report.summary()
+
+    def test_a_json_value_that_is_not_an_object_is_kept_not_collected(self, monkeypatch, tmp_path):
+        from gc_memory import _gc_outcomes as gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        (mem / "outcomes.jsonl").write_text("[]\nnull\n")
+
+        total, removed, _ = gc(retain_days=90, dry_run=False)
+
+        assert (total, removed) == (2, 0)
+        assert "[]" in (mem / "outcomes.jsonl").read_text()

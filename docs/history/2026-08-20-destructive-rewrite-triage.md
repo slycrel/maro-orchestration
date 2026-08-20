@@ -104,14 +104,93 @@ same as "fine":
 
 - 15 tests — 6 `test_doctor.py`, 5 `test_interrupt.py`, 4 `test_gc_memory.py` —
   each written against a live probe *before* the fix.
-- `tests/mutation/interrupt_gc_doctor_preserve.json`: 19 file-derived
-  must-detect mutations, **19/19 first pass**, including the deliberate-drop
+- `tests/mutation/interrupt_gc_doctor_preserve.json`: 29 file-derived
+  must-detect mutations (19 first pass, +10 from adversarial r1), including the deliberate-drop
   direction (a strand-and-carry that quietly turned the cleanup verb into a
   no-op would be a worse bug than the one it fixes).
-- Census: 2 sites cleared. The scanner's RISK count falls 70 → 63.
+- Census: 2 sites cleared. The scanner's RISK count falls 70 → 62.
+- `scripts/triage_manifest.py` — the full site → category mapping, with a
+  `--check` drift mode pinned by `tests/test_scan_destructive_rewrites.py`.
 - Full suite verified in an isolated `git worktree` at HEAD + this change only:
   **9622 passed, 1 skipped**. The shared checkout shows two unrelated reds from
   another session's in-flight `captains_log.py` chunk.
+
+## Adversarial round 1 (2026-08-20, five codex seats — the cap lifted)
+
+Skeptic, Architect, Minimalist, Expert QA and the Experimentalist (the change
+ships numbers). **REJECT — 5/5 consensus HIGH, verified and fixed**, plus five
+more that held.
+
+**The consensus HIGH was mine, and it is the same shape the previous round
+caught:** the doctor fix took the lock only around the *write*, so a
+`save_skill()` landing between the snapshot and the lock was overwritten by the
+stale snapshot. A lost update, in a repair verb, introduced by the commit that
+was fixing data loss — and the code comment claimed the race was fixed. The
+read now happens inside the lock and the lock is held through the rewrite.
+
+A probe note worth keeping: **an in-process probe of that race cannot fail.**
+`locked_write` is reentrant, so a same-process writer acquires the lock the
+cleanup already holds and its append is overwritten no matter how correct the
+code is. The pin forks a real subprocess (which waits 1.3s for the lock);
+without that it would be a guard that cannot fail, which is worse than none.
+
+Also fixed, all verified by probe first:
+
+- **Shape, not just bytes** (3 lenses): `loads_clean` refuses byte taint, not a
+  wrong shape. `[]`, `null` and `"x"` are valid, taint-free JSON, and every one
+  reached `.get()` and raised `AttributeError` — which `peek()`'s handler does
+  not catch. The byte-safety fix closed one door and left the one beside it
+  open: the control channel still went down, on a different input.
+- **`"applied": "false"`** (2 lenses): legal JSON, and truthy, so a STOP
+  interrupt was read as already-delivered and silently dropped with no warning.
+  Now strictly `is True`; our own writer emits a real boolean, so nothing Maro
+  wrote changes meaning.
+- **Stale-by-id** (Minimalist): the cleanup removed every row carrying a stale
+  row's *id*, so a healthy skill sharing that id was destroyed and the summary
+  counted only the stale one. Probed: 2 rows in, 0 left, "1 removed". Filters
+  by row now. Duplicate ids are not hypothetical here — a byte-tainted twin
+  never id-matches on rewrite, so ids do accumulate.
+- **`splitlines()` framing** (2 lenses): JSONL frames on LF, but `splitlines()`
+  also breaks on U+2028/U+2029, which are legal *inside* a JSON string. A
+  rewrite after such a split turns one valid row into two invalid fragments.
+  Fixed in all three files; the arc-wide sweep of this idiom is BACKLOG'd,
+  since our writers use `json.dumps` defaults (which escape those characters)
+  and the exposure is foreign or hand-edited rows.
+- **"Verbatim" was not verbatim** (2 lenses): the strand-and-carry stripped the
+  line before carrying it, so padding and CRLF framing were lost even though
+  the tainted bytes survived. The raw line is carried now; only a stripped copy
+  is offered to the parser.
+- **GC counts** (2 lenses): *half right, and the half that held is the one that
+  mattered.* The claim that a post-scan append is deleted along with the old row
+  it equals cannot cost data — an outcomes line identical to an old one carries
+  that same old timestamp, so collecting it is correct. But the returned counts
+  came from the out-of-lock scan, so GC could delete two rows and report one
+  (probed: `(1, 1)` for a rewrite that removed 2). Classification now happens
+  again inside the lock and the counts describe the mutation that happened,
+  which also deletes the value-identity dependence entirely.
+- **Uncollectable rows are now visible** (3 lenses): rows kept because they
+  cannot be read can never age out, so a store accumulating them grows without
+  bound. The retention decree forbids deleting them, so the answer is
+  visibility, not collection — `GCReport.outcomes_uncollectable` and a summary
+  line. A quarantine/repair verb is the follow-on, not a silent drop.
+- **The manifest** (Experimentalist): the first version of this record shipped
+  eight aggregate categories with selected examples, which is not a
+  site -> classification mapping — you could not look up
+  `closure_verify._detect_next_ledger_gap` and find its verdict. Now
+  `scripts/triage_manifest.py`, with a `--check` mode pinned by a test, so a
+  new RISK site cannot quietly inherit "already triaged".
+
+**Deferred with reasons** (verified real, out of this chunk's scope):
+`poll()` marks an interrupt applied *before* the caller applies it, so a crash
+in that window loses the message permanently — at-most-once, not
+exactly-once (3 lenses). Moving the mark later just trades it for
+double-delivery, so the fix is a claim/ack protocol with idempotent apply
+keyed on interrupt id, which is its own chunk. Pre-existing; not touched here.
+
+Four of the five seats reported their sandbox was read-only and could not run
+pytest; they compensated with in-memory and static probes. The Experimentalist
+did run the mutation suite in an isolated archive and independently reproduced
+19/19.
 
 ## Lesson
 

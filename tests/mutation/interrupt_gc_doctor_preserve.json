@@ -2,35 +2,35 @@
   {
     "name": "interrupt family-B :: one torn byte kills the whole control channel again",
     "file": "src/interrupt.py",
-    "anchor": "        from jsonl_utils import store_text\n        text = store_text(self.path).strip()",
-    "replacement": "        text = self.path.read_text(encoding=\"utf-8\").strip()",
+    "anchor": "        from jsonl_utils import store_text\n        return [l for l in store_text(self.path).split(\"\\n\") if l.strip()]",
+    "replacement": "        text = self.path.read_text(encoding=\"utf-8\")\n        return [l for l in text.split(\"\\n\") if l.strip()]",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt launder (poll) :: a tainted twin is re-dumped as clean escapes",
     "file": "src/interrupt.py",
-    "anchor": "                        d = _loads_clean(line)\n                        if not d.get(\"applied\", False):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
-    "replacement": "                        d = json.loads(line)\n                        if not d.get(\"applied\", False):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "anchor": "                        d = _loads_clean(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "replacement": "                        d = json.loads(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt launder (clear) :: same, on the clear path",
     "file": "src/interrupt.py",
-    "anchor": "                        d = _loads_clean(line)  # never launder a tainted twin",
-    "replacement": "                        d = json.loads(line)",
+    "anchor": "                        d = _loads_clean(raw)  # never launder a tainted twin",
+    "replacement": "                        d = json.loads(raw)",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt preserve (poll) :: a row poll cannot parse is deleted by its rewrite",
     "file": "src/interrupt.py",
-    "anchor": "                        pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(line)",
-    "replacement": "                        pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        pass",
+    "anchor": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(raw)",
+    "replacement": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        pass",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt preserve (clear) :: same, on the clear path",
     "file": "src/interrupt.py",
-    "anchor": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(line)",
+    "anchor": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(raw)",
     "replacement": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        pass",
     "tests": "tests/test_interrupt.py"
   },
@@ -44,8 +44,8 @@
   {
     "name": "interrupt delivery :: poll stops marking healthy rows applied",
     "file": "src/interrupt.py",
-    "anchor": "                        if not d.get(\"applied\", False):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
-    "replacement": "                        if not d.get(\"applied\", False):\n                            pending.append(Interrupt.from_dict(d))",
+    "anchor": "                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "replacement": "                        if not _is_applied(d):\n                            pending.append(Interrupt.from_dict(d))",
     "tests": "tests/test_interrupt.py"
   },
   {
@@ -58,43 +58,43 @@
   {
     "name": "gc conservative-keep :: an unparseable row is dropped from the trim instead of kept",
     "file": "src/gc_memory.py",
-    "anchor": "        except Exception:\n            unreadable += 1\n            keep.append(line)  # parse error → keep conservatively",
-    "replacement": "        except Exception:\n            unreadable += 1\n            dropped.append(line)",
+    "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error → keep conservatively",
+    "replacement": "            except Exception:\n                unreadable += 1",
     "tests": "tests/test_gc_memory.py"
   },
   {
     "name": "gc launder :: a byte-tainted row's untrustworthy timestamp authorizes its own delete",
     "file": "src/gc_memory.py",
-    "anchor": "            d = _loads_clean(line)\n            ts_str = d.get(\"recorded_at\") or d.get(\"timestamp\", \"\")",
-    "replacement": "            d = json.loads(line)\n            ts_str = d.get(\"recorded_at\") or d.get(\"timestamp\", \"\")",
+    "anchor": "                d = _loads_clean(line)\n                if not isinstance(d, dict):",
+    "replacement": "                d = json.loads(line)\n                if not isinstance(d, dict):",
     "tests": "tests/test_gc_memory.py"
   },
   {
     "name": "gc announce :: the kept-but-unreadable rows are never mentioned",
     "file": "src/gc_memory.py",
-    "anchor": "    if unreadable:\n        log.warning(\"gc: %d unparseable/byte-tainted row(s) in %s",
-    "replacement": "    if False:\n        log.warning(\"gc: %d unparseable/byte-tainted row(s) in %s",
+    "anchor": "        if unreadable:\n            log.warning(\"gc: %d unparseable/byte-tainted row(s) in %s",
+    "replacement": "        if False:\n            log.warning(\"gc: %d unparseable/byte-tainted row(s) in %s",
     "tests": "tests/test_gc_memory.py"
   },
   {
     "name": "gc collection :: old rows stop being collected at all",
     "file": "src/gc_memory.py",
-    "anchor": "                if ts >= cutoff:\n                    keep.append(line)\n                else:\n                    dropped.append(line)  # too old",
-    "replacement": "                keep.append(line)",
+    "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old — collected",
+    "replacement": "                    keep.append(raw)",
     "tests": "tests/test_gc_memory.py"
   },
   {
     "name": "doctor family-B :: one torn byte crashes the cleanup verb again",
     "file": "src/doctor.py",
-    "anchor": "    for line in _store_text(workspace_skills).splitlines():",
-    "replacement": "    for line in workspace_skills.read_text(encoding=\"utf-8\").splitlines():",
+    "anchor": "        for raw in _store_text(workspace_skills).split(\"\\n\"):",
+    "replacement": "        for raw in workspace_skills.read_text(encoding=\"utf-8\").split(\"\\n\"):",
     "tests": "tests/test_doctor.py"
   },
   {
     "name": "doctor destruction :: a row the verb cannot read is deleted by its rewrite",
     "file": "src/doctor.py",
-    "anchor": "            except Exception as e:\n                stranded.append(line)",
-    "replacement": "            except Exception as e:\n                pass",
+    "anchor": "            except Exception as e:\n                stranded.append(raw)\n                print(f\"Unparseable line kept as-is (not removed): {e}\")",
+    "replacement": "            except Exception as e:\n                print(f\"Unparseable line kept as-is (not removed): {e}\")",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -107,8 +107,8 @@
   {
     "name": "doctor launder :: the rewrite cannot round-trip the bytes it carried",
     "file": "src/doctor.py",
-    "anchor": "        atomic_write(workspace_skills, \"\\n\".join(output_lines) + \"\\n\",\n                     errors=\"surrogateescape\")",
-    "replacement": "        workspace_skills.write_text(\"\\n\".join(output_lines) + \"\\n\", encoding=\"utf-8\")",
+    "anchor": "    atomic_write(workspace_skills, \"\\n\".join(output_lines) + \"\\n\",\n                 errors=\"surrogateescape\")",
+    "replacement": "    workspace_skills.write_text(\"\\n\".join(output_lines) + \"\\n\", encoding=\"utf-8\")",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -121,8 +121,8 @@
   {
     "name": "doctor deliberate-drop :: stale-hash skills stop being removed",
     "file": "src/doctor.py",
-    "anchor": "    clean = [s for s in all_skills if s.get(\"id\") not in stale_ids]",
-    "replacement": "    clean = list(all_skills)",
+    "anchor": "    stale_rows = {id(s) for s in stale}\n    clean = [s for s in all_skills if id(s) not in stale_rows]",
+    "replacement": "    stale_rows = set()\n    clean = [s for s in all_skills if id(s) not in stale_rows]",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -131,5 +131,76 @@
     "anchor": "        from orch_items import memory_dir\n        return memory_dir() / \"skills.jsonl\"",
     "replacement": "        return Path.home() / \".maro\" / \"workspace\" / \"memory\" / \"skills.jsonl\"",
     "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor lock :: the read moves back outside the lock (lost update)",
+    "file": "src/doctor.py",
+    "anchor": "    with locked_write(workspace_skills):\n        all_skills = []",
+    "replacement": "    if True:\n        all_skills = []",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor stale-by-id :: a healthy row sharing a stale row's id is destroyed",
+    "file": "src/doctor.py",
+    "anchor": "    stale_rows = {id(s) for s in stale}\n    clean = [s for s in all_skills if id(s) not in stale_rows]",
+    "replacement": "    stale_ids = {s.get(\"id\") for s in stale}\n    clean = [s for s in all_skills if s.get(\"id\") not in stale_ids]",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor shape :: a JSON value that is not an object reaches .get()",
+    "file": "src/doctor.py",
+    "anchor": "                row = _loads_clean(line)\n                if not isinstance(row, dict):",
+    "replacement": "                row = _loads_clean(line)\n                if False:",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
+    "file": "src/doctor.py",
+    "anchor": "            except Exception as e:\n                stranded.append(raw)",
+    "replacement": "            except Exception as e:\n                stranded.append(line)",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "interrupt shape :: a JSON value that is not an object kills the channel again",
+    "file": "src/interrupt.py",
+    "anchor": "                if not isinstance(d, dict):\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows.",
+    "replacement": "                if False:\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows.",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt applied-flag :: the string \"false\" reads as applied and swallows a STOP",
+    "file": "src/interrupt.py",
+    "anchor": "    return d.get(\"applied\") is True",
+    "replacement": "    return bool(d.get(\"applied\", False))",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt framing :: splitlines() splits a row on U+2028 and corrupts it",
+    "file": "src/interrupt.py",
+    "anchor": "        return [l for l in store_text(self.path).split(\"\\n\") if l.strip()]",
+    "replacement": "        return [l for l in store_text(self.path).splitlines() if l.strip()]",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "gc counts :: the returned counts come from the out-of-lock scan again",
+    "file": "src/gc_memory.py",
+    "anchor": "    return locked.get(\"total\", total), locked.get(\"removed\", removed), freed",
+    "replacement": "    return total, removed, freed",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "gc visibility :: the uncollectable count never reaches the operator",
+    "file": "src/gc_memory.py",
+    "anchor": "        report.outcomes_uncollectable = _oc_stats.get(\"uncollectable\", 0)",
+    "replacement": "        report.outcomes_uncollectable = 0",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "gc shape :: a JSON value that is not an object reaches .get()",
+    "file": "src/gc_memory.py",
+    "anchor": "                if not isinstance(d, dict):\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
+    "replacement": "                if False:\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
+    "tests": "tests/test_gc_memory.py",
+    "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way — no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
   }
 ]

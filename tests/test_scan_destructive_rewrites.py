@@ -128,3 +128,25 @@ class TestTheScannerStillSeesTheRealFixedSurfaces:
         assert got.get("_read_skill_stats") == "OK"
         assert got.get("_save_skills") == "OK"
         assert got.get("save_skill") == "OK"
+
+
+def test_the_triage_manifest_matches_the_live_scan():
+    """A new RISK site must not quietly inherit "already triaged".
+
+    Adversarial round 2026-08-20 (Experimentalist, accepted): the triage
+    record shipped aggregate categories with examples, so "every false
+    positive has a reason written down" was not reproducible — you could not
+    look a site up. scripts/triage_manifest.py is the mapping; this pins that
+    it stays true as the tree moves.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).parent.parent
+    proc = subprocess.run(
+        [sys.executable, "scripts/triage_manifest.py", "--check"],
+        cwd=repo, capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, (
+        "triage manifest drifted from the scanner:\n" + proc.stdout + proc.stderr)

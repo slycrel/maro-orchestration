@@ -516,7 +516,60 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       note worth keeping: the scanner's own summary line contains the
       word RISK, so `grep -c RISK` reports 71 for 70 sites — the
       triage counts were re-derived by set-difference before the record
-      was written.*
+      was written.
+    - *Its adversarial r1 (2026-08-20, FIVE codex seats — the cap
+      lifted, so a true opposite-model round): **REJECT, 5/5 consensus
+      HIGH — and the HIGH was mine again**, the same shape the previous
+      round caught. The doctor fix took the lock only around the WRITE,
+      so a `save_skill()` landing between the snapshot and the lock was
+      overwritten by the stale snapshot: a lost update, in a repair
+      verb, introduced by the commit that was fixing data loss — with a
+      code comment claiming the race was fixed. Read now happens inside
+      the lock. **Probe note worth keeping: an in-process probe of that
+      race CANNOT FAIL** (locked_write is reentrant, so a same-process
+      writer takes the lock the cleanup already holds); the pin forks a
+      real subprocess, which waits 1.3s for the lock. Five more held and
+      were fixed: (a) `loads_clean` refuses byte TAINT, not wrong SHAPE
+      — `[]`/`null`/`"x"` are valid taint-free JSON that reached .get()
+      and raised AttributeError, which peek()'s handler does not catch,
+      so the control channel still went down on a different input (3
+      lenses); (b) `"applied": "false"` is legal JSON and truthy, so a
+      STOP read as already-delivered and vanished with no warning — now
+      strictly `is True`; (c) the cleanup filtered stale rows by ID, so
+      a healthy skill sharing a stale row's id was destroyed and the
+      summary counted only the stale one (probed 2 in / 0 left / "1
+      removed") — filters by row now; (d) `splitlines()` also breaks on
+      U+2028/U+2029, legal INSIDE a JSON string, so a rewrite turns one
+      valid row into two invalid fragments — fixed in all three files,
+      arc-wide sweep of the idiom BACKLOG'd below; (e) "verbatim"
+      strand-and-carry stripped the line before carrying it. GC's count
+      finding was **half right and worth recording as such**: an
+      identical post-scan append cannot cost data (an outcomes line
+      equal to an old one carries that same old timestamp, so
+      collecting it is correct), but the RETURNED COUNTS came from the
+      out-of-lock scan, so GC could delete two rows and report one —
+      classification now happens again inside the lock. Uncollectable
+      rows became visible (`GCReport.outcomes_uncollectable` + summary
+      line): they can never age out, and the retention decree forbids
+      deleting them, so visibility is the answer, not collection.
+      Receipts: 12 more tests (all four verified as failing against the
+      pre-fix code), spec 19 -> 29 (28 detected + 1 marked EQUIVALENT
+      surviving as claimed), suite 9634 in an isolated worktree.*
+    - *Owed from r1, with reasons: (1) **`interrupt.poll()` marks a row
+      applied BEFORE the caller applies it** — a crash in that window
+      loses the message permanently. At-most-once, not exactly-once (3
+      lenses, verified). Moving the mark later just trades it for
+      double-delivery, so the fix is a claim/ack protocol with an
+      idempotent apply keyed on interrupt id — its own chunk,
+      pre-existing, not touched here. (2) An arc-wide sweep of
+      `store_text(...).splitlines()` -> `.split("\n")`: every store
+      hardened in this arc shares the U+2028 framing bug, and only the
+      three files touched on 2026-08-20 are fixed. Low exposure today
+      (our writers use json.dumps defaults, which escape those
+      characters; the risk is foreign or hand-edited rows) but it is
+      the same one-line change everywhere. (3) A quarantine/repair verb
+      for rows GC can never collect — count is now visible, the
+      remedy is not.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making
