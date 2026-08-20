@@ -37,6 +37,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What open threads exist, in what state? (premise-drift finds, ACTIVE/PARKED split, marker-convention rules) | `history/2026-07-28-thread-census.md` (star use #3; 56 threads / 7 states; 7 premise-drifts, 1 closed on the spot; 8 doc currency fixes; 10/10 sweep spot-checks held) |
 | Where did a given run actually go, and which paths does the process really use? | `RUN_ATLAS.md` (living; process map + run overlay, `scripts/run_atlas/`) |
 | What transitions does a run record, and where is each one written? | `RUN_TRACE.md` (living; `build/trace.jsonl`, `src/run_trace.py` — the phase track and every branch, recorded since 2026-08-18) |
+| Why do imported workspaces still hold the source machine's paths? | `PATH_PORTABILITY_DESIGN.md` (dormant-design; export-side `$MARO_ROOT/` placeholders, owned-vs-observed rule, invertibility requirement) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | What do those goals add up to, and what's the next bridge? (C0–C5 checkpoints, per-chasm ladders, tech-tree nodes) | `CAPABILITY_LADDER.md` (progression map; CAPABILITIES.md stays the goal well) |

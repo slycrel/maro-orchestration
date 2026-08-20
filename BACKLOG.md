@@ -1024,6 +1024,23 @@ decision) archived: BACKLOG_DONE.md §"Moved from BACKLOG 2026-08-16"
 — location gaps CLOSED as of format v2; residual gaps are semantics,
 not fidelity.
 
+**Export-side placeholders (successor design, sketched 2026-08-18)** —
+`docs/PATH_PORTABILITY_DESIGN.md`. Jeremy's call after reviewing the
+residual: substitute `$MARO_ROOT/`-style placeholders at EXPORT and expand
+at import, rather than rewriting source absolutes into local absolutes on
+the way in ("correct going out and not painful going back in"). Measured
+motivation: **2,029 files / 25,278 occurrences still embed `/home/clawd`
+after the current rewrite**, the largest bucket (6,150) being the
+pre-rename repo root, which is stale on BOTH machines. Design carries the
+root table (docker mounts are identity-mapped, so the only non-identity
+root is `/tmp` scratch; the self-dev clone is a distinct root), the
+owned-vs-observed rule (never substitute a scavenge/fence finding — the
+absolute string IS the evidence), and invertibility as a hard requirement
+(archives are byte-faithful today and the lesson-ledger restore relied on
+it; Jeremy's ship-both-forms suggestion satisfies it by construction, kept
+at manifest level so two copies cannot drift per-record). Forward-only:
+`path_rewrite` stays for legacy archives. NOT STARTED — spec only.
+
 **Path-token rewriting — SHIPPED 2026-08-16 as shape (b)**, on
 Jeremy's call to stop deferring it ("the intent was to do it later, not
 kick it down the road perpetually"; filed 2026-08-13 with his worry on
