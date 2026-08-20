@@ -44,6 +44,46 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Per-step model tiering — the classifier and the tier selector exist and are not connected (FOUND 2026-08-19; Jeremy's target architecture)
+
+Jeremy, 2026-08-19: *"I dream of a day where a super cheap (or local) model can
+do the step work while we make a 1-3 shot orchestration plan with a higher tier
+model."* That is nearer than it sounds — this is a wiring gap, not missing
+infrastructure.
+
+**What exists:** `classify_step_type` (`src/metrics.py:164`) buckets step text
+into research/summarize/analyze/write/verify/implement/plan/general.
+`assign_model_by_role` (`src/conductor.py:103`) maps roles to CHEAP/MID/POWER and
+is called from 24 sites.
+
+**Why nothing gets cheap:** the mapping is per-ROLE, not per-STEP.
+`loop_init.py:357` (and `handle.py:1254`) build ONE adapter from
+`assign_model_by_role("worker")` → MODEL_MID and thread that same adapter through
+every step of the run. Planner gets POWER, every step gets MID, **CHEAP is never
+selected for step work**. `classify_step_type` has 3 call sites, all inside
+`metrics.py` — it feeds cost accounting only and never reaches model selection.
+
+**The system already asked for this.** The 2026-08-19 run's introspect phase
+flagged `[cost_spike]` on itself and the recovery planner proposed *"route the
+costly step class to a cheaper model tier"* (NEEDS-REVIEW). A correct
+self-diagnosis with no mechanism to land in — the verify→learn loop open in one
+concrete, fixable instance.
+
+**Shape of the work:** a step_type→tier policy table consulted at step dispatch,
+behind a config flag defaulting OFF (out-of-the-box decree: no silent behavior
+change on fresh installs). Then A/B it — ungated MID-everything vs. tiered — on
+**cost-per-accepted-outcome**, not tokens, using `step-costs.jsonl` (per-call
+`tokens_in/out`, `cache_read_tokens`, `cost_usd`, `model`, `step_type`,
+`loop_id`). Tokens alone is the metric that makes delegation look bad while
+saying nothing about whether the work got done; see
+`research/2026-08-19-sol-advisor-efficiency-claim.md`.
+
+**Sequencing caveat — this is the smaller half of the time cost.** Same run:
+deliverable written at 14m37s, then 16m31s more (53% of wall clock) of post-hoc
+learning after the answer existed. Async-tail Phase 1 (2026-08-12) covers the
+notify path; a blocking CLI invocation still eats the whole tail. If the goal is
+wall-clock, the tail outranks tiering. If the goal is spend, tiering is first.
+
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 
 `_review_worker_output` (`src/director.py:832`) fires a second LLM call after

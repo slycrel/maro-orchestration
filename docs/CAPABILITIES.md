@@ -197,6 +197,8 @@ real phrasing beats cleaned-up phrasing.
 | "Iterate on this parsing code until it produces [expected output] on [input]." | every iteration's claimed output is sandbox-executed, not hand-written; auto-loop on mismatch | execution grounding, claimed-vs-actual diff | `target` — from failure corpus 3.2 |
 | "Figure out how to get [blocked/undocumented data source] working, then capture the recipe as a reusable skill." | working access path + a skill file future runs can load | probe-driven exploration, self-bundling ("learn a language to get things done") | `target` — done by hand 2026-07-11 (Reddit RSS door, X CT-cache reseed → skills/social_search.md); the target is Maro doing this loop itself |
 
+| "Run this goal with a cheap or local model doing the step work, and only spend high-tier tokens on the plan." | the run costs a fraction of today's, with 1–3 high-tier planning shots over CHEAP-tier step execution, and quality holds on cost-per-accepted-outcome | per-step tier routing (`classify_step_type` → tier policy), plan/execute model split | `aspirational` — Jeremy 2026-08-19: *"I dream of a day where a super cheap (or local) model can do the step work while we make a 1-3 shot orchestration plan with a higher tier model. Might be a pipe dream, but I think it's possible."* Both halves exist unconnected (`metrics.py:164`, `conductor.py:103`); today every step runs MID and nothing runs CHEAP |
+
 ### Tier 5 — long-horizon compound projects
 
 | Goal (as asked) | Success looks like | Exercises | Status |

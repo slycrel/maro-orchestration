@@ -773,6 +773,43 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 *Entries 2026-04-23 → 2026-07-14 rotated to `docs/history/goal-brain-decisions-2026-04-to-07.md` (2026-08-16). The archive is part of this append-only log — rotation, not deletion; dev-recall ingests it.*
 
+- **2026-08-19 (token/time weight is a design defect, not a cost of doing
+  business — Jeremy):** *"I'm painfully aware our orchestration is token (and
+  time) heavy. I think when we get it closer to right that it won't need to be.
+  I dream of a day where a super cheap (or local) model can do the step work
+  while we make a 1-3 shot orchestration plan with a higher tier model. Might be
+  a pipe dream, but I think it's possible. Until then, onward."* Two things this
+  settles. (1) **Direction:** the target architecture is a small number of
+  high-tier planning shots over cheap/local step execution — heavy spend is to be
+  designed out, not accepted as the price of orchestration. (2) **Posture:** this
+  is not a reason to pause; "onward" stands.
+
+  Prompted by examining the sol-advisor efficiency claim
+  (`research/2026-08-19-sol-advisor-efficiency-claim.md`). That investigation
+  found the target shape is **nearer than assumed** — both halves exist and are
+  simply not connected: `classify_step_type` (`src/metrics.py:164`) already
+  buckets steps into research/summarize/analyze/write/verify/implement/plan/
+  general but has only 3 call sites, all inside `metrics.py`, feeding cost
+  accounting alone; `assign_model_by_role` (`src/conductor.py:103`) already maps
+  to CHEAP/MID/POWER across 24 call sites. The mapping is per-ROLE, not per-STEP:
+  `loop_init.py:357` builds ONE `assign_model_by_role("worker")` → MID adapter
+  and threads it through every step, so planner gets POWER, all steps get MID,
+  and **nothing is ever routed CHEAP**. The gap is a step_type→tier policy table,
+  not new infrastructure.
+
+  Corroborating evidence from the same run, unprompted: the introspect phase
+  flagged `[cost_spike]` on itself and the recovery planner proposed *"route the
+  costly step class to a cheaper model tier"* (NEEDS-REVIEW) — a correct
+  self-diagnosis with no mechanism to act on, i.e. the verify→learn loop open in
+  one concrete instance.
+
+  Measured counterweight, which redirects where the saving actually is: that run
+  wrote its deliverable at 14m37s and then ran **16m31s more (53% of wall clock)**
+  of post-hoc learning after the answer existed. Orchestration was the smaller
+  half of the time cost; the learning tail was the larger. Async-tail Phase 1
+  (2026-08-12) covers the notify path — a blocking CLI invocation still eats the
+  whole tail.
+
 - **2026-07-15 (C4-BOX burn-in run + container containment finding — Jeremy:
   "do both"):** the containerized-executor C4 burn-in ran on the box (auth
   volume seeded via interactive `/login`; CLI pin bumped 2.1.207→2.1.210). A
