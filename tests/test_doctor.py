@@ -564,3 +564,174 @@ class TestARowMustBeProvenASkillNotJustADict:
         from skill_types import validate_skill_row
 
         assert validate_skill_row(_make_skill("sk", "n", correct_hash=True)).id == "sk"
+
+
+class TestDedupDeletesOnlyProvableRedundancy:
+    """Adversarial r4 (2026-08-20, 5/5 consensus HIGH). r3 answered "validate
+    the row" and five lenses each found a different field to smuggle junk
+    through — `tier` as a list, `failure_notes` carrying an int, `tags` as a
+    string, an empty `id` with `created_at="zzzz"` winning a lexical compare,
+    an empty `content_hash` falling through to an ID-keyed dedup the comment
+    claimed did not exist. Five shapes of one bug is a whack-a-mole, not a
+    fix.
+
+    The root cause was the dedup KEY: grouping by the row's declared
+    `content_hash` asks a row to nominate its own peers, and that hash covers
+    only name + description + steps_template + objective. So a row could
+    match on the hash, change `trigger_patterns` — which decides what the
+    skill MATCHES — and evict the healthy row for being its duplicate. Now
+    two rows are duplicates only when they agree on everything except
+    bookkeeping.
+    """
+
+    def _pair(self, tmp_path, **forged):
+        base = _make_skill("skgood", "real skill", correct_hash=True)
+        base["trigger_patterns"] = ["safe"]
+        from skill_types import compute_skill_hash, dict_to_skill
+        base["content_hash"] = compute_skill_hash(dict_to_skill(base))
+        row = dict(base)
+        row.update(id="forged", created_at="2030-01-01T00:00:00+00:00",
+                   use_count=999, success_rate=1.0)
+        row.update(forged)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(base) + "\n" + json.dumps(row) + "\n",
+                     encoding="utf-8")
+        return f
+
+    @pytest.mark.parametrize("label,forged", [
+        ("trigger_patterns differ, both well-typed", {"trigger_patterns": ["destroy prod"]}),
+        ("tier is a list", {"tier": ["not-a-tier"]}),
+        ("failure_notes carries an int", {"failure_notes": [7]}),
+        ("tags is a string", {"tags": "not-a-list"}),
+        ("empty id and a lexical-max timestamp", {"id": "", "created_at": "zzzz"}),
+    ])
+    def test_a_foreign_row_cannot_evict_a_healthy_one(self, tmp_path, label, forged):
+        f = self._pair(tmp_path, **forged)
+
+        cleanup_workspace_skills(skills_path=f)
+
+        rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+        assert any(r.get("id") == "skgood" for r in rows), (
+            f"the healthy skill was deleted — {label}")
+        assert len(rows) == 2, f"the foreign row was destroyed — {label}"
+
+    def test_two_unrelated_rows_sharing_an_id_are_not_deduped_by_it(self, tmp_path):
+        """The old fallback grouped hash-less rows by `id` under a comment
+        that said "can't dedup without a key". It deduped by that key, so two
+        unrelated skills that shared an id were one delete away from each
+        other. There is no fallback key now — and a row with no hash cannot
+        be verified, so it is stranded rather than ranked."""
+        a = _make_skill("dup-id", "skill A", correct_hash=True)
+        b = _make_skill("dup-id", "skill B — different work", correct_hash=True)
+        a["content_hash"] = b["content_hash"] = ""
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(a) + "\n" + json.dumps(b) + "\n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        names = [json.loads(l)["name"] for l in f.read_text().splitlines() if l.strip()]
+        assert sorted(names) == ["skill A", "skill B — different work"]
+
+    def test_a_true_duplicate_is_still_removed(self, tmp_path, capsys):
+        """The negative control. A verb that never deletes anything is not a
+        cleanup verb — the deliberate drop must still happen."""
+        f = self._pair(tmp_path)      # differs only in bookkeeping
+
+        cleanup_workspace_skills(skills_path=f)
+
+        rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+        assert len(rows) == 1 and rows[0]["id"] == "forged"
+        assert "identical copies" in capsys.readouterr().out
+
+
+class TestTheValidatorAcceptsEveryShapeTheLiveStoreCarries:
+    """Adversarial r4 (2 lenses, LOW but fair): the r3 negative control
+    claimed "all 423 rows in the live store validate" and then validated one
+    synthetic fixture whose `variant_of` is always None. The live store has
+    20 rows with a string `variant_of`, 43 with non-empty `failure_notes`, 27
+    with non-empty `tags`. A validator tightening could strand those and this
+    test would not notice. These are the observed shapes, checked in."""
+
+    SHAPES = [
+        {},
+        {"variant_of": "sk-parent", "variant_wins": 3, "variant_losses": 1},
+        {"failure_notes": ["timed out", "wrong tool"]},
+        {"tags": ["research", "ops"]},
+        {"source_loop_ids": ["loop-1", "loop-2"]},
+        {"steps_template": []},
+        {"imported": {"pack": "maro-pack-1", "at": "2026-01-01T00:00:00+00:00"}},
+        {"tier": "graduated", "circuit_state": "open", "domain": "ops",
+         "island": "a", "project": "p", "origin": "imported"},
+    ]
+
+    @pytest.mark.parametrize("over", SHAPES)
+    def test_it_validates(self, over):
+        from skill_types import validate_skill_row
+
+        row = _make_skill("sk", "n", correct_hash=True)
+        row.update(over)
+        validate_skill_row(row)
+
+
+class TestAnUnprovableRowIsStrandedNotAdmitted:
+    """The dedup-identity fix (r4) means a junk row can no longer evict a
+    healthy one even if it IS admitted — which is the point, but it also made
+    every "healthy row survives" test pass with the validator's field checks
+    removed. The mutation sweep said so: four validator mutants survived.
+    That is a hole in the suite, not a reason to drop the checks, because
+    admission has its own consequence — an admitted row is re-serialized into
+    the rewrite, a stranded one rides through byte for byte. These pin the
+    boundary directly."""
+
+    @pytest.mark.parametrize("label,over", [
+        ("description is not text", {"description": 7}),
+        # The one shape ONLY the hash call catches. Every field it hashes is
+        # also in _STR_FIELDS, so a non-str is rejected either way — but a
+        # lone surrogate IS a str, passes every isinstance check, and dies on
+        # .encode("utf-8"). Probed: without compute_skill_hash the row is
+        # admitted. (loads_clean refuses taint upstream on the doctor path;
+        # this is the boundary function's own contract, for other callers.)
+        ("description carries a lone surrogate", {"description": "bad\udcff"}),
+        ("name carries a lone surrogate", {"name": "n\udc80"}),
+        ("a step carries a lone surrogate", {"steps_template": ["ok", "x\udcff"]}),
+        ("tier is a list", {"tier": ["x"]}),
+        ("circuit_state is an int", {"circuit_state": 3}),
+        ("domain is a dict", {"domain": {}}),
+        ("failure_notes carries an int", {"failure_notes": [7]}),
+        ("trigger_patterns is a string", {"trigger_patterns": "x"}),
+        # NOT here: `tags` — normalize_tags() coerces a bare string to
+        # ["x"] on purpose (a stored string must not iterate into
+        # character tags). Coercion is the contract, not a hole.
+        ("id is empty", {"id": ""}),
+        ("content_hash is empty", {"content_hash": ""}),
+        ("name is whitespace", {"name": "   "}),
+        ("created_at is not a timestamp", {"created_at": "zzzz"}),
+        ("created_at is empty", {"created_at": ""}),
+        ("success_rate is NaN", {"success_rate": float("nan")}),
+        ("use_count is a string", {"use_count": "9"}),
+        ("use_count is a bool", {"use_count": True}),
+        ("variant_of is a list", {"variant_of": []}),
+        ("imported is a string", {"imported": "yes"}),
+    ])
+    def test_the_validator_refuses_it(self, label, over):
+        from skill_types import validate_skill_row
+
+        row = _make_skill("sk", "n", correct_hash=True)
+        row.update(over)
+        with pytest.raises((TypeError, ValueError, KeyError)):
+            validate_skill_row(row)
+
+    def test_a_refused_row_rides_the_rewrite_byte_for_byte(self, tmp_path, capsys):
+        """The observable difference between stranded and admitted: an
+        admitted row is re-serialized by `json.dumps`, a stranded one is the
+        original bytes. Distinctive spacing makes that visible."""
+        healthy = _make_skill("skgood", "real skill", correct_hash=True)
+        junk = dict(_make_skill("junk", "junk", correct_hash=True), tier=["nope"])
+        raw = "   " + json.dumps(junk, separators=(" , ", " : ")) + "   "
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(healthy) + "\n" + raw + "\n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        assert raw in f.read_text(), "a row the verb could not prove was re-serialized"
+        assert "kept as-is" in capsys.readouterr().out.lower()

@@ -304,7 +304,16 @@ def locked_rmw(path: Path, fn, *, default: str = "") -> str:
     such a line fails exactly like any other malformed row, so per-row
     scanners skip it and the rejoin preserves it.
 
-    Reentrant like locked_write. Returns the new content.
+    fn may return None to mean "nothing to change" — the file is then left
+    exactly as it is, with no atomic_write and no new inode. Added
+    2026-08-20 (adversarial r4, 3 lenses): gc_memory tried to express that
+    by returning the text unchanged, and this function rewrote it anyway,
+    so a collection that collected nothing still replaced the file. Bytes
+    compared equal, which is why the test written for it passed; the
+    inode, mtime and any watcher did not agree.
+
+    Reentrant like locked_write. Returns the new content — or the OLD
+    content when fn declined to change it.
     """
     with locked_write(path):
         try:
@@ -312,5 +321,7 @@ def locked_rmw(path: Path, fn, *, default: str = "") -> str:
         except FileNotFoundError:
             old = default
         new = fn(old)
+        if new is None:
+            return old
         atomic_write(path, new, errors="surrogateescape")
         return new

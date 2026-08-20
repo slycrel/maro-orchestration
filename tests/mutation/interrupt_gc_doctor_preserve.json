@@ -37,7 +37,7 @@
   {
     "name": "interrupt announce :: an undeliverable interrupt goes unmentioned",
     "file": "src/interrupt.py",
-    "anchor": "                dropped += 1\n        self._warn_undeliverable(dropped)\n        return result",
+    "anchor": "                dropped += 1\n        if announce:\n            self._warn_undeliverable(dropped)\n        return result",
     "replacement": "                dropped += 1\n        return result",
     "tests": "tests/test_interrupt.py"
   },
@@ -291,7 +291,7 @@
   {
     "name": "gc no-op :: a locked pass that removes nothing rewrites the file anyway",
     "file": "src/gc_memory.py",
-    "anchor": "            locked[\"freed\"] = 0\n            return old\n        new = \"\\n\".join(kept) + (\"\\n\" if kept else \"\")",
+    "anchor": "            locked[\"freed\"] = 0\n            return None\n        new = \"\\n\".join(kept) + (\"\\n\" if kept else \"\")",
     "replacement": "        new = \"\\n\".join(kept) + (\"\\n\" if kept else \"\")",
     "tests": "tests/test_gc_memory.py"
   },
@@ -305,8 +305,113 @@
   {
     "name": "scanner framing :: split(\"\\\\n\") walks out of the detector's view again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "            if n.func.attr == \"split\" and n.args:\n                a = n.args[0]\n                if isinstance(a, ast.Constant) and a.value == \"\\n\":\n                    return True",
-    "replacement": "            if False:\n                return True",
+    "anchor": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if n.func.attr == \"split\":\n                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value in (\"\\n\", b\"\\n\"):\n                    return True",
+    "replacement": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if False:\n                    return True",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "doctor dedup key :: rows group by the hash they DECLARE again",
+    "file": "src/doctor.py",
+    "anchor": "        by_hash[_dedup_identity(skill)].append(skill)",
+    "replacement": "        by_hash[skill.get(\"content_hash\", \"\") or skill.get(\"id\", id(skill))].append(skill)",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor dedup scope :: a behaviour field slips into the bookkeeping set",
+    "file": "src/doctor.py",
+    "anchor": "    \"source_loop_ids\", \"imported\",\n})",
+    "replacement": "    \"source_loop_ids\", \"imported\", \"trigger_patterns\",\n})",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (str fields) :: tier and the rest escape the type check",
+    "file": "src/skill_types.py",
+    "anchor": "_STR_FIELDS = (\"id\", \"name\", \"description\", \"content_hash\", \"created_at\",\n               \"tier\", \"circuit_state\", \"optimization_objective\", \"island\",\n               \"domain\", \"project\", \"origin\")",
+    "replacement": "_STR_FIELDS = (\"id\", \"name\", \"description\", \"content_hash\", \"created_at\")",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (list fields) :: failure_notes and tags escape the type check",
+    "file": "src/skill_types.py",
+    "anchor": "_LIST_OF_STR_FIELDS = (\"trigger_patterns\", \"steps_template\", \"source_loop_ids\",\n                       \"failure_notes\", \"tags\")",
+    "replacement": "_LIST_OF_STR_FIELDS = (\"trigger_patterns\", \"steps_template\", \"source_loop_ids\")",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (empty) :: an empty id or content_hash is admitted",
+    "file": "src/skill_types.py",
+    "anchor": "    for name in (\"id\", \"name\", \"content_hash\"):\n        if not getattr(skill, name).strip():\n            raise ValueError(f\"{name} must not be empty\")",
+    "replacement": "    pass",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (timestamp) :: a non-timestamp created_at ranks rows",
+    "file": "src/skill_types.py",
+    "anchor": "    try:                              # a timestamp is a RANKING input\n        datetime.fromisoformat(skill.created_at)\n    except (TypeError, ValueError) as exc:",
+    "replacement": "    try:                              # a timestamp is a RANKING input\n        pass\n    except (TypeError, ValueError) as exc:",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "file_lock sentinel :: locked_rmw writes even when the transform declines",
+    "file": "src/file_lock.py",
+    "anchor": "        if new is None:\n            return old\n        atomic_write(path, new, errors=\"surrogateescape\")",
+    "replacement": "        atomic_write(path, new, errors=\"surrogateescape\")",
+    "tests": "tests/test_gc_memory.py tests/test_file_lock.py"
+  },
+  {
+    "name": "gc failed-rewrite :: a failed rewrite reports zero stuck rows again",
+    "file": "src/gc_memory.py",
+    "anchor": "        _announce(unreadable)\n        if stats is not None:\n            stats[\"uncollectable\"] = unreadable\n        return total, 0, 0",
+    "replacement": "        return total, 0, 0",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "interrupt double-announce :: the unlocked preflight announces too",
+    "file": "src/interrupt.py",
+    "anchor": "            if not self.peek(announce=False):\n                return []",
+    "replacement": "            if not self.peek():\n                return []",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt double-announce (clear) :: same, on the clear path",
+    "file": "src/interrupt.py",
+    "anchor": "            if not self.peek(announce=False):\n                return 0",
+    "replacement": "            if not self.peek():\n                return 0",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt commit-failure :: a failed commit looks like an empty queue",
+    "file": "src/interrupt.py",
+    "anchor": "                log.error(\"interrupt queue: could not commit %s (%s) \u2014 \"\n                          \"pending interrupts were NOT delivered this pass\",\n                          self.path, exc)\n                return []",
+    "replacement": "                return []",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "manifest vanished :: a fixed site leaving the scanner's view passes the gate",
+    "file": "scripts/triage_manifest.py",
+    "anchor": "    vanished = sorted(FIXED - seen) if seen is not None else []",
+    "replacement": "    vanished = []",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "manifest vanished (scan) :: --check stops collecting the OK sites",
+    "file": "scripts/triage_manifest.py",
+    "anchor": "        live, seen = _scan()\n        untriaged, stale, regressed, vanished = compare(live, seen)",
+    "replacement": "        live, seen = _scan()\n        untriaged, stale, regressed, vanished = compare(live)",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner framing (readlines) :: readlines() stops counting as framing",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "            if n.func.attr in (\"splitlines\", \"readlines\"):",
+    "replacement": "            if n.func.attr in (\"splitlines\",):",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner framing (bytes/kwarg) :: split(b\"\\\\n\") and split(sep=...) walk out of view",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value in (\"\\n\", b\"\\n\"):",
+    "replacement": "                args = list(n.args)\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value == \"\\n\":",
     "tests": "tests/test_scan_destructive_rewrites.py"
   }
 ]

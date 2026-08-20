@@ -371,7 +371,7 @@ class InterruptQueue:
         interrupt landing between read and write_text was lost).
         """
         with _LOCK:
-            if not self.peek():
+            if not self.peek(announce=False):
                 return []
             pending: List[Interrupt] = []
             unreadable = {"n": 0}
@@ -408,7 +408,15 @@ class InterruptQueue:
             try:
                 from file_lock import locked_rmw
                 locked_rmw(self.path, _mark_applied)
-            except OSError:
+            except OSError as exc:
+                # Adversarial r4 (2 lenses, probed): this returned [] — which
+                # the loop reads as "no interrupts" — for a full disk or a
+                # failed replace. A STOP the operator posted is on disk, was
+                # seen by the preflight, and is not delivered; the only
+                # difference from a quiet queue was that nothing said so.
+                log.error("interrupt queue: could not commit %s (%s) — "
+                          "pending interrupts were NOT delivered this pass",
+                          self.path, exc)
                 return []
             self._warn_undeliverable(unreadable["n"])
             return pending
@@ -430,13 +438,22 @@ class InterruptQueue:
                         "interrupts cannot be delivered (left on disk)",
                         n, self.path)
 
-    def peek(self) -> List[Interrupt]:
+    def peek(self, *, announce: bool = True) -> List[Interrupt]:
         """Return pending interrupts without marking them applied.
 
         A row this cannot read is dropped from the RESULT only — the line
         stays on disk and rides every rewrite verbatim (see _mark_applied).
         The loss is announced: an interrupt the operator posted and the loop
         never saw is exactly the event that must not pass in silence.
+
+        `announce=False` is for poll()/clear(), which use this as an unlocked
+        PREFLIGHT and then reclassify under the lock. Adversarial r4 (3
+        lenses, probed): with both paths announcing, one pre-existing
+        unreadable row produced TWO identical warnings per poll — each
+        reading like a separate lost control action — and a row that was
+        unreadable at preflight but repaired before the lock was announced as
+        "cannot be delivered" in the same call that delivered it. The locked
+        classification is the authoritative one; it is the one that speaks.
         """
         lines = self._read_lines()
         result = []
@@ -458,13 +475,14 @@ class InterruptQueue:
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
                 dropped += 1
-        self._warn_undeliverable(dropped)
+        if announce:
+            self._warn_undeliverable(dropped)
         return result
 
     def clear(self) -> int:
         """Clear all pending interrupts. Returns count cleared."""
         with _LOCK:
-            if not self.peek():
+            if not self.peek(announce=False):
                 return 0
             counted = {"n": 0}
             unreadable = {"n": 0}
@@ -495,7 +513,9 @@ class InterruptQueue:
             try:
                 from file_lock import locked_rmw
                 locked_rmw(self.path, _mark_applied)
-            except OSError:
+            except OSError as exc:
+                log.error("interrupt queue: could not commit %s (%s) — "
+                          "nothing was cleared", self.path, exc)
                 return 0
             self._warn_undeliverable(unreadable["n"])
             return counted["n"]

@@ -205,14 +205,16 @@ def _gc_outcomes(
         locked["removed"] = t - len(kept)
         if locked["removed"] <= 0:
             # The window closed on us: what the unlocked scan saw as
-            # collectable is not collectable under the lock. Return the bytes
-            # UNTOUCHED rather than rejoining them — adversarial r3
-            # (Architect, probed): a rewrite that removes nothing still
-            # normalizes framing, so a snapshot without a trailing newline
-            # came back one byte LARGER and GC reported freed=-1 for a
-            # collection that collected nothing.
+            # collectable is not collectable under the lock. Decline the
+            # write entirely — adversarial r3 (Architect, probed): a rewrite
+            # that removes nothing still normalizes framing, so a snapshot
+            # without a trailing newline came back one byte LARGER and GC
+            # reported freed=-1 for a collection that collected nothing.
+            # r3 expressed that by returning `old`, which adversarial r4 (3
+            # lenses) showed does not work: locked_rmw wrote it back anyway,
+            # so the inode was replaced for a no-op. None is the decline.
             locked["freed"] = 0
-            return old
+            return None
         new = "\n".join(kept) + ("\n" if kept else "")
         # Byte delta from the LOCKED snapshot and the text that replaces it.
         # Adversarial r2 (2026-08-20, 3/3): sampling st_size before the lock
@@ -225,7 +227,19 @@ def _gc_outcomes(
 
     try:
         locked_rmw(path, _trim)
-    except OSError:
+    except OSError as exc:
+        # Adversarial r4 (2 lenses, probed): r3 moved the announcement and
+        # the stats write below the lock, so THIS path — a failed lock,
+        # read or write — returned (total, 0, 0) with no warning and no
+        # `uncollectable` stat. GCReport then said zero unreadable rows
+        # while one sits in the store forever. The unlocked classification
+        # is the only one we have when the locked pass never completed; it
+        # is worth strictly more than silence.
+        log.warning("gc: outcomes rewrite failed on %s (%s) — nothing was "
+                    "collected", path, exc)
+        _announce(unreadable)
+        if stats is not None:
+            stats["uncollectable"] = unreadable
         return total, 0, 0
     # The LOCKED absolute count, not a delta against the unlocked scan.
     # Adversarial r3 (Skeptic + Architect, probed): announcing the difference

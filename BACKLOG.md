@@ -690,6 +690,54 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       reports zero forever. After changing an idiom, re-run the detector
       against the REVERTED code and prove it still finds it. "Found 0"
       is a claim and needs an executing line like any other.*
+    - *Its adversarial r4 (2026-08-20, FIVE codex seats on the r3 fix
+      layer): **REJECT, 5/5 HIGH — the FOURTH round running whose top
+      finding is a defect the previous round's fix introduced.** r3
+      proved rows were well-formed; five seats independently found what
+      that does not answer — **schema validation cannot establish
+      provenance.** Dedup still grouped by the content_hash the row
+      DECLARES ABOUT ITSELF, so a row that validates perfectly still
+      nominates itself as a duplicate of a healthy skill and evicts it.
+      Five smuggling shapes (different description / steps_template /
+      optimization_objective under the victim's hash, an unnamed extra
+      field, the id fallback) = five angles on one keying bug. Fixed at
+      the KEY, not the field list: `_dedup_identity(row)` canonicalizes
+      everything in the stored row that says what the skill DOES (all
+      keys minus a named bookkeeping set), the declared hash never
+      enters the decision, and the id fallback is gone — all five shapes
+      probed, all now keep both rows. The bookkeeping set is now the
+      security boundary, hence the `doctor dedup scope` mutation. Also
+      fixed: (a) **`return old` is not "decline the write"** —
+      `locked_rmw` writes back whatever it is handed, so r3's GC no-op
+      fix still rewrote and re-inoded the file for a pass that collected
+      nothing; added a `None` sentinel (96 call sites, additive), pinned
+      by spying atomic_write AND asserting the inode. (b) r3 moved the
+      announcement below the lock and orphaned the failure paths: GC
+      returned (total,0,0) with no warning and no `uncollectable` stat
+      on a failed lock/read/write, and interrupt returned `[]` — which
+      the loop reads as "no interrupts" — for a failed commit, so a
+      STOP that was on disk and seen by the preflight silently was not
+      delivered. Both now say what did not happen. (c) the queue
+      announced twice per pass (peek + locked transform);
+      `peek(announce=False)` is the preflight form. (d) three more
+      framing idioms still invisible to the scanner — `readlines()`,
+      `split(b"\n")` (which jsonl_utils itself uses) and
+      `split(sep="\n")`. Receipts: spec 44 -> 59, `59/59 accounted
+      for`. **The survivors are the interesting part:** the first sweep
+      came back 55/59 with four VALIDATOR mutants surviving — because
+      the dedup fix removed the consequence the end-to-end tests
+      measured (once junk cannot evict, "the healthy row survives" holds
+      whether or not junk was admitted). Not a dead guard: admission has
+      its own consequence (an admitted row is re-serialized, a stranded
+      one rides through byte for byte), so the answer was direct
+      rejection tests plus a byte-for-byte strand assertion. One of the
+      four, `doctor validator (hash)`, looked genuinely equivalent —
+      every field compute_skill_hash touches is also in _STR_FIELDS —
+      until the shape that distinguishes them turned out to be a **lone
+      surrogate**: it IS a str, passes every isinstance check, and dies
+      on .encode(). The mutant that looked unfalsifiable was pointing at
+      this arc's own subject; marking it `equivalent` would have deleted
+      the one guard that catches byte taint at the schema boundary.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making

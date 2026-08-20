@@ -121,15 +121,26 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         return False
 
     def frames_lines(fn):
-        """Does fn split a blob into lines? `.splitlines()` or `.split("\\n")`."""
+        """Does fn split a blob into lines?
+
+        Every idiom that means the same thing: `.splitlines()`,
+        `.readlines()`, `.split("\\n")` / `.split(b"\\n")`, and the keyword
+        form `.split(sep="\\n")`. Adversarial r4 (3 lenses) listed the ones
+        r3's version still missed — including `split(b"\\n")`, which
+        `src/jsonl_utils.py` itself uses, so it was never hypothetical.
+        Each new idiom is one more way for a destructive rewrite to be
+        invisible here, which is the failure this scanner exists to not have.
+        """
         for n in ast.walk(fn):
             if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
                 continue
-            if n.func.attr == "splitlines":
+            if n.func.attr in ("splitlines", "readlines"):
                 return True
-            if n.func.attr == "split" and n.args:
-                a = n.args[0]
-                if isinstance(a, ast.Constant) and a.value == "\n":
+            if n.func.attr == "split":
+                args = list(n.args) + [k.value for k in n.keywords
+                                       if k.arg == "sep"]
+                if args and isinstance(args[0], ast.Constant) \
+                        and args[0].value in ("\n", b"\n"):
                     return True
         return False
 

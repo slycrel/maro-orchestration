@@ -713,3 +713,127 @@ class TestARowThatBecomesUnreadableUnderTheLockIsAnnounced:
         with caplog.at_level("WARNING"):
             InterruptQueue(queue_path=p).poll()
         assert not [r for r in caplog.records if "cannot be delivered" in r.msg]
+
+
+class TestTheQueueSpeaksOncePerPass:
+    """Adversarial r4 (3 lenses, probed): with peek() announcing AND the
+    locked pass announcing, one pre-existing unreadable row produced TWO
+    identical warnings per poll — each reading like a separate lost control
+    action — and a row that was unreadable at preflight but repaired before
+    the lock was announced as "cannot be delivered" in the same call that
+    delivered it. The locked classification is the authoritative one."""
+
+    @staticmethod
+    def _row(**over):
+        row = {"id": "ok", "source": "operator", "message": "stop",
+               "intent": "stop", "applied": False,
+               "created_at": "2026-01-01T00:00:00+00:00"}
+        row.update(over)
+        return row
+
+    def _seed(self, tmp_path):
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps(self._row()) + "\n"
+                     + json.dumps(self._row(id="broken", applied="maybe")) + "\n",
+                     encoding="utf-8")
+        return p
+
+    def test_a_stable_unreadable_row_is_announced_exactly_once(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+
+        p = self._seed(tmp_path)
+        with caplog.at_level("WARNING"):
+            delivered = InterruptQueue(queue_path=p).poll()
+
+        assert [i.id for i in delivered] == ["ok"]
+        warnings = [r for r in caplog.records if "cannot be delivered" in r.msg]
+        assert len(warnings) == 1, (
+            f"{len(warnings)} warnings for one unreadable row — each reads "
+            "like a separate lost control action")
+
+    def test_clear_announces_exactly_once_too(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+
+        p = self._seed(tmp_path)
+        with caplog.at_level("WARNING"):
+            InterruptQueue(queue_path=p).clear()
+
+        assert len([r for r in caplog.records if "cannot be delivered" in r.msg]) == 1
+
+    def test_a_row_repaired_before_the_lock_is_not_called_undeliverable(
+            self, monkeypatch, tmp_path, caplog):
+        """The false-warning direction: the preflight saw it broken, the
+        locked pass delivered it, and the operator was told it could not be
+        delivered."""
+        import jsonl_utils
+        from interrupt import InterruptQueue
+
+        p = self._seed(tmp_path)
+        real = jsonl_utils.store_text
+        fired = {}
+
+        def racing(path):
+            text = real(path)
+            healthy = json.dumps(self._row(id="broken"))
+            path.write_text(json.dumps(self._row()) + "\n" + healthy + "\n",
+                            encoding="utf-8")
+            fired["yes"] = True
+            monkeypatch.setattr(jsonl_utils, "store_text", real)
+            return text
+
+        monkeypatch.setattr(jsonl_utils, "store_text", racing)
+        with caplog.at_level("WARNING"):
+            delivered = InterruptQueue(queue_path=p).poll()
+
+        assert fired, "the racing hook never ran — test is vacuous"
+        assert sorted(i.id for i in delivered) == ["broken", "ok"]
+        assert not [r for r in caplog.records if "cannot be delivered" in r.msg], (
+            "an interrupt that WAS delivered was announced as undeliverable")
+
+
+class TestAFailedCommitIsNotAnEmptyQueue:
+    """Adversarial r4 (2 lenses, probed): poll() caught OSError from the
+    locked rewrite and returned [] — which the loop reads as "no
+    interrupts". A full disk or a failed replace turned a posted STOP into
+    silence, and the only difference from a quiet queue was that nothing
+    said so."""
+
+    def test_poll_says_so(self, monkeypatch, tmp_path, caplog):
+        import file_lock as _fl
+        from interrupt import InterruptQueue
+
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps({"id": "ok", "source": "operator",
+                                 "message": "stop", "intent": "stop",
+                                 "applied": False,
+                                 "created_at": "2026-01-01T00:00:00+00:00"}) + "\n",
+                     encoding="utf-8")
+
+        def boom(path, fn, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(_fl, "locked_rmw", boom)
+        with caplog.at_level("ERROR"):
+            assert InterruptQueue(queue_path=p).poll() == []
+
+        assert any("NOT delivered" in r.msg for r in caplog.records), (
+            "a failed commit was indistinguishable from an empty queue")
+
+    def test_clear_says_so(self, monkeypatch, tmp_path, caplog):
+        import file_lock as _fl
+        from interrupt import InterruptQueue
+
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps({"id": "ok", "source": "operator",
+                                 "message": "stop", "intent": "stop",
+                                 "applied": False,
+                                 "created_at": "2026-01-01T00:00:00+00:00"}) + "\n",
+                     encoding="utf-8")
+
+        def boom(path, fn, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(_fl, "locked_rmw", boom)
+        with caplog.at_level("ERROR"):
+            assert InterruptQueue(queue_path=p).clear() == 0
+        assert any("nothing was cleared" in r.msg for r in caplog.records)

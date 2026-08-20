@@ -554,3 +554,75 @@ class TestALockedPassThatRemovesNothingDoesNotRewrite:
         assert freed == 0, f"a no-op collection reported freed={freed}"
         assert out.read_bytes() == raced["before"], (
             "a locked pass that removed nothing still rewrote the store")
+
+
+class TestANoOpLockedPassDoesNotTouchTheFile:
+    """Adversarial r4 (3 lenses, probed): r3 expressed "do not rewrite" by
+    returning the text unchanged from `_trim`, and `locked_rmw` wrote it back
+    anyway — same bytes, new inode, new mtime, and every watcher told the
+    store changed. The r3 test compared bytes, so it passed on the defect."""
+
+    def test_atomic_write_is_never_called(self, monkeypatch, tmp_path):
+        import file_lock as _fl
+        import gc_memory as _gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        out = mem / "outcomes.jsonl"
+        _write_outcome(mem, days_ago=200)
+
+        recent = json.dumps({"goal": "kept", "status": "done",
+                             "recorded_at": datetime.now(timezone.utc).isoformat()})
+        real_rmw, real_write = _fl.locked_rmw, _fl.atomic_write
+        writes, raced = [], {}
+
+        def spy_write(path, text, **kw):
+            writes.append(str(path))
+            return real_write(path, text, **kw)
+
+        def racing_rmw(path, fn, **kw):
+            path.write_text(recent, encoding="utf-8")   # no trailing "\n"
+            raced["stat"] = path.stat()
+            return real_rmw(path, fn, **kw)
+
+        monkeypatch.setattr(_fl, "atomic_write", spy_write)
+        monkeypatch.setattr(_fl, "locked_rmw", racing_rmw)
+        total, removed, freed = _gc._gc_outcomes(retain_days=90, dry_run=False)
+
+        assert raced, "the racing hook never ran — test is vacuous"
+        assert (removed, freed) == (0, 0)
+        assert not writes, f"a no-op collection still rewrote the store: {writes}"
+        assert out.stat().st_ino == raced["stat"].st_ino, "the inode changed"
+
+
+class TestAFailedRewriteStillReportsWhatIsStuck:
+    """Adversarial r4 (2 lenses, probed): r3 moved the announcement and the
+    `uncollectable` stat below the lock, so a failed lock/read/write returned
+    (total, 0, 0) with no warning and no stat — GCReport then said zero
+    unreadable rows while one sits in the store forever. The unlocked
+    classification is the only one available when the locked pass never
+    completed, and it is worth strictly more than silence."""
+
+    def test_the_uncollectable_count_survives_an_oserror(
+            self, monkeypatch, tmp_path, caplog):
+        import file_lock as _fl
+        import gc_memory as _gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=200)
+        with open(mem / "outcomes.jsonl", "ab") as fh:
+            fh.write(b'{"goal": "torn\xff", "recorded_at": "x"}\n')
+
+        def boom(path, fn, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(_fl, "locked_rmw", boom)
+        stats: dict = {}
+        with caplog.at_level("WARNING"):
+            total, removed, freed = _gc._gc_outcomes(
+                retain_days=90, dry_run=False, stats=stats)
+
+        assert (removed, freed) == (0, 0)
+        assert stats.get("uncollectable") == 1, (
+            "the report would have claimed zero unreadable rows")
+        assert any("rewrite failed" in r.msg for r in caplog.records)
+        assert any("unparseable/byte-tainted" in r.msg for r in caplog.records)

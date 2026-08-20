@@ -394,6 +394,96 @@ the old one did not. Suite: 9664 passed in the shared tree (plus the two
 failures that belong to another session's uncommitted `captains_log.py`,
 proven foreign in an isolated worktree earlier in this arc).
 
+## Adversarial round 4 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats (Skeptic, Architect, Minimalist, Expert QA, Experimentalist) on the
+r3 fix layer. **REJECT, 5/5 HIGH — the fourth round running whose top finding
+is a defect the previous round's fix introduced.** Every finding was
+reproduced before it was touched.
+
+- **Schema validation cannot establish provenance** (5/5, HIGH). r3 answered
+  the forged-row attack with `validate_skill_row`, which proves a row is
+  *well-formed*. Five seats independently pointed at what that does not
+  answer: dedup still grouped rows by the `content_hash` the row **declares
+  about itself**, so a row that validates perfectly can still nominate itself
+  as a duplicate of a healthy skill and evict it. Each seat found a different
+  smuggling shape (a different `description` under the victim's hash, a
+  different `steps_template`, a different `optimization_objective`, an
+  extra field the schema does not name, and the id fallback path) — five
+  variants of one defect, which is what a keying bug looks like from five
+  angles.
+
+  The fix is the key, not the field list. `_dedup_identity(row)` is a
+  canonical dump of everything in the stored row that says what the skill
+  **does** — every key except a named bookkeeping set (`id`, `content_hash`,
+  `created_at`, the counters, circuit state, `failure_notes`,
+  `source_loop_ids`, `imported`). Two rows are duplicates when they behave
+  identically, full stop; the hash they claim never enters the decision, and
+  the id fallback is gone. All five attack shapes were probed against the
+  fixed code and all five now keep both rows. This kills the family, not the
+  five instances — and it is the reason `doctor dedup scope` exists as a
+  mutation: the bookkeeping set is now the security boundary, so a behaviour
+  field slipping into it is exactly the mutation that must fail.
+
+- **`return old` is not "decline the write"** (Architect + Expert QA, HIGH,
+  probed). r3 fixed GC's freed=-1 bug by returning the unmodified text from
+  the locked transform — but `locked_rmw` writes back whatever it is handed,
+  so the file was still rewritten, atomically replaced, and re-inoded for a
+  pass that collected nothing. `locked_rmw` gained a `None` sentinel (96 call
+  sites, additive — no existing transform returns `None`), and the GC no-op
+  path returns it. Pinned by spying `atomic_write` **and** asserting the
+  inode is unchanged, because "did not write" is not observable from content.
+
+- **r3 moved the announcement below the lock and orphaned the failure path**
+  (Failure-lens findings from 2 seats, probed). On a failed lock, read, or
+  write, `_gc_outcomes` returned `(total, 0, 0)` with no warning and no
+  `uncollectable` stat — GCReport then reported zero unreadable rows while
+  one sits in the store forever. Same shape, worse consequence, in
+  `interrupt`: a failed commit returned `[]`, which the loop reads as "no
+  interrupts", so a STOP the operator posted was on disk, had been seen by
+  the preflight, and was silently not delivered. Both now log what did not
+  happen, in the operator's words ("nothing was collected", "pending
+  interrupts were NOT delivered this pass").
+
+- **The queue announced twice per pass** (Minimalist). r3's announcement in
+  the locked transform stacked on the one `peek()` already emits, so a single
+  `poll()` warned about the same unreadable row twice — on both the poll and
+  the clear path. `peek(announce=False)` is now the preflight form; the
+  locked pass owns the announcement.
+
+- **The scanner still could not see three framing idioms** (Expert QA). r3
+  taught `frames_lines` about `split("\n")` after that conversion blinded it;
+  r4 listed what was still missing — `readlines()`, `split(b"\n")` and the
+  keyword form `split(sep="\n")`. `src/jsonl_utils.py` uses the bytes form
+  itself, so this was never hypothetical. All five idioms are now pinned by a
+  must-detect test with two CSV negative controls.
+
+**The survivors are the interesting receipt.** The first r4 sweep came back
+**55/59** with four validator mutants SURVIVED — delete the str-field check,
+the empty-`id` check or the timestamp check and every test still passed. That
+is not a dead guard; it is the dedup fix having removed the *consequence* the
+end-to-end tests measured. Once a junk row can no longer evict a healthy one,
+"the healthy row survives" holds whether or not the junk row was admitted.
+Admission still has its own consequence — an admitted row is re-serialized
+into the rewrite, a stranded one rides through byte for byte — so the answer
+was direct rejection tests on `validate_skill_row` plus a byte-for-byte
+strand assertion, not a weaker spec.
+
+One of the four is worth its own line. `doctor validator (hash)` looked
+genuinely equivalent: every field `compute_skill_hash` touches is also in
+`_STR_FIELDS`, so a non-`str` is rejected either way. The shape that
+distinguishes them is a **lone surrogate** — it IS a `str`, it passes every
+`isinstance` check, and it dies on `.encode("utf-8")`. The mutant that looked
+unfalsifiable was pointing straight at this arc's own subject. Marking it
+`equivalent` would have been a defensible-sounding way to delete the one
+guard that catches byte taint at the schema boundary.
+
+**Receipts:** mutation spec 44 → 59, `59/59 accounted for` (57 DETECTED + the
+2 standing equivalents) after the survivor pass above. Suite: green in the
+shared tree, plus the two failures that belong to another session's
+uncommitted `captains_log.py`, proven foreign in an isolated worktree earlier
+in this arc.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because

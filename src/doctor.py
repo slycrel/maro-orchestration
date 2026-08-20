@@ -594,6 +594,30 @@ def _skill_hash_is_stale(skill_dict: dict) -> bool:
         return False  # can't verify → keep
 
 
+# Bookkeeping: fields two rows may disagree on and still be the same skill.
+# Everything NOT named here must match for one row to be deleted as a
+# duplicate of another — including fields added after this line was written.
+_DEDUP_BOOKKEEPING = frozenset({
+    "id", "content_hash", "created_at", "use_count", "success_rate",
+    "utility_score", "consecutive_failures", "consecutive_successes",
+    "circuit_state", "variant_wins", "variant_losses", "failure_notes",
+    "source_loop_ids", "imported",
+})
+
+
+def _dedup_identity(row: dict) -> str:
+    """Everything about a stored row that says what the skill DOES.
+
+    Two rows with the same identity are interchangeable and one may be
+    deleted; two rows that differ anywhere else are different skills that
+    happen to collide on a hash covering only four of their fields. See the
+    comment at the dedup pass for the adversarial round that forced this.
+    """
+    return json.dumps({k: v for k, v in row.items()
+                       if k not in _DEDUP_BOOKKEEPING},
+                      sort_keys=True, default=repr)
+
+
 def _workspace_skills_path() -> Path:
     """The skills store maro actually uses.
 
@@ -715,19 +739,35 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
     stale_rows = {id(s) for s in stale}
     clean = [s for s in all_skills if id(s) not in stale_rows]
 
-    # Pass 2: deduplicate by content_hash
+    # Pass 2: deduplicate by what the rows SAY THE SKILL DOES, not by the
+    # hash they declare.
+    #
+    # Adversarial r4 (2026-08-20, 5/5 consensus) is the reason this is not
+    # `by_hash[row["content_hash"]]` any more. Grouping by the stored hash
+    # asks a row to nominate its own peers, and `compute_skill_hash` covers
+    # only name + description + steps_template + objective — so a row could
+    # copy a healthy skill's hash, change `trigger_patterns` (which decides
+    # what the skill MATCHES), carry junk in `tier`, and win the group on a
+    # later `created_at`. The healthy row was then deleted for being a
+    # "duplicate" of something that behaves differently. Five lenses found
+    # five different shapes of that; each one was a new field to validate,
+    # which is the shape of a whack-a-mole, not a fix.
+    #
+    # So: two rows are duplicates only when they agree on EVERYTHING except
+    # bookkeeping. A field this list does not name is a field whose
+    # disagreement means "not provably redundant" — and the safe answer to
+    # that is to keep both, which is also what the retention decree wants.
+    # The old `else` branch here grouped hash-less rows by ID under a
+    # comment that said "can't dedup without a key"; it deduped by ID, and
+    # two unrelated hash-less rows sharing one were one delete away from
+    # each other (Minimalist, probed). There is no fallback key now.
     by_hash: dict = defaultdict(list)
     for skill in clean:
-        hash_val = skill.get("content_hash", "")
-        if hash_val:
-            by_hash[hash_val].append(skill)
-        else:
-            # No hash — keep as-is (can't dedup without a key)
-            by_hash[skill.get("id", id(skill))].append(skill)
+        by_hash[_dedup_identity(skill)].append(skill)
 
     duplicates = {h: skills for h, skills in by_hash.items() if len(skills) > 1}
     if duplicates:
-        print(f"Found {len(duplicates)} hash group(s) with duplicates:")
+        print(f"Found {len(duplicates)} group(s) of identical skills:")
     else:
         print("No duplicates found")
 
@@ -739,11 +779,13 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
         return (created_at, success_rate, use_count)
 
     total_dup_removed = 0
-    for hash_val, skills in duplicates.items():
+    for skills in duplicates.values():
         best = max(skills, key=score_skill)
         removed = len(skills) - 1
         total_dup_removed += removed
-        print(f"  {hash_val[:16]}... : keeping best of {len(skills)} copies of '{best.get('name', '?')}'")
+        print(f"  {best.get('content_hash', '')[:16] or '(no hash)'}... : "
+              f"keeping best of {len(skills)} identical copies of "
+              f"'{best.get('name', '?')}'")
 
     # Rewrite with the clean, deduped set — plus every row we could not
     # read, byte for byte. The caller holds the lock across this write and

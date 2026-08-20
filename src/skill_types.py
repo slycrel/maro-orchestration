@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -310,11 +311,19 @@ def validate_skill_row(d: dict) -> Skill:
     """
     skill = dict_to_skill(d)          # required keys, or KeyError
     compute_skill_hash(skill)         # proves the content fields are text
-    for name in ("id", "name", "content_hash", "created_at"):
+    for name in _STR_FIELDS:
         v = getattr(skill, name)
         if not isinstance(v, str):
             raise TypeError(f"{name} must be a string, got {type(v).__name__}")
-    for name in ("trigger_patterns", "steps_template", "source_loop_ids"):
+    for name in ("id", "name", "content_hash"):
+        if not getattr(skill, name).strip():
+            raise ValueError(f"{name} must not be empty")
+    try:                              # a timestamp is a RANKING input
+        datetime.fromisoformat(skill.created_at)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"created_at is not a timestamp: "
+                         f"{skill.created_at!r} ({exc})") from None
+    for name in _LIST_OF_STR_FIELDS:
         v = getattr(skill, name)
         if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
             raise TypeError(f"{name} must be a list of strings, got {v!r}")
@@ -323,6 +332,28 @@ def validate_skill_row(d: dict) -> Skill:
         if isinstance(v, bool) or not isinstance(v, (int, float)) \
                 or not math.isfinite(v):
             raise TypeError(f"{name} must be a finite number, got {v!r}")
-    if isinstance(skill.use_count, bool) or not isinstance(skill.use_count, int):
-        raise TypeError(f"use_count must be an int, got {skill.use_count!r}")
+    for name in ("use_count", "consecutive_failures", "consecutive_successes",
+                 "variant_wins", "variant_losses"):
+        v = getattr(skill, name)
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise TypeError(f"{name} must be an int, got {v!r}")
+    if skill.variant_of is not None and not isinstance(skill.variant_of, str):
+        raise TypeError(f"variant_of must be a string or null, "
+                        f"got {skill.variant_of!r}")
+    if not isinstance(skill.imported, dict):
+        raise TypeError(f"imported must be an object, got {skill.imported!r}")
     return skill
+
+
+# Every string-typed field the repair verb may compare, rank or carry, and
+# every list-of-string field. Named explicitly rather than derived from the
+# annotations: `typing.get_type_hints` on a dataclass tells you what the
+# author DECLARED, and the whole reason this function exists is that the
+# declaration is not enforced. Adversarial r4 (2026-08-20, 5/5) found the
+# first cut of this list short by `tier`, `failure_notes` and `tags` — each
+# one a field a forged row could carry junk in and still be admitted.
+_STR_FIELDS = ("id", "name", "description", "content_hash", "created_at",
+               "tier", "circuit_state", "optimization_objective", "island",
+               "domain", "project", "origin")
+_LIST_OF_STR_FIELDS = ("trigger_patterns", "steps_template", "source_loop_ids",
+                       "failure_notes", "tags")

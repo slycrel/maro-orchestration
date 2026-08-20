@@ -171,18 +171,18 @@ def test_the_drift_gate_catches_a_brand_new_risk_site():
     so `main()` always returning 0 would still have passed it."""
     tm = _manifest()
     live = (set(tm.SITES) - tm.FIXED) | {"brand_new.py:some_rewrite"}
-    untriaged, stale, regressed = tm.compare(live)
+    untriaged, stale, regressed, vanished = tm.compare(live)
     assert untriaged == ["brand_new.py:some_rewrite"]
-    assert not stale and not regressed
+    assert not stale and not regressed and not vanished
 
 
 def test_the_drift_gate_catches_a_stale_manifest_entry():
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED
     dropped = sorted(live)[0]
-    untriaged, stale, regressed = tm.compare(live - {dropped})
+    untriaged, stale, regressed, vanished = tm.compare(live - {dropped})
     assert stale == [dropped]
-    assert not untriaged and not regressed
+    assert not untriaged and not regressed and not vanished
 
 
 def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
@@ -193,9 +193,9 @@ def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
     resurfaced = "interrupt.py:poll"
     assert resurfaced in tm.FIXED, "fixture drifted"
     live = (set(tm.SITES) - tm.FIXED) | {resurfaced}
-    untriaged, stale, regressed = tm.compare(live)
+    untriaged, stale, regressed, vanished = tm.compare(live)
     assert regressed == [resurfaced]
-    assert not untriaged and not stale
+    assert not untriaged and not stale and not vanished
 
 
 @pytest.mark.parametrize("live_extra,expect", [
@@ -215,8 +215,8 @@ def test_the_check_verb_itself_exits_nonzero(monkeypatch, capsys, live_extra, ex
     import sys as _sys
 
     tm = _manifest()
-    monkeypatch.setattr(tm, "_live_sites",
-                        lambda: (set(tm.SITES) - tm.FIXED) | live_extra)
+    live = (set(tm.SITES) - tm.FIXED) | live_extra
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
 
     rc = tm.main()
@@ -230,7 +230,8 @@ def test_the_check_verb_exits_zero_on_a_clean_scan(monkeypatch, capsys):
     import sys as _sys
 
     tm = _manifest()
-    monkeypatch.setattr(tm, "_live_sites", lambda: set(tm.SITES) - tm.FIXED)
+    live = set(tm.SITES) - tm.FIXED
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
     assert tm.main() == 0
     assert "all triaged" in capsys.readouterr().out
@@ -287,3 +288,79 @@ class TestTheScannerSeesTheFramingThisArcConvertedTo:
             "    return out\n"
         )
         assert "read" not in _scan(src)
+
+
+def test_the_drift_gate_catches_a_fixed_site_leaving_the_scanners_view():
+    """The failure `regressed` structurally cannot see, and the one this arc
+    actually shipped: a fixed site does not have to turn RISK to stop being
+    watched — it can simply stop being reported at all, and then
+    `live & FIXED` is empty forever and the gate says green. The arc's own
+    `splitlines()` -> `split("\\n")` conversion did exactly that to all six of
+    its fixed sites (adversarial r3). Watching a site means being able to see
+    it."""
+    tm = _manifest()
+    live = set(tm.SITES) - tm.FIXED
+    gone = sorted(tm.FIXED)[0]
+    seen = live | (tm.FIXED - {gone})
+    untriaged, stale, regressed, vanished = tm.compare(live, seen)
+    assert vanished == [gone]
+    assert not untriaged and not regressed
+
+
+def test_the_vanished_leg_is_quiet_when_every_fixed_site_is_still_visible():
+    """Negative control — a gate that always fires is not a gate."""
+    tm = _manifest()
+    live = set(tm.SITES) - tm.FIXED
+    untriaged, stale, regressed, vanished = tm.compare(live, live | tm.FIXED)
+    assert not (untriaged or stale or regressed or vanished)
+
+
+def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, capsys):
+    """And the GATE, not just its arithmetic — the r3 lesson applied to the
+    leg r4 added."""
+    import sys as _sys
+
+    tm = _manifest()
+    live = set(tm.SITES) - tm.FIXED
+    gone = sorted(tm.FIXED)[0]
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - {gone})))
+    monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
+    assert tm.main() == 1
+    assert "VANISHED" in capsys.readouterr().out
+
+
+class TestTheScannerSeesEveryLineFramingIdiom:
+    """Adversarial r4 (3 lenses): r3's `frames_lines` took only positional
+    `split("\\n")`. Each idiom it missed is one more way for a destructive
+    rewrite to be invisible — and `split(b"\\n")` was never hypothetical,
+    `src/jsonl_utils.py` itself uses it."""
+
+    def _destructive(self, framing: str) -> str:
+        return (
+            "def rewrite(path):\n"
+            "    out = []\n"
+            f"    for line in {framing}:\n"
+            "        try:\n"
+            "            out.append(json.loads(line))\n"
+            "        except Exception:\n"
+            "            continue\n"
+            "    atomic_write(path, dumps(out))\n"
+        )
+
+    @pytest.mark.parametrize("framing", [
+        'path.read_text().splitlines()',
+        'path.read_text().split("\\n")',
+        'path.read_text().split(sep="\\n")',
+        'path.read_bytes().split(b"\\n")',
+        'path.open().readlines()',
+    ])
+    def test_each_framing_idiom_is_found(self, framing):
+        assert _scan(self._destructive(framing)).get("rewrite") == "RISK", framing
+
+    @pytest.mark.parametrize("framing", [
+        'path.read_text().split(",")',
+        'path.read_text().split(sep=",")',
+    ])
+    def test_a_non_line_separator_is_not_framing(self, framing):
+        """Negative control: a CSV split is not JSONL framing."""
+        assert "rewrite" not in _scan(self._destructive(framing)), framing

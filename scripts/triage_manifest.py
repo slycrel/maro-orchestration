@@ -60,6 +60,7 @@ _add("markdown", """
  loop_report.py:_parse_reading_queue
  playbook.py:_replace_alarm playbook.py:_expire_text playbook.py:_dedup_text""")
 _add("subprocess", """
+ llm.py:_run_subprocess_safe
  heartbeat.py:_is_interactive_session_active
  build_loop_runner.py:_worker_session_already_active
  container_exec.py:_reseed_probe worktree.py:_sanitize_untrusted_git""")
@@ -73,6 +74,7 @@ _add("derived-index", """
  memory_ledger.py:_update_memory_index loop_report.py:_render_devlog_html
  portability.py:main""")
 _add("read-only", """
+ metrics.py:_reverse_readline
  playbook.py:parse_entries playbook.py:_valid_compression
  knowledge_lens.py:load_standing_rules knowledge_lens.py:load_hypotheses
  knowledge_lens.py:_lesson_texts_by_id knowledge_lens.py:search_decisions
@@ -92,7 +94,7 @@ _add("append-importer", """
  pack.py:_import_skill_records workspace_import.py:import_ledgers""")
 _add("verbatim-preserve", """
  memory_ledger.py:compress_old_outcomes._drop_compressed captains_log.py:_maybe_rotate
- gc_memory.py:_gc_outcomes._trim""")
+ gc_memory.py:_gc_outcomes._classify""")
 _add("orchestrator", """
  handle.py:_handle_impl heartbeat.py:heartbeat_loop doctor.py:run_doctor
  sheriff.py:check_project""")
@@ -104,23 +106,40 @@ _add("REAL", """
 # report these any more; they stay here because the manifest is the record of
 # what was triaged, not a snapshot of the current scan.
 FIXED = {n for n, c in SITES.items() if c == "REAL"} | {
-    "doctor.py:run_doctor", "gc_memory.py:_gc_outcomes._trim"}
+    "doctor.py:run_doctor", "gc_memory.py:_gc_outcomes._classify"}
+# `gc_memory.py:_gc_outcomes._trim` used to be listed here. The `vanished`
+# leg below caught it on its first run — `_trim` no longer frames lines at
+# all (it calls `_classify`, which does, and which the scanner reports as its
+# own site). So the surface is still watched, under the name that now owns
+# the framing. Recorded rather than silently swapped: this is the exact
+# reasoning the check exists to force someone to do out loud, instead of a
+# fixed site quietly leaving the field of view.
 
 
-def _live_sites() -> set[str]:
+def _scan() -> "tuple[set[str], set[str]]":
+    """(RISK sites, EVERY site the scanner reported — RISK and OK alike)."""
     out = subprocess.run([sys.executable, "scripts/scan_destructive_rewrites.py"],
                          capture_output=True, text=True,
                          env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"}).stdout
-    sites = set()
+    risk, seen = set(), set()
     for line in out.splitlines():
-        if line.startswith("RISK"):
-            _, loc, name = line.split(None, 2)
-            sites.add(f"{loc.rsplit(':', 1)[0]}:{name.strip().rstrip('()')}")
-    return sites
+        if not (line.startswith("RISK") or line.startswith("OK")):
+            continue
+        verdict, loc, name = line.split(None, 2)
+        site = f"{loc.rsplit(':', 1)[0]}:{name.strip().rstrip('()')}"
+        seen.add(site)
+        if verdict == "RISK":
+            risk.add(site)
+    return risk, seen
 
 
-def compare(live: "set[str]") -> "tuple[list[str], list[str], list[str]]":
-    """(untriaged, stale, regressed) for a live scan result.
+def _live_sites() -> set[str]:
+    return _scan()[0]
+
+
+def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
+        "tuple[list[str], list[str], list[str], list[str]]":
+    """(untriaged, stale, regressed, vanished) for a live scan result.
 
     Pure, so the drift gate itself can be tested against a synthetic live set
     — the runner's own must-detect rule applied to the runner.
@@ -129,31 +148,47 @@ def compare(live: "set[str]") -> "tuple[list[str], list[str], list[str]]":
       stale      a manifest site the scanner no longer reports (and which was
                  not one of the 2026-08-20 fixes)
       regressed  a site the 2026-08-20 fixes made OK that is RISK again
+      vanished   a FIXED site the scanner no longer reports AT ALL — not as
+                 RISK, not as OK
 
     `regressed` exists because of adversarial r2 (2026-08-20, 2 lenses,
     verified): a resurfaced FIXED site was neither untriaged (it is in SITES)
     nor stale (FIXED exempted it), so re-introducing the exact destructive
     rewrite this arc removed passed the gate silently. A one-directional
     exemption is not a gate.
+
+    `vanished` exists because of adversarial r3, which found the failure mode
+    `regressed` could not see: a fixed site does not have to turn RISK to
+    stop being watched — it can simply leave the scanner's field of view, and
+    then `live & FIXED` is empty forever and the gate reports green. That is
+    exactly what the arc's own `splitlines()` -> `split("\n")` conversion did
+    to all six of its fixed sites. Watching a site means being able to SEE
+    it; `seen` is every site the scanner reported, at any verdict. Pass None
+    to skip the check (for callers testing the other three legs).
     """
     untriaged = sorted(live - set(SITES))
     stale = sorted((set(SITES) - FIXED) - live)
     regressed = sorted(live & FIXED)
-    return untriaged, stale, regressed
+    vanished = sorted(FIXED - seen) if seen is not None else []
+    return untriaged, stale, regressed, vanished
 
 
 def main() -> int:
     if "--check" in sys.argv:
-        untriaged, stale, regressed = compare(_live_sites())
+        live, seen = _scan()
+        untriaged, stale, regressed, vanished = compare(live, seen)
         for n in untriaged:
             print(f"UNTRIAGED  {n} — new RISK site, not in the manifest")
         for n in stale:
             print(f"STALE      {n} — manifest lists it but the scanner does not")
         for n in regressed:
             print(f"REGRESSED  {n} — fixed on 2026-08-20, destructive again")
-        if untriaged or stale or regressed:
+        for n in vanished:
+            print(f"VANISHED   {n} — a fixed site the scanner can no longer "
+                  f"see at all; the gate is blind to it, not clean")
+        if untriaged or stale or regressed or vanished:
             print(f"\n{len(untriaged)} untriaged, {len(stale)} stale, "
-                  f"{len(regressed)} regressed")
+                  f"{len(regressed)} regressed, {len(vanished)} vanished")
             return 1
         print(f"manifest matches the live scan: {len(SITES) - len(FIXED)} "
               f"RISK sites, all triaged")
