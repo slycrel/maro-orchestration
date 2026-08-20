@@ -360,17 +360,38 @@ class TestTheCleanupVerbHoldsItsLock:
         import time
 
         import jsonl_utils
-        import doctor as _doctor
 
         src = str(Path(__file__).parent.parent / "src")
         skills_file = tmp_path / "skills.jsonl"
+        marker = tmp_path / "child-state"
         first = _make_skill("skfirst", "already here", correct_hash=True)
         skills_file.write_text(json.dumps(first) + "\n", encoding="utf-8")
 
         arrival = json.dumps(_make_skill("sklate", "arrived mid-cleanup", correct_hash=True))
+        # The child HANDSHAKES: it proves the lock is genuinely held by
+        # someone else before it appends, and records which. A fixed sleep
+        # would let the child append after cleanup finished, so both rows
+        # survive and the test passes with no lock at all — adversarial r2
+        # (2026-08-20) demonstrated exactly that against the lock-removal
+        # mutant. `blocked` is the only outcome that proves serialization.
         writer = (
-            f"import sys; sys.path.insert(0, {src!r})\n"
+            f"import sys, time, fcntl\n"
+            f"sys.path.insert(0, {src!r})\n"
             "from pathlib import Path\n"
+            f"lock = Path({str(skills_file) + '.lock'!r})\n"
+            "state = 'never-contended'\n"
+            "deadline = time.time() + 20\n"
+            "while time.time() < deadline:\n"
+            "    try:\n"
+            "        fh = open(lock, 'a+')\n"
+            "        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)\n"
+            "        fh.close()\n"
+            "        time.sleep(0.02)\n"
+            "    except OSError:\n"
+            "        state = 'blocked'\n"
+            "        break\n"
+            f"Path({str(marker)!r}).write_text(state)\n"
             "from file_lock import locked_append\n"
             f"locked_append(Path({str(skills_file)!r}), {arrival!r})\n"
         )
@@ -381,21 +402,23 @@ class TestTheCleanupVerbHoldsItsLock:
         def racing(path):
             text = real_store_text(path)
             started["proc"] = subprocess.Popen([_sys.executable, "-c", writer])
-            time.sleep(1.0)  # let the other process reach the lock
+            deadline = time.time() + 25
+            while time.time() < deadline and not marker.exists():
+                time.sleep(0.05)
+            started["state"] = marker.read_text() if marker.exists() else "no-handshake"
             return text
 
-        monkey = jsonl_utils.store_text
         jsonl_utils.store_text = racing
         try:
-            # cleanup imports store_text inside the function, so patching the
-            # module attribute is enough — but assert we actually raced.
             cleanup_workspace_skills(skills_path=skills_file)
         finally:
-            jsonl_utils.store_text = monkey
+            jsonl_utils.store_text = real_store_text
             if "proc" in started:
                 started["proc"].wait(timeout=30)
 
-        assert "proc" in started, "the racing hook never ran — test is vacuous"
+        assert started.get("state") == "blocked", (
+            "the child never contended for the lock, so this test proves "
+            f"nothing about serialization (state={started.get('state')!r})")
         names = [json.loads(l)["name"] for l in skills_file.read_text().splitlines() if l.strip()]
         assert "arrived mid-cleanup" in names, (
             "a save from another process was overwritten by cleanup's snapshot")
@@ -441,3 +464,32 @@ class TestTheCleanupVerbRemovesRowsNotIds:
         cleanup_workspace_skills(skills_path=skills_file)
 
         assert padded in skills_file.read_text()
+
+
+class TestTheCleanupVerbValidatesRowsNotJustJson:
+    """Adversarial r2 (2026-08-20, Expert QA, verified): the shape boundary
+    accepted every dict, but a dict is not yet a Skill. `_skill_hash_is_stale`
+    returns "not stale" for anything it cannot build, so a row that is merely
+    an object could carry a healthy skill's content_hash plus a higher score,
+    win the dedup, and DELETE the healthy row — confident destructive output
+    derived from garbage, with no warning."""
+
+    def test_a_dict_that_is_not_a_skill_cannot_win_dedup(self, tmp_path, capsys):
+        from skill_types import compute_skill_hash, dict_to_skill
+
+        healthy = _make_skill("skgood", "real skill", correct_hash=True)
+        forged = {"id": "forged", "name": "forged",
+                  "content_hash": healthy["content_hash"],
+                  "created_at": "2030-01-01T00:00:00+00:00",
+                  "success_rate": 1.0, "use_count": 999}
+        skills_file = tmp_path / "skills.jsonl"
+        skills_file.write_text(json.dumps(healthy) + "\n" + json.dumps(forged) + "\n",
+                               encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        rows = [json.loads(l) for l in skills_file.read_text().splitlines() if l.strip()]
+        ids = [r["id"] for r in rows]
+        assert "skgood" in ids, "a healthy skill was deleted by a row that is not a Skill"
+        assert "forged" in ids, "and the unreadable row is carried, not dropped"
+        assert "kept as-is" in capsys.readouterr().out.lower()

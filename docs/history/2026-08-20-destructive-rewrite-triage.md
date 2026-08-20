@@ -192,6 +192,95 @@ pytest; they compensated with in-memory and static probes. The Experimentalist
 did run the mutation suite in an isolated archive and independently reproduced
 19/19.
 
+## Adversarial round 2 (2026-08-20, three codex seats — the fix layer)
+
+Round 1's fixes got their own round, per the review-to-fixpoint practice.
+Three seats (Skeptic, Expert QA, Minimalist) on the r1 diff. **REJECT** —
+and the top finding was, for the second round running, a regression
+introduced by the previous round's fix. That is now a pattern worth naming:
+*the fix layer is the highest-yield thing to review, because it is the only
+code in the change that nobody has reviewed yet.*
+
+**Fixed, each reproduced before it was touched:**
+
+- **The `applied` flag became tri-state** (3/3 seats, HIGH). r1 made the read
+  strictly `is True` to stop `"applied": "false"` — a truthy string — from
+  swallowing a STOP. That closed the drop and opened the mirror: every
+  *legacy* truthy value (`"true"`, `1`) flipped from applied to pending, so a
+  historical interrupt is **re-delivered and applied a second time**, then
+  silently rewritten as boolean `true`. Probed: `stored_applied='true'` →
+  `delivered_ids=['already']`. Two rounds in a row spent on this one flag,
+  because both fixes treated a three-valued question as two-valued.
+  `_applied_state()` now answers `True` / `False` / **`None`** — where `None`
+  means *this flag cannot be read*, a third answer, not a default. Legacy
+  `"true"`/`"false"`/`0`/`1` are recognized explicitly as the compatibility
+  boundary they are; anything else routes to the preserve-and-announce path
+  with the row left on disk. Pinned by three mutations (`applied-flag`,
+  `legacy-applied`, `unreadable-flag`).
+- **A dict is not yet a Skill** (Expert QA, HIGH). r1's shape guard accepted
+  every JSON object, but `_skill_hash_is_stale()` returns "not stale" for
+  anything it cannot build — so a forged object carrying a healthy skill's
+  `content_hash` and a higher score **wins the dedup and deletes the healthy
+  row**. Probed: `healthy survived: False`, `forged survived: True`,
+  `"Cleaned: 1 skills remain"`. Confident destructive output derived from
+  garbage, with no warning. The read now calls `dict_to_skill(row)` and
+  strands whatever fails.
+- **`freed` bytes described the wrong thing** (3/3, MEDIUM). `st_size` was
+  sampled *before* the lock, so a concurrent **retained** append was charged
+  against GC's freed count — a successful collection reported to the operator
+  as having grown the store. Probed: `(2, 1, -4097)`. The delta is now
+  computed inside `_trim` from the locked snapshot and the exact text that
+  replaces it, `encode("utf-8", "surrogateescape")` on both sides.
+- **The drift gate accepted regressions** (2 seats, MEDIUM). Re-introducing
+  the *known real defect* at `interrupt.py:poll` passed `--check` cleanly: the
+  site is in `SITES`, so it is not untriaged, and it is in `FIXED`, so it is
+  not stale. A gate whose whole purpose is "a site cannot inherit already
+  triaged" was blind to the one case that matters most. `compare()` now
+  returns a third list, `regressed = live & FIXED`, and exits nonzero on it.
+- **The lock test could pass with the lock removed** (2 seats). The r1 test
+  spawned a child and slept 1.0s, then asserted both rows survived — but a
+  child that appends *after* cleanup finishes leaves both rows there whether
+  or not anything was serialized. Demonstrated by delaying the child two
+  seconds against the lock-removal mutant: the test passed. The child now
+  **handshakes** — it probes the `.lock` with `LOCK_NB` until it is refused,
+  writes `blocked` to a marker, and only then appends; the parent waits for
+  the marker and asserts on it. `never-contended` and `no-handshake` now fail
+  the test loudly. This is the vacuous-test lesson in its purest form: the
+  original assertion (`"proc" in started`) proved a subprocess was *spawned*.
+- **The scanner gate had no must-detect fixture** (Skeptic, LOW). The
+  committed test verified only the green baseline, so `main()` hardcoded to
+  return 0 would still pass. `compare()` was split out as a pure function and
+  is now unit-tested on all three failure directions.
+
+**Accepted as designed, and now says so in the code** (Skeptic, MEDIUM): GC
+skips the locked pass entirely when the unlocked pre-scan finds nothing to
+collect, so a row that expires between the scan and the lock waits for the
+next tick. Correct observation; it is a latency choice that avoids rewriting
+the store on every GC tick, not data loss, and the authoritative
+classification is still the locked one. The reasoning is now a comment at the
+branch rather than a thing a future reader has to re-derive.
+
+**Deferred, with the reason** (Skeptic, HIGH): `locked_write` **fails open** —
+on a corrupt `.lock` (e.g. a directory of that name) it logs a warning and
+proceeds *unlocked*, which hands the lost-update race back to every caller
+including this repair verb. Reproduced. But that is documented, deliberate
+behaviour in a primitive shared by the whole tree (the rationale being that a
+RO-fs/permissions failure is an environment problem, not contention), so
+flipping it to fail-closed is a decision about every caller at once, not a fix
+inside this chunk. BACKLOG'd for Jeremy.
+
+**Receipts for the round:** mutation spec 29 → 35, `35/35 accounted for` (33
+DETECTED + 2 marked EQUIVALENT surviving as claimed). One of those two is new
+and is itself a result: `doctor shape` — removing the `isinstance` guard — was
+DETECTED in r1 and became *unfalsifiable* in r2, because the `dict_to_skill`
+validation added on the next line raises `TypeError` on every non-dict JSON
+value (`[]`, `null`, `"x"`, `3`, `true` — all probed). Two guards, one
+detector: the mutation is marked with that reason rather than deleted, and
+row-shape detection is carried by `doctor schema` instead. Four other
+mutations came back **SKIP** — stale anchors, because the r2 rewrites moved
+the code they pointed at. A SKIP is not a pass; all four were re-anchored
+before the sweep was called green.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -204,3 +293,11 @@ The corollary is the one the scanner's own docstring already makes: a "found 0"
 from a tool nobody has falsified is worth nothing. This triage is the
 falsification pass, and its durable output is the FP table above — so the next
 person to run the scanner starts from 63 known-benign sites, not 63 unknowns.
+
+The second lesson is from the two rounds, not the scan: **both rounds' top
+finding was a defect the previous round's fix introduced** — r1 found the lock
+that r0's fix scoped too narrowly, r2 found the `applied` flag that r1's fix
+inverted. Neither was in the original code. Review the fix layer first; it is
+the only part of the change that has never been read by anyone but its author,
+and it was written under the pressure of a finding, which is exactly the
+condition that produces the mirror-image bug.

@@ -588,3 +588,58 @@ class TestTheInterruptChannelSurvivesAJsonValueThatIsNotARow:
 
         assert [i.id for i in pending] == ["i1"]
         assert len([l for l in p.read_text().split("\n") if l.strip()]) == 1
+
+
+class TestTheAppliedFlagIsReadNotGuessed:
+    """Adversarial r2 (2026-08-20, 3/3 HIGH): the strict `is True` fix that
+    closed r1's "false"-swallows-a-STOP bug flipped every OTHER non-boolean
+    the other way. A legacy `"true"` or `1` had counted as applied for its
+    whole life; suddenly it was pending, so poll() handed a CORRECTIVE
+    interrupt back to the loop to be applied a second time.
+
+    Both directions now have to hold at once, and a flag with no unambiguous
+    reading makes the row unreadable rather than silently picking a failure.
+    """
+
+    def _row(self, iid: str, **over) -> dict:
+        d = {"id": iid, "message": "corrective: do X instead", "source": "cli",
+             "intent": "corrective", "new_steps": [], "replacement_goal": "X",
+             "timestamp": "2026-08-19T00:00:00+00:00", "applied": False}
+        d.update(over)
+        return d
+
+    def _peek(self, tmp_path, flag):
+        from interrupt import InterruptQueue
+        p = tmp_path / f"i-{abs(hash(repr(flag)))}.jsonl"
+        p.write_text(json.dumps(self._row("legacy", applied=flag)) + "\n")
+        return [i.id for i in InterruptQueue(queue_path=p).peek()], p
+
+    @pytest.mark.parametrize("flag", [True, "true", "True", 1])
+    def test_a_legacy_truthy_row_is_not_re_delivered(self, tmp_path, flag):
+        delivered, _ = self._peek(tmp_path, flag)
+        assert delivered == [], f"applied={flag!r} was re-delivered"
+
+    @pytest.mark.parametrize("flag", [False, "false", "False", 0, None])
+    def test_a_legacy_falsey_row_is_still_delivered(self, tmp_path, flag):
+        delivered, _ = self._peek(tmp_path, flag)
+        assert delivered == ["legacy"], f"applied={flag!r} swallowed the interrupt"
+
+    def test_an_unreadable_flag_is_neither_delivered_nor_swallowed(self, tmp_path, caplog):
+        """Choosing a default for garbage picks a failure — double-apply or a
+        lost STOP — on the operator's behalf, in silence."""
+        with caplog.at_level("WARNING"):
+            delivered, p = self._peek(tmp_path, "maybe")
+
+        assert delivered == []
+        assert "maybe" in p.read_text(), "the row stays on disk"
+        assert any("cannot be delivered" in r.message for r in caplog.records), caplog.text
+
+    def test_an_unreadable_flag_survives_poll_verbatim(self, tmp_path):
+        from interrupt import InterruptQueue
+        p = tmp_path / "i.jsonl"
+        row = json.dumps(self._row("weird", applied="maybe"))
+        p.write_text(json.dumps(self._row("ok")) + "\n" + row + "\n")
+
+        assert [i.id for i in InterruptQueue(queue_path=p).poll()] == ["ok"]
+
+        assert row in p.read_text(), "the unreadable row was rewritten or dropped"

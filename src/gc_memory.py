@@ -172,6 +172,12 @@ def _gc_outcomes(
     if stats is not None:
         stats["uncollectable"] = unreadable
 
+    # Pre-check only, and deliberately so: skipping the locked pass when the
+    # unlocked scan saw nothing to collect avoids rewriting the file on every
+    # GC tick. Adversarial r2 (2026-08-20) is right that a row expiring — or
+    # being appended already-expired — between this scan and the lock is then
+    # left for the NEXT run. That is a latency choice, not data loss, and the
+    # authoritative classification is still the locked one below.
     if dry_run or removed <= 0:
         return total, removed, 0
 
@@ -186,13 +192,20 @@ def _gc_outcomes(
     # describe the mutation that actually happened.
     from file_lock import locked_rmw
     locked: "dict[str, int]" = {}
-    original_size = path.stat().st_size
 
     def _trim(old: str) -> str:
         kept, t, u = _classify(old)
+        new = "\n".join(kept) + ("\n" if kept else "")
         locked["total"], locked["unreadable"] = t, u
         locked["removed"] = t - len(kept)
-        return "\n".join(kept) + ("\n" if kept else "")
+        # Byte delta from the LOCKED snapshot and the text that replaces it.
+        # Adversarial r2 (2026-08-20, 3/3): sampling st_size before the lock
+        # charged a concurrent RETAINED append against GC's freed count and
+        # could report a NEGATIVE number — a successful collection described
+        # to the operator as having grown the store. Probed: (2, 1, -4097).
+        locked["freed"] = (len(old.encode("utf-8", "surrogateescape"))
+                           - len(new.encode("utf-8", "surrogateescape")))
+        return new
 
     try:
         locked_rmw(path, _trim)
@@ -201,8 +214,8 @@ def _gc_outcomes(
     _announce(locked.get("unreadable", 0) - unreadable)
     if stats is not None:
         stats["uncollectable"] = locked.get("unreadable", unreadable)
-    freed = original_size - path.stat().st_size
-    return locked.get("total", total), locked.get("removed", removed), freed
+    return (locked.get("total", total), locked.get("removed", removed),
+            locked.get("freed", 0))
 
 
 def _gc_tiered_lessons(*, dry_run: bool = True) -> int:

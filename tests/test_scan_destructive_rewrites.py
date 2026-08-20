@@ -150,3 +150,48 @@ def test_the_triage_manifest_matches_the_live_scan():
     )
     assert proc.returncode == 0, (
         "triage manifest drifted from the scanner:\n" + proc.stdout + proc.stderr)
+
+
+def _manifest():
+    """Import scripts/triage_manifest.py without putting scripts/ on sys.path."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "scripts" / "triage_manifest.py"
+    spec = importlib.util.spec_from_file_location("_triage_manifest", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_drift_gate_catches_a_brand_new_risk_site():
+    """A green baseline proves nothing about a gate. Adversarial r2
+    (2026-08-20): the committed test only checked that --check passes today,
+    so `main()` always returning 0 would still have passed it."""
+    tm = _manifest()
+    live = (set(tm.SITES) - tm.FIXED) | {"brand_new.py:some_rewrite"}
+    untriaged, stale, regressed = tm.compare(live)
+    assert untriaged == ["brand_new.py:some_rewrite"]
+    assert not stale and not regressed
+
+
+def test_the_drift_gate_catches_a_stale_manifest_entry():
+    tm = _manifest()
+    live = set(tm.SITES) - tm.FIXED
+    dropped = sorted(live)[0]
+    untriaged, stale, regressed = tm.compare(live - {dropped})
+    assert stale == [dropped]
+    assert not untriaged and not regressed
+
+
+def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
+    """The one the gate originally missed: a resurfaced FIXED site was
+    neither untriaged (it is in SITES) nor stale (FIXED exempted it), so
+    re-introducing the exact destructive rewrite passed silently."""
+    tm = _manifest()
+    resurfaced = "interrupt.py:poll"
+    assert resurfaced in tm.FIXED, "fixture drifted"
+    live = (set(tm.SITES) - tm.FIXED) | {resurfaced}
+    untriaged, stale, regressed = tm.compare(live)
+    assert regressed == [resurfaced]
+    assert not untriaged and not stale

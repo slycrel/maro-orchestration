@@ -268,16 +268,37 @@ class Interrupt:
 _LOCK = threading.Lock()
 
 
-def _is_applied(d: dict) -> bool:
-    """Has this row already been delivered?
+def _applied_state(d: dict) -> "Optional[bool]":
+    """Tri-state read of a row's `applied` flag: True, False, or None.
 
-    Strictly `True`, not truthiness. Adversarial round 2026-08-20 (verified):
-    `d.get("applied", False)` read the STRING "false" — legal JSON, and what a
-    hand-edited or foreign-written row can easily carry — as applied, so a
-    STOP interrupt was silently never delivered and nothing warned. Our own
-    writer emits a real boolean, so nothing that Maro wrote changes meaning.
+    None means "this flag cannot be read", which is a THIRD answer, not a
+    default — and getting that wrong cost two adversarial rounds in a row:
+
+    - r1 (2026-08-20): plain truthiness read the STRING "false" as applied, so
+      a STOP interrupt was silently never delivered and nothing warned.
+    - r2, same day: the strict `is True` fix that closed r1 flipped every
+      OTHER non-boolean the other way. A legacy `"true"` or `1` had counted as
+      applied for its whole life; suddenly it was pending, so poll() handed a
+      corrective interrupt back to the loop and it was applied a SECOND time.
+      Verified: `applied="true"` and `applied=1` both re-delivered.
+
+    So: recognise the values that have an unambiguous reading, and refuse the
+    rest. A flag we cannot read makes the ROW unreadable — it joins the
+    torn-byte and non-object rows, carried verbatim and announced, never
+    silently delivered and never silently swallowed. Choosing either default
+    for garbage picks a failure (double-apply, or a lost STOP) on the
+    operator's behalf, in silence. That is the thing this arc exists to stop.
     """
-    return d.get("applied") is True
+    v = d.get("applied", False)
+    if v is True or v is False:
+        return v
+    if v is None:                      # explicit null == never delivered
+        return False
+    if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+        return v.strip().lower() == "true"
+    if isinstance(v, int) and v in (0, 1):
+        return bool(v)
+    return None
 
 
 class InterruptQueue:
@@ -370,7 +391,10 @@ class InterruptQueue:
                         d = _loads_clean(raw)
                         if not isinstance(d, dict):
                             raise TypeError("not a JSON object")
-                        if not _is_applied(d):
+                        state = _applied_state(d)
+                        if state is None:
+                            raise TypeError("unreadable applied flag")
+                        if not state:
                             d["applied"] = True
                             pending.append(Interrupt.from_dict(d))
                         updated.append(json.dumps(d))
@@ -406,7 +430,10 @@ class InterruptQueue:
                     # the control channel went down exactly as it did on a
                     # torn byte (adversarial round 2026-08-20, verified).
                     raise TypeError(f"not a JSON object: {type(d).__name__}")
-                if not _is_applied(d):
+                state = _applied_state(d)
+                if state is None:
+                    raise TypeError(f"unreadable applied flag: {d.get('applied')!r}")
+                if not state:
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
                 dropped += 1
@@ -433,7 +460,10 @@ class InterruptQueue:
                         d = _loads_clean(raw)  # never launder a tainted twin
                         if not isinstance(d, dict):
                             raise TypeError("not a JSON object")
-                        if not _is_applied(d):
+                        state = _applied_state(d)
+                        if state is None:
+                            raise TypeError("unreadable applied flag")
+                        if not state:
                             d["applied"] = True
                             counted["n"] += 1
                         updated.append(json.dumps(d))

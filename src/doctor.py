@@ -666,10 +666,20 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
                     # `[]`, `null` and `"x"` are valid JSON but not rows;
                     # without this they reached .get() and crashed the verb.
                     raise TypeError(f"not a JSON object: {type(row).__name__}")
+                # ...and a dict is not yet a Skill. Adversarial r2
+                # (2026-08-20, verified): _skill_hash_is_stale() returns
+                # "not stale" for anything it cannot build, so a row that is
+                # merely an object could carry a healthy skill's content_hash
+                # plus a higher score, win the dedup, and DELETE the healthy
+                # row — confident destructive output derived from garbage.
+                # Probed: healthy skill gone, forged row kept, no warning.
+                from skill_types import dict_to_skill as _to_skill
+                _to_skill(row)
                 all_skills.append(row)
             except Exception as e:
                 stranded.append(raw)
-                print(f"Unparseable line kept as-is (not removed): {e}")
+                print(f"Unreadable line kept as-is (not removed): "
+                      f"{type(e).__name__}: {e}")
 
         print(f"Loaded {len(all_skills)} skills")
         _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write)

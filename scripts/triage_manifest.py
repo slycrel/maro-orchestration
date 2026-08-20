@@ -116,19 +116,44 @@ def _live_sites() -> set[str]:
     return sites
 
 
+def compare(live: "set[str]") -> "tuple[list[str], list[str], list[str]]":
+    """(untriaged, stale, regressed) for a live scan result.
+
+    Pure, so the drift gate itself can be tested against a synthetic live set
+    — the runner's own must-detect rule applied to the runner.
+
+      untriaged  a RISK site the manifest has never classified
+      stale      a manifest site the scanner no longer reports (and which was
+                 not one of the 2026-08-20 fixes)
+      regressed  a site the 2026-08-20 fixes made OK that is RISK again
+
+    `regressed` exists because of adversarial r2 (2026-08-20, 2 lenses,
+    verified): a resurfaced FIXED site was neither untriaged (it is in SITES)
+    nor stale (FIXED exempted it), so re-introducing the exact destructive
+    rewrite this arc removed passed the gate silently. A one-directional
+    exemption is not a gate.
+    """
+    untriaged = sorted(live - set(SITES))
+    stale = sorted((set(SITES) - FIXED) - live)
+    regressed = sorted(live & FIXED)
+    return untriaged, stale, regressed
+
+
 def main() -> int:
     if "--check" in sys.argv:
-        live = _live_sites()
-        untriaged = sorted(live - set(SITES))
-        gone = sorted((set(SITES) - FIXED) - live)
+        untriaged, stale, regressed = compare(_live_sites())
         for n in untriaged:
             print(f"UNTRIAGED  {n} — new RISK site, not in the manifest")
-        for n in gone:
+        for n in stale:
             print(f"STALE      {n} — manifest lists it but the scanner does not")
-        if untriaged or gone:
-            print(f"\n{len(untriaged)} untriaged, {len(gone)} stale")
+        for n in regressed:
+            print(f"REGRESSED  {n} — fixed on 2026-08-20, destructive again")
+        if untriaged or stale or regressed:
+            print(f"\n{len(untriaged)} untriaged, {len(stale)} stale, "
+                  f"{len(regressed)} regressed")
             return 1
-        print(f"manifest matches the live scan: {len(live)} RISK sites, all triaged")
+        print(f"manifest matches the live scan: {len(SITES) - len(FIXED)} "
+              f"RISK sites, all triaged")
         return 0
     print(f"{len(SITES)} sites triaged 2026-08-20 "
           f"({sum(1 for c in SITES.values() if c == 'REAL')} real, "

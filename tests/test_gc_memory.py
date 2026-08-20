@@ -411,3 +411,49 @@ class TestOutcomesGcReportsWhatItActuallyDid:
 
         assert (total, removed) == (2, 0)
         assert "[]" in (mem / "outcomes.jsonl").read_text()
+
+
+class TestFreedBytesDescribeTheRewrite:
+    """Adversarial r2 (2026-08-20, 3/3): `original_size` was sampled before
+    the lock, so a concurrent RETAINED append was charged against GC's freed
+    count — a successful collection reported to the operator as having GROWN
+    the store. Probed: (2, 1, -4097)."""
+
+    def test_a_concurrent_retained_append_does_not_make_freed_negative(
+            self, monkeypatch, tmp_path):
+        import gc_memory as _gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=200)
+        big = json.dumps({"goal": "x" * 4000, "status": "done",
+                          "recorded_at": datetime.now(timezone.utc).isoformat()})
+        real = _gc._store_text
+        landed = {}
+
+        def racing(path):
+            text = real(path)
+            from file_lock import locked_append
+            locked_append(path, big)
+            landed["yes"] = True
+            return text
+
+        monkeypatch.setattr(_gc, "_store_text", racing)
+        total, removed, freed = _gc._gc_outcomes(retain_days=90, dry_run=False)
+
+        assert landed, "the racing hook never ran — test is vacuous"
+        assert removed == 1
+        assert freed > 0, f"a collection that removed a row reported freed={freed}"
+
+    def test_freed_matches_the_bytes_actually_removed(self, monkeypatch, tmp_path):
+        from gc_memory import _gc_outcomes as gc
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=200)
+        _write_outcome(mem, days_ago=1)
+        before = (mem / "outcomes.jsonl").stat().st_size
+
+        _, removed, freed = gc(retain_days=90, dry_run=False)
+
+        after = (mem / "outcomes.jsonl").stat().st_size
+        assert removed == 1
+        assert freed == before - after

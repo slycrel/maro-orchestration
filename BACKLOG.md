@@ -570,6 +570,59 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       the same one-line change everywhere. (3) A quarantine/repair verb
       for rows GC can never collect — count is now visible, the
       remedy is not.*
+    - *Its adversarial r2 (2026-08-20, three codex seats on the r1 fix
+      layer): **REJECT — and for the SECOND round running the top
+      finding was a regression the previous round's fix introduced.**
+      r1 made the `applied` read strictly `is True` to stop a truthy
+      `"false"` from swallowing a STOP; that closed the drop and opened
+      its mirror — every LEGACY truthy value (`"true"`, `1`) flipped
+      from applied to pending, so a historical interrupt is
+      **re-delivered and applied twice**, then silently rewritten as a
+      boolean (3/3 seats, probed). Both fixes treated a three-valued
+      question as two-valued. `_applied_state()` now answers True /
+      False / **None** — None meaning *this flag cannot be read*, a
+      third answer rather than a default; legacy `"true"`/`"false"`/`0`
+      /`1` are recognized as the compatibility boundary they are and
+      anything else strands-and-announces. Also fixed: (a) **a dict is
+      not yet a Skill** — the r1 shape guard accepted every JSON object,
+      and `_skill_hash_is_stale` returns "not stale" for anything it
+      cannot build, so a forged object carrying a healthy skill's
+      content_hash plus a higher score won the dedup and DELETED the
+      healthy row (probed: healthy gone, forgery kept, no warning);
+      `dict_to_skill(row)` now validates at the boundary. (b) GC's
+      `freed` sampled `st_size` before the lock, charging a concurrent
+      RETAINED append against the freed count and reporting a NEGATIVE
+      number — a successful collection described as having grown the
+      store (probed `(2, 1, -4097)`); the delta is computed inside the
+      locked transform now. (c) The drift gate accepted regressions:
+      re-introducing the KNOWN REAL defect at `interrupt.py:poll`
+      passed `--check` (in SITES so not untriaged, in FIXED so not
+      stale) — `compare()` returns `regressed = live & FIXED` and exits
+      nonzero. (d) **The r1 lock test could pass with the lock
+      removed** — spawn + `sleep(1.0)` + assert both rows survive is
+      satisfied by a child that appends AFTER cleanup finishes;
+      demonstrated against the lock-removal mutant. The child now
+      handshakes (LOCK_NB probe until refused -> marker -> append) and
+      the parent asserts `blocked`. (e) The scanner gate had no
+      must-detect fixture; `compare()` was split out pure and is tested
+      on all three failure directions. **Accepted as designed** (now a
+      comment, not a thing to re-derive): GC skips the locked pass when
+      the unlocked pre-scan finds nothing, so a row expiring in that
+      window waits for the next tick — a latency choice, not data loss.
+      **Deferred for Jeremy:** `locked_write` FAILS OPEN on a corrupt
+      `.lock` (logs a warning, proceeds unlocked), handing the
+      lost-update race back to every caller including this repair verb
+      — reproduced, but it is documented deliberate behaviour in a
+      primitive the whole tree shares, so fail-closed is a decision
+      about every caller at once. Receipts: spec 29 -> 35, **35/35
+      accounted for** (33 detected + 2 equivalent surviving as
+      claimed). One equivalence is itself a result: `doctor shape` was
+      DETECTED in r1 and became unfalsifiable in r2 because the new
+      `dict_to_skill` validation raises on every non-dict JSON value —
+      marked with that reason, with row-shape detection carried by
+      `doctor schema` instead. Four mutations came back SKIP (stale
+      anchors from the r2 rewrites); a SKIP is not a pass and all four
+      were re-anchored before the sweep was called green.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making

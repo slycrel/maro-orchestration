@@ -9,8 +9,8 @@
   {
     "name": "interrupt launder (poll) :: a tainted twin is re-dumped as clean escapes",
     "file": "src/interrupt.py",
-    "anchor": "                        d = _loads_clean(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
-    "replacement": "                        d = json.loads(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "anchor": "                        d = _loads_clean(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        state = _applied_state(d)\n                        if state is None:\n                            raise TypeError(\"unreadable applied flag\")\n                        if not state:\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "replacement": "                        d = json.loads(raw)\n                        if not isinstance(d, dict):\n                            raise TypeError(\"not a JSON object\")\n                        state = _applied_state(d)\n                        if state is None:\n                            raise TypeError(\"unreadable applied flag\")\n                        if not state:\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
     "tests": "tests/test_interrupt.py"
   },
   {
@@ -44,8 +44,8 @@
   {
     "name": "interrupt delivery :: poll stops marking healthy rows applied",
     "file": "src/interrupt.py",
-    "anchor": "                        if not _is_applied(d):\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
-    "replacement": "                        if not _is_applied(d):\n                            pending.append(Interrupt.from_dict(d))",
+    "anchor": "                        if not state:\n                            d[\"applied\"] = True\n                            pending.append(Interrupt.from_dict(d))",
+    "replacement": "                        if not state:\n                            pending.append(Interrupt.from_dict(d))",
     "tests": "tests/test_interrupt.py"
   },
   {
@@ -58,7 +58,7 @@
   {
     "name": "gc conservative-keep :: an unparseable row is dropped from the trim instead of kept",
     "file": "src/gc_memory.py",
-    "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error → keep conservatively",
+    "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error \u2192 keep conservatively",
     "replacement": "            except Exception:\n                unreadable += 1",
     "tests": "tests/test_gc_memory.py"
   },
@@ -79,7 +79,7 @@
   {
     "name": "gc collection :: old rows stop being collected at all",
     "file": "src/gc_memory.py",
-    "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old — collected",
+    "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old \u2014 collected",
     "replacement": "                    keep.append(raw)",
     "tests": "tests/test_gc_memory.py"
   },
@@ -93,8 +93,8 @@
   {
     "name": "doctor destruction :: a row the verb cannot read is deleted by its rewrite",
     "file": "src/doctor.py",
-    "anchor": "            except Exception as e:\n                stranded.append(raw)\n                print(f\"Unparseable line kept as-is (not removed): {e}\")",
-    "replacement": "            except Exception as e:\n                print(f\"Unparseable line kept as-is (not removed): {e}\")",
+    "anchor": "            except Exception as e:\n                stranded.append(raw)\n                print(f\"Unreadable line kept as-is (not removed): \"\n                      f\"{type(e).__name__}: {e}\")",
+    "replacement": "            except Exception as e:\n                print(f\"Unreadable line kept as-is (not removed): \"\n                      f\"{type(e).__name__}: {e}\")",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -151,7 +151,8 @@
     "file": "src/doctor.py",
     "anchor": "                row = _loads_clean(line)\n                if not isinstance(row, dict):",
     "replacement": "                row = _loads_clean(line)\n                if False:",
-    "tests": "tests/test_doctor.py"
+    "tests": "tests/test_doctor.py",
+    "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) \u2014 so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
   },
   {
     "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
@@ -170,8 +171,8 @@
   {
     "name": "interrupt applied-flag :: the string \"false\" reads as applied and swallows a STOP",
     "file": "src/interrupt.py",
-    "anchor": "    return d.get(\"applied\") is True",
-    "replacement": "    return bool(d.get(\"applied\", False))",
+    "anchor": "    if isinstance(v, str) and v.strip().lower() in (\"true\", \"false\"):\n        return v.strip().lower() == \"true\"",
+    "replacement": "    if isinstance(v, str):\n        return bool(v)",
     "tests": "tests/test_interrupt.py"
   },
   {
@@ -184,8 +185,8 @@
   {
     "name": "gc counts :: the returned counts come from the out-of-lock scan again",
     "file": "src/gc_memory.py",
-    "anchor": "    return locked.get(\"total\", total), locked.get(\"removed\", removed), freed",
-    "replacement": "    return total, removed, freed",
+    "anchor": "    return (locked.get(\"total\", total), locked.get(\"removed\", removed),\n            locked.get(\"freed\", 0))",
+    "replacement": "    return total, removed, locked.get(\"freed\", 0)",
     "tests": "tests/test_gc_memory.py"
   },
   {
@@ -201,6 +202,48 @@
     "anchor": "                if not isinstance(d, dict):\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
     "replacement": "                if False:\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
     "tests": "tests/test_gc_memory.py",
-    "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way — no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
+    "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way \u2014 no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
+  },
+  {
+    "name": "interrupt legacy-applied :: a legacy \"true\"/1 row is re-delivered and applied twice",
+    "file": "src/interrupt.py",
+    "anchor": "    if v is None:                      # explicit null == never delivered\n        return False",
+    "replacement": "    if v is not True:\n        return False",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt unreadable-flag :: an unreadable applied flag is silently treated as pending",
+    "file": "src/interrupt.py",
+    "anchor": "                state = _applied_state(d)\n                if state is None:\n                    raise TypeError(f\"unreadable applied flag: {d.get('applied')!r}\")",
+    "replacement": "                state = _applied_state(d)\n                if state is None:\n                    state = False",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "doctor schema :: a dict that is not a Skill wins dedup and deletes a healthy row",
+    "file": "src/doctor.py",
+    "anchor": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)",
+    "replacement": "                pass",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "gc freed :: the byte delta is sampled outside the lock and can go negative",
+    "file": "src/gc_memory.py",
+    "anchor": "        locked[\"freed\"] = (len(old.encode(\"utf-8\", \"surrogateescape\"))\n                           - len(new.encode(\"utf-8\", \"surrogateescape\")))",
+    "replacement": "        locked[\"freed\"] = 0",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "manifest gate :: a fixed site turning destructive again passes the drift check",
+    "file": "scripts/triage_manifest.py",
+    "anchor": "    regressed = sorted(live & FIXED)",
+    "replacement": "    regressed = []",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "manifest gate :: a brand-new RISK site inherits \"already triaged\"",
+    "file": "scripts/triage_manifest.py",
+    "anchor": "    untriaged = sorted(live - set(SITES))\n    stale = sorted((set(SITES) - FIXED) - live)",
+    "replacement": "    untriaged = []\n    stale = sorted((set(SITES) - FIXED) - live)",
+    "tests": "tests/test_scan_destructive_rewrites.py"
   }
 ]
