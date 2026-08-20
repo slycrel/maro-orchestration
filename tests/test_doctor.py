@@ -1109,3 +1109,69 @@ class TestTheRefusalKindIsRecordedNotGuessedFromTheExceptionName:
         assert len(readable) == 1, lines
         assert len(unreadable) == 1, lines
         assert "torn" not in readable[0]
+
+
+class TestARowIsParsedAsItIsStored:
+    """Adversarial r9 (QA + Architect, HIGH, probed). The read loop parsed
+    `raw.strip()` and carried `raw`. `str.strip()` removes Unicode
+    whitespace that JSON does not permit, so `" " + a valid row`
+    parsed after stripping, was admitted, and came back re-serialised with
+    those bytes gone — the launder this verb exists to prevent, arriving
+    through the whitespace door instead of the surrogate one."""
+
+    def test_a_row_wrapped_in_json_forbidden_whitespace_strands(
+            self, tmp_path, capsys):
+        good = _make_skill("good", "n", correct_hash=True)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(good) + "\n"
+                     + " " + json.dumps(_make_skill("weird", "w",
+                                                         correct_hash=True))
+                     + "\n", encoding="utf-8")
+        before = f.read_text(encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert " " in f.read_text(encoding="utf-8"), \
+            "the bytes this verb could not read were rewritten away"
+        assert before == f.read_text(encoding="utf-8"), "byte for byte"
+        assert "kept as-is" in out, out
+
+    def test_a_line_of_only_whitespace_is_not_treated_as_framing(
+            self, tmp_path):
+        good = _make_skill("good", "n", correct_hash=True)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(good) + "\n \n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        assert " " in f.read_text(encoding="utf-8"), \
+            "a row of Unicode whitespace was silently deleted by the rewrite"
+
+
+class TestTheLineThatAnnouncesADestructionNamesTheStore:
+    """Adversarial r9 (5/5 seats): r8 put the path on the header, the
+    stranded rows and the summary — not on the two lines that announce a
+    row being DESTROYED. Operator logs are read, filtered and forwarded
+    line by line; a deletion line that cannot say which store it deleted
+    from is not a receipt."""
+
+    def test_the_stale_and_duplicate_removals_each_name_the_store(
+            self, tmp_path, capsys):
+        newer = dict(_make_skill("keeper", "n", correct_hash=True),
+                     created_at="2030-01-01T00:00:00+00:00")
+        older = dict(_make_skill("goner", "n", correct_hash=True),
+                     created_at="2020-01-01T00:00:00+00:00")
+        stale = _make_skill("stale", "other", correct_hash=False)
+        f = tmp_path / "skills.jsonl"
+        f.write_text("\n".join(json.dumps(r) for r in (newer, older, stale))
+                     + "\n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        lines = capsys.readouterr().out.splitlines()
+        removing = [l for l in lines if "removing 'goner'" in l]
+        stale_line = [l for l in lines if "'stale'" in l or "stale " in l]
+        assert removing and str(f) in removing[0], removing
+        named = [l for l in stale_line if "stored hash" in l]
+        assert named and str(f) in named[0], named

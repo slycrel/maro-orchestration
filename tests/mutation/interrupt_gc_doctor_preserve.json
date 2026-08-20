@@ -65,8 +65,8 @@
   {
     "name": "gc launder :: a byte-tainted row's untrustworthy timestamp authorizes its own delete",
     "file": "src/gc_memory.py",
-    "anchor": "                d = _loads_clean(line)\n                if not isinstance(d, dict):",
-    "replacement": "                d = json.loads(line)\n                if not isinstance(d, dict):",
+    "anchor": "                d = _loads_clean(raw)\n                if not isinstance(d, dict):",
+    "replacement": "                d = json.loads(raw)\n                if not isinstance(d, dict):",
     "tests": "tests/test_gc_memory.py"
   },
   {
@@ -424,8 +424,8 @@
   {
     "name": "loads_clean dup names :: duplicate object names silently keep the last",
     "file": "src/jsonl_utils.py",
-    "anchor": "    value = json.loads(s, object_pairs_hook=_no_duplicate_names)",
-    "replacement": "    value = json.loads(s)",
+    "anchor": "    value = json.loads(s, object_pairs_hook=_no_duplicate_names,\n                           parse_constant=_refuse_constant)",
+    "replacement": "    value = json.loads(s, parse_constant=_refuse_constant)",
     "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py"
   },
   {
@@ -565,8 +565,8 @@
     "name": "doctor announce :: the removed rows are not named",
     "file": "src/doctor.py",
     "tests": "tests/test_doctor.py",
-    "anchor": "        for s in losers:\n            print(f\"      removing '{s.get('id', '?')}' \"",
-    "replacement": "        for s in losers[:0]:\n            print(f\"      removing '{s.get('id', '?')}' \""
+    "anchor": "        for s in losers:\n            # The path on the line that announces the destruction",
+    "replacement": "        for s in losers[:0]:\n            # The path on the line that announces the destruction"
   },
   {
     "name": "doctor announce :: the kept row is named only by what the whole group shares",
@@ -685,8 +685,8 @@
     "name": "doctor announce :: the stale row it deletes loses its timestamp",
     "file": "src/doctor.py",
     "tests": "tests/test_doctor.py",
-    "anchor": "            print(f\"  {s.get('id', '?'):12} '{s.get('name', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \u2014 stored hash doesn't match \"\n                  f\"content\")",
-    "replacement": "            print(f\"  {s.get('id', '?'):12} '{s.get('name', '?')}' \"\n                  f\"\u2014 stored hash doesn't match content\")"
+    "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"",
+    "replacement": "                  f\"in {workspace_skills} \u2014 \""
   },
   {
     "name": "doctor kind :: a readable row is announced as unreadable",
@@ -713,8 +713,8 @@
     "name": "scanner scope :: a module-wide proof survives a local rebinding",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "    clean_names = clean_names - _shadowed(fn)",
-    "replacement": "    clean_names = clean_names"
+    "anchor": "    shadow = _shadowed(fn)",
+    "replacement": "    shadow = set()"
   },
   {
     "name": "scanner scope :: nothing counts as a shadow",
@@ -734,15 +734,15 @@
     "name": "scanner provenance :: any module may supply a name spelled loads_clean",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "                elif a.name in (\"loads_clean\", \"_loads_clean\") \\\n                        and (n.module or \"\").split(\".\")[-1] == \"jsonl_utils\":",
+    "anchor": "                elif a.name in (\"loads_clean\", \"_loads_clean\") \\\n                        and n.module == \"jsonl_utils\":",
     "replacement": "                elif a.name in (\"loads_clean\", \"_loads_clean\"):"
   },
   {
     "name": "scanner provenance :: the wrapper called through its own module is unproven",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "                elif a.name.split(\".\")[-1] == \"jsonl_utils\":\n                    mod = a.asname or a.name\n                    clean |= {f\"{mod}.loads_clean\", f\"{mod}.{a.name}.loads_clean\"}",
-    "replacement": "                elif False:\n                    mod = a.asname or a.name\n                    clean |= {f\"{mod}.loads_clean\"}"
+    "anchor": "                elif a.name == \"jsonl_utils\":\n                    clean.add(f\"{a.asname or a.name}.loads_clean\")",
+    "replacement": "                elif False:\n                    clean.add(f\"{a.asname or a.name}.loads_clean\")"
   },
   {
     "name": "scanner bindings :: a parameter is not counted as a binding",
@@ -772,5 +772,145 @@
     "anchor": "            for target in n.targets:\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
     "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
     "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering \u2014 `consts` is read for the separator's actual value."
+  },
+  {
+    "name": "loads_clean constants :: a CPython extension constant is admitted again",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py",
+    "anchor": "        value = json.loads(s, object_pairs_hook=_no_duplicate_names,\n                           parse_constant=_refuse_constant)",
+    "replacement": "        value = json.loads(s, object_pairs_hook=_no_duplicate_names)"
+  },
+  {
+    "name": "loads_clean constants :: the refusal is announced but not raised",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py",
+    "anchor": "    raise json.JSONDecodeError(f\"{token} is not JSON (a CPython extension \"\n                               f\"this store does not accept)\", \"\", 0)",
+    "replacement": "    return float(token.replace(\"Infinity\", \"inf\"))"
+  },
+  {
+    "name": "framing :: a line of Unicode whitespace counts as framing again",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py tests/test_doctor.py tests/test_gc_memory.py tests/test_interrupt.py",
+    "anchor": "    return raw == \"\"",
+    "replacement": "    return not raw.strip()"
+  },
+  {
+    "name": "doctor launder :: the row is parsed from a stripped copy again",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "                row = _loads_clean(raw)",
+    "replacement": "                row = _loads_clean(raw.strip())"
+  },
+  {
+    "name": "doctor framing :: the read loop decides blankness with strip()",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "            if _is_frame_blank(raw):",
+    "replacement": "            if not raw.strip():"
+  },
+  {
+    "name": "doctor path :: the duplicate removal line drops the store",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) from {workspace_skills} \"\n                  f\"\u2014 same behaviour, older\")",
+    "replacement": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \"\n                  f\"\u2014 same behaviour, older\")"
+  },
+  {
+    "name": "doctor path :: the stale removal line drops the store",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"\n                  f\"stored hash doesn't match content\")",
+    "replacement": "                  f\"({s.get('created_at', '?')}) \u2014 \"\n                  f\"stored hash doesn't match content\")"
+  },
+  {
+    "name": "gc launder :: the timestamp is read out of a stripped copy",
+    "file": "src/gc_memory.py",
+    "tests": "tests/test_gc_memory.py",
+    "anchor": "                d = _loads_clean(raw)",
+    "replacement": "                d = _loads_clean(raw.strip())"
+  },
+  {
+    "name": "gc framing :: a whitespace row is dropped from the rewrite",
+    "file": "src/gc_memory.py",
+    "tests": "tests/test_gc_memory.py",
+    "anchor": "            if _is_frame_blank(raw):",
+    "replacement": "            if not raw.strip():"
+  },
+  {
+    "name": "interrupt framing (poll) :: a whitespace row is dropped from the merge",
+    "file": "src/interrupt.py",
+    "tests": "tests/test_interrupt.py",
+    "anchor": "                    if is_frame_blank(raw):\n                        continue\n                    try:\n                        # loads_clean, not json.loads: this merge re-dumps",
+    "replacement": "                    if not raw.strip():\n                        continue\n                    try:\n                        # loads_clean, not json.loads: this merge re-dumps"
+  },
+  {
+    "name": "interrupt framing (clear) :: a whitespace row is dropped from the merge",
+    "file": "src/interrupt.py",
+    "tests": "tests/test_interrupt.py",
+    "anchor": "                    if is_frame_blank(raw):\n                        continue\n                    try:\n                        d = _loads_clean(raw)  # never launder a tainted twin",
+    "replacement": "                    if not raw.strip():\n                        continue\n                    try:\n                        d = _loads_clean(raw)  # never launder a tainted twin"
+  },
+  {
+    "name": "skills raw-carry :: the carried row is stripped by save_skill",
+    "file": "src/skills.py",
+    "tests": "tests/test_skills.py",
+    "anchor": "                    if _loads_clean(line).get(\"id\") == skill.id:\n                        continue  # replaced below\n                except Exception:\n                    pass\n                out.append(line)",
+    "replacement": "                    if _loads_clean(line.strip()).get(\"id\") == skill.id:\n                        continue  # replaced below\n                except Exception:\n                    pass\n                out.append(line.strip())"
+  },
+  {
+    "name": "skills raw-carry :: the stranded row is stripped by _save_skills",
+    "file": "src/skills.py",
+    "tests": "tests/test_skills.py",
+    "anchor": "                        _loads_clean(line)\n                    except Exception:\n                        stranded.append(line)",
+    "replacement": "                        _loads_clean(line.strip())\n                    except Exception:\n                        stranded.append(line.strip())"
+  },
+  {
+    "name": "scanner scope :: the census walks into nested functions again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,\n                            ast.Lambda, ast.ClassDef)):\n            continue                       # its own scope, its own proofs",
+    "replacement": "        if False:\n            continue                       # its own scope, its own proofs"
+  },
+  {
+    "name": "scanner scope :: parser proofs are collected module-wide again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    walk = ast.walk if isinstance(tree, ast.Module) else _own_scope",
+    "replacement": "    walk = ast.walk"
+  },
+  {
+    "name": "scanner provenance :: the module is trusted by its last component again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "                        and n.module == \"jsonl_utils\":",
+    "replacement": "                        and (n.module or \"\").split(\".\")[-1] == \"jsonl_utils\":"
+  },
+  {
+    "name": "scanner provenance :: any module import ending in the right word is clean",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "                elif a.name == \"jsonl_utils\":",
+    "replacement": "                elif a.name.split(\".\")[-1] == \"jsonl_utils\":"
+  },
+  {
+    "name": "scanner scope :: a dotted proof outlives its receiver",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    clean_names = {n for n in clean_names - shadow\n                   if n.split(\".\")[0] not in shadow}",
+    "replacement": "    clean_names = clean_names - shadow"
+  },
+  {
+    "name": "scanner bindings :: a parameter of THIS function is not a binding",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    for a in getattr(getattr(fn, \"args\", None), \"args\", []) or []:\n        binds.setdefault(a.arg, []).append(_UNRESOLVED)",
+    "replacement": "    for a in []:\n        binds.setdefault(a.arg, []).append(_UNRESOLVED)"
+  },
+  {
+    "name": "scanner call graph :: one function per name, last one wins",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "            if any(writes(tgt, seen) for tgt in by_name.get(callee, ())):\n                return True",
+    "replacement": "            tgt = by_name.get(callee, ())\n            if tgt and writes(tgt[-1], seen):\n                return True"
   }
 ]

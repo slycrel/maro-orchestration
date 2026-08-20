@@ -977,3 +977,26 @@ class TestNoRowCanTakeTheChannelDownWhateverItsShape:
         assert delivered == ["ok"], "a valid STOP was lost to a neighbouring row"
         assert any("cannot be delivered" in r.message for r in caplog.records)
         assert big in p.read_text(), "the row this could not read was destroyed"
+
+
+class TestTheMergeDoesNotDeleteWhatItCannotRead:
+    """Adversarial r9, applied to the control channel's own rewrite loops.
+    Both `poll._mark_applied` and `clear._mark_applied` skipped a fragment
+    with `if not raw.strip()`, and a skipped fragment is never appended to
+    `updated` — so a row of Unicode whitespace was deleted by a rewrite that
+    announced nothing."""
+
+    @pytest.mark.parametrize("verb", ["poll", "clear"])
+    def test_a_whitespace_only_row_survives(self, tmp_path, verb):
+        from interrupt import InterruptQueue
+
+        good = json.dumps({"id": "ok", "source": "operator", "intent": "stop",
+                           "message": "go", "applied": False,
+                           "created_at": "2026-01-01T00:00:00+00:00"})
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(good + "\n \n", encoding="utf-8")
+
+        getattr(InterruptQueue(queue_path=p), verb)()
+
+        assert " " in p.read_text(encoding="utf-8"), \
+            "a row this merge could not read was deleted by the rewrite"

@@ -278,7 +278,8 @@ def loads_clean(s: str):
         raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
                                    "bytes carried as surrogates)", s, 0)
     try:
-        value = json.loads(s, object_pairs_hook=_no_duplicate_names)
+        value = json.loads(s, object_pairs_hook=_no_duplicate_names,
+                           parse_constant=_refuse_constant)
     except json.JSONDecodeError:
         raise                       # already the shape every caller catches
     except Exception as e:
@@ -302,6 +303,50 @@ def loads_clean(s: str):
         raise json.JSONDecodeError("byte-tainted line (surrogate written as "
                                    "a \\uDCxx escape)", s, 0)
     return value
+
+
+def _refuse_constant(token: str):
+    """`NaN`, `Infinity`, `-Infinity` — accepted by `json.loads`, not JSON.
+
+    Adversarial r8 raised this and it was REJECTED with the reason "they
+    round-trip faithfully through json.dumps, so nothing is laundered".
+    That was true and beside the point: r9 (Failure Operator, probed) showed
+    the row does not need to be laundered to do damage — it needs only to be
+    ADMITTED. A row carrying `{"extra": NaN}` is not JSON, and once admitted
+    it takes part in a removal decision (`_dedup_identity` serialises the
+    token straight back, the group forms, and the older row is deleted). The
+    doctrine is that a row this layer cannot vouch for strands; "can be
+    parsed by CPython's extensions" is not the same as "is a row".
+
+    Measured before flipping: zero rows in the live workspace carry any of
+    the three tokens, so nothing real strands.
+    """
+    raise json.JSONDecodeError(f"{token} is not JSON (a CPython extension "
+                               f"this store does not accept)", "", 0)
+
+
+def is_frame_blank(raw: str) -> bool:
+    """Is this fragment framing, rather than a row that lost its content?
+
+    `text.split("\n")` yields one empty fragment for the trailing newline
+    every JSONL file ends with, and that fragment is the ONLY thing a
+    rewrite may drop for free. Everything else is a row.
+
+    Every reader in this codebase used to write `if not raw.strip():
+    continue`, and adversarial r9 (2 lenses, probed) showed what that costs
+    a DESTRUCTIVE reader. `str.strip()` removes Unicode whitespace, which
+    JSON does not permit (JSON's whitespace is space, tab, CR, LF and
+    nothing else). So `"\u2028" + valid_row` was stripped into something
+    that parses, admitted, and re-serialised — the row's bytes gone, the
+    file reported as clean, no announcement. And a line of `"\u00a0"` alone
+    counted as blank and was dropped from the rewrite entirely. Both are the
+    launder this arc exists to prevent, arriving through the whitespace door
+    instead of the surrogate one.
+
+    So: a fragment is framing only when it is empty. Anything else goes to
+    the parser, and if the parser refuses it, it strands and is announced.
+    """
+    return raw == ""
 
 
 def _no_duplicate_names(pairs):

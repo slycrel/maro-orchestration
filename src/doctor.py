@@ -685,7 +685,9 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
     # exact "loud read becomes silent deletion downstream" shape the arc
     # exists to remove. Probed: a skill saved mid-cleanup did not survive.
     from file_lock import locked_write, atomic_write
-    from jsonl_utils import loads_clean as _loads_clean, store_text as _store_text
+    from jsonl_utils import (loads_clean as _loads_clean,
+                             store_text as _store_text,
+                             is_frame_blank as _is_frame_blank)
 
     with locked_write(workspace_skills):
         all_skills = []
@@ -722,11 +724,17 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
         # into two invalid fragments. The raw line is what gets carried;
         # only a stripped copy is offered to the parser.
         for raw in _store_text(workspace_skills).split("\n"):
-            line = raw.strip()
-            if not line:
+            if _is_frame_blank(raw):
                 continue
             try:
-                row = _loads_clean(line)
+                # The RAW line, not a stripped copy. `str.strip()` removes
+                # Unicode whitespace that JSON does not permit, so
+                # "\u2028" + a valid row parsed after stripping, was
+                # admitted, and came back re-serialised with those bytes
+                # gone and nothing announced (adversarial r9, 2 lenses,
+                # probed). A rewrite that normalises what it could not read
+                # verbatim is the launder this verb exists to prevent.
+                row = _loads_clean(raw)
             except Exception as e:
                 # The BYTES or the JSON are the problem. Recorded as a kind
                 # here, where it is known, rather than inferred downstream
@@ -789,8 +797,8 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
             # (adversarial r8, 2 lenses — r7 named the rows on the duplicate
             # branch and left its sibling naming half of one).
             print(f"  {s.get('id', '?'):12} '{s.get('name', '?')}' "
-                  f"({s.get('created_at', '?')}) — stored hash doesn't match "
-                  f"content")
+                  f"({s.get('created_at', '?')}) in {workspace_skills} — "
+                  f"stored hash doesn't match content")
     else:
         print("No stale-hash skills found")
     # Filter by ROW, not by id. Adversarial round 2026-08-20 (Minimalist,
@@ -889,8 +897,14 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
               f"({best.get('created_at', '?')}) of "
               f"{len(skills)} identical copies of '{best.get('name', '?')}'")
         for s in losers:
+            # The path on the line that announces the destruction, not only
+            # on a header four lines up: adversarial r9 (5/5 seats) —
+            # operator logs are read, filtered and forwarded line by line,
+            # and a deletion line that cannot say which store it deleted
+            # from is not a receipt.
             print(f"      removing '{s.get('id', '?')}' "
-                  f"({s.get('created_at', '?')}) — same behaviour, older")
+                  f"({s.get('created_at', '?')}) from {workspace_skills} "
+                  f"— same behaviour, older")
 
     for skills in undecidable:
         print(f"  keeping ALL {len(skills)} copies of "

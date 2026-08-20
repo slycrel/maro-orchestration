@@ -524,3 +524,58 @@ class TestEveryParserRefusalIsTheShapeCallersCatch:
         assert "while parsing" not in str(caught.value), \
             "a refusal this layer raised on purpose was re-wrapped as one " \
             "the parser raised, which loses which check fired"
+
+
+class TestWhatCPythonAcceptsIsNotWhatThisStoreAccepts:
+    """Adversarial r9 (Failure Operator + Skeptic, probed). `json.loads`
+    accepts `NaN`, `Infinity` and `-Infinity` as an extension; none is JSON.
+    r8 rejected this finding because the tokens round-trip faithfully — true,
+    and beside the point: the row does not have to be laundered to do damage,
+    it only has to be ADMITTED. Once admitted it takes part in a removal
+    decision. Measured before flipping: zero rows in the live workspace carry
+    any of the three."""
+
+    @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+    def test_a_cpython_extension_constant_strands(self, token):
+        from jsonl_utils import loads_clean
+
+        assert json.loads('{"x": %s}' % token)          # the premise
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean('{"x": %s}' % token)
+
+    def test_a_field_merely_NAMED_like_one_is_still_a_row(self):
+        """The must-detect other half: refusing the string "NaN" would
+        strand real rows."""
+        from jsonl_utils import loads_clean
+
+        assert loads_clean('{"x": "NaN", "y": "Infinity"}') == \
+            {"x": "NaN", "y": "Infinity"}
+
+
+class TestOnlyTheEmptyFragmentIsFraming:
+    """Adversarial r9 (QA + Architect, probed): every reader in this repo
+    wrote `if not raw.strip(): continue`, and `str.strip()` removes Unicode
+    whitespace that JSON forbids. In a DESTRUCTIVE reader that means a row
+    of U+00A0 is dropped from the rewrite, and `"\\u2028" + valid_row` is
+    stripped into something that parses, admitted, and re-serialised without
+    its bytes."""
+
+    @pytest.mark.parametrize("raw,blank", [
+        ("", True),
+        (" ", False),
+        ("\t", False),
+        (" ", False),
+        (" ", False),
+        ('{"a": 1}', False),
+    ])
+    def test_a_fragment_is_framing_only_when_it_is_empty(self, raw, blank):
+        from jsonl_utils import is_frame_blank
+
+        assert is_frame_blank(raw) is blank
+
+    def test_json_forbidden_whitespace_is_not_parsed_away(self):
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(' {"a": 1}')
+        assert loads_clean(' {"a": 1}\t') == {"a": 1}   # JSON's own whitespace

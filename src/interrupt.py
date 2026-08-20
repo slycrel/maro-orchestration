@@ -44,7 +44,7 @@ from typing import Dict, List, Optional
 from llm_parse import extract_json, content_or_empty
 # Store-hygiene helper (2026-08-20 destructive-rewrite sweep): a byte-tainted
 # line must never id-match or be re-dumped as clean escapes.
-from jsonl_utils import loads_clean as _loads_clean
+from jsonl_utils import loads_clean as _loads_clean, is_frame_blank
 
 log = logging.getLogger("maro.interrupt")
 
@@ -385,7 +385,11 @@ class InterruptQueue:
                 unreadable["n"] = 0
                 updated = []
                 for raw in old.split("\n"):
-                    if not raw.strip():
+                    # Empty, not "blank": a line of Unicode whitespace is a
+                    # row this merge cannot read, and `continue` here drops
+                    # it from `updated` — a silent deletion by a rewrite
+                    # that reports nothing (adversarial r9).
+                    if is_frame_blank(raw):
                         continue
                     try:
                         # loads_clean, not json.loads: this merge re-dumps
@@ -506,7 +510,11 @@ class InterruptQueue:
                 unreadable["n"] = 0
                 updated = []
                 for raw in old.split("\n"):
-                    if not raw.strip():
+                    # Empty, not "blank": a line of Unicode whitespace is a
+                    # row this merge cannot read, and `continue` here drops
+                    # it from `updated` — a silent deletion by a rewrite
+                    # that reports nothing (adversarial r9).
+                    if is_frame_blank(raw):
                         continue
                     try:
                         d = _loads_clean(raw)  # never launder a tainted twin

@@ -714,3 +714,102 @@ class TestABindingIsAnythingPythonBinds:
         src = 'def rewrite(path):\n    sep = ","\n' + self.BODY
         assert _scan(src).get("rewrite") is None, \
             "a proven non-newline separator is not line framing"
+
+
+class TestAProofIsScopedAndItsModuleIsNamedExactly:
+    """Adversarial r9 (4 lenses, probed) on r8's scope-aware parser
+    identity. Three shapes walked past it and one module-name check was
+    still a spelling test."""
+
+    BODY = ('    out = []\n'
+            '    for line in path.read_text().split("\\n"):\n'
+            '        try:\n            %s(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n'
+            '    atomic_write(path, "\\n".join(out))\n')
+
+    @pytest.mark.parametrize("label,src", [
+        ("a module whose last component is spelled right",
+         "from vendor.jsonl_utils import loads_clean\ndef rewrite(path):\n"
+         "%s"),
+        ("the same, imported as a module",
+         "import vendor.jsonl_utils as m\ndef rewrite(path):\n%s"),
+        ("a nested import re-proving the outer function's raw parameter",
+         "import json\ndef rewrite(path, loads_clean=json.loads):\n"
+         "    def helper():\n"
+         "        from jsonl_utils import loads_clean\n"
+         "        return loads_clean\n%s"),
+        ("a shadowed module receiver",
+         "import jsonl_utils\ndef rewrite(path, jsonl_utils):\n%s"),
+        ("a module alias rebound locally",
+         "import jsonl_utils as pm\nimport json\n"
+         "def rewrite(path):\n    pm = json\n%s"),
+    ])
+    def test_an_unproven_parser_is_never_ok(self, label, src):
+        call = {"a module whose last component is spelled right": "loads_clean",
+                "the same, imported as a module": "m.loads_clean",
+                "a nested import re-proving the outer function's raw parameter":
+                    "loads_clean",
+                "a shadowed module receiver": "jsonl_utils.loads_clean",
+                "a module alias rebound locally": "pm.loads_clean"}[label]
+        got = _scan(src % (self.BODY % call))
+        assert got.get("rewrite") == "RISK", (label, got)
+
+    @pytest.mark.parametrize("label,src,call", [
+        ("the real module import",
+         "from jsonl_utils import loads_clean\ndef rewrite(path):\n%s",
+         "loads_clean"),
+        ("the real module, called through it",
+         "import jsonl_utils\ndef rewrite(path):\n%s",
+         "jsonl_utils.loads_clean"),
+        ("a function-local import",
+         "def rewrite(path):\n    from jsonl_utils import loads_clean\n%s",
+         "loads_clean"),
+        ("an alias of the real import",
+         "from jsonl_utils import loads_clean as _lc\ndef rewrite(path):\n%s",
+         "_lc"),
+    ])
+    def test_a_real_proof_still_earns_ok(self, label, src, call):
+        """The must-detect other half — every one of these shapes is in the
+        live tree, and a strictness change that turns them RISK stops being
+        a signal."""
+        got = _scan(src % (self.BODY % call))
+        assert got.get("rewrite") == "OK", (label, got)
+
+
+class TestANameCollisionIsNotEvidence:
+    """Adversarial r9 (Skeptic, probed): the call-graph leg indexed
+    functions by bare name in a dict, so an unrelated class's `save`
+    replaced the one actually called and the destructive helper vanished
+    from the scan entirely — neither RISK nor OK, the disappearance this
+    arc has now paid for four times."""
+
+    SRC = '''
+class A:
+    def helper(self, path):
+        rows = []
+        for line in path.read_text().split("\\n"):
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+        return rows
+    def save(self, path, text):
+        path.write_text(text)
+    def rewrite(self, path):
+        rows = self.helper(path)
+        self.save(path, "x")
+%s
+'''
+
+    def test_the_destructive_helper_is_still_seen(self):
+        other = ('class B:\n    def save(self, path, text):\n'
+                 '        return len(text)\n')
+        # The scanner qualifies by enclosing FUNCTION, not by class, so
+        # the site is reported as `helper` — that naming is what the
+        # manifest keys on.
+        assert _scan(self.SRC % other).get("helper") == "RISK"
+
+    def test_it_was_seen_without_the_collision_too(self):
+        """The control: the finding is the collision, not the shape."""
+        assert _scan(self.SRC % "").get("helper") == "RISK"

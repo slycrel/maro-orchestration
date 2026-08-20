@@ -41,6 +41,7 @@ from llm_parse import extract_json, content_or_empty
 # and one torn byte in skills.jsonl made every future save_skill() raise
 # UnicodeDecodeError, write-locking the skill library until hand repair.
 from jsonl_utils import (
+    is_frame_blank,
     loads_clean as _loads_clean,
     read_jsonl_announced as _read_store,
     store_text as _store_text,
@@ -232,16 +233,20 @@ def save_skill(skill: Skill) -> None:
         # lines, so they never id-match.
         out: List[str] = []
         if path.exists():
-            for line in _store_text(path).splitlines():
-                stripped = line.strip()
-                if not stripped:
+            for line in _store_text(path).split("\n"):
+                # Carry the line as it is. r9 (probed on the doctor's twin):
+                # `strip()` removes Unicode whitespace that JSON forbids, so
+                # the stripped copy could parse when the row does not — and
+                # this loop WRITES what it carries, so the row's bytes were
+                # rewritten by a save that never claimed to touch them.
+                if is_frame_blank(line):
                     continue
                 try:
-                    if _loads_clean(stripped).get("id") == skill.id:
+                    if _loads_clean(line).get("id") == skill.id:
                         continue  # replaced below
                 except Exception:
                     pass
-                out.append(stripped)
+                out.append(line)
         out.append(json.dumps(_skill_to_dict(skill)))
         from file_lock import atomic_write
         atomic_write(path, "\n".join(out) + "\n", errors="surrogateescape")
@@ -1953,18 +1958,25 @@ def _save_skills(skills: List[Skill]) -> None:
             keep_ids = {s.id for s in skills}
             stranded: List[str] = []
             if path.exists():
-                for line in _store_text(path).splitlines():
-                    stripped = line.strip()
-                    if not stripped:
+                # split("\n"), not splitlines(): the latter also breaks on
+                # U+2028/U+2029, which are legal INSIDE a JSON string, and
+                # this loop feeds a REWRITE — one such row would be carried
+                # through as two invalid fragments.
+                for line in _store_text(path).split("\n"):
+                    if is_frame_blank(line):
                         continue
                     try:
                         # A line we can parse is represented by the list
                         # (or was deliberately dropped by the caller —
                         # graduation, demotion, GC). Only lines we CANNOT
                         # parse are unrepresentable, so only those strand.
-                        _loads_clean(stripped)
+                        # The RAW line, both to parse and to carry: a
+                        # stripped copy can parse when the row does not, and
+                        # "verbatim" that strips is not verbatim
+                        # (adversarial r9).
+                        _loads_clean(line)
                     except Exception:
-                        stranded.append(stripped)
+                        stranded.append(line)
             if stranded:
                 logger.warning(
                     "[skills] _save_skills: %d unparseable/byte-tainted "

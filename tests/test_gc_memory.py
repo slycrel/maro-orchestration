@@ -626,3 +626,46 @@ class TestAFailedRewriteStillReportsWhatIsStuck:
             "the report would have claimed zero unreadable rows")
         assert any("rewrite failed" in r.msg for r in caplog.records)
         assert any("unparseable/byte-tainted" in r.msg for r in caplog.records)
+
+
+class TestATimestampReadOutOfALaunderedCopyCannotAuthorizeADelete:
+    """Adversarial r9, applied to the sibling the finding did not name.
+    `_classify` parsed `raw.strip()` and this verb DELETES on the timestamp
+    it reads there — so a row whose bytes JSON forbids (U+2028 and friends
+    are not JSON whitespace) had its `recorded_at` trusted anyway. The
+    conservative branch already exists; the row belongs in it."""
+
+    def test_a_row_wrapped_in_json_forbidden_whitespace_is_kept(
+            self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+        row = json.dumps({"goal": "old", "status": "done", "recorded_at": old})
+        (mem / "outcomes.jsonl").write_text(" " + row + "\n",
+                                            encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            total, removed, _ = _gc_outcomes(retain_days=90, dry_run=False)
+
+        assert removed == 0, "a row this verb could not read was collected"
+        assert " " in (mem / "outcomes.jsonl").read_text(encoding="utf-8")
+        assert any("kept, never collected" in r.message for r in caplog.records)
+
+    def test_a_line_of_only_whitespace_survives_the_rewrite(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        rows = [json.dumps({"goal": "a", "status": "done", "recorded_at": old}),
+                " ",
+                json.dumps({"goal": "b", "status": "done",
+                            "recorded_at": recent})]
+        (mem / "outcomes.jsonl").write_text("\n".join(rows) + "\n",
+                                            encoding="utf-8")
+
+        _gc_outcomes(retain_days=90, dry_run=False)
+
+        after = (mem / "outcomes.jsonl").read_text(encoding="utf-8")
+        assert " " in after, "a row of Unicode whitespace was deleted"
+        assert '"goal": "b"' in after and '"goal": "a"' not in after

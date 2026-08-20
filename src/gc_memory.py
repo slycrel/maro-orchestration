@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import List, Optional
 
 # Store-hygiene helpers (2026-08-20 destructive-rewrite sweep triage).
-from jsonl_utils import loads_clean as _loads_clean, store_text as _store_text
+from jsonl_utils import (loads_clean as _loads_clean,
+                         store_text as _store_text,
+                         is_frame_blank as _is_frame_blank)
 
 log = logging.getLogger("maro.gc")
 
@@ -130,15 +132,19 @@ def _gc_outcomes(
         keep: "list[str]" = []
         total = unreadable = 0
         for raw in text.split("\n"):
-            line = raw.strip()
-            if not line:
+            if _is_frame_blank(raw):
                 continue
             total += 1
             try:
+                # The RAW line. A stripped copy can parse when the row does
+                # not (`str.strip()` removes Unicode whitespace JSON forbids)
+                # — and this classifier decides whether to COLLECT the row,
+                # so a timestamp read out of a laundered copy would authorize
+                # deleting bytes nobody could read (adversarial r9).
                 # loads_clean, not json.loads: a byte-tainted row's timestamp
                 # cannot be trusted to authorize its own deletion, so taint
                 # falls to the keep-conservatively branch with the rest.
-                d = _loads_clean(line)
+                d = _loads_clean(raw)
                 if not isinstance(d, dict):
                     raise TypeError(f"not a JSON object: {type(d).__name__}")
                 ts_str = d.get("recorded_at") or d.get("timestamp", "")

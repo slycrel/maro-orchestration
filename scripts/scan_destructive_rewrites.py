@@ -92,21 +92,21 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
     sites before and after).
     """
     clean, raw, json_mods = set(), set(), set()
-    for n in ast.walk(tree):
+    walk = ast.walk if isinstance(tree, ast.Module) else _own_scope
+    for n in walk(tree):
         if isinstance(n, ast.Import):
             for a in n.names:
                 if a.name == "json":
                     json_mods.add(a.asname or "json")
-                elif a.name.split(".")[-1] == "jsonl_utils":
-                    mod = a.asname or a.name
-                    clean |= {f"{mod}.loads_clean", f"{mod}.{a.name}.loads_clean"}
+                elif a.name == "jsonl_utils":
+                    clean.add(f"{a.asname or a.name}.loads_clean")
         elif isinstance(n, ast.ImportFrom):
             for a in n.names:
                 bound = a.asname or a.name
                 if n.module == "json" and a.name == "loads":
                     raw.add(bound)
                 elif a.name in ("loads_clean", "_loads_clean") \
-                        and (n.module or "").split(".")[-1] == "jsonl_utils":
+                        and n.module == "jsonl_utils":
                     clean.add(bound)
         elif isinstance(n, ast.Assign) and len(n.targets) == 1 \
                 and isinstance(n.targets[0], ast.Name):
@@ -122,6 +122,28 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
     for mod in json_mods | {"json"}:
         raw.add(f"{mod}.loads")
     return clean - raw, raw
+
+
+def _own_scope(node):
+    """Walk `node`, but do NOT descend into a nested scope.
+
+    Adversarial r9 (2 lenses, probed): `ast.walk(fn)` descends into nested
+    functions, so a helper defined inside `rewrite` that imports the real
+    wrapper re-proved `rewrite`'s OWN parameter — which defaulted to
+    `json.loads`. The scanner said OK about a function parsing every line
+    with the raw parser. A scope-aware rule that reads the wrong scope is
+    not scope-aware; Python's scopes are the unit, so this is the walk that
+    respects them. (Nested functions are scanned as their own sites, so
+    nothing stops being looked at.)
+    """
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        cur = stack.pop()
+        yield cur
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.Lambda, ast.ClassDef)):
+            continue                       # its own scope, its own proofs
+        stack.extend(ast.iter_child_nodes(cur))
 
 
 def _binding_census(fn) -> "dict[str, list]":
@@ -146,13 +168,13 @@ def _binding_census(fn) -> "dict[str, list]":
     """
     binds: "dict[str, list]" = {}
     resolved: "dict[int, object]" = {}
-    for n in ast.walk(fn):
+    for n in _own_scope(fn):
         # A simple `x = <constant>` is the ONLY shape whose value is known.
         if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant):
             for target in n.targets:
                 if isinstance(target, ast.Name):
                     resolved[id(target)] = n.value.value
-    for n in ast.walk(fn):
+    for n in _own_scope(fn):
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
             binds.setdefault(n.id, []).append(
                 resolved.get(id(n), _UNRESOLVED))
@@ -168,6 +190,11 @@ def _binding_census(fn) -> "dict[str, list]":
                                  []).append(_UNRESOLVED)
         elif isinstance(n, ast.arg):
             binds.setdefault(n.arg, []).append(_UNRESOLVED)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.ClassDef)):
+            binds.setdefault(n.name, []).append(_UNRESOLVED)
+    for a in getattr(getattr(fn, "args", None), "args", []) or []:
+        binds.setdefault(a.arg, []).append(_UNRESOLVED)
     return binds
 
 
@@ -219,7 +246,16 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
 
     funcs = [n for n in ast.walk(tree)
              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    by_name = {f.name: f for f in funcs}
+    # name -> EVERY function with that name. Adversarial r9 (Skeptic,
+    # probed): a dict kept the last one, so an unrelated `B.save` replaced
+    # `A.save` and `A.rewrite`'s write leg resolved to the wrong body —
+    # `A.helper`, a destructive JSONL loop, vanished from the scan
+    # entirely (neither RISK nor OK). A name collision is not evidence of
+    # anything; when the call is ambiguous the scanner says "someone should
+    # read this", which is the direction it is allowed to be wrong in.
+    by_name: "dict[str, list]" = {}
+    for f in funcs:
+        by_name.setdefault(f.name, []).append(f)
 
     def qual(fn):
         name, cur = fn.name, fn
@@ -246,8 +282,7 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
                     return True
                 break
         for callee in _called_names(fn):           # same-module call graph
-            tgt = by_name.get(callee)
-            if tgt is not None and writes(tgt, seen):
+            if any(writes(tgt, seen) for tgt in by_name.get(callee, ())):
                 return True
         return False
 
@@ -372,7 +407,14 @@ def _is_open_call(node) -> bool:
 def _parse_calls(fn) -> "tuple[bool, bool]":
     """(calls a proven-clean parser, calls anything else parse-shaped)."""
     clean_names, raw_names = _PARSERS
-    clean_names = clean_names - _shadowed(fn)
+    shadow = _shadowed(fn)
+    # A dotted proof is only as good as its RECEIVER. `import jsonl_utils`
+    # proves `jsonl_utils.loads_clean`, and `def rewrite(path, jsonl_utils)`
+    # or a local `jsonl_utils = shim` replaces the object that name points
+    # at — adversarial r9 (3 lenses, probed) certified both OK, because the
+    # r8 revocation subtracted bare names from a set holding dotted ones.
+    clean_names = {n for n in clean_names - shadow
+                   if n.split(".")[0] not in shadow}
     used_clean = used_raw = False
     for n in ast.walk(fn):
         if not isinstance(n, ast.Call):

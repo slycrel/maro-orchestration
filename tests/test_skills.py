@@ -2772,3 +2772,30 @@ class TestTheSkillStoresSurviveATornByte:
             assert get_all_skill_stats() == []
         assert any("NOT the same as no stats existing" in r.message
                    for r in caplog.records)
+
+
+class TestTheCarriedRowKeepsItsOwnBytes:
+    """Adversarial r9, applied to the skills writer. `_save_skills` and
+    `save_skill` both parsed a STRIPPED copy and then wrote that copy, so a
+    row's leading/trailing bytes were rewritten by a save that never claimed
+    to touch them — and `splitlines()` in the same loop would have split a
+    row containing U+2028 into two invalid fragments."""
+
+    def test_a_stranded_row_is_written_back_exactly(self, tmp_path,
+                                                    monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        torn = " {not json"
+        f.write_text(torn + "\n", encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+
+        skill = skills_mod.Skill(id="new", name="n", description="d",
+                                 trigger_patterns=[], steps_template=["s"],
+                                 source_loop_ids=[],
+                                 created_at="2026-01-01T00:00:00+00:00")
+        skills_mod.save_skill(skill)
+
+        after = f.read_text(encoding="utf-8")
+        assert torn in after, "the row this save could not read lost its bytes"
+        assert '"id": "new"' in after
