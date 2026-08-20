@@ -138,9 +138,19 @@ authoritative copy that cannot drift per-record.
 
 ## Scope and honesty
 
-- **Forward-only.** This does not retire the 25,278 existing absolutes.
-  `path_rewrite` stays for legacy archives indefinitely; this is a deprecation
-  path, not a replacement.
+- **This DOES convert existing run data — that is the point, not a side
+  effect.** Export substitutes whatever is in the workspace at export time,
+  which is all the historical records in it; that is how the 6,150 stale
+  pre-rename repo paths get retired. An earlier draft of this doc called the
+  change "forward-only", which was wrong. Precisely:
+  - the **live workspace on disk is untouched** — it keeps its absolutes;
+  - **every new archive is converted**, historical rows included;
+  - **already-made archives are unchanged**, so `path_rewrite` stays for them
+    indefinitely.
+  The consequence that follows, and the reason Q3 below is load-bearing: any
+  consumer reading an archive **directly** must expand. The flat lesson ledger
+  was restored 466/466 rows straight out of the 2026-08-16 archive — that
+  reader would have written placeholder text into a live store.
 - **Provenance stays absolute.** Recording what the source roots *were* is its
   entire job; substituting there would destroy the custody chain.
 - **`path_rewrite` is byte-level and stays that way.** It reads `rb`,
@@ -148,15 +158,70 @@ authoritative copy that cannot drift per-record.
   launder a byte-tainted row. Any new substitution layer must keep that
   property.
 
-## Open questions
+## Decisions (2026-08-18, each probed)
 
-1. Does the substitution run over *all* members or only text-shaped ones? The
-   existing rewrite already screens NUL-bearing files as binary; reuse it.
-2. Should `$MARO_REPO` resolve the pre-rename name as an alias, or should
-   stale-name occurrences stay absolute and be reported? An alias retires 6,150
-   occurrences; it also silently equates two directory names that were distinct
-   at the time the record was written.
-3. Where does the expansion happen for a *reader* that never imports — someone
-   reading an archive directly? A resolver helper, or documented placeholders?
-4. Does anything downstream pattern-match on absolute paths in a way a
-   placeholder would break? Needs a consumer census before building.
+**The token cannot be `$MARO_ROOT/` as first proposed.** Probed against the
+live corpus: `$MARO_WORKSPACE` already appears **30 times** as a literal, and
+`$MARO_MOUNT_VIEW` **428 times** — the latter is a real env var the container
+sets. A `$MARO_*` placeholder therefore collides with existing content and the
+substitution is *not* invertible: on the way back you cannot tell a substituted
+prefix from source text that always said that.
+
+Candidates probed for zero collisions in the same corpus:
+
+| token | collisions |
+|---|---|
+| `%%MARO_WORKSPACE%%` | 0 |
+| `maro-workspace://` | 0 |
+| `{{maro.workspace}}` | 0 |
+| `$MARO_WORKSPACE` | **30** |
+
+**Recommended: `%%MARO_WORKSPACE%%`** — zero collisions, unmistakably a
+placeholder on sight, and it keeps the value a plain string rather than a
+structured payload. Note the honest cost: *no* placeholder preserves
+"looks like an absolute path", so any consumer testing `startswith("/")` sees a
+different shape. Q4 below bounds who that is.
+
+**Q1 — all members, or text-shaped only?** *Decided: reuse the existing
+screen.* `path_rewrite.skip_reason` already applies a skip-suffix list plus a
+whole-file NUL sniff, and that sniff was hardened specifically because a
+NUL-free-header binary let a path get spliced into its tail. Same code, same
+doctrine, no new policy.
+
+**Q2 — alias the pre-rename repo name?** *Decided: yes, substitute it, and
+record the alias in the manifest.* This retires 6,150 occurrences pointing at a
+directory that exists on neither machine. The objection to aliasing — that it
+silently equates two names that were distinct when the record was written — is
+answered by moving that fact to the manifest rather than destroying it: the
+root table records that two source roots mapped to one placeholder, and which
+name each record originally used remains recoverable.
+
+**Q3 — where does expansion happen for a reader that never imports?**
+*Decided: expansion is the DEFAULT on read, plus a tripwire.* This is the
+question the lesson-ledger restore makes load-bearing. Two obligations:
+  1. a shared resolver used by every archive-reading path, and by
+     `maro-export inspect`;
+  2. a test asserting a placeholder literal **never appears in a live
+     workspace store** — if one does, expansion was skipped somewhere, and the
+     failure is silent otherwise.
+
+**Q4 — does anything downstream pattern-match on absolute paths?** *Measured;
+the set is small and named.* The consumers that resolve a stored path back to a
+file, and therefore must expand:
+  - `loop_report.py:832` and `:948` — `call_record` → `Path(...).read_text()`
+  - `run_curation.py:604` — a stored deliverable path
+  - `loop_report.py:1026` uses only `Path(...).name`, so it is unaffected
+The `startswith("/")` sites found elsewhere (`listener_core`, `conductor`,
+`web_fetch`, `orch_bridges`) test user input or HTTP redirects, not stored
+record paths, and are out of scope.
+
+## Build order
+
+1. Root table + token, with a collision assertion at export time (fail closed
+   if the chosen token appears in the corpus being exported).
+2. Substitution at export, reusing `path_rewrite`'s binary screen.
+3. Manifest: root table + alias record + per-root occurrence counts.
+4. Shared resolver + expansion at the three consumer sites above.
+5. Tripwire test: no placeholder literal in a live workspace store.
+6. Owned/observed enforcement — the scavenge and fence sites must be provably
+   excluded from substitution.
