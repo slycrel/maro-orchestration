@@ -689,7 +689,13 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
 
     with locked_write(workspace_skills):
         all_skills = []
-        stranded: "list[str]" = []
+        stranded: "list[tuple[int, str]]" = []
+        unprovable: "list[str]" = []
+        # Position by object identity, NOT a key on the row: every key a row
+        # carries is part of `_dedup_identity`, so stamping one on would make
+        # every row unique and silently disable the dedup this verb exists
+        # for — and it would be written into the store.
+        ordinals: "dict[int, int]" = {}
         # split("\n"), not splitlines(): JSONL frames on LF alone, while
         # splitlines() also breaks on U+2028/U+2029 and friends, which are
         # legal INSIDE a JSON string — a rewrite would turn one such row
@@ -722,17 +728,32 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
                 # a decision about which rows to remove.
                 from skill_types import validate_skill_row as _to_skill
                 _to_skill(row)
+                ordinals[id(row)] = len(all_skills) + len(stranded)
                 all_skills.append(row)
             except Exception as e:
-                stranded.append(raw)
+                # Order is load-bearing. `skills.load_skills` reads the file
+                # in reverse and lets the LAST row for an id win, so where a
+                # row sits in the file decides which skill is live.
+                # Adversarial r7 (2026-08-20, Skeptic, probed): r6's stricter
+                # validator strands more rows, the rewrite appended all
+                # stranded rows AFTER the admitted ones, and a legacy row
+                # sharing an id with a verified one was promoted from ignored
+                # to live — by a verb that printed "0 removed" and "kept in
+                # place". Nothing was deleted and the system still changed
+                # behaviour. Positions are carried through and the file is
+                # rebuilt in the order it was read.
+                stranded.append((len(all_skills) + len(stranded), raw))
+                unprovable.append(f"{type(e).__name__}: {e}")
                 print(f"Unreadable line kept as-is (not removed): "
                       f"{type(e).__name__}: {e}")
 
         print(f"Loaded {len(all_skills)} skills")
-        _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write)
+        _cleanup_pass(workspace_skills, all_skills, stranded,
+                      atomic_write, unprovable, ordinals)
 
 
-def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
+def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
+                  unprovable=(), ordinals=None) -> None:
     """Classify and rewrite. Split out only so the lock's scope is one
     `with` block; the caller holds the lock for the whole of this."""
     from collections import defaultdict
@@ -791,38 +812,68 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
     # "Recent" means the INSTANT, not the string. Adversarial r6 (2026-08-20,
     # Failure Operator, probed): `2026-01-01T00:00:00+14:00` sorts after
     # `2025-12-31T23:00:00-12:00` lexically and before it in real time, so
-    # the older row was kept and the newer deleted. Both rows validate, both
-    # timestamps are legal ISO-8601, and nothing in the output says which one
-    # went. Every row reaching here has already been proven to carry a
-    # parseable `created_at` (validate_skill_row), so this cannot raise;
-    # naive timestamps are treated as UTC rather than crashing the mixed
-    # comparison, which is the only choice available once both shapes are in
-    # the store.
+    # the older row was kept and the newer deleted. Both rows validate and
+    # both timestamps are legal ISO-8601. Every row reaching here has been
+    # proven to carry a parseable `created_at` (validate_skill_row), so this
+    # cannot raise.
+    def moment_of(skill):
+        return datetime.fromisoformat(skill.get("created_at", ""))
+
     def score_skill(skill):
-        moment = datetime.fromisoformat(skill.get("created_at", ""))
-        if moment.tzinfo is None:
-            moment = moment.replace(tzinfo=timezone.utc)
-        success_rate = float(skill.get("success_rate", 0))
-        use_count = int(skill.get("use_count", 0))
-        return (moment, success_rate, use_count)
+        return (moment_of(skill), float(skill.get("success_rate", 0)),
+                int(skill.get("use_count", 0)))
 
     total_dup_removed = 0
-    for skills in duplicates.values():
+    undecidable = []
+    kept = []
+    for skills in by_hash.values():
+        # A group whose timestamps mix offset-aware and naive values cannot
+        # be ranked: `replace(tzinfo=utc)` is not a conversion, it ASSERTS a
+        # fact the row does not carry, and a naive value can denote either
+        # side of an aware one. r6 did exactly that and deleted a row on the
+        # invented instant (adversarial r7, Architect, probed). Both shapes
+        # are in the live store, and `max()` over mixed awareness raises, so
+        # doing nothing is not an option either — the answer the retention
+        # decree already gives is: keep both, and say why.
+        aware = {moment_of(s).tzinfo is not None for s in skills}
+        if len(skills) > 1 and len(aware) > 1:
+            undecidable.append(skills)
+            kept.extend(skills)
+            continue
         best = max(skills, key=score_skill)
-        removed = len(skills) - 1
-        total_dup_removed += removed
+        kept.append(best)
+        if len(skills) <= 1:
+            continue
+        total_dup_removed += len(skills) - 1
+        # Name the rows. Adversarial r7 (4 lenses): the group line printed a
+        # shared hash prefix and a shared name — the two things that by
+        # construction cannot tell the rows apart — so an operator could not
+        # tell WHICH record a repair verb had just destroyed, or recover it.
+        # The path is part of the result; so is the id.
+        losers = [s for s in skills if s is not best]
         print(f"  {best.get('content_hash', '')[:16] or '(no hash)'}... : "
-              f"keeping best of {len(skills)} identical copies of "
-              f"'{best.get('name', '?')}'")
+              f"keeping '{best.get('id', '?')}' "
+              f"({best.get('created_at', '?')}) of "
+              f"{len(skills)} identical copies of '{best.get('name', '?')}'")
+        for s in losers:
+            print(f"      removing '{s.get('id', '?')}' "
+                  f"({s.get('created_at', '?')}) — same behaviour, older")
 
-    # Rewrite with the clean, deduped set — plus every row we could not
-    # read, byte for byte. The caller holds the lock across this write and
-    # the read that produced `all_skills`, so no concurrent save_skill can
-    # land between them; atomic_write's surrogateescape encoder is what
-    # lets the carried rows round-trip (the bare write_text this replaced
-    # could do neither).
-    kept = [max(skills, key=score_skill) for skills in by_hash.values()]
-    output_lines = [json.dumps(skill) for skill in kept] + stranded
+    for skills in undecidable:
+        print(f"  keeping ALL {len(skills)} copies of "
+              f"'{skills[0].get('name', '?')}' "
+              f"({', '.join(repr(s.get('id', '?')) for s in skills)}) — their "
+              f"timestamps mix offset-aware and naive values, so which one is "
+              f"newer is not something this verb can prove")
+
+    # Rewrite in the order the rows were READ, admitted and stranded alike.
+    # `skills.load_skills` reads the file in reverse and lets the last row
+    # for an id win, so position decides which skill is live: appending the
+    # stranded rows at the end promoted a legacy row over a verified one
+    # (adversarial r7, probed) in a run that reported "0 removed".
+    ordinals = ordinals or {}
+    rows = [(ordinals.get(id(s), 0), json.dumps(s)) for s in kept] + list(stranded)
+    output_lines = [text for _, text in sorted(rows, key=lambda r: r[0])]
     atomic_write(workspace_skills, "\n".join(output_lines) + "\n",
                  errors="surrogateescape")
     total_removed = len(stale) + total_dup_removed
@@ -832,9 +883,23 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write) -> None:
         f"{total_removed} total)"
     )
     if stranded:
-        print(f"Kept in place: {len(stranded)} unparseable/byte-tainted row(s) "
+        # Two different refusals, two different repairs. A byte-tainted or
+        # unparseable row needs the bytes fixed; a row that parses fine but
+        # cannot be proven to be a Skill needs a field. r6's stricter
+        # validator made the second kind common and the summary reported
+        # both as corruption (adversarial r7, QA), which points the operator
+        # at the wrong tool.
+        schema = sum(1 for reason in unprovable
+                     if reason.startswith(("KeyError", "TypeError", "ValueError")))
+        corrupt = len(stranded) - schema
+        parts = []
+        if corrupt:
+            parts.append(f"{corrupt} unparseable/byte-tainted")
+        if schema:
+            parts.append(f"{schema} readable but unprovable as a skill")
+        print(f"Kept in place: {' + '.join(parts)} row(s) "
               f"— this verb removes stale and duplicate skills, not rows it "
-              f"cannot read")
+              f"cannot read or cannot prove")
 
 
 def main():

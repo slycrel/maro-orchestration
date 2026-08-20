@@ -52,9 +52,60 @@ import ast
 import pathlib
 import sys
 
+_PARSERS: "tuple[set[str], set[str]]" = (set(), set())
+
 WRITE_MARKERS = ("atomic_write", "write_text", "write_bytes", "locked_rmw",
                  "locked_append", "locked_write")
 CLEAN_MARKERS = ("loads_clean", "_loads_clean")
+
+
+
+def _parser_names(tree) -> "tuple[set[str], set[str]]":
+    """(names proven to be the clean wrapper, names proven to be a raw parser).
+
+    Adversarial r7 (2026-08-20, 5/5) killed r6's spelling-based version four
+    ways in one round: `from json import loads as parse` was invisible
+    (`parse` is neither `loads` nor `*_loads`), `parse_json = json.loads`
+    likewise, and — the other direction — `from json import loads as
+    _loads_clean` was TRUSTED, because the marker list matched the name and
+    nothing checked where it came from. A verdict about safety cannot be
+    read off an identifier. It comes from the binding:
+
+        from jsonl_utils import loads_clean [as X]   -> X is clean
+        X = loads_clean                              -> X is clean
+        from json import loads [as X]                -> X is raw
+        X = json.loads / X = J.loads                 -> X is raw
+        import json [as J]                           -> J.loads is raw
+
+    Anything unresolved stays unproven, and unproven parses do not earn OK.
+    """
+    clean, raw, json_mods = set(), set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == "json":
+                    json_mods.add(a.asname or "json")
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                bound = a.asname or a.name
+                if n.module == "json" and a.name == "loads":
+                    raw.add(bound)
+                elif a.name in ("loads_clean", "_loads_clean"):
+                    clean.add(bound)
+        elif isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                and isinstance(n.targets[0], ast.Name):
+            bound, v = n.targets[0].id, n.value
+            if isinstance(v, ast.Name) and v.id in clean:
+                clean.add(bound)
+            elif isinstance(v, ast.Attribute) and v.attr == "loads" \
+                    and isinstance(v.value, ast.Name) \
+                    and (v.value.id in json_mods or v.value.id == "json"):
+                raw.add(bound)
+            elif isinstance(v, ast.Name) and v.id in raw:
+                raw.add(bound)
+    for mod in json_mods | {"json"}:
+        raw.add(f"{mod}.loads")
+    return clean - raw, raw
 
 
 def _called_names(node: ast.AST) -> set[str]:
@@ -72,6 +123,8 @@ def _called_names(node: ast.AST) -> set[str]:
 
 def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     """Return (verdict, lineno, qualified_name) for every flagged function."""
+    global _PARSERS
+    _PARSERS = _parser_names(tree)
     parents: dict[ast.AST, ast.AST] = {}
     for p in ast.walk(tree):
         for c in ast.iter_child_nodes(p):
@@ -151,12 +204,32 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         # unresolved, and unresolved means framing.
         binds = {}
         for n in ast.walk(fn):
-            if isinstance(n, ast.Assign) and len(n.targets) == 1 \
-                    and isinstance(n.targets[0], ast.Name):
-                name = n.targets[0].id
-                binds.setdefault(name, []).append(
-                    n.value.value if isinstance(n.value, ast.Constant)
-                    else _UNRESOLVED)
+            # EVERY binding form, not just `x = ...`. Adversarial r7 (3
+            # lenses, probed): `sep: str = "\n"`, `sep += "\n"` and
+            # `(sep := "\n")` were all invisible, so a function that binds a
+            # comma once and a newline by any of those forms was "proven"
+            # non-framing and vanished from the scan entirely — neither RISK
+            # nor OK. Counting is not flow analysis; it only has to refuse to
+            # pretend, so an unrecognised binding counts as unresolved.
+            if isinstance(n, ast.Assign):
+                targets, value = n.targets, n.value
+            elif isinstance(n, (ast.AnnAssign, ast.AugAssign)):
+                targets, value = [n.target], getattr(n, "value", None)
+            elif isinstance(n, ast.NamedExpr):
+                targets, value = [n.target], n.value
+            elif isinstance(n, (ast.For, ast.AsyncFor)):
+                targets, value = [n.target], None
+            elif isinstance(n, (ast.With, ast.AsyncWith)):
+                targets = [i.optional_vars for i in n.items if i.optional_vars]
+                value = None
+            else:
+                continue
+            for t in targets:
+                if not isinstance(t, ast.Name):
+                    continue
+                binds.setdefault(t.id, []).append(
+                    value.value if isinstance(n, ast.Assign)
+                    and isinstance(value, ast.Constant) else _UNRESOLVED)
         consts = {k: v[0] for k, v in binds.items() if len(v) == 1}
         file_handles = set()                       # names bound from open()
         for n in ast.walk(fn):
@@ -207,8 +280,8 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         # OK — visible to the manifest's `vanished` leg, and green. A
         # function that still parses with the unguarded call has not been
         # cleared, whatever else it mentions.
-        clean = any(m in dump for m in CLEAN_MARKERS) and not _bare_json_loads(fn)
-        verdict = "OK  " if clean else "RISK"
+        used_clean, used_raw = _parse_calls(fn)
+        verdict = "OK  " if used_clean and not used_raw else "RISK"
         out.append((verdict, fn.lineno, qual(fn)))
     return out
 
@@ -236,34 +309,38 @@ def _is_open_call(node) -> bool:
            (isinstance(f, ast.Attribute) and f.attr == "open")
 
 
-def _bare_json_loads(fn) -> bool:
-    """Does this function parse with anything other than the taint-refusing
-    wrapper?
-
-    Adversarial r6 (2026-08-20, 4 lenses, probed) broke the first cut four
-    ways: it matched only the literal spelling `json.loads`, so
-    `import json as j`, `from json import loads`, and every aliased variant
-    walked past it and the function was certified OK for merely mentioning
-    `loads_clean` elsewhere. Chasing spellings is the losing half of that
-    trade — the rule is now the other way round. ANY call named `loads` that
-    is not the clean wrapper counts as unguarded, whatever module it came
-    from, because `yaml.loads` and `pickle.loads` are not safer than
-    `json.loads` for this purpose. The scanner's job is to say "someone
-    should read this", and it is allowed to be wrong in that direction.
-    """
+def _parse_calls(fn) -> "tuple[bool, bool]":
+    """(calls a proven-clean parser, calls anything else parse-shaped)."""
+    clean_names, raw_names = _PARSERS
+    used_clean = used_raw = False
     for n in ast.walk(fn):
         if not isinstance(n, ast.Call):
             continue
         f = n.func
-        name = f.attr if isinstance(f, ast.Attribute) else \
-            (f.id if isinstance(f, ast.Name) else None)
-        if name is None:
+        if isinstance(f, ast.Attribute):
+            recv = f.value.id if isinstance(f.value, ast.Name) else "?"
+            name, dotted = f.attr, f"{recv}.{f.attr}"
+        elif isinstance(f, ast.Name):
+            name = dotted = f.id
+        else:
             continue
-        if name in CLEAN_MARKERS or name.lstrip("_") in CLEAN_MARKERS:
-            continue
-        if name == "loads" or name.endswith("_loads"):
-            return True
-    return False
+        # RAW WINS. `from json import loads as _loads_clean` binds a
+        # trusted-looking name to the untrusted parser, and r7 probed that
+        # exact shape earning OK — so a proven raw binding beats every
+        # naming convention below it.
+        if dotted in raw_names or name in raw_names:
+            used_raw = True
+        elif name in clean_names or dotted in clean_names:
+            used_clean = True
+        elif name in ("loads_clean", "_loads_clean"):
+            # Conventional name with NO conflicting binding in this module:
+            # the import may live in another function, or in a `*` import.
+            # Named as the fallback it is, and it can never rescue a name
+            # the branch above already proved raw.
+            used_clean = True
+        elif name == "loads" or name.endswith("_loads"):
+            used_raw = True          # parse-shaped and unproven
+    return used_clean, used_raw
 
 
 def main(argv=None) -> int:

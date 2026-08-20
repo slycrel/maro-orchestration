@@ -904,12 +904,111 @@ class TestTheTiebreakIsTheInstantNotTheString:
         kept = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
         assert kept == ["newer"]
 
-    def test_a_naive_and_an_aware_timestamp_compare_without_crashing(self, tmp_path):
-        """Both shapes are in the live store. `max()` over mixed tz-awareness
-        raises TypeError, which would take the whole repair verb down."""
+    def test_a_group_that_mixes_naive_and_aware_keeps_every_row(
+            self, tmp_path, capsys):
+        """Both shapes are in the live store, and `max()` over mixed
+        awareness raises — so r6 stamped UTC on the naive one and ranked.
+        Adversarial r7 (Architect, probed): `replace(tzinfo=utc)` is not a
+        conversion, it ASSERTS a fact the row does not carry, and a naive
+        value can denote either side of an aware one. The verb cannot prove
+        which is newer, so it does not get to delete either."""
         f = self._pair(tmp_path, "2030-01-01T00:00:00", "2020-01-01T00:00:00+00:00")
 
         cleanup_workspace_skills(skills_path=f)
 
         kept = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
-        assert kept == ["newer"]
+        assert sorted(kept) == ["newer", "older"]
+        out = capsys.readouterr().out
+        assert "mix offset-aware and naive" in out, out
+        assert "0 duplicate(s) removed" in out
+
+
+class TestARepairVerbThatRemovesNothingChangesNothing:
+    """Adversarial r7 (2026-08-20, Skeptic, probed) — the sharpest find of
+    the arc after the original three, because nothing was deleted. r6's
+    stricter validator strands more rows; the rewrite appended stranded rows
+    AFTER the admitted ones; and `skills.load_skills` reads the file in
+    reverse letting the LAST row for an id win. So a legacy row sharing an id
+    with a verified one was promoted from ignored to live — by a verb that
+    printed "0 removed" and "kept in place". Order is part of the data."""
+
+    def _store(self, tmp_path, rows):
+        f = tmp_path / "skills.jsonl"
+        f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        return f
+
+    def test_a_stranded_row_is_not_promoted_over_a_verified_twin(self, tmp_path):
+        from skills import load_skills
+
+        # Both rows carry a hash correct for their OWN content — otherwise
+        # the verified row is stale and the stale pass deletes it, which is
+        # a different (correct) behaviour and would hide this one.
+        legacy = _make_skill("same-id", "legacy name", correct_hash=True)
+        legacy.pop("content_hash")            # readable, unprovable, stranded
+        verified = _make_skill("same-id", "verified name", correct_hash=True)
+        f = self._store(tmp_path, [legacy, verified])
+
+        def winner():
+            with patch("skills._skills_path", return_value=f):
+                return [(s.id, s.name) for s in load_skills()]
+
+        before = winner()
+        cleanup_workspace_skills(skills_path=f)
+        assert winner() == before, "a verb that removed nothing changed which skill is live"
+
+    def test_the_file_keeps_the_order_it_was_read_in(self, tmp_path):
+        rows = [_make_skill("a", "n"), _make_skill("b", "n2")]
+        rows.insert(1, dict(_make_skill("junk", "n3"), created_at="nope"))
+        f = self._store(tmp_path, rows)
+
+        cleanup_workspace_skills(skills_path=f)
+
+        ids = [json.loads(l).get("id", "?") if l.startswith("{") else "?"
+               for l in f.read_text().splitlines() if l.strip()]
+        assert ids == ["a", "junk", "b"], ids
+
+
+class TestTheOperatorIsToldWhichRowWent:
+    """Adversarial r7 (4 lenses): the group line printed a shared hash prefix
+    and a shared name — by construction the two things that CANNOT tell the
+    rows apart — so an operator could not tell which record the repair verb
+    had destroyed, or recover it. The path is part of the result; so is the
+    id."""
+
+    def test_both_the_survivor_and_the_removed_row_are_named(self, tmp_path, capsys):
+        newer = dict(_make_skill("keeper", "n", correct_hash=True),
+                     created_at="2030-01-01T00:00:00+00:00")
+        older = dict(_make_skill("goner", "n", correct_hash=True),
+                     created_at="2020-01-01T00:00:00+00:00")
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(newer) + "\n" + json.dumps(older) + "\n",
+                     encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert "keeping 'keeper'" in out, out
+        assert "removing 'goner'" in out, out
+        assert "2020-01-01T00:00:00+00:00" in out, "the removed row's timestamp"
+
+
+class TestAnUnprovableRowIsNotReportedAsCorruption:
+    """Adversarial r7 (QA): two different refusals need two different
+    repairs. r6's stricter validator made "readable but unprovable" common
+    and the summary called every stranded row unparseable/byte-tainted,
+    which points the operator at the wrong tool."""
+
+    def test_a_schema_gap_and_a_torn_byte_are_counted_apart(self, tmp_path, capsys):
+        good = _make_skill("good", "n", correct_hash=True)
+        schema = _make_skill("nohash", "n", correct_hash=True)
+        schema.pop("content_hash")
+        f = tmp_path / "skills.jsonl"
+        f.write_bytes(json.dumps(good).encode() + b"\n"
+                      + json.dumps(schema).encode() + b"\n"
+                      + b'{"id": "torn\xff"}\n')
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert "1 unparseable/byte-tainted" in out, out
+        assert "1 readable but unprovable as a skill" in out, out

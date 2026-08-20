@@ -18,6 +18,7 @@ plus one overshoot chunk — never the whole file.
 from __future__ import annotations
 
 import json
+from itertools import chain
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -276,7 +277,19 @@ def loads_clean(s: str):
     if any("\ud800" <= ch <= "\udfff" for ch in s):
         raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
                                    "bytes carried as surrogates)", s, 0)
-    value = json.loads(s, object_pairs_hook=_no_duplicate_names)
+    try:
+        value = json.loads(s, object_pairs_hook=_no_duplicate_names)
+    except RecursionError:
+        # json.loads has its OWN depth limit, and it raises RecursionError,
+        # which is not a JSONDecodeError — so a line nested ~50k deep flew
+        # through every `except (json.JSONDecodeError, TypeError)` in the
+        # codebase and killed the caller (adversarial r7, Minimalist, probed:
+        # InterruptQueue.poll() died on one such row before it could strand
+        # it or announce anything). r6 fixed the walk's recursion and left
+        # the parser's. A row this layer cannot parse is a row that strands,
+        # whatever shape the refusal arrives in.
+        raise json.JSONDecodeError("nesting too deep to parse", s, 0) from None
+
     if "\\u" in s and _carries_surrogate(value):
         raise json.JSONDecodeError("byte-tainted line (surrogate written as "
                                    "a \\uDCxx escape)", s, 0)
@@ -308,18 +321,27 @@ def _carries_surrogate(value) -> bool:
     with 84 call sites does not get to raise something its callers do not
     catch.
     """
-    stack = [value]
+    # A stack of ITERATORS, not of elements. Adversarial r7 (Architect,
+    # probed under a 96 MiB cap): pushing every element of a container at
+    # once made the walk's own memory proportional to the widest container,
+    # so a valid five-million-item row raised MemoryError — again something
+    # no caller catches. Auxiliary storage is proportional to nesting depth
+    # now, which is what the recursive version got right before r6 removed
+    # it for being proportional to nesting depth in STACK frames.
+    stack = [iter((value,))]
     while stack:
-        v = stack.pop()
+        try:
+            v = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
         if isinstance(v, str):
             if any("\ud800" <= ch <= "\udfff" for ch in v):
                 return True
         elif isinstance(v, dict):
-            for k, val in v.items():
-                stack.append(k)
-                stack.append(val)
+            stack.append(iter(chain.from_iterable(v.items())))
         elif isinstance(v, (list, tuple)):
-            stack.extend(v)
+            stack.append(iter(v))
     return False
 
 

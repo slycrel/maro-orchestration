@@ -924,3 +924,30 @@ class TestOneValidRowCannotTakeTheChannelDown:
             delivered = [i.id for i in InterruptQueue(queue_path=p).poll()]
 
         assert "ok" in delivered, "a valid STOP was lost to the taint check"
+
+
+class TestNoSingleRowCanCrashThePreflight:
+    """The r6 test proved a 600-deep row was survivable; adversarial r7
+    found the depth where `json.loads` ITSELF raises — RecursionError, which
+    `_peek_counted` does not catch. One queue row, no delivery, no
+    announcement."""
+
+    def test_a_row_deeper_than_the_parser_allows_is_stranded_not_fatal(
+            self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+
+        deep = '{"id": "deep", "source": "operator", "intent": "stop", ' \
+               '"message": "x", "applied": false, "payload": ' \
+               + "[" * 50000 + "0" + "]" * 50000 + "}"
+        good = json.dumps({"id": "ok", "source": "operator", "intent": "stop",
+                           "message": "go", "applied": False,
+                           "created_at": "2026-01-01T00:00:00+00:00"})
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(deep + "\n" + good + "\n", encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            delivered = [i.id for i in InterruptQueue(queue_path=p).poll()]
+
+        assert delivered == ["ok"], "a valid STOP was lost to a neighbouring row"
+        assert any("cannot be delivered" in r.message for r in caplog.records)
+        assert deep in p.read_text(), "the row this could not read was destroyed"

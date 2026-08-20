@@ -93,15 +93,15 @@
   {
     "name": "doctor destruction :: a row the verb cannot read is deleted by its rewrite",
     "file": "src/doctor.py",
-    "anchor": "            except Exception as e:\n                stranded.append(raw)\n                print(f\"Unreadable line kept as-is (not removed): \"\n                      f\"{type(e).__name__}: {e}\")",
-    "replacement": "            except Exception as e:\n                print(f\"Unreadable line kept as-is (not removed): \"\n                      f\"{type(e).__name__}: {e}\")",
+    "anchor": "                stranded.append((len(all_skills) + len(stranded), raw))\n                unprovable.append(f\"{type(e).__name__}: {e}\")",
+    "replacement": "                unprovable.append(f\"{type(e).__name__}: {e}\")",
     "tests": "tests/test_doctor.py"
   },
   {
     "name": "doctor carry :: stranded rows are computed but never written back",
     "file": "src/doctor.py",
-    "anchor": "    output_lines = [json.dumps(skill) for skill in kept] + stranded",
-    "replacement": "    output_lines = [json.dumps(skill) for skill in kept]",
+    "anchor": "    rows = [(ordinals.get(id(s), 0), json.dumps(s)) for s in kept] + list(stranded)",
+    "replacement": "    rows = [(ordinals.get(id(s), 0), json.dumps(s)) for s in kept]",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -114,8 +114,8 @@
   {
     "name": "doctor announce :: the operator is not told which rows were kept",
     "file": "src/doctor.py",
-    "anchor": "    if stranded:\n        print(f\"Kept in place: {len(stranded)} unparseable/byte-tainted row(s) \"",
-    "replacement": "    if False:\n        print(f\"Kept in place: {len(stranded)} unparseable/byte-tainted row(s) \"",
+    "anchor": "    if stranded:\n        # Two different refusals, two different repairs.",
+    "replacement": "    if False:\n        # Two different refusals, two different repairs.",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -157,8 +157,8 @@
   {
     "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
     "file": "src/doctor.py",
-    "anchor": "            except Exception as e:\n                stranded.append(raw)",
-    "replacement": "            except Exception as e:\n                stranded.append(line)",
+    "anchor": "                stranded.append((len(all_skills) + len(stranded), raw))",
+    "replacement": "                stranded.append((len(all_skills) + len(stranded), line))",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -249,8 +249,8 @@
   {
     "name": "doctor validator :: dict_to_skill is treated as validation again",
     "file": "src/doctor.py",
-    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)\n                all_skills.append(row)",
-    "replacement": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)\n                all_skills.append(row)",
+    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)\n                ordinals[id(row)] = len(all_skills) + len(stranded)",
+    "replacement": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)\n                ordinals[id(row)] = len(all_skills) + len(stranded)",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -438,8 +438,8 @@
   {
     "name": "loads_clean escaped taint (keys) :: only string VALUES are walked",
     "file": "src/jsonl_utils.py",
-    "anchor": "            for k, val in v.items():\n                stack.append(k)\n                stack.append(val)",
-    "replacement": "            for val in v.values():\n                stack.append(val)",
+    "anchor": "            stack.append(iter(chain.from_iterable(v.items())))",
+    "replacement": "            stack.append(iter(v.values()))",
     "tests": "tests/test_jsonl_utils.py"
   },
   {
@@ -480,8 +480,8 @@
   {
     "name": "scanner OK verdict :: mentioning the guard clears a bare json.loads again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "        clean = any(m in dump for m in CLEAN_MARKERS) and not _bare_json_loads(fn)",
-    "replacement": "        clean = any(m in dump for m in CLEAN_MARKERS)",
+    "anchor": "        used_clean, used_raw = _parse_calls(fn)\n        verdict = \"OK  \" if used_clean and not used_raw else \"RISK\"",
+    "replacement": "        used_clean = any(m in dump for m in CLEAN_MARKERS)\n        verdict = \"OK  \" if used_clean else \"RISK\"",
     "tests": "tests/test_scan_destructive_rewrites.py"
   },
   {
@@ -494,14 +494,14 @@
   {
     "name": "doctor tiebreak :: created_at ranks as text, so offsets reverse the order",
     "file": "src/doctor.py",
-    "anchor": "        moment = datetime.fromisoformat(skill.get(\"created_at\", \"\"))\n        if moment.tzinfo is None:\n            moment = moment.replace(tzinfo=timezone.utc)\n        success_rate = float(skill.get(\"success_rate\", 0))\n        use_count = int(skill.get(\"use_count\", 0))\n        return (moment, success_rate, use_count)",
-    "replacement": "        moment = skill.get(\"created_at\", \"\")\n        success_rate = float(skill.get(\"success_rate\", 0))\n        use_count = int(skill.get(\"use_count\", 0))\n        return (moment, success_rate, use_count)",
+    "anchor": "    def score_skill(skill):\n        return (moment_of(skill), float(skill.get(\"success_rate\", 0)),\n                int(skill.get(\"use_count\", 0)))",
+    "replacement": "    def score_skill(skill):\n        return (skill.get(\"created_at\", \"\"),\n                float(skill.get(\"success_rate\", 0)),\n                int(skill.get(\"use_count\", 0)))",
     "tests": "tests/test_doctor.py"
   },
   {
     "name": "loads_clean recursion :: the taint walk recurses and dies on deep JSON",
     "file": "src/jsonl_utils.py",
-    "anchor": "    stack = [value]\n    while stack:\n        v = stack.pop()\n        if isinstance(v, str):\n            if any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in v):\n                return True\n        elif isinstance(v, dict):\n            for k, val in v.items():\n                stack.append(k)\n                stack.append(val)\n        elif isinstance(v, (list, tuple)):\n            stack.extend(v)\n    return False",
+    "anchor": "    stack = [iter((value,))]\n    while stack:\n        try:\n            v = next(stack[-1])\n        except StopIteration:\n            stack.pop()\n            continue\n        if isinstance(v, str):\n            if any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in v):\n                return True\n        elif isinstance(v, dict):\n            stack.append(iter(chain.from_iterable(v.items())))\n        elif isinstance(v, (list, tuple)):\n            stack.append(iter(v))\n    return False",
     "replacement": "    if isinstance(value, str):\n        return any(\"\\ud800\" <= ch <= \"\\udfff\" for ch in value)\n    if isinstance(value, dict):\n        return any(_carries_surrogate(k) or _carries_surrogate(v)\n                   for k, v in value.items())\n    if isinstance(value, (list, tuple)):\n        return any(_carries_surrogate(v) for v in value)\n    return False",
     "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py"
   },
@@ -515,8 +515,8 @@
   {
     "name": "scanner sep bindings :: the last assignment seen wins again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "        binds = {}\n        for n in ast.walk(fn):\n            if isinstance(n, ast.Assign) and len(n.targets) == 1 \\\n                    and isinstance(n.targets[0], ast.Name):\n                name = n.targets[0].id\n                binds.setdefault(name, []).append(\n                    n.value.value if isinstance(n.value, ast.Constant)\n                    else _UNRESOLVED)\n        consts = {k: v[0] for k, v in binds.items() if len(v) == 1}",
-    "replacement": "        consts = {}\n        for n in ast.walk(fn):\n            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) \\\\\n                    and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):\n                consts[n.targets[0].id] = n.value.value",
+    "anchor": "        consts = {k: v[0] for k, v in binds.items() if len(v) == 1}",
+    "replacement": "        consts = {k: v[-1] for k, v in binds.items()}",
     "tests": "tests/test_scan_destructive_rewrites.py"
   },
   {
@@ -529,8 +529,128 @@
   {
     "name": "scanner parser spelling :: only literal json.loads counts as unguarded again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "        if name == \"loads\" or name.endswith(\"_loads\"):\n            return True",
-    "replacement": "        if name == \"loads\" and isinstance(f, ast.Attribute) \\\n                and isinstance(f.value, ast.Name) and f.value.id == \"json\":\n            return True",
+    "anchor": "        elif name == \"loads\" or name.endswith(\"_loads\"):\n            used_raw = True          # parse-shaped and unproven",
+    "replacement": "        elif dotted == \"json.loads\":\n            used_raw = True          # parse-shaped and unproven",
     "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "doctor order :: the stranded rows are appended after the admitted ones again",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "    rows = [(ordinals.get(id(s), 0), json.dumps(s)) for s in kept] + list(stranded)\n    output_lines = [text for _, text in sorted(rows, key=lambda r: r[0])]",
+    "replacement": "    output_lines = [json.dumps(s) for s in kept] + [t for _, t in stranded]"
+  },
+  {
+    "name": "doctor order :: every admitted row is written at the same position",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "                ordinals[id(row)] = len(all_skills) + len(stranded)",
+    "replacement": "                ordinals[id(row)] = 0"
+  },
+  {
+    "name": "doctor undecidable :: a naive timestamp is ASSERTED to be UTC again",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "    def moment_of(skill):\n        return datetime.fromisoformat(skill.get(\"created_at\", \"\"))",
+    "replacement": "    def moment_of(skill):\n        moment = datetime.fromisoformat(skill.get(\"created_at\", \"\"))\n        return moment.replace(tzinfo=timezone.utc) \\\n            if moment.tzinfo is None else moment"
+  },
+  {
+    "name": "doctor undecidable :: the mixed-awareness group is ranked anyway",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "        aware = {moment_of(s).tzinfo is not None for s in skills}\n        if len(skills) > 1 and len(aware) > 1:",
+    "replacement": "        aware = {moment_of(s).tzinfo is not None for s in skills}\n        if False and len(skills) > 1 and len(aware) > 1:"
+  },
+  {
+    "name": "doctor announce :: the removed rows are not named",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "        for s in losers:\n            print(f\"      removing '{s.get('id', '?')}' \"",
+    "replacement": "        for s in losers[:0]:\n            print(f\"      removing '{s.get('id', '?')}' \""
+  },
+  {
+    "name": "doctor announce :: the kept row is named only by what the whole group shares",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "              f\"keeping '{best.get('id', '?')}' \"\n              f\"({best.get('created_at', '?')}) of \"\n",
+    "replacement": "              f\"keeping best of \"\n"
+  },
+  {
+    "name": "doctor summary :: an unprovable row is reported as corruption again",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "        schema = sum(1 for reason in unprovable\n                     if reason.startswith((\"KeyError\", \"TypeError\", \"ValueError\")))",
+    "replacement": "        schema = 0"
+  },
+  {
+    "name": "doctor summary :: the reasons a row could not be proven are never collected",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "                unprovable.append(f\"{type(e).__name__}: {e}\")",
+    "replacement": "                unprovable.extend([])"
+  },
+  {
+    "name": "loads_clean depth :: the parser's own RecursionError is left uncaught",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py",
+    "anchor": "    try:\n        value = json.loads(s, object_pairs_hook=_no_duplicate_names)\n    except RecursionError:",
+    "replacement": "    try:\n        value = json.loads(s, object_pairs_hook=_no_duplicate_names)\n    except ZeroDivisionError:"
+  },
+  {
+    "name": "loads_clean depth :: the deep row is refused as something no caller catches",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py",
+    "anchor": "        raise json.JSONDecodeError(\"nesting too deep to parse\", s, 0) from None",
+    "replacement": "        raise ValueError(\"nesting too deep to parse\") from None"
+  },
+  {
+    "name": "loads_clean width :: the walk pushes every element instead of an iterator",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py",
+    "anchor": "        elif isinstance(v, dict):\n            stack.append(iter(chain.from_iterable(v.items())))\n        elif isinstance(v, (list, tuple)):\n            stack.append(iter(v))",
+    "replacement": "        elif isinstance(v, dict):\n            stack.append(iter(list(chain.from_iterable(v.items()))))\n        elif isinstance(v, (list, tuple)):\n            stack.append(iter(list(v)))"
+  },
+  {
+    "name": "scanner parser identity :: safety is read off the identifier again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "        if dotted in raw_names or name in raw_names:\n            used_raw = True\n        elif name in clean_names or dotted in clean_names:\n            used_clean = True",
+    "replacement": "        if name in (\"loads_clean\", \"_loads_clean\"):\n            used_clean = True\n        elif False:\n            used_clean = True"
+  },
+  {
+    "name": "scanner parser identity :: an aliased import binds the original name",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "                bound = a.asname or a.name",
+    "replacement": "                bound = a.name"
+  },
+  {
+    "name": "scanner parser identity :: a raw binding no longer poisons the clean set",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    return clean - raw, raw",
+    "replacement": "    return clean, raw",
+    "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent \u2014 pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
+  },
+  {
+    "name": "scanner bindings :: annotated and augmented assignments are invisible",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "            elif isinstance(n, (ast.AnnAssign, ast.AugAssign)):\n                targets, value = [n.target], getattr(n, \"value\", None)",
+    "replacement": "            elif isinstance(n, ast.AnnAssign) and False:\n                targets, value = [n.target], getattr(n, \"value\", None)"
+  },
+  {
+    "name": "scanner bindings :: a walrus binding is invisible",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "            elif isinstance(n, ast.NamedExpr):\n                targets, value = [n.target], n.value",
+    "replacement": "            elif isinstance(n, ast.NamedExpr) and False:\n                targets, value = [n.target], n.value"
+  },
+  {
+    "name": "scanner bindings :: loop and context-manager targets are invisible",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "            elif isinstance(n, (ast.For, ast.AsyncFor)):\n                targets, value = [n.target], None\n            elif isinstance(n, (ast.With, ast.AsyncWith)):\n                targets = [i.optional_vars for i in n.items if i.optional_vars]\n                value = None",
+    "replacement": "            elif isinstance(n, (ast.For, ast.AsyncFor)) and False:\n                targets, value = [n.target], None"
   }
 ]

@@ -415,3 +415,68 @@ class TestTheTaintCheckCannotBeTheThingThatBreaks:
 
         with pytest.raises(json.JSONDecodeError):
             loads_clean('{"x": "' + raw + '"}')
+
+
+class TestTheParserOwnLimitsAreThisLayersProblem:
+    """Adversarial r7 (2 lenses, probed) on r6's own fix. r6 made the taint
+    WALK iterative and left the PARSER's recursion, and made the walk's
+    memory proportional to the widest container. Both raise things no caller
+    catches — every destructive caller strands a bad row via `except
+    (json.JSONDecodeError, TypeError)`, and neither RecursionError nor
+    MemoryError is one. A row this layer cannot parse is a row that
+    strands, whatever shape the refusal arrives in."""
+
+    def test_nesting_deeper_than_the_parser_allows_strands(self):
+        from jsonl_utils import loads_clean
+
+        line = '{"applied": false, "x": ' + "[" * 50000 + "0" + "]" * 50000 + "}"
+        with pytest.raises(RecursionError):
+            json.loads(line)            # the premise, stated out loud
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(line)
+
+    def test_a_very_wide_row_is_walked_without_copying_it(self):
+        """The walk holds one iterator per nesting LEVEL, not one entry per
+        element. Width was r6's regression: `stack.extend(v)` duplicated
+        every reference at once, making the walk's own memory proportional
+        to the widest container — probed to MemoryError under a 96 MiB cap.
+
+        Measured on the WALK alone (the parse allocates the row either way),
+        so the mutation that reverts to an element stack has somewhere to
+        fail: 1M references is ~8 MiB of list growth, against a budget of 1.
+        """
+        import tracemalloc
+
+        from jsonl_utils import _carries_surrogate
+
+        value = {"a": list(range(1_000_000)), "b": "clean"}
+        tracemalloc.start()
+        try:
+            assert _carries_surrogate(value) is False
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert peak < 1 << 20, (
+            f"the walk allocated {peak >> 10} KiB on a row it only had to "
+            f"read — auxiliary memory must follow DEPTH, not width")
+
+    def test_a_wide_row_is_still_walked_to_the_end(self):
+        """The must-detect other half: a cheap way to pass the budget above
+        is to stop walking wide containers."""
+        from jsonl_utils import loads_clean
+
+        line = json.dumps({"a": ["clean"] * 100_000 + ["\udcff"]})
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(line)
+
+    def test_the_iterative_walk_is_not_shallower_than_the_recursive_one(self):
+        """The must-detect half — an easy way to "fix" a crashing walk is to
+        stop walking."""
+        from jsonl_utils import loads_clean
+
+        for line in ('{"a": {"b": {"c": ["ok", "\\udcff"]}}}',
+                     '{"a": [[[{"k": "\\udcff"}]]]}',
+                     '{"a": {"\\udcff": 1}}',
+                     "[" * 400 + '"\\udcff"' + "]" * 400):
+            with pytest.raises(json.JSONDecodeError):
+                loads_clean(line)

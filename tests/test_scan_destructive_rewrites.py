@@ -485,14 +485,38 @@ class TestTheOkVerdictSurvivesAnImportRefactor:
     @pytest.mark.parametrize("label,head,parse", [
         ("module alias", "import json as j\n", "j.loads"),
         ("direct import", "from json import loads\n", "loads"),
-        ("aliased direct import", "from json import loads as parse\n", "parse_loads"),
+        # r6 wrote this row as `parse_loads` — a name that appears NOWHERE in
+        # the fixture's imports and happens to match the old suffix
+        # heuristic. It passed for the wrong reason: adversarial r7 probed
+        # the real shape, `parse(line)`, and got OK. A must-detect fixture
+        # that tests the heuristic instead of the production shape is the
+        # exact failure this repo's own rule warns about.
+        ("aliased direct import", "from json import loads as parse\n", "parse"),
+        ("assignment alias", "import json\n", "PARSE_ALIAS"),
+        ("a trusted-looking alias of the raw parser",
+         "from json import loads as _loads_clean\n", "_loads_clean"),
         ("the original spelling", "import json\n", "json.loads"),
         ("another parser entirely", "import yaml\n", "yaml.loads"),
     ])
     def test_an_unguarded_parse_is_never_ok(self, label, head, parse):
+        prelude = "    PARSE_ALIAS = json.loads\n" if parse == "PARSE_ALIAS" else ""
         src = head + 'def rewrite(path):\n    loads_clean("unrelated")\n' \
-              + self.BODY % parse
+              + prelude + self.BODY % parse
         assert _scan(src).get("rewrite") == "RISK", label
+
+    @pytest.mark.parametrize("label,src", [
+        ("imported from jsonl_utils",
+         "from jsonl_utils import loads_clean\ndef rewrite(path):\n"),
+        ("imported under an alias",
+         "from jsonl_utils import loads_clean as _lc\ndef rewrite(path):\n"),
+        ("called through the module",
+         "import jsonl_utils\ndef rewrite(path):\n"),
+    ])
+    def test_a_proven_clean_binding_earns_ok(self, label, src):
+        call = {"imported from jsonl_utils": "loads_clean",
+                "imported under an alias": "_lc",
+                "called through the module": "jsonl_utils.loads_clean"}[label]
+        assert _scan(src + self.BODY % call).get("rewrite") == "OK", label
 
     @pytest.mark.parametrize("parse", ["loads_clean", "_loads_clean"])
     def test_the_clean_wrapper_still_earns_ok(self, parse):
@@ -533,4 +557,36 @@ class TestASeparatorIsOnlyProvenWhenNothingElseTouchesIt:
     def test_one_unconditional_non_newline_binding_still_buys_silence(self):
         """Negative control: this is the only shape that proves it."""
         src = 'def rewrite(path):\n    sep = ","\n' + self.BODY
+        assert "rewrite" not in _scan(src)
+
+
+class TestEveryBindingFormCountsAsABinding:
+    """Adversarial r7 (3 lenses, probed): r6's "exactly one binding proves
+    it" guard counted only `ast.Assign`. `sep: str = "\\n"`, `sep += "\\n"`
+    and `(sep := "\\n")` were invisible, so a function binding a comma once
+    and a newline by any other form was "proven" non-framing and vanished
+    from the scan entirely — neither RISK nor OK, which is worse than either
+    because the drift gate can only report what the scanner can see."""
+
+    BODY = ('    out = []\n    for line in path.read_text().split(sep):\n'
+            '        try:\n            json.loads(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n    atomic_write(path, "x")\n')
+
+    @pytest.mark.parametrize("label,binding", [
+        ("annotated", '    sep = ","\n    sep: str = "\\n"\n'),
+        ("augmented", '    sep = ","\n    sep += "\\n"\n'),
+        ("walrus", '    sep = ","\n    if (sep := "\\n"):\n        pass\n'),
+        ("loop target", '    sep = ","\n    for sep in seps:\n        pass\n'),
+        ("with target", '    sep = ","\n    with opened() as sep:\n        pass\n'),
+        ("plain rebinding", '    sep = ","\n    sep = "\\n"\n'),
+    ])
+    def test_a_second_binding_makes_the_separator_unproven(self, label, binding):
+        src = "import json\ndef rewrite(path, seps):\n" + binding + self.BODY
+        assert _scan(src).get("rewrite") == "RISK", label
+
+    def test_one_binding_is_still_a_proof(self):
+        """Negative control — otherwise every variable separator is RISK and
+        the resolution logic may as well not exist."""
+        src = 'import json\ndef rewrite(path):\n    sep = ","\n' + self.BODY
         assert "rewrite" not in _scan(src)
