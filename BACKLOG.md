@@ -882,6 +882,65 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       the r7 fixes re-anchored first, 1 new equivalent recorded); 9811
       tests pass; scanner blast radius ZERO for the second round
       running (77 RISK before and after, manifest green).*
+    - *Its adversarial r8 (2026-08-20, FIVE codex seats on the r7 fix
+      layer): **REJECT — eighth round, eighth fix-layer HIGH.** Six
+      findings accepted, all six reproduced, zero hallucinations for the
+      fourth round running, and THREE of them are the same mistake in
+      three files: a denylist. (1) `loads_clean` translated
+      `RecursionError` — the one class r7 had met — and r8 walked past
+      it with the next: CPython caps int-from-string conversion at 4300
+      digits and raises ValueError, so a 5000-digit number in a queue
+      row killed `InterruptQueue.poll()` before it could strand or
+      announce. Same finding as r7, one exception class over, inside
+      r7's own fix. General rule now: if the parser did not return a
+      value, the line does not parse. (2) The doctor's corrupt-vs-
+      unprovable split matched the exception's class NAME against three
+      strings; a 401-digit `success_rate` (valid JSON, readable bytes,
+      OverflowError) was reported as byte corruption. Parse and
+      validation are separate try blocks now and the kind is recorded
+      where it is known. (3) The scanner kept a fallback for the
+      conventional SPELLING — added so r7's own fixtures would pass — so
+      `from untrusted_parser import loads_clean` was trusted on the name
+      alone, in the round whose finding was "a verdict cannot be read
+      off an identifier". (4) Parser identity was module-wide, so a
+      parameter, a default argument or a local rebinding shadowed the
+      import and still read OK; shadowing revokes now, with the
+      must-detect other half pinned (half this codebase imports the
+      wrapper INSIDE the function). (5) r7 enumerated binding NODE
+      TYPES and r8 found the two it had not thought of — a tuple target
+      and a `match` capture — each making a live JSONL rewrite vanish
+      from the scan entirely; the census counts Store-context names now.
+      (6) 5/5 seats independently: r7 named the ROWS it destroys and
+      never named the FILE — the path is now on the header, every
+      stranded row, the strand summary and the closing count, and the
+      stale branch names created_at like the duplicate branch. REJECTED
+      one finding (loads_clean admits NaN/Infinity): json.dumps re-emits
+      both verbatim so a rewrite carries them faithfully, and the
+      ranking inputs are already proven finite — recorded below as a
+      strictness question, not a defect. Receipts: spec 93 -> 110 with
+      SIX survivors on the first sweep (five were holes in the new
+      tests), 110/110 after; 9837 tests pass; scanner blast radius ZERO
+      for the third round running.*
+    - *Carried lesson from r8, the arc's most durable: **naming the
+      cases you have met is a denylist, and a denylist in a safety check
+      fails open on the case nobody has met yet.** Three files, one
+      mistake: a list of exception classes to translate, a list of
+      exception names to classify by, a list of AST node types that bind
+      a name. The general form was available in all three and is shorter
+      than the list. Where it genuinely is not available, count what you
+      can prove and treat the rest as unproven — never a list that grows
+      by one each round. Corollary from the same sweep: **a count-based
+      assertion cannot fail in the direction it was written for** ("the
+      path appears on >= 3 lines" passed with any one of the four
+      announcements stripped).*
+    - *Open, not a defect (r8, Minimalist): `loads_clean` admits the
+      non-standard JSON constants `NaN`, `Infinity` and `-Infinity`.
+      They round-trip faithfully through `json.dumps`, so nothing in
+      this arc's doctrine is broken — but a STRICT third-party reader of
+      one of our stores would reject the line. Whoever owns cross-reader
+      compatibility should decide whether `parse_constant` should refuse
+      them; the blast radius is 84 call sites, so measure before
+      flipping.*
     - *Carried lesson from r7: **preserving every byte is not the same
       as preserving the meaning.** Every rule this arc wrote down
       guards the bytes — strand what you cannot read, carry it

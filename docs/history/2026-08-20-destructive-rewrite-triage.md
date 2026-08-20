@@ -739,6 +739,99 @@ ordering already closes). Suite: 9811 pass. Blast radius of the stricter
 scanner on the real tree: **zero** for the second round running — 77 RISK
 sites before and after, manifest green.
 
+## Adversarial round 8 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r7 fix layer. **REJECT.** Six findings accepted, all six
+reproduced before being touched, zero hallucinations for the fourth round
+running. Three of them are the same mistake wearing three hats, which is
+what makes this round worth reading.
+
+- **A denylist of exception classes, again** (Skeptic + Architect, HIGH,
+  probed). r7 translated `RecursionError` — the one class it had met — into
+  `JSONDecodeError` so a row the parser refuses would strand. r8 walked past
+  it with the next class: CPython caps int-from-string conversion at 4300
+  digits and raises `ValueError`, so a queue row carrying a 5000-digit
+  number killed `InterruptQueue.poll()` before it could strand the row or
+  announce anything. That is the r7 finding verbatim, one exception class
+  over, in code written to fix the r7 finding. The rule is the general one
+  now: if the parser did not return a value, the line does not parse, and a
+  line that does not parse strands. The class rides in the message so the
+  operator still sees why, and the refusal this layer raises on purpose
+  (duplicate object names) is re-raised untouched rather than re-wrapped.
+
+- **The same denylist, in the doctor's accounting** (Minimalist + QA,
+  probed). r7's split of "unparseable/byte-tainted" from "readable but
+  unprovable" tested the exception's class NAME against three strings. A
+  401-digit `success_rate` is valid JSON with readable bytes, is refused
+  with `OverflowError`, and was reported to the operator as byte
+  corruption — the exact misdirection r7 claimed to have removed. Parse and
+  validation are separate `try` blocks now and the kind is recorded where it
+  is known. The per-row line was carrying the same lie in the other
+  direction: every stranded row was announced as `Unreadable line`, four
+  lines above a summary that said "readable but unprovable".
+
+- **The same denylist, in my own scanner fallback** (3 lenses, HIGH,
+  probed). r7's parser-identity fix kept a fallback for the conventional
+  SPELLING — `loads_clean(...)` with no visible import earned OK — added so
+  that round's own fixtures would pass. `from untrusted_parser import
+  loads_clean` was therefore trusted on the name alone, in the round whose
+  entire finding was that a verdict cannot be read off an identifier. It is
+  gone; a clean binding must come from `jsonl_utils`, and `import
+  jsonl_utils` + `jsonl_utils.loads_clean(...)` is proven the same way.
+
+- **A module-wide proof does not survive a local rebinding** (4 lenses,
+  HIGH, probed). Parser identity was collected module-wide, so
+  `def rewrite(path, loads_clean=json.loads)` and a local
+  `loads_clean = lambda s: json.loads(s)` both parsed with the raw parser
+  while the scanner read the module-level import and said OK. Shadowing
+  revokes the proof now — with the must-detect other half pinned, because
+  half this codebase imports the wrapper INSIDE the function (doctor.py and
+  gc_memory.py both do) and reading that import as a shadow would have
+  turned every one of them RISK, which is how a strictness change stops
+  being a signal.
+
+- **Enumerating binding forms is a denylist too** (2 lenses, probed). r7
+  listed the node types that bind a name — Assign, AnnAssign, AugAssign,
+  NamedExpr, For, With — and r8 found the two it had not thought of: a tuple
+  target (`sep, _unused = "\n", 0`) and a `match` capture
+  (`case {"separator": sep}`). Each made a live JSONL rewrite vanish from
+  the scan entirely, neither RISK nor OK — the third time this arc has paid
+  for that exact disappearance. The census counts Store-context names now,
+  which is Python's own answer to "what binds a name", plus the short closed
+  set of binders the grammar defines without a Name node (except aliases,
+  match captures, imports, parameters).
+
+- **The store path was never named** (5/5 seats, independently). r7 named
+  the ROWS it destroys and never named the FILE it destroyed them in, while
+  its own comment said "the path is part of the result". An operator running
+  cleanup under a `MARO_WORKSPACE` override, or reading an automation log,
+  could see that a record was destroyed and not which `skills.jsonl` lost
+  it. The path is now on the rewrite header, on every stranded row, on the
+  strand summary and on the closing count. The stale branch — the sibling r7
+  left half-done — names its row's `created_at` like the duplicate branch
+  does.
+
+**Rejected:** the Minimalist's finding that `loads_clean` admits `NaN` and
+`Infinity`. Both are non-standard JSON that `json.dumps` re-emits verbatim,
+so a rewrite carries them faithfully — there is no launder and no loss, and
+the ranking inputs that could be poisoned by a non-finite value are already
+proven finite by `validate_skill_row`. The probe's "concrete failure" was a
+duplicate row being removed, which is the verb's job. Recorded in BACKLOG as
+a strictness question for whoever owns cross-reader compatibility, not as a
+defect in this arc.
+
+**Receipts:** mutation spec 93 → 110, and the sweep did real work this time
+— **six survivors on the first pass**, all of them holes rather than dead
+mutants. Four "the path is missing from line X" mutants survived because the
+new test counted occurrences (`>= 3`) instead of asserting each line, so
+stripping any ONE of the four still passed. The fifth showed that removing
+the spelling fallback had quietly disarmed the r6 fixtures: their guard
+mention (`loads_clean("unrelated")` with no import) no longer earned clean
+status, so they read RISK for a different reason and stopped exercising the
+unguarded-parse branch at all. The sixth is marked equivalent with its
+reason. 110/110 after. Suite: 9837 pass. Scanner blast radius on the real
+tree: **zero** for the third round running.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -814,3 +907,24 @@ anything other than a row's own content (position, adjacency, file identity),
 that property is part of the data and belongs in the preserve tests. The
 question to ask of any rewrite is not "did I lose a row" but "could a reader
 tell the difference".
+
+The seventh is r8's, and it is the arc's most durable one because it names
+the SHAPE rather than an instance: **naming the cases you have met is a
+denylist, and a denylist in a safety check fails open on the case nobody
+has met yet.** r8 found the same mistake in three files at once — a list of
+exception classes to translate, a list of exception names to classify by, a
+list of AST node types that bind a name — and one of the three was written
+INSIDE the round whose finding was "a verdict cannot be read off an
+identifier". The general form was available in all three cases and is
+shorter than the list: the parser either returned a value or it did not;
+the kind of refusal is known where it is raised, so record it there; and
+Python already marks every name it binds with `ctx=Store`. Where the
+general form genuinely is not available, the honest move is the one the
+scanner makes — count what you can prove and treat everything else as
+unproven — never a list that grows by one each round.
+
+The eighth is smaller and is about the tests, not the code: **a
+count-based assertion cannot fail in the direction it was written for.**
+The r8 path test asserted the store path appeared on "at least three"
+lines; the mutation sweep stripped any one of the four and it still passed.
+Assert the property on each thing that must carry it, not on a total.
