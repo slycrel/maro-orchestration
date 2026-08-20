@@ -221,6 +221,7 @@ py-modules = [
     "pack",
     "packaging_readout",
     "path_rewrite",
+    "path_tokens",
     "persona",
     "persona_dispatch",
     "planner",

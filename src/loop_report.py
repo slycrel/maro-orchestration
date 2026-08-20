@@ -829,7 +829,12 @@ def _step_artifact_names(call_record: str, artifact_names: set,
     they still show on the Outcome panel's artifact list, so nothing
     goes invisible."""
     try:
-        data = json.loads(Path(call_record).read_text(encoding="utf-8"))
+        # One shared resolver, never bespoke expansion per call site
+        # (Jeremy, Q4: "use a method if possible rather than custom
+        # code in those places"). Safe on a plain absolute path.
+        from path_tokens import resolve_stored_path
+        data = json.loads(
+            resolve_stored_path(call_record).read_text(encoding="utf-8"))
     except Exception:
         return []
     hits: List[str] = []
@@ -945,7 +950,8 @@ def _render_step_table(
         model_html = '<span class="meta">-</span>'
         arts_html = ""
         if s.call_record:
-            rec_path = Path(s.call_record)
+            from path_tokens import resolve_stored_path
+            rec_path = resolve_stored_path(s.call_record)
             rel = _relpath(rec_path, report_dir) if rec_path.is_absolute() else s.call_record
             data_attr = f' data-call-record="{_esc(rel)}"'
             detail_html = (

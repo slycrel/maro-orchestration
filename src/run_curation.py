@@ -601,7 +601,8 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
     sections: List[str] = []
     top_text = ""
     for d in (card.get("deliverables") or [])[:3]:
-        p = Path(str(d.get("path", "")))
+        from path_tokens import resolve_stored_path
+        p = resolve_stored_path(d.get("path", ""))
         if p.is_file() and p.suffix.lower() in (".md", ".txt"):
             try:
                 t = p.read_text(errors="replace")
