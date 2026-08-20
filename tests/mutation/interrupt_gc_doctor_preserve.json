@@ -770,6 +770,7 @@
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
     "anchor": "            for target in n.targets:\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
-    "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value"
+    "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
+    "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering \u2014 `consts` is read for the separator's actual value."
   }
 ]

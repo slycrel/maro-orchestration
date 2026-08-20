@@ -505,7 +505,14 @@ class TestTheOkVerdictSurvivesAnImportRefactor:
     ])
     def test_an_unguarded_parse_is_never_ok(self, label, head, parse):
         prelude = "    PARSE_ALIAS = json.loads\n" if parse == "PARSE_ALIAS" else ""
-        src = head + 'def rewrite(path):\n    loads_clean("unrelated")\n' \
+        # The guard mention has to be a PROVEN one — r8 removed the
+        # spelling fallback, so an unimported `loads_clean("unrelated")` no
+        # longer earns clean status and the fixture stopped exercising the
+        # unguarded-parse branch at all (it read RISK for the other reason).
+        # A must-detect fixture that passes for the wrong reason is the
+        # failure this repo's own rule warns about; the sweep found it.
+        src = head + "from jsonl_utils import loads_clean\n" \
+              + 'def rewrite(path):\n    loads_clean("unrelated")\n' \
               + prelude + self.BODY % parse
         assert _scan(src).get("rewrite") == "RISK", label
 

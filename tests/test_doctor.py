@@ -1036,11 +1036,22 @@ class TestTheStoreItRewroteIsNamed:
 
         cleanup_workspace_skills(skills_path=f)
 
-        out = capsys.readouterr().out
-        assert str(f) in out, f"the rewritten store is never named:\n{out}"
-        # ...on the summary line and on the stranded-row line too, not only
-        # in a header a scrolling operator has already lost.
-        assert sum(str(f) in line for line in out.splitlines()) >= 3, out
+        # Each announcement separately, not a count: the mutation sweep
+        # showed that "the path appears at least three times" passes with
+        # any ONE of the four lines stripped, which is a test that cannot
+        # fail in the direction it was written for.
+        lines = capsys.readouterr().out.splitlines()
+
+        def carries(prefix):
+            named = [l for l in lines if l.startswith(prefix)]
+            assert named, f"no line starts with {prefix!r}:\n" + "\n".join(lines)
+            assert all(str(f) in l for l in named), \
+                f"{prefix!r} does not name the store:\n" + "\n".join(named)
+
+        carries("Rewriting")                 # before the destructive write
+        carries("Unreadable line")           # the row it could not read
+        carries("Kept in place")             # the strand summary
+        carries("Cleaned")                   # the closing count
 
     def test_the_stale_branch_names_its_row_as_fully_as_the_duplicate_one(
             self, tmp_path, capsys):
