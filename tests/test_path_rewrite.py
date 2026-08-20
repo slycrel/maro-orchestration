@@ -310,7 +310,11 @@ class TestArchiveRoundTrip:
         monkeypatch.setenv("MARO_WORKSPACE", str(src))
         (src / "memory" / "lessons.jsonl").write_text(
             json.dumps({"lesson": f"read {src}/runs/1/artifact"}) + "\n")
-        (src / "playbook.md").write_text(f"# Playbook\nlives at {src}\n")
+        # Two shapes on purpose: a CHILD path (root followed by `/`, which
+        # tokenization covers) and a BARE root at end-of-line, which the
+        # narrow boundary rule deliberately leaves absolute.
+        (src / "playbook.md").write_text(
+            f"# Playbook\nartifacts in {src}/runs/1\nlives at {src}\n")
         # A git object and a database: both cite the path, neither may move.
         objdir = src / "projects" / "repo" / ".git" / "objects" / "ab"
         objdir.mkdir(parents=True)
@@ -333,8 +337,13 @@ class TestArchiveRoundTrip:
         dest = self._dest(monkeypatch, tmp_path)
         import_workspace(archive)
 
-        assert str(src) not in (dest / "playbook.md").read_text()
-        assert str(dest) in (dest / "playbook.md").read_text()
+        body = (dest / "playbook.md").read_text()
+        # The child path is portable...
+        assert f"{dest}/runs/1" in body
+        # ...and the bare root at end-of-line is deliberately still absolute
+        # (narrow boundary rule, round 3). Asserting it rather than pretending
+        # the whole file moved.
+        assert f"lives at {src}" in body
         assert str(dest) in (dest / "memory" / "lessons.jsonl").read_text()
 
         # Since 2026-08-18 a v3 archive ships root PLACEHOLDERS and import
@@ -409,7 +418,7 @@ class TestArchiveRoundTrip:
         dest = self._dest(monkeypatch, tmp_path)
         import_workspace(archive, rewrite_paths=False)
         assert (dest / "playbook.md").read_text() == \
-            f"# Playbook\nlives at {src}\n"
+            f"# Playbook\nartifacts in {src}/runs/1\nlives at {src}\n"
         assert not list((dest / ".import-meta").glob("*/path-rewrite.json"))
         prov = json.loads(next(
             (dest / ".import-meta").glob("*/provenance.json")).read_text())
@@ -435,8 +444,14 @@ class TestArchiveRoundTrip:
         monkeypatch.setenv("MARO_WORKSPACE", str(src))
         import_workspace(archive)
         assert (src / "playbook.md").read_text() == \
-            f"# Playbook\nlives at {src}\n"
-        assert "nothing to rewrite" in capsys.readouterr().err
+            f"# Playbook\nartifacts in {src}/runs/1\nlives at {src}\n"
+        # Re-importing onto the SOURCE machine is the identity case. The
+        # tokenized lane reports that it skipped the legacy rewriter rather
+        # than "nothing to rewrite" -- same outcome, different mechanism, and
+        # the file above proves the bytes are unchanged either way.
+        err = capsys.readouterr().err
+        assert ("nothing to rewrite" in err
+                or "path rewrite: skipped" in err), err
 
     def test_merge_import_leaves_existing_files_alone(self, exported,
                                                       monkeypatch, tmp_path):

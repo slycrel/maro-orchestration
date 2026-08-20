@@ -392,3 +392,74 @@ def test_a_good_archive_still_imports_after_all_this(ws, tmp_path):
     body = (dest / "memory" / "x.jsonl").read_text()
     assert f"{dest}/runs/a" in body and "%%MARO_" not in body
     assert not list(dest.parent.glob("*.import-staging-*"))
+
+
+# ==================================================== round 3 (2026-08-20)
+
+def test_import_never_deletes_a_staging_path_it_did_not_create(ws, tmp_path):
+    """The first staging dir was PID-named and rmtree'd if it existed, so PID
+    reuse after a crash erased the previous run's staged recovery tree -- the
+    very copy the failure path promises to keep."""
+    _seed(ws)
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    dest = tmp_path / "live"; dest.mkdir()
+
+    decoy = dest.parent / f"{dest.name}.import-staging-{__import__('os').getpid()}"
+    decoy.mkdir()
+    (decoy / "PRECIOUS").write_text("a previous run's recovery tree")
+
+    assert _run(["import", str(arc)], dest).returncode == 0
+    assert (decoy / "PRECIOUS").read_text() == "a previous run's recovery tree"
+
+
+def test_merge_installs_each_file_atomically(ws, tmp_path):
+    """copytree writes ONTO the destination, so a crash mid-file left a live
+    file truncated -- neither the old bytes nor the new. Each file now lands via
+    a temp + os.replace, and no temp may survive."""
+    _seed(ws)
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+
+    dest = tmp_path / "live"; (dest / "memory").mkdir(parents=True)
+    (dest / "memory" / "existing.txt").write_text("KEEP ME")
+    r = _run(["import", str(arc)], dest)
+    assert r.returncode == 0
+    assert (dest / "memory" / "existing.txt").read_text() == "KEEP ME"
+    assert not list(dest.rglob("*.import-tmp")), "atomic-install temp left behind"
+    assert "installed\natomically" in r.stderr.replace("  ", " ") or \
+           "atomically" in r.stderr
+
+
+def test_declared_token_accounting_must_match_the_bytes(ws, tmp_path):
+    """Type-checking the metadata was not enough: `occurrences: 99` against one
+    real occurrence passed, and the archive installed anyway."""
+    _seed(ws)
+    good = tmp_path / "good.tar.gz"
+    assert _run(["export", "--output", str(good)], ws).returncode == 0
+    bad = tmp_path / "bad.tar.gz"
+    _forge_provenance(good, bad, lambda p: p["path_tokens"].__setitem__(
+        "occurrences", {"%%MARO_WORKSPACE%%": 99}))
+
+    dest = tmp_path / "live"; (dest / "memory").mkdir(parents=True)
+    (dest / "memory" / "keep.txt").write_text("PRECIOUS")
+    r = _run(["import", str(bad)], dest)
+    assert r.returncode != 0
+    assert "does not match its contents" in (r.stderr + r.stdout)
+    assert (dest / "memory" / "keep.txt").read_text() == "PRECIOUS"
+
+
+def test_a_bare_root_reference_stays_absolute_and_is_announced(ws, tmp_path):
+    """The narrow boundary rule's deliberate cost. A silent no-op would be
+    indistinguishable from broken, so the residue is counted out loud."""
+    (ws / "memory" / "notes.md").write_text(f"lives at {ws}\nchild {ws}/runs/a\n")
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    dest = tmp_path / "live"; dest.mkdir()
+    r = _run(["import", str(arc)], dest)
+    assert r.returncode == 0
+    body = (dest / "memory" / "notes.md").read_text()
+    assert f"child {dest}/runs/a" in body          # child path is portable
+    assert f"lives at {ws}" in body                # bare root deliberately not
+    assert "remain\nabsolute" in r.stderr.replace("  ", " ") or \
+           "remain absolute" in r.stderr or "deliberately" in r.stderr

@@ -82,20 +82,36 @@ ALIASES: Dict[str, Tuple[str, ...]] = {
 }
 
 
-# A root only ends where a path component ends. Defined POSITIVELY: the match
-# must be followed by one of these delimiters, or by end of data. The first
-# version listed the bytes that CONTINUE a component instead, which is an open
-# set -- it named ASCII only, so `/ownedé/x` (a different directory) matched on
-# its leading UTF-8 byte and had its evidence rewritten (round 2, 2026-08-20).
-# Anything not named here -- any high byte, `%`, `\`, `-`, `.`, alphanumerics --
-# continues the component and blocks the match. That errs toward NOT
-# substituting, which leaves an absolute path: the status quo, never data loss.
-_DELIMITERS = rb"/\s\"'`,;:()\[\]{}<>|=*?!&\$@#\n\r\t"
+# A root only ends where a path component provably ends. In a RAW BYTE STREAM
+# there are exactly two such places: a `/`, and end-of-data. Every other byte
+# is legal inside a POSIX filename, so treating it as a boundary rewrites a
+# DIFFERENT path -- and when that path is a scavenge hit or a fence violation,
+# it is evidence.
+#
+# Three review rounds each found this rule wrong one level deeper: a raw
+# bytes.replace (round 1), then an ASCII continuation BLOCKLIST that let
+# `/ownedé/x` through (round 2), then a delimiter ALLOWLIST containing `?`,
+# `#`, `!`, space and quote -- all legal filename bytes -- so `/owned?evil/x`
+# was still rewritten (round 3). The lesson is not a better byte set. It is
+# that deciding whether bytes are a path at all needs the containing format,
+# which this layer does not have.
+#
+# So the rule is now only what can be proven without that knowledge. The cost
+# is real and deliberate: a quote-terminated reference to the root ITSELF
+# (`{"root": "/owned"}`) is no longer substituted and stays absolute. That is a
+# silent no-op, which this project treats as the SAFE direction -- an absolute
+# path is the status quo, while a rewritten one is destroyed evidence. Child
+# paths (`/owned/runs/a`), which are the overwhelming majority of references we
+# own, are unaffected because a `/` follows the root.
+# `\Z` not `$`: in Python `$` also matches just before a trailing newline,
+# and `\n` is itself a legal (if perverse) POSIX filename byte -- so `$`
+# reintroduces the exact false-positive class this rule exists to close.
+_BOUNDARY = rb"(?=/|\Z)"
 
 
 @lru_cache(maxsize=256)
 def _boundary_re(root: str):
-    return re.compile(re.escape(root.encode()) + rb"(?=[" + _DELIMITERS + rb"]|$)")
+    return re.compile(re.escape(root.encode()) + _BOUNDARY)
 
 
 class TokenCollision(RuntimeError):

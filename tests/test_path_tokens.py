@@ -135,19 +135,36 @@ def test_local_map_never_emits_an_alias():
 # shipped and a negative control, so "found 0" is not taken on trust.
 
 @pytest.mark.parametrize("payload,should_match", [
-    (b"/owned/runs/a",        True),   # real child path
-    (b"/owned",               True),   # the root itself, bare
-    (b'"/owned/x"',           True),   # inside a JSON string
-    (b"/owned\n",             True),   # end of line
-    (b"/owned-other/x",       False),  # DIFFERENT path, shares a prefix
-    (b"/ownedX/x",            False),
-    (b"/owned.bak/x",         False),
-    (b"/owned_2/x",           False),
+    # The ONLY two provable boundaries in a raw byte stream:
+    (b"/owned/runs/a", True),      # followed by `/`
+    (b'"/owned/x"', True),         # ditto, inside a JSON string
+    (b"/owned", True),             # end of data
+    # Everything else is a legal POSIX filename byte, so the root did NOT end
+    # there and the path is a DIFFERENT one. Three review rounds each found a
+    # byte in this list being treated as a boundary.
+    (b"/owned-other/x", False), (b"/ownedX", False), (b"/owned.bak", False),
+    (b"/owned_2/x", False),
+    ("/ownedé/x".encode(), False), (b"/owned\xff\xfe", False),   # round 2
+    (b"/owned?evil/x", False), (b"/owned#e", False),             # round 3
+    (b"/owned evil", False), (b"/owned!x", False), (b'/owned"x', False),
+    (b"/owned)", False), (b"/owned,", False), (b"/owned:", False),
+    (b"/owned\n", False),          # `$` would match here; `\Z` must not
+    (b"/owned%2Fchild", False), (b"/owned\\child", False),
 ])
-def test_substitution_requires_a_real_path_boundary(payload, should_match):
-    """The owned-vs-observed guarantee rests entirely on this. A bare
-    bytes.replace rewrote `/owned-other/violation.txt` -- a fence violation is
-    evidence, and the absolute string IS the finding."""
+def test_only_slash_and_end_of_data_end_a_root(payload, should_match):
+    """The invariant, not the instances.
+
+    A root ends where a path component provably ends, and in raw bytes that is
+    only `/` or end-of-data. Every other byte is legal inside a POSIX filename,
+    so treating it as a boundary rewrites a different path -- and when that path
+    is a scavenge hit or a fence violation, it is evidence.
+
+    Rounds 1, 2 and 3 each found this rule wrong one level deeper (raw replace,
+    then an ASCII blocklist, then a delimiter allowlist containing `?`, `#`,
+    `!`, space and quote). The cost of the narrow rule is deliberate: a
+    quote-terminated bare root is no longer substituted and stays absolute --
+    a silent no-op, which is the safe direction here.
+    """
     m = pt.build_map({"workspace_root": "/owned"}, aliases=False)
     out, n = m.substitute(payload)
     assert bool(n) is should_match, (payload, out)
@@ -184,24 +201,3 @@ def test_canonical_spellings_round_trip_byte_identically():
     assert back == src
 
 
-@pytest.mark.parametrize("payload,should_match", [
-    (b"/owned/child", True), (b"/owned", True), (b'"/owned/x"', True),
-    (b"/owned\n", True), (b"/owned ", True), (b"/owned)", True),
-    (b"/owned,", True), (b"/owned:", True),
-    ("/ownedé/x".encode(), False),          # non-ASCII component -- round 2
-    ("/ownedñ".encode(), False),
-    (b"/owned\xff\xfe", False),             # arbitrary high bytes
-    (b"/owned%2Fchild", False),             # percent-encoded, not a boundary
-    (b"/owned\\child", False),              # backslash is a legal POSIX name byte
-    (b"/owned-other/x", False), (b"/ownedX", False), (b"/owned.bak", False),
-])
-def test_boundary_is_defined_positively_not_by_an_ascii_blocklist(
-        payload, should_match):
-    """The first fix listed the bytes that CONTINUE a component -- an open set
-    that named ASCII only, so `/ownedé/x` matched on its leading UTF-8 byte and
-    had its evidence rewritten. Boundaries are now an explicit delimiter set."""
-    m = pt.build_map({"workspace_root": "/owned"}, aliases=False)
-    out, n = m.substitute(payload)
-    assert bool(n) is should_match, (payload, out)
-    if not should_match:
-        assert out == payload

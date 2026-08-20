@@ -376,3 +376,59 @@ isolation: a forged archive must leave a sentinel file byte-unchanged, must not
 move the workspace aside under `--clean`, must not leave a staging tree, and a
 good archive must still import — the negative control proving the refusals are
 not refusing everything.
+
+---
+
+## Round 3, 2026-08-20 — the boundary rule, narrowed to what is provable
+
+Round 3 found six HIGHs, **all six in round 2's fix layer**. Three consecutive
+rounds have now found real defects in the previous round's fixes.
+
+### The finding that mattered was the pattern, not any one defect
+
+Each round found the boundary rule wrong, one level deeper:
+
+| round | rule | what got through |
+|---|---|---|
+| 1 | raw `bytes.replace` | `/owned-other/violation.txt` |
+| 2 | ASCII continuation **blocklist** | `/ownedé/x` — high bytes read as boundaries |
+| 3 | delimiter **allowlist** | `/owned?evil/x`, `/owned evil`, `/owned#e` — all legal POSIX filename bytes |
+
+The lesson is not a better byte set. **In a raw byte stream only `/` and
+end-of-data are provable component boundaries**; every other byte is legal
+inside a POSIX filename, so deciding whether bytes are a path at all requires
+the containing format, which this layer does not have.
+
+So the rule is now only what can be proven: `(?=/|\Z)` — and `\Z`, not `$`,
+because Python's `$` also matches before a trailing newline and `\n` is itself
+a legal filename byte, which would reintroduce the same class.
+
+**The cost is real, deliberate, and announced.** A bare root reference
+(`lives at /src/ws`, `{"root": "/src/ws"}`) is no longer substituted and stays
+absolute. Child paths — the overwhelming majority of what we own — are
+unaffected, since a `/` follows the root. Import counts and prints the residue,
+because a silent no-op is indistinguishable from broken.
+
+**A consequence worth stating:** the legacy `path_rewrite` must NOT run over a
+tokenized archive. It is a raw byte replace, so it would rewrite exactly what
+the narrow rule declined to touch — undoing the protection. Tokenized archives
+now skip it entirely and report that they did.
+
+### The other five, all introduced by round 2's restructure
+
+| # | Defect | Fix |
+|---|---|---|
+| R3-H2 | Staging was PID-named and `rmtree`'d if present, so PID reuse erased the previous run's staged recovery tree — the copy the failure path promises to keep | `tempfile.mkdtemp` — atomically created, unpredictable, never adopts or deletes a path it did not create |
+| R3-H3 | `--clean`'s two renames are not a transaction: a failure after the first left the workspace **pathname absent** while the handler printed "nothing was removed" | rollback renames the aside copy back; if that also fails, both paths are named and neither is deleted |
+| R3-H4 | The merge used `copytree`, which writes onto the destination — a crash mid-file left a live file truncated, so the claim that a crash "can only leave a partial copy of GOOD data" was false | each regular file installs via a same-directory temp + `os.replace`; every destination is wholly old or wholly new. The merge **as a whole** is still not transactional, and that bound is now stated rather than implied |
+| R3-H5 | "The first and ONLY mutation" was over-broad — meta staging, shape verification, custody and `--apply-meta` all run after install | claim scoped to "the first mutation of the workspace CONTENTS", with the post-install writes named |
+| R3-H6 | Metadata was type-checked but never reconciled with the bytes: `occurrences: 99` against one real occurrence passed, a declared member containing no token passed, a missing member only warned | accounting reconciled against actual expansions **before** install; any mismatch refuses while still in staging |
+
+### What changed in how this is tested
+
+Per the round-3 judgment, the boundary tests were collapsed from two
+instance-based parametrisations into **one invariant test** — "only `/` and
+end-of-data end a root" — carrying every shape all three rounds found, so a
+fourth variant of the same mistake fails immediately rather than needing a new
+fixture. That is the general lesson from three rounds: each fix landed at the
+layer the finding named rather than at the invariant the finding implied.

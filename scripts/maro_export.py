@@ -74,6 +74,7 @@ import io
 import json
 import os
 import shutil
+import tempfile
 import re
 import sys
 import tarfile
@@ -1419,10 +1420,14 @@ def import_workspace(
         # failure anywhere below leaves the workspace exactly as it was --
         # which is what makes "fails closed" true of the filesystem and not
         # just of the process (round 2, 2026-08-20).
-        _stage = ws.with_name(ws.name + f".import-staging-{os.getpid()}")
-        if _stage.exists():
-            shutil.rmtree(_stage, ignore_errors=True)
-        _stage.mkdir(parents=True)
+        # Atomically created and unpredictable. The first version used a
+        # PID-derived name and rmtree'd it if it already existed, which meant
+        # PID reuse after a crash silently deleted the previous run's staged
+        # tree -- exactly the recovery copy the failure path promises to keep
+        # -- and a same-named directory belonging to anyone else. Never adopt,
+        # never delete, a path we did not create (round 3).
+        _stage = Path(tempfile.mkdtemp(
+            prefix=ws.name + ".import-staging-", dir=str(ws.parent)))
         _install_target, ws = ws, _stage
         ws.mkdir(parents=True, exist_ok=True)
 
@@ -1485,6 +1490,7 @@ def import_workspace(
             # promised to preserve.
             _declared = set(_tok_meta.get("members") or [])
             _staged: list = []
+            _staged_pairs_zero: list = []
             _missing: list = []
             for _m, _rel in safe_members:
                 if not _m.isreg():
@@ -1505,11 +1511,47 @@ def import_workspace(
                 if _c:
                     _staged.append((_abs, _new))
                     tok_expanded += _c
+                else:
+                    # Declared as tokenized but holding no token: either the
+                    # manifest lies or the bytes were corrupted in transit.
+                    _staged_pairs_zero.append((_abs, 0))
                 _declared.discard(_key)
             if _declared:
                 _missing = sorted(_declared)
-            # Write only after every member has been read and transformed, so
-            # a failure mid-pass cannot leave the workspace half-expanded.
+            # Reconcile the declared accounting against what the BYTES
+            # actually contained. Type-checking the metadata was not enough:
+            # `occurrences: 99` against one real occurrence passed, a declared
+            # member containing zero tokens passed, and a missing declared
+            # member only warned and installed anyway (round 3). We are still
+            # in staging here, so refusing costs nothing.
+            _recon = []
+            if _missing:
+                _recon.append(
+                    f"{len(_missing)} declared tokenized member(s) absent from "
+                    f"the archive: {_missing[:5]}")
+            _declared_occ = sum(int(v) for v in
+                                (_tok_meta.get("occurrences") or {}).values())
+            if _declared_occ and _declared_occ != tok_expanded:
+                _recon.append(
+                    f"declared {_declared_occ} token occurrence(s) but expanded "
+                    f"{tok_expanded}")
+            _inert = [str(a) for a, _n in _staged_pairs_zero]
+            if _inert:
+                _recon.append(
+                    f"{len(_inert)} declared member(s) contained no token: "
+                    f"{_inert[:5]}")
+            if _recon:
+                print("Error: archive token accounting does not match its "
+                      "contents, refusing to install:", file=sys.stderr)
+                for _r in _recon:
+                    print(f"  - {_r}", file=sys.stderr)
+                print(f"Nothing was changed. Staged tree left at {ws}.",
+                      file=sys.stderr)
+                sys.exit(1)
+
+            # Write only after every member has been read, transformed and
+            # reconciled, so a failure mid-pass cannot leave a half-expanded
+            # staging tree either.
             for _abs, _new in _staged:
                 _abs.write_bytes(_new)
             print(f"  path tokens: expanded {tok_expanded} occurrence(s) in "
@@ -1526,7 +1568,43 @@ def import_workspace(
                       f"the canonical one -- those are NOT byte-identical to "
                       f"the source: {sorted(_alias)}", file=sys.stderr)
 
-        if rewrite_paths and prov is not None:
+        # A v3 archive's token lane is AUTHORITATIVE, so the legacy rewriter
+        # must not run over the same tree. Otherwise everything the narrow
+        # boundary rule deliberately declined to substitute -- `/owned?evil`,
+        # `/ownedé`, a quote-terminated bare root -- gets rewritten anyway by
+        # path_rewrite's raw byte replace, which is precisely the evidence
+        # destruction the narrow rule exists to prevent. Residue staying
+        # absolute is the intended outcome, not a gap for the old tool to fill.
+        if _tok_meta.get("applied") is True:
+            # Count what stayed absolute so the deliberate loss is VISIBLE.
+            # The narrow boundary rule only substitutes a root followed by `/`
+            # or end-of-data, so a bare root reference (`lives at /src/ws\n`,
+            # `{"root": "/src/ws"}`) is left alone on purpose. Silent would be
+            # indistinguishable from broken.
+            _residue = 0
+            try:
+                _src_roots = [str(v) for v in
+                              ((prov or {}).get("source") or {}).values() if v]
+                for _m2, _rel2 in safe_members:
+                    if not _m2.isreg():
+                        continue
+                    try:
+                        _b = (ws / Path(*_rel_parts(_rel2))).read_bytes()
+                    except OSError:
+                        continue
+                    for _r in _src_roots:
+                        _residue += _b.count(_r.encode())
+            except Exception:
+                _residue = -1
+            print("  path rewrite: skipped — this archive is token-expanded "
+                  "and the legacy rewriter would re-rewrite exactly what the "
+                  "boundary rule declined to touch", file=sys.stderr)
+            if _residue > 0:
+                print(f"  NOTE: {_residue} source-root occurrence(s) remain "
+                      f"absolute — references that end at something other than "
+                      f"`/` (a bare root in prose or quotes) are deliberately "
+                      f"not substituted", file=sys.stderr)
+        elif rewrite_paths and prov is not None:
             import path_rewrite
             rw_map = path_rewrite.build_map(
                 prov["source"],
@@ -1563,10 +1641,18 @@ def import_workspace(
             print("  path rewrite: disabled (--no-rewrite-paths) — embedded "
                   "paths still name the source machine", file=sys.stderr)
 
-        # --- install: the first and only mutation of the live workspace ---
-        # Everything above ran against the staging tree. Only now, with every
-        # member extracted, validated, expanded and rewritten, does the real
-        # workspace change.
+        # --- install: the first mutation of the workspace CONTENTS --------
+        # Everything above ran against the staging tree, so any refusal or
+        # failure before this point leaves the workspace untouched.
+        #
+        # Scoped honestly (round 3 caught the earlier wording claiming "the
+        # first and ONLY mutation"): the import-meta staging, shape
+        # verification, the custody append and --apply-meta all run AFTER this
+        # point and write under <ws>/.import-meta (and, for --apply-meta, the
+        # user config). Those are deliberately post-install -- they record what
+        # this import DID, which is not knowable before it happens -- but they
+        # are mutations, and a failure in them leaves an installed workspace
+        # with incomplete provenance rather than an untouched one.
         _staged_tree, ws = ws, _install_target
         try:
             if ws.exists() and any(ws.iterdir()):
@@ -1581,7 +1667,25 @@ def import_workspace(
                     print(f"--clean: existing workspace moved aside to {aside} "
                           f"(nothing deleted; rename back to recover)",
                           file=sys.stderr)
-                    _staged_tree.rename(ws)
+                    try:
+                        _staged_tree.rename(ws)
+                    except Exception:
+                        # The two renames are not one transaction. Without this
+                        # rollback a failure here left the workspace PATHNAME
+                        # absent while the handler printed "nothing was
+                        # removed" -- materially false (round 3).
+                        if not ws.exists():
+                            try:
+                                aside.rename(ws)
+                                print("  install failed after the workspace was "
+                                      "moved aside — rolled it back into place",
+                                      file=sys.stderr)
+                            except Exception:
+                                print(f"  install failed AND rollback failed — "
+                                      f"your workspace is at {aside}, the new "
+                                      f"tree at {_staged_tree}. Neither was "
+                                      f"deleted.", file=sys.stderr)
+                        raise
                 else:
                     print(
                         "WARNING: importing into a non-empty workspace — this "
@@ -1590,13 +1694,35 @@ def import_workspace(
                         "to move the existing workspace aside first.",
                         file=sys.stderr,
                     )
-                    # Per-file merge. Not atomic as a whole -- a merge into a
-                    # live tree cannot be -- but every byte written here has
-                    # already been validated and transformed, so a crash can
-                    # only leave a partial copy of GOOD data, never a
-                    # half-expanded or unvalidated one.
-                    shutil.copytree(_staged_tree, ws, dirs_exist_ok=True,
-                                    symlinks=True)
+                    # Per-file merge, each file installed atomically. The
+                    # first version used copytree, which writes onto the
+                    # destination path -- so a crash mid-file left a live file
+                    # TRUNCATED: neither the old bytes nor the new ones. The
+                    # claim that a crash "can only leave a partial copy of GOOD
+                    # data" was therefore false (round 3). Now every regular
+                    # file lands via a same-directory temp + os.replace, so each
+                    # destination is wholly old or wholly new at every instant.
+                    # The MERGE AS A WHOLE is still not transactional -- a crash
+                    # can leave some files updated and others not -- and that
+                    # bound is real and stated, not hidden.
+                    _merged = 0
+                    for _src in sorted(_staged_tree.rglob("*")):
+                        _dst = ws / _src.relative_to(_staged_tree)
+                        if _src.is_dir() and not _src.is_symlink():
+                            _dst.mkdir(parents=True, exist_ok=True)
+                            continue
+                        _dst.parent.mkdir(parents=True, exist_ok=True)
+                        if _src.is_symlink():
+                            if _dst.is_symlink() or _dst.exists():
+                                _dst.unlink()
+                            os.symlink(os.readlink(_src), _dst)
+                            continue
+                        _tmp = _dst.with_name(_dst.name + ".import-tmp")
+                        shutil.copy2(_src, _tmp)
+                        os.replace(_tmp, _dst)
+                        _merged += 1
+                    print(f"  merged {_merged} file(s), each installed "
+                          f"atomically", file=sys.stderr)
                     shutil.rmtree(_staged_tree, ignore_errors=True)
             else:
                 if ws.exists():
