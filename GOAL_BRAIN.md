@@ -773,6 +773,45 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 *Entries 2026-04-23 → 2026-07-14 rotated to `docs/history/goal-brain-decisions-2026-04-to-07.md` (2026-08-16). The archive is part of this append-only log — rotation, not deletion; dev-recall ingests it.*
 
+- **2026-08-20 (cheap-tier step execution DEFERRED; and dev-recall missed a
+  decree — Jeremy):** two calls in one message. (1) **Deferral:** *"let's revisit
+  during an optimization pass in the future… no need to keep that bookmark front
+  and center, that can live in the later."* The 2026-07-20 MID-floor decree
+  **stands**; the re-test is a named future revisit, not an open question. The
+  READING_QUEUE row opened the same day was moved to Done, and the BACKLOG item
+  demoted from the Actionable Stack to Vision/Deferred. (2) **Direction for when
+  it comes up:** *"We should A/B test that, gather data, and let maro itself
+  decide what models to use; probably ideally let it learn and train, though that
+  might be too complicated."* So the target is maro selecting its own models from
+  measured outcomes — explicitly **not** a hand-tuned step_type→tier policy
+  table, which is what the prior day's entry had implied. (3) **What is actually
+  under-tested,** narrowing the empirical question: *"IIRC we settled on mid model
+  + low thinking to keep it 'cheap', but possible we didn't test it as thoroughly
+  as we should have. I think at the time it seemed heavy for something we could
+  throw a little spend at."*
+
+  **The finding he flagged as worrying, and it is the more important half:**
+  *"how we missed this (and recall didn't know anything about that arc) that makes
+  me a little worried as well."* Diagnosed same day. **Root cause is ranking, not
+  coverage** — the arc was in the index throughout; a query in the code comment's
+  vocabulary ("execution floor MID per-step cheap downgrade removed") returned
+  nothing useful, while the record's own words ("execution defaults unified at
+  MID") return the right doc as top hit. That is the **already-measured MH #8 gap**
+  (paraphrase queries hit@1 **2–6%** vs 46–80% lexical) landing on a real
+  question, which upgrades it from a benchmark number to a demonstrated cost: a
+  wrong answer caught only because Jeremy personally remembered a month-old
+  decision. Treat as evidence for the memory-as-module bake-off (MILESTONES arc -1).
+
+  **A second, independent defect found and FIXED the same day:** nothing ever
+  triggered `correspondence ingest` — manual-only, so the index sat **5 days
+  stale** and had entirely missed the GOAL_BRAIN rotation (`20a917ef`, 556KB→173KB
+  into `docs/history/goal-brain-*.md`; all three rotated files held **0 chunks**).
+  For four days the compiled record's own history was invisible to recall by
+  construction. `scripts/land.sh` now re-ingests after every successful push
+  (~0.4s, non-fatal). Rotation remains a standing hazard: moved content is only as
+  findable as the next ingest, and nothing verifies a rotation preserved
+  retrievability.
+
 - **2026-08-19 (token/time weight is a design defect, not a cost of doing
   business — Jeremy):** *"I'm painfully aware our orchestration is token (and
   time) heavy. I think when we get it closer to right that it won't need to be.

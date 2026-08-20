@@ -44,6 +44,50 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
+
+**The incident.** Asked whether we could route step work to cheap models, I
+reported that per-step tiering was never wired. Wrong: it shipped as Phase 57
+and was removed 2026-07-21 under the MID-floor decree. Jeremy caught it from
+memory. `dev-recall` — the tool whose entire job is "why did we decide X" — did
+not surface the arc, and I only found it via `git log -S classify_step_model`.
+His concern is the right one: *"how we missed this (and recall didn't know
+anything about that arc) that makes me a little worried as well."*
+
+**Root cause: vocabulary mismatch under lexical-only retrieval.** The content
+was in the index the whole time. I queried in the vocabulary of the *code
+comment* — "execution floor MID per-step cheap downgrade removed" — and got
+nothing useful. The record uses different words: *"execution defaults unified at
+MID"*, *"local-model wiring removed"*. Querying with those returns the right doc
+as the **top hit** (`docs/history/2026-07-21-chunk1-adversarial-review.md`). BM25
+has no bridge between the two phrasings.
+
+**This is the already-measured MH #8 gap, biting on a real question.** The
+memory_quality eval scores paraphrase queries at **hit@1 2–6%** vs 46–80% on the
+lexical lane. This incident converts that from a benchmark number into a worked
+example with a cost attached: a wrong answer to Jeremy, caught only because he
+personally remembered a decision from a month earlier. That is not a
+reproducible safety net. **Recommend this be treated as evidence for the
+memory-as-module bake-off (MILESTONES arc -1)**, which is exactly the axis a
+third-party store would improve.
+
+**Second, independent defect — the index silently rots. FIXED 2026-08-20.**
+Nothing triggered ingest: it was manual-only per CLAUDE.md, so nobody ran it.
+Found at **5 days stale**, and it had missed the GOAL_BRAIN rotation entirely —
+`20a917ef` moved 556KB→173KB of decisions and journal into
+`docs/history/goal-brain-*.md`, and all three rotated files held **0 chunks**.
+So for four days the compiled record's own history was invisible to recall by
+construction. Re-ingest recovered them (47/21/23 chunks). Fixed at the source:
+`scripts/land.sh` now runs `correspondence ingest --since 1d` after a successful
+push (~0.4s over 817 files, non-fatal, quiet unless it errors). Landing is when
+repo docs change, so it is the honest trigger.
+
+**Still open after that fix:** the ranking half. A rotation-shaped hazard also
+remains — content moved between files is only as findable as the next ingest,
+and nothing verifies that a rotation preserved retrievability. Worth a cheap
+guard: after any doc rotation, query for a distinctive string from the moved
+content and confirm it still returns.
+
 ### The "async tail" is not async — it is reordering. Make it a real process spawn (Jeremy, 2026-08-20)
 
 Jeremy: *"That's not really async if we're blocking the CLI call right? is this
@@ -90,60 +134,6 @@ suggest the answer is already partly there).
 **Watch-item inherited from Phase 1** (still open, listed under the original
 async-tail entry): `handle()`'s `_hid=None` exception path can strand registered
 callables. A spawn design should make stranding impossible rather than rarer.
-
-### Per-step cheap tiering — REMOVED BY DECREE 2026-07-20, not unfinished. Re-test, don't rebuild (corrected 2026-08-20)
-
-**This item previously said "the classifier and the tier selector exist and are
-not connected — a wiring gap, not missing infrastructure." That was wrong** and
-is corrected here, because it would send the next session off to build something
-that was deliberately deleted.
-
-**What actually happened.** Per-step tiering *shipped* — Phase 57, "Adaptive
-Model Tiering", 2026-04-06 (`docs/history/ROADMAP_ARCHIVE.md`): `classify_step_model`
-chose a tier from step content, plus retry- and verify-failure escalation. It was
-then **deliberately removed** on 2026-07-21 in `b6fd4881` (authored by Jeremy)
-under the **2026-07-20 decree "execution defaults unified at MID"**. From that
-commit message: *"scope-lift block + classify_step_model cheap-downgrade deleted
-… the user/CONFIG.md template no longer ships the cheap pin that silently
-recreated the split."* `classify_step_model` has 0 hits in `src/` today.
-
-**What survives** is escalation-only, and it is intact: `_step_tier_overrides`
-and `_session_tier_floor` in `loop_execute.py`, resolved by `_select_step_adapter`
-(`loop_execute.py:126`). Its own comment states the rule — *"Execution floor is
-MID (2026-07-20 decree — per-step cheap downgrade removed); only a raised session
-floor re-tiers here."* So tiers move UP from MID on failure signals and never
-DOWN on triviality. CHEAP is never selected for step work **by decree, not by
-omission.**
-
-**Why it was removed — the evidence is on record.** `docs/history/2026-03-31-factory-mode-findings.md`
-§3: factory_thin on Haiku burned **1,512K tokens vs Mode 2's 344K — 4.4×** on the
-same goal, one research step alone taking 560K, *"because Haiku lacks the output
-compression judgment that Sonnet applies."* Verdict: *"even with the fix, Haiku's
-verbosity means factory_thin on Haiku is not reliably cheaper than Mode 2 on
-Sonnet … The model cost advantage disappears."* Cheap models are verbose, and
-verbosity eats the per-token discount. A separate 2026-06-21 finding killed the
-local rung on latency (~10s/step on this box).
-
-**The idea is not dead — it was moved to where it pays.** `src/hosted_free.py` is
-live: ladder is Tier-0 deterministic → hosted-free (Groq/Gemini free tiers) →
-paid, aimed at **validation**, which that module calls the highest-volume call
-class and *"the biggest avoidable token sink."* Opt-in, default off. So cheap
-models were applied to the high-volume/low-judgment class and withdrawn from the
-low-volume/high-judgment one. That is arguably the correct resolution of the
-"cheap model does the step work" idea, not a failure of it.
-
-**Pre-registered revival trigger already exists** (`docs/LOCAL_VALIDATOR.md:17-24`):
-revive the local rung *"if the hosted free tiers churn away"* — providers cut free
-quotas, keys die, breakers trip chronically. Re-entry path = the bakeoff
-methodology in that doc + the kept corpus `tests/fixtures/validation_cases.json`
-+ the pre-2026-07-21 implementation in git history.
-
-**So the open work is a RE-TEST, not a build.** The 4.4× is a 2026-03-31 fact
-about then-current cheap models; model capability moves. The re-test is cheap
-now: replay the corpus against current CHEAP-tier models, score on
-cost-per-accepted-outcome via `step-costs.jsonl`, and compare against the
-recorded 4.4× baseline. If verbosity has closed, that is the evidence that
-reopens the decree — which is Jeremy's call to reverse, not a session's.
 
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 
@@ -3350,6 +3340,83 @@ strip-prose/fences pre-parse pass in `handle.py`'s scope path is the
 cheap fix.
 
 ## Vision / Deferred
+
+### Cheap-tier step execution — DEFERRED to a future optimization pass (Jeremy, 2026-08-20)
+
+**Status: parked deliberately, not queued.** Jeremy, 2026-08-20: *"let's revisit
+during an optimization pass in the future… no need to keep that bookmark front
+and center, that can live in the later."* Moved out of the Actionable Stack the
+same day it was written there. The MID-floor decree **stands** — this is a named
+future revisit, not an open question.
+
+**Direction for when it comes up** (his words): *"We should A/B test that, gather
+data, and let maro itself decide what models to use; probably ideally let it
+learn and train, though that might be too complicated."* The target is therefore
+**not** a hand-tuned step_type→tier policy table — it is maro selecting its own
+models from measured outcomes, with learning the choice as the stretch goal.
+Don't ship a static table and call it done.
+
+**The genuinely under-tested part**, which narrows the question: *"IIRC we
+settled on mid model + low thinking to keep it 'cheap', but possible we didn't
+test it as thoroughly as we should have. I think at the time it seemed heavy for
+something we could throw a little spend at."* So the open empirical question is
+not "should we use cheap models" — it is **whether mid + low-thinking was ever
+properly measured as the cheap configuration**, given the original call was made
+partly on not-worth-the-effort grounds rather than on data.
+
+**History that makes this a re-test, not a build (corrected 2026-08-20):**
+
+**This item previously said "the classifier and the tier selector exist and are
+not connected — a wiring gap, not missing infrastructure." That was wrong** and
+is corrected here, because it would send the next session off to build something
+that was deliberately deleted.
+
+**What actually happened.** Per-step tiering *shipped* — Phase 57, "Adaptive
+Model Tiering", 2026-04-06 (`docs/history/ROADMAP_ARCHIVE.md`): `classify_step_model`
+chose a tier from step content, plus retry- and verify-failure escalation. It was
+then **deliberately removed** on 2026-07-21 in `b6fd4881` (authored by Jeremy)
+under the **2026-07-20 decree "execution defaults unified at MID"**. From that
+commit message: *"scope-lift block + classify_step_model cheap-downgrade deleted
+… the user/CONFIG.md template no longer ships the cheap pin that silently
+recreated the split."* `classify_step_model` has 0 hits in `src/` today.
+
+**What survives** is escalation-only, and it is intact: `_step_tier_overrides`
+and `_session_tier_floor` in `loop_execute.py`, resolved by `_select_step_adapter`
+(`loop_execute.py:126`). Its own comment states the rule — *"Execution floor is
+MID (2026-07-20 decree — per-step cheap downgrade removed); only a raised session
+floor re-tiers here."* So tiers move UP from MID on failure signals and never
+DOWN on triviality. CHEAP is never selected for step work **by decree, not by
+omission.**
+
+**Why it was removed — the evidence is on record.** `docs/history/2026-03-31-factory-mode-findings.md`
+§3: factory_thin on Haiku burned **1,512K tokens vs Mode 2's 344K — 4.4×** on the
+same goal, one research step alone taking 560K, *"because Haiku lacks the output
+compression judgment that Sonnet applies."* Verdict: *"even with the fix, Haiku's
+verbosity means factory_thin on Haiku is not reliably cheaper than Mode 2 on
+Sonnet … The model cost advantage disappears."* Cheap models are verbose, and
+verbosity eats the per-token discount. A separate 2026-06-21 finding killed the
+local rung on latency (~10s/step on this box).
+
+**The idea is not dead — it was moved to where it pays.** `src/hosted_free.py` is
+live: ladder is Tier-0 deterministic → hosted-free (Groq/Gemini free tiers) →
+paid, aimed at **validation**, which that module calls the highest-volume call
+class and *"the biggest avoidable token sink."* Opt-in, default off. So cheap
+models were applied to the high-volume/low-judgment class and withdrawn from the
+low-volume/high-judgment one. That is arguably the correct resolution of the
+"cheap model does the step work" idea, not a failure of it.
+
+**Pre-registered revival trigger already exists** (`docs/LOCAL_VALIDATOR.md:17-24`):
+revive the local rung *"if the hosted free tiers churn away"* — providers cut free
+quotas, keys die, breakers trip chronically. Re-entry path = the bakeoff
+methodology in that doc + the kept corpus `tests/fixtures/validation_cases.json`
++ the pre-2026-07-21 implementation in git history.
+
+**So the open work is a RE-TEST, not a build.** The 4.4× is a 2026-03-31 fact
+about then-current cheap models; model capability moves. The re-test is cheap
+now: replay the corpus against current CHEAP-tier models, score on
+cost-per-accepted-outcome via `step-costs.jsonl`, and compare against the
+recorded 4.4× baseline. If verbosity has closed, that is the evidence that
+reopens the decree — which is Jeremy's call to reverse, not a session's.
 
 ### Codex (and maybe Grok) as primary executor — gated revisit of the stay-first-party call (Jeremy, 2026-08-11)
 

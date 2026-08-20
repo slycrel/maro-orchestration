@@ -13,10 +13,17 @@ of another process to make it truly async in cases like that? Seems
 like something that's solveable with a little effort."* Design + the
 module-identity rationale for why a separate process is the clean fix
 (not a workaround) are in BACKLOG § "The 'async tail' is not async".
-Parked alongside it, awaiting Jeremy's read (READING_QUEUE row
-2026-08-20): whether to re-test cheap-tier step execution against the
-recorded 4.4× baseline — that one needs him because it means reversing
-his own MID-floor decree.
+Cheap-tier step execution was considered alongside it and **parked by
+Jeremy the same day** — revisit during a future optimization pass, not a
+current bookmark (BACKLOG § Vision/Deferred). The MID-floor decree
+stands. When it does come up the shape is his: A/B with data, and let
+maro pick its own models rather than us hand-tuning a policy table.
+
+Also queued from the same pass: **dev-recall missed a decree we had
+written down** — lexical retrieval failed on a paraphrased query while
+the content sat in the index (BACKLOG, Actionable Stack). The staleness
+half is fixed (land.sh now re-ingests); the ranking half is live
+evidence for the memory-as-module bake-off, arc -1 below.
 
 Last updated: 2026-08-15 — **Treasure-map arc (multi-chunk build; this
 file resumes as its queue per the 08-11 note below).** Jeremy's decree:

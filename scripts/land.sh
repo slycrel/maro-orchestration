@@ -309,6 +309,22 @@ if gh auth status >/dev/null 2>&1 && [ -x "$WATCHER" ]; then
     echo "ci-watch: spawned for ${SHA} (log: /tmp/ci-watch.log)"
 fi
 
+# Keep dev-recall's index fresh (2026-08-20). Landing is when repo docs
+# change, so it is the honest moment to re-ingest. Nothing triggered ingest
+# before this: it was manual-only per CLAUDE.md, so the index quietly rotted
+# — found at 5 days stale, having missed the GOAL_BRAIN rotation entirely
+# (556KB of decisions/journal moved into docs/history/goal-brain-*.md the
+# day AFTER the last ingest, so all three rotated files held 0 chunks).
+# Incremental and local: --since 1d over 817 files measures ~0.4s. Never
+# fails the land — the push already succeeded — and stays quiet unless it
+# errors, since a landing is not the place for retrieval chatter.
+CORR_PY="python3"
+[ -x "$REPO_DIR/.venv/bin/python" ] && CORR_PY="$REPO_DIR/.venv/bin/python"
+if ! (cd "$REPO_DIR" && PYTHONPATH=src "$CORR_PY" -m correspondence ingest \
+        --since 1d >/dev/null 2>&1); then
+    echo "  (dev-recall ingest skipped; refresh with: PYTHONPATH=src python3 -m correspondence ingest --since 1d)"
+fi
+
 # Post-land dev-status line (2026-08-16, Jeremy: "I'm often trapped with less
 # visibility in where we actually are at the high level"). Landing is exactly
 # when project state changes, so this is the honest moment to recompute — but
