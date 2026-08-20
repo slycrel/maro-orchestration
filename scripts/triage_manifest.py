@@ -28,7 +28,8 @@ CATEGORIES: dict[str, str] = {
     "stream": "stream/LLM-output parser — nothing on disk is being rebuilt",
     "derived-index": "derived-index rebuild — the written file is generated FROM "
                      "the source, and regenerating is the repair",
-    "read-only": "read-only loader — flagged via the call-graph leg; it drops, "
+    "read-only": "read-only loader or pure predicate — flagged via the "
+                 "call-graph leg; it drops or merely counts, "
                  "but nothing writes the result back, so the bytes survive "
                  "(these are the silent-drop census's business, not this scan's)",
     "append-importer": "append-only importer — rows are appended to a LOCAL "
@@ -56,7 +57,8 @@ _add("markdown", """
  convo_miner.py:scan_maro_memory orch_items.py:parse_next orch_items.py:append_next_items
  thread_brain.py:_append_under pack.py:_append_conflicts_note
  pack.py:_append_conflicts_note.add_once pack.py:_review_section
- loop_report.py:_parse_reading_queue""")
+ loop_report.py:_parse_reading_queue
+ playbook.py:_replace_alarm playbook.py:_expire_text playbook.py:_dedup_text""")
 _add("subprocess", """
  heartbeat.py:_is_interactive_session_active
  build_loop_runner.py:_worker_session_already_active
@@ -71,6 +73,7 @@ _add("derived-index", """
  memory_ledger.py:_update_memory_index loop_report.py:_render_devlog_html
  portability.py:main""")
 _add("read-only", """
+ playbook.py:parse_entries playbook.py:_valid_compression
  knowledge_lens.py:load_standing_rules knowledge_lens.py:load_hypotheses
  knowledge_lens.py:_lesson_texts_by_id knowledge_lens.py:search_decisions
  evolver_scans.py:_load_baselines evolver_scans.py:_load_dated_diagnoses

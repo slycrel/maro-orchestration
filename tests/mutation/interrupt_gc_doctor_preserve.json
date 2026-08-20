@@ -23,22 +23,22 @@
   {
     "name": "interrupt preserve (poll) :: a row poll cannot parse is deleted by its rewrite",
     "file": "src/interrupt.py",
-    "anchor": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(raw)",
-    "replacement": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        pass",
+    "anchor": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        unreadable[\"n\"] += 1\n                        updated.append(raw)",
+    "replacement": "                            pending.append(Interrupt.from_dict(d))\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        unreadable[\"n\"] += 1",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt preserve (clear) :: same, on the clear path",
     "file": "src/interrupt.py",
-    "anchor": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        updated.append(raw)",
-    "replacement": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        pass",
+    "anchor": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        unreadable[\"n\"] += 1\n                        updated.append(raw)",
+    "replacement": "                            counted[\"n\"] += 1\n                        updated.append(json.dumps(d))\n                    except (json.JSONDecodeError, TypeError):\n                        unreadable[\"n\"] += 1",
     "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt announce :: an undeliverable interrupt goes unmentioned",
     "file": "src/interrupt.py",
-    "anchor": "        if dropped:\n            log.warning(\"interrupt queue: %d unreadable row(s) in %s",
-    "replacement": "        if False:\n            log.warning(\"interrupt queue: %d unreadable row(s) in %s",
+    "anchor": "                dropped += 1\n        self._warn_undeliverable(dropped)\n        return result",
+    "replacement": "                dropped += 1\n        return result",
     "tests": "tests/test_interrupt.py"
   },
   {
@@ -221,7 +221,7 @@
   {
     "name": "doctor schema :: a dict that is not a Skill wins dedup and deletes a healthy row",
     "file": "src/doctor.py",
-    "anchor": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)",
+    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)",
     "replacement": "                pass",
     "tests": "tests/test_doctor.py"
   },
@@ -229,7 +229,7 @@
     "name": "gc freed :: the byte delta is sampled outside the lock and can go negative",
     "file": "src/gc_memory.py",
     "anchor": "        locked[\"freed\"] = (len(old.encode(\"utf-8\", \"surrogateescape\"))\n                           - len(new.encode(\"utf-8\", \"surrogateescape\")))",
-    "replacement": "        locked[\"freed\"] = 0",
+    "replacement": "        locked[\"freed\"] = (len(text.encode(\"utf-8\", \"surrogateescape\"))\n                           - len(new.encode(\"utf-8\", \"surrogateescape\")))",
     "tests": "tests/test_gc_memory.py"
   },
   {
@@ -244,6 +244,69 @@
     "file": "scripts/triage_manifest.py",
     "anchor": "    untriaged = sorted(live - set(SITES))\n    stale = sorted((set(SITES) - FIXED) - live)",
     "replacement": "    untriaged = []\n    stale = sorted((set(SITES) - FIXED) - live)",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "doctor validator :: dict_to_skill is treated as validation again",
+    "file": "src/doctor.py",
+    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)\n                all_skills.append(row)",
+    "replacement": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)\n                all_skills.append(row)",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (hash) :: a row whose content cannot be hashed is admitted",
+    "file": "src/skill_types.py",
+    "anchor": "    skill = dict_to_skill(d)          # required keys, or KeyError\n    compute_skill_hash(skill)         # proves the content fields are text",
+    "replacement": "    skill = dict_to_skill(d)          # required keys, or KeyError",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor validator (finite) :: a NaN score is admitted to the dedup",
+    "file": "src/skill_types.py",
+    "anchor": "        if isinstance(v, bool) or not isinstance(v, (int, float)) \\\n                or not math.isfinite(v):\n            raise TypeError(f\"{name} must be a finite number, got {v!r}\")",
+    "replacement": "        if False:\n            raise TypeError(f\"{name} must be a finite number, got {v!r}\")",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "interrupt announce (poll) :: a row that becomes unreadable under the lock is silent",
+    "file": "src/interrupt.py",
+    "anchor": "                return []\n            self._warn_undeliverable(unreadable[\"n\"])\n            return pending",
+    "replacement": "                return []\n            return pending",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt announce (clear) :: same, on the clear path",
+    "file": "src/interrupt.py",
+    "anchor": "                return 0\n            self._warn_undeliverable(unreadable[\"n\"])\n            return counted[\"n\"]",
+    "replacement": "                return 0\n            return counted[\"n\"]",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "gc announce :: the locked count is reported as a delta again (can go negative)",
+    "file": "src/gc_memory.py",
+    "anchor": "    _announce(locked.get(\"unreadable\", unreadable))",
+    "replacement": "    _announce(locked.get(\"unreadable\", 0) - unreadable)",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "gc no-op :: a locked pass that removes nothing rewrites the file anyway",
+    "file": "src/gc_memory.py",
+    "anchor": "            locked[\"freed\"] = 0\n            return old\n        new = \"\\n\".join(kept) + (\"\\n\" if kept else \"\")",
+    "replacement": "        new = \"\\n\".join(kept) + (\"\\n\" if kept else \"\")",
+    "tests": "tests/test_gc_memory.py"
+  },
+  {
+    "name": "manifest gate wiring :: --check reports the drift and exits 0 anyway",
+    "file": "scripts/triage_manifest.py",
+    "anchor": "            return 1",
+    "replacement": "            return 0",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner framing :: split(\"\\\\n\") walks out of the detector's view again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "            if n.func.attr == \"split\" and n.args:\n                a = n.args[0]\n                if isinstance(a, ast.Constant) and a.value == \"\\n\":\n                    return True",
+    "replacement": "            if False:\n                return True",
     "tests": "tests/test_scan_destructive_rewrites.py"
   }
 ]

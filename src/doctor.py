@@ -673,7 +673,15 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
                 # plus a higher score, win the dedup, and DELETE the healthy
                 # row — confident destructive output derived from garbage.
                 # Probed: healthy skill gone, forged row kept, no warning.
-                from skill_types import dict_to_skill as _to_skill
+                #
+                # r2 answered that with dict_to_skill(), which adversarial r3
+                # (5/5 consensus) then showed is a CONSTRUCTOR, not a
+                # validator: `description=7` sails through it, the hash
+                # cannot be recomputed, and the same forgery still deleted
+                # the healthy skill. Probed: 2 rows in, only `forged` out.
+                # validate_skill_row PROVES the row before it is admitted to
+                # a decision about which rows to remove.
+                from skill_types import validate_skill_row as _to_skill
                 _to_skill(row)
                 all_skills.append(row)
             except Exception as e:

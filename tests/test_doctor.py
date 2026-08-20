@@ -493,3 +493,74 @@ class TestTheCleanupVerbValidatesRowsNotJustJson:
         assert "skgood" in ids, "a healthy skill was deleted by a row that is not a Skill"
         assert "forged" in ids, "and the unreadable row is carried, not dropped"
         assert "kept as-is" in capsys.readouterr().out.lower()
+
+
+class TestARowMustBeProvenASkillNotJustADict:
+    """Adversarial r3 (2026-08-20, 5/5 consensus HIGH — the r2 fix's own
+    regression): r2 answered "a dict is not yet a Skill" with
+    `dict_to_skill(row)`, which is a CONSTRUCTOR. Python does not enforce
+    dataclass annotations, so `description=7` sails through it, the hash
+    cannot be recomputed, `_skill_hash_is_stale` answers "not stale" for the
+    failure, and the forgery still wins the dedup and DELETES the healthy
+    skill. Probed against the r2 code: 2 rows in, only `forged` out."""
+
+    def _pair(self, tmp_path, **forged_overrides):
+        from skill_types import compute_skill_hash, dict_to_skill
+
+        healthy = _make_skill("skgood", "real skill", correct_hash=True)
+        forged = dict(healthy)
+        forged.update(id="forged", name="forged",
+                      created_at="2030-01-01T00:00:00+00:00",
+                      use_count=999, success_rate=1.0)
+        forged.update(forged_overrides)
+        # the forgery DECLARES the healthy row's hash, so it groups with it
+        forged["content_hash"] = healthy["content_hash"]
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(healthy) + "\n" + json.dumps(forged) + "\n",
+                     encoding="utf-8")
+        return f
+
+    def test_a_content_field_that_is_not_text_cannot_evict_a_healthy_row(
+            self, tmp_path, capsys):
+        f = self._pair(tmp_path, description=7)
+
+        cleanup_workspace_skills(skills_path=f)
+
+        ids = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
+        assert "skgood" in ids, "a healthy skill was deleted by a row that is not a Skill"
+        assert "forged" in ids, "and the row we could not read is carried, not dropped"
+        assert "kept as-is" in capsys.readouterr().out.lower()
+
+    def test_a_nan_score_cannot_win_a_dedup(self, tmp_path, capsys):
+        """`max()` ordering with NaN is undefined, so a NaN success_rate wins
+        or loses by position. A row whose ranking fields cannot be compared
+        must not be ranked at all."""
+        f = self._pair(tmp_path, description="test description",
+                       success_rate=float("nan"))
+        raw = f.read_text().replace("NaN", "NaN")  # json.dumps emits bare NaN
+        f.write_text(raw, encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        ids = [l for l in f.read_text().splitlines() if l.strip()]
+        assert any('"skgood"' in l for l in ids), "the healthy row lost to a NaN"
+        assert any('"forged"' in l for l in ids), "the NaN row was destroyed"
+
+    def test_a_list_field_that_is_a_string_cannot_evict_a_healthy_row(
+            self, tmp_path, capsys):
+        f = self._pair(tmp_path, description="test description",
+                       trigger_patterns="not-a-list")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        ids = [json.loads(l)["id"] for l in f.read_text().splitlines() if l.strip()]
+        assert "skgood" in ids
+        assert "forged" in ids
+
+    def test_every_row_in_the_live_shape_still_validates(self):
+        """The negative control: a guard that strands everything is not a
+        guard, it is an outage. This is the shape all 423 rows in the live
+        store carry."""
+        from skill_types import validate_skill_row
+
+        assert validate_skill_row(_make_skill("sk", "n", correct_hash=True)).id == "sk"

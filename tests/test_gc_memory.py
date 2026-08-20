@@ -421,28 +421,40 @@ class TestFreedBytesDescribeTheRewrite:
 
     def test_a_concurrent_retained_append_does_not_make_freed_negative(
             self, monkeypatch, tmp_path):
+        """The append must land AFTER the pre-lock size sample, or this test
+        cannot fail.
+
+        Adversarial r3 (2026-08-20, Minimalist, probed): the first version of
+        this test appended inside `_store_text`, which in the pre-fix code
+        ran BEFORE `original_size = path.stat().st_size` — so the old
+        implementation's own snapshot already included the big row and
+        reported a positive `freed`. The test passed on the exact defect it
+        names. Hooking `locked_rmw` puts the append in the real window:
+        after the size sample, before the rewrite.
+        """
         import gc_memory as _gc
+        import file_lock as _fl
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = _mem_dir(tmp_path)
         _write_outcome(mem, days_ago=200)
         big = json.dumps({"goal": "x" * 4000, "status": "done",
                           "recorded_at": datetime.now(timezone.utc).isoformat()})
-        real = _gc._store_text
+        real_rmw = _fl.locked_rmw
         landed = {}
 
-        def racing(path):
-            text = real(path)
-            from file_lock import locked_append
-            locked_append(path, big)
+        def racing_rmw(path, fn, *a, **kw):
+            _fl.locked_append(path, big)
             landed["yes"] = True
-            return text
+            return real_rmw(path, fn, *a, **kw)
 
-        monkeypatch.setattr(_gc, "_store_text", racing)
+        monkeypatch.setattr(_fl, "locked_rmw", racing_rmw)
         total, removed, freed = _gc._gc_outcomes(retain_days=90, dry_run=False)
 
         assert landed, "the racing hook never ran — test is vacuous"
         assert removed == 1
         assert freed > 0, f"a collection that removed a row reported freed={freed}"
+        assert (mem / "outcomes.jsonl").read_text().count("xxxx") > 0, (
+            "the concurrent retained row was destroyed by the rewrite")
 
     def test_freed_matches_the_bytes_actually_removed(self, monkeypatch, tmp_path):
         from gc_memory import _gc_outcomes as gc
@@ -457,3 +469,88 @@ class TestFreedBytesDescribeTheRewrite:
         after = (mem / "outcomes.jsonl").stat().st_size
         assert removed == 1
         assert freed == before - after
+
+
+class TestTheUncollectableCountIsAbsoluteNotADelta:
+    """Adversarial r3 (2026-08-20, Skeptic + Architect, probed): GC announced
+    the unlocked count and then announced `locked - unlocked` as though the
+    difference were itself a count. A row repaired between the two reads
+    produced `gc: -1 unparseable/byte-tainted row(s) ... kept` — a negative
+    row count, in the one warning whose job is to tell an operator how many
+    rows are permanently stuck."""
+
+    def test_a_row_repaired_before_the_lock_never_reports_a_negative_count(
+            self, monkeypatch, tmp_path, caplog):
+        import file_lock as _fl
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        out = mem / "outcomes.jsonl"
+        _write_outcome(mem, days_ago=200)          # collectable
+        _write_outcome(mem, days_ago=1)            # retained
+        with open(out, "ab") as fh:                # two torn rows
+            fh.write(b'{"goal": "torn-a\xff", "recorded_at": "x"}\n')
+            fh.write(b'{"goal": "torn-b\xff", "recorded_at": "x"}\n')
+
+        real_rmw = _fl.locked_rmw
+        healed = {}
+
+        good = json.dumps({"goal": "repaired", "status": "done",
+                           "recorded_at": datetime.now(timezone.utc).isoformat()})
+
+        def healing_rmw(path, fn, *a, **kw):
+            lines = path.read_bytes().split(b"\n")
+            lines = [good.encode() if b"torn-a" in l else l for l in lines]
+            path.write_bytes(b"\n".join(lines))    # one torn row repaired
+            healed["yes"] = True
+            return real_rmw(path, fn, *a, **kw)
+
+        monkeypatch.setattr(_fl, "locked_rmw", healing_rmw)
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            _gc_outcomes(retain_days=90, dry_run=False)
+
+        assert healed, "the healing hook never ran — test is vacuous"
+        counts = [r.args[0] for r in caplog.records
+                  if "unparseable/byte-tainted" in r.msg]
+        assert counts, "the uncollectable rows were never announced"
+        assert all(c >= 0 for c in counts), (
+            f"GC announced a negative row count: {counts}")
+        assert counts[-1] == 1, (
+            f"the announced count is not the locked absolute one: {counts}")
+
+
+class TestALockedPassThatRemovesNothingDoesNotRewrite:
+    """Adversarial r3 (2026-08-20, Architect, probed): the unlocked pre-scan
+    commits GC to `locked_rmw`. If the window closes — the collectable row is
+    gone by the time the lock is held — the old shape still rejoined and
+    rewrote, normalizing framing. A snapshot without a trailing newline came
+    back one byte LARGER and GC reported `freed=-1` for a collection that
+    collected nothing."""
+
+    def test_the_bytes_are_returned_untouched(self, monkeypatch, tmp_path):
+        import file_lock as _fl
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        out = mem / "outcomes.jsonl"
+        _write_outcome(mem, days_ago=200)
+
+        # Between the unlocked scan and the lock, the collectable row is
+        # replaced by a retained one with NO trailing newline.
+        recent = json.dumps({"goal": "kept", "status": "done",
+                             "recorded_at": datetime.now(timezone.utc).isoformat()})
+        real_rmw = _fl.locked_rmw
+        raced = {}
+
+        def racing_rmw(path, fn, *a, **kw):
+            path.write_text(recent, encoding="utf-8")   # no trailing "\n"
+            raced["before"] = path.read_bytes()
+            return real_rmw(path, fn, *a, **kw)
+
+        monkeypatch.setattr(_fl, "locked_rmw", racing_rmw)
+        total, removed, freed = _gc_outcomes(retain_days=90, dry_run=False)
+
+        assert raced, "the racing hook never ran — test is vacuous"
+        assert removed == 0
+        assert freed == 0, f"a no-op collection reported freed={freed}"
+        assert out.read_bytes() == raced["before"], (
+            "a locked pass that removed nothing still rewrote the store")

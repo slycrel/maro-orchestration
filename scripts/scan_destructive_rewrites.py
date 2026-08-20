@@ -10,9 +10,11 @@ lines to 1 and wiped a knowledge tier before it was found.
 
 Reported shapes
 ---------------
-RISK  a function that scans `.splitlines()`, drops on a parse failure,
-      and participates in a write-back — directly, via a lexically
-      enclosing function, or via a SAME-MODULE helper it calls by name.
+RISK  a function that FRAMES a store into lines — `.splitlines()` or
+      `.split("\n")` — and participates in a write-back: directly, via a
+      lexically enclosing function, or via a SAME-MODULE helper it calls
+      by name. It does NOT check that a drop is present; framing plus a
+      write-back is the whole signal, which is why most hits are benign.
 OK    the same, but a taint-refusing parse is applied on the drop path.
 
 The call-graph leg exists because the scanner's first version could not
@@ -28,8 +30,21 @@ Limits, stated so nobody reads more off a clean run than it carries:
     the drop path, not that every unparseable line is provably carried.
     Read the function.
   * Cross-MODULE helpers are not followed.
+  * `.split("\n")` counts as framing since 2026-08-20. It has to: this arc
+    CONVERTED the sites it hardened from `splitlines()` to `split("\n")`
+    (splitlines also breaks on U+2028/U+2029, which are legal inside a JSON
+    string), which walked every one of them out of the scanner's field of
+    view. Adversarial r3 proved it: reverting `interrupt.poll` to the exact
+    destructive shape this arc removed produced ZERO hits, and the drift
+    gate's `regressed` check — whose whole job is to catch that — could
+    never fire. A fix that blinds the detector to its own subject is a
+    worse outcome than the bug.
   * Markdown/single-object rewrites match the write markers and show up
     as RISK; they are usually false positives. Triage by reading.
+  * No drop is required for a RISK. An earlier version of this docstring
+    said "drops on a parse failure" was part of the test; it never was,
+    and the 64-of-70 false-positive rate is the direct consequence
+    (adversarial r3, 2026-08-20 — the claim had no executing line).
 """
 from __future__ import annotations
 
@@ -105,10 +120,23 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
                 return True
         return False
 
+    def frames_lines(fn):
+        """Does fn split a blob into lines? `.splitlines()` or `.split("\\n")`."""
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+                continue
+            if n.func.attr == "splitlines":
+                return True
+            if n.func.attr == "split" and n.args:
+                a = n.args[0]
+                if isinstance(a, ast.Constant) and a.value == "\n":
+                    return True
+        return False
+
     out = []
     for fn in funcs:
         dump = ast.dump(fn)
-        if "splitlines" not in dump:
+        if not frames_lines(fn):
             continue
         if not (writes(fn) or written_by_a_caller(fn)):
             continue

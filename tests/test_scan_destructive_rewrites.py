@@ -10,6 +10,7 @@ reports "clean" for it forever.
 from __future__ import annotations
 
 import ast
+import pytest
 import sys
 from pathlib import Path
 
@@ -195,3 +196,94 @@ def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
     untriaged, stale, regressed = tm.compare(live)
     assert regressed == [resurfaced]
     assert not untriaged and not stale
+
+
+@pytest.mark.parametrize("live_extra,expect", [
+    ({"brand_new.py:some_rewrite"}, "UNTRIAGED"),
+    ({"interrupt.py:poll"}, "REGRESSED"),
+])
+def test_the_check_verb_itself_exits_nonzero(monkeypatch, capsys, live_extra, expect):
+    """Pin the GATE, not just its arithmetic.
+
+    Adversarial r3 (2026-08-20, 4 lenses): every drift test called
+    `compare()` directly, and the only test that ran the executable asserted
+    the CLEAN baseline exits 0. So `main()`'s `return 1` mutated to `return
+    0` passed the whole file — `compare()` stays correct while CI is told
+    green. That is the asserted-the-helper-not-the-flow shape our own
+    watch-list names, in the test written to close a gate.
+    """
+    import sys as _sys
+
+    tm = _manifest()
+    monkeypatch.setattr(tm, "_live_sites",
+                        lambda: (set(tm.SITES) - tm.FIXED) | live_extra)
+    monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
+
+    rc = tm.main()
+
+    assert rc == 1, "the drift gate reported success on a drifted tree"
+    assert expect in capsys.readouterr().out
+
+
+def test_the_check_verb_exits_zero_on_a_clean_scan(monkeypatch, capsys):
+    """The negative control for the pin above — it must still be able to pass."""
+    import sys as _sys
+
+    tm = _manifest()
+    monkeypatch.setattr(tm, "_live_sites", lambda: set(tm.SITES) - tm.FIXED)
+    monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
+    assert tm.main() == 0
+    assert "all triaged" in capsys.readouterr().out
+
+
+class TestTheScannerSeesTheFramingThisArcConvertedTo:
+    """Adversarial r3 (2026-08-20, Expert QA — the sharpest finding of the
+    round): the scanner only matched `.splitlines()`, and this arc CONVERTED
+    every site it hardened to `.split("\\n")` (splitlines also breaks on
+    U+2028/U+2029, legal inside a JSON string). So the fix walked its own
+    subject out of the detector's field of view: reverting `interrupt.poll`
+    to the exact destructive shape produced ZERO hits, and the drift gate's
+    `regressed` check — whose entire job is to catch that — could never fire.
+    """
+
+    def test_a_split_lf_rewrite_that_drops_is_found(self):
+        src = (
+            "def rewrite(path):\n"
+            "    out = []\n"
+            "    for line in path.read_text().split(\"\\n\"):\n"
+            "        try:\n"
+            "            out.append(json.loads(line))\n"
+            "        except Exception:\n"
+            "            continue\n"
+            "    atomic_write(path, dumps(out))\n"
+        )
+        assert _scan(src).get("rewrite") == "RISK"
+
+    def test_the_real_regression_at_a_fixed_site_is_found(self):
+        """The literal one: revert poll's taint-refusing parse and the site
+        must come back as RISK, or `regressed` is decoration."""
+        from pathlib import Path
+
+        src = (Path(__file__).parent.parent / "src" / "interrupt.py").read_text(
+            encoding="utf-8", errors="surrogateescape")
+        assert _scan(src).get("poll") == "OK", "fixture drifted — poll is not clean"
+        assert _scan(src.replace("_loads_clean(raw)", "json.loads(raw)")).get("poll") \
+            == "RISK", "a reverted poll is invisible to the scanner"
+
+    def test_a_split_lf_read_with_no_write_back_is_not_flagged(self):
+        """The negative control for the new framing leg: `split("\\n")` on its
+        own must not start reporting every reader in the tree. Note what is
+        NOT claimed — the scanner does not detect the DROP, only framing +
+        write-back (see its docstring); that is why 64 of the first 70 sites
+        were false positives."""
+        src = (
+            "def read(path):\n"
+            "    out = []\n"
+            "    for line in path.read_text().split(\"\\n\"):\n"
+            "        try:\n"
+            "            out.append(json.loads(line))\n"
+            "        except Exception:\n"
+            "            continue\n"
+            "    return out\n"
+        )
+        assert "read" not in _scan(src)

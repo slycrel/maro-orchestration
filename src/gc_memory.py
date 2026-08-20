@@ -168,17 +168,23 @@ def _gc_outcomes(
         return 0, 0, 0
     keep, total, unreadable = _classify(text)
     removed = total - len(keep)
-    _announce(unreadable)
-    if stats is not None:
-        stats["uncollectable"] = unreadable
 
     # Pre-check only, and deliberately so: skipping the locked pass when the
     # unlocked scan saw nothing to collect avoids rewriting the file on every
     # GC tick. Adversarial r2 (2026-08-20) is right that a row expiring — or
     # being appended already-expired — between this scan and the lock is then
-    # left for the NEXT run. That is a latency choice, not data loss, and the
-    # authoritative classification is still the locked one below.
+    # left for the NEXT run. That is a latency choice, not data loss.
+    #
+    # r3 sharpened the claim that used to sit here ("the authoritative
+    # classification is still the locked one below"): on THIS branch there is
+    # no locked pass at all, so what is reported is the unlocked snapshot.
+    # That is honest because nothing was mutated — there is no mutation for
+    # the numbers to misdescribe — but it is not the same statement, and the
+    # comment used to make the stronger one.
     if dry_run or removed <= 0:
+        _announce(unreadable)
+        if stats is not None:
+            stats["uncollectable"] = unreadable
         return total, removed, 0
 
     # Classify AGAIN inside the lock, and rewrite from THAT classification.
@@ -195,9 +201,19 @@ def _gc_outcomes(
 
     def _trim(old: str) -> str:
         kept, t, u = _classify(old)
-        new = "\n".join(kept) + ("\n" if kept else "")
         locked["total"], locked["unreadable"] = t, u
         locked["removed"] = t - len(kept)
+        if locked["removed"] <= 0:
+            # The window closed on us: what the unlocked scan saw as
+            # collectable is not collectable under the lock. Return the bytes
+            # UNTOUCHED rather than rejoining them — adversarial r3
+            # (Architect, probed): a rewrite that removes nothing still
+            # normalizes framing, so a snapshot without a trailing newline
+            # came back one byte LARGER and GC reported freed=-1 for a
+            # collection that collected nothing.
+            locked["freed"] = 0
+            return old
+        new = "\n".join(kept) + ("\n" if kept else "")
         # Byte delta from the LOCKED snapshot and the text that replaces it.
         # Adversarial r2 (2026-08-20, 3/3): sampling st_size before the lock
         # charged a concurrent RETAINED append against GC's freed count and
@@ -211,7 +227,14 @@ def _gc_outcomes(
         locked_rmw(path, _trim)
     except OSError:
         return total, 0, 0
-    _announce(locked.get("unreadable", 0) - unreadable)
+    # The LOCKED absolute count, not a delta against the unlocked scan.
+    # Adversarial r3 (Skeptic + Architect, probed): announcing the difference
+    # printed "-1 unparseable row(s) ... kept" when a concurrent repair fixed
+    # a torn row between the two reads — a negative row count, in a warning
+    # whose whole job is to tell an operator how many rows are stuck. One
+    # announcement per run, always absolute, always from whichever
+    # classification was authoritative on the path taken.
+    _announce(locked.get("unreadable", unreadable))
     if stats is not None:
         stats["uncollectable"] = locked.get("unreadable", unreadable)
     return (locked.get("total", total), locked.get("removed", removed),

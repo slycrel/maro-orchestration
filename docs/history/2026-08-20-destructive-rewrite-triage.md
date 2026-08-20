@@ -76,16 +76,22 @@ so taint now joins the keep-conservatively branch with everything else.
 
 ## The 64 false positives, by why
 
+*(Counts below are the original 70-site scan. Adversarial r3 taught the
+scanner a second framing idiom the same day, which added 5 more sites —
+3 markdown, 2 read-only, all in `playbook.py` — for 75 triaged / 69 FPs.
+`scripts/triage_manifest.py` is the live mapping; these tables are the
+narrative.)*
+
 The scanner's docstring already warns that OK is a hint and that markdown and
 single-object rewrites match its write markers. That is what most of these are.
 
 | shape | count | examples | why it is not the bug |
 |---|---|---|---|
-| markdown / prose rewrite | 10 | `orch_items.parse_next` + `append_next_items`, `thread_brain._append_under`, `boot_protocol._read_completed_from_next`, `convo_miner.scan_maro_memory`, `pack._append_conflicts_note` | no JSON parse; every line is carried, and the "drop" is a regex non-match, not a discard |
+| markdown / prose rewrite | 10 (+3 r3) | `orch_items.parse_next` + `append_next_items`, `thread_brain._append_under`, `boot_protocol._read_completed_from_next`, `convo_miner.scan_maro_memory`, `pack._append_conflicts_note` | no JSON parse; every line is carried, and the "drop" is a regex non-match, not a discard |
 | subprocess-output parser | 4 | `heartbeat._is_interactive_session_active`, `build_loop_runner._worker_session_already_active`, `container_exec._reseed_probe`, `worktree._sanitize_untrusted_git` | the parsed text is `pgrep`/`docker` stdout, not a durable store |
 | stream / LLM-output parser | 9 | `llm._parse_stream_json`, `llm._stream_events`, `orch_bridges._tail_lines`, `orch_bridges._extract_session_result_from_text` | same — nothing on disk is being rebuilt |
 | derived-index rebuild | 3 | `memory_ledger._update_memory_index`, `loop_report._render_devlog_html`, `portability.main` | the written file is generated *from* the source, and regenerating is the repair |
-| read-only loader | 26 | `knowledge_lens.load_standing_rules` / `load_hypotheses` / `search_decisions`, `evolver_scans._load_baselines`, `graduation.scan_candidates`, `shadow_lane._status`, `router.build_training_data`, `memory_quality.*`, `navigator_shadow._load_navigator_events` | flagged only via the call-graph leg; they drop, but nothing writes the result back — recoverable, and already on the silent-drop census |
+| read-only loader | 26 (+2 r3) | `knowledge_lens.load_standing_rules` / `load_hypotheses` / `search_decisions`, `evolver_scans._load_baselines`, `graduation.scan_candidates`, `shadow_lane._status`, `router.build_training_data`, `memory_quality.*`, `navigator_shadow._load_navigator_events` | flagged only via the call-graph leg; they drop, but nothing writes the result back — recoverable, and already on the silent-drop census |
 | append-only importer | 5 | `pack._import_lessons` / `_import_hypotheses` / `_import_skill_records`, `workspace_import.import_ledgers` | rows are appended to a *local* store; the source pack is never rewritten |
 | already verbatim-preserve | 3 | `memory_ledger.compress_old_outcomes._drop_compressed`, `captains_log._maybe_rotate`, `gc_memory._gc_outcomes._trim` | the rewrite rejoins raw lines and never parses, so there is nothing to drop |
 | giant orchestrator | 4 | `handle._handle_impl`, `heartbeat.heartbeat_loop`, `doctor.run_doctor`, `sheriff.check_project` | call-graph noise: a drop loop and a write exist hundreds of lines apart with no data path between them |
@@ -281,6 +287,113 @@ mutations came back **SKIP** — stale anchors, because the r2 rewrites moved
 the code they pointed at. A SKIP is not a pass; all four were re-anchored
 before the sweep was called green.
 
+## Adversarial round 3 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats (Skeptic, Architect, Minimalist, Expert QA, Experimentalist) on the
+r2 fix layer, with the r1→r2 pattern stated in the prompt as the primary
+target. **REJECT — and for the THIRD round running the top finding was a
+defect the previous round's fix introduced**, this time with 5/5 consensus.
+Every finding below was reproduced before it was touched.
+
+- **`dict_to_skill` is a constructor, not a validator** (5/5, HIGH). r2's
+  answer to "a dict is not yet a Skill" was `dict_to_skill(row)`. Python does
+  not enforce dataclass annotations, so `description=7` sails straight
+  through it. Then: `compute_skill_hash` raises on the non-text field,
+  `_skill_hash_is_stale` catches that and answers **"not stale"**, and the
+  forgery — carrying the healthy row's declared `content_hash` and a later
+  `created_at` — wins the dedup and **deletes the healthy skill**. Probed
+  against the r2 code: 2 rows in, only `forged` out. `validate_skill_row()`
+  now proves the row before it is admitted to any decision about which rows
+  to remove: required keys, content fields that are text (proven by computing
+  the hash over them), string identity/timestamp fields, list-of-string list
+  fields, finite ranking numbers. It lives in `skill_types.py` because that is
+  where the schema lives; read-only callers stay on `dict_to_skill`, because
+  degrading them is a behaviour change nobody asked for. All 423 rows in the
+  live store validate — that negative control is a test, since a guard that
+  strands everything is an outage, not a guard.
+
+  Worth stating plainly: the mechanism is the error *direction*.
+  `except Exception: return False  # can't verify → keep` is the right
+  retention instinct and the wrong membership answer — the row is kept AND
+  admitted to the comparison. "Cannot verify" has to mean *cannot act on*.
+
+- **The scanner had walked out of its own field of view** (Expert QA, HIGH —
+  the sharpest finding of the round). It matched only `.splitlines()`. This
+  arc **converted** every site it hardened to `.split("\n")` — because
+  `splitlines()` also breaks on U+2028/U+2029, legal inside a JSON string —
+  so the fix made the fixed sites invisible to the detector. Probed: reverting
+  `interrupt.poll` to the exact destructive shape this arc removed produced
+  **zero hits**, which means r2's `regressed = live & FIXED` gate, whose
+  entire job is to catch that, could never fire for 6 of its 8 entries. The
+  scanner now treats both idioms as framing. Blast radius was measured before
+  the change, not after: +10 sites, 5 of them RISK, all in `playbook.py`
+  (3 markdown rewrites that carry every line, 2 read-only) — triaged and
+  added to the manifest, which now covers 75 sites / 69 FPs.
+
+  Side-find while fixing it: the scanner's docstring claimed RISK required a
+  function that "drops on a parse failure". It never tested that — framing
+  plus a write-back is the whole signal. The claim had no executing line, and
+  the 64-of-70 false-positive rate is its direct consequence. Docstring
+  corrected rather than the code, because conservative is the right setting
+  for this instrument.
+
+- **poll() and clear() stranded rows in silence** (3 seats). Both preflight
+  with an *unlocked* `peek()` and then re-read under the lock, so a row that
+  becomes unreadable in that window is withheld from delivery and carried by
+  the locked rewrite — both correct — with nobody told. `peek()` was the only
+  path that announced, and if the interrupt that *was* delivered stops the
+  loop, no later `peek()` ever runs. An operator's message parked on disk in
+  silence is precisely the event this subsystem exists to make impossible.
+  Both locked transforms now count and announce through one shared helper.
+
+- **GC announced a delta as though it were a count** (2 seats). The second
+  announcement passed `locked - unlocked` to a warning that formats it as
+  "%d rows kept". A row repaired between the two reads printed
+  **`gc: -1 unparseable/byte-tainted row(s) … kept`**. One announcement per
+  run now, always absolute, always from whichever classification was
+  authoritative on the path taken.
+
+- **A locked pass that removes nothing no longer rewrites** (Architect). The
+  unlocked pre-scan commits GC to `locked_rmw`; if the window closes and
+  nothing is collectable under the lock, the old shape still rejoined and
+  rewrote, normalizing framing — a snapshot with no trailing newline came back
+  one byte *larger* and GC reported `freed=-1` for a collection that collected
+  nothing. `_trim` returns the bytes untouched on that path.
+
+- **The r2 drift-gate tests proved `compare()`, not the gate** (4 seats). Every
+  new test called the pure function; the only test that ran the executable
+  asserted the *clean* baseline exits 0. So `main()`'s `return 1` mutated to
+  `return 0` passed the entire file — `compare()` stays correct while CI is
+  told green. That is the asserted-the-helper-not-the-flow shape our own
+  watch-list names, committed inside the test written to close a gate.
+  `main()` is now pinned directly in both failure directions, with a
+  negative control, plus a must-detect mutation.
+
+- **The r2 freed-byte test could not fail** (Minimalist). It appended inside
+  `_store_text`, which in the pre-fix code ran *before* `original_size =
+  path.stat().st_size` — so the old implementation's own snapshot already
+  included the concurrent row and reported a positive `freed`. The test passed
+  on the exact defect it names. It now hooks `locked_rmw` so the append lands
+  in the real window, and the mutation was replaced with a **faithful revert**
+  of the old shape (sample the unlocked snapshot's size) instead of the
+  `freed = 0` stand-in that any assertion would have caught. Deriving
+  must-detect mutations from the FILE and not from the diff is a standing
+  house rule; this is what violating it looks like.
+
+**Narrowed rather than fixed** (Skeptic + Experimentalist): GC skips the locked
+pass entirely when the unlocked pre-scan finds nothing, so on that branch the
+reported counts are the *unlocked* snapshot. r2's comment claimed "the
+authoritative classification is still the locked one below", which is false on
+the path that returns above it. The claim is now the true one: nothing was
+mutated, so there is no mutation for the numbers to misdescribe.
+
+**Receipts:** mutation spec 35 → 44, **44/44 accounted for on the first pass**
+(42 DETECTED + the 2 standing equivalents), including all nine new mutants —
+among them the faithful `gc freed` revert, which the repointed test kills and
+the old one did not. Suite: 9664 passed in the shared tree (plus the two
+failures that belong to another session's uncommitted `captains_log.py`,
+proven foreign in an isolated worktree earlier in this arc).
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -294,10 +407,22 @@ from a tool nobody has falsified is worth nothing. This triage is the
 falsification pass, and its durable output is the FP table above — so the next
 person to run the scanner starts from 63 known-benign sites, not 63 unknowns.
 
-The second lesson is from the two rounds, not the scan: **both rounds' top
+The second lesson is from the three rounds, not the scan: **every round's top
 finding was a defect the previous round's fix introduced** — r1 found the lock
 that r0's fix scoped too narrowly, r2 found the `applied` flag that r1's fix
-inverted. Neither was in the original code. Review the fix layer first; it is
-the only part of the change that has never been read by anyone but its author,
-and it was written under the pressure of a finding, which is exactly the
-condition that produces the mirror-image bug.
+inverted, r3 found that r2's "validation" validated nothing. None was in the
+original code. Review the fix layer first; it is the only part of the change
+that has never been read by anyone but its author, and it was written under
+the pressure of a finding, which is exactly the condition that produces the
+mirror-image bug. Three for three is no longer a coincidence, and the r3
+prompt said so up front — which is probably why r3 landed 5/5 consensus on it.
+
+The third is narrower and worse, and it is the one to carry forward: **a fix
+can blind the detector to its own subject.** Converting the hardened sites from
+`splitlines()` to `split("\n")` was correct on its own terms and walked all six
+of them out of the scanner's field of view — including out of the regression
+gate written the round before, specifically to catch them coming back. Nothing
+about that shows up as a failing test, a warning, or a red CI run; it shows up
+as an instrument that reports zero forever. After changing an idiom, re-run the
+detector against the *reverted* code and prove it still finds it. "Found 0" is
+a claim, and like every other claim it needs an executing line.

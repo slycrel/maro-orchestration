@@ -623,6 +623,73 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       `doctor schema` instead. Four mutations came back SKIP (stale
       anchors from the r2 rewrites); a SKIP is not a pass and all four
       were re-anchored before the sweep was called green.*
+    - *Its adversarial r3 (2026-08-20, FIVE codex seats on the r2 fix
+      layer): **REJECT, and for the THIRD round running the top finding
+      was a defect the previous round's fix introduced** — 5/5 consensus
+      this time. r2 answered "a dict is not yet a Skill" with
+      `dict_to_skill(row)`, which is a CONSTRUCTOR: Python does not
+      enforce dataclass annotations, so `description=7` sails through,
+      `compute_skill_hash` raises on it, `_skill_hash_is_stale` catches
+      that and answers "not stale", and the forgery — carrying the
+      healthy row's declared content_hash and a later created_at — wins
+      the dedup and DELETES the healthy skill. Probed against the r2
+      code: 2 rows in, only `forged` out. New `skill_types.
+      validate_skill_row()` proves a row before it may take part in any
+      decision about which rows to remove (required keys, content fields
+      that are text — proven by hashing them, string identity/timestamp
+      fields, list-of-string lists, finite ranking numbers); all 423 live
+      rows validate, and that negative control is a test. The mechanism
+      was the error DIRECTION: "can't verify -> keep" is the right
+      retention instinct and the wrong membership answer. **Sharpest
+      finding of the round (Expert QA): the scanner had walked out of its
+      own field of view.** It matched only `.splitlines()`, and this arc
+      CONVERTED every site it hardened to `.split("\n")` (splitlines
+      breaks on U+2028/U+2029, legal inside a JSON string) — so reverting
+      `interrupt.poll` to the exact destructive shape produced ZERO hits,
+      and r2's `regressed = live & FIXED` gate could never fire for 6 of
+      its 8 entries. Scanner now takes both idioms; blast radius measured
+      BEFORE the change (+10 sites, 5 RISK, all playbook.py markdown /
+      read-only) and triaged, manifest now 75 sites / 69 FPs. Side-find:
+      the scanner's docstring claimed RISK required "drops on a parse
+      failure" — it never tested that, the claim had no executing line,
+      and the 64-of-70 FP rate is the consequence; docstring corrected,
+      code left conservative. Also fixed: (a) poll()/clear() stranded
+      rows in SILENCE — both preflight with an unlocked peek() then
+      re-read under the lock, so a row that turns unreadable in that
+      window is withheld and carried with nobody told, and if the
+      delivered interrupt stops the loop no later peek() ever runs (3
+      seats); both locked transforms count and announce now. (b) GC
+      announced `locked - unlocked` through a warning that formats it as
+      a count — a repaired row printed "gc: -1 unparseable row(s) …
+      kept" (2 seats); one absolute announcement per run now. (c) A
+      locked pass that removes nothing no longer rewrites — the old
+      shape re-joined and normalized framing, so a snapshot with no
+      trailing newline came back one byte LARGER and GC reported
+      freed=-1 for collecting nothing. (d) **The r2 drift-gate tests
+      proved `compare()`, not the gate** (4 seats): the only test running
+      the executable asserted the CLEAN baseline exits 0, so `main()`'s
+      `return 1` -> `return 0` passed the whole file — CI told green
+      while a regression ships. main() pinned directly both directions +
+      negative control + must-detect mutation. (e) **The r2 freed-byte
+      test could not fail** (Minimalist): it appended inside
+      `_store_text`, which in the pre-fix code ran BEFORE the
+      `stat().st_size` sample, so the old implementation also reported
+      positive freed. Repointed to hook `locked_rmw`, and the mutation
+      replaced with a FAITHFUL revert instead of a `freed = 0` stand-in
+      — deriving must-detect mutations from the FILE not the diff is the
+      house rule this violated. NARROWED rather than fixed: GC skips the
+      locked pass when the pre-scan finds nothing, so on that branch the
+      reported counts are the unlocked snapshot; r2's comment claimed
+      otherwise and now states the true thing (nothing was mutated, so
+      there is no mutation to misdescribe). Receipts: spec 35 -> 44,
+      **44/44 accounted for on the first pass** (42 detected + the 2
+      standing equivalents), suite 9664 passed.*
+    - *Carried lesson, the one worth reusing: **a fix can blind the
+      detector to its own subject.** Nothing about that shows up as a
+      failing test or a red CI run — it shows up as an instrument that
+      reports zero forever. After changing an idiom, re-run the detector
+      against the REVERTED code and prove it still finds it. "Found 0"
+      is a claim and needs an executing line like any other.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making

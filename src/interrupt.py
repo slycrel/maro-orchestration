@@ -374,9 +374,11 @@ class InterruptQueue:
             if not self.peek():
                 return []
             pending: List[Interrupt] = []
+            unreadable = {"n": 0}
 
             def _mark_applied(old: str) -> str:
                 pending.clear()
+                unreadable["n"] = 0
                 updated = []
                 for raw in old.split("\n"):
                     if not raw.strip():
@@ -399,6 +401,7 @@ class InterruptQueue:
                             pending.append(Interrupt.from_dict(d))
                         updated.append(json.dumps(d))
                     except (json.JSONDecodeError, TypeError):
+                        unreadable["n"] += 1
                         updated.append(raw)
                 return ("\n".join(updated) + "\n") if updated else ""
 
@@ -407,7 +410,25 @@ class InterruptQueue:
                 locked_rmw(self.path, _mark_applied)
             except OSError:
                 return []
+            self._warn_undeliverable(unreadable["n"])
             return pending
+
+    def _warn_undeliverable(self, n: int) -> None:
+        """One warning text, three callers.
+
+        peek() announced its unreadable rows from the start; poll() and
+        clear() did not, and adversarial r3 (2026-08-20, 3 lenses, probed)
+        showed why that matters. Both preflight with an UNLOCKED peek() and
+        then re-read under the lock, so a row that becomes unreadable in
+        that window is withheld from delivery and carried by the locked
+        rewrite — correctly — with nobody ever told. And if the interrupt
+        that WAS delivered stops the loop, no later peek() runs to announce
+        it either: the operator's message is parked on disk in silence.
+        """
+        if n:
+            log.warning("interrupt queue: %d unreadable row(s) in %s — those "
+                        "interrupts cannot be delivered (left on disk)",
+                        n, self.path)
 
     def peek(self) -> List[Interrupt]:
         """Return pending interrupts without marking them applied.
@@ -437,10 +458,7 @@ class InterruptQueue:
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
                 dropped += 1
-        if dropped:
-            log.warning("interrupt queue: %d unreadable row(s) in %s — those "
-                        "interrupts cannot be delivered (left on disk)",
-                        dropped, self.path)
+        self._warn_undeliverable(dropped)
         return result
 
     def clear(self) -> int:
@@ -449,9 +467,11 @@ class InterruptQueue:
             if not self.peek():
                 return 0
             counted = {"n": 0}
+            unreadable = {"n": 0}
 
             def _mark_applied(old: str) -> str:
                 counted["n"] = 0
+                unreadable["n"] = 0
                 updated = []
                 for raw in old.split("\n"):
                     if not raw.strip():
@@ -468,6 +488,7 @@ class InterruptQueue:
                             counted["n"] += 1
                         updated.append(json.dumps(d))
                     except (json.JSONDecodeError, TypeError):
+                        unreadable["n"] += 1
                         updated.append(raw)
                 return ("\n".join(updated) + "\n") if updated else ""
 
@@ -476,6 +497,7 @@ class InterruptQueue:
                 locked_rmw(self.path, _mark_applied)
             except OSError:
                 return 0
+            self._warn_undeliverable(unreadable["n"])
             return counted["n"]
 
     def is_empty(self) -> bool:

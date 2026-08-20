@@ -643,3 +643,73 @@ class TestTheAppliedFlagIsReadNotGuessed:
         assert [i.id for i in InterruptQueue(queue_path=p).poll()] == ["ok"]
 
         assert row in p.read_text(), "the unreadable row was rewritten or dropped"
+
+
+class TestARowThatBecomesUnreadableUnderTheLockIsAnnounced:
+    """Adversarial r3 (2026-08-20, 3 lenses, probed): poll() and clear()
+    preflight with an UNLOCKED peek() and then re-read under the lock. A row
+    that becomes unreadable in that window is withheld from delivery and
+    carried by the locked rewrite — both correct — but nobody was told.
+    peek() is the only path that announced, and if the interrupt that WAS
+    delivered stops the loop, no later peek() ever runs. An operator's
+    message parked on disk in silence is the exact event this subsystem
+    exists to make impossible."""
+
+    @staticmethod
+    def _row(**over):
+        row = {"id": "ok", "source": "operator", "message": "stop",
+               "intent": "stop", "applied": False,
+               "created_at": "2026-01-01T00:00:00+00:00"}
+        row.update(over)
+        return row
+
+    def _race(self, monkeypatch, tmp_path):
+        """Make one foreign unreadable row land between peek() and the lock."""
+        import jsonl_utils
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps(self._row()) + "\n", encoding="utf-8")
+        real = jsonl_utils.store_text
+        fired = {}
+
+        def racing(path):
+            text = real(path)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(self._row(id="foreign", applied="maybe")) + "\n")
+            fired["yes"] = True
+            monkeypatch.setattr(jsonl_utils, "store_text", real)  # race once
+            return text
+
+        monkeypatch.setattr(jsonl_utils, "store_text", racing)
+        return p, fired
+
+    def test_poll_announces_it(self, monkeypatch, tmp_path, caplog):
+        p, fired = self._race(monkeypatch, tmp_path)
+        with caplog.at_level("WARNING"):
+            from interrupt import InterruptQueue
+            delivered = InterruptQueue(queue_path=p).poll()
+
+        assert fired, "the racing hook never ran — test is vacuous"
+        assert [i.id for i in delivered] == ["ok"]
+        assert "foreign" in p.read_text(), "the unreadable row was destroyed"
+        assert any("cannot be delivered" in r.msg for r in caplog.records), (
+            "a row withheld under the lock was never announced")
+
+    def test_clear_announces_it(self, monkeypatch, tmp_path, caplog):
+        p, fired = self._race(monkeypatch, tmp_path)
+        with caplog.at_level("WARNING"):
+            from interrupt import InterruptQueue
+            cleared = InterruptQueue(queue_path=p).clear()
+
+        assert fired, "the racing hook never ran — test is vacuous"
+        assert cleared == 1
+        assert "foreign" in p.read_text(), "the unreadable row was destroyed"
+        assert any("cannot be delivered" in r.msg for r in caplog.records)
+
+    def test_a_clean_queue_stays_quiet(self, tmp_path, caplog):
+        """The negative control: no warning when there is nothing to warn about."""
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps(self._row()) + "\n", encoding="utf-8")
+        from interrupt import InterruptQueue
+        with caplog.at_level("WARNING"):
+            InterruptQueue(queue_path=p).poll()
+        assert not [r for r in caplog.records if "cannot be delivered" in r.msg]

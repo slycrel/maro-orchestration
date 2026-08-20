@@ -8,6 +8,7 @@ for type definitions.
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -276,3 +277,52 @@ def verify_skill_hash(skill: Skill, expected_hash: str) -> bool:
     if not expected_hash:
         return True
     return compute_skill_hash(skill) == expected_hash
+
+
+def validate_skill_row(d: dict) -> Skill:
+    """Build a Skill from a stored row AND prove the row is one. Raises if not.
+
+    `dict_to_skill` is a CONSTRUCTOR, not a validator — Python does not
+    enforce dataclass annotations, so `description=7` and
+    `trigger_patterns="x"` sail straight through it. Adversarial r3
+    (2026-08-20, 5/5 consensus) probed what that costs a DESTRUCTIVE caller:
+    in `doctor.cleanup_workspace_skills` a row carrying a healthy skill's
+    `content_hash` but `description=7` could not have its hash recomputed,
+    `_skill_hash_is_stale` answered "not stale" for the failure, the forgery
+    won the dedup on a later `created_at`, and the healthy skill was DELETED.
+    Probed: 2 rows in, only `forged` out.
+
+    So: a caller that REMOVES rows must use this, not `dict_to_skill`. A row
+    that cannot be proven to be a Skill must never take part in a decision
+    about which rows to remove — strand the raw line instead. Read-only
+    callers stay on `dict_to_skill`; degrading them would be a behaviour
+    change nobody asked for.
+
+    What is proven, and only that: the required keys exist, the content
+    fields are text (proven by computing the hash over them), the
+    identity/timestamp fields are strings, the list fields are lists of
+    strings, and the fields `score_skill` ranks by are finite numbers. All
+    423 rows in the live store satisfy it. Non-finite is called out on
+    purpose: a NaN `success_rate` makes `max()` ordering undefined, so it can
+    win a dedup at random — and `score_skill`'s tuple compares `created_at`
+    first, so a non-string there raises TypeError inside `max()` and takes
+    the whole verb down.
+    """
+    skill = dict_to_skill(d)          # required keys, or KeyError
+    compute_skill_hash(skill)         # proves the content fields are text
+    for name in ("id", "name", "content_hash", "created_at"):
+        v = getattr(skill, name)
+        if not isinstance(v, str):
+            raise TypeError(f"{name} must be a string, got {type(v).__name__}")
+    for name in ("trigger_patterns", "steps_template", "source_loop_ids"):
+        v = getattr(skill, name)
+        if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+            raise TypeError(f"{name} must be a list of strings, got {v!r}")
+    for name in ("success_rate", "utility_score"):
+        v = getattr(skill, name)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or not math.isfinite(v):
+            raise TypeError(f"{name} must be a finite number, got {v!r}")
+    if isinstance(skill.use_count, bool) or not isinstance(skill.use_count, int):
+        raise TypeError(f"use_count must be an int, got {skill.use_count!r}")
+    return skill
