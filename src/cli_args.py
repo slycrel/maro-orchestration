@@ -537,8 +537,8 @@ def build_parser() -> argparse.ArgumentParser:
              "with no stopping rule")
     p_devstatus.add_argument(
         "--write", action="store_true",
-        help="Fold the block into the top of docs/DEV_LOG.md (between "
-             "markers; the narrative entries below are untouched)")
+        help="Regenerate docs/DEV_STATUS.md (its own file; the DEV_LOG.md "
+             "narrative entries are a separate surface and are untouched)")
     p_devstatus.add_argument(
         "--format", choices=["text", "line"], default="text",
         help="'line' prints the one-line summary (what land.sh shows)")

@@ -323,7 +323,13 @@ if DS_LINE=$(cd "$REPO_DIR" && PYTHONPATH=src "$DS_PY" src/cli.py dev-status \
         --format line 2>/dev/null) && [ -n "$DS_LINE" ]; then
     echo "$DS_LINE"
     # Say when the written block has drifted from what just landed, rather
-    # than letting the dev log quietly become another stale surface.
-    DS_BLOCK_AGE=$(cd "$REPO_DIR" && git log -1 --format=%cr -- docs/DEV_LOG.md 2>/dev/null)
-    [ -n "$DS_BLOCK_AGE" ] && echo "  (dev log last written ${DS_BLOCK_AGE}; refresh with: maro dev-status --write)"
+    # than letting the readout quietly become another stale surface.
+    # Track DEV_STATUS.md, not DEV_LOG.md: the readout moved to its own file
+    # (src/dev_status.py DOC, and the rationale above it). Watching DEV_LOG
+    # here meant the nag keyed off narrative session entries instead of the
+    # generated block, so `dev-status --write` — the very command named in
+    # the message — could never clear it. Found 2026-08-20 during a doc
+    # hygiene pass, after it fired on four consecutive lands.
+    DS_BLOCK_AGE=$(cd "$REPO_DIR" && git log -1 --format=%cr -- docs/DEV_STATUS.md 2>/dev/null)
+    [ -n "$DS_BLOCK_AGE" ] && echo "  (dev status last written ${DS_BLOCK_AGE}; refresh with: maro dev-status --write)"
 fi
