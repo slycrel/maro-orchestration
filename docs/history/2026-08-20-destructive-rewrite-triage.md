@@ -652,6 +652,93 @@ mutants came back SKIP from r6's own rewrites and were re-anchored first).
 Blast radius of the stricter scanner on the real tree: **zero** — 77 RISK
 sites before and after, none gained, none lost, manifest still green.
 
+## Adversarial round 7 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r6 fix layer. **REJECT.** Seven findings, all seven
+reproduced before being touched, zero hallucinations for the third round
+running — and for the seventh round running, the top finding is a defect the
+previous round's fix introduced.
+
+- **The rewrite reordered the store, and order decides which skill is live**
+  (Skeptic, HIGH, probed). `skills.load_skills` reads the file in reverse and
+  lets the LAST row for an id win, so a row's POSITION decides whether it is
+  the live skill or the ignored twin. The rewrite appended every stranded row
+  after the admitted ones. r6's stricter validator strands more rows, so a
+  legacy row sharing an id with a verified one moved from ignored to live —
+  in a run that printed `0 removed` and `Kept in place: 1 row`. Nothing was
+  deleted and the system still changed behaviour, which is the failure mode
+  this arc's retention rules do not cover: they guard the bytes, not the
+  meaning. Rows are written in read order now, admitted and stranded alike.
+
+  The fix has a trap of its own, and it is worth writing down: the obvious
+  implementation stamps the position onto the row (`row["__ordinal"]`).
+  Every key a row carries is part of `_dedup_identity`, so that would make
+  every row unique, silently disable the dedup this verb exists for, and
+  write the bookkeeping key into the store. Positions are carried by object
+  identity in a side table instead.
+
+- **A mixed-awareness group cannot be ranked, and r6 ranked it** (Architect,
+  HIGH, probed). r6's tiebreak read naive timestamps as UTC.
+  `replace(tzinfo=utc)` is not a conversion — it ASSERTS a fact the row does
+  not carry, and a naive value can denote either side of an aware one. r6
+  deleted a row on that invented instant. Both shapes are in the live store
+  and `max()` over mixed awareness raises, so "do nothing" was not available
+  either; the answer the retention decree already gives is to keep both rows
+  and say why. Undecidable groups are now kept whole with a named reason.
+
+- **The parser's own recursion limit was still uncaught** (Minimalist, HIGH,
+  probed). r6 fixed the taint WALK's recursion and left `json.loads`'s.
+  It has its own depth limit and raises `RecursionError`, which is not a
+  `JSONDecodeError` — so a row nested ~50k deep flew through every
+  `except (json.JSONDecodeError, TypeError)` in the codebase. Probed:
+  `InterruptQueue.poll()` died on one such row before it could strand it or
+  announce anything, which is the silent control-channel loss the arc
+  started from. Translated at the helper: a row this layer cannot parse is a
+  row that strands, whatever shape the refusal arrives in.
+
+- **The r6 walk's memory followed WIDTH** (Architect, MEDIUM, probed under a
+  96 MiB cap). Making the walk iterative fixed depth by pushing every element
+  of a container at once, so a valid five-million-item row raised
+  `MemoryError` — again something no caller catches. It is a stack of
+  ITERATORS now: auxiliary storage proportional to nesting depth, which is
+  what the recursive version got right before r6 removed it.
+
+- **A verdict about safety cannot be read off an identifier** (4 lenses,
+  HIGH, probed). r6's answer to the spelling problem was a better spelling
+  rule, and it died four ways in one round: `from json import loads as parse`
+  was invisible (`parse` is neither `loads` nor `*_loads`),
+  `parse_json = json.loads` likewise, and — the other direction —
+  `from json import loads as _loads_clean` was TRUSTED, because the marker
+  list matched the name and nothing checked where it came from. Parser
+  identity now comes from the BINDING (imports, aliases, assignments), with
+  raw winning over every naming convention.
+
+- **Three binding forms were invisible to the separator census** (3 lenses,
+  probed). `sep: str = "\n"`, `sep += "\n"` and `(sep := "\n")` were not
+  counted as bindings at all, so a function that binds a comma once and a
+  newline by any of those forms was "proven" non-framing and vanished from
+  the scan entirely — neither RISK nor OK, the same disappearance r5's
+  `split("\n")` conversion caused. Every binding form counts now, and an
+  unrecognised one counts as unresolved.
+
+- **A repair verb that destroys a row must name it** (4 lenses, MEDIUM).
+  `keeping best of 3 identical copies of 'name'` identifies the kept row by
+  the hash prefix and the name — the two things that, by construction, cannot
+  tell the group apart. An operator could not tell which record had just been
+  destroyed, or recover it. Each kept and each removed row is now named by id
+  and `created_at`. The same finding's sibling: r6's stricter validator made
+  "readable but unprovable as a skill" a common outcome, and the summary
+  reported those as corruption, which points the operator at the wrong
+  repair. The two counts are split.
+
+**Receipts:** mutation spec 76 → 93, `93/93 accounted for` on the first
+sweep — eleven r6 anchors that the r7 fixes moved were re-anchored before it
+was called green, and one new mutant is marked `equivalent` with its reason
+(the `clean - raw` subtraction is a second lock on a door the raw-wins
+ordering already closes). Suite: 9811 pass. Blast radius of the stricter
+scanner on the real tree: **zero** for the second round running — 77 RISK
+sites before and after, manifest green.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -713,3 +800,17 @@ before had specifically added. When a check moves, the question is not "is
 the new check better" but "what was the old one catching that nobody wrote
 down" — and the only reliable way to answer it is a mutation the old code
 kills and the new code does not.
+
+The sixth is r7's, and it is the one that does not fit the arc's own frame:
+**preserving every byte is not the same as preserving the meaning.** Every
+rule this arc wrote down guards the bytes — strand the row you cannot read,
+carry it verbatim, announce the drop, never rewrite from the short list. The
+r7 top finding broke none of them. `doctor --cleanup-skills` kept all the
+bytes, deleted nothing, printed `0 removed`, and changed which skill the
+system executes, because `load_skills` reads the file in reverse and position
+decides the winner. A rewrite is only non-destructive if the ORDER survives
+too — and more generally, when a store's readers derive meaning from
+anything other than a row's own content (position, adjacency, file identity),
+that property is part of the data and belongs in the preserve tests. The
+question to ask of any rewrite is not "did I lose a row" but "could a reader
+tell the difference".

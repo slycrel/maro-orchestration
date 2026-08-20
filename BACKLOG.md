@@ -842,6 +842,56 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       framing. Receipts: spec 69 -> 76, 76/76 (2 SKIPs re-anchored
       first); scanner blast radius on the real tree ZERO (77 RISK
       before and after, manifest green).*
+    - *Its adversarial r7 (2026-08-20, FIVE codex seats on the r6 fix
+      layer): **REJECT — seventh round, seventh fix-layer HIGH.** Seven
+      findings, all seven reproduced, zero hallucinations for the third
+      round running. (1) **The rewrite REORDERED the store, and order
+      decides which skill is live.** `load_skills` reads the file in
+      reverse and lets the last row for an id win; the rewrite appended
+      stranded rows after admitted ones, and r6's stricter validator
+      strands more — so a legacy row sharing an id with a verified one
+      was promoted from ignored to LIVE, in a run that printed "0
+      removed" and "kept in place". Every byte survived; the meaning
+      did not. Written in read order now, and the positions ride a side
+      table keyed by object identity: stamping `row["__ordinal"]` would
+      have joined `_dedup_identity`, made every row unique, silently
+      disabled the dedup, and shipped the key into the store. (2) **A
+      mixed-awareness group cannot be ranked and r6 ranked it** —
+      `replace(tzinfo=utc)` is not a conversion, it asserts a fact the
+      row does not carry, and r6 deleted a row on that invented
+      instant; undecidable groups are kept whole with a reason. (3)
+      **The PARSER's own recursion limit was still uncaught**: r6 fixed
+      the walk and left `json.loads`, whose RecursionError is not a
+      JSONDecodeError — a ~50k-deep row killed `poll()` before it could
+      strand or announce. (4) The r6 walk's memory followed WIDTH
+      (MemoryError on a valid 5M-item row under a 96 MiB cap) — stack
+      of iterators now, storage follows depth. (5) **A verdict about
+      safety cannot be read off an identifier**: r6's better spelling
+      rule died four ways — `from json import loads as parse` invisible,
+      `parse_json = json.loads` invisible, and `from json import loads
+      as _loads_clean` TRUSTED; parser identity now comes from the
+      binding, raw beating every naming convention. (6) `sep: str =
+      "\n"`, `sep += "\n"` and `(sep := "\n")` were not counted as
+      bindings, so a live JSONL rewrite vanished from the scan
+      entirely — neither RISK nor OK. (7) A repair verb that destroys a
+      row must NAME it: "keeping best of 3 identical copies of 'x'"
+      identifies rows by the two things that cannot tell them apart;
+      each kept and removed row now carries id and created_at, and
+      "unprovable as a skill" is no longer summarised as corruption.
+      Receipts: spec 76 -> 93, 93/93 first sweep (11 anchors moved by
+      the r7 fixes re-anchored first, 1 new equivalent recorded); 9811
+      tests pass; scanner blast radius ZERO for the second round
+      running (77 RISK before and after, manifest green).*
+    - *Carried lesson from r7: **preserving every byte is not the same
+      as preserving the meaning.** Every rule this arc wrote down
+      guards the bytes — strand what you cannot read, carry it
+      verbatim, announce the drop, never rewrite from the short list —
+      and the r7 top finding broke none of them while still changing
+      which skill the system executes. When a store's readers derive
+      meaning from anything other than a row's own content (position,
+      adjacency, file identity), that property IS part of the data and
+      belongs in the preserve tests. Ask not "did I lose a row" but
+      "could a reader tell the difference".*
     - *Carried lesson from r6, the one that makes six rounds worth it:
       **a correct refactor can delete a guard that was load-bearing
       under another name.** r5 replaced "validate the constructed
