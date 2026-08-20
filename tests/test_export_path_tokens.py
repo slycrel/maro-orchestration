@@ -195,3 +195,112 @@ def test_no_placeholder_ever_survives_into_a_live_workspace(ws, tmp_path):
         if b"%%MARO_" in b and ".import-meta" not in str(p):
             offenders.append(str(p.relative_to(dest)))
     assert not offenders, f"placeholder text left in a live workspace: {offenders}"
+
+
+# ============================================================ review 2026-08-20
+
+def test_import_does_not_touch_members_export_refused_to_tokenize(ws, tmp_path):
+    """Export screens binaries out; import used to expand tokens in EVERY
+    regular member, so a literal token occurring inside a binary was rewritten
+    -- corrupting bytes export had promised to preserve. The two sides now
+    screen by one recorded member list instead of two drifting rules."""
+    (ws / "memory" / "text.jsonl").write_text(f"{ws}/runs/a\n")
+    blob = ws / "memory" / "blob.dat"
+    original = b"BIN\x00%%MARO_WORKSPACE%%/deep\x00tail"
+    blob.write_bytes(original)
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+
+    dest = tmp_path / "dest"; dest.mkdir()
+    assert _run(["import", str(arc)], dest).returncode == 0
+    assert (dest / "memory" / "blob.dat").read_bytes() == original
+
+
+def test_tokenized_archive_advertises_a_new_format(ws, tmp_path):
+    """An importer that predates tokens caps at v2. A tokenized archive must
+    trip its format gate rather than be extracted with placeholders intact."""
+    (ws / "memory" / "x.jsonl").write_text(f"{ws}/runs/a\n")
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    prov = json.loads(_archive_member(arc, "meta/provenance.json"))
+    assert prov["format"] == 3 and prov["path_tokens"]["applied"] is True
+
+
+def test_untokenized_archive_stays_on_the_old_format(ws, tmp_path):
+    """A workspace with no substitutable path must not gratuitously demand a
+    newer importer."""
+    (ws / "memory" / "x.jsonl").write_text("nothing path-shaped here\n")
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    prov = json.loads(_archive_member(arc, "meta/provenance.json"))
+    assert prov["format"] == 2 and not prov["path_tokens"]["applied"]
+
+
+def test_collision_leaves_no_artifact_at_the_requested_path(ws, tmp_path):
+    """'Fails closed' was true of the process and false of the filesystem:
+    tarfile.open truncates its target up front, so a late collision left a
+    valid-looking partial archive where the operator asked for a real one."""
+    for i in range(30):
+        (ws / "memory" / f"f{i}.jsonl").write_text(f"{ws}/runs/{i}\n")
+    (ws / "memory" / "zzz.jsonl").write_text("%%MARO_WORKSPACE%% already here\n")
+    out = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(out)], ws).returncode != 0
+    assert not out.exists(), "partial archive left at the requested path"
+    assert not Path(str(out) + ".partial").exists(), "partial stub left behind"
+
+
+def test_a_pre_existing_archive_survives_a_failed_export(ws, tmp_path):
+    out = tmp_path / "a.tar.gz"
+    out.write_bytes(b"PREVIOUS GOOD ARCHIVE")
+    (ws / "memory" / "x.jsonl").write_text("%%MARO_WORKSPACE%% already here\n")
+    assert _run(["export", "--output", str(out)], ws).returncode != 0
+    assert out.read_bytes() == b"PREVIOUS GOOD ARCHIVE"
+
+
+def test_provenance_always_carries_the_alias_accounting_key(ws, tmp_path):
+    """Alias and symlink spellings normalise on expansion by design (an
+    approved decision), so those occurrences are NOT byte-identical to the
+    source. Import announces them from this key, so it must always be present
+    -- an absent key and a zero count must not be the same thing to a reader.
+
+    The count itself is exercised at unit level in test_path_tokens.py; this
+    checkout's directory name happens to equal the alias, so a CLI-level alias
+    hit is not reproducible here and is not faked.
+    """
+    (ws / "memory" / "x.jsonl").write_text(f"{ws}/runs/a\n")
+    arc = tmp_path / "a.tar.gz"
+    assert _run(["export", "--output", str(arc)], ws).returncode == 0
+    tok = json.loads(_archive_member(arc, "meta/provenance.json"))["path_tokens"]
+    assert "alias_normalized" in tok
+    assert isinstance(tok["alias_normalized"], dict)
+    assert tok["members_rewritten"] == len(tok["members"])
+
+
+@pytest.mark.parametrize("forged,why", [
+    ({"applied": "false"}, "string-typed boolean is truthy"),
+    ({"applied": True, "members": [], "members_rewritten": 0,
+      "occurrences": {}}, "applied with no roots"),
+    ({"applied": True, "roots": [{"token": "%%MARO_WORKSPACE%%", "root": "/w"}],
+      "members": ["a", "b"], "members_rewritten": 1, "occurrences": {}},
+     "declared count disagrees with the member list"),
+    ({"applied": True, "roots": [{"token": "%%MARO_FUTURE%%", "root": "/w"}],
+      "members": [], "members_rewritten": 0, "occurrences": {}},
+     "token from a newer exporter"),
+])
+def test_forged_token_metadata_is_refused(forged, why):
+    """This metadata selects a destructive transform over an extracted
+    workspace, so it is a trust boundary."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    sys.path.insert(0, str(REPO / "src"))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("maro_export_v", EXPORT)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    assert mod._validate_path_tokens(forged), why
+
+
+def test_absent_token_metadata_is_accepted():
+    """A v2 archive is legitimate, not forged -- the negative control."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("maro_export_v2", EXPORT)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    assert mod._validate_path_tokens({}) == []

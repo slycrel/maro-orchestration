@@ -33,6 +33,8 @@ from jsonl_utils import (SkipReport, loads_clean, read_jsonl_tail_counted,
                          store_text)
 from loop_types import StepOutcome, _orch, _project_dir_root
 
+from path_tokens import resolve_stored_path
+
 log = logging.getLogger("maro.loop")
 
 _FREEZE_SENTINEL_PREFIX = "<!-- maro-report: final status="
@@ -450,7 +452,12 @@ def _call_meta(path_str: str) -> Optional[dict]:
             return _call_meta_cache[path_str]
     meta: Optional[dict] = None
     try:
-        rec = json.loads(Path(path_str).read_text(encoding="utf-8"))
+        # Sibling reader missed by the first census (adversarial review
+        # 2026-08-20): a tokenized call_record reached here raw and the
+        # except below turned it into a silent None.
+        from path_tokens import resolve_stored_path
+        rec = json.loads(
+            resolve_stored_path(path_str).read_text(encoding="utf-8"))
         # Caller-stamped purpose (BACKLOG #17 sub-item 2) wins when present;
         # the prompt-opener sniffer is a fallback for records written before
         # record_llm_call() gained the purpose= field.
@@ -1177,8 +1184,9 @@ def _render_verdict(report_dir: Path) -> str:
     )
     result_html = ""
     rp = card.get("result_path")
-    if rp and Path(rp).exists():
-        result_html = f' &middot; <a href="{_esc(_relpath(Path(rp), report_dir))}">result &#8599;</a>'
+    _rp_path = resolve_stored_path(rp) if rp else None
+    if _rp_path is not None and _rp_path.exists():
+        result_html = f' &middot; <a href="{_esc(_relpath(_rp_path, report_dir))}">result &#8599;</a>'
     # Every served artifact, curation-ranked (card.served_artifacts) with
     # stragglers appended — the run-level view; steps that wrote one also
     # link it in-row.
@@ -1744,7 +1752,7 @@ def _gather_run_summaries() -> List[dict]:
             result_path = card.get("result_path")
             if result_path:
                 try:
-                    candidate = Path(result_path).resolve()
+                    candidate = resolve_stored_path(result_path).resolve()
                     result_relpath = str(candidate.relative_to(d.resolve()))
                     if not candidate.is_file() or not result_relpath.startswith("build/"):
                         result_relpath = None

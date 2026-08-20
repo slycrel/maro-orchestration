@@ -93,7 +93,10 @@ def _result_text(card: Dict[str, Any]) -> str:
     rp = card.get("result_path")
     if rp:
         try:
-            parts.append(Path(rp).read_text(
+            # Third reader of a stored result_path, found by censusing the
+            # class rather than fixing the two instances a review named.
+            from path_tokens import resolve_stored_path as _rsp
+            parts.append(_rsp(rp).read_text(
                 encoding="utf-8", errors="replace")[:_RESULT_READ_CAP])
         except Exception:
             pass

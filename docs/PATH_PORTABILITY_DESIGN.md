@@ -279,3 +279,42 @@ This retires none of the 25,278 absolutes already sitting in existing
 archives; `path_rewrite` remains the lane for those and is pinned by
 `test_legacy_untokenized_archive_still_goes_through_path_rewrite`. The box must
 pull this code before any export produces a tokenized archive.
+
+---
+
+## Adversarial round, 2026-08-20 — five HIGHs, all verified, all fixed
+
+Four Codex lenses (Skeptic, Architect, Minimalist, Expert QA) reviewed the
+implementation. Every HIGH reproduced under an independent probe. Recorded
+here because three of them were *claims this document made* that the code did
+not keep.
+
+| # | Defect | Fix |
+|---|---|---|
+| H1 | A tokenized archive still advertised `format: 2`, so an importer predating tokens accepted it, dropped the unknown key, and wrote placeholders into a live workspace | tokenized archives advertise **v3**; untokenized stay v2, so an old importer fails closed on the format gate |
+| H2 | Export screened binaries / `.db` / oversized members out, but import expanded tokens in **every** regular member — corrupting bytes export had promised to preserve | provenance records the **exact member list**; import expands only those. One recorded list instead of two independently drifting screens |
+| H3 | Substitution was a raw `bytes.replace`, so root `/owned` rewrote `/owned-other/violation.txt` — falsifying owned-vs-observed, the guarantee that protects evidence | boundary-aware matching: a root must end at a real path boundary, never mid-component |
+| H4 | "Exactly invertible" and "`--no-rewrite-paths` reproduces source bytes" were false for aliases and symlink twins, which are many-to-one | claims scoped to canonical spellings; alias hits counted per root and **announced on import** |
+| H5 | `path_tokens` was whitelisted but never validated — `"applied": "false"` is truthy, so a corrupt marker activated a destructive transform | full schema validation, failing closed before the workspace is touched |
+
+Mediums fixed alongside: the consumer census was incomplete — **three** raw
+readers, not the two the review found (`loop_report._call_meta`,
+`run_curation`'s `result_path` fallback, and `camera_readout._result_text`, the
+third located by censusing the class instead of fixing the named instances); a
+collision left a partial archive at the operator's requested path
+(`tarfile.open` truncates up front — the archive is now built under `.partial`
+and renamed only on success, so a pre-existing archive survives a failed run);
+token expansion swallowed read errors while printing a success count (now fails
+loudly, and stages every write until all members have been read); and a relaxed
+test assertion had become a tautology (`… or ev["transformed"]` after asserting
+it True).
+
+**The round's own prediction held.** Both mid-development fixes flagged in the
+prompt as prime suspects were the papered-over ones: `extra_roots` — the
+symlink fix — added *more* many-to-one spellings rather than preserving
+invertibility, and adding `path_tokens` to the provenance whitelist repaired
+the drop but not the trust boundary that had caused it.
+
+**What the fixes are not.** They are themselves unreviewed. Across ~50 recorded
+rounds the prior round's fix layer is the likeliest home of the next round's
+worst finding, and this round's changes touch the same seams the HIGHs did.

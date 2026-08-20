@@ -30,11 +30,23 @@ against the live corpus and the codebase, and both collide:
 `%`), and `.format()`. Nothing in the record path applies `%`-interpolation to
 a stored value.
 
-**Invertibility is the contract.** Substitution is prefix-only and the token
-cannot occur in source content (asserted at export, fail-closed), so `expand`
-is an exact inverse of `substitute`. That matters because archives are
-byte-faithful today and it has already paid off — the flat lesson ledger was
-restored 466/466 rows straight out of an archive.
+**Invertibility, stated precisely.** Substitution matches a root only where it
+ends at a real path boundary, and the token cannot occur in source content
+(asserted at export, fail-closed). For a CANONICAL root spelling `expand` is
+therefore an exact inverse of `substitute`, and a round trip is byte-identical.
+That matters because archives are byte-faithful and it has already paid off —
+the flat lesson ledger was restored 466/466 rows straight out of an archive.
+
+**Where it is deliberately NOT exact.** Alias roots (the pre-rename repo
+directory) and symlink twins are MANY-TO-ONE: several source spellings collapse
+to one token, and expansion restores the canonical one. Those occurrences do
+not come back byte-identical, by design — translating the old name is the point
+(Jeremy, 2026-08-18: "ok with the translation to avoid dealing with the 'old'
+format"). `substitute_detail` counts them per root so export can record them and
+import can SAY so, because a normalisation nobody announces is
+indistinguishable from a round trip that silently lost data. An earlier version
+of this docstring claimed exact invertibility globally; the adversarial round of
+2026-08-20 was right that the claim was false for exactly this case.
 
 **What must NOT be substituted.** A path we *wrote*, naming our own data, is
 `owned` and portable. A path we *observed* — a scavenge hit, a write-fence
@@ -45,6 +57,8 @@ distinction (see `docs/PATH_PORTABILITY_DESIGN.md`).
 from __future__ import annotations
 
 import os
+import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -66,6 +80,18 @@ TOKENS: Dict[str, str] = {
 ALIASES: Dict[str, Tuple[str, ...]] = {
     "repo_root": ("openclaw-orchestration",),
 }
+
+
+# Bytes that would extend a path component. A root followed by one of these
+# is a DIFFERENT path (`/owned` vs `/owned-other`, `/w` vs `/w2`), so the root
+# did not actually end there and must not be replaced. Anything else -- `/`,
+# a quote, whitespace, end of data -- is a real boundary.
+_CONTINUATION = rb"A-Za-z0-9._~\-"
+
+
+@lru_cache(maxsize=256)
+def _boundary_re(root: str):
+    return re.compile(re.escape(root.encode()) + rb"(?![" + _CONTINUATION + rb"])")
 
 
 class TokenCollision(RuntimeError):
@@ -105,13 +131,46 @@ class TokenMap:
         return [t for _, t in self.pairs]
 
     def substitute(self, data: bytes) -> Tuple[bytes, int]:
-        n = 0
-        for root, token in self.pairs:
-            rb, tb = root.encode(), token.encode()
-            if rb in data:
-                n += data.count(rb)
-                data = data.replace(rb, tb)
+        """Replace each root that ends at a real path boundary.
+
+        A plain `bytes.replace` is NOT prefix-only: with root `/owned` it
+        rewrites `/owned-other/violation.txt`, which is a DIFFERENT path and,
+        when it is a scavenge hit or a fence violation, is evidence. The
+        owned-vs-observed guarantee rests entirely on this boundary check
+        (adversarial review 2026-08-20, HIGH; the original test used a root
+        sharing no prefix with the observed path, so it proved the fixture
+        rather than the rule).
+        """
+        data, n, _ = self.substitute_detail(data)
         return data, n
+
+    def substitute_detail(self, data: bytes) -> Tuple[bytes, int, Dict[str, int]]:
+        """substitute(), plus per-ROOT counts.
+
+        The caller needs to know how many hits came from a NON-canonical
+        spelling (a historical alias, a symlink twin). Those normalize to the
+        canonical root on expansion, so they are the occurrences a round trip
+        cannot reproduce byte-for-byte -- and a loss that is not counted cannot
+        be announced.
+        """
+        n = 0
+        per: Dict[str, int] = {}
+        for root, token in self.pairs:
+            rx = _boundary_re(root)
+            data, c = rx.subn(token.encode(), data)
+            if c:
+                per[root] = per.get(root, 0) + c
+                n += c
+        return data, n, per
+
+    def is_canonical(self, root: str) -> bool:
+        return self.canonical.get(self.token_for(root), None) == root
+
+    def token_for(self, root: str) -> str:
+        for r, tok in self.pairs:
+            if r == root:
+                return tok
+        return ""
 
     def expand(self, data: bytes) -> Tuple[bytes, int]:
         n = 0

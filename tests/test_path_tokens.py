@@ -128,3 +128,57 @@ def test_local_map_never_emits_an_alias():
     historical directory name."""
     m = pt.build_map({"repo_root": "/x/maro-orchestration"}, aliases=False)
     assert [r for r, _ in m.pairs] == ["/x/maro-orchestration"]
+
+
+# ============================================================ review 2026-08-20
+# Must-detect fixtures for the adversarial round. Each pins a defect that
+# shipped and a negative control, so "found 0" is not taken on trust.
+
+@pytest.mark.parametrize("payload,should_match", [
+    (b"/owned/runs/a",        True),   # real child path
+    (b"/owned",               True),   # the root itself, bare
+    (b'"/owned/x"',           True),   # inside a JSON string
+    (b"/owned\n",             True),   # end of line
+    (b"/owned-other/x",       False),  # DIFFERENT path, shares a prefix
+    (b"/ownedX/x",            False),
+    (b"/owned.bak/x",         False),
+    (b"/owned_2/x",           False),
+])
+def test_substitution_requires_a_real_path_boundary(payload, should_match):
+    """The owned-vs-observed guarantee rests entirely on this. A bare
+    bytes.replace rewrote `/owned-other/violation.txt` -- a fence violation is
+    evidence, and the absolute string IS the finding."""
+    m = pt.build_map({"workspace_root": "/owned"}, aliases=False)
+    out, n = m.substitute(payload)
+    assert bool(n) is should_match, (payload, out)
+    if not should_match:
+        assert out == payload
+
+
+def test_boundary_check_has_a_negative_control():
+    """A root that appears nowhere must produce zero -- proving the matcher
+    can return 0 for the right reason, not because it is inert."""
+    m = pt.build_map({"workspace_root": "/nowhere"}, aliases=False)
+    out, n = m.substitute(b"/owned/runs/a and /elsewhere/b")
+    assert n == 0 and out == b"/owned/runs/a and /elsewhere/b"
+
+
+def test_alias_hits_are_counted_separately_from_canonical_ones():
+    """An alias spelling normalises on expansion, so it is the occurrence a
+    round trip cannot reproduce. A loss that is not counted cannot be
+    announced."""
+    m = pt.build_map({"repo_root": "/x/maro-orchestration"})
+    out, n, per = m.substitute_detail(
+        b"/x/maro-orchestration/a and /x/openclaw-orchestration/b")
+    assert n == 2
+    alias = {r: c for r, c in per.items() if not m.is_canonical(r)}
+    assert alias == {"/x/openclaw-orchestration": 1}
+
+
+def test_canonical_spellings_round_trip_byte_identically():
+    """The invertibility claim, scoped to what it actually covers."""
+    m = pt.build_map({"workspace_root": "/w", "repo_root": "/r/maro-orchestration"})
+    src = b"/w/runs/a\n/r/maro-orchestration/src/x.py\n/w-other/evidence\n"
+    sub, _ = m.substitute(src)
+    back, _ = m.expand(sub)
+    assert back == src

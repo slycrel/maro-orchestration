@@ -371,9 +371,16 @@ class TestArchiveRoundTrip:
         # the copy no longer holds the source's paths. Recording only
         # path_rewrite would make a tokenized import look untransformed.
         assert ev["transformed"] is True
-        assert (ev.get("path_rewrite", {}).get("files_rewritten")
-                or prov.get("path_tokens", {}).get("applied")
-                or ev["transformed"])
+        # Assert the flow that ACTUALLY ran, not a disjunction ending in
+        # `or ev["transformed"]` -- that trailing term made the whole
+        # assertion unfalsifiable after the line above (review 2026-08-20).
+        tok = prov.get("path_tokens") or {}
+        if tok.get("applied"):
+            assert tok["members_rewritten"] == len(tok["members"]) > 0
+            assert not ev.get("path_rewrite", {}).get("files_rewritten"), \
+                "both transforms ran on one archive"
+        else:
+            assert ev["path_rewrite"]["files_rewritten"] > 0
 
 
     def test_legacy_untokenized_archive_still_goes_through_path_rewrite(

@@ -616,7 +616,11 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
         rp = str(card.get("result_path") or "")
         if rp:
             try:
-                top_text = Path(rp).read_text(errors="replace")
+                # The result_path fallback is the sibling branch of the
+                # deliverables loop above; a tokenized value here was
+                # swallowed into an empty answer.
+                from path_tokens import resolve_stored_path as _rsp
+                top_text = _rsp(rp).read_text(errors="replace")
             except Exception:
                 top_text = ""
     body = _strip_result_preamble(top_text)

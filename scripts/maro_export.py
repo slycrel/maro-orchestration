@@ -81,7 +81,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-ARCHIVE_FORMAT = 2
+ARCHIVE_FORMAT = 3
+# v2 = untokenized (the pre-2026-08-20 shape). v3 = root placeholders +
+# meta/provenance.json:path_tokens. A tokenized archive MUST advertise 3: an
+# importer that predates tokens caps at 2, so v3 trips its format gate and it
+# refuses the archive instead of extracting placeholders into a live workspace
+# and silently dropping the key it does not know (adversarial review
+# 2026-08-20, HIGH -- "the box must pull first" is an operational convention,
+# not structural compatibility).
+ARCHIVE_FORMAT_UNTOKENIZED = 2
 _META_PREFIX = "meta/"
 _STAGING_DIRNAME = ".import-meta"
 _REDACT_MARKER = "REDACTED-BY-EXPORT"
@@ -535,14 +543,15 @@ def _tokenize_member(src: Path, rel: str, tok_map, state: dict):
     # be invertible, and a non-invertible archive is worse than none.
     _pt.assert_no_collision([data], tok_map)
 
-    new, count = tok_map.substitute(data)
+    new, count, per_root = tok_map.substitute_detail(data)
     if not count:
         return None
     state["n"] += count
-    for root, token in tok_map.pairs:
-        c = data.count(root.encode())
-        if c:
-            state["counts"][token] = state["counts"].get(token, 0) + c
+    for root, c in per_root.items():
+        token = tok_map.token_for(root)
+        state["counts"][token] = state["counts"].get(token, 0) + c
+        if not tok_map.is_canonical(root):
+            state["alias"][root] = state["alias"].get(root, 0) + c
     out = Path(state["tmpd"]) / f"tok-{len(state['files']):06d}.bin"
     out.write_bytes(new)
     return out
@@ -589,7 +598,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False,
                                         (os.environ.get("MARO_WORKSPACE"),)
                                         if v]},
     ) if tokenize else _pt.TokenMap([])
-    tok_state: dict = {"tmpd": None, "files": [], "counts": {}, "n": 0}
+    tok_state: dict = {"tmpd": None, "files": [], "counts": {},
+                   "n": 0, "alias": {}}
 
     def _abs_for(rel: str) -> Path:
         return ws / Path(*_rel_parts(rel))
@@ -638,7 +648,15 @@ def export_workspace(output_path: Path = None, verbose: bool = False,
             print(f"  add:  {rel} ({tarinfo.size:,} bytes)", file=sys.stderr)
         return tarinfo
 
-    print(f"Exporting {ws} → {output_path}", file=sys.stderr)
+    # Build into a sibling temp file and replace atomically. tarfile.open
+    # TRUNCATES its target immediately, so a collision discovered mid-walk
+    # used to leave a valid-looking partial .tar.gz at the operator's
+    # requested path -- "fails closed" was true of the process and false of
+    # the filesystem (adversarial review 2026-08-20). Any pre-existing
+    # archive at that path also survives a failed run now.
+    _final_path = output_path
+    output_path = _final_path.with_name(_final_path.name + ".partial")
+    print(f"Exporting {ws} → {_final_path}", file=sys.stderr)
 
     import tempfile
     user_config_present = False
@@ -791,7 +809,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False,
             {"event": "export", "at": _utcnow(), "by": _identity()})
 
         provenance = {
-            "format": ARCHIVE_FORMAT,
+            "format": (ARCHIVE_FORMAT if tok_state["n"]
+                       else ARCHIVE_FORMAT_UNTOKENIZED),
             "created_at": _utcnow(),
             "exporter": _identity(),
             # The roots an importer rewrites to its own (path_rewrite.ROLES).
@@ -823,6 +842,20 @@ def export_workspace(output_path: Path = None, verbose: bool = False,
                 "roots": _tok_map.as_manifest(),
                 "occurrences": tok_state["counts"],
                 "members_rewritten": len(tok_state["files"]),
+                # The EXACT members that were substituted. Import expands only
+                # these. Without it, import expanded every regular member --
+                # including binaries, .db snapshots and oversized files that
+                # export had deliberately screened OUT -- so a literal token
+                # occurring naturally in one of them was silently rewritten.
+                # Export and import now screen by the same list rather than by
+                # two independently-drifting rules.
+                "members": sorted(str(Path(*_rel_parts(r)))
+                                  for r, _s, _o in tok_state["files"]),
+                # Occurrences whose SOURCE spelling was a historical alias or a
+                # symlink twin. Those normalize to the canonical root on
+                # expansion, so they are exactly the ones a round trip cannot
+                # reproduce byte-for-byte. Counted so import can say so.
+                "alias_normalized": tok_state["alias"],
             },
             "meta": {
                 "user_config": user_config_present,
@@ -835,6 +868,10 @@ def export_workspace(output_path: Path = None, verbose: bool = False,
         _add_bytes(tar, _META_PREFIX + "provenance.json",
                    json.dumps(provenance, indent=2).encode("utf-8"))
         meta_count += 1
+
+    # Commit point: the archive is complete, so it may take the real name.
+    os.replace(output_path, _final_path)
+    output_path = _final_path
 
     archive_size = output_path.stat().st_size
     print(
@@ -886,6 +923,62 @@ def _validate_provenance(obj):
         "meta": _d("meta"),
         "custody": custody,
     }
+
+
+def _validate_path_tokens(meta) -> list:
+    """Problems with an archive's path_tokens block, or [] if it is sound.
+
+    This metadata selects a DESTRUCTIVE transform over an extracted
+    workspace, so it is a trust boundary and gets validated like one. The
+    whitelist fix that let it reach the importer at all repaired the drop but
+    not the boundary: `bool("false")` is True, so a hand-edited or corrupt
+    marker activated expansion (adversarial review 2026-08-20, HIGH).
+
+    Returns a list of human-readable problems -- the caller fails closed.
+    """
+    if not meta:
+        return []                      # absent is legitimate: a v2 archive
+    problems = []
+    if not isinstance(meta, dict):
+        return ["path_tokens is not an object"]
+    applied = meta.get("applied")
+    if not isinstance(applied, bool):
+        problems.append(f"applied must be a JSON boolean, got {applied!r}")
+        return problems                # everything else is moot
+    if not applied:
+        return problems
+    roots = meta.get("roots")
+    if not isinstance(roots, list) or not roots:
+        problems.append("roots must be a non-empty list when applied is true")
+    else:
+        import path_tokens as _pt
+        known = set(_pt.TOKENS.values())
+        for row in roots:
+            if not isinstance(row, dict):
+                problems.append(f"roots entry is not an object: {row!r}")
+                continue
+            tok, root = row.get("token"), row.get("root")
+            if tok not in known:
+                problems.append(f"unknown token {tok!r} -- this archive was "
+                                "written by a newer exporter")
+            if not isinstance(root, str) or not root.startswith("/"):
+                problems.append(f"root must be an absolute path: {root!r}")
+    members = meta.get("members")
+    if not isinstance(members, list) or not all(
+            isinstance(x, str) for x in members):
+        problems.append("members must be a list of strings")
+    n = meta.get("members_rewritten")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        problems.append(f"members_rewritten must be a non-negative int, got {n!r}")
+    elif isinstance(members, list) and n != len(members):
+        problems.append(f"members_rewritten={n} disagrees with "
+                        f"len(members)={len(members)}")
+    occ = meta.get("occurrences")
+    if not isinstance(occ, dict) or not all(
+            isinstance(v, int) and not isinstance(v, bool) and v >= 0
+            for v in occ.values()):
+        problems.append("occurrences must map tokens to non-negative ints")
+    return problems
 
 
 def _load_provenance(tar, meta_members):
@@ -1297,38 +1390,76 @@ def import_workspace(
         # rewritten bytes.
         rw_report = None
         # Expand root placeholders first. A v3 archive ships tokenized
-        # content plus the root table; expanding is exact by construction, so
-        # this is a restore, not a best-effort rewrite. Legacy archives carry
-        # no token table and fall through to path_rewrite unchanged.
+        # content plus the root table; expanding is exact for canonical
+        # spellings, so this is a restore, not a best-effort rewrite. Legacy
+        # archives carry no token table and fall through to path_rewrite.
         tok_expanded = 0
         _tok_meta = (prov or {}).get("path_tokens") or {}
-        if _tok_meta.get("applied"):
+        _tok_problems = _validate_path_tokens(_tok_meta)
+        if _tok_problems:
+            # Fail CLOSED before touching the workspace. This metadata selects
+            # a destructive transform; a forged or corrupt marker must not be
+            # able to drive it, and `"applied": "false"` is TRUTHY, which the
+            # bare bool() check accepted (adversarial review 2026-08-20, HIGH).
+            raise ValueError(
+                "archive path_tokens metadata is invalid, refusing to expand: "
+                + "; ".join(_tok_problems))
+        if _tok_meta.get("applied") is True:
             import path_tokens as _pt
-            # rewrite_paths=False means "give me the source's view, do not
-            # make it true here" -- so expand to the roots the archive came
-            # from. With the token table that reproduces the source bytes
-            # EXACTLY, which the old best-effort rewrite could only approximate
-            # by leaving them untouched.
+            # rewrite_paths=False means "give me the source's view, do not make
+            # it true here" -- so expand to the roots the archive came from.
             _exp_roots = ((prov or {}).get("source") or {}) if not rewrite_paths else {
                 "workspace_root": str(ws),
                 "maro_user_dir": str(_maro_dir()),
                 "repo_root": str(repo_root()),
             }
             _local = _pt.build_map(_exp_roots, aliases=False)
+            # Only the members export actually substituted. Expanding every
+            # regular member rewrote binaries, .db snapshots and oversized
+            # files that export had screened out -- corrupting bytes export
+            # promised to preserve.
+            _declared = set(_tok_meta.get("members") or [])
+            _staged: list = []
+            _missing: list = []
             for _m, _rel in safe_members:
                 if not _m.isreg():
+                    continue
+                _key = str(Path(*_rel_parts(_rel)))
+                if _key not in _declared:
                     continue
                 _abs = ws / Path(*_rel_parts(_rel))
                 try:
                     _data = _abs.read_bytes()
-                except OSError:
-                    continue
+                except OSError as _exc:
+                    # Never silent: a skipped member leaves a half-expanded
+                    # workspace, and the old code printed a success count
+                    # regardless.
+                    raise OSError(
+                        f"path-token expansion could not read {_key}: {_exc}")
                 _new, _c = _local.expand(_data)
                 if _c:
-                    _abs.write_bytes(_new)
+                    _staged.append((_abs, _new))
                     tok_expanded += _c
-            print(f"  path tokens: expanded {tok_expanded} occurrence(s) "
-                  f"against this install's roots", file=sys.stderr)
+                _declared.discard(_key)
+            if _declared:
+                _missing = sorted(_declared)
+            # Write only after every member has been read and transformed, so
+            # a failure mid-pass cannot leave the workspace half-expanded.
+            for _abs, _new in _staged:
+                _abs.write_bytes(_new)
+            print(f"  path tokens: expanded {tok_expanded} occurrence(s) in "
+                  f"{len(_staged)} member(s)", file=sys.stderr)
+            if _missing:
+                print(f"  WARN: {len(_missing)} declared tokenized member(s) "
+                      f"were not present to expand: {_missing[:5]}",
+                      file=sys.stderr)
+            _alias = _tok_meta.get("alias_normalized") or {}
+            if _alias:
+                _total = sum(int(v) for v in _alias.values())
+                print(f"  NOTE: {_total} occurrence(s) used a historical or "
+                      f"symlinked spelling of a root and were normalized to "
+                      f"the canonical one -- those are NOT byte-identical to "
+                      f"the source: {sorted(_alias)}", file=sys.stderr)
 
         if rewrite_paths and prov is not None:
             import path_rewrite
@@ -1744,7 +1875,22 @@ def main():
     args = parser.parse_args()
 
     if args.command == "export":
-        export_workspace(output_path=args.output, verbose=args.verbose)
+        try:
+            export_workspace(output_path=args.output, verbose=args.verbose)
+        except BaseException:
+            # The archive is built under a `.partial` name and only renamed on
+            # success, so a failure never leaves anything at the requested
+            # path. Sweep the stub too, so a later run does not inherit it.
+            try:
+                if args.output:
+                    _stub = Path(str(args.output) + ".partial")
+                    if _stub.exists():
+                        _stub.unlink()
+                        print(f"  removed partial archive {_stub}",
+                              file=sys.stderr)
+            except OSError:
+                pass
+            raise
     elif args.command == "inspect":
         sys.exit(inspect_archive(args.archive, verbose=args.verbose))
     elif args.command == "import":
