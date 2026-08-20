@@ -279,16 +279,24 @@ def loads_clean(s: str):
                                    "bytes carried as surrogates)", s, 0)
     try:
         value = json.loads(s, object_pairs_hook=_no_duplicate_names)
-    except RecursionError:
-        # json.loads has its OWN depth limit, and it raises RecursionError,
-        # which is not a JSONDecodeError — so a line nested ~50k deep flew
-        # through every `except (json.JSONDecodeError, TypeError)` in the
-        # codebase and killed the caller (adversarial r7, Minimalist, probed:
-        # InterruptQueue.poll() died on one such row before it could strand
-        # it or announce anything). r6 fixed the walk's recursion and left
-        # the parser's. A row this layer cannot parse is a row that strands,
-        # whatever shape the refusal arrives in.
-        raise json.JSONDecodeError("nesting too deep to parse", s, 0) from None
+    except json.JSONDecodeError:
+        raise                       # already the shape every caller catches
+    except Exception as e:
+        # EVERY other way the parser can refuse a line, translated — not a
+        # list of the ones we have met. r7 caught `RecursionError` (json's
+        # own depth limit, raised on a line `json.loads` cannot parse) and
+        # adversarial r8 walked straight past it with the next one:
+        # `int` conversion is capped at 4300 digits and raises ValueError,
+        # so an interrupt row carrying a 5000-digit number killed
+        # `InterruptQueue.poll()` before it could strand the row or announce
+        # anything — the same failure r7 had just fixed, one exception class
+        # over. Naming the classes we have seen is a denylist, and this is
+        # the third round it has failed open. The rule instead: if the
+        # parser did not return a value, the line does not parse, and a line
+        # that does not parse strands. The class is named in the message so
+        # the operator can still see WHY.
+        raise json.JSONDecodeError(f"{type(e).__name__} while parsing: {e}",
+                                   s, 0) from None
 
     if "\\u" in s and _carries_surrogate(value):
         raise json.JSONDecodeError("byte-tainted line (surrogate written as "

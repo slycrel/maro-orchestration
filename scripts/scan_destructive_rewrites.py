@@ -72,12 +72,24 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
     read off an identifier. It comes from the binding:
 
         from jsonl_utils import loads_clean [as X]   -> X is clean
+        import jsonl_utils [as M]                    -> M.loads_clean is clean
         X = loads_clean                              -> X is clean
         from json import loads [as X]                -> X is raw
         X = json.loads / X = J.loads                 -> X is raw
         import json [as J]                           -> J.loads is raw
 
     Anything unresolved stays unproven, and unproven parses do not earn OK.
+
+    r7 kept a fallback for the conventional SPELLING (`loads_clean(...)`
+    with no visible import earned OK), added so the round's own fixtures
+    would pass. Adversarial r8 (3 lenses, probed) walked in through it:
+    `from untrusted_parser import loads_clean` was trusted on the name
+    alone. A fallback added under the pressure of a finding is exactly the
+    shape the previous six rounds keep finding, and this one was in the
+    docstring's own blind spot — the sentence above says unproven parses do
+    not earn OK, and the fallback said otherwise. It is gone; every real
+    caller in this repo imports the wrapper, and the scan proves it (77 RISK
+    sites before and after).
     """
     clean, raw, json_mods = set(), set(), set()
     for n in ast.walk(tree):
@@ -85,12 +97,16 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
             for a in n.names:
                 if a.name == "json":
                     json_mods.add(a.asname or "json")
+                elif a.name.split(".")[-1] == "jsonl_utils":
+                    mod = a.asname or a.name
+                    clean |= {f"{mod}.loads_clean", f"{mod}.{a.name}.loads_clean"}
         elif isinstance(n, ast.ImportFrom):
             for a in n.names:
                 bound = a.asname or a.name
                 if n.module == "json" and a.name == "loads":
                     raw.add(bound)
-                elif a.name in ("loads_clean", "_loads_clean"):
+                elif a.name in ("loads_clean", "_loads_clean") \
+                        and (n.module or "").split(".")[-1] == "jsonl_utils":
                     clean.add(bound)
         elif isinstance(n, ast.Assign) and len(n.targets) == 1 \
                 and isinstance(n.targets[0], ast.Name):
@@ -106,6 +122,77 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
     for mod in json_mods | {"json"}:
         raw.add(f"{mod}.loads")
     return clean - raw, raw
+
+
+def _binding_census(fn) -> "dict[str, list]":
+    """{name: [value per binding]} for every name bound inside `fn`.
+
+    A binding whose value is not a proven constant is `_UNRESOLVED`, and a
+    name bound more than once is unresolved by construction (see the caller).
+
+    r7 enumerated binding NODE TYPES — Assign, AnnAssign, AugAssign,
+    NamedExpr, For, With — and adversarial r8 (2 lenses, probed) found the
+    two it had not thought of: a tuple target (`sep, ignored = "\n", 0`) and
+    a `match` capture (`case {"separator": sep}`). Both made a live JSONL
+    rewrite vanish from the scan entirely — neither RISK nor OK, the same
+    disappearance the arc has now paid for three times.
+
+    Enumerating forms is a denylist, so this does not enumerate. Python
+    marks every name it binds by ASSIGNMENT with `ctx=ast.Store`, so that is
+    what gets counted; the handful of binders that carry a bare `str`
+    instead of a Name node (`except E as x`, `case ... as x`, `case [*rest]`,
+    `import x`, parameters) are listed after it — a short, closed set that
+    the grammar itself defines.
+    """
+    binds: "dict[str, list]" = {}
+    resolved: "dict[int, object]" = {}
+    for n in ast.walk(fn):
+        # A simple `x = <constant>` is the ONLY shape whose value is known.
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant):
+            for target in n.targets:
+                if isinstance(target, ast.Name):
+                    resolved[id(target)] = n.value.value
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            binds.setdefault(n.id, []).append(
+                resolved.get(id(n), _UNRESOLVED))
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            binds.setdefault(n.name, []).append(_UNRESOLVED)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            binds.setdefault(n.name, []).append(_UNRESOLVED)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            binds.setdefault(n.rest, []).append(_UNRESOLVED)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                binds.setdefault((a.asname or a.name).split(".")[0],
+                                 []).append(_UNRESOLVED)
+        elif isinstance(n, ast.arg):
+            binds.setdefault(n.arg, []).append(_UNRESOLVED)
+    return binds
+
+
+def _shadowed(fn) -> set:
+    """Names this function rebinds locally, whatever the module says.
+
+    Adversarial r8 (4 lenses, probed): parser identity was collected
+    module-wide, so `def rewrite(path, loads_clean=json.loads)` and a local
+    `loads_clean = lambda s: json.loads(s)` both parsed with the raw parser
+    while the scanner read the module-level import and said OK. A binding
+    that is not proven clean IN THIS SCOPE cannot inherit the module's
+    proof.
+    """
+    local = set(_binding_census(fn))
+    module_clean, _ = _PARSERS
+    # A local binding can RE-prove itself: importing the wrapper inside the
+    # function is how half this codebase does it (`doctor.py` and
+    # `gc_memory.py` both do), and that import is the proof, not a shadow.
+    keep, local_raw = _parser_names(fn)
+    for n in ast.walk(fn):
+        # ...as is `X = <a name the module already proved clean>`.
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Name) \
+                and n.value.id in module_clean:
+            keep |= {tgt.id for tgt in n.targets if isinstance(tgt, ast.Name)}
+    return local - (keep - local_raw)
 
 
 def _called_names(node: ast.AST) -> set[str]:
@@ -202,34 +289,7 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         # vanish from the scan entirely. Counting bindings is not flow
         # analysis either; it just refuses to pretend. Two bindings means
         # unresolved, and unresolved means framing.
-        binds = {}
-        for n in ast.walk(fn):
-            # EVERY binding form, not just `x = ...`. Adversarial r7 (3
-            # lenses, probed): `sep: str = "\n"`, `sep += "\n"` and
-            # `(sep := "\n")` were all invisible, so a function that binds a
-            # comma once and a newline by any of those forms was "proven"
-            # non-framing and vanished from the scan entirely — neither RISK
-            # nor OK. Counting is not flow analysis; it only has to refuse to
-            # pretend, so an unrecognised binding counts as unresolved.
-            if isinstance(n, ast.Assign):
-                targets, value = n.targets, n.value
-            elif isinstance(n, (ast.AnnAssign, ast.AugAssign)):
-                targets, value = [n.target], getattr(n, "value", None)
-            elif isinstance(n, ast.NamedExpr):
-                targets, value = [n.target], n.value
-            elif isinstance(n, (ast.For, ast.AsyncFor)):
-                targets, value = [n.target], None
-            elif isinstance(n, (ast.With, ast.AsyncWith)):
-                targets = [i.optional_vars for i in n.items if i.optional_vars]
-                value = None
-            else:
-                continue
-            for t in targets:
-                if not isinstance(t, ast.Name):
-                    continue
-                binds.setdefault(t.id, []).append(
-                    value.value if isinstance(n, ast.Assign)
-                    and isinstance(value, ast.Constant) else _UNRESOLVED)
+        binds = _binding_census(fn)
         consts = {k: v[0] for k, v in binds.items() if len(v) == 1}
         file_handles = set()                       # names bound from open()
         for n in ast.walk(fn):
@@ -312,6 +372,7 @@ def _is_open_call(node) -> bool:
 def _parse_calls(fn) -> "tuple[bool, bool]":
     """(calls a proven-clean parser, calls anything else parse-shaped)."""
     clean_names, raw_names = _PARSERS
+    clean_names = clean_names - _shadowed(fn)
     used_clean = used_raw = False
     for n in ast.walk(fn):
         if not isinstance(n, ast.Call):
@@ -332,13 +393,8 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
             used_raw = True
         elif name in clean_names or dotted in clean_names:
             used_clean = True
-        elif name in ("loads_clean", "_loads_clean"):
-            # Conventional name with NO conflicting binding in this module:
-            # the import may live in another function, or in a `*` import.
-            # Named as the fallback it is, and it can never rescue a name
-            # the branch above already proved raw.
-            used_clean = True
-        elif name == "loads" or name.endswith("_loads"):
+        elif name == "loads" or name.endswith("_loads") \
+                or name in ("loads_clean", "_loads_clean"):
             used_raw = True          # parse-shaped and unproven
     return used_clean, used_raw
 

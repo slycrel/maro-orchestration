@@ -951,3 +951,29 @@ class TestNoSingleRowCanCrashThePreflight:
         assert delivered == ["ok"], "a valid STOP was lost to a neighbouring row"
         assert any("cannot be delivered" in r.message for r in caplog.records)
         assert deep in p.read_text(), "the row this could not read was destroyed"
+
+
+class TestNoRowCanTakeTheChannelDownWhateverItsShape:
+    """The r7 sibling: a row `json.loads` refuses with something other than
+    RecursionError. Adversarial r8 probed a 5000-digit integer — valid JSON
+    syntax, refused by CPython's int-conversion limit with ValueError, which
+    `_peek_counted` does not catch."""
+
+    def test_a_row_the_parser_refuses_is_stranded_not_fatal(
+            self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+
+        big = ('{"id": "big", "source": "operator", "intent": "stop", '
+               '"message": "x", "applied": false, "n": ' + "9" * 5000 + '}')
+        good = json.dumps({"id": "ok", "source": "operator", "intent": "stop",
+                           "message": "go", "applied": False,
+                           "created_at": "2026-01-01T00:00:00+00:00"})
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(big + "\n" + good + "\n", encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            delivered = [i.id for i in InterruptQueue(queue_path=p).poll()]
+
+        assert delivered == ["ok"], "a valid STOP was lost to a neighbouring row"
+        assert any("cannot be delivered" in r.message for r in caplog.records)
+        assert big in p.read_text(), "the row this could not read was destroyed"

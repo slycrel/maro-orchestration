@@ -480,3 +480,47 @@ class TestTheParserOwnLimitsAreThisLayersProblem:
                      "[" * 400 + '"\\udcff"' + "]" * 400):
             with pytest.raises(json.JSONDecodeError):
                 loads_clean(line)
+
+
+class TestEveryParserRefusalIsTheShapeCallersCatch:
+    """Adversarial r8 (2 lenses, probed). r7 translated `RecursionError`
+    — the one class it had met — and r8 walked past it with the next one:
+    CPython caps int-from-string conversion at 4300 digits and raises
+    ValueError, so a queue row carrying a 5000-digit number killed
+    `InterruptQueue.poll()` before it could strand the row or announce
+    anything. Naming classes is a denylist. If the parser did not return a
+    value, the line does not parse, and a line that does not parse strands.
+    """
+
+    LINES = {
+        "an integer past the digit limit": '{"n": ' + "9" * 5000 + '}',
+        "nesting past the parser's depth limit":
+            '{"a": ' + "[" * 50000 + "0" + "]" * 50000 + '}',
+    }
+
+    @pytest.mark.parametrize("label", list(LINES))
+    def test_the_refusal_is_a_JSONDecodeError(self, label):
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError) as caught:
+            loads_clean(self.LINES[label])
+        # ...and it still says WHY, so the operator is not handed "invalid
+        # JSON" for a line whose JSON is fine.
+        assert "while parsing" in str(caught.value), label
+
+    def test_a_line_that_parses_is_still_returned(self):
+        """The must-detect other half — translating everything is easy if
+        you translate the successes too."""
+        from jsonl_utils import loads_clean
+
+        assert loads_clean('{"n": 1, "s": "ok"}') == {"n": 1, "s": "ok"}
+
+    def test_the_error_a_caller_already_handles_is_not_re_wrapped(self):
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError) as caught:
+            loads_clean('{"applied": false, "applied": true}')
+        assert "duplicate object name" in str(caught.value)
+        assert "while parsing" not in str(caught.value), \
+            "a refusal this layer raised on purpose was re-wrapped as one " \
+            "the parser raised, which loses which check fired"

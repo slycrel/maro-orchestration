@@ -93,8 +93,8 @@
   {
     "name": "doctor destruction :: a row the verb cannot read is deleted by its rewrite",
     "file": "src/doctor.py",
-    "anchor": "                stranded.append((len(all_skills) + len(stranded), raw))\n                unprovable.append(f\"{type(e).__name__}: {e}\")",
-    "replacement": "                unprovable.append(f\"{type(e).__name__}: {e}\")",
+    "anchor": "            stranded.append((len(all_skills) + len(stranded), raw))\n            kinds.append(kind)",
+    "replacement": "            kinds.append(kind)",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -149,16 +149,16 @@
   {
     "name": "doctor shape :: a JSON value that is not an object reaches .get()",
     "file": "src/doctor.py",
-    "anchor": "                row = _loads_clean(line)\n                if not isinstance(row, dict):",
-    "replacement": "                row = _loads_clean(line)\n                if False:",
+    "anchor": "                if not isinstance(row, dict):\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
+    "replacement": "                if False:\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
     "tests": "tests/test_doctor.py",
     "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) \u2014 so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
   },
   {
     "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
     "file": "src/doctor.py",
-    "anchor": "                stranded.append((len(all_skills) + len(stranded), raw))",
-    "replacement": "                stranded.append((len(all_skills) + len(stranded), line))",
+    "anchor": "            stranded.append((len(all_skills) + len(stranded), raw))",
+    "replacement": "            stranded.append((len(all_skills) + len(stranded), raw.strip()))",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -249,8 +249,8 @@
   {
     "name": "doctor validator :: dict_to_skill is treated as validation again",
     "file": "src/doctor.py",
-    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)\n                ordinals[id(row)] = len(all_skills) + len(stranded)",
-    "replacement": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)\n                ordinals[id(row)] = len(all_skills) + len(stranded)",
+    "anchor": "                from skill_types import validate_skill_row as _to_skill\n                _to_skill(row)",
+    "replacement": "                from skill_types import dict_to_skill as _to_skill\n                _to_skill(row)",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -529,7 +529,7 @@
   {
     "name": "scanner parser spelling :: only literal json.loads counts as unguarded again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "        elif name == \"loads\" or name.endswith(\"_loads\"):\n            used_raw = True          # parse-shaped and unproven",
+    "anchor": "        elif name == \"loads\" or name.endswith(\"_loads\") \\\n                or name in (\"loads_clean\", \"_loads_clean\"):\n            used_raw = True          # parse-shaped and unproven",
     "replacement": "        elif dotted == \"json.loads\":\n            used_raw = True          # parse-shaped and unproven",
     "tests": "tests/test_scan_destructive_rewrites.py"
   },
@@ -544,8 +544,8 @@
     "name": "doctor order :: every admitted row is written at the same position",
     "file": "src/doctor.py",
     "tests": "tests/test_doctor.py",
-    "anchor": "                ordinals[id(row)] = len(all_skills) + len(stranded)",
-    "replacement": "                ordinals[id(row)] = 0"
+    "anchor": "            ordinals[id(row)] = len(all_skills) + len(stranded)",
+    "replacement": "            ordinals[id(row)] = 0"
   },
   {
     "name": "doctor undecidable :: a naive timestamp is ASSERTED to be UTC again",
@@ -579,29 +579,29 @@
     "name": "doctor summary :: an unprovable row is reported as corruption again",
     "file": "src/doctor.py",
     "tests": "tests/test_doctor.py",
-    "anchor": "        schema = sum(1 for reason in unprovable\n                     if reason.startswith((\"KeyError\", \"TypeError\", \"ValueError\")))",
+    "anchor": "        schema = list(kinds).count(\"unprovable\")",
     "replacement": "        schema = 0"
   },
   {
-    "name": "doctor summary :: the reasons a row could not be proven are never collected",
+    "name": "doctor summary :: every stranded row is recorded as the same kind",
     "file": "src/doctor.py",
     "tests": "tests/test_doctor.py",
-    "anchor": "                unprovable.append(f\"{type(e).__name__}: {e}\")",
-    "replacement": "                unprovable.extend([])"
+    "anchor": "            kinds.append(kind)",
+    "replacement": "            kinds.append(\"corrupt\")"
   },
   {
-    "name": "loads_clean depth :: the parser's own RecursionError is left uncaught",
+    "name": "loads_clean refusals :: only the exception classes we have MET are translated",
     "file": "src/jsonl_utils.py",
     "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py",
-    "anchor": "    try:\n        value = json.loads(s, object_pairs_hook=_no_duplicate_names)\n    except RecursionError:",
-    "replacement": "    try:\n        value = json.loads(s, object_pairs_hook=_no_duplicate_names)\n    except ZeroDivisionError:"
+    "anchor": "    except json.JSONDecodeError:\n        raise                       # already the shape every caller catches\n    except Exception as e:",
+    "replacement": "    except json.JSONDecodeError:\n        raise                       # already the shape every caller catches\n    except RecursionError as e:"
   },
   {
     "name": "loads_clean depth :: the deep row is refused as something no caller catches",
     "file": "src/jsonl_utils.py",
     "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py",
-    "anchor": "        raise json.JSONDecodeError(\"nesting too deep to parse\", s, 0) from None",
-    "replacement": "        raise ValueError(\"nesting too deep to parse\") from None"
+    "anchor": "        raise json.JSONDecodeError(f\"{type(e).__name__} while parsing: {e}\",\n                                   s, 0) from None",
+    "replacement": "        raise ValueError(f\"{type(e).__name__} while parsing: {e}\") from None"
   },
   {
     "name": "loads_clean width :: the walk pushes every element instead of an iterator",
@@ -633,24 +633,143 @@
     "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent \u2014 pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
   },
   {
-    "name": "scanner bindings :: annotated and augmented assignments are invisible",
+    "name": "scanner bindings :: only plain assignment targets are counted again",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "            elif isinstance(n, (ast.AnnAssign, ast.AugAssign)):\n                targets, value = [n.target], getattr(n, \"value\", None)",
-    "replacement": "            elif isinstance(n, ast.AnnAssign) and False:\n                targets, value = [n.target], getattr(n, \"value\", None)"
+    "anchor": "        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):\n            binds.setdefault(n.id, []).append(\n                resolved.get(id(n), _UNRESOLVED))",
+    "replacement": "        if isinstance(n, ast.Assign):\n            for t in n.targets:\n                if isinstance(t, ast.Name):\n                    binds.setdefault(t.id, []).append(\n                        resolved.get(id(t), _UNRESOLVED))"
   },
   {
-    "name": "scanner bindings :: a walrus binding is invisible",
+    "name": "scanner bindings :: a match capture is invisible",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "            elif isinstance(n, ast.NamedExpr):\n                targets, value = [n.target], n.value",
-    "replacement": "            elif isinstance(n, ast.NamedExpr) and False:\n                targets, value = [n.target], n.value"
+    "anchor": "        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:\n            binds.setdefault(n.name, []).append(_UNRESOLVED)",
+    "replacement": "        elif False:\n            binds.setdefault(n.name, []).append(_UNRESOLVED)"
   },
   {
-    "name": "scanner bindings :: loop and context-manager targets are invisible",
+    "name": "scanner bindings :: an except alias and a local import are invisible",
     "file": "scripts/scan_destructive_rewrites.py",
     "tests": "tests/test_scan_destructive_rewrites.py",
-    "anchor": "            elif isinstance(n, (ast.For, ast.AsyncFor)):\n                targets, value = [n.target], None\n            elif isinstance(n, (ast.With, ast.AsyncWith)):\n                targets = [i.optional_vars for i in n.items if i.optional_vars]\n                value = None",
-    "replacement": "            elif isinstance(n, (ast.For, ast.AsyncFor)) and False:\n                targets, value = [n.target], None"
+    "anchor": "        elif isinstance(n, ast.ExceptHandler) and n.name:\n            binds.setdefault(n.name, []).append(_UNRESOLVED)",
+    "replacement": "        elif False:\n            binds.setdefault(n.name, []).append(_UNRESOLVED)"
+  },
+  {
+    "name": "doctor path :: the store it rewrites is never named",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "    print(f\"Rewriting {workspace_skills}\")",
+    "replacement": "    print(\"Rewriting\")"
+  },
+  {
+    "name": "doctor path :: the stranded summary drops the store",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "        print(f\"Kept in place in {workspace_skills}: {' + '.join(parts)} \"",
+    "replacement": "        print(f\"Kept in place: {' + '.join(parts)} \""
+  },
+  {
+    "name": "doctor path :: the per-row strand line drops the store",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "            print(f\"{what} kept as-is (not removed) in {workspace_skills}: \"",
+    "replacement": "            print(f\"{what} kept as-is (not removed): \""
+  },
+  {
+    "name": "doctor path :: the closing count drops the store",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "        f\"Cleaned {workspace_skills}: {len(kept)} skills remain \"",
+    "replacement": "        f\"Cleaned: {len(kept)} skills remain \""
+  },
+  {
+    "name": "doctor announce :: the stale row it deletes loses its timestamp",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "            print(f\"  {s.get('id', '?'):12} '{s.get('name', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \u2014 stored hash doesn't match \"\n                  f\"content\")",
+    "replacement": "            print(f\"  {s.get('id', '?'):12} '{s.get('name', '?')}' \"\n                  f\"\u2014 stored hash doesn't match content\")"
+  },
+  {
+    "name": "doctor kind :: a readable row is announced as unreadable",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "            what = (\"Unreadable line\" if kind == \"corrupt\"\n                    else \"Readable line that is not provably a skill\")",
+    "replacement": "            what = \"Unreadable line\""
+  },
+  {
+    "name": "doctor kind :: a validation refusal is filed as byte corruption",
+    "file": "src/doctor.py",
+    "tests": "tests/test_doctor.py",
+    "anchor": "                _strand(raw, \"unprovable\", e)",
+    "replacement": "                _strand(raw, \"corrupt\", e)"
+  },
+  {
+    "name": "loads_clean refusals :: a refusal this layer raised is re-wrapped as the parser's",
+    "file": "src/jsonl_utils.py",
+    "tests": "tests/test_jsonl_utils.py",
+    "anchor": "    except json.JSONDecodeError:\n        raise                       # already the shape every caller catches\n",
+    "replacement": ""
+  },
+  {
+    "name": "scanner scope :: a module-wide proof survives a local rebinding",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    clean_names = clean_names - _shadowed(fn)",
+    "replacement": "    clean_names = clean_names"
+  },
+  {
+    "name": "scanner scope :: nothing counts as a shadow",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    local = set(_binding_census(fn))\n    module_clean, _ = _PARSERS",
+    "replacement": "    local = set()\n    module_clean, _ = _PARSERS"
+  },
+  {
+    "name": "scanner scope :: a local import of the wrapper reads as a shadow",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "    keep, local_raw = _parser_names(fn)",
+    "replacement": "    keep, local_raw = set(), set()"
+  },
+  {
+    "name": "scanner provenance :: any module may supply a name spelled loads_clean",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "                elif a.name in (\"loads_clean\", \"_loads_clean\") \\\n                        and (n.module or \"\").split(\".\")[-1] == \"jsonl_utils\":",
+    "replacement": "                elif a.name in (\"loads_clean\", \"_loads_clean\"):"
+  },
+  {
+    "name": "scanner provenance :: the wrapper called through its own module is unproven",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "                elif a.name.split(\".\")[-1] == \"jsonl_utils\":\n                    mod = a.asname or a.name\n                    clean |= {f\"{mod}.loads_clean\", f\"{mod}.{a.name}.loads_clean\"}",
+    "replacement": "                elif False:\n                    mod = a.asname or a.name\n                    clean |= {f\"{mod}.loads_clean\"}"
+  },
+  {
+    "name": "scanner bindings :: a parameter is not counted as a binding",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "        elif isinstance(n, ast.arg):\n            binds.setdefault(n.arg, []).append(_UNRESOLVED)",
+    "replacement": "        elif False:\n            binds.setdefault(n.arg, []).append(_UNRESOLVED)"
+  },
+  {
+    "name": "scanner bindings :: a mapping rest-capture is invisible",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "        elif isinstance(n, ast.MatchMapping) and n.rest:\n            binds.setdefault(n.rest, []).append(_UNRESOLVED)",
+    "replacement": "        elif False:\n            binds.setdefault(n.rest, []).append(_UNRESOLVED)"
+  },
+  {
+    "name": "scanner bindings :: an import inside the function is invisible",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "        elif isinstance(n, (ast.Import, ast.ImportFrom)):\n            for a in n.names:\n                binds.setdefault((a.asname or a.name).split(\".\")[0],\n                                 []).append(_UNRESOLVED)",
+    "replacement": "        elif False:\n            pass"
+  },
+  {
+    "name": "scanner bindings :: a tuple target resolves to its constant anyway",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "tests": "tests/test_scan_destructive_rewrites.py",
+    "anchor": "            for target in n.targets:\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
+    "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value"
   }
 ]

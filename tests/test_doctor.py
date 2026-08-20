@@ -1012,3 +1012,89 @@ class TestAnUnprovableRowIsNotReportedAsCorruption:
         out = capsys.readouterr().out
         assert "1 unparseable/byte-tainted" in out, out
         assert "1 readable but unprovable as a skill" in out, out
+
+
+class TestTheStoreItRewroteIsNamed:
+    """Adversarial r8 (5/5 seats, probed). r7 named the ROWS and never named
+    the STORE — while its own comment said "the path is part of the result".
+    An operator running cleanup under a MARO_WORKSPACE override, or reading
+    an automation log, could see that a record was destroyed and not which
+    skills.jsonl lost it. That is the retention decree's own sentence, with
+    no executing line behind it until now."""
+
+    def test_every_destructive_announcement_carries_the_store_path(
+            self, tmp_path, capsys):
+        newer = dict(_make_skill("keeper", "n", correct_hash=True),
+                     created_at="2030-01-01T00:00:00+00:00")
+        older = dict(_make_skill("goner", "n", correct_hash=True),
+                     created_at="2020-01-01T00:00:00+00:00")
+        stale = _make_skill("stale", "other", correct_hash=False)
+        f = tmp_path / "elsewhere" / "skills.jsonl"
+        f.parent.mkdir()
+        f.write_bytes("\n".join(json.dumps(r) for r in (newer, older, stale))
+                      .encode() + b"\n" + b'{"id": "torn\xff"}\n')
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert str(f) in out, f"the rewritten store is never named:\n{out}"
+        # ...on the summary line and on the stranded-row line too, not only
+        # in a header a scrolling operator has already lost.
+        assert sum(str(f) in line for line in out.splitlines()) >= 3, out
+
+    def test_the_stale_branch_names_its_row_as_fully_as_the_duplicate_one(
+            self, tmp_path, capsys):
+        """The sibling r7 left half-done: `created_at` is the only thing
+        that tells two rows sharing an id apart, and this branch DELETES."""
+        stale = dict(_make_skill("stale", "n", correct_hash=False),
+                     created_at="2019-07-04T00:00:00+00:00")
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert "2019-07-04T00:00:00+00:00" in out, out
+
+
+class TestTheRefusalKindIsRecordedNotGuessedFromTheExceptionName:
+    """Adversarial r8 (Minimalist + QA, probed). r7 split "corrupt" from
+    "unprovable" by testing the exception's class NAME against three
+    strings, which is a denylist — the same shape r5 already wrote a lesson
+    about. Probed: a 401-digit `success_rate` is valid JSON with readable
+    bytes, is refused with OverflowError, and was reported to the operator
+    as byte corruption."""
+
+    def test_a_readable_row_refused_with_an_unlisted_exception(
+            self, tmp_path, capsys):
+        row = dict(_make_skill("big", "n", correct_hash=True),
+                   success_rate=10 ** 401)
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        out = capsys.readouterr().out
+        assert "OverflowError" in out, out
+        assert "1 readable but unprovable as a skill" in out, out
+        assert "unparseable/byte-tainted" not in out, out
+
+    def test_the_per_row_line_says_which_repair_it_needs(
+            self, tmp_path, capsys):
+        """r7's per-row message called every stranded row "Unreadable",
+        including the ones whose bytes and JSON are fine — contradicting the
+        summary it prints four lines later."""
+        schema = _make_skill("nohash", "n", correct_hash=True)
+        schema.pop("content_hash")
+        f = tmp_path / "skills.jsonl"
+        f.write_bytes(json.dumps(schema).encode() + b"\n"
+                      + b'{"id": "torn\xff"}\n')
+
+        cleanup_workspace_skills(skills_path=f)
+
+        lines = capsys.readouterr().out.splitlines()
+        readable = [l for l in lines if "not provably a skill" in l]
+        unreadable = [l for l in lines if l.startswith("Unreadable line")]
+        assert len(readable) == 1, lines
+        assert len(unreadable) == 1, lines
+        assert "torn" not in readable[0]

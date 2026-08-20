@@ -104,7 +104,11 @@ def load(path):
 
     def test_a_taint_refusing_rewrite_reads_as_ok(self):
         # Negative control for the verdict: the fixed shape.
+        # The import is part of the fixture: adversarial r8 removed the
+        # "conventional name with no visible import" fallback, because it
+        # trusted `from untrusted_parser import loads_clean` on spelling.
         src = '''
+from jsonl_utils import loads_clean
 def rewrite(path, key):
     out = []
     for line in path.read_text().splitlines():
@@ -457,7 +461,8 @@ class TestTheOkVerdictIsNotBoughtByMentioningTheGuard:
     def test_a_genuinely_guarded_rewrite_is_still_ok(self):
         """The negative control — otherwise the rule is just "everything is
         RISK", which tells a triager nothing."""
-        src = ('def poll(path):\n'
+        src = ('from jsonl_utils import loads_clean\n'
+               'def poll(path):\n'
                '    out = []\n'
                '    for line in path.read_text().split("\\n"):\n'
                '        try:\n            loads_clean(line)\n'
@@ -521,9 +526,72 @@ class TestTheOkVerdictSurvivesAnImportRefactor:
     @pytest.mark.parametrize("parse", ["loads_clean", "_loads_clean"])
     def test_the_clean_wrapper_still_earns_ok(self, parse):
         """Negative control — a rule that never says OK tells a triager
-        nothing."""
-        src = "def rewrite(path):\n" + self.BODY % parse
-        assert _scan(src).get("rewrite") == "OK"
+        nothing. The import is what proves it; see the r8 case below."""
+        head = f"from jsonl_utils import loads_clean as {parse}\n" \
+            if parse == "_loads_clean" else "from jsonl_utils import loads_clean\n"
+        assert _scan(head + "def rewrite(path):\n"
+                     + self.BODY % parse).get("rewrite") == "OK"
+
+    @pytest.mark.parametrize("label,head", [
+        ("no import at all", ""),
+        ("imported from somewhere else",
+         "from untrusted_parser import loads_clean\n"),
+        ("imported from a module that merely ends in the right word",
+         "from vendor.not_jsonl_utils import loads_clean\n"),
+    ])
+    def test_the_conventional_name_alone_does_not_earn_ok(self, label, head):
+        """Adversarial r8 (3 lenses, probed). r7 kept a fallback for the
+        conventional spelling, added so its own fixtures would pass, and it
+        trusted any `loads_clean` — including one imported from an arbitrary
+        module. A name is not provenance."""
+        assert _scan(head + "def rewrite(path):\n"
+                     + self.BODY % "loads_clean").get("rewrite") == "RISK", label
+
+
+class TestAModuleWideProofDoesNotSurviveALocalRebinding:
+    """Adversarial r8 (4 lenses, probed): parser identity was collected
+    module-wide, so a function that shadowed the imported wrapper — with a
+    parameter, a default argument, or a plain local assignment — parsed with
+    the raw parser while the scanner read the module-level import and said
+    OK. A binding that is not proven clean IN THIS SCOPE cannot inherit the
+    module's proof."""
+
+    BODY = ('    out = []\n'
+            '    for line in path.read_text().split("\\n"):\n'
+            '        try:\n            loads_clean(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n'
+            '    atomic_write(path, "\\n".join(out))\n')
+
+    HEAD = "from jsonl_utils import loads_clean\nimport json\n"
+
+    @pytest.mark.parametrize("label,sig,prelude", [
+        ("a parameter shadows it", "def rewrite(path, loads_clean):\n", ""),
+        ("a default argument shadows it",
+         "def rewrite(path, loads_clean=json.loads):\n", ""),
+        ("a local assignment rebinds it", "def rewrite(path):\n",
+         "    loads_clean = json.loads\n"),
+        ("a lambda rebinds it", "def rewrite(path):\n",
+         "    loads_clean = lambda s: json.loads(s)\n"),
+    ])
+    def test_a_shadowed_wrapper_is_not_proof(self, label, sig, prelude):
+        assert _scan(self.HEAD + sig + prelude
+                     + self.BODY).get("rewrite") == "RISK", label
+
+    @pytest.mark.parametrize("label,sig,prelude", [
+        ("the function imports it itself", "def rewrite(path):\n",
+         "    from jsonl_utils import loads_clean\n"),
+        ("the function aliases the module-level import",
+         "def rewrite(path):\n", "    loads_clean = _module_level\n"),
+    ])
+    def test_a_local_proof_is_still_a_proof(self, label, sig, prelude):
+        """The must-detect other half. Half this codebase imports the
+        wrapper INSIDE the function (doctor.py, gc_memory.py); reading that
+        import as a shadow would turn every one of them RISK — which is how
+        a strictness change stops being a signal."""
+        head = "from jsonl_utils import loads_clean as _module_level\n"
+        assert _scan(head + sig + prelude
+                     + self.BODY).get("rewrite") == "OK", label
 
 
 class TestASeparatorIsOnlyProvenWhenNothingElseTouchesIt:
@@ -590,3 +658,52 @@ class TestEveryBindingFormCountsAsABinding:
         the resolution logic may as well not exist."""
         src = 'import json\ndef rewrite(path):\n    sep = ","\n' + self.BODY
         assert "rewrite" not in _scan(src)
+
+
+class TestABindingIsAnythingPythonBinds:
+    """Adversarial r8 (2 lenses, probed). r7 enumerated binding NODE TYPES
+    and r8 found the two it had not thought of — a tuple target and a
+    `match` capture — each of which made a live JSONL rewrite vanish from
+    the scan entirely (neither RISK nor OK), which is the same
+    disappearance this arc has now paid for three times. Enumerating forms
+    is a denylist; the census counts Store-context names instead."""
+
+    BODY = ('    out = []\n'
+            '    for line in path.read_text().split(sep):\n'
+            '        try:\n            json.loads(line)\n'
+            '        except Exception:\n            continue\n'
+            '        out.append(line)\n'
+            '    atomic_write(path, "\\n".join(out))\n')
+
+    @pytest.mark.parametrize("label,head", [
+        ("tuple target",
+         'def rewrite(path, nl):\n    sep = ","\n'
+         '    if nl:\n        sep, _unused = "\\n", 0\n'),
+        ("list target",
+         'def rewrite(path, nl):\n    sep = ","\n'
+         '    if nl:\n        [sep, _unused] = ["\\n", 0]\n'),
+        ("starred target",
+         'def rewrite(path, nl):\n    sep = ","\n'
+         '    if nl:\n        sep, *_rest = "\\n", 0\n'),
+        ("match capture",
+         'def rewrite(path, config):\n    sep = ","\n'
+         '    match config:\n        case {"separator": sep}:\n            pass\n'),
+        ("match rest capture",
+         'def rewrite(path, config):\n    sep = ","\n'
+         '    match config:\n        case {"x": 1, **sep}:\n            pass\n'),
+        ("except alias",
+         'def rewrite(path, nl):\n    sep = ","\n'
+         '    try:\n        nl()\n    except Exception as sep:\n        pass\n'),
+        ("a local import",
+         'def rewrite(path, nl):\n    sep = ","\n'
+         '    if nl:\n        from constants import sep\n'),
+    ])
+    def test_a_second_binding_of_any_form_means_unresolved(self, label, head):
+        assert _scan(head + self.BODY).get("rewrite") == "RISK", label
+
+    def test_one_proven_comma_still_buys_silence(self):
+        """The must-detect other half: if every binding form counted as
+        unresolved the rule would just be "everything is RISK"."""
+        src = 'def rewrite(path):\n    sep = ","\n' + self.BODY
+        assert _scan(src).get("rewrite") is None, \
+            "a proven non-newline separator is not line framing"

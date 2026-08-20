@@ -690,12 +690,32 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
     with locked_write(workspace_skills):
         all_skills = []
         stranded: "list[tuple[int, str]]" = []
-        unprovable: "list[str]" = []
+        kinds: "list[str]" = []
         # Position by object identity, NOT a key on the row: every key a row
         # carries is part of `_dedup_identity`, so stamping one on would make
         # every row unique and silently disable the dedup this verb exists
         # for — and it would be written into the store.
         ordinals: "dict[int, int]" = {}
+
+        def _strand(raw: str, kind: str, e: Exception) -> None:
+            """Carry a row through untouched, and say which repair it needs.
+
+            Order is load-bearing. `skills.load_skills` reads the file in
+            reverse and lets the LAST row for an id win, so where a row sits
+            in the file decides which skill is live. Adversarial r7 (Skeptic,
+            probed): the rewrite appended all stranded rows AFTER the
+            admitted ones, and a legacy row sharing an id with a verified one
+            was promoted from ignored to live — by a verb that printed "0
+            removed" and "kept in place". Nothing was deleted and the system
+            still changed behaviour. Positions are carried through and the
+            file is rebuilt in the order it was read.
+            """
+            stranded.append((len(all_skills) + len(stranded), raw))
+            kinds.append(kind)
+            what = ("Unreadable line" if kind == "corrupt"
+                    else "Readable line that is not provably a skill")
+            print(f"{what} kept as-is (not removed) in {workspace_skills}: "
+                  f"{type(e).__name__}: {e}")
         # split("\n"), not splitlines(): JSONL frames on LF alone, while
         # splitlines() also breaks on U+2028/U+2029 and friends, which are
         # legal INSIDE a JSON string — a rewrite would turn one such row
@@ -707,6 +727,19 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
                 continue
             try:
                 row = _loads_clean(line)
+            except Exception as e:
+                # The BYTES or the JSON are the problem. Recorded as a kind
+                # here, where it is known, rather than inferred downstream
+                # from the exception's class name: r7 counted the two
+                # refusals by `reason.startswith(("KeyError", "TypeError",
+                # "ValueError"))`, and adversarial r8 (Minimalist, probed)
+                # walked past it with a 401-digit `success_rate` — valid
+                # JSON, readable bytes, refused with OverflowError, reported
+                # to the operator as byte corruption. That is a denylist
+                # again, and it is the same lesson r5 already wrote down.
+                _strand(raw, "corrupt", e)
+                continue
+            try:
                 if not isinstance(row, dict):
                     # `[]`, `null` and `"x"` are valid JSON but not rows;
                     # without this they reached .get() and crashed the verb.
@@ -728,32 +761,20 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
                 # a decision about which rows to remove.
                 from skill_types import validate_skill_row as _to_skill
                 _to_skill(row)
-                ordinals[id(row)] = len(all_skills) + len(stranded)
-                all_skills.append(row)
             except Exception as e:
-                # Order is load-bearing. `skills.load_skills` reads the file
-                # in reverse and lets the LAST row for an id win, so where a
-                # row sits in the file decides which skill is live.
-                # Adversarial r7 (2026-08-20, Skeptic, probed): r6's stricter
-                # validator strands more rows, the rewrite appended all
-                # stranded rows AFTER the admitted ones, and a legacy row
-                # sharing an id with a verified one was promoted from ignored
-                # to live — by a verb that printed "0 removed" and "kept in
-                # place". Nothing was deleted and the system still changed
-                # behaviour. Positions are carried through and the file is
-                # rebuilt in the order it was read.
-                stranded.append((len(all_skills) + len(stranded), raw))
-                unprovable.append(f"{type(e).__name__}: {e}")
-                print(f"Unreadable line kept as-is (not removed): "
-                      f"{type(e).__name__}: {e}")
+                # Readable. Just not provably a skill — a different repair.
+                _strand(raw, "unprovable", e)
+                continue
+            ordinals[id(row)] = len(all_skills) + len(stranded)
+            all_skills.append(row)
 
         print(f"Loaded {len(all_skills)} skills")
         _cleanup_pass(workspace_skills, all_skills, stranded,
-                      atomic_write, unprovable, ordinals)
+                      atomic_write, kinds, ordinals)
 
 
 def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
-                  unprovable=(), ordinals=None) -> None:
+                  kinds=(), ordinals=None) -> None:
     """Classify and rewrite. Split out only so the lock's scope is one
     `with` block; the caller holds the lock for the whole of this."""
     from collections import defaultdict
@@ -763,7 +784,13 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
     if stale:
         print(f"Found {len(stale)} skill(s) with stale content_hash (test fixtures):")
         for s in stale:
-            print(f"  {s.get('id', '?'):12} '{s.get('name', '?')}' — stored hash doesn't match content")
+            # created_at too: it is the only thing that tells two rows
+            # sharing an id apart, and this branch DELETES the row
+            # (adversarial r8, 2 lenses — r7 named the rows on the duplicate
+            # branch and left its sibling naming half of one).
+            print(f"  {s.get('id', '?'):12} '{s.get('name', '?')}' "
+                  f"({s.get('created_at', '?')}) — stored hash doesn't match "
+                  f"content")
     else:
         print("No stale-hash skills found")
     # Filter by ROW, not by id. Adversarial round 2026-08-20 (Minimalist,
@@ -823,6 +850,12 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
         return (moment_of(skill), float(skill.get("success_rate", 0)),
                 int(skill.get("use_count", 0)))
 
+    # Every destructive verb in this arc owes the operator the path it is
+    # about to rewrite — "the path is part of the result" (retention decree).
+    # r7 named the rows and still never named the store; five of five r8
+    # seats found that independently, and it is the claim the r7 comment
+    # itself makes two lines below without an executing line behind it.
+    print(f"Rewriting {workspace_skills}")
     total_dup_removed = 0
     undecidable = []
     kept = []
@@ -878,7 +911,7 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
                  errors="surrogateescape")
     total_removed = len(stale) + total_dup_removed
     print(
-        f"Cleaned: {len(kept)} skills remain "
+        f"Cleaned {workspace_skills}: {len(kept)} skills remain "
         f"({len(stale)} stale-hash + {total_dup_removed} duplicate(s) removed, "
         f"{total_removed} total)"
     )
@@ -889,17 +922,16 @@ def _cleanup_pass(workspace_skills, all_skills, stranded, atomic_write,
         # validator made the second kind common and the summary reported
         # both as corruption (adversarial r7, QA), which points the operator
         # at the wrong tool.
-        schema = sum(1 for reason in unprovable
-                     if reason.startswith(("KeyError", "TypeError", "ValueError")))
+        schema = list(kinds).count("unprovable")
         corrupt = len(stranded) - schema
         parts = []
         if corrupt:
             parts.append(f"{corrupt} unparseable/byte-tainted")
         if schema:
             parts.append(f"{schema} readable but unprovable as a skill")
-        print(f"Kept in place: {' + '.join(parts)} row(s) "
-              f"— this verb removes stale and duplicate skills, not rows it "
-              f"cannot read or cannot prove")
+        print(f"Kept in place in {workspace_skills}: {' + '.join(parts)} "
+              f"row(s) — this verb removes stale and duplicate skills, not "
+              f"rows it cannot read or cannot prove")
 
 
 def main():
