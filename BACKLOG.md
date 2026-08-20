@@ -954,6 +954,58 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       every json.dumps row already contains, so the assertion could
       not fail), 129/129 after; 9867 tests pass; scanner blast
       radius ZERO for the fourth round running.*
+    - *Its adversarial r10 (2026-08-20, FIVE codex seats on the r9 fix
+      layer): **REJECT — tenth round.** Seven findings, all seven
+      reproduced, zero hallucinations for the sixth round running, and
+      FOUR of the five seats reached the top finding independently by
+      four different routes — the strongest consensus of the arc.
+      **The shared READER admits what every writer refuses.** Nine
+      rounds hardened the write paths; `read_jsonl_announced` — the one
+      door most loaders here use — still parsed with bare `json.loads`
+      on a `bytes.strip()`ed copy, so the whole launder chain
+      reassembled from the read side: `load_skills` built a Skill from
+      a row `loads_clean` rejects, `_save_skills` wrote a CLEAN
+      re-serialised copy AND stranded the raw one, and the laundered
+      twin (landing last) then won last-row-wins. The same door admitted
+      `NaN`, duplicate names and `\x0b{...}`. Fixed at the helper;
+      census first: 141,094 live rows across 1,061 stores, ZERO flips.
+      Also: `_read_skill_stats` was the last read->rewrite pair still on
+      the r8 idiom and destroyed data BOTH ways (a U+2028 row split in
+      two and rejoined with LF under a log line saying "verbatim"; a
+      U+00A0 row deleted uncounted); both skill writers let an
+      UNPROVABLE row decide its own removal, so a schema-drifted row was
+      deleted by an unrelated outcome update — the rule
+      `validate_skill_row`'s docstring has stated since r3, with two
+      callers never moved onto it; `_save_skills` appended strandees to
+      the TAIL of a last-row-wins store, which is a promotion, not
+      preservation; the interrupt PREFLIGHT kept the `l.strip()` idiom
+      r9 removed from its own merge loops, so a queue of nothing but an
+      unreadable row reported empty in silence; and the scanner's cycle
+      detection was still keyed by bare name, so reversing two
+      definitions made a destructive reader vanish from the scan — the
+      fifth disappearance this arc has paid for. Side-find, the only
+      site this round FOUND rather than re-found:
+      `memory_backends.JSONLBackend.read_all` was carrying families A
+      and B at once next to a `rewrite()` whose own comment names the
+      read->transform->rewrite pattern. Gate drift handled out loud:
+      making the scanner lexical moved NINE sites' framing into their
+      `locked_rmw` closures, so the manifest records each move with the
+      inner site that owns it now plus a fifth leg (`blind`) that
+      re-checks the twin is still visible — an exemption that keeps
+      paying for itself. Receipts: spec 129 -> 146 with SEVEN needing
+      work on the first sweep (five were holes in this round's own new
+      tests — the U+2028 fixture never held a U+2028 because json.dumps
+      escapes it; the ordinal test put the carried row first, where
+      tail-append lands it in the same place; the "broken" row used a
+      field dict_to_skill assigns without complaint; nothing
+      distinguished the proof from the constructor because every fixture
+      used a row BOTH reject; and the deep-nesting test went vacuous in
+      this round, when the taint gate tightened past its payload),
+      146/146 after; 9898 tests pass;
+      manifest green at 72 RISK sites; the reader's stricter parse cost
+      248ms -> 1098ms on the largest live store and was brought to 730ms
+      by replacing a per-character surrogate loop with
+      `isascii()` + a UTF-8 encode.*
     - *Carried lesson from r9: **the idiom everyone writes is the one
       nobody reviews.** `line = raw.strip()` sat in five readers,
       survived eight adversarial rounds whose subject was "what can a
@@ -966,6 +1018,21 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       in the decision"** — when rejecting a finding, name the property
       you are relying on and check that it is the property that
       matters.*
+    - *Carried lesson from r10: **a safety rule enforced on the write
+      path and not the read path is not enforced.** Nine rounds hardened
+      every rewrite against byte-tainted rows; the chain reassembled
+      itself through the LOADER, because the writers then serialise the
+      in-memory OBJECT faithfully — which is a clean copy of a row
+      nobody vouched for. Four seats found it from four call sites in
+      one round: that is what a rule with a missing half looks like from
+      outside. Corollaries: **a scope-aware rule applied to two of its
+      four scans is not scope-aware** (the half that still walks is the
+      half that decides — same shape as r10's name-keyed `seen` beside a
+      name-collecting `by_name`, and its converted-two-of-three merge
+      loops); and **an exemption must carry a proof that keeps being
+      checked** — `FIXED` needed `regressed`, `regressed` needed
+      `vanished`, and r10's `MOVED` needed `blind`, or it is a deletion
+      with a comment on it.*
     - *Carried lesson from r8, the arc's most durable: **naming the
       cases you have met is a denylist, and a denylist in a safety check
       fails open on the case nobody has met yet.** Three files, one

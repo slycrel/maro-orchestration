@@ -917,6 +917,147 @@ pass. Scanner blast
 radius on the real tree: **zero** for the fourth round running — 77 RISK
 sites before and after, manifest green.
 
+## Adversarial round 10 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r9 fix layer. **REJECT.** Seven findings, every one
+reproduced before being touched, zero hallucinations for the sixth round
+running. Four of the five seats reached the top finding independently, by
+four different routes — the strongest consensus this arc has produced.
+
+- **The shared READER admits what every writer refuses** (Skeptic +
+  Minimalist + QA + Failure Operator, HIGH, all four probed). Nine rounds
+  hardened the write paths, and `read_jsonl_announced` — the single door
+  most loaders in this repo use — still parsed with bare `json.loads`, on a
+  `bytes.strip()`ed copy. So the whole launder chain reassembled itself from
+  the read side: `load_skills` materialised a Skill from a row `loads_clean`
+  rejects, `_save_skills` wrote a CLEAN re-serialised copy of it and
+  stranded the raw one beside it, and the laundered twin — landing last —
+  then won last-row-wins on the next load. Probed end to end:
+
+      on disk: {"id": "s1", ..., "note": "\udcff"}
+      loads_clean: JSONDecodeError byte-tainted line
+      load_skills -> 1 skill
+      after _save_skills: 2 rows with id s1, one of them clean
+
+  The same door admitted `NaN`, duplicate names, and `\x0b{...}` — the
+  `bytes.strip()` removed bytes JSON does not allow as whitespace, so a line
+  no parser accepts was handed over as a record. Fixed at the helper:
+  `_classify` frames on the physical newline only and parses with
+  `loads_clean`. Census before flipping: **141,094 live rows across 1,061
+  stores, zero flips.**
+
+- **`_read_skill_stats` was the last read→rewrite pair still on the r8
+  idiom** (Skeptic, HIGH, probed). The r9 census missed it, and both halves
+  destroyed data: `splitlines()` broke a valid row at the U+2028 inside a
+  JSON string and `_write_skill_stats` wrote the two fragments back rejoined
+  with LF — the row's bytes CHANGED under a log line that says "carried
+  verbatim" — while `line.strip()` deleted a U+00A0-only row outright,
+  neither stranded nor counted. This is the store every outcome update
+  rewrites.
+
+- **Both skill writers let an unprovable row decide its own removal**
+  (Minimalist + Failure Operator, HIGH, both probed). `validate_skill_row`
+  has said since r3 that *"a caller that REMOVES rows must use this"*, and
+  `save_skill` matched on `.get("id")` while `_save_skills` treated every
+  parseable row as "represented by the list". A row that is valid JSON but
+  not a loadable Skill (`"utility_score": "nope"`) is skipped by
+  `load_skills` with a log line — so it is in no caller's list — and the
+  next unrelated outcome update deleted it. Probed: `good_survives=True
+  drift_survives=False`. The doctrine existed; two callers had not been
+  moved onto it.
+
+- **Carrying a row to the tail is a promotion, not preservation**
+  (Minimalist, HIGH, probed). `_save_skills` appended strandees after every
+  live skill, and this store is read last-row-wins by id. The doctor's
+  rewrite has preserved ordinals since r7; the skills rewrite now does too.
+
+- **The interrupt preflight kept the idiom r9 removed from its own merge
+  loops** (four seats, MEDIUM, probed). `_read_lines` still filtered
+  `if l.strip()`, so a queue holding ONLY an unreadable whitespace row was
+  emptied before `_peek_counted` could count it: `poll()` and `clear()` took
+  their no-preflight early return and reported a quiet queue with no
+  warning, while an operator's undeliverable STOP sat on disk. The r9 test
+  seeded a valid row alongside, which forces the locked merge — so it passed
+  on the defect.
+
+- **The scanner's cycle detection was still keyed by bare name** (three
+  seats, MEDIUM, all probed). r9 taught the call graph that an ambiguous
+  name means "any candidate writes" and then poisoned it with a name-keyed
+  `seen`: evaluating a harmless `save` first inserted `"save"`, and the
+  destructive `A.save` behind it returned False before its body was read.
+  r9's own fixture put the writer first. Reversed, the destructive reader
+  vanished from the scan entirely — the same disappearance r9 was written to
+  fix, one definition-order edit away.
+
+- **r9 made the scanner lexical in two places out of four** (Minimalist +
+  QA, MEDIUM, both probed). `_binding_census` and `_parser_names` got
+  `_own_scope`; `_parse_calls` and `_shadowed`'s re-proof loop kept
+  `ast.walk`. So a `loads_clean` call — or a re-proving assignment — inside
+  a nested helper that need never execute cleared the OUTER function's
+  verdict while every line of its rewrite went through the raw parser:
+  `nested-clean-call: [('OK  ', 5, 'rewrite')]` against
+  `control: [('RISK', 5, 'rewrite')]`.
+
+**The side-find, and the only site this round found rather than re-found.**
+Making the scanner lexical throughout meant `frames_lines` had to read one
+scope too, and that put `memory_backends.JSONLBackend.read_all` in view for
+the first time. It was carrying three of the arc's families at once:
+`read_text(encoding="utf-8")` is a strict whole-file decode and
+`except OSError` does not catch `UnicodeDecodeError` (family B), the
+per-line `except json.JSONDecodeError: pass` dropped rows in silence
+(family A), and `rewrite()` — the method directly below, whose own comment
+names the "read_all → transform → rewrite" pattern — writes the survivors
+back, which turns each silent drop into a deletion. Now on the shared
+announced reader.
+
+**The gate's own drift, handled out loud.** Nine functions whose only
+framing lives in a `locked_rmw` closure stopped being reported under the
+OUTER name — `interrupt.poll`, `gc_memory._gc_outcomes`,
+`memory_ledger.stamp_outcome_verdict` and six more. This is the r3 `_trim`
+situation at nine times the size and it gets the same answer: a surface is
+watched when the scanner can still SEE it, under whatever name owns the
+framing. The manifest records each move with the inner site that owns it
+now, and a fifth gate leg (`blind`) re-checks that each named twin is still
+in the live scan — so the exemption keeps paying for itself instead of
+being a third one-directional excuse. `llm._run_subprocess_safe` is the one
+entry with no twin: hand-re-read, unchanged in its triage (it parses CLI
+NDJSON stdout, no durable store), and recorded as such rather than deleted.
+
+**Cost, measured rather than assumed.** Pointing the shared reader at
+`loads_clean` put a stricter parse on 84 call sites. On this box's largest
+live store (57,843 rows) a full unbounded read went 248 ms → 1098 ms, and
+most of that turned out to be a per-character Python loop hunting
+surrogates in every row. `str.isascii()` plus a UTF-8 encode is the same
+answer at C speed, and tightening the escaped-surrogate gate from `\u` to
+`\ud`/`\uD` (every surrogate escape's hex starts with d) took it to
+**730 ms**. The remaining 2.7× is the C scanner that `object_pairs_hook`
+and `parse_constant` necessarily disable — the price of the duplicate-name
+and non-finite-constant refusals, paid on purpose. Tail reads with a limit
+parse `limit` rows and are unaffected.
+
+**The sweep, which did real work again.** 138/145 on the first pass, and
+five of the seven gaps were holes in the tests this round had just written
+— the r8 and r9 pattern for the third time running. The U+2028 stats
+fixture never contained a U+2028 (`json.dumps` escapes it to six ASCII
+characters, and `splitlines()` does not break on those). The ordinal test
+put the carried row FIRST, where appending it to the tail lands it in the
+same place, so it could not fail. The shadow test's "broken" row used
+`steps_template="not a list"`, which `dict_to_skill` assigns without
+complaint. Nothing distinguished `validate_skill_row` from `dict_to_skill`
+in `_save_skills`, because every fixture used a row BOTH reject — the
+distinguishing shape is a row the constructor accepts and the proof does
+not, carrying a key `skill_to_dict` does not write, which the constructor
+path silently drops on re-serialisation. And the deep-nesting test went
+vacuous in this very round: tightening the taint walk's gate from `\u` to
+`\ud` meant its `\u000a` payload no longer reached the walk. It carries a
+valid surrogate PAIR now. That gate change also introduced case-sensitivity
+where none existed — JSON hex may be uppercase — so `\uDCFF` got its own
+pin and its own mutant. The other two were re-anchors; a SKIP is not a
+pass.
+
+Landed with 146 mutations in the spec (129 → 146), the manifest green at 72
+RISK sites, and 21 new must-detect tests.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1034,3 +1175,37 @@ probed the consequence anyway and found the row being admitted into a
 DELETION decision, which is the thing the doctrine actually protects. When
 rejecting a finding, state the property you are relying on and then check
 that it is the property that matters here.
+
+
+The eleventh is r10's, and it is the arc's own shape turned around: **a
+safety rule enforced on the write path and not the read path is not
+enforced.** Nine rounds hardened every rewrite in this repo against
+byte-tainted rows, and the whole chain reassembled itself through the
+loader — a row the writers refuse became a live object, and the writers
+then serialised that OBJECT faithfully, which is a laundered clean copy of
+a row nobody vouched for. Four seats found it from four different call
+sites in one round, which is what a rule with a missing half looks like
+from the outside. When a property is stated as "this store never contains
+X", the check belongs at every door into the store, and the read door is
+the one that feels harmless.
+
+The twelfth is about half-conversions: **a scope-aware rule applied to two
+of its four scans is not scope-aware, and the half that still walks is the
+one that decides.** r9 gave the binding census and the parser-name scan
+lexical scopes; the proof scan and the shadow re-proof kept `ast.walk`, so
+a nested helper that never executes certified its parent. The same
+half-conversion produced r10's ordering bug (`by_name` collects every
+candidate; `seen` still keyed on the name) and r10's own preflight miss
+(two merge loops converted, their sibling reader left behind). When a rule
+changes, the unit of work is every place that reads the thing it changed —
+list them, then convert them, and make the list a test if it can be one.
+
+The thirteenth is a rule about exemptions, and it is now the third time
+this arc has learned it: **an exemption must carry a proof that keeps being
+checked.** `FIXED` was one-directional until r2 added `regressed`;
+`regressed` could not see a site leaving the scan until r3 added
+`vanished`; and r10's `MOVED` — nine sites now watched under an inner name
+— would have been a blanket "these are allowed to be missing" if the
+`blind` leg did not re-check that each named twin is still visible. Write
+the exemption with the counter-check in the same commit, or the exemption
+is a deletion with a comment on it.
