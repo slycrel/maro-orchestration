@@ -572,8 +572,18 @@ class InterruptQueue:
         # two invalid fragments (adversarial round 2026-08-20, verified).
         # Lines are returned RAW; callers strip only a parsing copy, so what
         # rides a rewrite is byte-for-byte what was on disk.
-        from jsonl_utils import store_text
-        return [l for l in store_text(self.path).split("\n") if l.strip()]
+        from jsonl_utils import is_frame_blank, store_text
+        # is_frame_blank, not `l.strip()`. r9 fixed the two LOCKED merge
+        # loops and left their preflight sibling on the old idiom, so a
+        # queue holding ONLY an unreadable whitespace row (U+00A0, say)
+        # was filtered to empty before _peek_counted could parse it:
+        # poll() and clear() took their no-preflight early return and
+        # reported a quiet queue, with no path-bearing warning, while an
+        # operator's STOP sat on disk undelivered forever. Probed by four
+        # of five r10 seats; the r9 test seeded a valid row alongside, so
+        # it exercised the merge and never this branch.
+        return [l for l in store_text(self.path).split("\n")
+                if not is_frame_blank(l)]
 
 
 # ---------------------------------------------------------------------------

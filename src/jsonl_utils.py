@@ -237,6 +237,27 @@ def store_text(path: Path) -> str:
     return path.read_bytes().decode("utf-8", errors="surrogateescape")
 
 
+def _has_surrogate(s: str) -> bool:
+    """Any lone surrogate in `s` — the same answer as scanning every
+    character, without the per-character Python loop.
+
+    This runs on every row of every announced read (84 call sites since
+    adversarial r10 pointed the shared reader at `loads_clean`), so the
+    character loop it replaces was measurable: 248 ms -> 1098 ms on this
+    box's largest live store, most of it here. `str.isascii()` is a cached
+    flag, and UTF-8 encoding is the C-level test for exactly this property
+    — a lone surrogate is the one thing a `str` can hold that `utf-8`
+    cannot encode.
+    """
+    if s.isascii():
+        return False
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def loads_clean(s: str):
     """json.loads that refuses byte-tainted lines.
 
@@ -274,7 +295,7 @@ def loads_clean(s: str):
       which we discard by an implementation detail, is not something this
       layer may decide: it is a corrupt row, and corrupt rows strand.
     """
-    if any("\ud800" <= ch <= "\udfff" for ch in s):
+    if _has_surrogate(s):
         raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
                                    "bytes carried as surrogates)", s, 0)
     try:
@@ -299,7 +320,11 @@ def loads_clean(s: str):
         raise json.JSONDecodeError(f"{type(e).__name__} while parsing: {e}",
                                    s, 0) from None
 
-    if "\\u" in s and _carries_surrogate(value):
+    # `\ud` / `\uD`, not `\u`: every surrogate escape's four hex digits
+    # start with d, and the wider gate ran the deep walk on every row
+    # carrying any non-ASCII escape at all — which, on this box's largest
+    # store, is most of them.
+    if ("\\ud" in s or "\\uD" in s) and _carries_surrogate(value):
         raise json.JSONDecodeError("byte-tainted line (surrogate written as "
                                    "a \\uDCxx escape)", s, 0)
     return value
@@ -405,16 +430,32 @@ def _classify(raw_line: bytes, counts: Dict[str, int]) -> Optional[Dict[str, Any
     were near-copies of this ladder, and the last time they diverged the
     full scan let UnicodeDecodeError escape against its own docstring.
     """
-    raw_line = raw_line.strip()
-    if not raw_line:
-        return None                      # blank: not a record, not a loss
+    # Framing only. `bytes.strip()` removed \x0b, \x0c and every other
+    # ASCII whitespace byte JSON does NOT allow, so `\x0b{"id": "x"}` — a
+    # line no JSON parser accepts — was admitted as a clean record
+    # (adversarial r10, Expert QA, probed). The reverse iterator has
+    # already dropped the terminator; the forward path has not.
+    if raw_line.endswith(b"\n"):
+        raw_line = raw_line[:-1]
+    if raw_line == b"":
+        return None                      # blank frame: not a record, not a loss
     try:
         text = raw_line.decode("utf-8")
     except UnicodeDecodeError:
         counts["undecodable"] += 1
         return None
     try:
-        item = json.loads(text)
+        # loads_clean, not json.loads. This reader is the ONLY way most
+        # loaders see a store, and a bare parse here re-opened the launder
+        # hole the write paths were hardened against: adversarial r10
+        # (4 of 5 seats, independently probed) traced skills.jsonl —
+        # `load_skills` admitted a row carrying an escaped lone surrogate,
+        # `_save_skills` re-serialized it as a clean JSON row AND stranded
+        # the raw one, and the laundered copy then won last-row-wins. A
+        # row the write path refuses to vouch for must not be a record on
+        # the read path either. Census before the change: 141,094 live
+        # rows across 1,061 stores, zero flips.
+        item = loads_clean(text)
     except json.JSONDecodeError:
         counts["malformed"] += 1
         return None

@@ -2815,3 +2815,192 @@ class TestTheCarriedRowKeepsItsOwnBytes:
         after = f.read_text(encoding="utf-8")
         assert torn in after, "the row this save could not read lost its bytes"
         assert '"id": "new"' in after
+
+
+class TestARowTheParserRefusesIsNotALiveSkill:
+    """Adversarial r10 (4 of 5 seats, each probing it independently — the
+    round's consensus finding). The write paths were hardened to refuse
+    byte-tainted rows; the READ path went through the generic
+    `read_jsonl_announced`, whose `_classify` still used bare `json.loads`.
+    So `load_skills` materialized a Skill from a row `loads_clean` refuses,
+    `_save_skills` wrote a CLEAN re-serialized copy of it, and — because
+    the strandee landed after it — the laundered row then won last-row-wins
+    on the next load. The launder hole the whole arc is about, re-opened
+    from the read side."""
+
+    ROW = ('{"id": "s1", "name": "n", "description": "d", '
+           '"content_hash": "h", "created_at": "2026-01-01T00:00:00", '
+           '"note": "\\udcff"}')
+
+    def test_the_tainted_row_never_becomes_a_skill(self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        f.write_text(self.ROW + "\n", encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        assert skills_mod.load_skills() == []
+
+    def test_no_clean_clone_is_written(self, tmp_path, monkeypatch):
+        """The half that is data loss rather than a bad read: a clean copy
+        on disk makes the corruption undetectable ever after."""
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        f.write_text(self.ROW + "\n", encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+
+        skills_mod._save_skills(skills_mod.load_skills())
+
+        after = f.read_text(encoding="utf-8")
+        assert after.count('"id"') == 1, f"a clone was minted: {after!r}"
+        assert "\\udcff" in after, "the row this save could not read lost its bytes"
+
+
+class TestAnUnprovableRowIsNotAVersionOfAnything:
+    """Adversarial r10 (Minimalist + Failure Operator, both probed). Both
+    skill writers decided what to REMOVE from a row that only had to
+    `loads_clean`-parse — so a row that is valid JSON but not a provable
+    Skill took part in a removal decision about itself. `load_skills` skips
+    such a row with a log line, which means it is in no caller's list, which
+    means the next unrelated outcome update deleted it. This is the rule
+    `validate_skill_row`'s own docstring has stated since r3, applied to the
+    two callers that were still using the constructor."""
+
+    def _store(self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        good = skills_mod.Skill(id="good", name="n", description="d",
+                                trigger_patterns=[], steps_template=["s"],
+                                source_loop_ids=[],
+                                created_at="2026-01-01T00:00:00+00:00")
+        skills_mod.save_skill(good)
+        row = json.loads(f.read_text(encoding="utf-8").strip())
+        drift = dict(row, id="drift", utility_score="nope")
+        f.write_text(json.dumps(drift) + "\n" + json.dumps(row) + "\n",
+                     encoding="utf-8")
+        return skills_mod, f
+
+    def test_the_full_rewrite_keeps_it(self, tmp_path, monkeypatch):
+        skills_mod, f = self._store(tmp_path, monkeypatch)
+        loaded = skills_mod.load_skills()
+        assert [s.id for s in loaded] == ["good"]
+
+        skills_mod._save_skills(loaded)
+
+        after = f.read_text(encoding="utf-8")
+        assert '"utility_score": "nope"' in after, \
+            "an unrelated save deleted a row it could not prove"
+        assert '"id": "good"' in after
+
+    def test_it_keeps_its_ordinal(self, tmp_path, monkeypatch):
+        """The store is read last-row-wins by id, so carrying a row to the
+        TAIL is not preservation — it is a promotion. `doctor` has preserved
+        ordinals since r7; the skills writer appended strandees after every
+        live skill (adversarial r10, Minimalist)."""
+        skills_mod, f = self._store(tmp_path, monkeypatch)
+
+        skills_mod._save_skills(skills_mod.load_skills())
+
+        lines = f.read_text(encoding="utf-8").rstrip("\n").split("\n")
+        assert '"utility_score": "nope"' in lines[0], \
+            f"the carried row was moved: {lines}"
+
+    def test_a_single_skill_save_keeps_it_too(self, tmp_path, monkeypatch):
+        """`save_skill` matched on `.get("id")` alone, so writing skill
+        `drift` would have deleted the row it cannot prove is that skill."""
+        skills_mod, f = self._store(tmp_path, monkeypatch)
+        replacement = skills_mod.Skill(id="drift", name="n2", description="d",
+                                       trigger_patterns=[], steps_template=["s"],
+                                       source_loop_ids=[],
+                                       created_at="2026-02-01T00:00:00+00:00")
+
+        skills_mod.save_skill(replacement)
+
+        after = f.read_text(encoding="utf-8")
+        assert '"utility_score": "nope"' in after
+        assert '"name": "n2"' in after
+
+    def test_a_provable_row_the_caller_dropped_is_still_removed(self):
+        """The negative control, and the reason this is not just 'never
+        delete': graduation, demotion and GC drop skills ON PURPOSE, and
+        that decision must still take effect."""
+        import skills as skills_mod
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "skills.jsonl"
+            import unittest.mock as mock
+            with mock.patch.object(skills_mod, "_skills_path", lambda: f):
+                for i in ("a", "b"):
+                    skills_mod.save_skill(skills_mod.Skill(
+                        id=i, name=i, description="d", trigger_patterns=[],
+                        steps_template=["s"], source_loop_ids=[],
+                        created_at="2026-01-01T00:00:00+00:00"))
+                keep = [s for s in skills_mod.load_skills() if s.id == "a"]
+                skills_mod._save_skills(keep)
+                after = f.read_text(encoding="utf-8")
+        assert '"id": "a"' in after and '"id": "b"' not in after
+
+
+class TestABrokenRowDoesNotHideAWorkingOne:
+    """Adversarial r10, found while probing the one above. `load_skills`
+    claimed an id for `seen_ids` BEFORE converting the row, so the newest
+    UNLOADABLE row for an id shadowed the newest loadable one and the skill
+    left the library with nothing but a count in the log."""
+
+    def test_the_older_valid_version_still_loads(self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        skills_mod.save_skill(skills_mod.Skill(
+            id="x", name="working", description="d", trigger_patterns=[],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00"))
+        row = json.loads(f.read_text(encoding="utf-8").strip())
+        with f.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(dict(row, steps_template="not a list")) + "\n")
+
+        loaded = skills_mod.load_skills()
+
+        assert [s.name for s in loaded] == ["working"]
+
+
+class TestTheSkillStatsRewriteKeepsWhatItCannotRead:
+    """Adversarial r10 (Skeptic, probed): `_read_skill_stats` was the last
+    read->rewrite pair in the arc still on the r8 idiom, and both halves of
+    it destroyed data. `splitlines()` broke a valid row at the U+2028 inside
+    a JSON string and the writer put the two fragments back rejoined with
+    LF — the row's bytes CHANGED while the log said "carried verbatim" —
+    and `line.strip()` deleted a whitespace-only row outright, neither
+    stranded nor counted. This is the hot path every outcome update takes."""
+
+    def test_a_whitespace_only_row_survives(self, tmp_path):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text(json.dumps({"skill_id": "a"}) + "\n\u00a0\n",
+                     encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+        skills_mod._write_skill_stats(f, records, stranded)
+
+        after = f.read_text(encoding="utf-8")
+        assert "\u00a0" in after, "a row the reader could not parse was deleted"
+        assert '"skill_id": "a"' in after
+
+    def test_a_row_holding_U2028_is_not_split_in_two(self, tmp_path):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        row = json.dumps({"skill_id": "b", "note": "x\u2028y"})
+        f.write_text(row + "\n", encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+
+        assert list(records) == ["b"], f"the row was framed apart: {records}"
+        assert records["b"]["note"] == "x\u2028y"
+        assert not stranded

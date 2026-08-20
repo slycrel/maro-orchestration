@@ -91,6 +91,7 @@ _add("read-only", """
  router.py:build_training_data router.py:_count_skill_stats
  memory_quality.py:_load_corpus_from_workspace memory_quality.py:_load_paraphrase_queries
  navigator_shadow.py:_load_navigator_events memory_jsonl.py:_replay
+ jsonl_utils.py:_iter_lines_reverse
  constraint.py:_load_dynamic_constraints closure_verify.py:_detect_next_ledger_gap
  handle.py:_load_user_config knowledge_bridge.py:_extract_llm
  knowledge_bridge.py:upsert_knowledge_from_candidate run_curation.py:_strip_result_preamble
@@ -138,6 +139,46 @@ FIXED = {n for n, c in SITES.items() if c == "REAL"} | {
 # fixed site quietly leaving the field of view.
 
 
+# Sites whose FRAMING moved into a nested scope, and the inner site that
+# owns it now. Adversarial r10 made the scanner lexical throughout — the
+# parse proof, the binding census and the framing test all read one scope
+# — because a clean call inside an uncalled nested helper was certifying
+# its outer destructive rewrite as OK. The cost is that nine functions
+# whose only `split("\n")` lives in a `locked_rmw` closure stopped being
+# reported under the OUTER name.
+#
+# This is the `_trim` situation from r3, at nine times the size, and it
+# gets the same answer: a surface is still watched when the scanner can
+# still SEE it, under whatever name owns the framing. The exemption is
+# proof-carrying — the `blind` leg below re-checks that each named twin is
+# in the live scan, so if a twin ever leaves too, the gate fires instead of
+# reporting green. A blanket "these are allowed to be missing" is exactly
+# the one-directional exemption `regressed` and `vanished` were written
+# against.
+#
+# `llm.py:_run_subprocess_safe` is the one entry with no twin: its framing
+# is in `_drain_new_events`, which the scanner does not report because
+# nothing writes what it returns. Hand-re-read 2026-08-20 and unchanged in
+# its triage — it parses `codex`/`claude` NDJSON stdout, and no durable
+# store is being rebuilt. Recorded as a None rather than deleted, so the
+# row that says "this was looked at" survives the site leaving the scan.
+MOVED: "dict[str, str | None]" = {
+    "llm.py:_run_subprocess_safe": None,
+    "memory_ledger.py:annotate_outcome_lessons":
+        "memory_ledger.py:annotate_outcome_lessons._stamp",
+    "memory_ledger.py:stamp_outcome_verdict":
+        "memory_ledger.py:stamp_outcome_verdict._stamp",
+    "orch_bridges.py:command_execution_bridge":
+        "orch_bridges.py:command_execution_bridge._execute",
+    "orch_bridges.py:review_command_validation_bridge":
+        "orch_bridges.py:review_command_validation_bridge._validate",
+    "pack.py:_append_conflicts_note": "pack.py:_append_conflicts_note.add_once",
+    "gc_memory.py:_gc_outcomes": "gc_memory.py:_gc_outcomes._classify",
+    "interrupt.py:poll": "interrupt.py:poll._mark_applied",
+    "interrupt.py:clear": "interrupt.py:clear._mark_applied",
+}
+
+
 def _scan() -> "tuple[set[str], set[str]]":
     """(RISK sites, EVERY site the scanner reported — RISK and OK alike)."""
     out = subprocess.run([sys.executable, "scripts/scan_destructive_rewrites.py"],
@@ -160,8 +201,8 @@ def _live_sites() -> set[str]:
 
 
 def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
-        "tuple[list[str], list[str], list[str], list[str]]":
-    """(untriaged, stale, regressed, vanished) for a live scan result.
+        "tuple[list[str], list[str], list[str], list[str], list[str]]":
+    """(untriaged, stale, regressed, vanished, blind) for a live scan result.
 
     Pure, so the drift gate itself can be tested against a synthetic live set
     — the runner's own must-detect rule applied to the runner.
@@ -187,18 +228,28 @@ def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
     to all six of its fixed sites. Watching a site means being able to SEE
     it; `seen` is every site the scanner reported, at any verdict. Pass None
     to skip the check (for callers testing the other three legs).
+
+    `blind` exists because of adversarial r10, and because `MOVED` would
+    otherwise be a third one-directional exemption. A moved site is
+    excused from `stale`/`vanished` only while the inner site named as its
+    new home is itself in the live scan; if that twin disappears, the
+    surface is unwatched and this leg says so. The exemption has to keep
+    paying for itself.
     """
     untriaged = sorted(live - set(SITES))
-    stale = sorted((set(SITES) - FIXED) - live)
+    stale = sorted((set(SITES) - FIXED - set(MOVED)) - live)
     regressed = sorted(live & FIXED)
-    vanished = sorted(FIXED - seen) if seen is not None else []
-    return untriaged, stale, regressed, vanished
+    vanished = sorted(FIXED - seen - set(MOVED)) if seen is not None else []
+    blind = sorted(t for t in MOVED.values()
+                   if t is not None and t not in seen) \
+        if seen is not None else []
+    return untriaged, stale, regressed, vanished, blind
 
 
 def main() -> int:
     if "--check" in sys.argv:
         live, seen = _scan()
-        untriaged, stale, regressed, vanished = compare(live, seen)
+        untriaged, stale, regressed, vanished, blind = compare(live, seen)
         for n in untriaged:
             print(f"UNTRIAGED  {n} — new RISK site, not in the manifest")
         for n in stale:
@@ -208,12 +259,21 @@ def main() -> int:
         for n in vanished:
             print(f"VANISHED   {n} — a fixed site the scanner can no longer "
                   f"see at all; the gate is blind to it, not clean")
-        if untriaged or stale or regressed or vanished:
+        for n in blind:
+            print(f"BLIND      {n} — a moved site's new home is not in the "
+                  f"scan either; the MOVED exemption covers nothing")
+        if untriaged or stale or regressed or vanished or blind:
             print(f"\n{len(untriaged)} untriaged, {len(stale)} stale, "
-                  f"{len(regressed)} regressed, {len(vanished)} vanished")
+                  f"{len(regressed)} regressed, {len(vanished)} vanished, "
+                  f"{len(blind)} blind")
             return 1
-        print(f"manifest matches the live scan: {len(SITES) - len(FIXED)} "
-              f"RISK sites, all triaged")
+        # len(live), not a count derived from the manifest: with FIXED and
+        # MOVED both subtracted the arithmetic version drifted from what
+        # the scanner actually reported (78 vs 72), and a gate that prints
+        # a number nobody can reproduce from its own output is the shape
+        # this whole script exists to replace.
+        print(f"manifest matches the live scan: {len(live)} RISK sites, "
+              f"all triaged ({len(MOVED)} watched under a moved name)")
         return 0
     print(f"{len(SITES)} sites triaged 2026-08-20 "
           f"({sum(1 for c in SITES.values() if c == 'REAL')} real, "

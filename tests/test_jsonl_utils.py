@@ -226,8 +226,16 @@ class TestTheSkipReportCounts:
     def test_blank_lines_are_not_counted_as_loss(self, tmp_path):
         # A trailing newline must not read as a corrupt ledger, or every
         # well-formed file on the box reports a drop.
+        #
+        # The `   ` fragment this case used to include moved out to
+        # TestTheSharedReaderRefusesWhatTheWritersRefuse in r10, and the
+        # move is a deliberate behaviour change: `bytes.strip()` made a
+        # whitespace-only row indistinguishable from framing, so a row that
+        # LOST its content was reported as a file that never had one. Only
+        # the empty fragment is framing — the same rule `is_frame_blank`
+        # gave the writers in r9, now read the same way on both sides.
         path = tmp_path / "log.jsonl"
-        path.write_text('{"n": 1}\n\n   \n\n{"n": 2}\n')
+        path.write_text('{"n": 1}\n\n\n{"n": 2}\n')
         records, report = read_jsonl_tail_counted(path)
         assert records == [{"n": 1}, {"n": 2}]
         assert report.dropped == 0
@@ -579,3 +587,82 @@ class TestOnlyTheEmptyFragmentIsFraming:
         with pytest.raises(json.JSONDecodeError):
             loads_clean(' {"a": 1}')
         assert loads_clean(' {"a": 1}\t') == {"a": 1}   # JSON's own whitespace
+
+
+class TestTheSharedReaderRefusesWhatTheWritersRefuse:
+    """Adversarial r10's consensus finding — four of five seats reached it
+    independently, from four different call sites.
+
+    Every write path in this arc was taught to refuse byte-tainted rows.
+    The READ path — `read_jsonl_announced`, the single door most loaders
+    use — still parsed with bare `json.loads` on a `bytes.strip()`ed copy.
+    So a row `loads_clean` rejects became a live record anyway, and the
+    first rewrite that touched the store re-serialized it as clean JSON
+    while separately stranding the raw one: the corruption acquired a
+    laundered twin and the announced-loss count went silent. A row the
+    writers will not vouch for must not be a record on the way in either.
+
+    Live census before the change: 141,094 rows across 1,061 stores, zero
+    of them admitted by `json.loads` and refused by `loads_clean`. The
+    strictness costs nothing that exists; it closes what could arrive.
+    """
+
+    @pytest.mark.parametrize("row,label", [
+        ('{"a": "\\udcff"}', "surrogate as a JSON escape"),
+        ('{"a": 1, "a": 2}', "duplicate names"),
+        ('{"a": NaN}', "a CPython-only constant"),
+        ('\x0b{"a": 1}', "a byte JSON does not allow as whitespace"),
+    ])
+    def test_the_row_is_counted_and_announced_not_admitted(self, tmp_path,
+                                                           row, label):
+        from jsonl_utils import read_jsonl_tail_counted
+        p = tmp_path / "s.jsonl"
+        p.write_text('{"ok": 1}\n' + row + "\n", encoding="utf-8")
+
+        rows, report = read_jsonl_tail_counted(p)
+
+        assert rows == [{"ok": 1}], (label, rows)
+        assert report and report.malformed == 1, (label, report)
+
+    def test_a_blank_frame_is_still_not_a_loss(self, tmp_path):
+        """The negative control. JSONL framing produces empty fragments —
+        a trailing newline makes one every time — and counting those as
+        malformed would make every store on the box announce a loss."""
+        from jsonl_utils import read_jsonl_tail_counted
+        p = tmp_path / "s.jsonl"
+        p.write_text('{"ok": 1}\n\n', encoding="utf-8")
+
+        rows, report = read_jsonl_tail_counted(p)
+
+        assert rows == [{"ok": 1}]
+        assert not report, report
+
+    def test_a_whitespace_only_fragment_is_a_loss(self, tmp_path):
+        """And the other side of that line: `bytes.strip()` made a row of
+        Unicode whitespace indistinguishable from framing, so it vanished
+        uncounted. Only the empty fragment is framing (r9's rule, now
+        applied on the read path too)."""
+        from jsonl_utils import read_jsonl_tail_counted
+        p = tmp_path / "s.jsonl"
+        p.write_text('{"ok": 1}\n\u00a0\n', encoding="utf-8")
+
+        rows, report = read_jsonl_tail_counted(p)
+
+        assert rows == [{"ok": 1}]
+        assert report and report.malformed == 1, report
+
+    def test_the_tail_path_agrees_with_the_full_scan(self, tmp_path,
+                                                     monkeypatch):
+        """The two paths through `_classify` have diverged before (the full
+        scan once let UnicodeDecodeError escape against its own docstring),
+        so the strictness gets checked on both."""
+        import jsonl_utils
+        from jsonl_utils import read_jsonl_tail_counted
+        monkeypatch.setattr(jsonl_utils, "_TAIL_CHUNK_BYTES", 8)
+        p = tmp_path / "s.jsonl"
+        p.write_text('{"ok": 1}\n{"a": NaN}\n', encoding="utf-8")
+
+        rows, report = read_jsonl_tail_counted(p, limit=5)
+
+        assert rows == [{"ok": 1}]
+        assert report and report.malformed == 1, report

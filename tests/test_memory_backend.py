@@ -252,3 +252,68 @@ class TestGetBackend:
         monkeypatch.setenv("MARO_MEMORY_BACKEND", "redis")
         backend = get_backend(tmpdir)
         assert isinstance(backend, JSONLBackend)
+
+
+class TestTheJSONLBackendSurvivesATornByte:
+    """Adversarial r10, and the one site the round found rather than
+    re-found: making the scanner lexical put `JSONLBackend.read_all` into
+    view for the first time, and it was carrying three of the arc's
+    families at once. `read_text(encoding="utf-8")` is a strict whole-file
+    decode and `except OSError` does not catch UnicodeDecodeError, so one
+    torn byte raised out of every caller; the per-line
+    `except json.JSONDecodeError: pass` dropped rows in silence; and
+    `rewrite()` — whose own comment names the read->transform->rewrite
+    pattern — writes the survivors back, which turns each silent drop into
+    a deletion."""
+
+    def test_a_torn_byte_costs_one_record_not_the_whole_collection(self, tmpdir):
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"n": 1})
+        b.append("lessons", {"n": 2})
+        p = b._path("lessons")
+        with p.open("ab") as fh:
+            fh.write(b'{"n": "\xff"}\n')
+
+        records = b.read_all("lessons")
+
+        assert records == [{"n": 1}, {"n": 2}]
+
+    def test_the_torn_row_is_not_destroyed_by_a_read_then_rewrite(self, tmpdir):
+        """The half that is data loss: the drop is right, the silence and
+        the write-back are not."""
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"n": 1})
+        p = b._path("lessons")
+        with p.open("ab") as fh:
+            fh.write(b'{"n": "\xff"}\n')
+        before = p.read_bytes()
+
+        b.read_all("lessons")
+
+        assert p.read_bytes() == before
+
+    def test_the_loss_is_announced_with_the_store_path(self, tmpdir, caplog):
+        import logging
+
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"n": 1})
+        with b._path("lessons").open("ab") as fh:
+            fh.write(b'{"n": "\xff"}\n')
+
+        with caplog.at_level(logging.WARNING):
+            b.read_all("lessons")
+
+        assert any("lessons" in r.getMessage() for r in caplog.records), \
+            [r.getMessage() for r in caplog.records]
+
+    def test_a_healthy_collection_reads_clean_and_quiet(self, tmpdir, caplog):
+        """Negative control."""
+        import logging
+
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"n": 1})
+
+        with caplog.at_level(logging.WARNING):
+            assert b.read_all("lessons") == [{"n": 1}]
+
+        assert not caplog.records, [r.getMessage() for r in caplog.records]

@@ -175,7 +175,7 @@ def test_the_drift_gate_catches_a_brand_new_risk_site():
     so `main()` always returning 0 would still have passed it."""
     tm = _manifest()
     live = (set(tm.SITES) - tm.FIXED) | {"brand_new.py:some_rewrite"}
-    untriaged, stale, regressed, vanished = tm.compare(live)
+    untriaged, stale, regressed, vanished, blind = tm.compare(live)
     assert untriaged == ["brand_new.py:some_rewrite"]
     assert not stale and not regressed and not vanished
 
@@ -183,8 +183,10 @@ def test_the_drift_gate_catches_a_brand_new_risk_site():
 def test_the_drift_gate_catches_a_stale_manifest_entry():
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED
-    dropped = sorted(live)[0]
-    untriaged, stale, regressed, vanished = tm.compare(live - {dropped})
+    # not a MOVED site: those are exempt from `stale` on purpose (r10), and
+    # picking one would test the exemption instead of the leg.
+    dropped = sorted(live - set(tm.MOVED))[0]
+    untriaged, stale, regressed, vanished, blind = tm.compare(live - {dropped})
     assert stale == [dropped]
     assert not untriaged and not regressed and not vanished
 
@@ -197,7 +199,7 @@ def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
     resurfaced = "interrupt.py:poll"
     assert resurfaced in tm.FIXED, "fixture drifted"
     live = (set(tm.SITES) - tm.FIXED) | {resurfaced}
-    untriaged, stale, regressed, vanished = tm.compare(live)
+    untriaged, stale, regressed, vanished, blind = tm.compare(live)
     assert regressed == [resurfaced]
     assert not untriaged and not stale and not vanished
 
@@ -271,8 +273,14 @@ class TestTheScannerSeesTheFramingThisArcConvertedTo:
 
         src = (Path(__file__).parent.parent / "src" / "interrupt.py").read_text(
             encoding="utf-8", errors="surrogateescape")
-        assert _scan(src).get("poll") == "OK", "fixture drifted — poll is not clean"
-        assert _scan(src.replace("_loads_clean(raw)", "json.loads(raw)")).get("poll") \
+        # `poll._mark_applied`, not `poll`: since r10 the scanner reads one
+        # lexical scope, so the site is the closure that frames the lines —
+        # which is where poll's rewrite has always lived. The manifest's
+        # MOVED entry claims exactly this, and this test is what makes the
+        # claim falsifiable rather than a comment.
+        site = "poll._mark_applied"
+        assert _scan(src).get(site) == "OK", "fixture drifted — poll is not clean"
+        assert _scan(src.replace("_loads_clean(raw)", "json.loads(raw)")).get(site) \
             == "RISK", "a reverted poll is invisible to the scanner"
 
     def test_a_split_lf_read_with_no_write_back_is_not_flagged(self):
@@ -304,9 +312,9 @@ def test_the_drift_gate_catches_a_fixed_site_leaving_the_scanners_view():
     it."""
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED
-    gone = sorted(tm.FIXED)[0]
+    gone = sorted(tm.FIXED - set(tm.MOVED))[0]
     seen = live | (tm.FIXED - {gone})
-    untriaged, stale, regressed, vanished = tm.compare(live, seen)
+    untriaged, stale, regressed, vanished, blind = tm.compare(live, seen)
     assert vanished == [gone]
     assert not untriaged and not regressed
 
@@ -315,8 +323,8 @@ def test_the_vanished_leg_is_quiet_when_every_fixed_site_is_still_visible():
     """Negative control — a gate that always fires is not a gate."""
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED
-    untriaged, stale, regressed, vanished = tm.compare(live, live | tm.FIXED)
-    assert not (untriaged or stale or regressed or vanished)
+    untriaged, stale, regressed, vanished, blind = tm.compare(live, live | tm.FIXED)
+    assert not (untriaged or stale or regressed or vanished or blind)
 
 
 def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, capsys):
@@ -326,11 +334,62 @@ def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, caps
 
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED
-    gone = sorted(tm.FIXED)[0]
+    gone = sorted(tm.FIXED - set(tm.MOVED))[0]
     monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - {gone})))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
     assert tm.main() == 1
     assert "VANISHED" in capsys.readouterr().out
+
+
+class TestTheMovedExemptionKeepsPayingForItself:
+    """Adversarial r10 made the scanner lexical, which moved nine sites'
+    framing into the closure that owns it. `MOVED` excuses those from
+    `stale`/`vanished` — and an exemption with no counter-check is the
+    one-directional hole `regressed` and `vanished` were both written
+    against. So the excuse is only good while the scanner can still see the
+    site named as the new home."""
+
+    def test_a_moved_sites_new_home_leaving_the_scan_is_caught(self):
+        tm = _manifest()
+        twin = next(t for t in tm.MOVED.values() if t is not None)
+        live = set(tm.SITES) - tm.FIXED
+        seen = (live | tm.FIXED) - {twin}
+        untriaged, stale, regressed, vanished, blind = tm.compare(live, seen)
+        assert blind == [twin]
+
+    def test_the_moved_sites_themselves_are_not_reported_stale(self):
+        """The negative control: they are absent from the live scan BY
+        DESIGN, and reporting them would make the gate cry wolf nine times
+        on a clean tree."""
+        tm = _manifest()
+        live = (set(tm.SITES) - tm.FIXED) - set(tm.MOVED)
+        untriaged, stale, regressed, vanished, blind = tm.compare(
+            live, live | tm.FIXED)
+        assert not (stale or vanished or blind)
+
+    def test_the_check_verb_exits_nonzero_on_a_blind_moved_site(
+            self, monkeypatch, capsys):
+        """And the GATE, not just its arithmetic."""
+        import sys as _sys
+
+        tm = _manifest()
+        twin = next(t for t in tm.MOVED.values() if t is not None)
+        live = set(tm.SITES) - tm.FIXED
+        monkeypatch.setattr(
+            tm, "_scan", lambda: (live, (live | tm.FIXED) - {twin}))
+        monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
+        assert tm.main() == 1
+        assert "BLIND" in capsys.readouterr().out
+
+    def test_every_named_twin_is_actually_in_the_live_scan(self):
+        """The manifest's own claim, checked against the real scanner: each
+        MOVED entry asserts a surface is still watched somewhere. If that is
+        prose rather than fact, the exemption is a deletion with a comment
+        on it."""
+        tm = _manifest()
+        _live, seen = tm._scan()
+        missing = [t for t in tm.MOVED.values() if t is not None and t not in seen]
+        assert not missing, missing
 
 
 class TestTheScannerSeesEveryLineFramingIdiom:
@@ -813,3 +872,78 @@ class A:
     def test_it_was_seen_without_the_collision_too(self):
         """The control: the finding is the collision, not the shape."""
         assert _scan(self.SRC % "").get("helper") == "RISK"
+
+    def test_the_harmless_twin_coming_FIRST_does_not_poison_the_writer(self):
+        """r9 keyed the call graph's cycle detection on `fn.name`, so the
+        first `save` evaluated inserted "save" into `seen` and every other
+        `save` returned False before its body was read. r9's own fixture put
+        the destructive one first and passed; adversarial r10 (3 seats,
+        independently probed) reversed the order and the reader vanished
+        from the scan entirely — the same disappearance r9 was written to
+        fix, one definition-order edit away. Order is not evidence."""
+        other = ('class B:\n    def save(self, path, text):\n'
+                 '        return len(text)\n')
+        assert _scan(other + self.SRC % "").get("helper") == "RISK"
+
+
+class TestANestedScopeCannotVouchForItsParent:
+    """Adversarial r10 (Minimalist + Expert QA, both probed): r9 gave the
+    binding census and `_parser_names` lexical scopes and left the two
+    scans that USE them walking the whole subtree. So a `loads_clean` call
+    — or a re-proving assignment — inside a nested helper that need never
+    execute cleared the outer function's verdict, while every line of the
+    outer rewrite went through the raw parser."""
+
+    DESTRUCTIVE = (
+        "    keep = []\n"
+        "    for line in open(path).read().split(\"\\n\"):\n"
+        "        if line == \"\":\n"
+        "            continue\n"
+        "        row = %s(line)\n"
+        "        if row.get(\"ok\"):\n"
+        "            keep.append(line)\n"
+        "%s"
+        "    atomic_write(path, \"\\n\".join(keep))\n"
+    )
+
+    def test_a_clean_call_in_a_nested_helper_does_not_certify_the_outer(self):
+        nested = ("    def unrelated(s):\n"
+                  "        return loads_clean(s)\n")
+        src = ("from jsonl_utils import loads_clean\n"
+               "def rewrite(path, parser):\n" + self.DESTRUCTIVE % ("parser", nested))
+        assert _scan(src).get("rewrite") == "RISK"
+
+    def test_the_control_without_the_nested_helper(self):
+        src = ("from jsonl_utils import loads_clean\n"
+               "def rewrite(path, parser):\n" + self.DESTRUCTIVE % ("parser", ""))
+        assert _scan(src).get("rewrite") == "RISK"
+
+    def test_the_outer_calling_it_itself_still_earns_OK(self):
+        """The one that must NOT move: a proof in the function's own scope
+        is still a proof. Without this the fix could be 'always RISK'."""
+        src = ("from jsonl_utils import loads_clean\n"
+               "def rewrite(path):\n" + self.DESTRUCTIVE % ("loads_clean", ""))
+        assert _scan(src).get("rewrite") == "OK"
+
+    def test_a_nested_reproof_does_not_clear_the_outer_parameter_shadow(self):
+        """The `_shadowed` half of the same defect: `def nested():
+        loads_clean = clean` re-proved the OUTER function's
+        `loads_clean=json.loads` parameter."""
+        nested = ("    def nested():\n"
+                  "        loads_clean = clean\n"
+                  "        return loads_clean\n")
+        src = ("import json\n"
+               "from jsonl_utils import loads_clean as clean\n"
+               "def rewrite(path, loads_clean=json.loads):\n"
+               + self.DESTRUCTIVE % ("loads_clean", nested))
+        assert _scan(src).get("rewrite") == "RISK"
+
+    def test_the_same_reproof_in_the_functions_OWN_scope_still_counts(self):
+        """Negative control: the r8 rule this must not undo — a local
+        `X = <module-proved name>` IS a proof when it is in this scope."""
+        src = ("import json\n"
+               "from jsonl_utils import loads_clean as clean\n"
+               "def rewrite(path):\n"
+               "    loads_clean = clean\n"
+               + self.DESTRUCTIVE % ("loads_clean", ""))
+        assert _scan(src).get("rewrite") == "OK"

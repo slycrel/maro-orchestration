@@ -168,7 +168,10 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
     ("evolver_store.py", "revert_suggestion._drop_constraint"): _SUGGESTION_STAMPER,
     ("rules.py", "save_rule._upsert"): _UPSERT_STAMPER,
     ("background.py", "_append_task_log._merge"): _UPSERT_STAMPER,
-    ("skills.py", "save_skill"): _SKILL_UPSERT_STAMPER,
+    # ("skills.py", "save_skill") lived here until adversarial r10. It no
+    # longer drops anything: a row it cannot PROVE is a Skill is carried
+    # through the rewrite instead of being matched on `.get("id")` and
+    # deleted, so the census finds no drop to review.
 }
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
@@ -232,7 +235,9 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("loop_finalize.py", "_mint_run_risks_to_project"): 1,
 
-    ("memory_backends.py", "JSONLBackend.read_all"): 1,
+    # JSONLBackend.read_all was here until adversarial r10 surfaced it as a
+    # live read->rewrite pair (family A + B at once) and moved it onto the
+    # shared announced reader. Deleting the line IS the fix landing.
     ("memory_backends.py", "SQLiteBackend.read_all"): 1,
 
     ("metrics.py", "spend_for_loops"): 1,

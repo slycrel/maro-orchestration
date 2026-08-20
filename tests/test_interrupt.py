@@ -1,6 +1,7 @@
 """Tests for interrupt.py — source-agnostic interrupt queue."""
 
 import json
+import logging
 import os
 import pytest
 from pathlib import Path
@@ -1005,3 +1006,54 @@ class TestTheMergeDoesNotDeleteWhatItCannotRead:
 
         assert blank in p.read_text(encoding="utf-8"), \
             "a row this merge could not read was deleted by the rewrite"
+
+
+class TestAQueueOfNothingButUnreadableRowsStillSpeaks:
+    """Adversarial r10 (four of five seats, probed). r9 converted the two
+    LOCKED merge loops to `is_frame_blank` and left their preflight sibling
+    `_read_lines` on `if l.strip()`. Unicode whitespace is not JSON
+    whitespace, so a queue holding ONLY a U+00A0 row was filtered to empty
+    before `_peek_counted` could parse it: `poll()` and `clear()` took their
+    no-preflight early return and reported a quiet queue with no warning,
+    while an operator's undeliverable STOP sat on disk indefinitely. The r9
+    test seeded a valid row alongside, which forces the locked merge — so it
+    passed on the defect, the exact shape our watch-list calls attacking the
+    new tests."""
+
+    def test_poll_announces_it_instead_of_reporting_empty(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text("\u00a0\n", encoding="utf-8")
+        q = InterruptQueue(p)
+
+        with caplog.at_level(logging.WARNING):
+            assert q.poll() == []
+
+        assert any(str(p) in r.getMessage() for r in caplog.records), \
+            "an undeliverable control message was silently invisible"
+        assert p.read_text(encoding="utf-8") == "\u00a0\n", \
+            "the bytes were destroyed by the read that could not use them"
+
+    def test_clear_announces_it_too(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text("\u00a0\n", encoding="utf-8")
+        q = InterruptQueue(p)
+
+        with caplog.at_level(logging.WARNING):
+            q.clear()
+
+        assert caplog.records, "clear() reported a quiet queue"
+
+    def test_a_genuinely_empty_queue_stays_quiet(self, tmp_path, caplog):
+        """The negative control: a gate that always warns is not a gate,
+        and blank framing is not a lost row."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text("\n\n", encoding="utf-8")
+        q = InterruptQueue(p)
+
+        with caplog.at_level(logging.WARNING):
+            assert q.poll() == []
+
+        assert not caplog.records, [r.message for r in caplog.records]

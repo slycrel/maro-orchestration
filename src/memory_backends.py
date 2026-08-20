@@ -125,22 +125,26 @@ class JSONLBackend(MemoryBackend):
             log.warning("JSONLBackend.append(%s): %s", collection, exc)
 
     def read_all(self, collection: str) -> List[Dict[str, Any]]:
+        """Every record in the collection, with any loss announced.
+
+        Surfaced by adversarial r10: the scanner's new lexical scoping
+        made this pair visible for the first time, and it was carrying
+        three of the arc's families at once. `read_text(encoding="utf-8")`
+        is a STRICT whole-file decode, and `except OSError` does not catch
+        UnicodeDecodeError (a ValueError), so one torn byte raised out of
+        every caller; the per-line `except json.JSONDecodeError: pass`
+        dropped rows in silence; and `rewrite()` — the method directly
+        below, whose own comment names the "read_all -> transform ->
+        rewrite" pattern — writes the survivors back, which turns each
+        silent drop into a deletion. The shared reader answers all three:
+        one torn byte costs one row, the loss is announced with the store
+        path, and a byte-tainted row is refused rather than laundered.
+        """
+        from jsonl_utils import read_jsonl_announced
         path = self._path(collection)
         if not path.exists():
             return []
-        records: List[Dict[str, Any]] = []
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-        except OSError:
-            pass
-        return records
+        return read_jsonl_announced(path, f"JSONLBackend.read_all({collection})")
 
     def rewrite(self, collection: str, records: List[Dict[str, Any]]) -> None:
         # Lock + atomic replace: the bare tmp+replace was atomic for readers

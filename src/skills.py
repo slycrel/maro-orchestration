@@ -50,6 +50,7 @@ from skill_types import (  # noqa: F401 — re-exported for backward compat
     Skill, SkillStats, SkillTestCase, SkillMutationResult,
     compute_skill_hash, verify_skill_hash,
     skill_to_dict, dict_to_skill, normalize_tags,
+    validate_skill_row,
 )
 
 # Module-level imports for clean test patching
@@ -190,8 +191,14 @@ def load_skills() -> List[Skill]:
             sid = d.get("id", "")
             if sid in seen_ids:
                 continue
-            seen_ids.add(sid)
             skill = _dict_to_skill(d)
+            # AFTER the conversion, not before: a schema-drifted row used
+            # to claim its id on the way past and then fail, so the newest
+            # BROKEN row for an id hid the newest WORKING one and the
+            # skill went missing from the library with only a count in the
+            # log (adversarial r10, probed). An unloadable row is not a
+            # version of anything.
+            seen_ids.add(sid)
             # Phase 14: verify hash if one is recorded
             stored_hash = d.get("content_hash", "")
             if stored_hash:
@@ -242,10 +249,20 @@ def save_skill(skill: Skill) -> None:
                 if is_frame_blank(line):
                     continue
                 try:
-                    if _loads_clean(line).get("id") == skill.id:
-                        continue  # replaced below
+                    # validate_skill_row, not `.get("id")`: adversarial r10
+                    # (Minimalist, probed) wrote `{"id":"same","operator_
+                    # note":"keep this row"}` into the store and watched a
+                    # save of skill `same` delete it. A row that cannot be
+                    # PROVEN to be a Skill is not a version of that skill,
+                    # so it cannot be the thing this save replaces — which
+                    # is the rule validate_skill_row's own docstring has
+                    # stated since r3 for exactly this class of caller.
+                    row = validate_skill_row(_loads_clean(line))
                 except Exception:
-                    pass
+                    out.append(line)      # unprovable: carried, never matched
+                    continue
+                if row.id == skill.id:
+                    continue  # replaced below
                 out.append(line)
         out.append(json.dumps(_skill_to_dict(skill)))
         from file_lock import atomic_write
@@ -957,20 +974,27 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
         raise
     tainted = 0
     keyless = 0
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
+    # split("\n") on the RAW line, not splitlines() on a stripped copy.
+    # This function feeds a REWRITE, and adversarial r10 (Skeptic, probed)
+    # found it was the last read->rewrite pair in the arc still using the
+    # r8-era idiom. Both halves destroyed data: `splitlines()` broke a
+    # valid row at the U+2028 inside a JSON string and `_write_skill_stats`
+    # wrote the two fragments back rejoined with LF — the row's bytes
+    # CHANGED while the log said "carried verbatim" — and `line.strip()`
+    # deleted a U+00A0-only row outright, unstranded and uncounted.
+    for line in text.split("\n"):
+        if is_frame_blank(line):
             continue
         try:
-            d = _loads_clean(s)
+            d = _loads_clean(line)
             sid = d.get("skill_id", "")
         except Exception:
             tainted += 1
-            stranded.append(s + "\n")
+            stranded.append(line)
             continue
         if not sid:
             keyless += 1
-            stranded.append(s + "\n")
+            stranded.append(line)
             continue
         records[sid] = d
     if tainted or keyless:
@@ -984,10 +1008,12 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
 def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
     """Crash-safe, byte-safe write-back of the keyed store + its strandees."""
     from file_lock import atomic_write
+    # `stranded` holds raw lines WITHOUT their framing newline (r10), so
+    # the writer owns the framing for both halves.
     atomic_write(
         path,
         "".join(json.dumps(d) + "\n" for d in records.values())
-        + "".join(stranded),
+        + "".join(l + "\n" for l in stranded),
         errors="surrogateescape",
     )
 
@@ -1955,8 +1981,10 @@ def _save_skills(skills: List[Skill]) -> None:
         from file_lock import locked_write, atomic_write
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write(path):
-            keep_ids = {s.id for s in skills}
-            stranded: List[str] = []
+            by_id = {s.id: s for s in skills}
+            out: "List[Optional[str]]" = []
+            slot: dict = {}
+            tainted = unprovable = 0
             if path.exists():
                 # split("\n"), not splitlines(): the latter also breaks on
                 # U+2028/U+2029, which are legal INSIDE a JSON string, and
@@ -1965,27 +1993,71 @@ def _save_skills(skills: List[Skill]) -> None:
                 for line in _store_text(path).split("\n"):
                     if is_frame_blank(line):
                         continue
+                    # Two different unrepresentables, counted apart. The
+                    # RAW line, both to parse and to carry: a stripped copy
+                    # can parse when the row does not, and "verbatim" that
+                    # strips is not verbatim (adversarial r9).
                     try:
-                        # A line we can parse is represented by the list
-                        # (or was deliberately dropped by the caller —
-                        # graduation, demotion, GC). Only lines we CANNOT
-                        # parse are unrepresentable, so only those strand.
-                        # The RAW line, both to parse and to carry: a
-                        # stripped copy can parse when the row does not, and
-                        # "verbatim" that strips is not verbatim
-                        # (adversarial r9).
-                        _loads_clean(line)
+                        d = _loads_clean(line)
                     except Exception:
-                        stranded.append(line)
-            if stranded:
+                        tainted += 1
+                        out.append(line)
+                        continue
+                    try:
+                        # r9 stopped here and called every parseable row
+                        # "represented by the list". Adversarial r10
+                        # (Minimalist + Failure Operator, both probed) showed
+                        # what that costs: a row that is valid JSON but not a
+                        # loadable Skill — `"utility_score": "nope"` — is
+                        # skipped by load_skills with a log line, so it is in
+                        # NO caller's list, and the next unrelated outcome
+                        # update deleted it. Representable means provable,
+                        # the rule validate_skill_row was written for.
+                        row = validate_skill_row(d)
+                    except Exception:
+                        unprovable += 1
+                        out.append(line)
+                        continue
+                    if row.id in by_id:
+                        # Hold this row's ORDINAL. Appending survivors after
+                        # the rewritten skills reorders the store, and this
+                        # store is read last-row-wins by id — so a carried
+                        # row could be promoted over a live skill purely by
+                        # being moved (adversarial r10, Minimalist). The
+                        # doctor's rewrite has preserved ordinals since r7;
+                        # this one now does too. Last occurrence wins, which
+                        # is what the reader would have picked anyway.
+                        slot[row.id] = len(out)
+                        out.append(None)
+                    # else: a proven Skill the caller deliberately dropped
+                    # (graduation, demotion, GC) — that IS a decision.
+            # A writer must not emit a row it would itself refuse. Every
+            # row this function writes is read back by the NEXT call to it,
+            # which since r10 will only let a PROVABLE row take part in a
+            # removal decision — and `content_hash` is one of the fields
+            # `validate_skill_row` requires, because a destructive caller
+            # acts on it. A Skill that never went through `save_skill` (a
+            # cull pool built in memory, say) carries an empty hash, so
+            # without this the store would fill with rows that can never be
+            # removed again: probed by the suite, where a deliberate island
+            # cull left every culled skill live. `save_skill` has always
+            # recomputed on write; this fills the gap for the bulk writer
+            # without erasing a hash the caller deliberately carries.
+            for s in skills:
+                if not s.content_hash:
+                    s.content_hash = compute_skill_hash(s)
+            for sid, i in slot.items():
+                out[i] = json.dumps(_skill_to_dict(by_id[sid]))
+            out.extend(json.dumps(_skill_to_dict(s))
+                       for s in skills if s.id not in slot)
+            if tainted or unprovable:
                 logger.warning(
-                    "[skills] _save_skills: %d unparseable/byte-tainted "
-                    "row(s) carried through the rewrite verbatim (%s)",
-                    len(stranded), path)
+                    "[skills] _save_skills: %d unparseable/byte-tainted and "
+                    "%d unprovable row(s) carried through the rewrite "
+                    "verbatim (%s)", tainted, unprovable, path)
             atomic_write(
                 path,
-                "\n".join([json.dumps(_skill_to_dict(s)) for s in skills]
-                          + stranded) + "\n",
+                "\n".join([l for l in out if l is not None]) + "\n",
                 errors="surrogateescape",
             )
     except Exception as e:

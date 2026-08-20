@@ -212,8 +212,14 @@ def _shadowed(fn) -> set:
     # function is how half this codebase does it (`doctor.py` and
     # `gc_memory.py` both do), and that import is the proof, not a shadow.
     keep, local_raw = _parser_names(fn)
-    for n in ast.walk(fn):
+    for n in _own_scope(fn):
         # ...as is `X = <a name the module already proved clean>`.
+        # _own_scope, not ast.walk: r9 gave the census and the proof scan
+        # lexical scopes and left THIS re-proof loop walking the whole
+        # subtree, so `def nested(): loads_clean = clean` inside the body
+        # cleared the shadow on the outer function's own
+        # `loads_clean=json.loads` parameter and certified it OK
+        # (adversarial r10, Minimalist, probed).
         if isinstance(n, ast.Assign) and isinstance(n.value, ast.Name) \
                 and n.value.id in module_clean:
             keep |= {tgt.id for tgt in n.targets if isinstance(tgt, ast.Name)}
@@ -265,10 +271,19 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
 
     def writes(fn, seen=None):
         """Does fn write back — itself, via an enclosing fn, or a callee?"""
-        seen = seen or set()
-        if fn.name in seen:
+        seen = seen if seen is not None else set()
+        # Cycle detection keys on the NODE, not the name. r9 taught the
+        # call graph that an ambiguous name means "any candidate writes",
+        # then poisoned it with a name-keyed `seen`: evaluating a harmless
+        # `save` first inserted "save", and the destructive `A.save` right
+        # behind it returned False before its body was read. The r9 fixture
+        # happened to put the writer first, so the whole disappearance came
+        # back the moment the definitions were reordered — the reader
+        # vanished from the scan entirely, neither RISK nor OK (adversarial
+        # r10, 3 seats, independently probed).
+        if id(fn) in seen:
             return False
-        seen.add(fn.name)
+        seen.add(id(fn))
         dump = ast.dump(fn)
         if any(m in dump for m in WRITE_MARKERS):
             return True
@@ -325,11 +340,22 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         binds = _binding_census(fn)
         consts = {k: v[0] for k, v in binds.items() if len(v) == 1}
         file_handles = set()                       # names bound from open()
-        for n in ast.walk(fn):
+        # _own_scope, like the census and the proof scan. The SCOPE is the
+        # site: r10 made the parse proof lexical and left this walking the
+        # whole subtree, and the mismatch flagged 21 functions whose only
+        # framing AND only parse both live in a `locked_rmw` closure — the
+        # outer function inherited the nested framing but no longer
+        # inherited the nested proof, so `memory_ledger.stamp_outcome_*`
+        # and friends turned RISK without one line of their code changing.
+        # Each closure is already scanned as its own site (the manifest has
+        # carried `poll._mark_applied` and `stamp_outcome_verdict._stamp`
+        # since r1), so nothing stops being watched; it is watched under
+        # the name that owns the framing.
+        for n in _own_scope(fn):
             for target, value in _bindings(n):
                 if _is_open_call(value) and isinstance(target, ast.Name):
                     file_handles.add(target.id)
-        for n in ast.walk(fn):
+        for n in _own_scope(fn):
             if isinstance(n, (ast.For, ast.AsyncFor)):
                 it = n.iter
                 if isinstance(it, ast.Name) and it.id in file_handles:
@@ -414,7 +440,14 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
     clean_names = {n for n in clean_names - shadow
                    if n.split(".")[0] not in shadow}
     used_clean = used_raw = False
-    for n in ast.walk(fn):
+    # _own_scope, not ast.walk. The same r9 half-conversion: a
+    # `loads_clean(s)` call sitting in a nested helper — which need never
+    # execute — counted as the OUTER function's taint-refusing parse, so a
+    # rewrite parsing every line with a raw `parser(line)` came out OK
+    # (adversarial r10, 2 seats, probed). Nested functions are scanned as
+    # their own sites, so the call is still looked at, in the scope that
+    # actually makes it.
+    for n in _own_scope(fn):
         if not isinstance(n, ast.Call):
             continue
         f = n.func
