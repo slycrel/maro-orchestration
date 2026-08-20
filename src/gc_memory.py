@@ -15,11 +15,17 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
+
+# Store-hygiene helpers (2026-08-20 destructive-rewrite sweep triage).
+from jsonl_utils import loads_clean as _loads_clean, store_text as _store_text
+
+log = logging.getLogger("maro.gc")
 
 
 # ---------------------------------------------------------------------------
@@ -96,27 +102,45 @@ def _gc_outcomes(
     dropped = []
     total = 0
 
+    # Byte-safe read (2026-08-20, destructive-rewrite sweep triage). This was
+    # a strict decode inside `except Exception: return 0, 0, 0`, so ONE
+    # crash-torn byte anywhere in outcomes.jsonl silently DISABLED outcome
+    # retention forever: every later GC reported (0, 0, 0) — "nothing to
+    # collect" — with no log line at all, and the store grew without bound.
+    # Probed 2026-08-20: (2, 1, 0) before the torn append, (0, 0, 0) after.
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            total += 1
-            try:
-                d = json.loads(line)
-                ts_str = d.get("recorded_at") or d.get("timestamp", "")
-                if ts_str:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if ts >= cutoff:
-                        keep.append(line)
-                    else:
-                        dropped.append(line)  # too old
-                else:
-                    keep.append(line)  # no timestamp → keep conservatively
-            except Exception:
-                keep.append(line)  # parse error → keep conservatively
-    except Exception:
+        text = _store_text(path)
+    except OSError as exc:
+        log.warning("gc: cannot read %s (%s) — skipping outcomes GC",
+                    path, exc)
         return 0, 0, 0
+    unreadable = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        total += 1
+        try:
+            # loads_clean, not json.loads: a byte-tainted row's timestamp
+            # cannot be trusted to authorize its own deletion, so taint
+            # falls to the keep-conservatively branch with the rest.
+            d = _loads_clean(line)
+            ts_str = d.get("recorded_at") or d.get("timestamp", "")
+            if ts_str:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts >= cutoff:
+                    keep.append(line)
+                else:
+                    dropped.append(line)  # too old
+            else:
+                keep.append(line)  # no timestamp → keep conservatively
+        except Exception:
+            unreadable += 1
+            keep.append(line)  # parse error → keep conservatively
+    if unreadable:
+        log.warning("gc: %d unparseable/byte-tainted row(s) in %s — kept, "
+                    "never collected (they carry no trustworthy timestamp)",
+                    unreadable, path)
 
     removed = total - len(keep)
     freed = 0

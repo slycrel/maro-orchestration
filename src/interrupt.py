@@ -42,6 +42,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from llm_parse import extract_json, content_or_empty
+# Store-hygiene helper (2026-08-20 destructive-rewrite sweep): a byte-tainted
+# line must never id-match or be re-dumped as clean escapes.
+from jsonl_utils import loads_clean as _loads_clean
 
 log = logging.getLogger("maro.interrupt")
 
@@ -346,7 +349,12 @@ class InterruptQueue:
                     if not line.strip():
                         continue
                     try:
-                        d = json.loads(line)
+                        # loads_clean, not json.loads: this merge re-dumps
+                        # EVERY row it parses, so a byte-tainted-but-valid row
+                        # would come back as clean \udcXX escapes and the
+                        # corruption signal would be erased forever. Refusing
+                        # taint sends it down the preserve branch below.
+                        d = _loads_clean(line)
                         if not d.get("applied", False):
                             d["applied"] = True
                             pending.append(Interrupt.from_dict(d))
@@ -363,16 +371,27 @@ class InterruptQueue:
             return pending
 
     def peek(self) -> List[Interrupt]:
-        """Return pending interrupts without marking them applied."""
+        """Return pending interrupts without marking them applied.
+
+        A row this cannot read is dropped from the RESULT only — the line
+        stays on disk and rides every rewrite verbatim (see _mark_applied).
+        The loss is announced: an interrupt the operator posted and the loop
+        never saw is exactly the event that must not pass in silence.
+        """
         lines = self._read_lines()
         result = []
+        dropped = 0
         for line in lines:
             try:
-                d = json.loads(line)
+                d = _loads_clean(line)
                 if not d.get("applied", False):
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
-                pass
+                dropped += 1
+        if dropped:
+            log.warning("interrupt queue: %d unreadable row(s) in %s — those "
+                        "interrupts cannot be delivered (left on disk)",
+                        dropped, self.path)
         return result
 
     def clear(self) -> int:
@@ -389,7 +408,7 @@ class InterruptQueue:
                     if not line.strip():
                         continue
                     try:
-                        d = json.loads(line)
+                        d = _loads_clean(line)  # never launder a tainted twin
                         if not d.get("applied", False):
                             d["applied"] = True
                             counted["n"] += 1
@@ -421,7 +440,16 @@ class InterruptQueue:
     def _read_lines(self) -> List[str]:
         if not self.path.exists():
             return []
-        text = self.path.read_text(encoding="utf-8").strip()
+        # Byte-safe whole-store read (2026-08-20, destructive-rewrite sweep
+        # triage). A strict decode raised UnicodeDecodeError out of here, and
+        # this feeds peek(), which GATES poll()/clear()/is_empty() — so ONE
+        # crash-torn append killed the operator's entire interrupt channel:
+        # stop/pivot messages, and the kill switch's STOP interrupt, stopped
+        # reaching a running loop. loop_post_step logs an ERROR per step, so
+        # it was not silent, but the channel stayed dead until hand repair.
+        # Now one torn byte costs one interrupt.
+        from jsonl_utils import store_text
+        text = store_text(self.path).strip()
         return [l for l in text.splitlines() if l.strip()] if text else []
 
 

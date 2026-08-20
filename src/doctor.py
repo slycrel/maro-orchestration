@@ -306,17 +306,25 @@ def run_doctor() -> bool:
 
     # Phase 62: Check workspace skills for duplicates (same content_hash)
     try:
-        workspace_skills = Path.home() / ".maro" / "workspace" / "memory" / "skills.jsonl"
+        workspace_skills = _workspace_skills_path()
         if workspace_skills.exists():
             from collections import defaultdict
+            from jsonl_utils import loads_clean as _lc, store_text as _st
             all_skills = []
-            for line in workspace_skills.read_text(encoding="utf-8").splitlines():
+            unreadable = 0
+            for line in _st(workspace_skills).splitlines():
                 line = line.strip()
                 if line:
                     try:
-                        all_skills.append(json.loads(line))
+                        all_skills.append(_lc(line))
                     except Exception:
-                        pass
+                        unreadable += 1
+            if unreadable:
+                results.append(_check(
+                    "Workspace skills (readable)", False,
+                    f"{unreadable} unparseable/byte-tainted row(s) in "
+                    f"{workspace_skills} — not counted below",
+                ))
             if all_skills:
                 by_hash = defaultdict(list)
                 for skill in all_skills:
@@ -586,6 +594,22 @@ def _skill_hash_is_stale(skill_dict: dict) -> bool:
         return False  # can't verify → keep
 
 
+def _workspace_skills_path() -> Path:
+    """The skills store maro actually uses.
+
+    Was hardcoded to ``~/.maro/workspace/memory/skills.jsonl`` in both the
+    doctor check and the cleanup verb, while every runtime caller resolves
+    through ``config.workspace_root()`` — so under a MARO_WORKSPACE override
+    doctor reported on, and rewrote, a store the running system was not
+    using. Identical to the old constant when no override is set.
+    """
+    try:
+        from orch_items import memory_dir
+        return memory_dir() / "skills.jsonl"
+    except Exception:
+        return Path.home() / ".maro" / "workspace" / "memory" / "skills.jsonl"
+
+
 def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
     """Remove duplicate and stale-hash skills from workspace skills.jsonl.
 
@@ -599,21 +623,32 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
         skills_path: Override the default workspace path (for testing).
     """
     from collections import defaultdict
-    workspace_skills = skills_path or (Path.home() / ".maro" / "workspace" / "memory" / "skills.jsonl")
+    workspace_skills = skills_path or _workspace_skills_path()
 
     if not workspace_skills.exists():
         print("Workspace skills file not found — nothing to clean")
         return
 
-    # Load all skills
+    # Load all skills. Announced + strand-and-carry (2026-08-20,
+    # destructive-rewrite sweep triage): this is a REWRITE, so a row this
+    # loop drops is gone from disk, not merely absent from the result.
+    # Probed live before the fix — a truncated row (the shape a crashed
+    # append actually leaves) was deleted by the rewrite while the closing
+    # summary said "0 total removed", and one non-UTF-8 byte crashed the
+    # whole verb with UnicodeDecodeError. Deliberate drops (stale-hash,
+    # duplicates) still drop; what this verb was never asked to delete now
+    # rides the rewrite verbatim.
+    from jsonl_utils import loads_clean as _loads_clean, store_text as _store_text
     all_skills = []
-    for line in workspace_skills.read_text(encoding="utf-8").splitlines():
+    stranded: "list[str]" = []
+    for line in _store_text(workspace_skills).splitlines():
         line = line.strip()
         if line:
             try:
-                all_skills.append(json.loads(line))
+                all_skills.append(_loads_clean(line))
             except Exception as e:
-                print(f"Skipped unparseable line: {e}")
+                stranded.append(line)
+                print(f"Unparseable line kept as-is (not removed): {e}")
 
     print(f"Loaded {len(all_skills)} skills")
 
@@ -658,16 +693,27 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
         total_dup_removed += removed
         print(f"  {hash_val[:16]}... : keeping best of {len(skills)} copies of '{best.get('name', '?')}'")
 
-    # Rewrite with clean, deduped set
+    # Rewrite with clean, deduped set — plus every row we could not read,
+    # verbatim. Under the file's lock and via atomic_write: the bare
+    # write_text this replaced raced concurrent save_skill/_save_skills
+    # calls (skills.jsonl is written on every skill match) and could not
+    # encode the surrogates a byte-safe read now carries.
+    from file_lock import locked_write, atomic_write
     kept = [max(skills, key=score_skill) for skills in by_hash.values()]
-    output_lines = [json.dumps(skill) for skill in kept]
-    workspace_skills.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    output_lines = [json.dumps(skill) for skill in kept] + stranded
+    with locked_write(workspace_skills):
+        atomic_write(workspace_skills, "\n".join(output_lines) + "\n",
+                     errors="surrogateescape")
     total_removed = len(stale) + total_dup_removed
     print(
         f"Cleaned: {len(kept)} skills remain "
         f"({len(stale)} stale-hash + {total_dup_removed} duplicate(s) removed, "
         f"{total_removed} total)"
     )
+    if stranded:
+        print(f"Kept in place: {len(stranded)} unparseable/byte-tainted row(s) "
+              f"— this verb removes stale and duplicate skills, not rows it "
+              f"cannot read")
 
 
 def main():

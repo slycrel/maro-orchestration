@@ -255,3 +255,86 @@ class TestCleanupWorkspaceSkills:
         captured = capsys.readouterr()
         assert "no stale" in captured.out.lower()
         assert "no duplicates" in captured.out.lower()
+
+
+class TestTheSkillsCleanupSurvivesATornByte:
+    """A repair verb must not destroy what it was never asked to remove.
+
+    Probed live 2026-08-20 before the fix (destructive-rewrite sweep triage):
+    one non-UTF-8 byte crashed the whole verb with UnicodeDecodeError, and a
+    truncated row — the shape a crashed append actually leaves — was DELETED
+    by the rewrite while the closing summary reported "0 total" removed.
+    """
+
+    def _write_raw(self, path: Path, chunks: "list[bytes]") -> None:
+        path.write_bytes(b"".join(c + b"\n" for c in chunks))
+
+    def test_a_torn_byte_no_longer_crashes_the_verb(self, tmp_path, capsys):
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True)).encode()
+        torn = b'{"id": "sktorn", "name": "torn\xff", "content_hash": "zzz"}'
+        self._write_raw(skills_file, [good, torn])
+
+        cleanup_workspace_skills(skills_path=skills_file)  # used to raise
+
+        assert torn in skills_file.read_bytes()
+
+    def test_an_unparseable_row_is_kept_not_deleted(self, tmp_path, capsys):
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True)).encode()
+        truncated = b'{"id": "skhalf", "name": "half-writ'
+        self._write_raw(skills_file, [good, truncated])
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        after = skills_file.read_bytes()
+        assert truncated in after, "a row the verb cannot read must ride the rewrite"
+        assert good in after
+
+    def test_the_kept_rows_are_announced_to_the_operator(self, tmp_path, capsys):
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True)).encode()
+        self._write_raw(skills_file, [good, b'{"id": "skhalf", "name": "half'])
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        out = capsys.readouterr().out.lower()
+        assert "kept in place" in out
+        assert "not removed" in out or "cannot read" in out
+
+    def test_deliberate_removals_still_remove(self, tmp_path, capsys):
+        """The strand-and-carry path must not turn the verb into a no-op."""
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True)).encode()
+        stale = json.dumps(_make_skill("skbad", "test fixture", correct_hash=False)).encode()
+        self._write_raw(skills_file, [good, stale, b'{"id": "skhalf", "name": "half'])
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        after = skills_file.read_bytes()
+        assert stale not in after, "stale-hash skills are still removed"
+        assert b"skhalf" in after and good in after
+
+    def test_a_tainted_twin_is_never_relaundered(self, tmp_path, capsys):
+        """A byte-tainted row must not come back as clean \\udcXX escapes."""
+        skills_file = tmp_path / "skills.jsonl"
+        good = json.dumps(_make_skill("skgood", "real skill", correct_hash=True)).encode()
+        tainted = json.dumps(
+            _make_skill("sktwin", "tainted skill", correct_hash=True)
+        ).encode().replace(b"tainted", b"tain\xffed")
+        self._write_raw(skills_file, [good, tainted])
+
+        cleanup_workspace_skills(skills_path=skills_file)
+
+        after = skills_file.read_bytes()
+        assert tainted in after
+        assert b"udcff" not in after.lower()
+
+    def test_the_default_path_follows_the_workspace_override(self, tmp_path, monkeypatch):
+        """doctor must clean the store the running system uses, not ~/.maro."""
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from doctor import _workspace_skills_path
+
+        resolved = _workspace_skills_path()
+        assert str(resolved).startswith(str(tmp_path)), resolved
+        assert resolved.name == "skills.jsonl"

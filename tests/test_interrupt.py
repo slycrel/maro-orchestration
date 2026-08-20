@@ -445,3 +445,83 @@ class TestProjectLock:
         info = get_running_loop()
         assert info is not None
         assert info["project"] == "polymarket-edges"
+
+
+class TestTheInterruptChannelSurvivesATornByte:
+    """One torn byte used to kill the operator's whole control channel.
+
+    _read_lines strict-decoded the queue, and it feeds peek(), which GATES
+    poll()/clear()/is_empty() — so a single crash-torn append raised
+    UnicodeDecodeError out of every consumer. Stop/pivot messages, and the
+    kill switch's STOP interrupt, stopped reaching a running loop until
+    someone repaired the file by hand (loop_post_step logs an ERROR per
+    step, so it was loud — but the channel stayed dead). Probed live
+    2026-08-20 against the pre-fix code with a correctly-shaped row.
+    """
+
+    def _row(self, iid: str, message: str) -> dict:
+        return {"id": iid, "message": message, "source": "cli",
+                "intent": "additive", "new_steps": [], "replacement_goal": None,
+                "timestamp": "2026-08-19T00:00:00+00:00", "applied": False}
+
+    def test_a_torn_row_costs_one_interrupt_not_the_channel(self, tmp_path):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_bytes(json.dumps(self._row("i1", "stop the loop")).encode()
+                      + b"\n" + b'{"id": "i2", "torn\xff": 1}\n')
+
+        pending = InterruptQueue(queue_path=p).poll()  # used to raise
+
+        assert [i.id for i in pending] == ["i1"]
+
+    def test_the_torn_row_rides_the_rewrite_verbatim(self, tmp_path):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        torn = b'{"id": "i2", "torn\xff": 1}'
+        p.write_bytes(json.dumps(self._row("i1", "stop")).encode() + b"\n"
+                      + torn + b"\n")
+
+        InterruptQueue(queue_path=p).poll()
+
+        after = p.read_bytes()
+        assert torn in after, "poll's rewrite must not delete what it cannot read"
+        assert b'"applied": true' in after, "the healthy row was still marked"
+
+    def test_a_tainted_twin_is_never_laundered(self, tmp_path):
+        """It parses as JSON; re-dumping it would erase the corruption signal."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        tainted = json.dumps(self._row("i2", "tainted")).encode().replace(
+            b"tainted", b"tain\xffed")
+        p.write_bytes(json.dumps(self._row("i1", "stop")).encode() + b"\n"
+                      + tainted + b"\n")
+
+        InterruptQueue(queue_path=p).poll()
+
+        after = p.read_bytes()
+        assert tainted in after
+        assert b"udcff" not in after.lower()
+
+    def test_clear_also_preserves_what_it_cannot_read(self, tmp_path):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        torn = b'{"id": "i2", "torn\xff": 1}'
+        p.write_bytes(json.dumps(self._row("i1", "stop")).encode() + b"\n"
+                      + torn + b"\n")
+
+        assert InterruptQueue(queue_path=p).clear() == 1
+
+        assert torn in p.read_bytes()
+
+    def test_an_undeliverable_interrupt_is_announced(self, tmp_path, caplog):
+        """An interrupt the operator posted and the loop never saw is exactly
+        the event that must not pass in silence."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_bytes(json.dumps(self._row("i1", "stop")).encode() + b"\n"
+                      + b'{"id": "i2", "torn\xff": 1}\n')
+
+        with caplog.at_level("WARNING"):
+            InterruptQueue(queue_path=p).peek()
+
+        assert any("cannot be delivered" in r.message for r in caplog.records), caplog.text

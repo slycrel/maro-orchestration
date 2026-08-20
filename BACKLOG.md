@@ -478,11 +478,45 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       skills.py census sites cleared, 8 tests,
       `skills_preserve.json` 9 mutations 9/9 first pass. Scanner kept
       at `scripts/scan_destructive_rewrites.py`; remaining RISK
-      candidates (interrupt.py, gc_memory.py,
-      orch_items.append_next_items, run_curation.promote_skills_lite,
-      pack.py importers, workspace_import.import_ledgers,
-      thread_brain._append_under) NOT yet triaged — several are
-      markdown or single-object reads and likely false positives.*
+      candidates NOT yet triaged at the time — CLOSED 2026-08-20, see
+      the triage entry below.*
+    - *Destructive-rewrite triage CLOSED 2026-08-20: all 70 RISK sites
+      read by hand — 3 real defects (6 scanner sites), 64 false
+      positives, each FP's reason tabled in
+      `docs/history/2026-08-20-destructive-rewrite-triage.md` so the
+      next run of the scanner starts from known-benign sites rather
+      than unknowns. The three: (1) **`doctor.cleanup_workspace_skills`
+      — DESTRUCTIVE**, and the sharpest framing of this family yet
+      because it is a REPAIR verb an operator runs *because* the store
+      looks wrong. Probed live: one non-UTF-8 byte crashed it outright,
+      and a truncated row (what a crashed append actually leaves) went
+      4 lines in / 3 out while the closing summary said "0 total"
+      removed — the summary counts only what the verb MEANT to delete,
+      so a destroyed row reports as zero. Side-find fixed with it: the
+      verb and doctor's duplicate check both hardcoded
+      `~/.maro/workspace/memory/skills.jsonl` while every runtime
+      caller resolves through `config.workspace_root()`, so under a
+      MARO_WORKSPACE override doctor rewrote a store the running system
+      was not using. (2) **`interrupt.InterruptQueue`** — `_read_lines`
+      strict-decoded and feeds `peek()`, which GATES
+      poll/clear/is_empty, so one torn byte killed the operator's whole
+      control channel: stop/pivot messages and the kill switch's own
+      STOP interrupt stopped reaching a running loop until hand repair.
+      Loud (loop_post_step logs an ERROR per step) but total. Both
+      `_mark_applied` merges also re-dumped every parsed row —
+      loads_clean now sends tainted twins down the preserve branch that
+      already existed. (3) **`gc_memory._gc_outcomes`** — the r4
+      deferral, closed: probed (2,1,0) healthy -> (0,0,0) after one torn
+      append, "nothing to collect" forever with zero log signal while
+      the store grew without bound. Receipts: 15 tests each written
+      against a live probe first, `interrupt_gc_doctor_preserve.json`
+      19 file-derived mutations 19/19 first pass, census 2 sites
+      cleared (84 unreviewed sites / 76 functions + 13 reviewed), suite
+      9622 verified in an isolated worktree at HEAD+change. Counting
+      note worth keeping: the scanner's own summary line contains the
+      word RISK, so `grep -c RISK` reports 71 for 70 sites — the
+      triage counts were re-derived by set-difference before the record
+      was written.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making

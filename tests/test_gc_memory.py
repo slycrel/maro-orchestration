@@ -271,3 +271,76 @@ def test_main_run_yes_executes(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "GC Summary" in out
     assert "DRY RUN" not in out
+
+
+# ---------------------------------------------------------------------------
+# _gc_outcomes byte-safety (2026-08-20 destructive-rewrite sweep triage)
+# ---------------------------------------------------------------------------
+
+class TestOutcomesGcSurvivesATornByte:
+    """One torn byte used to DISABLE outcome retention forever, silently.
+
+    Probed live 2026-08-20: a healthy store reported (2, 1, 0); after one
+    crash-torn append the same call reported (0, 0, 0) — "nothing to
+    collect" — with no log line at all. The store then grew without bound
+    while GC reported success on every run.
+    """
+
+    def _torn(self, mem: Path) -> None:
+        with open(mem / "outcomes.jsonl", "ab") as f:
+            f.write(b'{"goal": "torn\xff", "status": "done"}\n')
+
+    def test_a_torn_byte_does_not_disable_collection(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=200)
+        _write_outcome(mem, days_ago=1)
+        self._torn(mem)
+
+        total, removed, _ = _gc_outcomes(retain_days=90, dry_run=True)
+
+        assert total == 3, "the torn row is counted, not swallowed"
+        assert removed == 1, "the old row is still collectable past a torn byte"
+
+    def test_the_torn_row_is_never_collected(self, monkeypatch, tmp_path):
+        """A row whose bytes we cannot trust cannot authorize its own delete."""
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=200)
+        self._torn(mem)
+
+        _gc_outcomes(retain_days=90, dry_run=False)
+
+        after = (mem / "outcomes.jsonl").read_bytes()
+        assert b"\xff" in after, "the torn row survived the trim"
+        assert b'"days_ago"' not in after
+
+    def test_the_loss_is_announced(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        _write_outcome(mem, days_ago=1)
+        self._torn(mem)
+
+        with caplog.at_level("WARNING"):
+            _gc_outcomes(retain_days=90, dry_run=True)
+
+        assert any("unparseable" in r.message or "byte-tainted" in r.message
+                   for r in caplog.records), caplog.text
+
+    def test_a_tainted_but_valid_row_is_kept_conservatively(self, monkeypatch, tmp_path):
+        """It parses as JSON, but its timestamp is not trustworthy — keep it."""
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = _mem_dir(tmp_path)
+        old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        tainted = json.dumps(
+            {"goal": "tainted", "status": "done", "recorded_at": old}
+        ).encode().replace(b"tainted", b"tain\xffed")
+        with open(mem / "outcomes.jsonl", "ab") as f:
+            f.write(tainted + b"\n")
+
+        total, removed, _ = _gc_outcomes(retain_days=90, dry_run=False)
+
+        assert total == 1 and removed == 0
+        after = (mem / "outcomes.jsonl").read_bytes()
+        assert tainted in after, "kept verbatim, not re-dumped as clean escapes"
+        assert b"udcff" not in after.lower()

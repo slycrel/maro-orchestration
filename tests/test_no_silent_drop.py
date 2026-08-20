@@ -197,7 +197,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("delta_replay.py", "find_decision_calls"): 1,
     ("delta_replay.py", "gather_oracle_decision_calls"): 1,
 
-    ("doctor.py", "run_doctor"): 1,
 
     ("eval.py", "load_eval_trend"): 1,
     ("eval.py", "load_generated_evals"): 1,
@@ -216,7 +215,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("graduation.py", "scan_candidates"): 1,
     ("graduation.py", "verify_graduation_rules"): 1,
 
-    ("interrupt.py", "InterruptQueue.peek"): 1,
     ("interrupt.py", "acquire_project_slot"): 1,
 
     ("knowledge_bridge.py", "_extract_llm"): 1,
