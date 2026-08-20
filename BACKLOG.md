@@ -44,45 +44,106 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### Per-step model tiering — the classifier and the tier selector exist and are not connected (FOUND 2026-08-19; Jeremy's target architecture)
+### The "async tail" is not async — it is reordering. Make it a real process spawn (Jeremy, 2026-08-20)
 
-Jeremy, 2026-08-19: *"I dream of a day where a super cheap (or local) model can
-do the step work while we make a 1-3 shot orchestration plan with a higher tier
-model."* That is nearer than it sounds — this is a wiring gap, not missing
-infrastructure.
+Jeremy: *"That's not really async if we're blocking the CLI call right? is this
+an exec level spawn of another process to make it truly async in cases like
+that? Seems like something that's solveable with a little effort."* Correct on
+both halves.
 
-**What exists:** `classify_step_type` (`src/metrics.py:164`) buckets step text
-into research/summarize/analyze/write/verify/implement/plan/general.
-`assign_model_by_role` (`src/conductor.py:103`) maps roles to CHEAP/MID/POWER and
-is called from 24 sites.
+**What Phase 1 actually does.** `_defer_learning_post_notify` (`handle.py:190`)
+appends a callable to an in-process dict `_POST_NOTIFY_LEARNING`.
+`_drain_deferred_learning` (`handle.py:194`) pops and calls them **synchronously,
+same process, same thread**. The maintenance twin (`defer_maintenance_post_notify`
+/ `drain_deferred_maintenance`, `loop_finalize.py:581`) is the same shape. So the
+tail is *reordered* to run after the notification, not *backgrounded*. A
+notify/Telegram consumer sees the answer first and genuinely benefits; a caller
+waiting on process exit — `python3 -m handle`, any script, any CI step — waits
+for the entire tail and gets nothing from Phase 1.
 
-**Why nothing gets cheap:** the mapping is per-ROLE, not per-STEP.
-`loop_init.py:357` (and `handle.py:1254`) build ONE adapter from
-`assign_model_by_role("worker")` → MODEL_MID and thread that same adapter through
-every step of the run. Planner gets POWER, every step gets MID, **CHEAP is never
-selected for step work**. `classify_step_type` has 3 call sites, all inside
-`metrics.py` — it feeds cost accounting only and never reaches model selection.
+**Measured cost of that gap** (run 2026-08-19, `research/2026-08-19-sol-advisor-efficiency-claim.md`):
+deliverable written at 14m37s, process alive until 31m08s — **16m31s, 53% of wall
+clock, after the answer existed**. Closure audit, adversarial claim review, lesson
+extraction, ~10 skill-promotion validations, ~8 skill rewrites, ~10 knowledge-node
+validations, evolver, business signal scan.
 
-**The system already asked for this.** The 2026-08-19 run's introspect phase
-flagged `[cost_spike]` on itself and the recovery planner proposed *"route the
-costly step class to a cheaper model tier"* (NEEDS-REVIEW). A correct
-self-diagnosis with no mechanism to land in — the verify→learn loop open in one
-concrete, fixable instance.
+**Why a spawn is the clean fix and not a workaround.** `handle.py:208-215` already
+records the hazard in-process deferral creates: the maintenance twin had to be
+moved into a *different module* because `python -m handle` executes as `__main__`,
+so `loop_finalize`'s `import handle` loads a **second copy** whose registry the
+finalize block never drains (found in 3-lens review of `707a541`). That is a
+module-identity bug class that in-process deferral keeps generating; a separate
+process with an explicit state handoff eliminates it by construction rather than
+by careful placement.
 
-**Shape of the work:** a step_type→tier policy table consulted at step dispatch,
-behind a config flag defaulting OFF (out-of-the-box decree: no silent behavior
-change on fresh installs). Then A/B it — ungated MID-everything vs. tiered — on
-**cost-per-accepted-outcome**, not tokens, using `step-costs.jsonl` (per-call
-`tokens_in/out`, `cache_read_tokens`, `cost_usd`, `model`, `step_type`,
-`loop_id`). Tokens alone is the metric that makes delegation look bad while
-saying nothing about whether the work got done; see
-`research/2026-08-19-sol-advisor-efficiency-claim.md`.
+**The seam already exists.** The tail is keyed by `handle_id`/`loop_id`, and run
+records are already durable on disk — so a child process can re-open the run by
+id instead of inheriting objects. Missing piece is a standalone entry point:
+there is no `finalize-tail` verb today; `_finalize_cli_deferred_learning`
+(`cli.py:640`) takes an in-memory result object. Shape of the work: (1) add
+`maro finalize-tail --loop-id X` that reconstructs from disk, (2) have the parent
+double-fork/`spawn` it and exit after the answer, (3) keep the current in-process
+path as the fallback when spawn is unavailable, (4) decide the contract for a run
+whose tail is still in flight when the next run starts (the existing lock files
+suggest the answer is already partly there).
 
-**Sequencing caveat — this is the smaller half of the time cost.** Same run:
-deliverable written at 14m37s, then 16m31s more (53% of wall clock) of post-hoc
-learning after the answer existed. Async-tail Phase 1 (2026-08-12) covers the
-notify path; a blocking CLI invocation still eats the whole tail. If the goal is
-wall-clock, the tail outranks tiering. If the goal is spend, tiering is first.
+**Watch-item inherited from Phase 1** (still open, listed under the original
+async-tail entry): `handle()`'s `_hid=None` exception path can strand registered
+callables. A spawn design should make stranding impossible rather than rarer.
+
+### Per-step cheap tiering — REMOVED BY DECREE 2026-07-20, not unfinished. Re-test, don't rebuild (corrected 2026-08-20)
+
+**This item previously said "the classifier and the tier selector exist and are
+not connected — a wiring gap, not missing infrastructure." That was wrong** and
+is corrected here, because it would send the next session off to build something
+that was deliberately deleted.
+
+**What actually happened.** Per-step tiering *shipped* — Phase 57, "Adaptive
+Model Tiering", 2026-04-06 (`docs/history/ROADMAP_ARCHIVE.md`): `classify_step_model`
+chose a tier from step content, plus retry- and verify-failure escalation. It was
+then **deliberately removed** on 2026-07-21 in `b6fd4881` (authored by Jeremy)
+under the **2026-07-20 decree "execution defaults unified at MID"**. From that
+commit message: *"scope-lift block + classify_step_model cheap-downgrade deleted
+… the user/CONFIG.md template no longer ships the cheap pin that silently
+recreated the split."* `classify_step_model` has 0 hits in `src/` today.
+
+**What survives** is escalation-only, and it is intact: `_step_tier_overrides`
+and `_session_tier_floor` in `loop_execute.py`, resolved by `_select_step_adapter`
+(`loop_execute.py:126`). Its own comment states the rule — *"Execution floor is
+MID (2026-07-20 decree — per-step cheap downgrade removed); only a raised session
+floor re-tiers here."* So tiers move UP from MID on failure signals and never
+DOWN on triviality. CHEAP is never selected for step work **by decree, not by
+omission.**
+
+**Why it was removed — the evidence is on record.** `docs/history/2026-03-31-factory-mode-findings.md`
+§3: factory_thin on Haiku burned **1,512K tokens vs Mode 2's 344K — 4.4×** on the
+same goal, one research step alone taking 560K, *"because Haiku lacks the output
+compression judgment that Sonnet applies."* Verdict: *"even with the fix, Haiku's
+verbosity means factory_thin on Haiku is not reliably cheaper than Mode 2 on
+Sonnet … The model cost advantage disappears."* Cheap models are verbose, and
+verbosity eats the per-token discount. A separate 2026-06-21 finding killed the
+local rung on latency (~10s/step on this box).
+
+**The idea is not dead — it was moved to where it pays.** `src/hosted_free.py` is
+live: ladder is Tier-0 deterministic → hosted-free (Groq/Gemini free tiers) →
+paid, aimed at **validation**, which that module calls the highest-volume call
+class and *"the biggest avoidable token sink."* Opt-in, default off. So cheap
+models were applied to the high-volume/low-judgment class and withdrawn from the
+low-volume/high-judgment one. That is arguably the correct resolution of the
+"cheap model does the step work" idea, not a failure of it.
+
+**Pre-registered revival trigger already exists** (`docs/LOCAL_VALIDATOR.md:17-24`):
+revive the local rung *"if the hosted free tiers churn away"* — providers cut free
+quotas, keys die, breakers trip chronically. Re-entry path = the bakeoff
+methodology in that doc + the kept corpus `tests/fixtures/validation_cases.json`
++ the pre-2026-07-21 implementation in git history.
+
+**So the open work is a RE-TEST, not a build.** The 4.4× is a 2026-03-31 fact
+about then-current cheap models; model capability moves. The re-test is cheap
+now: replay the corpus against current CHEAP-tier models, score on
+cost-per-accepted-outcome via `step-costs.jsonl`, and compare against the
+recorded 4.4× baseline. If verbosity has closed, that is the evidence that
+reopens the decree — which is Jeremy's call to reverse, not a session's.
 
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 

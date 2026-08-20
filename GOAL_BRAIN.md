@@ -784,18 +784,38 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   designed out, not accepted as the price of orchestration. (2) **Posture:** this
   is not a reason to pause; "onward" stands.
 
-  Prompted by examining the sol-advisor efficiency claim
-  (`research/2026-08-19-sol-advisor-efficiency-claim.md`). That investigation
-  found the target shape is **nearer than assumed** — both halves exist and are
-  simply not connected: `classify_step_type` (`src/metrics.py:164`) already
-  buckets steps into research/summarize/analyze/write/verify/implement/plan/
-  general but has only 3 call sites, all inside `metrics.py`, feeding cost
-  accounting alone; `assign_model_by_role` (`src/conductor.py:103`) already maps
-  to CHEAP/MID/POWER across 24 call sites. The mapping is per-ROLE, not per-STEP:
-  `loop_init.py:357` builds ONE `assign_model_by_role("worker")` → MID adapter
-  and threads it through every step, so planner gets POWER, all steps get MID,
-  and **nothing is ever routed CHEAP**. The gap is a step_type→tier policy table,
-  not new infrastructure.
+  **Correction, 2026-08-20** (this entry first claimed the target shape was "a
+  wiring gap, not missing infrastructure" — that was wrong, and Jeremy's own
+  recollection is what prompted the re-check): per-step tiering is not
+  unfinished, it was **built and then deliberately removed**. Phase 57
+  ("Adaptive Model Tiering", 2026-04-06) shipped `classify_step_model` —
+  content-based per-step tier selection — plus retry/verify escalation. It was
+  deleted 2026-07-21 in `b6fd4881` under the **2026-07-20 decree "execution
+  defaults unified at MID"**, which also removed the CONFIG.md cheap pin that
+  *"silently recreated the split."* `classify_step_model` has 0 hits in `src/`
+  today. What survives is escalation-only (`_step_tier_overrides`,
+  `_session_tier_floor`, resolved in `_select_step_adapter`,
+  `loop_execute.py:126`): tiers move UP from MID on failure signals, never DOWN
+  on triviality. **CHEAP is never selected for step work by decree, not by
+  omission.**
+
+  The evidence behind the decree, and it is Jeremy's remembered result:
+  `docs/history/2026-03-31-factory-mode-findings.md` §3 — factory_thin on Haiku
+  burned **1,512K tokens vs 344K, 4.4×**, *"because Haiku lacks the output
+  compression judgment that Sonnet applies … The model cost advantage
+  disappears."* Cheap models are verbose; verbosity eats the per-token discount.
+  The local rung died separately on latency (~10s/step, 2026-06-21).
+
+  The idea survived where it pays: `src/hosted_free.py` routes **validation** —
+  the highest-volume call class, *"the biggest avoidable token sink"* — through a
+  Tier-0 → hosted-free → paid ladder (opt-in, default off). Cheap models were
+  applied to the high-volume/low-judgment class and withdrawn from the
+  low-volume/high-judgment one. A pre-registered revival trigger for the local
+  rung exists at `docs/LOCAL_VALIDATOR.md:17-24` (revive "if the hosted free
+  tiers churn away"), with the bakeoff methodology and corpus kept.
+
+  **So the open work is a re-test against the recorded 4.4× baseline, not a
+  rebuild** — and reversing the decree is Jeremy's call, not a session's.
 
   Corroborating evidence from the same run, unprompted: the introspect phase
   flagged `[cost_spike]` on itself and the recovery planner proposed *"route the
