@@ -832,6 +832,91 @@ unguarded-parse branch at all. The sixth is marked equivalent with its
 reason. 110/110 after. Suite: 9837 pass. Scanner blast radius on the real
 tree: **zero** for the third round running.
 
+## Adversarial round 9 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r8 fix layer. **REJECT.** Six findings, all six
+reproduced before being touched, zero hallucinations for the fifth round
+running. The top finding is the first in nine rounds that is NOT in the
+previous round's fix — it is older than the arc, and it is a launder that
+eight rounds of reviewers (and this author) read past every time.
+
+- **`str.strip()` is not JSON whitespace** (QA + Architect, HIGH, probed).
+  Every reader in this repo wrote `line = raw.strip()` and then parsed the
+  stripped copy while carrying the raw one. JSON's whitespace is space, tab,
+  CR and LF — nothing else — so `"\u2028" + a valid row` parsed AFTER
+  stripping, was admitted, and came back re-serialised with those bytes
+  gone, the file reported clean, nothing announced. That is the exact
+  laundering this arc exists to prevent, arriving through the whitespace
+  door instead of the surrogate one. The same idiom used for blank
+  detection (`if not raw.strip(): continue`) deleted a row of U+00A0
+  outright, because a skipped fragment is never appended to the rewrite.
+
+  The finding named `doctor`. The census found it live in four more places,
+  and two of them are worse than the one that was reported:
+  `gc_memory._gc_outcomes._classify` read the timestamp that AUTHORIZES a
+  delete out of the laundered copy, and `skills.save_skill` parsed AND WROTE
+  the stripped copy — a carried row's bytes rewritten by a save that never
+  claimed to touch them. `_save_skills` stranded a stripped copy under a log
+  line that says "verbatim", and framed with `splitlines()` while doing it.
+  Both interrupt merges dropped whitespace rows. One helper answers all of
+  them: `jsonl_utils.is_frame_blank`, true only for the empty fragment
+  `split("\n")` yields for the trailing newline every JSONL file ends with.
+
+- **Admission is enough; laundering is not required** (Failure Operator +
+  Skeptic, probed). `loads_clean` accepted `NaN`, `Infinity` and
+  `-Infinity` — CPython extensions, not JSON. **r8 rejected this finding**
+  on the grounds that the tokens round-trip faithfully through
+  `json.dumps`, so nothing is laundered. That was true and beside the
+  point, and r9 showed why by probe: the row does not need to be laundered
+  to do damage, it only needs to be ADMITTED. Once admitted it takes part in
+  a removal decision — `_dedup_identity` serialises the token straight back,
+  the group forms, the older row is deleted. Refused now, with the blast
+  radius measured first: zero rows in the live workspace carry any of the
+  three.
+
+- **A scope-aware rule that reads the wrong scope** (Minimalist + QA, HIGH,
+  probed). r8's `_shadowed` and `_parser_names` used `ast.walk(fn)`, which
+  descends into nested functions — so a helper defined inside a rewrite that
+  imported the real wrapper re-proved the OUTER function's parameter, which
+  defaulted to `json.loads`. Proofs and bindings are collected per lexical
+  scope now, which is the unit Python itself uses.
+
+- **A dotted proof outlived its receiver** (Architect + Failure Operator +
+  Skeptic, HIGH, probed). `def rewrite(path, jsonl_utils)` and a local
+  `pm = json` both kept `jsonl_utils.loads_clean` / `pm.loads_clean` in the
+  clean set, because r8's revocation subtracted BARE names from a set
+  holding DOTTED ones. A proof is now revoked with its receiver.
+
+- **Module identity was still a spelling test** (Architect + QA, HIGH,
+  probed). `(n.module or "").split(".")[-1] == "jsonl_utils"` trusts
+  `from vendor.jsonl_utils import loads_clean`. Exact match now — and the r8
+  must-detect fixture had tested `vendor.not_jsonl_utils`, the shape that
+  cannot fire, rather than the dangerous sibling.
+
+- **A name collision made a destructive site vanish** (Skeptic, probed). The
+  call-graph leg indexed functions by bare name in a dict, so an unrelated
+  `B.save` replaced `A.save`, `A.rewrite`'s write leg resolved to the wrong
+  body, and `A.helper` — a destructive JSONL loop — disappeared from the
+  scan entirely, neither RISK nor OK. That is the fourth time this arc has
+  paid for a site disappearing rather than turning red. Ambiguous names
+  resolve to "any candidate writes" now, which errs toward being looked at.
+
+- Plus the r8 sibling left half-done: the two lines that announce a row
+  being DESTROYED now name the store, not just the header above them (5/5
+  seats).
+
+**Receipts:** mutation spec 110 → 129, with **five survivors on the first
+sweep** — all holes, and two of them worth naming. Both interrupt merge
+mutants lived because the new test's "whitespace row" was a literal SPACE,
+and every `json.dumps` row in the fixture already contains spaces, so
+`assert " " in text` could not fail; it uses an explicit U+00A0 now. The two
+parameter-binding mutants lived because they were redundant with each other
+(`_own_scope` already yields the `ast.arg` nodes), which is a finding about
+the fix rather than the test — the redundant loop is gone. Suite: 9867
+pass. Scanner blast
+radius on the real tree: **zero** for the fourth round running — 77 RISK
+sites before and after, manifest green.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -928,3 +1013,24 @@ count-based assertion cannot fail in the direction it was written for.**
 The r8 path test asserted the store path appeared on "at least three"
 lines; the mutation sweep stripped any one of the four and it still passed.
 Assert the property on each thing that must carry it, not on a total.
+
+The ninth is r9's, and it is the first one in this arc that is not about the
+fix layer: **the idiom everyone writes is the one nobody reviews.**
+`line = raw.strip()` appears in five readers here, was in the original code
+of every site this arc hardened, and survived eight adversarial rounds and
+several hundred probes — including rounds whose entire subject was "what can
+a rewrite do to bytes it cannot read". It survived because it looks like
+tidying, not like a decision. It is a decision: `str.strip()` removes
+Unicode whitespace that JSON forbids, so the stripped copy can parse when
+the row does not, and any verb that parses one copy and writes another has
+already lost the bytes. When auditing a destructive reader, list every
+transformation between the bytes on disk and the value the decision is made
+from — and require each one to be either identity or announced.
+
+The tenth is the one r9 forced on the round before it: **"it round-trips
+faithfully" is not the same as "it may take part in the decision".** r8
+rejected the NaN finding because nothing was laundered, which was true. r9
+probed the consequence anyway and found the row being admitted into a
+DELETION decision, which is the thing the doctrine actually protects. When
+rejecting a finding, state the property you are relying on and then check
+that it is the property that matters here.

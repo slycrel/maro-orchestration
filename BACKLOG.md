@@ -921,6 +921,51 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       SIX survivors on the first sweep (five were holes in the new
       tests), 110/110 after; 9837 tests pass; scanner blast radius ZERO
       for the third round running.*
+    - *Its adversarial r9 (2026-08-20, FIVE codex seats on the r8 fix
+      layer): **REJECT — ninth round.** Six findings, all six
+      reproduced, zero hallucinations for the fifth round running, and
+      for the FIRST time the top finding is not in the previous round's
+      fix — it is older than the arc. **`str.strip()` is not JSON
+      whitespace.** Every reader here parsed `raw.strip()` and carried
+      `raw`; JSON's whitespace is space/tab/CR/LF only, so
+      `"\u2028" + a valid row` parsed after stripping, was admitted, and
+      came back re-serialised with those bytes gone and nothing
+      announced — and `if not raw.strip(): continue` deleted a row of
+      U+00A0 outright. The finding named doctor; the sibling census
+      found four more, two of them worse: `gc_memory` read the timestamp
+      that AUTHORIZES a delete out of the laundered copy, and
+      `skills.save_skill` parsed AND WROTE the stripped copy. One helper
+      answers all five (`jsonl_utils.is_frame_blank`: only the empty
+      fragment is framing). Also: `loads_clean` now refuses
+      NaN/Infinity/-Infinity — the finding r8 REJECTED, correctly
+      reasoned and wrongly concluded, because a row does not have to be
+      laundered to do damage, only ADMITTED (probed: it joins a dedup
+      group and evicts the older row); zero live rows carry the tokens.
+      Scanner: `ast.walk(fn)` descended into nested scopes so a nested
+      import re-proved the outer function's raw parameter; a dotted
+      proof outlived its receiver (`def rewrite(path, jsonl_utils)`);
+      module identity was still a suffix test (`vendor.jsonl_utils`
+      trusted, and the r8 fixture had tested the shape that cannot
+      fire); and a bare-name dict in the call-graph leg let an unrelated
+      `B.save` make a destructive helper VANISH from the scan — the
+      fourth disappearance this arc has paid for. Receipts: spec 110 ->
+      129 with FIVE survivors on the first sweep (all holes — the
+      interrupt tests' "whitespace row" was a literal space, which
+      every json.dumps row already contains, so the assertion could
+      not fail), 129/129 after; 9867 tests pass; scanner blast
+      radius ZERO for the fourth round running.*
+    - *Carried lesson from r9: **the idiom everyone writes is the one
+      nobody reviews.** `line = raw.strip()` sat in five readers,
+      survived eight adversarial rounds whose subject was "what can a
+      rewrite do to bytes it cannot read", and survived because it looks
+      like tidying rather than a decision. When auditing a destructive
+      reader, list every transformation between the bytes on disk and
+      the value the decision is made from, and require each one to be
+      either identity or announced. Corollary from the NaN reversal:
+      **"it round-trips faithfully" is not the same as "it may take part
+      in the decision"** — when rejecting a finding, name the property
+      you are relying on and check that it is the property that
+      matters.*
     - *Carried lesson from r8, the arc's most durable: **naming the
       cases you have met is a denylist, and a denylist in a safety check
       fails open on the case nobody has met yet.** Three files, one
