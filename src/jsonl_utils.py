@@ -255,11 +255,55 @@ def loads_clean(s: str):
     announcing it. Raising JSONDecodeError (not a bare ValueError) means
     every existing `except json.JSONDecodeError` skip branch handles
     taint with no new code at the call sites.
+
+    Two more shapes join the family, both from adversarial r5 of the
+    2026-08-20 arc (Failure Operator, probed):
+
+    * A surrogate can also arrive as a JSON *escape* — `{"tier": "\\udcff"}`
+      is a pure-ASCII line whose bytes are perfectly valid UTF-8, and the
+      raw-text scan above cannot see it, but it parses to exactly the same
+      tainted string. The taint check therefore has to run on the PARSED
+      value, not only on the raw line. A cheap ASCII pre-filter keeps the
+      hot path (`\\ud` cannot appear unless an escape does) and the deep
+      walk only runs when it might find something.
+    * Duplicate names in one object. `json.loads` silently keeps the LAST
+      one, so `{"applied": false, "applied": true}` reads as applied —
+      probed: a STOP interrupt swallowed with no warning — and a rewrite
+      that re-dumps the row destroys the other value. Two values, one of
+      which we discard by an implementation detail, is not something this
+      layer may decide: it is a corrupt row, and corrupt rows strand.
     """
     if any("\udc80" <= ch <= "\udcff" for ch in s):
         raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
                                    "bytes carried as surrogates)", s, 0)
-    return json.loads(s)
+    value = json.loads(s, object_pairs_hook=_no_duplicate_names)
+    if "\\u" in s and _carries_surrogate(value):
+        raise json.JSONDecodeError("byte-tainted line (surrogate written as "
+                                   "a \\uDCxx escape)", s, 0)
+    return value
+
+
+def _no_duplicate_names(pairs):
+    seen = set()
+    for k, _ in pairs:
+        if k in seen:
+            raise json.JSONDecodeError(f"duplicate object name {k!r} — two "
+                                       f"values, and JSON does not say which",
+                                       "", 0)
+        seen.add(k)
+    return dict(pairs)
+
+
+def _carries_surrogate(value) -> bool:
+    """Any lone surrogate anywhere in a parsed row — keys included."""
+    if isinstance(value, str):
+        return any("\ud800" <= ch <= "\udfff" for ch in value)
+    if isinstance(value, dict):
+        return any(_carries_surrogate(k) or _carries_surrogate(v)
+                   for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_carries_surrogate(v) for v in value)
+    return False
 
 
 def _classify(raw_line: bytes, counts: Dict[str, int]) -> Optional[Dict[str, Any]]:

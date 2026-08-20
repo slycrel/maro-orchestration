@@ -234,8 +234,13 @@ class TestCleanupWorkspaceSkills:
         # Two copies of the same good skill (same content_hash)
         dup1 = _make_skill("sk-a", "skill alpha", correct_hash=True)
         dup2 = dict(dup1)
+        # Identical in every field that says what the skill DOES; newer, so
+        # it is the one kept. This used to bump `use_count` instead, which
+        # after adversarial r5 makes the two rows different skills (a
+        # diverged use count is evidence, and deleting it destroys it) —
+        # see TestOnlyFieldsThatCannotChangeBehaviourAreIgnoredByDedup.
         dup2["id"] = "sk-b"
-        dup2["use_count"] = 5  # higher score → should be kept
+        dup2["created_at"] = "2030-01-01T00:00:00Z"
         stale = _make_skill("sk-c", "test fixture", correct_hash=False)
         self._write_skills(skills_file, [dup1, dup2, stale])
 
@@ -590,8 +595,11 @@ class TestDedupDeletesOnlyProvableRedundancy:
         from skill_types import compute_skill_hash, dict_to_skill
         base["content_hash"] = compute_skill_hash(dict_to_skill(base))
         row = dict(base)
-        row.update(id="forged", created_at="2030-01-01T00:00:00+00:00",
-                   use_count=999, success_rate=1.0)
+        # Only id and created_at differ. r5 tightened the identity to exactly
+        # those two plus the derived hash, so a `use_count` bump — which the
+        # r4 version of this helper used — now means "not a duplicate", and a
+        # control built on it could never delete anything.
+        row.update(id="forged", created_at="2030-01-01T00:00:00+00:00")
         row.update(forged)
         f = tmp_path / "skills.jsonl"
         f.write_text(json.dumps(base) + "\n" + json.dumps(row) + "\n",
@@ -735,3 +743,89 @@ class TestAnUnprovableRowIsStrandedNotAdmitted:
 
         assert raw in f.read_text(), "a row the verb could not prove was re-serialized"
         assert "kept as-is" in capsys.readouterr().out.lower()
+
+
+class TestOnlyFieldsThatCannotChangeBehaviourAreIgnoredByDedup:
+    """Adversarial r5 (5/5 HIGH) on the r4 dedup identity: r4 named a dozen
+    fields "bookkeeping" and excluded them from the comparison, so rows that
+    a consumer treats differently still counted as "identical copies" and one
+    got deleted. `circuit_state` is the proof — an open circuit EXCLUDES a
+    skill from matching — but the lesson is the shape: an exclusion list over
+    an open field space fails open on every field nobody thought about."""
+
+    @pytest.mark.parametrize("field,a,b", [
+        ("circuit_state", "closed", "open"),
+        ("failure_notes", [], ["it broke"]),
+        ("use_count", 0, 41),
+        ("success_rate", 1.0, 0.1),
+        ("utility_score", 1.0, 9.0),
+        ("consecutive_failures", 0, 3),
+        ("variant_wins", 0, 5),
+        ("source_loop_ids", [], ["loop-7"]),
+        ("imported", {}, {"pack": "x"}),
+    ])
+    def test_rows_differing_there_are_not_the_same_skill(self, field, a, b):
+        from doctor import _dedup_identity
+
+        left = dict(_make_skill("l", "n", correct_hash=True), **{field: a})
+        right = dict(_make_skill("r", "n", correct_hash=True), **{field: b})
+        assert _dedup_identity(left) != _dedup_identity(right)
+
+    def test_the_three_that_are_ignored_stay_ignored(self):
+        """id, the derived hash, and the tiebreaker timestamp — the fields two
+        rows must differ on to be two rows at all."""
+        from doctor import _dedup_identity
+
+        left = _make_skill("l", "n", correct_hash=True)
+        right = dict(_make_skill("r", "n", correct_hash=True),
+                     content_hash="deadbeef", created_at="2030-01-01T00:00:00")
+        assert _dedup_identity(left) == _dedup_identity(right)
+
+    def test_an_open_circuit_twin_does_not_evict_the_usable_skill(self, tmp_path, capsys):
+        """The literal end-to-end path: cleanup must keep both."""
+        healthy = dict(_make_skill("healthy", "s", correct_hash=True),
+                       circuit_state="closed")
+        forged = dict(_make_skill("forged", "s", correct_hash=True),
+                      circuit_state="open", created_at="2030-01-01T00:00:00")
+        f = tmp_path / "skills.jsonl"
+        f.write_text(json.dumps(healthy) + "\n" + json.dumps(forged) + "\n",
+                     encoding="utf-8")
+
+        cleanup_workspace_skills(skills_path=f)
+
+        ids = {json.loads(ln)["id"] for ln in f.read_text().splitlines() if ln.strip()}
+        assert ids == {"healthy", "forged"}, "a behaviour difference was deduped away"
+
+
+class TestTheValidatorProvesTheStoredValueNotTheCoercedOne:
+    """Adversarial r5 (2 lenses, probed): every check read `getattr(skill, …)`
+    AFTER `dict_to_skill`, which coerces with int()/float()/normalize_tags —
+    so a stored `"7"` was proven to be an int. Those same fields are the ones
+    dedup ignores, so the forged row then won on created_at."""
+
+    @pytest.mark.parametrize("field,stored", [
+        ("consecutive_failures", "7"),
+        ("consecutive_successes", "7"),
+        ("variant_wins", "7"),
+        ("variant_losses", "7"),
+        ("utility_score", True),
+        ("utility_score", "1.0"),
+        ("tags", "not-a-list"),
+    ])
+    def test_a_coercible_junk_value_is_refused_not_converted(self, field, stored):
+        from skill_types import validate_skill_row
+
+        row = dict(_make_skill("sk", "n", correct_hash=True), **{field: stored})
+        with pytest.raises((TypeError, ValueError)):
+            validate_skill_row(row)
+
+    def test_every_live_shape_still_validates_under_the_raw_checks(self):
+        """A validator that strands everything is an outage, not a guard.
+        Re-probed against the live store after the r5 raw-value change:
+        423 rows, 0 stranded."""
+        from skill_types import validate_skill_row
+
+        for over in TestTheValidatorAcceptsEveryShapeTheLiveStoreCarries.SHAPES:
+            row = _make_skill("sk", "n", correct_hash=True)
+            row.update(over)
+            validate_skill_row(row)

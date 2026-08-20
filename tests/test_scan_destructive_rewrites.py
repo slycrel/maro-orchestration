@@ -364,3 +364,104 @@ class TestTheScannerSeesEveryLineFramingIdiom:
     def test_a_non_line_separator_is_not_framing(self, framing):
         """Negative control: a CSV split is not JSONL framing."""
         assert "rewrite" not in _scan(self._destructive(framing)), framing
+
+
+class TestTheScannerSeesTheTwoIdiomsR5Found:
+    """Adversarial r5 (2026-08-20, 3 lenses, probed): r4's `frames_lines`
+    still could not see the two shapes a routine refactor of any hardened
+    site produces — hoisting the separator into a local, and moving from
+    `.readlines()` to plain iteration over an open handle. Both returned
+    ZERO hits against a genuinely destructive rewrite. The `vanished` gate
+    can only report what the scanner can see, so a blind spot here is a
+    blind spot in the gate too."""
+
+    DESTRUCTIVE_BODY = (
+        "        try:\n"
+        "            json.loads(line)\n"
+        "        except Exception:\n"
+        "            continue\n"
+        "        out.append(line)\n"
+        '    atomic_write(path, "\\n".join(out))\n'
+    )
+
+    @pytest.mark.parametrize("label,head", [
+        ("file iteration via with/as",
+         "def rewrite(path):\n    out = []\n    with path.open() as fh:\n"
+         "        for line in fh:\n"),
+        ("file iteration via open()",
+         "def rewrite(path):\n    out = []\n    with open(path) as fh:\n"
+         "        for line in fh:\n"),
+        ("iterating the open() call itself",
+         "def rewrite(path):\n    out = []\n    for line in open(path):\n"),
+        ("separator hoisted to a local",
+         'def rewrite(path):\n    out = []\n    sep = "\\n"\n'
+         "    for line in path.read_text().split(sep):\n"),
+        ("separator that cannot be resolved",
+         "def rewrite(path, sep):\n    out = []\n"
+         "    for line in path.read_text().split(sep):\n"),
+    ])
+    def test_each_is_found(self, label, head):
+        body = self.DESTRUCTIVE_BODY
+        if "with " in head:                      # keep the indentation legal
+            body = "".join("    " + ln if ln.strip() else ln
+                           for ln in body.splitlines(keepends=True)[:-1]) \
+                   + self.DESTRUCTIVE_BODY.splitlines(keepends=True)[-1]
+        assert _scan(head + body).get("rewrite") == "RISK", label
+
+    @pytest.mark.parametrize("label,src", [
+        ("a resolved non-newline local",
+         'def rewrite(path):\n    out = []\n    sep = ","\n'
+         "    for cell in path.read_text().split(sep):\n"
+         "        try:\n            json.loads(cell)\n"
+         "        except Exception:\n            continue\n"
+         "        out.append(cell)\n"
+         '    atomic_write(path, ",".join(out))\n'),
+        ("shlex.split is shell words, not store lines",
+         "def rewrite(path, cmd):\n    out = []\n"
+         "    for word in shlex.split(cmd):\n"
+         "        try:\n            json.loads(word)\n"
+         "        except Exception:\n            continue\n"
+         "        out.append(word)\n"
+         '    atomic_write(path, " ".join(out))\n'),
+        ("iterating a plain list is not framing",
+         "def rewrite(path, rows):\n    out = []\n"
+         "    for line in rows:\n"
+         "        try:\n            json.loads(line)\n"
+         "        except Exception:\n            continue\n"
+         "        out.append(line)\n"
+         '    atomic_write(path, "\\n".join(out))\n'),
+    ])
+    def test_the_negative_controls_stay_quiet(self, label, src):
+        assert "rewrite" not in _scan(src), label
+
+
+class TestTheOkVerdictIsNotBoughtByMentioningTheGuard:
+    """Adversarial r5 (Architect, probed): the OK verdict was a substring
+    test over the whole function, so a rewrite that parses every line with
+    bare `json.loads` and merely MENTIONS `loads_clean` somewhere reported
+    OK — which the manifest's `vanished` leg then counts as a watched,
+    healthy site. A function still parsing with the unguarded call has not
+    been cleared, whatever else it mentions."""
+
+    def test_an_unrelated_mention_does_not_clear_a_bare_parse(self):
+        src = ('def poll(path):\n'
+               '    loads_clean("unrelated")\n'
+               '    out = []\n'
+               '    for line in path.read_text().split("\\n"):\n'
+               '        try:\n            json.loads(line)\n'
+               '        except Exception:\n            continue\n'
+               '        out.append(line)\n'
+               '    atomic_write(path, "\\n".join(out))\n')
+        assert _scan(src).get("poll") == "RISK"
+
+    def test_a_genuinely_guarded_rewrite_is_still_ok(self):
+        """The negative control — otherwise the rule is just "everything is
+        RISK", which tells a triager nothing."""
+        src = ('def poll(path):\n'
+               '    out = []\n'
+               '    for line in path.read_text().split("\\n"):\n'
+               '        try:\n            loads_clean(line)\n'
+               '        except Exception:\n            pass\n'
+               '        out.append(line)\n'
+               '    atomic_write(path, "\\n".join(out))\n')
+        assert _scan(src).get("poll") == "OK"

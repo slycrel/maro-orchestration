@@ -39,6 +39,10 @@ CATEGORIES: dict[str, str] = {
     "orchestrator": "call-graph noise — a drop loop and a write exist hundreds "
                     "of lines apart in one giant function, with no data path "
                     "between them",
+    "clean-then-raw": "the scan parses every line with `loads_clean`, and the "
+                      "bare `json.loads` re-parses ONE line that scan already "
+                      "proved taint-free — the r5 verdict rule cannot see that "
+                      "ordering, and the preserve tests already cover these",
     "REAL": "REAL DEFECT — fixed 2026-08-20, see "
             "docs/history/2026-08-20-destructive-rewrite-triage.md",
 }
@@ -71,10 +75,12 @@ _add("stream", """
  orch_bridges.py:review_command_validation_bridge
  orch_bridges.py:review_command_validation_bridge._validate""")
 _add("derived-index", """
+ memory_sqlite.py:_catch_up
  memory_ledger.py:_update_memory_index loop_report.py:_render_devlog_html
  portability.py:main""")
 _add("read-only", """
- metrics.py:_reverse_readline
+ metrics.py:_reverse_readline convo_miner.py:scan_session_logs
+ correspondence.py:render_transcript
  playbook.py:parse_entries playbook.py:_valid_compression
  knowledge_lens.py:load_standing_rules knowledge_lens.py:load_hypotheses
  knowledge_lens.py:_lesson_texts_by_id knowledge_lens.py:search_decisions
@@ -95,6 +101,10 @@ _add("append-importer", """
 _add("verbatim-preserve", """
  memory_ledger.py:compress_old_outcomes._drop_compressed captains_log.py:_maybe_rotate
  gc_memory.py:_gc_outcomes._classify""")
+_add("clean-then-raw", """
+ memory_ledger.py:stamp_outcome_verdict memory_ledger.py:stamp_outcome_verdict._stamp
+ memory_ledger.py:annotate_outcome_lessons
+ memory_ledger.py:annotate_outcome_lessons._stamp""")
 _add("orchestrator", """
  handle.py:_handle_impl heartbeat.py:heartbeat_loop doctor.py:run_doctor
  sheriff.py:check_project""")
@@ -106,7 +116,19 @@ _add("REAL", """
 # report these any more; they stay here because the manifest is the record of
 # what was triaged, not a snapshot of the current scan.
 FIXED = {n for n, c in SITES.items() if c == "REAL"} | {
-    "doctor.py:run_doctor", "gc_memory.py:_gc_outcomes._classify"}
+    "gc_memory.py:_gc_outcomes._classify"}
+# `doctor.py:run_doctor` used to be listed here too, and adversarial r5 took
+# it back out — deliberately, with the reasoning written down rather than the
+# entry quietly deleted. It is RISK again, but nothing in it regressed: r5
+# refuted the OK verdict itself (a function got OK for merely MENTIONING
+# `loads_clean` anywhere in its body, even while parsing every line with bare
+# `json.loads`), so the verdict that put run_doctor in this set was the weak
+# one. Its actual triage — "orchestrator", a drop loop and a write hundreds
+# of lines apart in one giant function with no data path between them — was
+# read by hand on 2026-08-20 and is unchanged. A gate that cannot tell "the
+# code regressed" from "the rule got stricter" would have reported this as a
+# REGRESSION, which is why the resolution is a hand re-read and a recorded
+# reason, not a silently widened exemption.
 # `gc_memory.py:_gc_outcomes._trim` used to be listed here. The `vanished`
 # leg below caught it on its first run — `_trim` no longer frames lines at
 # all (it calls `_classify`, which does, and which the scanner reports as its

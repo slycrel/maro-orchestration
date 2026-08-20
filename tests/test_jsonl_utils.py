@@ -1,7 +1,10 @@
 """Tests for jsonl_utils.py — the shared JSONL-tail reader (Tier 2 consolidation)."""
 
+import json
 import logging
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -320,3 +323,60 @@ class TestTheDropIsAnnounced:
             assert read_jsonl_tail(path) == []
         assert len(caplog.records) == 1
         assert caplog.records[0].levelno == logging.WARNING
+
+
+class TestLoadsCleanRefusesTheTwoShapesR5Found:
+    """`loads_clean` refuses byte TAINT so a rewrite cannot launder it into a
+    clean escape. Adversarial r5 (2026-08-20, Failure Operator, probed) found
+    two more ways a line can be structurally valid JSON and still be a row we
+    must not act on."""
+
+    def test_a_surrogate_written_as_an_escape_is_taint_too(self):
+        """`{"tier": "\\udcff"}` is pure ASCII on disk — valid UTF-8, so the
+        raw-line scan cannot see it — and parses to exactly the string a torn
+        byte produces. It reached the store's validators, and only the fields
+        that get hashed were caught."""
+        from jsonl_utils import loads_clean
+
+        line = json.dumps({"tier": "x"}).replace('"x"', '"\\udcff"')
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(line)
+
+    @pytest.mark.parametrize("line", [
+        '{"a": "\\udcff"}',                      # value
+        '{"a": ["ok", "\\udcff"]}',              # inside a list
+        '{"a": {"b": "\\udcff"}}',               # nested object
+        '{"\\udcff": "a"}',                      # the KEY
+        '{"a": "\\uDCFF"}',                      # uppercase hex
+    ])
+    def test_it_finds_the_surrogate_wherever_it_hides(self, line):
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean(line)
+
+    def test_duplicate_names_are_a_corrupt_row_not_a_choice(self):
+        """json.loads silently keeps the LAST value, so
+        `{"applied": false, "applied": true}` read as already-applied and a
+        STOP interrupt was swallowed with no warning. Two values and no rule
+        saying which is not something this layer may decide."""
+        from jsonl_utils import loads_clean
+
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean('{"id": "s", "applied": false, "applied": true}')
+        with pytest.raises(json.JSONDecodeError):
+            loads_clean('{"a": {"z": 1, "z": 2}}')      # nested
+
+    @pytest.mark.parametrize("line", [
+        '{"a": 1, "b": ["x"], "c": {"d": null}}',
+        '{"a": "caf\\u00e9 \\u2028 line sep"}',   # escapes that are NOT surrogates
+        '{"a": "\\ud83d\\ude00"}',                # a PAIR: a real emoji, not taint
+        '[]', 'null', '"x"', '3',
+    ])
+    def test_healthy_lines_still_parse(self, line):
+        """The negative control. A refusal that fires on everything is an
+        outage, and `\\ud83d\\ude00` is the shape that proves the check is
+        about LONE surrogates: json.loads has already joined the pair."""
+        from jsonl_utils import loads_clean
+
+        loads_clean(line)

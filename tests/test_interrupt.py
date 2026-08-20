@@ -837,3 +837,65 @@ class TestAFailedCommitIsNotAnEmptyQueue:
         with caplog.at_level("ERROR"):
             assert InterruptQueue(queue_path=p).clear() == 0
         assert any("nothing was cleared" in r.msg for r in caplog.records)
+
+
+class TestAQueueOfNothingButUnreadableRowsStillSpeaks:
+    """Adversarial r5 (2026-08-20, 4 lenses, probed) on r4's own fix. r4
+    silenced the preflight peek() so the locked pass could own the single
+    announcement — correct, except that poll()/clear() return BEFORE the
+    locked pass when the preflight finds nothing deliverable. A queue holding
+    only a corrupt STOP therefore behaved exactly like an empty queue: no
+    delivery, no warning, no trace. The rule is one announcement per pass from
+    whichever branch actually runs — not from the branch that usually runs."""
+
+    BAD = json.dumps({"id": "stop", "source": "operator", "message": "STOP",
+                      "intent": "stop", "applied": "maybe"})
+    GOOD = json.dumps({"id": "ok", "source": "operator", "message": "go",
+                       "intent": "stop", "applied": False,
+                       "created_at": "2026-01-01T00:00:00+00:00"})
+
+    def _q(self, tmp_path, content):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(content, encoding="utf-8")
+        return InterruptQueue(queue_path=p), p
+
+    @staticmethod
+    def _warnings(caplog):
+        return [r for r in caplog.records if "cannot be delivered" in r.message]
+
+    def test_poll_announces_the_stranded_row(self, tmp_path, caplog):
+        q, p = self._q(tmp_path, self.BAD + "\n")
+        with caplog.at_level("WARNING"):
+            assert q.poll() == []
+        assert len(self._warnings(caplog)) == 1, caplog.text
+        assert self.BAD in p.read_text(), "the raw line must stay on disk"
+
+    def test_clear_announces_the_stranded_row(self, tmp_path, caplog):
+        q, p = self._q(tmp_path, self.BAD + "\n")
+        with caplog.at_level("WARNING"):
+            assert q.clear() == 0
+        assert len(self._warnings(caplog)) == 1, caplog.text
+        assert self.BAD in p.read_text()
+
+    def test_a_mixed_queue_still_announces_exactly_once(self, tmp_path, caplog):
+        """The r4 defect in the other direction: two warnings per pass, each
+        reading like a separate lost control action."""
+        q, p = self._q(tmp_path, self.GOOD + "\n" + self.BAD + "\n")
+        with caplog.at_level("WARNING"):
+            assert [i.id for i in q.poll()] == ["ok"]
+        assert len(self._warnings(caplog)) == 1, caplog.text
+
+    def test_a_healthy_queue_says_nothing(self, tmp_path, caplog):
+        """The negative control: a warning that always fires is noise."""
+        q, _ = self._q(tmp_path, self.GOOD + "\n")
+        with caplog.at_level("WARNING"):
+            assert [i.id for i in q.poll()] == ["ok"]
+        assert self._warnings(caplog) == []
+
+    def test_an_empty_queue_says_nothing(self, tmp_path, caplog):
+        q, _ = self._q(tmp_path, "")
+        with caplog.at_level("WARNING"):
+            assert q.poll() == []
+            assert q.clear() == 0
+        assert self._warnings(caplog) == []

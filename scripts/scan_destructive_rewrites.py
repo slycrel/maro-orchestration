@@ -124,24 +124,61 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         """Does fn split a blob into lines?
 
         Every idiom that means the same thing: `.splitlines()`,
-        `.readlines()`, `.split("\\n")` / `.split(b"\\n")`, and the keyword
-        form `.split(sep="\\n")`. Adversarial r4 (3 lenses) listed the ones
-        r3's version still missed — including `split(b"\\n")`, which
+        `.readlines()`, `.split("\\n")` / `.split(b"\\n")`, the keyword form
+        `.split(sep="\\n")`, a separator held in a variable, and plain
+        iteration over an open file handle. Adversarial r4 (3 lenses) added
+        the second and third — including `split(b"\\n")`, which
         `src/jsonl_utils.py` itself uses, so it was never hypothetical.
-        Each new idiom is one more way for a destructive rewrite to be
-        invisible here, which is the failure this scanner exists to not have.
+        Adversarial r5 (3 lenses, probed) added the last two, both invisible
+        to r4's version and both one routine refactor away from any hardened
+        site: hoisting the separator to a `sep = "\\n"` local, or moving from
+        `.readlines()` to `with path.open() as fh: for line in fh:`.
+
+        The direction of the doubt is the point. A `.split()` whose separator
+        this cannot resolve is treated as framing, because the cost of a
+        false RISK is one line of triage (the manifest already carries 69 of
+        them) and the cost of a false OK is a destructive rewrite nobody can
+        see. Only a separator PROVEN to be something other than a newline
+        buys silence.
         """
+        consts = {}                                # sep = "\n" style locals
         for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) \
+                    and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                consts[n.targets[0].id] = n.value.value
+        file_handles = set()                       # names bound from open()
+        for n in ast.walk(fn):
+            for target, value in _bindings(n):
+                if _is_open_call(value) and isinstance(target, ast.Name):
+                    file_handles.add(target.id)
+        for n in ast.walk(fn):
+            if isinstance(n, (ast.For, ast.AsyncFor)):
+                it = n.iter
+                if isinstance(it, ast.Name) and it.id in file_handles:
+                    return True
+                if _is_open_call(it):              # for line in open(p):
+                    return True
             if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
                 continue
             if n.func.attr in ("splitlines", "readlines"):
                 return True
             if n.func.attr == "split":
+                if isinstance(n.func.value, ast.Name) and \
+                        n.func.value.id == "shlex":
+                    continue          # shell words, never store lines
                 args = list(n.args) + [k.value for k in n.keywords
                                        if k.arg == "sep"]
-                if args and isinstance(args[0], ast.Constant) \
-                        and args[0].value in ("\n", b"\n"):
-                    return True
+                if not args:
+                    continue                       # .split() on whitespace
+                a = args[0]
+                if isinstance(a, ast.Constant):
+                    if a.value in ("\n", b"\n"):
+                        return True
+                elif isinstance(a, ast.Name):
+                    if consts.get(a.id, "\n") in ("\n", b"\n"):
+                        return True               # unresolved -> assume framing
+                else:
+                    return True                    # unresolvable expression
         return False
 
     out = []
@@ -151,9 +188,46 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
             continue
         if not (writes(fn) or written_by_a_caller(fn)):
             continue
-        verdict = "OK  " if any(m in dump for m in CLEAN_MARKERS) else "RISK"
+        # OK is a HINT, and adversarial r5 (Architect, probed) showed how
+        # weak a hint: the marker only had to APPEAR somewhere in the
+        # function, so a rewrite that parses each line with bare
+        # `json.loads` and merely mentions `loads_clean` elsewhere reported
+        # OK — visible to the manifest's `vanished` leg, and green. A
+        # function that still parses with the unguarded call has not been
+        # cleared, whatever else it mentions.
+        clean = any(m in dump for m in CLEAN_MARKERS) and not _bare_json_loads(fn)
+        verdict = "OK  " if clean else "RISK"
         out.append((verdict, fn.lineno, qual(fn)))
     return out
+
+
+
+def _bindings(node):
+    """(target, value) pairs for assignments and `with ... as` clauses."""
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            yield t, node.value
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if item.optional_vars is not None:
+                yield item.optional_vars, item.context_expr
+
+
+def _is_open_call(node) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    return (isinstance(f, ast.Name) and f.id == "open") or \
+           (isinstance(f, ast.Attribute) and f.attr == "open")
+
+
+def _bare_json_loads(fn) -> bool:
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                and n.func.attr == "loads" and isinstance(n.func.value, ast.Name) \
+                and n.func.value.id == "json":
+            return True
+    return False
 
 
 def main(argv=None) -> int:

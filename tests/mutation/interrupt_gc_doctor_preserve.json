@@ -256,15 +256,15 @@
   {
     "name": "doctor validator (hash) :: a row whose content cannot be hashed is admitted",
     "file": "src/skill_types.py",
-    "anchor": "    skill = dict_to_skill(d)          # required keys, or KeyError\n    compute_skill_hash(skill)         # proves the content fields are text",
-    "replacement": "    skill = dict_to_skill(d)          # required keys, or KeyError",
+    "anchor": "    skill = dict_to_skill(d)\n    compute_skill_hash(skill)         # proves the content fields ENCODE",
+    "replacement": "    skill = dict_to_skill(d)\n",
     "tests": "tests/test_doctor.py"
   },
   {
     "name": "doctor validator (finite) :: a NaN score is admitted to the dedup",
     "file": "src/skill_types.py",
-    "anchor": "        if isinstance(v, bool) or not isinstance(v, (int, float)) \\\n                or not math.isfinite(v):\n            raise TypeError(f\"{name} must be a finite number, got {v!r}\")",
-    "replacement": "        if False:\n            raise TypeError(f\"{name} must be a finite number, got {v!r}\")",
+    "anchor": "    for name in (\"success_rate\", \"utility_score\"):\n        _raw_check(d, name, lambda v: not isinstance(v, bool)\n                   and isinstance(v, (int, float)) and math.isfinite(v),\n                   \"a finite number\")",
+    "replacement": "    for name in (\"success_rate\", \"utility_score\"):\n        _raw_check(d, name, lambda v: True,\n                   \"a finite number\")",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -305,8 +305,8 @@
   {
     "name": "scanner framing :: split(\"\\\\n\") walks out of the detector's view again",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if n.func.attr == \"split\":\n                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value in (\"\\n\", b\"\\n\"):\n                    return True",
-    "replacement": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if False:\n                    return True",
+    "anchor": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if n.func.attr == \"split\":\n                if isinstance(n.func.value, ast.Name) and \\\n                        n.func.value.id == \"shlex\":\n                    continue          # shell words, never store lines\n                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]\n                if not args:",
+    "replacement": "            if n.func.attr in (\"splitlines\", \"readlines\"):\n                return True\n            if False:\n                args = []\n                if not args:",
     "tests": "tests/test_scan_destructive_rewrites.py"
   },
   {
@@ -319,8 +319,8 @@
   {
     "name": "doctor dedup scope :: a behaviour field slips into the bookkeeping set",
     "file": "src/doctor.py",
-    "anchor": "    \"source_loop_ids\", \"imported\",\n})",
-    "replacement": "    \"source_loop_ids\", \"imported\", \"trigger_patterns\",\n})",
+    "anchor": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\"})",
+    "replacement": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\",\n                               \"trigger_patterns\"})",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -340,15 +340,15 @@
   {
     "name": "doctor validator (empty) :: an empty id or content_hash is admitted",
     "file": "src/skill_types.py",
-    "anchor": "    for name in (\"id\", \"name\", \"content_hash\"):\n        if not getattr(skill, name).strip():\n            raise ValueError(f\"{name} must not be empty\")",
+    "anchor": "    for name in (\"id\", \"name\", \"content_hash\"):\n        if name in d and not d[name].strip():\n            raise ValueError(f\"{name} must not be empty\")",
     "replacement": "    pass",
     "tests": "tests/test_doctor.py"
   },
   {
     "name": "doctor validator (timestamp) :: a non-timestamp created_at ranks rows",
     "file": "src/skill_types.py",
-    "anchor": "    try:                              # a timestamp is a RANKING input\n        datetime.fromisoformat(skill.created_at)\n    except (TypeError, ValueError) as exc:",
-    "replacement": "    try:                              # a timestamp is a RANKING input\n        pass\n    except (TypeError, ValueError) as exc:",
+    "anchor": "    if \"created_at\" in d:             # a timestamp is a RANKING input\n        try:\n            datetime.fromisoformat(d[\"created_at\"])\n        except (TypeError, ValueError) as exc:\n            raise ValueError(f\"created_at is not a timestamp: \"\n                             f\"{d['created_at']!r} ({exc})\") from None",
+    "replacement": "    if \"created_at\" in d:             # a timestamp is a RANKING input\n        try:\n            pass\n        except (TypeError, ValueError) as exc:\n            raise ValueError(f\"created_at is not a timestamp: \"\n                             f\"{d['created_at']!r} ({exc})\") from None",
     "tests": "tests/test_doctor.py"
   },
   {
@@ -364,20 +364,6 @@
     "anchor": "        _announce(unreadable)\n        if stats is not None:\n            stats[\"uncollectable\"] = unreadable\n        return total, 0, 0",
     "replacement": "        return total, 0, 0",
     "tests": "tests/test_gc_memory.py"
-  },
-  {
-    "name": "interrupt double-announce :: the unlocked preflight announces too",
-    "file": "src/interrupt.py",
-    "anchor": "            if not self.peek(announce=False):\n                return []",
-    "replacement": "            if not self.peek():\n                return []",
-    "tests": "tests/test_interrupt.py"
-  },
-  {
-    "name": "interrupt double-announce (clear) :: same, on the clear path",
-    "file": "src/interrupt.py",
-    "anchor": "            if not self.peek(announce=False):\n                return 0",
-    "replacement": "            if not self.peek():\n                return 0",
-    "tests": "tests/test_interrupt.py"
   },
   {
     "name": "interrupt commit-failure :: a failed commit looks like an empty queue",
@@ -410,8 +396,92 @@
   {
     "name": "scanner framing (bytes/kwarg) :: split(b\"\\\\n\") and split(sep=...) walk out of view",
     "file": "scripts/scan_destructive_rewrites.py",
-    "anchor": "                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value in (\"\\n\", b\"\\n\"):",
-    "replacement": "                args = list(n.args)\n                if args and isinstance(args[0], ast.Constant) \\\n                        and args[0].value == \"\\n\":",
+    "anchor": "                args = list(n.args) + [k.value for k in n.keywords\n                                       if k.arg == \"sep\"]",
+    "replacement": "                args = list(n.args)",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "doctor dedup scope (circuit) :: an operational field goes back to bookkeeping",
+    "file": "src/doctor.py",
+    "anchor": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\"})",
+    "replacement": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\",\n                               \"circuit_state\"})",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "doctor dedup scope (evidence) :: failure notes and counters go back to bookkeeping",
+    "file": "src/doctor.py",
+    "anchor": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\"})",
+    "replacement": "_DEDUP_BOOKKEEPING = frozenset({\"id\", \"content_hash\", \"created_at\",\n                               \"failure_notes\", \"use_count\", \"source_loop_ids\"})",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "validator raw values :: the checks read the coerced Skill again",
+    "file": "src/skill_types.py",
+    "anchor": "    if name in d and not ok(d[name]):\n        raise TypeError(f\"{name} must be {expected}, got {d[name]!r}\")",
+    "replacement": "    if name in d and not ok(getattr(dict_to_skill(d), name)):\n        raise TypeError(f\"{name} must be {expected}, got {d[name]!r}\")",
+    "tests": "tests/test_doctor.py"
+  },
+  {
+    "name": "loads_clean dup names :: duplicate object names silently keep the last",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    value = json.loads(s, object_pairs_hook=_no_duplicate_names)",
+    "replacement": "    value = json.loads(s)",
+    "tests": "tests/test_jsonl_utils.py tests/test_interrupt.py"
+  },
+  {
+    "name": "loads_clean escaped taint :: a surrogate written as \\\\uDCxx is admitted",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if \"\\\\u\" in s and _carries_surrogate(value):\n        raise json.JSONDecodeError(\"byte-tainted line (surrogate written as \"\n                                   \"a \\\\uDCxx escape)\", s, 0)\n",
+    "replacement": "",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "loads_clean escaped taint (keys) :: only string VALUES are walked",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return any(_carries_surrogate(k) or _carries_surrogate(v)\n                   for k, v in value.items())",
+    "replacement": "        return any(_carries_surrogate(v) for v in value.values())",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "interrupt stranded-only (poll) :: a queue of only unreadable rows goes silent",
+    "file": "src/interrupt.py",
+    "anchor": "            preflight, stranded = self._peek_counted()\n            if not preflight:\n                # No locked pass will run, so this branch owns the\n                # announcement (adversarial r5, 4 lenses, probed).\n                self._warn_undeliverable(stranded)\n                return []",
+    "replacement": "            preflight, stranded = self._peek_counted()\n            if not preflight:\n                return []",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt stranded-only (clear) :: same, on the clear path",
+    "file": "src/interrupt.py",
+    "anchor": "            preflight, stranded = self._peek_counted()\n            if not preflight:\n                self._warn_undeliverable(stranded)   # same as poll(): r5\n                return 0",
+    "replacement": "            preflight, stranded = self._peek_counted()\n            if not preflight:\n                return 0",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "interrupt double-announce :: the preflight speaks too, twice per pass",
+    "file": "src/interrupt.py",
+    "anchor": "    def _peek_counted(self, *, announce: bool = False) \\",
+    "replacement": "    def _peek_counted(self, *, announce: bool = True) \\",
+    "tests": "tests/test_interrupt.py"
+  },
+  {
+    "name": "scanner framing (file iteration) :: iterating an open handle stops counting",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "                if isinstance(it, ast.Name) and it.id in file_handles:\n                    return True\n                if _is_open_call(it):              # for line in open(p):\n                    return True",
+    "replacement": "                pass",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner framing (variable sep) :: an unresolvable separator buys silence",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "                elif isinstance(a, ast.Name):\n                    if consts.get(a.id, \"\\n\") in (\"\\n\", b\"\\n\"):\n                        return True               # unresolved -> assume framing\n                else:\n                    return True                    # unresolvable expression",
+    "replacement": "                elif isinstance(a, ast.Name):\n                    if consts.get(a.id) in (\"\\n\", b\"\\n\"):\n                        return True",
+    "tests": "tests/test_scan_destructive_rewrites.py"
+  },
+  {
+    "name": "scanner OK verdict :: mentioning the guard clears a bare json.loads again",
+    "file": "scripts/scan_destructive_rewrites.py",
+    "anchor": "        clean = any(m in dump for m in CLEAN_MARKERS) and not _bare_json_loads(fn)",
+    "replacement": "        clean = any(m in dump for m in CLEAN_MARKERS)",
     "tests": "tests/test_scan_destructive_rewrites.py"
   }
 ]

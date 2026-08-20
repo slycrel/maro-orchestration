@@ -371,7 +371,11 @@ class InterruptQueue:
         interrupt landing between read and write_text was lost).
         """
         with _LOCK:
-            if not self.peek(announce=False):
+            preflight, stranded = self._peek_counted()
+            if not preflight:
+                # No locked pass will run, so this branch owns the
+                # announcement (adversarial r5, 4 lenses, probed).
+                self._warn_undeliverable(stranded)
                 return []
             pending: List[Interrupt] = []
             unreadable = {"n": 0}
@@ -438,7 +442,7 @@ class InterruptQueue:
                         "interrupts cannot be delivered (left on disk)",
                         n, self.path)
 
-    def peek(self, *, announce: bool = True) -> List[Interrupt]:
+    def peek(self) -> List[Interrupt]:
         """Return pending interrupts without marking them applied.
 
         A row this cannot read is dropped from the RESULT only — the line
@@ -446,15 +450,23 @@ class InterruptQueue:
         The loss is announced: an interrupt the operator posted and the loop
         never saw is exactly the event that must not pass in silence.
 
-        `announce=False` is for poll()/clear(), which use this as an unlocked
-        PREFLIGHT and then reclassify under the lock. Adversarial r4 (3
-        lenses, probed): with both paths announcing, one pre-existing
-        unreadable row produced TWO identical warnings per poll — each
-        reading like a separate lost control action — and a row that was
-        unreadable at preflight but repaired before the lock was announced as
-        "cannot be delivered" in the same call that delivered it. The locked
-        classification is the authoritative one; it is the one that speaks.
+        poll()/clear() do NOT call this — they use `_peek_counted`, the
+        silent form, and announce for themselves. Adversarial r4 (3 lenses,
+        probed): with both the preflight and the locked pass announcing, one
+        pre-existing unreadable row produced TWO identical warnings per poll,
+        each reading like a separate lost control action. Adversarial r5 (4
+        lenses, probed) found what r4's fix for that broke: a queue holding
+        ONLY unreadable rows has no pending row, so poll() returned early,
+        the locked pass never ran, and the warning it was supposed to own was
+        never emitted — a corrupt STOP stranded in total silence, which is
+        the exact failure this whole arc exists to prevent. Whichever branch
+        runs is now the branch that speaks, and only one of them runs.
         """
+        return self._peek_counted(announce=True)[0]
+
+    def _peek_counted(self, *, announce: bool = False) \
+            -> "tuple[List[Interrupt], int]":
+        """(pending interrupts, rows that could not be read)."""
         lines = self._read_lines()
         result = []
         dropped = 0
@@ -477,12 +489,14 @@ class InterruptQueue:
                 dropped += 1
         if announce:
             self._warn_undeliverable(dropped)
-        return result
+        return result, dropped
 
     def clear(self) -> int:
         """Clear all pending interrupts. Returns count cleared."""
         with _LOCK:
-            if not self.peek(announce=False):
+            preflight, stranded = self._peek_counted()
+            if not preflight:
+                self._warn_undeliverable(stranded)   # same as poll(): r5
                 return 0
             counted = {"n": 0}
             unreadable = {"n": 0}

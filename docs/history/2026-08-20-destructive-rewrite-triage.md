@@ -484,6 +484,105 @@ shared tree, plus the two failures that belong to another session's
 uncommitted `captains_log.py`, proven foreign in an isolated worktree earlier
 in this arc.
 
+## Adversarial round 5 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats (Skeptic, Architect, Minimalist, Expert QA, Failure Operator) on the
+r4 fix layer. **REJECT — the fifth round running whose top finding is a defect
+the previous round's fix introduced, and the second at 5/5 consensus.** Seven
+findings, all seven reproduced independently before anything was touched; zero
+hallucinations in the round.
+
+- **An exclusion list is a denylist, and a denylist guarding a destructive
+  decision fails open** (5/5, HIGH). r4 keyed dedup on behaviour rather than
+  the row's declared hash — right idea — and implemented it by naming twelve
+  fields "bookkeeping" and ignoring them. `circuit_state` is the proof: an
+  open circuit **excludes a skill from matching** (`skills.py`,
+  `find_matching_skills`), so two rows differing only there are not identical
+  copies in any sense a user would accept. Probed both directions: a forged
+  `open` row evicting a healthy `closed` one, and a forged `closed` row
+  resurrecting a circuit-broken skill. `failure_notes` and `source_loop_ids`
+  are the same mistake wearing a different hat — they are EVIDENCE, and
+  deleting the row that carries them destroys it.
+
+  `_DEDUP_BOOKKEEPING` is now three names — `id`, `content_hash`,
+  `created_at` — the fields two rows must differ on to be two rows at all.
+  Everything else must match, including fields a future commit adds. Measured
+  before shipping: on the 423-row live store the tight identity finds exactly
+  as many duplicate groups as r4's list did (zero), so the strictness costs
+  nothing observable and the summary line's word "identical" is now literally
+  true.
+
+- **The validator proved the coerced value, not the stored one** (2 lenses,
+  HIGH, probed). Every check read `getattr(skill, …)` AFTER `dict_to_skill`,
+  which coerces with `int()`, `float()` and `normalize_tags()`. So
+  `consecutive_failures: "7"` was proven to be an int, `utility_score: true`
+  a float, `tags: "not-a-list"` a list — and those are exactly the fields r4
+  excluded from the identity, so the forged row still won on `created_at`.
+  Checks now run on the raw `d[name]`; construction happens after. Coercion
+  stays in `dict_to_skill` because a tolerant READ path wants it — the point
+  is that a caller about to delete rows must prove what the STORE says, not
+  what a constructor could make of it. Re-probed against the live store:
+  423 rows, 0 stranded.
+
+- **A queue of nothing but unreadable rows went silent** (4 lenses, HIGH,
+  probed). r4 silenced the preflight so the locked pass could own the single
+  announcement. But `poll()`/`clear()` return BEFORE the locked pass when the
+  preflight finds nothing deliverable — so a corrupt STOP alone in the queue
+  produced no delivery, no warning, and no trace, which is the precise
+  failure the whole arc exists to prevent. The preflight is now
+  `_peek_counted()` (silent, returns the count) and the early-return branch
+  announces for itself: one announcement per pass, from whichever branch
+  actually runs.
+
+- **`loads_clean` accepted two more shapes of corrupt row** (Failure
+  Operator, HIGH, probed). (a) A surrogate written as a JSON **escape** —
+  `{"tier": "\udcff"}` — is pure ASCII on disk, so the raw-line taint scan
+  cannot see it, and it parses to exactly the string a torn byte produces.
+  Only the fields that get hashed caught it. The check now also runs on the
+  parsed value (keys included), behind a cheap `\u`-substring pre-filter so
+  the hot path is unchanged. (b) Duplicate object names:
+  `{"applied": false, "applied": true}` reads as applied, because
+  `json.loads` silently keeps the last one — probed, a STOP swallowed with
+  no warning — and a rewrite that re-dumps the row destroys the other value.
+  Two values and no rule saying which is not a choice this layer may make;
+  it is a corrupt row, and corrupt rows strand.
+
+- **The scanner still could not see two idioms, and its OK verdict was worth
+  little** (3 lenses + Architect, MEDIUM). Invisible: a separator hoisted to
+  a local (`sep = "\n"`), and plain iteration over an open handle
+  (`with path.open() as fh: for line in fh:`) — each one routine-refactor
+  distance from any hardened site. Both now count, and an unresolvable
+  separator counts too: only a separator PROVEN to be something else buys
+  silence, because a false RISK costs one line of triage and a false OK
+  costs a rewrite nobody can see. Separately, `OK` was a substring test over
+  the whole function, so a rewrite parsing every line with bare `json.loads`
+  that merely MENTIONED `loads_clean` reported OK — and the `vanished` leg
+  then counted it as a watched, healthy site. A function still parsing with
+  the unguarded call is not cleared, whatever else it mentions.
+
+**Blast radius, measured before shipping** (the r3 discipline): the stricter
+scanner takes the tree from 69 to 77 RISK sites, +8, none lost. All eight were
+read by hand and triaged the same day — two read-only loaders and a
+derived-index replay newly visible through the file-iteration leg, plus four
+`memory_ledger` stampers and `doctor.run_doctor` newly RISK through the
+verdict rule. The stampers earned a new FP category, `clean-then-raw`: their
+scan parses every line with `loads_clean` and the bare `json.loads`
+re-parses ONE line that scan already proved taint-free, an ordering the rule
+cannot see and the existing preserve tests already cover.
+
+`doctor.run_doctor` is the interesting one, and it is recorded rather than
+quietly swapped: it left `FIXED`, because nothing in it regressed — r5
+refuted the OK **verdict** that put it there. A drift gate cannot tell "the
+code regressed" from "the rule got stricter", so the resolution is a hand
+re-read and a written reason, never a widened exemption. That is the same
+move `vanished` forced for `_gc_outcomes._trim` one round earlier.
+
+**Receipts:** mutation spec 59 → 69, `69/69 accounted for`. Eight of the
+existing mutants came back **SKIP** on the first sweep — stale anchors from
+r5's own rewrites — and were re-anchored against the current files before the
+sweep was called green; a SKIP is not a pass, and a spec that silently skips
+is the same failure as a scanner that reports zero.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -497,11 +596,13 @@ from a tool nobody has falsified is worth nothing. This triage is the
 falsification pass, and its durable output is the FP table above — so the next
 person to run the scanner starts from 63 known-benign sites, not 63 unknowns.
 
-The second lesson is from the three rounds, not the scan: **every round's top
+The second lesson is from the five rounds, not the scan: **every round's top
 finding was a defect the previous round's fix introduced** — r1 found the lock
 that r0's fix scoped too narrowly, r2 found the `applied` flag that r1's fix
-inverted, r3 found that r2's "validation" validated nothing. None was in the
-original code. Review the fix layer first; it is the only part of the change
+inverted, r3 found that r2's "validation" validated nothing, r4 found that r3's
+validation proved well-formedness and called it provenance, r5 found that r4's
+provenance key was a denylist and that its de-duplicated announcement had left
+one branch mute. None was in the original code. Review the fix layer first; it is the only part of the change
 that has never been read by anyone but its author, and it was written under
 the pressure of a finding, which is exactly the condition that produces the
 mirror-image bug. Three for three is no longer a coincidence, and the r3
@@ -516,3 +617,16 @@ about that shows up as a failing test, a warning, or a red CI run; it shows up
 as an instrument that reports zero forever. After changing an idiom, re-run the
 detector against the *reverted* code and prove it still finds it. "Found 0" is
 a claim, and like every other claim it needs an executing line.
+
+The fourth arrived in r5 and generalizes the third: **an exclusion list
+guarding a destructive decision is a denylist, and denylists fail open on
+everything nobody thought of** — including the fields a future commit adds.
+r4's dedup key named twelve fields as ignorable and was refuted 5/5 on the
+first one anybody checked. The same shape sat one file away in the scanner,
+where `OK` meant "this function mentions the safe parser somewhere". Both
+fixes are the same move: state the small set you can prove, and treat
+everything else as unproven. Three names instead of twelve, and a verdict
+that requires the unguarded call to be absent rather than the guarded one to
+be present. On the live store the strict version costs nothing — measured,
+not assumed, because "it would be too strict" is exactly the claim that needs
+an executing line.

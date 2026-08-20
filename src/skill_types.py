@@ -309,40 +309,57 @@ def validate_skill_row(d: dict) -> Skill:
     first, so a non-string there raises TypeError inside `max()` and takes
     the whole verb down.
     """
-    skill = dict_to_skill(d)          # required keys, or KeyError
-    compute_skill_hash(skill)         # proves the content fields are text
+    for name in ("id", "name", "description"):
+        if name not in d:
+            raise KeyError(name)     # dict_to_skill's required keys, up front
     for name in _STR_FIELDS:
-        v = getattr(skill, name)
-        if not isinstance(v, str):
-            raise TypeError(f"{name} must be a string, got {type(v).__name__}")
+        _raw_check(d, name, lambda v: isinstance(v, str), "a string")
     for name in ("id", "name", "content_hash"):
-        if not getattr(skill, name).strip():
+        if name in d and not d[name].strip():
             raise ValueError(f"{name} must not be empty")
-    try:                              # a timestamp is a RANKING input
-        datetime.fromisoformat(skill.created_at)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"created_at is not a timestamp: "
-                         f"{skill.created_at!r} ({exc})") from None
+    if "created_at" in d:             # a timestamp is a RANKING input
+        try:
+            datetime.fromisoformat(d["created_at"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"created_at is not a timestamp: "
+                             f"{d['created_at']!r} ({exc})") from None
     for name in _LIST_OF_STR_FIELDS:
-        v = getattr(skill, name)
-        if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
-            raise TypeError(f"{name} must be a list of strings, got {v!r}")
+        _raw_check(d, name, lambda v: isinstance(v, list)
+                   and all(isinstance(x, str) for x in v), "a list of strings")
     for name in ("success_rate", "utility_score"):
-        v = getattr(skill, name)
-        if isinstance(v, bool) or not isinstance(v, (int, float)) \
-                or not math.isfinite(v):
-            raise TypeError(f"{name} must be a finite number, got {v!r}")
+        _raw_check(d, name, lambda v: not isinstance(v, bool)
+                   and isinstance(v, (int, float)) and math.isfinite(v),
+                   "a finite number")
     for name in ("use_count", "consecutive_failures", "consecutive_successes",
                  "variant_wins", "variant_losses"):
-        v = getattr(skill, name)
-        if isinstance(v, bool) or not isinstance(v, int):
-            raise TypeError(f"{name} must be an int, got {v!r}")
-    if skill.variant_of is not None and not isinstance(skill.variant_of, str):
-        raise TypeError(f"variant_of must be a string or null, "
-                        f"got {skill.variant_of!r}")
-    if not isinstance(skill.imported, dict):
-        raise TypeError(f"imported must be an object, got {skill.imported!r}")
+        _raw_check(d, name, lambda v: not isinstance(v, bool)
+                   and isinstance(v, int), "an int")
+    _raw_check(d, "variant_of", lambda v: v is None or isinstance(v, str),
+               "a string or null")
+    _raw_check(d, "imported", lambda v: isinstance(v, dict), "an object")
+
+    skill = dict_to_skill(d)
+    compute_skill_hash(skill)         # proves the content fields ENCODE
     return skill
+
+
+def _raw_check(d: dict, name: str, ok, expected: str) -> None:
+    """Check the STORED value, not what the constructor made of it.
+
+    Adversarial r5 (2026-08-20, 2 lenses, probed): every check here used to
+    read `getattr(skill, ...)` AFTER `dict_to_skill`, which coerces —
+    `int()`, `float()`, `normalize_tags()`. So `consecutive_failures: "7"`
+    arrived as `7`, `utility_score: true` as `1.0`, `tags: "not-a-list"` as
+    `[]`, and each was admitted as a proven value. Those same fields are
+    excluded from the dedup identity, so the forged row then wins on
+    `created_at` and deletes the healthy one. Coercion is the right answer
+    for a tolerant READ path (that is why `dict_to_skill` keeps it); it is
+    the wrong answer for a caller about to delete rows, because the thing
+    being proven is what the STORE says, not what the constructor could
+    make of it. Absent is fine — the default is ours, not the row's.
+    """
+    if name in d and not ok(d[name]):
+        raise TypeError(f"{name} must be {expected}, got {d[name]!r}")
 
 
 # Every string-typed field the repair verb may compare, rank or carry, and

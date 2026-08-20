@@ -594,15 +594,29 @@ def _skill_hash_is_stale(skill_dict: dict) -> bool:
         return False  # can't verify → keep
 
 
-# Bookkeeping: fields two rows may disagree on and still be the same skill.
-# Everything NOT named here must match for one row to be deleted as a
-# duplicate of another — including fields added after this line was written.
-_DEDUP_BOOKKEEPING = frozenset({
-    "id", "content_hash", "created_at", "use_count", "success_rate",
-    "utility_score", "consecutive_failures", "consecutive_successes",
-    "circuit_state", "variant_wins", "variant_losses", "failure_notes",
-    "source_loop_ids", "imported",
-})
+# The three fields two rows MUST disagree on to be two rows at all: their
+# identity, the hash derived from their content, and the timestamp this verb
+# breaks ties by. Everything else — every field, including ones added after
+# this line was written — has to match before one row may be deleted as a
+# duplicate of another.
+#
+# r4 named a dozen fields "bookkeeping" and adversarial r5 refuted the list
+# 5/5, with `circuit_state` as the proof: an "open" circuit EXCLUDES a skill
+# from matching (skills.py, find_matching_skills), so a row differing only
+# there is not an identical copy in any sense a user would accept — probed
+# both directions, a forged open row evicting a healthy closed one, and a
+# forged closed row resurrecting a circuit-broken skill. `failure_notes` and
+# `source_loop_ids` are the other half of the same mistake: they are
+# EVIDENCE, and deleting the row that carries them destroys it.
+#
+# The general lesson, which is why this is now three names and not twelve: an
+# exclusion list over an open field space is a denylist, and a denylist
+# guarding a DESTRUCTIVE decision fails open on every field nobody thought
+# about — including the ones a future commit adds. Measured before shipping:
+# on the 423-row live store this removes exactly as many duplicate groups as
+# the r4 list did (zero), so the strictness costs nothing observable and the
+# summary line's word "identical" becomes literally true.
+_DEDUP_BOOKKEEPING = frozenset({"id", "content_hash", "created_at"})
 
 
 def _dedup_identity(row: dict) -> str:

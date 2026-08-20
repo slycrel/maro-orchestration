@@ -738,6 +738,72 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       on .encode(). The mutant that looked unfalsifiable was pointing at
       this arc's own subject; marking it `equivalent` would have deleted
       the one guard that catches byte taint at the schema boundary.*
+    - *Its adversarial r5 (2026-08-20, FIVE codex seats on the r4 fix
+      layer): **REJECT, 5/5 HIGH — the FIFTH round running whose top
+      finding is a defect the previous round's fix introduced.** Seven
+      findings, all seven reproduced before being touched, zero
+      hallucinations. (1) **An exclusion list is a denylist, and a
+      denylist guarding a destructive decision fails open.** r4 keyed
+      dedup on behaviour (right) by naming twelve fields "bookkeeping"
+      and ignoring them (wrong): `circuit_state` decides whether a
+      skill MATCHES AT ALL (skills.py find_matching_skills), so rows
+      differing only there are not identical copies — probed both
+      directions, a forged open row evicting a healthy closed one and a
+      forged closed row resurrecting a circuit-broken skill; and
+      `failure_notes`/`source_loop_ids` are EVIDENCE, so deleting the
+      row destroys it. Identity is now three names — id, content_hash,
+      created_at — everything else must match, future fields included.
+      Measured first: on the 423-row live store the tight identity
+      finds exactly as many duplicate groups as r4's list (zero), so
+      the strictness costs nothing observable and "identical" becomes
+      literally true. (2) **The validator proved the COERCED value**:
+      every check read getattr(skill, ...) after dict_to_skill, which
+      applies int()/float()/normalize_tags, so `consecutive_failures:
+      "7"` was proven an int, `utility_score: true` a float, `tags:
+      "not-a-list"` a list — and those are the fields dedup ignores, so
+      the forgery still won on created_at. Checks now run on raw
+      d[name]; construction after; coercion stays in the tolerant READ
+      path. Re-probed live: 423 rows, 0 stranded. (3) **A queue of only
+      unreadable rows went silent** — r4 muted the preflight so the
+      locked pass could own the announcement, but poll/clear return
+      BEFORE the locked pass when nothing is deliverable, so a corrupt
+      STOP alone in the queue produced no delivery, no warning, no
+      trace. One announcement per pass, from whichever branch actually
+      runs. (4) **loads_clean accepted two more corrupt shapes**: a
+      surrogate written as a JSON ESCAPE (pure ASCII on disk, invisible
+      to the raw-line scan, parses to exactly what a torn byte
+      produces — only hashed fields caught it), and DUPLICATE OBJECT
+      NAMES (`{"applied": false, "applied": true}` reads as applied
+      because json.loads keeps the last — a STOP swallowed with no
+      warning). Both now strand. (5) **Scanner blind spots + a weak OK
+      verdict**: a separator hoisted to a local and plain iteration
+      over an open handle were invisible, and OK was a substring test,
+      so a rewrite parsing with bare json.loads that merely MENTIONED
+      loads_clean reported OK — and the vanished leg counted it as
+      watched and healthy. Blast radius measured before shipping: 69 ->
+      77 RISK, +8, none lost, all eight hand-triaged the same day (new
+      `clean-then-raw` FP category for the four memory_ledger stampers,
+      whose bare json.loads re-parses a line their own loads_clean scan
+      already proved clean). `doctor.run_doctor` LEFT the FIXED set
+      with the reason recorded: nothing in it regressed, r5 refuted the
+      VERDICT that put it there — a drift gate cannot tell "the code
+      regressed" from "the rule got stricter", so that resolution is a
+      hand re-read and a written reason, never a widened exemption.
+      Receipts: spec 59 -> 69, 69/69 accounted for. Eight existing
+      mutants came back SKIP on the first sweep (stale anchors from
+      r5's own rewrites) and were re-anchored before it was called
+      green — a SKIP is not a pass, and a spec that silently skips is
+      the same failure as a scanner that reports zero.*
+    - *Carried lesson from r5, the general form of the r3 one: **an
+      exclusion list guarding a destructive decision is a denylist and
+      fails open on everything nobody thought of**, including fields a
+      future commit adds. It appeared twice in one fix layer — twelve
+      "bookkeeping" fields in the dedup key, and an OK verdict meaning
+      "mentions the safe parser somewhere". Both fixes are the same
+      move: state the small set you can prove and treat the rest as
+      unproven. And measure the strictness rather than assuming it —
+      "that would be too strict" is exactly the claim that needs an
+      executing line.*
     - *Adversarial r4 on the skills chunk (5 lenses, sonnet-medium):
       REJECT -> fixed. **The HIGH was the chunk's own regression**, which
       is exactly where the watch-list says to look first: making
