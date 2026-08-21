@@ -1120,9 +1120,12 @@ def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
         if not skill_ids:
             return
         achieved = bool(row["goal_achieved"])
-        from skills import record_skill_injection_outcome
-        for sid in skill_ids:
-            record_skill_injection_outcome(sid, achieved)
+        # ONE transaction for the whole manifest (adversarial r16, four
+        # seats, probed): the per-id loop made a partial batch reachable
+        # once the recorder started raising — id A committed, id B
+        # failed, no marker, and the retry credited A twice.
+        from skills import record_skill_injection_outcomes
+        record_skill_injection_outcomes(skill_ids, achieved)
         marker.write_text(json.dumps({
             "loop_id": loop_id,
             "goal_achieved": achieved,
@@ -1130,8 +1133,13 @@ def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
             "attributed_at": datetime.now(timezone.utc).isoformat(),
         }), encoding="utf-8")
     except Exception:
-        log.debug(
-            "skill-injection attribution failed for %s", loop_id,
+        # WARNING, not debug (r16): attribution is telemetry and never
+        # raises out of here, but a required-lock or write failure must
+        # be operator-visible — at DEBUG a lock outage was
+        # indistinguishable from ordinary missing telemetry.
+        log.warning(
+            "skill-injection attribution failed for %s — verdict NOT "
+            "recorded for this run's skills", loop_id,
             exc_info=True)
 
 

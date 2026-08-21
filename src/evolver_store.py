@@ -910,9 +910,13 @@ def revert_suggestion(suggestion_id: str) -> dict:
             elif state_type == "skill_create":
                 # Remove the created skill
                 original_len = len(skills)
+                _removed = {s.id for s in skills
+                            if s.name == target or s.id == target}
                 skills = [s for s in skills if s.name != target and s.id != target]
                 if len(skills) < original_len:
-                    _save_skills(skills)
+                    # dropped_ids: a deliberate removal must be named
+                    # (r16 _save_skills contract).
+                    _save_skills(skills, dropped_ids=_removed)
                     detail = f"removed created skill '{target}'"
                     behavioral = True
                 else:

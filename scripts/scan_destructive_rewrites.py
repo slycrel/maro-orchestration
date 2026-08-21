@@ -274,32 +274,50 @@ def _class_alias_map(tree, by_class_name):
     class from minting false provenance.
     """
     ref: "dict[str, set[str]]" = {}
-    for target, value in _scope_bindings(tree):
-        if not isinstance(target, ast.Name):
-            continue
-        v = value
-        while isinstance(v, ast.Subscript):
-            v = v.value
-        vname = v.id if isinstance(v, ast.Name) else \
-            v.attr if isinstance(v, ast.Attribute) else None
-        if vname is not None:
-            ref.setdefault(target.id, set()).add(vname)
+    # EVERY scope, not just the module (adversarial r16, four seats,
+    # probed): `Alias = Base` inside a class body or a factory function
+    # is same-module inheritance too, and the module-only walk left a
+    # nested Child(Alias) without its base's decoder provenance. Scopes
+    # are flattened into one map — lexically imprecise, but imprecision
+    # UNIONS candidates, which errs toward RISK. A dotted target
+    # (Outer.Alias = Base) contributes its final attribute for the same
+    # reason base extraction reads Attribute bases by .attr.
+    scopes = [tree] + [n for n in ast.walk(tree)
+                       if isinstance(n, (ast.FunctionDef,
+                                         ast.AsyncFunctionDef,
+                                         ast.ClassDef))]
+    for scope in scopes:
+        for target, value in _scope_bindings(scope):
+            tname = target.id if isinstance(target, ast.Name) else \
+                target.attr if isinstance(target, ast.Attribute) else None
+            if tname is None:
+                continue
+            v = value
+            while isinstance(v, ast.Subscript):
+                v = v.value
+            vname = v.id if isinstance(v, ast.Name) else \
+                v.attr if isinstance(v, ast.Attribute) else None
+            if vname is not None and vname != tname:
+                ref.setdefault(tname, set()).add(vname)
 
     resolved: "dict[str, set[str]]" = {}
 
     def _resolve(name, seen):
-        if name in by_class_name:
-            return {name}
+        # A name that is BOTH a ClassDef and an alias target (`class
+        # Safe: ...; Safe = Dangerous`) carries BOTH provenances — the
+        # literal class must not short-circuit the rebinding
+        # (adversarial r16, Minimalist, probed).
+        base = {name} if name in by_class_name else set()
         if name in resolved:
-            return resolved[name]
+            return base | resolved[name]
         if name in seen or name not in ref:
-            return set()
+            return base
         seen.add(name)
         out: set = set()
         for r in ref[name]:
             out |= _resolve(r, seen)
         resolved[name] = out
-        return out
+        return base | out
 
     return {a: _resolve(a, set()) for a in ref}
 
@@ -341,8 +359,14 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
                     b = b.value
                 bname = b.id if isinstance(b, ast.Name) else \
                     b.attr if isinstance(b, ast.Attribute) else None
-                names = {bname} if bname in by_class_name else \
-                    alias_map.get(bname, set())
+                # UNION the literal class with any alias candidates
+                # (adversarial r16, Minimalist, probed): a name that is
+                # both a ClassDef and a later alias (`class Safe: ...;
+                # Safe = Dangerous`) must carry BOTH provenances —
+                # letting the literal class shadow the rebinding turned
+                # a rebound raw decoder scanner-green.
+                names = ({bname} if bname in by_class_name else set()) \
+                    | alias_map.get(bname, set())
                 for bc in (bc for n in names
                            for bc in by_class_name.get(n, ())):
                     if bc is not c:

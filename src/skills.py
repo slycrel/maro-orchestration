@@ -290,7 +290,8 @@ def save_skill(skill: Skill) -> None:
     skill.content_hash = compute_skill_hash(skill)
 
     path = _skills_path()
-    with locked_write(path):
+    # require=True (r16): a keyed-store RMW must not run unlocked.
+    with locked_write(path, require=True):
         # Unmatched lines are re-emitted VERBATIM (2026-08-17 silent-drop
         # arc): the old shape re-dumped every row (laundering byte-tainted
         # ones), DELETED lines it could not parse, and — because the read
@@ -659,7 +660,7 @@ def cull_island_bottom_half(
         # the two leaves a harmless duplicate, never a destroyed skill).
         _archive_skills(culled, reason="island_cull")
         surviving = [s for s in all_skills if s.id not in cull_set]
-        _save_skills(surviving)
+        _save_skills(surviving, dropped_ids=cull_set)
         for s in culled:
             try:
                 write_skill_provenance(
@@ -1081,6 +1082,13 @@ class _StatsRead(tuple):
         self.compacted = compacted
         return self
 
+    def __getnewargs__(self):
+        # Default tuple reduction reconstructs a subclass from ONE tuple
+        # argument, so copy/deepcopy/pickle raised TypeError and any path
+        # that survived would have dropped .compacted (adversarial r16,
+        # four seats, probed). Reconstruct with all three.
+        return (self[0], self[1], self.compacted)
+
 
 def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
     """Announced read of skill-stats.jsonl → ({skill_id: row}, stranded).
@@ -1354,7 +1362,14 @@ def record_skill_outcome(
     # race r14 closed for JSONLBackend.transform — two recorders both
     # read N, both write N+1, one outcome silently gone. A transaction
     # that cannot lock must refuse to run.
-    with locked_write(path, require=True):
+    #
+    # The try covers the WHOLE transaction (adversarial r16, two seats,
+    # probed): r15's error log wrapped only the write, so a lock or read
+    # failure raised with no recorder-level announcement — and two of
+    # the three production catch sites log at DEBUG, which made a lock
+    # outage indistinguishable from missing telemetry.
+    try:
+      with locked_write(path, require=True):
         # Announced read; `stranded` rides the rewrite verbatim so a torn
         # or keyless row is never deleted by a counter update.
         _read = _read_skill_stats(path)
@@ -1408,20 +1423,18 @@ def record_skill_outcome(
         # on the fields it writes; everything else rides through.
         all_records[skill_id] = {**all_records.get(skill_id, {}),
                                  **stats.to_dict()}
-        try:
-            _write_skill_stats(path, all_records, stranded,
-                               compacted=compacted)
-        except Exception as e:
-            # Name what was lost and where — then RAISE (adversarial
-            # r15, four seats, probed): the r13 version warned and
-            # returned a normal None, so a disk-full lost the outcome
-            # while the caller proceeded as if evidence existed. An
-            # error result must not be a valid value; every production
-            # caller wraps this in its own except and degrades visibly.
-            logger.error(
-                "[skills] record_skill_outcome: outcome for %r NOT "
-                "persisted (%s): %s", skill_id, path, e)
-            raise
+        _write_skill_stats(path, all_records, stranded,
+                           compacted=compacted)
+    except Exception as e:
+        # Name what was lost and where — then RAISE (adversarial r15,
+        # four seats, probed; widened to the whole transaction r16): the
+        # r13 version warned and returned a normal None, so a disk-full
+        # lost the outcome while the caller proceeded as if evidence
+        # existed. An error result must not be a valid value.
+        logger.error(
+            "[skills] record_skill_outcome: outcome for %r NOT "
+            "persisted (%s): %s", skill_id, path, e)
+        raise
 
 
 def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
@@ -1455,51 +1468,110 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
 
     path = _skill_stats_path()
 
-    # require=True (adversarial r15, three seats, probed): this is a
-    # read-modify-write over the whole keyed store, and the documented
-    # fail-open lock mode would degrade it into the exact lost-update
-    # race r14 closed for JSONLBackend.transform — two recorders both
-    # read N, both write N+1, one outcome silently gone. A transaction
-    # that cannot lock must refuse to run.
-    with locked_write(path, require=True):
-        # Announced read; `stranded` rides the rewrite verbatim so a torn
-        # or keyless row is never deleted by a counter update.
-        _read = _read_skill_stats(path)
-        all_records, stranded = _read
-        compacted = _read.compacted
-
-        if skill_id in all_records:
-            stats = SkillStats.from_dict(all_records[skill_id])
-        else:
-            skill_name = skill_id
-            try:
-                for sk in load_skills():
-                    if sk.id == skill_id:
-                        skill_name = sk.name
-                        break
-            except Exception:
-                pass
-            stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
-
-        stats.injected_runs += 1
-        if goal_achieved:
-            stats.injected_successes += 1
-        stats.injected_success_rate = (
-            stats.injected_successes / max(stats.injected_runs, 1))
-        stats.last_injected_verdict_at = datetime.now(timezone.utc).isoformat()
-
-        # Same merge-over-stored rule as record_skill_outcome (r11).
-        all_records[skill_id] = {**all_records.get(skill_id, {}),
-                                 **stats.to_dict()}
-        try:
+    # require=True (adversarial r15, three seats, probed); try covers the
+    # whole transaction (r16) — same contract as record_skill_outcome.
+    try:
+        with locked_write(path, require=True):
+            # Announced read; `stranded` rides the rewrite verbatim so a
+            # torn or keyless row is never deleted by a counter update.
+            _read = _read_skill_stats(path)
+            all_records, stranded = _read
+            compacted = _read.compacted
+            _apply_injection_verdict(all_records, skill_id, goal_achieved)
             _write_skill_stats(path, all_records, stranded,
                                compacted=compacted)
-        except Exception as e:
-            # Same contract as record_skill_outcome (r15): name it, raise.
-            logger.error(
-                "[skills] record_skill_injection_outcome: verdict for %r "
-                "NOT persisted (%s): %s", skill_id, path, e)
-            raise
+    except Exception as e:
+        # Same contract as record_skill_outcome (r15): name it, raise.
+        logger.error(
+            "[skills] record_skill_injection_outcome: verdict for %r "
+            "NOT persisted (%s): %s", skill_id, path, e)
+        raise
+
+
+def _require_recordable_id(skill_id) -> None:
+    """The recorders' shared id door (r12/r16): non-string or
+    non-encodable ids mint rows every future read strands as keyless."""
+    if not (isinstance(skill_id, str) and skill_id):
+        raise TypeError(f"skill_id must be a non-empty string, "
+                        f"got {skill_id!r}")
+    try:
+        skill_id.encode("utf-8")
+    except UnicodeEncodeError:
+        raise TypeError(f"skill_id is not encodable text: {skill_id!r}") \
+            from None
+
+
+def _apply_injection_verdict(all_records: dict, skill_id: str,
+                             goal_achieved: bool) -> None:
+    """Apply one injection verdict to the in-memory keyed records.
+
+    Runs INSIDE a caller-held required lock — shared by the single
+    recorder and the batch recorder so the two cannot drift."""
+    if skill_id in all_records:
+        stats = SkillStats.from_dict(all_records[skill_id])
+    else:
+        skill_name = skill_id
+        try:
+            for sk in load_skills():
+                if sk.id == skill_id:
+                    skill_name = sk.name
+                    break
+        except Exception:
+            pass
+        stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
+
+    stats.injected_runs += 1
+    if goal_achieved:
+        stats.injected_successes += 1
+    stats.injected_success_rate = (
+        stats.injected_successes / max(stats.injected_runs, 1))
+    stats.last_injected_verdict_at = datetime.now(timezone.utc).isoformat()
+
+    # Same merge-over-stored rule as record_skill_outcome (r11).
+    all_records[skill_id] = {**all_records.get(skill_id, {}),
+                             **stats.to_dict()}
+
+
+def record_skill_injection_outcomes(skill_ids, goal_achieved: bool) -> None:
+    """Batch twin of record_skill_injection_outcome: ONE transaction.
+
+    Adversarial r16 (four seats, probed): memory_ledger applied a run's
+    manifest with a per-id loop, so once r15's recorders started
+    raising, a mid-list failure became a reachable partial batch — id A
+    committed, id B failed, the idempotence marker never written, and
+    the caller's retry credited A twice. Permanently skewed training
+    evidence. Here every id commits in one write or none do; the
+    caller's marker can then mean what it says.
+
+    (Residual, recorded: a crash BETWEEN this commit and the caller's
+    marker write re-applies the whole batch on retry — the same
+    ack-vs-apply window as the BACKLOG'd interrupt F9 design item, and
+    the same design work resolves both.)"""
+    ids = list(skill_ids)
+    for sid in ids:
+        _require_recordable_id(sid)
+    if type(goal_achieved) is not bool:
+        raise TypeError(
+            f"goal_achieved must be a bool, got {goal_achieved!r}")
+    if not ids:
+        return
+    from file_lock import locked_write
+
+    path = _skill_stats_path()
+    try:
+        with locked_write(path, require=True):
+            _read = _read_skill_stats(path)
+            all_records, stranded = _read
+            compacted = _read.compacted
+            for sid in ids:
+                _apply_injection_verdict(all_records, sid, goal_achieved)
+            _write_skill_stats(path, all_records, stranded,
+                               compacted=compacted)
+    except Exception as e:
+        logger.error(
+            "[skills] record_skill_injection_outcomes: NONE of the %d "
+            "verdict(s) persisted (%s): %s", len(ids), path, e)
+        raise
 
 
 def get_skills_needing_escalation() -> List[SkillStats]:
@@ -2256,7 +2328,7 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
         losers = [s for s in skills if s.id in retired_set]
         _archive_skills(losers, reason="ab_variant_retired")
         skills = [s for s in skills if s.id not in retired_set]
-        _save_skills(skills)
+        _save_skills(skills, dropped_ids=retired_set)
         for s in losers:
             try:
                 write_skill_provenance(
@@ -2283,8 +2355,26 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
     return {"promoted": promoted, "retired": retired}
 
 
-def _save_skills(skills: List[Skill]) -> None:
+def _save_skills(skills: List[Skill], *,
+                 dropped_ids: "frozenset[str] | set[str]" = frozenset()
+                 ) -> None:
     """Overwrite skills.jsonl with the current list, carrying strandees.
+
+    A deliberate drop must be NAMED (adversarial r16 — three seats,
+    HIGH, probed): every caller hands us a list built from an UNLOCKED
+    load_skills() snapshot, and the old contract read "proven row absent
+    from the list" as "deliberately deleted" — so a skill saved by a
+    concurrent process between the caller's read and this rewrite was
+    silently destroyed, with no archive copy. Now absence means CARRY
+    (the fresh row rides through verbatim, holding its ordinal); only an
+    id in `dropped_ids` is removed, and the destructive callers (island
+    cull, A/B retirement, evolver rollback) name their drops.
+
+    (Residual, recorded: an id in dropped_ids whose row was UPDATED
+    after the caller's snapshot is still dropped, and the archive holds
+    the pre-update version — the id was leaving the pool either way.
+    Upgrade edge: a transform-style primitive that re-derives the
+    selection inside this lock.)
 
     The list a caller hands us came from load_skills(), which cannot
     represent a row it could not parse — so a naive full rewrite from that
@@ -2303,7 +2393,9 @@ def _save_skills(skills: List[Skill]) -> None:
     try:
         from file_lock import locked_write, atomic_write
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write(path):
+        # require=True (r16): this is THE destructive rewrite of the
+        # skill pool; fail-open would let two writers race it.
+        with locked_write(path, require=True):
             by_id = {s.id: s for s in skills}
             out: "List[Optional[str]]" = []
             slot: dict = {}
@@ -2352,8 +2444,16 @@ def _save_skills(skills: List[Skill]) -> None:
                         # is what the reader would have picked anyway.
                         slot[row.id] = len(out)
                         out.append(None)
-                    # else: a proven Skill the caller deliberately dropped
-                    # (graduation, demotion, GC) — that IS a decision.
+                    elif row.id in dropped_ids:
+                        # A NAMED deliberate drop (island cull, A/B
+                        # retirement, rollback) — that IS a decision.
+                        pass
+                    else:
+                        # Absent from the caller's list but NOT named as
+                        # dropped: a row this snapshot cannot account
+                        # for (a concurrent save, or a row load_skills
+                        # skipped). Carry it verbatim (r16).
+                        out.append(line)
             # A writer must not emit a row it would itself refuse. Every
             # row this function writes is read back by the NEXT call to it,
             # which since r10 will only let a PROVABLE row take part in a
@@ -2384,7 +2484,15 @@ def _save_skills(skills: List[Skill]) -> None:
                 errors="surrogateescape",
             )
     except Exception as e:
-        logger.warning("[skills] _save_skills failed: %s", e)
+        # Name the store and RAISE (adversarial r16, two seats, probed):
+        # the warn-and-return-None shape let a cull report "retired"
+        # while every skill remained live — the same
+        # error-result-is-a-valid-value flaw r15 removed from the stats
+        # recorders.
+        logger.error(
+            "[skills] _save_skills: pool rewrite NOT performed (%s): %s",
+            path, e)
+        raise
 
 
 # ---------------------------------------------------------------------------

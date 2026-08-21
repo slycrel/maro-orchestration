@@ -303,7 +303,26 @@ def locked_append(path: Path, line: str, *, timeout_s: float | None = None,
     with locked_write(path, timeout_s=timeout_s, require=require):
         path.parent.mkdir(parents=True, exist_ok=True)
         created = not path.exists()
+        # Frame a torn tail BEFORE appending (adversarial r16, Architect,
+        # probed): a prior crash-torn append can leave the file without a
+        # final LF, and appending straight onto that fragment fuses two
+        # rows into one malformed line — for the retention archive that
+        # turned the sole archived copy unreadable while the live delete
+        # stood. An LF first leaves the fragment as its own strandable
+        # row, bytes untouched, and the new row readable.
+        needs_frame = False
+        if not created:
+            try:
+                size = path.stat().st_size
+                if size:
+                    with open(path, "rb") as _tail:
+                        _tail.seek(-1, os.SEEK_END)
+                        needs_frame = _tail.read(1) != b"\n"
+            except OSError:
+                needs_frame = False
         with open(path, "a", encoding="utf-8") as fh:
+            if needs_frame:
+                fh.write("\n")
             fh.write(line + "\n")
             if durable:
                 fh.flush()
@@ -347,7 +366,11 @@ def locked_rmw(path: Path, fn, *, default: str = "") -> str:
     Reentrant like locked_write. Returns the new content — or the OLD
     content when fn declined to change it.
     """
-    with locked_write(path):
+    # require=True (adversarial r16, Architect, probed): this function
+    # EXISTS to prevent lost updates, so the fail-open degraded mode is
+    # self-contradictory here — an unlocked RMW is the race this
+    # primitive was written to close. Exclusivity is the contract.
+    with locked_write(path, require=True):
         try:
             old = path.read_bytes().decode("utf-8", errors="surrogateescape")
         except FileNotFoundError:

@@ -1094,7 +1094,10 @@ def _process_done_step(
                 confidence=_confidence_val,
             )
     except Exception as _skill_attr_exc:
-        log.debug("skill attribution failed for step %d (non-critical): %s", step_idx, _skill_attr_exc)
+        # WARNING, not debug (r16): silent loss here skews the evolver's
+        # per-skill telemetry — same standard as the loop_blocked twin.
+        log.warning("skill attribution failed for step %d — outcome NOT "
+                    "recorded: %s", step_idx, _skill_attr_exc)
 
     # Phase 33: record per-step cost
     try:

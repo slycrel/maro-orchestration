@@ -160,3 +160,53 @@ class TestVerdictSeamAttribution:
         record_outcome("goal", "done", "s", loop_id="lp-s8")
         assert _stamp("lp-s8", achieved=True).status == "updated"
         assert get_all_skill_stats() == []
+
+
+class TestAttributionIsOneTransaction:
+    """Adversarial r16 (four seats, probed): the seam applied a manifest
+    with a per-id loop, so once the recorder started raising (r15), a
+    mid-list failure became a reachable partial batch — id A committed,
+    id B failed, the marker never written, and the retry credited A
+    twice. The seam now calls the batch recorder: every id commits in
+    one write or none do, so a retry after a failed batch counts each
+    skill exactly once."""
+
+    def test_a_failed_batch_commits_nothing_and_retry_counts_once(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+        import skills as sk
+        _setup(monkeypatch, tmp_path)
+        rd = _seed_run_manifest(monkeypatch, tmp_path,
+                                skill_ids=["sk-a", "sk-b"])
+        record_outcome("goal", "done", "it worked", loop_id="lp-batch")
+
+        real = sk._write_skill_stats
+        def boom(*a, **k):
+            raise OSError("simulated ENOSPC")
+        monkeypatch.setattr(sk, "_write_skill_stats", boom)
+        with caplog.at_level(logging.WARNING):
+            assert _stamp("lp-batch", achieved=True).status == "updated"
+        # Nothing committed, no marker, and the failure is
+        # operator-visible (WARNING, not the old DEBUG).
+        for sid in ("sk-a", "sk-b"):
+            st = get_skill_stats(sid)
+            assert st is None or st.injected_runs == 0, sid
+        assert not (rd / "source" / "skill_attribution.json").exists()
+        assert "attribution failed" in caplog.text
+
+        # Retry with the disk healed: each id counted exactly ONCE.
+        monkeypatch.setattr(sk, "_write_skill_stats", real)
+        assert _stamp("lp-batch", achieved=True).status == "updated"
+        for sid in ("sk-a", "sk-b"):
+            assert get_skill_stats(sid).injected_runs == 1, sid
+        assert (rd / "source" / "skill_attribution.json").exists()
+
+    def test_the_seam_uses_the_batch_recorder(self):
+        """Structural pin: the per-id loop was the defect."""
+        import inspect
+        import memory_ledger as ml
+        src = inspect.getsource(
+            ml._maybe_record_skill_injection_outcomes)
+        assert "record_skill_injection_outcomes" in src
+        assert "for sid in skill_ids:\n            record_skill_injection_outcome(" \
+            not in src

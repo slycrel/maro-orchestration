@@ -475,6 +475,7 @@ class SQLiteBackend(MemoryBackend):
         """
         from jsonl_utils import loads_clean, prove_record_line
         committed = False
+        commit_issued = False
         try:
             con = self._connect()
             try:
@@ -503,10 +504,17 @@ class SQLiteBackend(MemoryBackend):
                     "INSERT INTO memory_records (collection, data) "
                     "VALUES (?, ?)",
                     [(collection, d) for d in datas])
+                commit_issued = True
                 con.commit()
                 committed = True
             except BaseException:
-                con.rollback()
+                try:
+                    con.rollback()
+                except Exception:
+                    # An uncommitted transaction is rolled back by the
+                    # close in the finally either way; a rollback error
+                    # must not mask the original failure.
+                    pass
                 raise
             finally:
                 con.close()
@@ -529,6 +537,16 @@ class SQLiteBackend(MemoryBackend):
                           "COMMITTED but the connection failed to close "
                           "cleanly (%s): %s — the store HOLDS the "
                           "transform; do not retry",
+                          collection, self._db_path, exc)
+            elif commit_issued:
+                # commit() itself raised (adversarial r16, QA, probed):
+                # SQLite can report an error on the commit boundary
+                # AFTER the transaction has become durable, and rollback
+                # proves nothing then. "Store unchanged" here invited a
+                # double-apply; the only honest claim is unknown.
+                log.error("SQLiteBackend.transform(%s): commit outcome "
+                          "UNKNOWN — the commit was issued and raised "
+                          "(%s): %s — inspect the store before retrying",
                           collection, self._db_path, exc)
             else:
                 log.error("SQLiteBackend.transform(%s): transform NOT "

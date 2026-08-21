@@ -244,3 +244,52 @@ class TestADurableAppendReachesTheDisk:
             assert not path.exists()
         finally:
             holder.close()
+
+
+class TestATornTailIsFramedNotFused:
+    """Adversarial r16 (Architect, probed): appending straight onto a
+    crash-torn unterminated tail fuses two rows into one malformed line
+    — for the retention archive that turned the sole archived copy
+    unreadable while the live delete stood. locked_append now frames
+    the fragment with an LF first: bytes untouched, fragment strandable,
+    new row readable."""
+
+    def test_the_fragment_becomes_its_own_line(self, tmp_path):
+        from file_lock import locked_append
+        p = tmp_path / "a.jsonl"
+        p.write_bytes(b'{"id":"torn')
+        locked_append(p, '{"id":"b"}')
+        assert p.read_bytes() == b'{"id":"torn\n{"id":"b"}\n'
+
+    def test_a_clean_tail_is_not_double_framed(self, tmp_path):
+        from file_lock import locked_append
+        p = tmp_path / "a.jsonl"
+        locked_append(p, "one")
+        locked_append(p, "two")
+        assert p.read_text(encoding="utf-8") == "one\ntwo\n"
+
+
+class TestLockedRmwRequiresItsLock:
+    """Adversarial r16 (Architect, probed): locked_rmw EXISTS to prevent
+    lost updates, so the fail-open degraded mode is self-contradictory —
+    an unlocked RMW is the race the primitive was written to close."""
+
+    def test_contended_fail_open_raises_before_fn(
+            self, tmp_path, monkeypatch):
+        import fcntl
+        import pytest
+        from file_lock import FileLockTimeout, locked_rmw
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "1")
+        p = tmp_path / "s.jsonl"
+        p.write_text("x\n", encoding="utf-8")
+        holder = open(str(p) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            ran = {"fn": False}
+            with pytest.raises(FileLockTimeout):
+                locked_rmw(p, lambda t: (ran.__setitem__("fn", True), t)[1])
+            assert not ran["fn"]
+            assert p.read_text(encoding="utf-8") == "x\n"
+        finally:
+            holder.close()

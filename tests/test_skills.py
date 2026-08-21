@@ -2757,7 +2757,8 @@ class TestTheSkillStoresSurviveATornByte:
         save_skill(_mk("k1"))
         save_skill(_mk("k2"))
         kept = [s for s in load_skills() if s.id != "k2"]
-        _save_skills(kept)
+        # r16: a deliberate drop must be NAMED — absence alone is carried.
+        _save_skills(kept, dropped_ids={"k2"})
         after = _skills_path().read_bytes()
         assert b'"k1"' in after and b'"k2"' not in after
 
@@ -2989,7 +2990,8 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
                         steps_template=["s"], source_loop_ids=[],
                         created_at="2026-01-01T00:00:00+00:00"))
                 keep = [s for s in skills_mod.load_skills() if s.id == "a"]
-                skills_mod._save_skills(keep)
+                # r16: the drop is named; an unnamed absence is carried.
+                skills_mod._save_skills(keep, dropped_ids={"b"})
                 after = f.read_text(encoding="utf-8")
         assert '"id": "a"' in after and '"id": "b"' not in after
 
@@ -3215,15 +3217,13 @@ class TestTheWriterCannotOutrunItsReader:
         loaded = skills_mod.load_skills()
         loaded[0].utility_score = _math.nan
 
-        # _save_skills has a never-raise contract (outer except -> warning),
-        # so the abort is announced rather than raised — but it must still
-        # be an ABORT: proof fails before atomic_write runs.
-        with self._warning_capture() as records:
+        # r16: _save_skills RAISES on abort (an error result must not be
+        # a valid value) — and the store must still be untouched.
+        import pytest
+        with pytest.raises(ValueError):
             skills_mod._save_skills(loaded)
 
         assert f.read_bytes() == before, "the store was touched on abort"
-        assert any("_save_skills failed" in r.getMessage() for r in records), \
-            [r.getMessage() for r in records]
 
     @staticmethod
     def _warning_capture():
@@ -3991,3 +3991,179 @@ class TestTheArchiveIsDurableBeforeTheDelete:
             assert not arch.exists()
         finally:
             holder.close()
+
+
+class TestADeliberateDropMustBeNamed:
+    """Adversarial r16 (three seats, HIGH, probed): every _save_skills
+    caller passes a list built from an UNLOCKED load_skills() snapshot,
+    and the old contract read "proven row absent from the list" as
+    "deliberately deleted" — so a skill saved by a concurrent process
+    between the snapshot and the rewrite was silently destroyed with no
+    archive copy. Absence now means CARRY; only ids named in
+    dropped_ids are removed."""
+
+    def _mk(self, i):
+        from skills import Skill
+        return Skill(id=i, name=i, description="d", trigger_patterns=[],
+                     steps_template=[], source_loop_ids=[],
+                     created_at="2026-08-21T00:00:00+00:00")
+
+    def test_an_unnamed_absence_is_carried_not_deleted(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A"))
+        snapshot = sk.load_skills()
+        sk.save_skill(self._mk("C"))          # concurrent add
+        sk._save_skills(snapshot)             # C absent, NOT named
+        assert {s.id for s in sk.load_skills()} == {"A", "C"}
+
+    def test_a_named_drop_removes_exactly_the_named_ids(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        for i in ("A", "B", "C"):
+            sk.save_skill(self._mk(i))
+        keep = [s for s in sk.load_skills() if s.id != "B"]
+        sk._save_skills(keep, dropped_ids={"B"})
+        assert {s.id for s in sk.load_skills()} == {"A", "C"}
+
+    def test_the_pool_writers_require_their_lock(self):
+        """Structural pin: the keyword is the fix (r16)."""
+        import ast
+        import inspect
+        import skills as sk
+        for fn in (sk.save_skill, sk._save_skills):
+            src = inspect.getsource(fn)
+            calls = [n for n in ast.walk(ast.parse(src.lstrip()))
+                     if isinstance(n, ast.Call)
+                     and getattr(n.func, "id", "") == "locked_write"]
+            assert calls, f"{fn.__name__} no longer calls locked_write"
+            kw = {k.arg: getattr(k.value, "value", None)
+                  for k in calls[0].keywords}
+            assert kw.get("require") is True, fn.__name__
+
+    def test_a_failed_pool_rewrite_raises_and_names_the_store(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import pytest
+        import file_lock
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A"))
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(file_lock, "atomic_write", boom)
+        with caplog.at_level(logging.ERROR, logger="skills"):
+            with pytest.raises(OSError):
+                sk._save_skills(sk.load_skills())
+        assert "pool rewrite NOT performed" in caplog.text
+        assert str(sk._skills_path()) in caplog.text
+
+    def test_the_destructive_callers_name_their_drops(self):
+        """Structural pin: cull, retirement, and the evolver rollback
+        pass dropped_ids explicitly."""
+        import inspect
+        import skills as sk
+        assert "dropped_ids=cull_set" in inspect.getsource(
+            sk.cull_island_bottom_half)
+        assert "dropped_ids=retired_set" in inspect.getsource(
+            sk.retire_losing_variants)
+        import evolver_store
+        assert "dropped_ids=_removed" in inspect.getsource(evolver_store)
+
+
+class TestTheBatchRecorderIsOneTransaction:
+    """Adversarial r16 (four seats, probed): see
+    record_skill_injection_outcomes — every id commits in one write or
+    none do."""
+
+    def test_all_ids_commit_in_one_write(self, tmp_path, monkeypatch):
+        import skills as sk
+        p = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(sk, "_skill_stats_path", lambda: p)
+        writes = []
+        real = sk._write_skill_stats
+        monkeypatch.setattr(
+            sk, "_write_skill_stats",
+            lambda *a, **k: (writes.append(1), real(*a, **k))[1])
+        sk.record_skill_injection_outcomes(["a", "b", "c"], True)
+        assert writes == [1]
+        recs, _ = sk._read_skill_stats(p)
+        assert {k: v["injected_runs"] for k, v in recs.items()} == \
+            {"a": 1, "b": 1, "c": 1}
+
+    def test_a_failed_batch_commits_nothing(self, tmp_path, monkeypatch):
+        import pytest
+        import skills as sk
+        p = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(sk, "_skill_stats_path", lambda: p)
+
+        def boom(*a, **k):
+            raise OSError("ENOSPC")
+
+        monkeypatch.setattr(sk, "_write_skill_stats", boom)
+        with pytest.raises(OSError):
+            sk.record_skill_injection_outcomes(["a", "b"], True)
+        assert not p.exists()
+
+    def test_the_id_door_refuses_before_any_write(
+            self, tmp_path, monkeypatch):
+        import pytest
+        import skills as sk
+        p = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(sk, "_skill_stats_path", lambda: p)
+        with pytest.raises(TypeError):
+            sk.record_skill_injection_outcomes(["ok", 7], True)
+        with pytest.raises(TypeError):
+            sk.record_skill_injection_outcomes(["ok"], "true")
+        assert not p.exists()
+
+
+class TestARecorderFailureIsAnnouncedWhereverItHappens:
+    """Adversarial r16 (two seats, probed): r15's error log wrapped only
+    the write, so a lock or read failure raised with NO recorder-level
+    announcement — and two of three production catch sites logged at
+    DEBUG. The try now covers the whole transaction."""
+
+    def test_a_lock_failure_is_announced_by_both_recorders(
+            self, tmp_path, monkeypatch, caplog):
+        import fcntl
+        import logging
+        import pytest
+        import skills as sk
+        p = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(sk, "_skill_stats_path", lambda: p)
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "1")
+        holder = open(str(p) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            for fn, args in ((sk.record_skill_outcome, ("s", True)),
+                             (sk.record_skill_injection_outcome,
+                              ("s", True))):
+                caplog.clear()
+                with caplog.at_level(logging.ERROR, logger="skills"):
+                    with pytest.raises(Exception):
+                        fn(*args)
+                assert "NOT persisted" in caplog.text, fn.__name__
+        finally:
+            holder.close()
+
+
+class TestStatsReadSurvivesTheCopyProtocols:
+    """Adversarial r16 (four seats, probed): default tuple reduction
+    reconstructs a subclass from ONE tuple argument, so copy, deepcopy,
+    and pickle raised TypeError — and any path that survived would have
+    dropped .compacted."""
+
+    def test_pickle_deepcopy_and_copy_preserve_all_three_fields(self):
+        import copy
+        import pickle
+        from skills import _StatsRead
+        r = _StatsRead({"a": {"n": 1}}, ["strand"], 2)
+        for clone in (pickle.loads(pickle.dumps(r)),
+                      copy.deepcopy(r), copy.copy(r)):
+            assert clone == r
+            assert clone.compacted == 2

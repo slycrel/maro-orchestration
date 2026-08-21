@@ -888,3 +888,44 @@ class TestACommittedTransformTellsTheTruth:
         assert "do not retry" in caplog.text
         assert "store unchanged" not in caplog.text
         assert be.read_all("led") == [{"k": 1}, {"k": 2}]
+
+
+class TestACommitBoundaryErrorClaimsNothing:
+    """Adversarial r16 (QA, probed): commit() can raise AFTER the
+    transaction became durable, and the inner handler then logged
+    "store unchanged" about a store that holds the transform — an
+    invitation to double-apply. A commit that was ISSUED and raised is
+    outcome-UNKNOWN."""
+
+    def test_commit_raising_after_apply_says_unknown(
+            self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        from memory_backends import SQLiteBackend
+        be = SQLiteBackend(tmp_path / "mem.db")
+        be.append("led", {"k": 1})
+
+        class CommitBomb:
+            def __init__(self, con):
+                self._con = con
+
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+
+            def commit(self):
+                self._con.commit()
+                raise sqlite3.OperationalError("post-commit transport")
+
+        real = be._connect
+        be._connect = lambda: CommitBomb(real())
+        try:
+            with caplog.at_level(
+                    logging.ERROR, logger="maro.memory_backends"):
+                with pytest.raises(sqlite3.Error):
+                    be.transform("led", lambda rows: rows + [{"k": 2}])
+        finally:
+            be._connect = real
+        assert "commit outcome UNKNOWN" in caplog.text
+        assert "store unchanged" not in caplog.text
+        assert be.read_all("led") == [{"k": 1}, {"k": 2}]

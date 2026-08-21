@@ -1536,3 +1536,75 @@ class Child(Alias):
         atomic_write(path, "".join(out))
 '''
         assert _scan(src)["rewrite"] == "OK"
+
+
+class TestAliasesInEveryScope:
+    """Adversarial r16 (four seats, probed): the r15 alias lattice
+    walked MODULE bindings only, and its resolver let a literal class
+    name short-circuit a rebinding — so a class-body alias, a
+    factory-local alias, and `class Safe: ...; Safe = Dangerous` each
+    severed inherited decoder provenance and earned OK from an
+    unrelated clean call."""
+
+    def test_a_class_body_alias_carries_provenance(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Outer:
+    class Base:
+        def __init__(self):
+            self.decoder = json.JSONDecoder()
+    Alias = Base
+
+class Child(Outer.Alias):
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_a_function_local_alias_carries_provenance(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+def factory():
+    class Base:
+        def __init__(self):
+            self.decoder = json.JSONDecoder()
+    Alias = Base
+    class Child(Alias):
+        def rewrite(self, path):
+            loads_clean("{}")
+            out = []
+            for line in open(path):
+                try:
+                    out.append(self.decoder.decode(line))
+                except Exception:
+                    continue
+            atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["factory.rewrite"] == "RISK"
+
+    def test_a_rebound_class_name_unions_both_provenances(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Dangerous:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+
+class Safe:
+    pass
+
+Safe = Dangerous
+
+class Child(Safe):
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"

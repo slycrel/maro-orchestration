@@ -1078,8 +1078,8 @@
  {
   "name": "stats merge :: the injection recorder rebuilds the row from its model",
   "file": "src/skills.py",
-  "anchor": "        # Same merge-over-stored rule as record_skill_outcome (r11).\n        all_records[skill_id] = {**all_records.get(skill_id, {}),\n                                 **stats.to_dict()}",
-  "replacement": "        # Same merge-over-stored rule as record_skill_outcome (r11).\n        all_records[skill_id] = stats.to_dict()",
+  "anchor": "    # Same merge-over-stored rule as record_skill_outcome (r11).\n    all_records[skill_id] = {**all_records.get(skill_id, {}),\n                             **stats.to_dict()}",
+  "replacement": "    # Same merge-over-stored rule as record_skill_outcome (r11).\n    all_records[skill_id] = stats.to_dict()",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1345,8 +1345,8 @@
  {
   "name": "recorder door :: a truthy string counts as goal_achieved again",
   "file": "src/skills.py",
-  "anchor": "    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
-  "replacement": "    if False:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
+  "anchor": "    # Same door as record_skill_outcome (adversarial r13): a truthy\n    # non-bool verdict must not count as goal_achieved.\n    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
+  "replacement": "    # Same door as record_skill_outcome (adversarial r13): a truthy\n    # non-bool verdict must not count as goal_achieved.\n    if False:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1569,8 +1569,8 @@
  {
   "name": "r14 scanner :: inheritance stops carrying provenance",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                names = {bname} if bname in by_class_name else \\\n                    alias_map.get(bname, set())\n                for bc in (bc for n in names\n                           for bc in by_class_name.get(n, ())):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
-  "replacement": "                pass",
+  "anchor": "            for b in c.bases:\n                # Base[str] is an ast.Subscript wrapping the base\n                # (adversarial r15, two seats, probed): generics were\n                # discarded outright, severing provenance at every\n                # Generic[...] boundary. Unwrap to the real base.\n                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                # UNION the literal class with any alias candidates\n                # (adversarial r16, Minimalist, probed): a name that is\n                # both a ClassDef and a later alias (`class Safe: ...;\n                # Safe = Dangerous`) must carry BOTH provenances \u2014\n                # letting the literal class shadow the rebinding turned\n                # a rebound raw decoder scanner-green.\n                names = ({bname} if bname in by_class_name else set()) \\\n                    | alias_map.get(bname, set())\n                for bc in (bc for n in names\n                           for bc in by_class_name.get(n, ())):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
+  "replacement": "            pass",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
@@ -1618,29 +1618,29 @@
  {
   "name": "r15 recorder :: outcome write failure goes quiet again",
   "file": "src/skills.py",
-  "anchor": "            logger.error(\n                \"[skills] record_skill_outcome: outcome for %r NOT \"\n                \"persisted (%s): %s\", skill_id, path, e)\n            raise",
-  "replacement": "            logger.warning(\n                \"[skills] record_skill_outcome: outcome for %r NOT \"\n                \"persisted (%s): %s\", skill_id, path, e)",
+  "anchor": "        logger.error(\n            \"[skills] record_skill_outcome: outcome for %r NOT \"\n            \"persisted (%s): %s\", skill_id, path, e)\n        raise",
+  "replacement": "        logger.warning(\n            \"[skills] record_skill_outcome: outcome for %r NOT \"\n            \"persisted (%s): %s\", skill_id, path, e)",
   "tests": "tests/test_skills.py"
  },
  {
   "name": "r15 recorder :: injection write failure goes quiet again",
   "file": "src/skills.py",
-  "anchor": "            logger.error(\n                \"[skills] record_skill_injection_outcome: verdict for %r \"\n                \"NOT persisted (%s): %s\", skill_id, path, e)\n            raise",
-  "replacement": "            logger.warning(\n                \"[skills] record_skill_injection_outcome: verdict for %r \"\n                \"NOT persisted (%s): %s\", skill_id, path, e)",
+  "anchor": "        logger.error(\n            \"[skills] record_skill_injection_outcome: verdict for %r \"\n            \"NOT persisted (%s): %s\", skill_id, path, e)\n        raise",
+  "replacement": "        logger.warning(\n            \"[skills] record_skill_injection_outcome: verdict for %r \"\n            \"NOT persisted (%s): %s\", skill_id, path, e)",
   "tests": "tests/test_skills.py"
  },
  {
   "name": "r15 recorder :: the outcome lock fails open again",
   "file": "src/skills.py",
-  "anchor": "                or not math.isfinite(_tv):\n            raise TypeError(\n                f\"{_tname} must be a finite number, got {_tv!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path, require=True):",
-  "replacement": "                or not math.isfinite(_tv):\n            raise TypeError(\n                f\"{_tname} must be a finite number, got {_tv!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path):",
+  "anchor": "    try:\n      with locked_write(path, require=True):\n        # Announced read; `stranded` rides the rewrite verbatim so a torn\n        # or keyless row is never deleted by a counter update.\n        _read = _read_skill_stats(path)",
+  "replacement": "    try:\n      with locked_write(path):\n        # Announced read; `stranded` rides the rewrite verbatim so a torn\n        # or keyless row is never deleted by a counter update.\n        _read = _read_skill_stats(path)",
   "tests": "tests/test_skills.py"
  },
  {
   "name": "r15 recorder :: the injection lock fails open again",
   "file": "src/skills.py",
-  "anchor": "    # non-bool verdict must not count as goal_achieved.\n    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path, require=True):",
-  "replacement": "    # non-bool verdict must not count as goal_achieved.\n    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path):",
+  "anchor": "    try:\n        with locked_write(path, require=True):\n            # Announced read; `stranded` rides the rewrite verbatim so a\n            # torn or keyless row is never deleted by a counter update.\n            _read = _read_skill_stats(path)",
+  "replacement": "    try:\n        with locked_write(path):\n            # Announced read; `stranded` rides the rewrite verbatim so a\n            # torn or keyless row is never deleted by a counter update.\n            _read = _read_skill_stats(path)",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1667,8 +1667,8 @@
  {
   "name": "r15 scanner :: aliases stop resolving to bases",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "                names = {bname} if bname in by_class_name else \\\n                    alias_map.get(bname, set())",
-  "replacement": "                names = {bname} if bname in by_class_name else \\\n                    set()",
+  "anchor": "                names = ({bname} if bname in by_class_name else set()) \\\n                    | alias_map.get(bname, set())",
+  "replacement": "                names = ({bname} if bname in by_class_name else set())",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
@@ -1712,5 +1712,103 @@
   "anchor": "            if committed:",
   "replacement": "            if False:",
   "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "r16 pool :: an unnamed absence deletes again",
+  "file": "src/skills.py",
+  "anchor": "                    elif row.id in dropped_ids:\n                        # A NAMED deliberate drop (island cull, A/B\n                        # retirement, rollback) \u2014 that IS a decision.\n                        pass\n                    else:\n                        # Absent from the caller's list but NOT named as\n                        # dropped: a row this snapshot cannot account\n                        # for (a concurrent save, or a row load_skills\n                        # skipped). Carry it verbatim (r16).\n                        out.append(line)",
+  "replacement": "                    elif row.id in dropped_ids:\n                        # A NAMED deliberate drop (island cull, A/B\n                        # retirement, rollback) \u2014 that IS a decision.\n                        pass",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 pool :: the pool rewrite lock fails open again",
+  "file": "src/skills.py",
+  "anchor": "        # require=True (r16): this is THE destructive rewrite of the\n        # skill pool; fail-open would let two writers race it.\n        with locked_write(path, require=True):",
+  "replacement": "        # require=True (r16): this is THE destructive rewrite of the\n        # skill pool; fail-open would let two writers race it.\n        with locked_write(path):",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 pool :: a failed rewrite goes quiet again",
+  "file": "src/skills.py",
+  "anchor": "        logger.error(\n            \"[skills] _save_skills: pool rewrite NOT performed (%s): %s\",\n            path, e)\n        raise",
+  "replacement": "        logger.warning(\n            \"[skills] _save_skills: pool rewrite NOT performed (%s): %s\",\n            path, e)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 pool :: save_skill fails open again",
+  "file": "src/skills.py",
+  "anchor": "    # require=True (r16): a keyed-store RMW must not run unlocked.\n    with locked_write(path, require=True):",
+  "replacement": "    # require=True (r16): a keyed-store RMW must not run unlocked.\n    with locked_write(path):",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 ledger :: attribution splits into per-id commits again",
+  "file": "src/memory_ledger.py",
+  "anchor": "        from skills import record_skill_injection_outcomes\n        record_skill_injection_outcomes(skill_ids, achieved)",
+  "replacement": "        from skills import record_skill_injection_outcome\n        for sid in skill_ids:\n            record_skill_injection_outcome(sid, achieved)",
+  "tests": "tests/test_skill_attribution.py"
+ },
+ {
+  "name": "r16 ledger :: the attribution failure goes quiet again",
+  "file": "src/memory_ledger.py",
+  "anchor": "        log.warning(\n            \"skill-injection attribution failed for %s \u2014 verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
+  "replacement": "        log.debug(\n            \"skill-injection attribution failed for %s \u2014 verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
+  "tests": "tests/test_skill_attribution.py"
+ },
+ {
+  "name": "r16 batch :: the batch splits into per-id writes again",
+  "file": "src/skills.py",
+  "anchor": "            for sid in ids:\n                _apply_injection_verdict(all_records, sid, goal_achieved)\n            _write_skill_stats(path, all_records, stranded,\n                               compacted=compacted)",
+  "replacement": "            for sid in ids:\n                _apply_injection_verdict(all_records, sid, goal_achieved)\n                _write_skill_stats(path, all_records, stranded,\n                                   compacted=compacted)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 file_lock :: a torn tail fuses again",
+  "file": "src/file_lock.py",
+  "anchor": "        needs_frame = False\n        if not created:\n            try:\n                size = path.stat().st_size\n                if size:\n                    with open(path, \"rb\") as _tail:\n                        _tail.seek(-1, os.SEEK_END)\n                        needs_frame = _tail.read(1) != b\"\\n\"\n            except OSError:\n                needs_frame = False",
+  "replacement": "        needs_frame = False",
+  "tests": "tests/test_file_lock.py"
+ },
+ {
+  "name": "r16 file_lock :: locked_rmw fails open again",
+  "file": "src/file_lock.py",
+  "anchor": "    with locked_write(path, require=True):\n        try:\n            old = path.read_bytes().decode(\"utf-8\", errors=\"surrogateescape\")",
+  "replacement": "    with locked_write(path):\n        try:\n            old = path.read_bytes().decode(\"utf-8\", errors=\"surrogateescape\")",
+  "tests": "tests/test_file_lock.py"
+ },
+ {
+  "name": "r16 sqlite :: a commit-boundary error claims unchanged again",
+  "file": "src/memory_backends.py",
+  "anchor": "            elif commit_issued:",
+  "replacement": "            elif False:",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "r16 statsread :: the copy protocol drops compacted again",
+  "file": "src/skills.py",
+  "anchor": "        return (self[0], self[1], self.compacted)",
+  "replacement": "        return (self[0], self[1], 0)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r16 scanner :: nested scopes go invisible again",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    scopes = [tree] + [n for n in ast.walk(tree)\n                       if isinstance(n, (ast.FunctionDef,\n                                         ast.AsyncFunctionDef,\n                                         ast.ClassDef))]",
+  "replacement": "    scopes = [tree]",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "r16 scanner :: the literal class shadows the rebinding again",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "        base = {name} if name in by_class_name else set()",
+  "replacement": "        if name in by_class_name:\n            return {name}\n        base = set()",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "r16 evolver :: the rollback stops naming its drops",
+  "file": "src/evolver_store.py",
+  "anchor": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, dropped_ids=_removed)",
+  "replacement": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills)",
+  "tests": "tests/test_skills.py"
  }
 ]
