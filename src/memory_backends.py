@@ -122,9 +122,16 @@ class JSONLBackend(MemoryBackend):
 
     def append(self, collection: str, record: Dict[str, Any]) -> None:
         path = self._path(collection)
+        # Prove the emission BEFORE the store is touched (adversarial r12,
+        # four seats): the bare dumps here happily wrote CPython NaN and
+        # clean \udcXX escapes — rows read_all() then announces and skips,
+        # i.e. this writer minting its own strandees while reporting
+        # success. A failure raises out; the store is intact.
+        from jsonl_utils import prove_record_line
+        line = prove_record_line(record)
         try:
             from file_lock import locked_append
-            locked_append(path, json.dumps(record))
+            locked_append(path, line)
         except OSError as exc:
             log.warning("JSONLBackend.append(%s): %s", collection, exc)
 
@@ -167,7 +174,8 @@ class JSONLBackend(MemoryBackend):
         # refuses, verbatim, after the caller's records (this store has no
         # per-row key, so ordinals cannot be reassigned; relative strandee
         # order is kept).
-        from jsonl_utils import is_frame_blank, loads_clean, store_text
+        from jsonl_utils import (is_frame_blank, loads_clean,
+                                 prove_record_line, store_text)
         path = self._path(collection)
         try:
             from file_lock import locked_write, atomic_write
@@ -178,7 +186,17 @@ class JSONLBackend(MemoryBackend):
                         if is_frame_blank(line):
                             continue
                         try:
-                            loads_clean(line)
+                            # The strand rule must MIRROR read_all's
+                            # admission, not just the parser: read_all also
+                            # announces-and-skips clean non-dict JSON
+                            # (`null`, arrays, strings), so those rows were
+                            # never in the caller's list either — r11's
+                            # re-read pass stranded only parse failures and
+                            # this rewrite deleted a `null` row it had just
+                            # been taught not to (adversarial r12, two
+                            # seats, probed).
+                            if not isinstance(loads_clean(line), dict):
+                                stranded.append(line)
                         except Exception:
                             stranded.append(line)
                 if stranded:
@@ -186,10 +204,15 @@ class JSONLBackend(MemoryBackend):
                         "JSONLBackend.rewrite(%s): %d unreadable row(s) "
                         "carried through the rewrite verbatim (%s)",
                         collection, len(stranded), path)
+                # Prove every emission through the reader's own door
+                # BEFORE the replace — allow_nan=False alone let a lone
+                # surrogate ride through as a clean escape and replace
+                # healthy data with a row read_all() strands (adversarial
+                # r12, four seats, probed). The whole payload is built
+                # first, so a failure aborts with the store untouched.
                 atomic_write(
                     path,
-                    "".join(json.dumps(r, allow_nan=False) + "\n"
-                            for r in records)
+                    "".join(prove_record_line(r) + "\n" for r in records)
                     + "".join(l + "\n" for l in stranded),
                     errors="surrogateescape")
         except OSError as exc:

@@ -241,9 +241,12 @@ def _called_names(node: ast.AST) -> set[str]:
 
 def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     """Return (verdict, lineno, qualified_name) for every flagged function."""
-    global _PARSERS, _MODULE_DECODERS
+    global _PARSERS, _MODULE_DECODER_CTORS, _MODULE_DECODERS, \
+        _MODULE_DECODER_METHODS
     _PARSERS = _parser_names(tree)
-    _MODULE_DECODERS = _decoder_names(tree)
+    _MODULE_DECODER_CTORS = _decoder_ctors(tree)
+    _MODULE_DECODERS, _MODULE_DECODER_METHODS = \
+        _decoder_names(tree, _MODULE_DECODER_CTORS)
     parents: dict[ast.AST, ast.AST] = {}
     for p in ast.walk(tree):
         for c in ast.iter_child_nodes(p):
@@ -411,10 +414,21 @@ _UNRESOLVED = object()
 
 
 def _bindings(node):
-    """(target, value) pairs for assignments and `with ... as` clauses."""
+    """(target, value) pairs for assignments and `with ... as` clauses.
+
+    Annotated (`decoder: object = JSONDecoder()`) and walrus bindings are
+    bindings too — adversarial r12 (QA, probed): an AnnAssign-bound decoder
+    was invisible to `_decoder_names`, so its raw `.decode` walked past the
+    scan while an unrelated clean call earned the function OK.
+    """
     if isinstance(node, ast.Assign):
         for t in node.targets:
             yield t, node.value
+    elif isinstance(node, ast.AnnAssign):
+        if node.value is not None:
+            yield node.target, node.value
+    elif isinstance(node, ast.NamedExpr):
+        yield node.target, node.value
     elif isinstance(node, (ast.With, ast.AsyncWith)):
         for item in node.items:
             if item.optional_vars is not None:
@@ -429,7 +443,9 @@ def _is_open_call(node) -> bool:
            (isinstance(f, ast.Attribute) and f.attr == "open")
 
 
+_MODULE_DECODER_CTORS: set = set()
 _MODULE_DECODERS: set = set()
+_MODULE_DECODER_METHODS: set = set()
 
 
 def _lazy_nodes(fn) -> set:
@@ -453,27 +469,66 @@ def _lazy_nodes(fn) -> set:
     return out
 
 
-def _decoder_names(scope) -> set:
-    """Names bound from `json.JSONDecoder(...)` in this scope.
+def _decoder_ctors(scope) -> set:
+    """Names that CONSTRUCT a JSONDecoder in this scope: the literal
+    spelling plus `from json import JSONDecoder as X` aliases (adversarial
+    r12, Failure Operator, probed: the import alias was a standard spelling
+    the literal match walked past)."""
+    out = {"JSONDecoder"}
+    for n in _own_scope(scope):
+        if isinstance(n, ast.ImportFrom) and n.module == "json":
+            for a in n.names:
+                if a.name == "JSONDecoder":
+                    out.add(a.asname or a.name)
+    return out
+
+
+def _decoder_names(scope, ctors=frozenset()) -> "tuple[set, set]":
+    """(names holding a JSONDecoder instance, names bound to its parse
+    methods) in this scope.
 
     Adversarial r11 (Expert QA, probed): `decoder.decode(line)` is a raw
     JSON parse wearing a spelling the parse-shaped rule never matched —
     `.decode` is overwhelmingly bytes.decode, so it cannot be treated as
     parse-shaped wholesale. The receiver decides: a name proven to hold a
-    JSONDecoder makes its `.decode` a raw parse; every other `.decode`
-    stays invisible, which is what keeps this from flagging every UTF-8
-    decode in the tree.
+    JSONDecoder makes its `.decode`/`.raw_decode` a raw parse; every other
+    `.decode` stays invisible, which is what keeps this from flagging
+    every UTF-8 decode in the tree.
+
+    Adversarial r12 (all five seats, each with a different spelling):
+    provenance, not the final call syntax, is what decides. `alias =
+    decoder`, `raw = decoder.decode`, an AnnAssign binding, an import
+    alias and `raw_decode` all bypassed the r11 literal match. Aliases
+    resolve to a fixpoint so chains (`a = decoder; b = a`) are covered.
     """
-    out: set = set()
-    for n in _own_scope(scope):
-        for target, value in _bindings(n):
-            if isinstance(value, ast.Call) and isinstance(target, ast.Name):
-                f = value.func
-                name = f.id if isinstance(f, ast.Name) else \
-                    f.attr if isinstance(f, ast.Attribute) else ""
-                if name == "JSONDecoder":
-                    out.add(target.id)
-    return out
+    ctors = set(ctors) | _decoder_ctors(scope)
+    insts: set = set()
+    methods: set = set()
+    changed = True
+    while changed:
+        changed = False
+        for n in _own_scope(scope):
+            for target, value in _bindings(n):
+                if not isinstance(target, ast.Name):
+                    continue
+                got = None
+                if isinstance(value, ast.Call):
+                    f = value.func
+                    name = f.id if isinstance(f, ast.Name) else \
+                        f.attr if isinstance(f, ast.Attribute) else ""
+                    if name in ctors:
+                        got = (insts, target.id)
+                elif isinstance(value, ast.Name) and value.id in insts:
+                    got = (insts, target.id)      # alias = decoder
+                elif (isinstance(value, ast.Attribute)
+                        and value.attr in ("decode", "raw_decode")
+                        and isinstance(value.value, ast.Name)
+                        and value.value.id in insts):
+                    got = (methods, target.id)    # raw = decoder.decode
+                if got and got[1] not in got[0]:
+                    got[0].add(got[1])
+                    changed = True
+    return insts, methods
 
 
 def _parse_calls(fn) -> "tuple[bool, bool]":
@@ -481,7 +536,10 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
     clean_names, raw_names = _PARSERS
     shadow = _shadowed(fn)
     lazy = _lazy_nodes(fn)
-    decoders = _decoder_names(fn) | _MODULE_DECODERS
+    ctors = _decoder_ctors(fn) | _MODULE_DECODER_CTORS
+    decoders, decoder_methods = _decoder_names(fn, ctors)
+    decoders |= _MODULE_DECODERS
+    decoder_methods |= _MODULE_DECODER_METHODS
     # A dotted proof is only as good as its RECEIVER. `import jsonl_utils`
     # proves `jsonl_utils.loads_clean`, and `def rewrite(path, jsonl_utils)`
     # or a local `jsonl_utils = shim` replaces the object that name points
@@ -514,13 +572,15 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
         # naming convention below it.
         if dotted in raw_names or name in raw_names:
             used_raw = True
-        elif name == "decode" and isinstance(f, ast.Attribute) and (
+        elif isinstance(f, ast.Name) and f.id in decoder_methods:
+            used_raw = True          # raw = decoder.decode; raw(line)
+        elif name in ("decode", "raw_decode") and isinstance(f, ast.Attribute) and (
                 (isinstance(f.value, ast.Name) and f.value.id in decoders)
                 or (isinstance(f.value, ast.Call)
                     and isinstance(f.value.func, (ast.Name, ast.Attribute))
                     and (getattr(f.value.func, "id", "")
                          or getattr(f.value.func, "attr", ""))
-                    == "JSONDecoder")):
+                    in ctors)):
             used_raw = True          # json.JSONDecoder().decode — a raw parse
         elif name in clean_names or dotted in clean_names:
             if id(n) not in lazy:    # a proof inside a genexp may never run

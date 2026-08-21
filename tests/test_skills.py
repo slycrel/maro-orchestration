@@ -795,7 +795,17 @@ def test_save_skill_stores_hash(monkeypatch, tmp_path):
 
 
 def test_load_skills_warns_on_hash_mismatch(monkeypatch, tmp_path, caplog):
-    """Corrupted skill file → warning logged, skill still loads."""
+    """Corrupted skill file → warning logged, skill still loads.
+
+    Accepted-with-reason (r12 F5, three seats): hash equality is
+    deliberately NOT part of the destructive admission predicate. The
+    content_hash is a tamper-EVIDENT tripwire, not a security boundary —
+    there is no secret key, so anyone who can forge a row can also write
+    a valid hash, and stranding on mismatch would stop no attacker. The
+    case it WOULD catch is a legitimate operator hand-edit whose hash is
+    merely stale, which the rehash-on-update flow handles correctly.
+    Warn-and-load is the decided behavior; this test pins it.
+    """
     import logging
     _setup_workspace(monkeypatch, tmp_path)
 
@@ -3169,6 +3179,28 @@ class TestTheWriterCannotOutrunItsReader:
         assert f.read_bytes() == before, "the store was touched on abort"
         assert [s.name for s in skills_mod.load_skills()] == ["valid"]
 
+    def test_save_skill_refuses_a_schema_invalid_emission(
+            self, tmp_path, monkeypatch):
+        """Adversarial r12 (Skeptic + Minimalist, probed): r11's proof ran
+        `loads_clean` alone while the reader admits via
+        `validate_skill_row` — so a constructible Skill with `tier=7`
+        (hash-excluded, JSON-clean) was emitted, REPLACED the healthy row,
+        and stranded on the next load. The writer proves the COMPLETE
+        admission predicate now."""
+        import skills as skills_mod
+
+        f = self._seed(tmp_path, monkeypatch)
+        before = f.read_bytes()
+        bad = Skill(id="v", name="v2", description="d", trigger_patterns=[],
+                    steps_template=["s"], source_loop_ids=[],
+                    created_at="2026-01-01T00:00:00+00:00", tier=7)
+
+        with pytest.raises(Exception):
+            skills_mod.save_skill(bad)
+
+        assert f.read_bytes() == before, "the store was touched on abort"
+        assert [s.name for s in skills_mod.load_skills()] == ["valid"]
+
     def test_save_skills_aborts_on_a_row_its_reader_would_strand(
             self, tmp_path, monkeypatch):
         """The bulk-writer twin: every emission point runs the same proof.
@@ -3354,3 +3386,93 @@ class TestTheFinalTornFrameGainsATerminatorOnPurpose:
 
         assert f.read_text(encoding="utf-8") == (
             '{"skill_id": "a"}\n{"torn": \n')
+
+
+class TestStatsAdmissionIsTheProof:
+    """Adversarial r12 (two seats, probed): the r11 skills rule applied to
+    its own stats twin. `SkillStats.from_dict` is a COERCING constructor —
+    `float("1.0")` passes, `bool("false")` is True — so a schema-drifted
+    row rode a routine counter bump and came back with modeled fields
+    silently laundered; the injection recorder (which does not recompute
+    `needs_escalation`) flipped a stored `"false"` to JSON `true`. Rows
+    the model would distort strand verbatim. Census: 203/203 live rows
+    pass."""
+
+    def test_a_drifted_row_strands_instead_of_being_laundered(
+            self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text(json.dumps({"skill_id": "s1", "skill_name": "S",
+                                 "success_rate": "1.0",
+                                 "needs_escalation": "false",
+                                 "operator_note": "keep"}) + "\n",
+                     encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skill_stats_path", lambda: f)
+
+        skills_mod.record_skill_injection_outcome("s1", True)
+
+        after = f.read_text(encoding="utf-8")
+        assert '"success_rate": "1.0"' in after, "the raw row was rewritten"
+        assert '"needs_escalation": "false"' in after, \
+            "a stored string-false was laundered to a real bool"
+        assert '"needs_escalation": true' not in after
+
+    def test_a_well_typed_row_is_still_a_record(self, tmp_path):
+        """Negative control — the live store is 203/203 well-typed."""
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text(json.dumps({"skill_id": "a", "skill_name": "A",
+                                 "total_uses": 3, "success_rate": 0.5,
+                                 "needs_escalation": False}) + "\n",
+                     encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+
+        assert list(records) == ["a"] and not stranded
+
+    def test_the_recorders_refuse_an_id_no_reader_can_return(
+            self, tmp_path, monkeypatch):
+        """A non-string id would strand as keyless; a surrogate id would
+        strand as byte-tainted. Either way the recorder would report an
+        outcome no read can ever surface — refuse at the door instead."""
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(skills_mod, "_skill_stats_path", lambda: f)
+
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_outcome(1, True)
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_outcome("bad\udcff", True)
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_injection_outcome(1, True)
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_injection_outcome("bad\udcff", True)
+
+        assert not f.exists(), "a refused outcome still touched the store"
+
+    def test_duplicate_string_ids_are_announced_not_silent(
+            self, tmp_path, caplog):
+        """Same id twice IS representable (last wins, matching the keyed
+        read) — but N rows becoming one on the next rewrite must be said
+        out loud (adversarial r12, QA). The drop is right; the silence
+        was not."""
+        import logging
+
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text('{"skill_id": "same", "skill_name": "older"}\n'
+                     '{"skill_id": "same", "skill_name": "newer"}\n',
+                     encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING):
+            records, stranded = skills_mod._read_skill_stats(f)
+
+        assert records["same"]["skill_name"] == "newer"   # last wins, pinned
+        assert not stranded
+        assert any("duplicate" in r.getMessage() and str(f) in r.getMessage()
+                   for r in caplog.records), \
+            "duplicate compaction passed in silence"

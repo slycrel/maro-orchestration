@@ -1177,3 +1177,33 @@ class TestAnUndeliverableRowIsNeverMarkedApplied:
         assert ["pre"] + got[0].new_steps == ["pre", "step"]
         assert got[0].replacement_goal == "new goal"
         assert '"applied": true' in p.read_text(encoding="utf-8")
+
+
+class TestTheProducerAcceptsOnlyWhatItsConsumersCanDeliver:
+    """Adversarial r12 (three seats, probed): r11 proved deliverability at
+    poll/clear/peek and left the PRODUCER on bare `json.dumps` — so
+    `post()` accepted a message holding a lone surrogate, wrote it as a
+    clean `\\udcff` escape, and every consumer stranded it forever: an
+    operator's STOP acknowledged at the door and never deliverable. A
+    queue must not accept under a weaker predicate than its consumer
+    delivers by."""
+
+    def test_post_refuses_a_surrogate_message_before_the_store(self, tmp_path):
+        from interrupt import InterruptQueue
+        q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+
+        with pytest.raises(Exception):
+            q.post("stop\udcff", intent="stop")
+
+        assert not q.path.exists(), "a refused post still touched the store"
+
+    def test_a_clean_post_round_trips_through_poll(self, tmp_path):
+        """Negative control: the full producer→consumer path."""
+        from interrupt import InterruptQueue
+        q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+
+        posted = q.post("stop now", intent="stop")
+        got = q.poll()
+
+        assert [i.id for i in got] == [posted.id]
+        assert got[0].message == "stop now"

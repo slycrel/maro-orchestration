@@ -225,7 +225,7 @@ def test_the_check_verb_itself_exits_nonzero(monkeypatch, capsys, live_extra, ex
 
     tm = _manifest()
     live = (set(tm.SITES) - tm.FIXED) | live_extra
-    monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - set(tm.MOVED))))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
 
     rc = tm.main()
@@ -240,7 +240,7 @@ def test_the_check_verb_exits_zero_on_a_clean_scan(monkeypatch, capsys):
 
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
-    monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - set(tm.MOVED))))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
     assert tm.main() == 0
     assert "all triaged" in capsys.readouterr().out
@@ -316,7 +316,7 @@ def test_the_drift_gate_catches_a_fixed_site_leaving_the_scanners_view():
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     gone = sorted(tm.FIXED - set(tm.MOVED))[0]
-    seen = live | (tm.FIXED - {gone})
+    seen = live | (tm.FIXED - set(tm.MOVED) - {gone})
     untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, seen)
     assert vanished == [gone]
     assert not untriaged and not regressed
@@ -326,7 +326,7 @@ def test_the_vanished_leg_is_quiet_when_every_fixed_site_is_still_visible():
     """Negative control — a gate that always fires is not a gate."""
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
-    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, live | tm.FIXED)
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, live | (tm.FIXED - set(tm.MOVED)))
     assert not (untriaged or stale or regressed or vanished or blind
                 or resurfaced)
 
@@ -339,7 +339,7 @@ def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, caps
     tm = _manifest()
     live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     gone = sorted(tm.FIXED - set(tm.MOVED))[0]
-    monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - {gone})))
+    monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - set(tm.MOVED) - {gone})))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
     assert tm.main() == 1
     assert "VANISHED" in capsys.readouterr().out
@@ -357,7 +357,7 @@ class TestTheMovedExemptionKeepsPayingForItself:
         tm = _manifest()
         twin = next(t for t in tm.MOVED.values() if t is not None)
         live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
-        seen = (live | tm.FIXED) - {twin}
+        seen = (live | (tm.FIXED - set(tm.MOVED))) - {twin}
         untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, seen)
         assert blind == [twin]
 
@@ -368,7 +368,7 @@ class TestTheMovedExemptionKeepsPayingForItself:
         tm = _manifest()
         live = (set(tm.SITES) - tm.FIXED) - set(tm.MOVED)
         untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(
-            live, live | tm.FIXED)
+            live, live | (tm.FIXED - set(tm.MOVED)))
         assert not (stale or vanished or blind or resurfaced)
 
     def test_the_check_verb_exits_nonzero_on_a_blind_moved_site(
@@ -380,7 +380,7 @@ class TestTheMovedExemptionKeepsPayingForItself:
         twin = next(t for t in tm.MOVED.values() if t is not None)
         live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
         monkeypatch.setattr(
-            tm, "_scan", lambda: (live, (live | tm.FIXED) - {twin}))
+            tm, "_scan", lambda: (live, (live | (tm.FIXED - set(tm.MOVED))) - {twin}))
         monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
         assert tm.main() == 1
         assert "BLIND" in capsys.readouterr().out
@@ -1092,8 +1092,100 @@ class TestAMovedSiteComingBackIsCaught:
         tm = _manifest()
         outer = next(s for s in tm.MOVED if s not in tm.FIXED)
         live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
-        monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
+        monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - set(tm.MOVED))))
         monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
 
         assert tm.main() == 1
         assert "RESURFACED" in capsys.readouterr().out
+
+
+class TestDecoderProvenanceNotSpelling:
+    """Adversarial r12 (all five seats, each with a different spelling):
+    the r11 decoder rule matched the literal `JSONDecoder` constructor and
+    the literal `decoder.decode(...)` call shape. Provenance, not the
+    final call syntax, is what decides — an import alias, an object alias,
+    a bound method, an annotated binding and `raw_decode` each carried the
+    same raw parse past the scan while an unrelated clean call earned OK."""
+
+    BASE = '''
+from jsonl_utils import loads_clean
+def rewrite(path):
+    %s
+    keep = []
+    for line in open(path).read().split("\\n"):
+        if line == "":
+            continue
+        try:
+            row = %s
+        except Exception:
+            continue
+        keep.append(line)
+    _probe = loads_clean('{}')
+    atomic_write(path, "\\n".join(keep))
+'''
+
+    @pytest.mark.parametrize("setup,call", [
+        ("from json import JSONDecoder as Decoder\n    decoder = Decoder()",
+         "decoder.decode(line)"),
+        ("import json\n    decoder = json.JSONDecoder()\n    alias = decoder",
+         "alias.decode(line)"),
+        ("import json\n    decoder = json.JSONDecoder()\n    raw = decoder.decode",
+         "raw(line)"),
+        ("import json\n    decoder: object = json.JSONDecoder()",
+         "decoder.decode(line)"),
+        ("import json\n    decoder = json.JSONDecoder()",
+         "decoder.raw_decode(line)[0]"),
+        ("import json\n    (decoder := json.JSONDecoder())",
+         "decoder.decode(line)"),
+    ], ids=["import-alias", "object-alias", "bound-method", "annassign",
+            "raw_decode", "walrus"])
+    def test_every_spelling_marks_the_site_raw(self, setup, call):
+        assert _scan(self.BASE % (setup, call))["rewrite"] == "RISK"
+
+    def test_an_aliased_bytes_decode_is_still_not_a_parse(self):
+        """Negative control: alias machinery must not start flagging
+        ordinary text decoding."""
+        src = '''
+from jsonl_utils import loads_clean
+def rewrite(path):
+    blob = open(path, "rb").read()
+    keep = []
+    for raw in blob.split(b"\\n"):
+        line = raw.decode("utf-8", errors="surrogateescape")
+        if line == "":
+            continue
+        try:
+            row = loads_clean(line)
+        except Exception:
+            continue
+        keep.append(line)
+    atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "OK"
+
+
+class TestAResurfacerIsCaughtAtAnyVerdict:
+    """Adversarial r12 (Skeptic, probed): `resurfaced` intersected the
+    RISK-only `live` set with MOVED, but the move's premise — the outer
+    name is expected ABSENT from the scan — is falsified by the name
+    coming back at ANY verdict. An OK resurfacer means framing returned
+    to the outer scope with a superficially clean parse beside it: more
+    suspicious, not less."""
+
+    def test_an_ok_resurfacer_fires_the_leg(self):
+        tm = _manifest()
+        outer = next(s for s in tm.MOVED if s not in tm.FIXED)
+        live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
+        seen = (live | (tm.FIXED - set(tm.MOVED))
+                | {t for t in tm.MOVED.values() if t}) | {outer}
+        *_, resurfaced = tm.compare(live, seen)
+        assert resurfaced == [outer]
+
+    def test_the_three_leg_form_still_sees_a_risk_resurfacer(self):
+        """seen=None callers offered only `live` — the leg must keep
+        firing there rather than going quiet (the fallback, pinned)."""
+        tm = _manifest()
+        outer = next(s for s in tm.MOVED if s not in tm.FIXED)
+        live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
+        *_, resurfaced = tm.compare(live)
+        assert resurfaced == [outer]

@@ -592,9 +592,21 @@ class InterruptQueue:
     # ------------------------------------------------------------------
 
     def _append(self, intr: Interrupt) -> None:
+        # The producer is the fourth door (adversarial r12, three seats,
+        # probed): r11 proved deliverability at poll/clear/peek and left
+        # this sibling on bare json.dumps — so post() ACCEPTED a message
+        # holding a lone surrogate, wrote it as a clean \udcff escape, and
+        # every consumer stranded it forever: an operator's STOP
+        # acknowledged at the door and never deliverable. A queue must not
+        # accept under a weaker predicate than its consumer delivers by.
+        # Serialize, prove through the reader's door, prove deliverable —
+        # and raise BEFORE the store is touched.
+        line = json.dumps(intr.to_dict(), allow_nan=False)
+        d = _loads_clean(line)
+        _prove_deliverable(d)
         with _LOCK:
             from file_lock import locked_append
-            locked_append(self.path, json.dumps(intr.to_dict()))
+            locked_append(self.path, line)
 
     def _read_lines(self) -> List[str]:
         if not self.path.exists():

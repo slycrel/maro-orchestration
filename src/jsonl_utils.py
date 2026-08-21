@@ -490,3 +490,30 @@ def _read(path: Path, limit: Optional[int]
     if tail:
         results.reverse()
     return results, SkipReport(partial=stopped_early, **counts)
+
+
+def prove_record_line(record, *, require_object: bool = True) -> str:
+    """Serialize one record AND prove this module's strict reader admits it.
+
+    Adversarial r12 (four of five seats, probed): every JSONL writer that
+    serialized without re-reading its own emission could mint a row the
+    reader strands. `json.dumps` defaults to `allow_nan=True` (writes the
+    CPython token `NaN`) and serializes a lone surrogate as a clean-looking
+    `\\udcXX` escape — either way the write "succeeds" and the record is
+    unreachable forever, announced only by some later read. r11 closed this
+    for skill rows (`skills._prove_line`); this is the same door for every
+    other writer: serialize, run the line back through `loads_clean`, and
+    only then let the caller touch the store. Raising here aborts BEFORE
+    the write — the store stays intact, which is the safe direction.
+
+    `require_object` mirrors the readers' non-dict rule: `read_all` and
+    every keyed reader admit only JSON objects, so a writer that emits
+    `null` or a bare array is minting a row those readers announce-and-skip.
+    """
+    line = json.dumps(record, allow_nan=False)
+    value = loads_clean(line)
+    if require_object and not isinstance(value, dict):
+        raise ValueError(
+            f"record serializes to non-object JSON ({type(value).__name__}) "
+            f"— the strict readers admit only objects")
+    return line

@@ -58,7 +58,7 @@
  {
   "name": "gc conservative-keep :: an unparseable row is dropped from the trim instead of kept",
   "file": "src/gc_memory.py",
-  "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error \u2192 keep conservatively",
+  "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error → keep conservatively",
   "replacement": "            except Exception:\n                unreadable += 1",
   "tests": "tests/test_gc_memory.py"
  },
@@ -79,7 +79,7 @@
  {
   "name": "gc collection :: old rows stop being collected at all",
   "file": "src/gc_memory.py",
-  "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old \u2014 collected",
+  "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old — collected",
   "replacement": "                    keep.append(raw)",
   "tests": "tests/test_gc_memory.py"
  },
@@ -152,7 +152,7 @@
   "anchor": "                if not isinstance(row, dict):\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
   "replacement": "                if False:\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
   "tests": "tests/test_doctor.py",
-  "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) \u2014 so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
+  "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) — so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
  },
  {
   "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
@@ -202,7 +202,7 @@
   "anchor": "                if not isinstance(d, dict):\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
   "replacement": "                if False:\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
   "tests": "tests/test_gc_memory.py",
-  "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way \u2014 no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
+  "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way — no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
  },
  {
   "name": "interrupt legacy-applied :: a legacy \"true\"/1 row is re-delivered and applied twice",
@@ -368,7 +368,7 @@
  {
   "name": "interrupt commit-failure :: a failed commit looks like an empty queue",
   "file": "src/interrupt.py",
-  "anchor": "                log.error(\"interrupt queue: could not commit %s (%s) \u2014 \"\n                          \"pending interrupts were NOT delivered this pass\",\n                          self.path, exc)\n                return []",
+  "anchor": "                log.error(\"interrupt queue: could not commit %s (%s) — \"\n                          \"pending interrupts were NOT delivered this pass\",\n                          self.path, exc)\n                return []",
   "replacement": "                return []",
   "tests": "tests/test_interrupt.py"
  },
@@ -487,7 +487,7 @@
  {
   "name": "doctor validator (required) :: an absent content_hash or created_at is a default again",
   "file": "src/skill_types.py",
-  "anchor": "    for name in (\"content_hash\", \"created_at\"):\n        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of\n        # these are fields the destructive caller ACTS ON: a missing\n        # content_hash makes `_skill_hash_is_stale` answer \"not stale\" (it\n        # has nothing to compare), and created_at is the tiebreaker that\n        # decides which row of a duplicate group survives. Both are also\n        # deliberately excluded from `_dedup_identity`, so neither absence\n        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,\n        # probed) chained exactly that: a row identical to a healthy one but\n        # with `content_hash` omitted and a later `created_at` validated,\n        # counted as non-stale, grouped, won, and DELETED the verified row.\n        # r4's constructor-first check happened to catch this \u2014 `dict_to_skill`\n        # defaults the field to \"\" and the empty check fired \u2014 so r5's move to\n        # raw values, which was right, silently dropped a guard on the way.\n        if name not in d:\n            raise KeyError(f\"{name} is required to take part in a removal \"\n                           f\"decision (absent is not empty, and neither is \"\n                           f\"proof)\")",
+  "anchor": "    for name in (\"content_hash\", \"created_at\"):\n        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of\n        # these are fields the destructive caller ACTS ON: a missing\n        # content_hash makes `_skill_hash_is_stale` answer \"not stale\" (it\n        # has nothing to compare), and created_at is the tiebreaker that\n        # decides which row of a duplicate group survives. Both are also\n        # deliberately excluded from `_dedup_identity`, so neither absence\n        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,\n        # probed) chained exactly that: a row identical to a healthy one but\n        # with `content_hash` omitted and a later `created_at` validated,\n        # counted as non-stale, grouped, won, and DELETED the verified row.\n        # r4's constructor-first check happened to catch this — `dict_to_skill`\n        # defaults the field to \"\" and the empty check fired — so r5's move to\n        # raw values, which was right, silently dropped a guard on the way.\n        if name not in d:\n            raise KeyError(f\"{name} is required to take part in a removal \"\n                           f\"decision (absent is not empty, and neither is \"\n                           f\"proof)\")",
   "replacement": "    pass",
   "tests": "tests/test_doctor.py"
  },
@@ -614,8 +614,8 @@
   "name": "scanner parser identity :: safety is read off the identifier again",
   "file": "scripts/scan_destructive_rewrites.py",
   "tests": "tests/test_scan_destructive_rewrites.py",
-  "anchor": "        if dotted in raw_names or name in raw_names:\n            used_raw = True\n        elif name == \"decode\" and isinstance(f, ast.Attribute) and (",
-  "replacement": "        if name in (\"loads_clean\", \"_loads_clean\"):\n            used_clean = True\n        elif name == \"decode\" and isinstance(f, ast.Attribute) and ("
+  "anchor": "        if dotted in raw_names or name in raw_names:\n            used_raw = True\n        elif isinstance(f, ast.Name) and f.id in decoder_methods:",
+  "replacement": "        if name in (\"loads_clean\", \"_loads_clean\"):\n            used_clean = True\n        elif isinstance(f, ast.Name) and f.id in decoder_methods:"
  },
  {
   "name": "scanner parser identity :: an aliased import binds the original name",
@@ -630,7 +630,7 @@
   "tests": "tests/test_scan_destructive_rewrites.py",
   "anchor": "    return clean - raw, raw",
   "replacement": "    return clean, raw",
-  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent \u2014 pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
+  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent — pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
  },
  {
   "name": "scanner bindings :: only plain assignment targets are counted again",
@@ -685,8 +685,8 @@
   "name": "doctor announce :: the stale row it deletes loses its timestamp",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"",
-  "replacement": "                  f\"in {workspace_skills} \u2014 \""
+  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} — \"",
+  "replacement": "                  f\"in {workspace_skills} — \""
  },
  {
   "name": "doctor kind :: a readable row is announced as unreadable",
@@ -771,7 +771,7 @@
   "tests": "tests/test_scan_destructive_rewrites.py",
   "anchor": "            for target in n.targets:\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
   "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
-  "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering \u2014 `consts` is read for the separator's actual value."
+  "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering — `consts` is read for the separator's actual value."
  },
  {
   "name": "loads_clean constants :: a CPython extension constant is admitted again",
@@ -812,15 +812,15 @@
   "name": "doctor path :: the duplicate removal line drops the store",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) from {workspace_skills} \"\n                  f\"\u2014 same behaviour, older\")",
-  "replacement": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \"\n                  f\"\u2014 same behaviour, older\")"
+  "anchor": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) from {workspace_skills} \"\n                  f\"— same behaviour, older\")",
+  "replacement": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \"\n                  f\"— same behaviour, older\")"
  },
  {
   "name": "doctor path :: the stale removal line drops the store",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"\n                  f\"stored hash doesn't match content\")",
-  "replacement": "                  f\"({s.get('created_at', '?')}) \u2014 \"\n                  f\"stored hash doesn't match content\")"
+  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} — \"\n                  f\"stored hash doesn't match content\")",
+  "replacement": "                  f\"({s.get('created_at', '?')}) — \"\n                  f\"stored hash doesn't match content\")"
  },
  {
   "name": "gc launder :: the timestamp is read out of a stripped copy",
@@ -1035,8 +1035,8 @@
  {
   "name": "skills writer proof :: _prove_line stops re-reading its own line",
   "file": "src/skills.py",
-  "anchor": "    _loads_clean(line)",
-  "replacement": "    # (proof removed)",
+  "anchor": "    validate_skill_row(_loads_clean(line))\n    return line",
+  "replacement": "    return line",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1045,7 +1045,7 @@
   "anchor": "    line = json.dumps(_skill_to_dict(skill), allow_nan=False)",
   "replacement": "    line = json.dumps(_skill_to_dict(skill))",
   "tests": "tests/test_skills.py",
-  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _prove_line's very next line runs the emitted text through _loads_clean, whose parse_constant (r9) refuses the NaN/Infinity tokens json.dumps would mint \u2014 so with allow_nan=False removed the save still aborts before the store is touched, with the same ValueError family, and no test can observe a difference. The dumps-side guard stays because it survives a future weakening of loads_clean; the reader-door refusal is pinned by the save_skill NaN test through the emit-an-unproven-line mutants, not by this one. Survivor found on the r11 sweep; marked rather than deleted, per the runner's contract."
+  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _prove_line's very next line runs the emitted text through _loads_clean, whose parse_constant (r9) refuses the NaN/Infinity tokens json.dumps would mint — so with allow_nan=False removed the save still aborts before the store is touched, with the same ValueError family, and no test can observe a difference. The dumps-side guard stays because it survives a future weakening of loads_clean; the reader-door refusal is pinned by the save_skill NaN test through the emit-an-unproven-line mutants, not by this one. Survivor found on the r11 sweep; marked rather than deleted, per the runner's contract."
  },
  {
   "name": "skills writer proof :: save_skill emits an unproven line",
@@ -1064,8 +1064,8 @@
  {
   "name": "stats identity :: JSON 1 and true share a dict key again",
   "file": "src/skills.py",
-  "anchor": "    if not (isinstance(sid, str) and sid):",
-  "replacement": "    if sid is None or sid == \"\":",
+  "anchor": "        if not (isinstance(sid, str) and sid):\n            # A non-empty STRING, not merely truthy.",
+  "replacement": "        if sid is None or sid == \"\":\n            # A non-empty STRING, not merely truthy.",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1085,7 +1085,7 @@
  {
   "name": "stats writer :: non-finite telemetry writes the NaN token again",
   "file": "src/skills.py",
-  "anchor": "        \"\".join(json.dumps(d, allow_nan=False) + \"\\n\" for d in records.values())",
+  "anchor": "        \"\".join(prove_record_line(d) + \"\\n\" for d in records.values())",
   "replacement": "        \"\".join(json.dumps(d) + \"\\n\" for d in records.values())",
   "tests": "tests/test_skills.py"
  },
@@ -1113,8 +1113,8 @@
  {
   "name": "backend rewrite :: the strandee pass is dropped and read_all's silence deletes again",
   "file": "src/memory_backends.py",
-  "anchor": "                stranded: List[str] = []\n                if path.exists():\n                    for line in store_text(path).split(\"\\n\"):\n                        if is_frame_blank(line):\n                            continue\n                        try:\n                            loads_clean(line)\n                        except Exception:\n                            stranded.append(line)",
-  "replacement": "                stranded: List[str] = []",
+  "anchor": "                stranded: List[str] = []\n                if path.exists():\n                    for line in store_text(path).split(\"\\n\"):\n                        if is_frame_blank(line):\n                            continue\n                        try:",
+  "replacement": "                stranded: List[str] = []\n                if False:\n                    for line in store_text(path).split(\"\\n\"):\n                        if is_frame_blank(line):\n                            continue\n                        try:",
   "tests": "tests/test_memory_backend.py"
  },
  {
@@ -1127,8 +1127,8 @@
  {
   "name": "backend rewrite :: the writer mints the NaN token",
   "file": "src/memory_backends.py",
-  "anchor": "                    \"\".join(json.dumps(r, allow_nan=False) + \"\\n\"",
-  "replacement": "                    \"\".join(json.dumps(r) + \"\\n\"",
+  "anchor": "                    \"\".join(prove_record_line(r) + \"\\n\" for r in records)",
+  "replacement": "                    \"\".join(json.dumps(r) + \"\\n\" for r in records)",
   "tests": "tests/test_memory_backend.py"
  },
  {
@@ -1141,14 +1141,14 @@
  {
   "name": "scanner decoder :: JSONDecoder.decode is invisible again",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "        elif name == \"decode\" and isinstance(f, ast.Attribute) and (\n                (isinstance(f.value, ast.Name) and f.value.id in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    == \"JSONDecoder\")):\n            used_raw = True          # json.JSONDecoder().decode \u2014 a raw parse",
+  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (\n                (isinstance(f.value, ast.Name) and f.value.id in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    in ctors)):\n            used_raw = True          # json.JSONDecoder().decode — a raw parse",
   "replacement": "        elif False:\n            used_raw = True",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
   "name": "manifest resurfaced :: the sixth leg goes silent",
   "file": "scripts/triage_manifest.py",
-  "anchor": "    resurfaced = sorted(live & set(MOVED))",
+  "anchor": "    resurfaced = sorted((seen if seen is not None else live) & set(MOVED))",
   "replacement": "    resurfaced: list = []",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1158,5 +1158,146 @@
   "anchor": "        if untriaged or stale or regressed or vanished or blind or resurfaced:",
   "replacement": "        if untriaged or stale or regressed or vanished or blind:",
   "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "interrupt producer :: post accepts what its consumers cannot deliver",
+  "file": "src/interrupt.py",
+  "anchor": "        line = json.dumps(intr.to_dict(), allow_nan=False)\n        d = _loads_clean(line)\n        _prove_deliverable(d)",
+  "replacement": "        line = json.dumps(intr.to_dict())",
+  "tests": "tests/test_interrupt.py"
+ },
+ {
+  "name": "skills writer proof :: the schema leg is dropped and tier=7 ships again",
+  "file": "src/skills.py",
+  "anchor": "    validate_skill_row(_loads_clean(line))\n    return line",
+  "replacement": "    _loads_clean(line)\n    return line",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "backend rewrite :: the strand rule stops mirroring the non-dict admission",
+  "file": "src/memory_backends.py",
+  "anchor": "                            if not isinstance(loads_clean(line), dict):\n                                stranded.append(line)",
+  "replacement": "                            loads_clean(line)",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "backend append :: the writer stops proving its own line",
+  "file": "src/memory_backends.py",
+  "anchor": "        from jsonl_utils import prove_record_line\n        line = prove_record_line(record)",
+  "replacement": "        line = json.dumps(record)",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "stats admission :: the coercing constructor launders drift again",
+  "file": "src/skills.py",
+  "anchor": "                validate_skill_stats_row(d)",
+  "replacement": "                pass",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats compaction :: duplicate ids compact without being counted",
+  "file": "src/skills.py",
+  "anchor": "            compacted += 1",
+  "replacement": "            pass",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats compaction :: the announce goes quiet",
+  "file": "src/skills.py",
+  "anchor": "    if compacted:\n        logger.warning(",
+  "replacement": "    if False:\n        logger.warning(",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats recorder door :: record_skill_outcome mints junk ids again",
+  "file": "src/skills.py",
+  "anchor": "        confidence:  Confidence tag from step outcome (optional, 0.0–1.0).\n    \"\"\"\n    # A non-string id would mint the exact row the reader strands as\n    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote\n    # {\"skill_id\": 1} and reported success while every future read carried\n    # it as an unreadable strandee). Refuse at the door, store untouched.\n    if not (isinstance(skill_id, str) and skill_id):\n        raise TypeError(f\"skill_id must be a non-empty string, \"\n                        f\"got {skill_id!r}\")\n    try:\n        skill_id.encode(\"utf-8\")   # a lone surrogate can never be re-read\n    except UnicodeEncodeError:\n        raise TypeError(f\"skill_id is not encodable text: {skill_id!r}\") \\\n            from None",
+  "replacement": "        confidence:  Confidence tag from step outcome (optional, 0.0–1.0).\n    \"\"\"",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats recorder door :: the injection recorder mints junk ids again",
+  "file": "src/skills.py",
+  "anchor": "    which is how the store reached 99.4% positive and starved the router.\n    \"\"\"\n    # A non-string id would mint the exact row the reader strands as\n    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote\n    # {\"skill_id\": 1} and reported success while every future read carried\n    # it as an unreadable strandee). Refuse at the door, store untouched.\n    if not (isinstance(skill_id, str) and skill_id):\n        raise TypeError(f\"skill_id must be a non-empty string, \"\n                        f\"got {skill_id!r}\")\n    try:\n        skill_id.encode(\"utf-8\")   # a lone surrogate can never be re-read\n    except UnicodeEncodeError:\n        raise TypeError(f\"skill_id is not encodable text: {skill_id!r}\") \\\n            from None",
+  "replacement": "    which is how the store reached 99.4% positive and starved the router.\n    \"\"\"",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "scanner decoder provenance :: the import alias forgets its asname",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                if a.name == \"JSONDecoder\":\n                    out.add(a.asname or a.name)",
+  "replacement": "                if a.name == \"JSONDecoder\":\n                    out.add(a.name)",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner decoder provenance :: the alias fixpoint leg goes blind",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                elif isinstance(value, ast.Name) and value.id in insts:\n                    got = (insts, target.id)      # alias = decoder",
+  "replacement": "                elif False:\n                    pass",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner decoder provenance :: the bound-method binding goes blind",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                elif (isinstance(value, ast.Attribute)\n                        and value.attr in (\"decode\", \"raw_decode\")\n                        and isinstance(value.value, ast.Name)\n                        and value.value.id in insts):\n                    got = (methods, target.id)    # raw = decoder.decode",
+  "replacement": "                elif False:\n                    pass",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner decoder provenance :: the bound-method call dispatch goes blind",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "        elif isinstance(f, ast.Name) and f.id in decoder_methods:\n            used_raw = True          # raw = decoder.decode; raw(line)",
+  "replacement": "        elif False:\n            used_raw = True",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner decoder provenance :: raw_decode stops counting as a parse",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (",
+  "replacement": "        elif name == \"decode\" and isinstance(f, ast.Attribute) and (",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner bindings :: AnnAssign stops being a binding",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    elif isinstance(node, ast.AnnAssign):\n        if node.value is not None:\n            yield node.target, node.value",
+  "replacement": "    elif isinstance(node, ast.AnnAssign):\n        pass",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner bindings :: the walrus stops being a binding",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    elif isinstance(node, ast.NamedExpr):\n        yield node.target, node.value",
+  "replacement": "    elif isinstance(node, ast.NamedExpr):\n        pass",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "manifest resurfaced :: the leg reads live instead of seen",
+  "file": "scripts/triage_manifest.py",
+  "anchor": "    resurfaced = sorted((seen if seen is not None else live) & set(MOVED))",
+  "replacement": "    resurfaced = sorted(live & set(MOVED))",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "record proof :: the emission door stops re-reading its line",
+  "file": "src/jsonl_utils.py",
+  "anchor": "    value = loads_clean(line)\n    if require_object and not isinstance(value, dict):",
+  "replacement": "    value = json.loads(line)\n    if require_object and not isinstance(value, dict):",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "record proof :: the object requirement is dropped",
+  "file": "src/jsonl_utils.py",
+  "anchor": "    if require_object and not isinstance(value, dict):",
+  "replacement": "    if False and not isinstance(value, dict):",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "record proof :: the door re-admits NaN",
+  "file": "src/jsonl_utils.py",
+  "anchor": "    line = json.dumps(record, allow_nan=False)\n    value = loads_clean(line)",
+  "replacement": "    line = json.dumps(record)\n    value = loads_clean(line)",
+  "tests": "tests/test_memory_backend.py",
+  "equivalent": "Twin lock (same as 'skills writer proof :: the proof line re-admits NaN', r11): with allow_nan defaulted back to True the dumps emits the CPython token `NaN`, but the very next line runs the emission through loads_clean, whose parse_constant refuses that token — the door still raises before any store is touched, just from the second lock. The mutation cannot change observable behavior."
  }
 ]

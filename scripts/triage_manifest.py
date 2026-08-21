@@ -253,7 +253,14 @@ def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
     blind = sorted(t for t in MOVED.values()
                    if t is not None and t not in seen) \
         if seen is not None else []
-    resurfaced = sorted(live & set(MOVED))
+    # `seen`, not `live` (adversarial r12, Skeptic, probed): the move
+    # premise — "the outer name is expected ABSENT from the scan" — is
+    # falsified by the outer name coming back at ANY verdict. An OK
+    # resurfacer means framing returned to the outer scope with a
+    # superficially clean parse beside it, which is more suspicious, not
+    # less. Callers that pass seen=None (three-leg tests) fall back to
+    # live, the only visibility they offered.
+    resurfaced = sorted((seen if seen is not None else live) & set(MOVED))
     return untriaged, stale, regressed, vanished, blind, resurfaced
 
 

@@ -385,3 +385,79 @@ class TestTheJSONLBackendSurvivesATornByte:
             assert b.read_all("lessons") == [{"n": 1}]
 
         assert not caplog.records, [r.getMessage() for r in caplog.records]
+
+
+class TestTheBackendWriterCannotOutrunItsReader:
+    """Adversarial r12 (four of five seats, probed): `allow_nan=False`
+    closed only the constant case. `json.dumps` also serializes a lone
+    surrogate as a clean-looking `\\udcXX` escape — so `rewrite()` could
+    replace a healthy collection with a row `read_all()` announces and
+    skips, and `append()` could mint the same strandee while reporting
+    success. Every emission now runs through `prove_record_line` — the
+    reader's own door — BEFORE the store is touched."""
+
+    def test_rewrite_refuses_an_escaped_surrogate(self, tmpdir):
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"id": "healthy"})
+        p = b._path("lessons")
+        before = p.read_bytes()
+
+        with pytest.raises(Exception):
+            b.rewrite("lessons", [{"id": "replacement", "note": "\udcff"}])
+
+        assert p.read_bytes() == before, "the store was touched on abort"
+        assert b.read_all("lessons") == [{"id": "healthy"}]
+
+    def test_append_refuses_nan_and_surrogates(self, tmpdir):
+        b = JSONLBackend(tmpdir)
+
+        with pytest.raises(ValueError):
+            b.append("lessons", {"x": float("nan")})
+        with pytest.raises(Exception):
+            b.append("lessons", {"x": "s\udcff"})
+
+        assert not b._path("lessons").exists(), \
+            "a refused append still touched the store"
+
+    def test_a_clean_append_still_lands(self, tmpdir):
+        """Negative control."""
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"n": 1})
+        assert b.read_all("lessons") == [{"n": 1}]
+
+
+class TestTheAppendDoorRequiresAnObject:
+    """`prove_record_line`'s require_object leg: read_all admits only JSON
+    objects, so a writer handing the backend a bare list or `null` is
+    minting a row every reader announces-and-skips. Refuse at the door."""
+
+    def test_append_refuses_a_non_object_record(self, tmp_path):
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        with pytest.raises(ValueError):
+            jb.append("rows", ["not", "a", "dict"])
+        assert not (tmp_path / "mem" / "rows.jsonl").exists(), \
+            "the store was touched on abort"
+
+
+class TestTheRewriteStrandRuleMirrorsTheReadersAdmission:
+    """Adversarial r12 (Skeptic + Expert QA, both probed): `read_all`
+    announces-and-skips clean non-dict JSON (`null`, arrays, strings), so
+    those rows were never in the caller's list either — but r11's re-read
+    pass stranded only parse FAILURES, and the composition deleted a
+    `null` row it had just been taught not to. The strand rule is the
+    reader's admission rule, not the parser's."""
+
+    def test_non_dict_json_rows_ride_the_rewrite(self, tmpdir):
+        b = JSONLBackend(tmpdir)
+        b.append("lessons", {"keep": 1})
+        p = b._path("lessons")
+        with p.open("a") as fh:
+            fh.write("null\n[1, 2]\n")
+
+        b.rewrite("lessons", b.read_all("lessons"))
+
+        after = p.read_text()
+        assert "null" in after, "a null row was deleted by the composition"
+        assert "[1, 2]" in after, "an array row was deleted by the composition"
+        assert '"keep": 1' in after

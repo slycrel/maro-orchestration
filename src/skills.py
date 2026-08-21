@@ -245,7 +245,13 @@ def _prove_line(skill: Skill) -> str:
     (same contract as _read_skill_stats's OSError raise).
     """
     line = json.dumps(_skill_to_dict(skill), allow_nan=False)
-    _loads_clean(line)      # escaped surrogates, dup names — same door as reads
+    # The COMPLETE admission predicate, not just the byte door (adversarial
+    # r12, two seats, probed): r11 moved load_skills onto validate_skill_row
+    # and left this proof on loads_clean alone — so a constructible Skill
+    # with `tier=7` (hash-excluded, JSON-clean) was emitted, REPLACED the
+    # healthy row, and stranded on the next load. A writer proves what its
+    # reader will ADMIT, and the reader admits via validate_skill_row.
+    validate_skill_row(_loads_clean(line))
     return line
 
 
@@ -977,6 +983,39 @@ def _skill_stats_path() -> Path:
     return memory_dir() / "skill-stats.jsonl"
 
 
+def validate_skill_stats_row(d: dict) -> None:
+    """Prove a stats row is one the coercing constructor cannot distort.
+
+    `SkillStats.from_dict` is a CONSTRUCTOR: `float("1.0")` passes,
+    `bool("false")` is True. Adversarial r12 (two seats, probed): a
+    schema-drifted row rode a routine counter bump and came back with its
+    modeled fields silently laundered — and the injection recorder, which
+    does not recompute `needs_escalation`, flipped a stored `"false"` to
+    JSON `true`. Same rule as `validate_skill_row`: checks the RAW values,
+    absence is fine (stats rows are sparse upserts), presence must be the
+    type the model would write. Census 2026-08-20: 203/203 live rows pass.
+    """
+    for name in ("total_uses", "successes", "failures",
+                 "injected_runs", "injected_successes"):
+        v = d.get(name)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
+            raise TypeError(f"{name} must be an int, got {v!r}")
+    for name in ("success_rate", "total_cost_usd", "avg_latency_ms",
+                 "avg_confidence", "injected_success_rate"):
+        v = d.get(name)
+        if v is not None and (isinstance(v, bool)
+                              or not isinstance(v, (int, float))
+                              or not math.isfinite(v)):
+            raise TypeError(f"{name} must be a finite number, got {v!r}")
+    for name in ("skill_name", "last_used", "last_injected_verdict_at"):
+        v = d.get(name)
+        if v is not None and not isinstance(v, str):
+            raise TypeError(f"{name} must be a string, got {v!r}")
+    v = d.get("needs_escalation")
+    if v is not None and not isinstance(v, bool):
+        raise TypeError(f"needs_escalation must be a bool, got {v!r}")
+
+
 def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
     """Announced read of skill-stats.jsonl → ({skill_id: row}, stranded).
 
@@ -1003,6 +1042,7 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
         # catch this and degrade to empty (see get_all_skill_stats).
         raise
     tainted = 0
+    compacted = 0
     keyless = 0
     # split("\n") on the RAW line, not splitlines() on a stripped copy.
     # This function feeds a REWRITE, and adversarial r10 (Skeptic, probed)
@@ -1023,6 +1063,24 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
             stranded.append(line)
             continue
         if not (isinstance(sid, str) and sid):
+            pass  # falls to the keyless strand below
+        else:
+            try:
+                # Admitted == provable, the r11 skills rule applied to its
+                # own stats twin (adversarial r12, two seats, probed): this
+                # map feeds SkillStats.from_dict, a COERCING constructor —
+                # float("1.0") passes, bool("false") is True — so a
+                # schema-drifted row was silently rewritten with laundered
+                # values by the next routine counter bump, and the
+                # injection recorder (which does not recompute
+                # needs_escalation) flipped a stored "false" to true.
+                # Census 2026-08-20: 203/203 live rows pass.
+                validate_skill_stats_row(d)
+            except Exception:
+                tainted += 1
+                stranded.append(line)
+                continue
+        if not (isinstance(sid, str) and sid):
             # A non-empty STRING, not merely truthy. Adversarial r11 (QA,
             # probed): JSON `1` and JSON `true` are distinct stored rows,
             # but Python keys them equal (`1 == True`), so the second
@@ -1033,12 +1091,23 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
             keyless += 1
             stranded.append(line)
             continue
+        if sid in records:
+            # Same id twice is representable (last wins, matching this
+            # keyed read) but it is still N rows becoming one on the next
+            # rewrite — say so instead of compacting in silence
+            # (adversarial r12, QA). The drop is right; the silence is not.
+            compacted += 1
         records[sid] = d
     if tainted or keyless:
         logger.warning(
-            "[skills] skill-stats: %d unparseable/byte-tainted and %d "
+            "[skills] skill-stats: %d unparseable/unprovable and %d "
             "keyless row(s) carried through the rewrite verbatim (%s)",
             tainted, keyless, path)
+    if compacted:
+        logger.warning(
+            "[skills] skill-stats: %d older duplicate row(s) for already-"
+            "seen id(s) will be compacted by the next rewrite — last row "
+            "per id wins, matching this keyed read (%s)", compacted, path)
     return records, stranded
 
 
@@ -1052,9 +1121,16 @@ def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
     # on the next load — the writer manufacturing its own unreadable row
     # (adversarial r11, Architect). Raising aborts the counter update and
     # leaves the store intact.
+    # prove_record_line, not bare allow_nan=False (adversarial r12, three
+    # seats, probed): a surrogate-bearing skill_id serialized as a clean
+    # \udcff escape, the write "succeeded", and the next read stranded the
+    # row — the recorder reported an outcome no reader can ever return.
+    # The payload is built before atomic_write runs, so a failure aborts
+    # with the store intact.
+    from jsonl_utils import prove_record_line
     atomic_write(
         path,
-        "".join(json.dumps(d, allow_nan=False) + "\n" for d in records.values())
+        "".join(prove_record_line(d) + "\n" for d in records.values())
         + "".join(l + "\n" for l in stranded),
         errors="surrogateescape",
     )
@@ -1119,6 +1195,18 @@ def record_skill_outcome(
         latency_ms:  Wall-clock latency in ms (optional, for efficiency scoring).
         confidence:  Confidence tag from step outcome (optional, 0.0–1.0).
     """
+    # A non-string id would mint the exact row the reader strands as
+    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote
+    # {"skill_id": 1} and reported success while every future read carried
+    # it as an unreadable strandee). Refuse at the door, store untouched.
+    if not (isinstance(skill_id, str) and skill_id):
+        raise TypeError(f"skill_id must be a non-empty string, "
+                        f"got {skill_id!r}")
+    try:
+        skill_id.encode("utf-8")   # a lone surrogate can never be re-read
+    except UnicodeEncodeError:
+        raise TypeError(f"skill_id is not encodable text: {skill_id!r}") \
+            from None
     from file_lock import locked_write
 
     path = _skill_stats_path()
@@ -1191,6 +1279,18 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
     credit keyword-matched bystanders with step completions (~1.0 base rate),
     which is how the store reached 99.4% positive and starved the router.
     """
+    # A non-string id would mint the exact row the reader strands as
+    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote
+    # {"skill_id": 1} and reported success while every future read carried
+    # it as an unreadable strandee). Refuse at the door, store untouched.
+    if not (isinstance(skill_id, str) and skill_id):
+        raise TypeError(f"skill_id must be a non-empty string, "
+                        f"got {skill_id!r}")
+    try:
+        skill_id.encode("utf-8")   # a lone surrogate can never be re-read
+    except UnicodeEncodeError:
+        raise TypeError(f"skill_id is not encodable text: {skill_id!r}") \
+            from None
     from file_lock import locked_write
 
     path = _skill_stats_path()
