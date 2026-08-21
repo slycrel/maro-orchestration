@@ -1589,6 +1589,30 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       the feature exists to prevent** (a one-lock transaction that
       honors fail-open is the race wearing the fix's clothes —
       require the lock).*
+    - *Its adversarial r16 (2026-08-21, five codex seats on the r15 fix
+      layer): **REJECT — the property census proved itself**: 9 deduped
+      findings, three HIGH clusters, all probed real (TWELFTH
+      zero-hallucination round). Absence was read as a decision
+      (_save_skills deleted any proven row absent from the caller's
+      unlocked snapshot — concurrent saves silently destroyed, no
+      archive copy; drops must now be NAMED via dropped_ids, absence is
+      carried; cull/retirement/rollback name theirs; residual: a named
+      id updated after selection archives the pre-update version,
+      upgrade edge = in-lock transform primitive); the r15 raise
+      travelled but its callers didn't (memory_ledger's per-id
+      attribution loop → partial batch → retry double-count; batch
+      record_skill_injection_outcomes now, one write or none;
+      marker-window residual recorded next to interrupt F9); the alias
+      lattice stopped at the module (class-body/factory-local aliases +
+      rebound class names severed provenance — every scope feeds the
+      map, rebinding unions both); the durable append could fuse rows
+      onto a torn tail (LF-frames the fragment first); save_skill/
+      _save_skills/locked_rmw joined the require-lock property;
+      _save_skills raises and names the store (was warn-and-None —
+      "retired" with every skill live); recorder error coverage widened
+      to the whole transaction + DEBUG catch sites promoted to WARNING;
+      commit() raising after durability now says outcome-UNKNOWN;
+      _StatsRead survives the copy protocols.*
     - *Carried lesson from r15: **enumerate the twins by the PROPERTY,
       not by the file.** r14's census converted the twins visible from
       the defect's own file, and each fix still stopped one twin short —
@@ -1598,6 +1622,17 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       Corollaries: **a retention copy must be at least as durable as
       the deletion it authorizes**, and **a post-failure message must
       state what the store HOLDS, not what the code intended**.*
+    - *Carried lesson from r16 (two halves): **changing a callee's
+      failure contract re-opens every caller as new surface — the
+      composition path is part of the fix layer** (r15 made the
+      recorders raise; the per-id caller loop turned that raise into a
+      partial batch with a retry double-count; callers were censused
+      for "do they crash", not "does their loop still compose"); and
+      **a destructive interface must take its deletions by name, not by
+      omission** ("absent from the list" cannot distinguish "I decided"
+      from "I never saw it" — an explicit dropped_ids makes the
+      decision the caller's and turns every unnamed absence into a
+      carry).*
     - *Open design item (r12, Failure Operator — real, pre-existing,
       out of the byte-safety arc's scope): `poll()` durably writes
       `applied=True` BEFORE the loop side applies anything

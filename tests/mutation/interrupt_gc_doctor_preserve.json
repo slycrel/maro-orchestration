@@ -1784,10 +1784,10 @@
   "tests": "tests/test_memory_backend.py"
  },
  {
-  "name": "r16 statsread :: the copy protocol drops compacted again",
+  "name": "r16 statsread :: the copy protocol breaks again",
   "file": "src/skills.py",
-  "anchor": "        return (self[0], self[1], self.compacted)",
-  "replacement": "        return (self[0], self[1], 0)",
+  "anchor": "    def __getnewargs__(self):\n        # Default tuple reduction reconstructs a subclass from ONE tuple\n        # argument, so copy/deepcopy/pickle raised TypeError (adversarial\n        # r16, four seats, probed). The method's EXISTENCE is the fix;\n        # the third element is belt-and-suspenders \u2014 pickle also restores\n        # the instance __dict__ after __new__, which carries .compacted\n        # (the r16 sweep proved that: a mutant zeroing this element could\n        # not fail, and was retargeted at removing the method).\n        return (self[0], self[1], self.compacted)",
+  "replacement": "    # __getnewargs__ removed (mutant)",
   "tests": "tests/test_skills.py"
  },
  {

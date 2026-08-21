@@ -1569,6 +1569,85 @@ parse-shaped wholesale, and the false-positive flood would train
 operators to ignore the scanner. Ambiguity within the module unions
 toward RISK; across modules the receiver's own module owns the proof.
 
+## Adversarial round 16 (2026-08-21, five codex seats — the fix layer again)
+
+Five seats on the r15 fix layer. **REJECT, and the census-by-property
+lesson proved itself immediately**: nine deduped findings, three HIGH
+clusters, every one of them a twin the seventeenth lesson's property
+census finds and the by-file census missed. Every probed claim real —
+the twelfth consecutive zero-hallucination round.
+
+- **Absence was read as a decision** (three seats, HIGH, probed).
+  Every `_save_skills` caller passes a list built from an UNLOCKED
+  `load_skills()` snapshot, and the writer's contract read "proven row
+  absent from the list" as "deliberately deleted" — so a skill saved
+  by a concurrent process between the snapshot and the rewrite was
+  silently destroyed, with no archive copy (the cull archives only
+  what it SELECTED). A deliberate drop must now be NAMED: the writer
+  takes `dropped_ids`, absence is carried verbatim in ordinal, and the
+  three destructive callers (island cull, A/B retirement, evolver
+  rollback) name their drops. Residual recorded: a named id whose row
+  was updated after selection still drops, archive holding the
+  pre-update version — the id was leaving the pool either way; upgrade
+  edge is a transform-style primitive that re-derives selection inside
+  the lock.
+- **The raise travelled; the callers did not** (four seats, HIGH,
+  probed). r15 made the recorders raise on failure — and
+  memory_ledger's attribution loop applied a run's manifest one id at
+  a time, so a mid-list failure became a reachable partial batch: id A
+  committed, id B failed, the idempotence marker never written, and
+  the retry credited A twice. Permanently skewed training evidence.
+  `record_skill_injection_outcomes` (batch) commits every id in one
+  write or none; the seam calls it once. The marker-window residual
+  (crash between commit and marker) is recorded next to its BACKLOG'd
+  twin, the interrupt F9 ack-before-apply design item.
+- **The alias lattice stopped at the module** (four seats, probed).
+  Class-body aliases (`Outer.Alias = Base`), factory-local aliases,
+  and a rebound class name (`class Safe: ...; Safe = Dangerous` — the
+  literal class short-circuited the alias) all severed inherited
+  decoder provenance one round after aliases became provenance. Every
+  scope now feeds the map (flattened — imprecision UNIONS candidates,
+  the RISK direction), and a name that is both a class and an alias
+  carries both provenances.
+- **The durable append could fuse rows** (one seat, HIGH, probed).
+  Appending onto a crash-torn unterminated tail concatenated the new
+  row onto the fragment — one malformed line where the retention copy
+  should be, while the live delete stood. `locked_append` now frames a
+  torn tail with an LF first: fragment bytes untouched, strandable,
+  new row readable.
+- **The require-lock property had three more members** (two seats,
+  probed). `save_skill`, `_save_skills`, and `locked_rmw` — the
+  generic RMW primitive whose docstring says "without lost updates" —
+  all rode bare `locked_write`. All require now; fail-open in an RMW
+  primitive is self-contradictory.
+- **The pool writer returned None for failure** (two seats, probed).
+  `_save_skills` caught everything, warned pathlessly, returned — a
+  cull could report "retired" with every skill still live. It raises
+  and names the store now (the error-result twin of r15's recorder
+  fix, found by the property census).
+- **The recorder announcement covered one failure of three** (two
+  seats, probed). r15's error log wrapped only the write, so lock and
+  read failures raised unannounced — and two of the three production
+  catch sites logged at DEBUG, making a lock outage indistinguishable
+  from missing telemetry. The try covers the whole transaction now;
+  the DEBUG sites are WARNING.
+- **The commit boundary could lie** (one seat, LOW, probed). SQLite
+  can report an error from `commit()` AFTER the transaction became
+  durable; the inner handler then said "store unchanged" about a store
+  that holds the transform. A commit that was ISSUED and raised is now
+  announced as outcome-UNKNOWN — inspect before retrying.
+- **The tuple subclass broke the copy protocols** (four seats, LOW,
+  probed). Default tuple reduction rebuilds `_StatsRead` from one
+  argument, so copy/deepcopy/pickle raised TypeError. `__getnewargs__`
+  carries all three fields.
+
+The sweep came back 257/258 (251 detected + 6 standing equivalents);
+the survivor taught about the fix again — the copy-protocol mutant
+zeroed `__getnewargs__`'s third element and could not fail, because
+pickle restores the instance `__dict__` (which carries `.compacted`)
+after `__new__`. The method's existence is the fix; the mutant was
+retargeted at removing it. 258/258 after.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1787,3 +1866,18 @@ deletion it authorizes** (an fsynced delete paired with a page-cache
 archive is retention theater), and **a post-failure message must state
 what the store HOLDS, not what the code intended** ("store unchanged"
 after a successful commit is an instruction to double-apply).
+
+The eighteenth is round 16's, and it has two halves. First: **changing
+a callee's failure contract re-opens every caller as new surface — the
+composition path is part of the fix layer.** r15 made the recorders
+raise, correctly; the caller applying a manifest one id at a time
+turned that raise into a reachable partial batch with a double-count on
+retry. The callers were censused for "do they crash" (they all wrapped)
+but not for "does their loop still compose" — a failure-contract change
+is not shipped until the literal production path through it has been
+re-read. Second: **a destructive interface must take its deletions by
+name, not by omission.** "Absent from the list" is ambiguous between "I
+decided to remove this" and "I never saw this" — and the writer cannot
+tell which, so for years it resolved the ambiguity in the destructive
+direction. An explicit `dropped_ids` makes the decision the caller's,
+visibly, and turns every unnamed absence into a carry.

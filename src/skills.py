@@ -1084,9 +1084,12 @@ class _StatsRead(tuple):
 
     def __getnewargs__(self):
         # Default tuple reduction reconstructs a subclass from ONE tuple
-        # argument, so copy/deepcopy/pickle raised TypeError and any path
-        # that survived would have dropped .compacted (adversarial r16,
-        # four seats, probed). Reconstruct with all three.
+        # argument, so copy/deepcopy/pickle raised TypeError (adversarial
+        # r16, four seats, probed). The method's EXISTENCE is the fix;
+        # the third element is belt-and-suspenders — pickle also restores
+        # the instance __dict__ after __new__, which carries .compacted
+        # (the r16 sweep proved that: a mutant zeroing this element could
+        # not fail, and was retargeted at removing the method).
         return (self[0], self[1], self.compacted)
 
 
