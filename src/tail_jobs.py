@@ -907,12 +907,23 @@ def _strict_bool(value, default: bool) -> bool:
 
 
 def spawn_enabled() -> bool:
-    """`tail.spawn` — off by default (see docs; on the runtime box by config)."""
+    """`tail.spawn` — ON by default since the 2026-08-21 flip (env wins).
+
+    The flip decree (Jeremy, on burn-in evidence: three clean organic runs
+    plus a deliberate mid-maintenance SIGKILL with full recovery semantics —
+    docs/history/2026-08-20-async-tail-process-spawn.md). `MARO_TAIL_SPAWN`
+    overrides config, same env-wins contract as `recording_enabled`: the
+    test suite pins it "0" so unit tests never fork real children, and an
+    operator can kill the lane the same way without touching config.
+    """
+    env = os.environ.get("MARO_TAIL_SPAWN")
+    if env is not None:
+        return _strict_bool(env, True)
     try:
         from config import get as _cfg_get
-        return _strict_bool(_cfg_get("tail.spawn", False), False)
+        return _strict_bool(_cfg_get("tail.spawn", True), True)
     except Exception:
-        return False
+        return True
 
 
 def _cli_path() -> Path:

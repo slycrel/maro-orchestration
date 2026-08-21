@@ -163,6 +163,13 @@ def _isolate_workspace(tmp_path):
     saved["MARO_WORKSPACE"] = os.environ.get("MARO_WORKSPACE")
     os.environ["MARO_WORKSPACE"] = str(tmp_path)
 
+    # tail.spawn flipped ON by default 2026-08-21 — without this pin, every
+    # test reaching handle()'s finalize with pending tail jobs would fork a
+    # REAL finalize-tail child. Tests that exercise the spawn itself delenv
+    # this explicitly.
+    saved["MARO_TAIL_SPAWN"] = os.environ.get("MARO_TAIL_SPAWN")
+    os.environ["MARO_TAIL_SPAWN"] = "0"
+
     # User-config isolation — the box's real ~/.maro/config.yml must never
     # feed a test (found 2026-07-01: notify/telegram keys leaked into
     # _resolve_allowed_chats through the user tier; the workspace tier was

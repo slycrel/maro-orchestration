@@ -286,12 +286,33 @@ def test_dispatch_with_nothing_pending_does_nothing(monkeypatch):
 
 def test_spawn_enabled_reads_the_config_key(monkeypatch):
     import config
-    # A fresh install has no `tail.spawn` key at all, and inherits OFF: a
-    # detached child moves where the tail's LLM spend and store writes happen.
+    monkeypatch.delenv("MARO_TAIL_SPAWN", raising=False)
+    # A fresh install has no `tail.spawn` key at all and inherits ON — the
+    # 2026-08-21 flip decree, made on burn-in evidence (three clean runs +
+    # a deliberate crash with full recovery semantics).
+    assert tail_jobs.spawn_enabled() is True
+    monkeypatch.setattr(config, "get",
+                        lambda key, default=None: False if key == "tail.spawn"
+                        else default)
     assert tail_jobs.spawn_enabled() is False
+
+
+def test_the_env_override_beats_config(monkeypatch):
+    """MARO_TAIL_SPAWN wins over config — the recording_enabled contract.
+
+    This is also what keeps the unit suite honest: conftest pins it "0" so
+    no test forks a real child by accident, and an operator can kill the
+    lane the same way without touching config."""
+    import config
     monkeypatch.setattr(config, "get",
                         lambda key, default=None: True if key == "tail.spawn"
                         else default)
+    monkeypatch.setenv("MARO_TAIL_SPAWN", "0")
+    assert tail_jobs.spawn_enabled() is False
+    monkeypatch.setattr(config, "get",
+                        lambda key, default=None: False if key == "tail.spawn"
+                        else default)
+    monkeypatch.setenv("MARO_TAIL_SPAWN", "1")
     assert tail_jobs.spawn_enabled() is True
 
 
@@ -318,6 +339,7 @@ def test_spawned_tail_outlives_the_parent_call(monkeypatch):
         loop_id="tail-e2e-loop", status="stuck", project="", steps=[]))
 
     import config
+    monkeypatch.delenv("MARO_TAIL_SPAWN", raising=False)
     _real_get = config.get
     monkeypatch.setattr(config, "get",
                         lambda key, default=None: (True if key == "tail.spawn"
@@ -933,11 +955,13 @@ def test_an_old_stranded_tail_is_found_behind_many_newer_ones(monkeypatch):
     assert [f["handle_id"] for f in found] == ["tjold001"], found
 
 
-def test_a_quoted_false_does_not_enable_the_spawn(monkeypatch):
+def test_a_quoted_false_still_means_off(monkeypatch):
     """`bool("false")` is True, and YAML hands back a string whenever the
-    value was quoted — ON in the one direction the OFF default exists to
-    prevent."""
+    value was quoted. Post-flip the stakes invert but the contract holds:
+    an explicit quoted "false" must turn the spawn OFF — an operator's
+    opt-out must not be eaten by truthiness."""
     import config
+    monkeypatch.delenv("MARO_TAIL_SPAWN", raising=False)
     for value in ("false", "False", "no", "off", "0", ""):
         monkeypatch.setattr(config, "get",
                             lambda key, default=None, _v=value: _v)
@@ -946,9 +970,10 @@ def test_a_quoted_false_does_not_enable_the_spawn(monkeypatch):
         monkeypatch.setattr(config, "get",
                             lambda key, default=None, _v=value: _v)
         assert tail_jobs.spawn_enabled() is True, value
-    # A value nobody can read is a value nobody decided: take the default.
+    # A value nobody can read is a value nobody decided: take the default —
+    # which since the flip is ON.
     monkeypatch.setattr(config, "get", lambda key, default=None: "banana")
-    assert tail_jobs.spawn_enabled() is False
+    assert tail_jobs.spawn_enabled() is True
 
 
 def test_an_unreadable_store_is_not_an_empty_one(monkeypatch):

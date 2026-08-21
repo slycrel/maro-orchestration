@@ -161,10 +161,10 @@
   "tests": "tests/test_tail_jobs.py"
  },
  {
-  "name": "the config default is ON, so a fresh install inherits the spawn",
+  "name": "the config default is OFF again \u2014 fresh installs silently lose the flip",
   "file": "src/tail_jobs.py",
-  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", False), False)",
-  "replacement": "        return _strict_bool(_cfg_get(\"tail.spawn\", True), True)",
+  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", True), True)",
+  "replacement": "        return _strict_bool(_cfg_get(\"tail.spawn\", False), False)",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -294,10 +294,10 @@
   "tests": "tests/test_tail_jobs.py"
  },
  {
-  "name": "a quoted \"false\" enables the spawn (plain truthiness)",
+  "name": "a quoted \"false\" is eaten by truthiness \u2014 the operator opt-out dies",
   "file": "src/tail_jobs.py",
-  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", False), False)",
-  "replacement": "        return bool(_cfg_get(\"tail.spawn\", False))",
+  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", True), True)",
+  "replacement": "        return bool(_cfg_get(\"tail.spawn\", True))",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -446,6 +446,13 @@
   "file": "src/tail_jobs.py",
   "anchor": "            if attempted and refresh:\n                _refresh_surfaces(handle_id, path)",
   "replacement": "            if ran and refresh:\n                _refresh_surfaces(handle_id, path)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the env override is ignored, so the test-suite pin and the operator kill-switch are dead",
+  "file": "src/tail_jobs.py",
+  "anchor": "    env = os.environ.get(\"MARO_TAIL_SPAWN\")\n    if env is not None:\n        return _strict_bool(env, True)",
+  "replacement": "    env = None\n    if env is not None:\n        return _strict_bool(env, True)",
   "tests": "tests/test_tail_jobs.py"
  }
 ]
