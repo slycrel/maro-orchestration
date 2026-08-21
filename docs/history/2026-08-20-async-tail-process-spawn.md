@@ -94,7 +94,9 @@ backend is worth more than a tail that does not run.
 ## The contracts
 
 **Overlapping tails.** One tail process per handle_id — a drainer appends a
-`claim` row and declines if a live claim stands. Liveness is
+`claim` row and declines if a live claim stands. *(Round 1: as first written
+this was check-then-act, so it was a comment rather than a mechanism. The
+check and the append are one locked transaction now — see below.)* Liveness is
 `os.kill(pid, 0)` (portable: the `/proc` checks written for the Linux box
 were silently always-false on the dev Mac, 2026-07-08), EPERM counts as
 alive, and the claim is host-scoped because a pid from another machine says
@@ -114,7 +116,9 @@ runs that sweep on its health tick (grace window 1800s, so it can never race
 a child that is still starting). Every job kind is idempotent — lesson
 extraction skips rows that already carry lessons, crystallization re-checks
 the verdict gate, maintenance is threshold/cadence-based — so a late drain
-repeats nothing.
+repeats nothing. *(Round 1 corrected this: threshold-based is NOT idempotent.
+`run_post_run_maintenance` advances durable cadence counters, so the sweep
+asks per kind and surfaces maintenance it cannot prove safe to repeat.)*
 
 **Failure.** A job that raises is marked done WITH its error, not left
 pending. It has already had its effect on whatever it touched before it
@@ -124,7 +128,9 @@ raised, and a sweep re-running it would repeat that half.
 ten-round destructive-rewrite arc (r1–r10, this same month) is the record of
 what read→transform→rewrite does to a store under exactly those conditions.
 Nothing here rewrites a line, so nothing here can lose one; a torn row costs
-one record, announced, via `read_jsonl_announced`.
+one record, announced, via `read_jsonl_announced`. *(Round 1: true of LINES
+and, as first written, false of JOBS — two registrars could allocate the same
+`seq` outside the lock, and the executor is keyed by seq.)*
 
 ## Off by default
 
@@ -132,12 +138,16 @@ one record, announced, via `read_jsonl_announced`.
 but it changes WHERE its LLM spend and store writes happen, and that wants
 burn-in on a real workload before a fresh install inherits it. Off — or when
 the spawn cannot be made — the jobs run inline, which is phase-1 behaviour
-exactly.
+exactly. *(Round 1: not exactly — the inline lane was rebuilding the adapter
+instead of using the run's live one. Fixed; the claim holds now.)*
 
 ## What was probed
 
 `tests/test_tail_jobs.py` (30 tests) and `tests/mutation/tail_jobs.json`
 (28 must-detect mutants, **28/28 accounted for**; 27 on the first sweep).
+*(Superseded by round 1: 47 tests, 50 mutants. The numbers below describe the
+pre-review state and are left as written — what a sweep accounted for before
+four adversarial seats read the same file is the point of keeping them.)*
 
 The claim the chunk exists for is asserted directly:
 `test_spawned_tail_outlives_the_parent_call` requires `drain_or_spawn` to
@@ -191,3 +201,110 @@ grace window. Age is not abandonment.
   through `handle()` opens a run), and its own refresh blocks are largely
   inert there anyway, since there is no run dir to re-render. Worth a census
   before deleting them; not worth deleting on a guess.
+
+---
+
+# Adversarial round 1 — 2026-08-20, four codex seats
+
+Skeptic, Architect, Minimalist, Expert QA, via `/adversarial-review` against
+`f4d3b26~1..HEAD`. **Verdict: REJECT.** Six distinct HIGHs, all reproduced,
+zero hallucinations. Every one of them lives in what this chunk ADDED — the
+round's own stated prior, holding again.
+
+Two of the four seats independently reached the same top finding by the same
+route, and all four reached it eventually. It is worth stating plainly because
+the chunk's own commit message got it wrong:
+
+> **Append-only is not atomic.**
+
+Byte-level safety says no line is overwritten. It says nothing about a
+decision made from a read that a later write depends on — and every
+state-dependent write here was one of those:
+
+- `_next_seq` read the rows, then appended outside the lock. Two registrars
+  could allocate `seq: 1` twice; both lines are physically on disk and one job
+  is invisible, because the executor is keyed by seq. Probed literally: two
+  `seq: 1` job rows in, `pending == ['maintenance']` out.
+- `run_jobs` checked the standing claim, then appended its own. Two drainers
+  could both read "unclaimed" and both run. The "one tail process per
+  handle_id" contract was a comment, not a mechanism.
+
+Both now go through `_transact`: read, decide, append, one lock
+(`file_lock.locked_write` is reentrant per thread, so the inner append does
+not deadlock).
+
+**The default lane had lost the run's adapter.** `handle()` called
+`drain_or_spawn(adapter=None)`, so even with `tail.spawn` OFF the tail rebuilt
+from the recorded identity — dropping a `FailoverAdapter`'s live fallback
+state and any caller-injected adapter, in the lane that ships on by default.
+"Phase-1 behaviour exactly" was therefore false in the one place it was load
+bearing. `_handle_impl` builds its own adapter when the caller passes none
+(`handle.py:1270`), so the object is not recoverable from `handle()`'s scope:
+it is remembered at record time and used where it still exists. The identity
+stays the fallback for the child, which cannot have the object.
+
+**"Every job kind is idempotent" was too broad.** `run_post_run_maintenance`
+advances DURABLE cadence counters (`evolver_cadence_tick` and the inspector
+twin), so a child that died after a tick and before its `done` row would have
+that tick counted twice by the sweep — firing a meta-cycle early. Threshold-
+based is not idempotent. The sweep now asks per kind: learning re-drains,
+maintenance whose drain already started is surfaced under `needs_operator`.
+Note the direction — this hazard did not exist in phase 1, because phase 1 had
+no sweep to re-run anything. The recovery mechanism introduced it, and a
+correct-looking blanket claim hid it.
+
+**A failed job was visible nowhere.** It is marked done, so it is not pending,
+and pending was all `find_stranded` reported — while the comment two lines
+above claimed the sweep reported the error. `state()` carries `failed` now,
+and the CLI, the sweep result and heartbeat all show it.
+
+Also fixed: claim/done/release append failures were computed and discarded (a
+claim we could not publish is a claim we do not hold — the drain declines
+now); the sweep truncated candidates to `limit * 4` newest-first BEFORE
+filtering, and heartbeat passes `limit=3`, so twelve healthy recent runs could
+hide an old abandoned tail from every tick forever (it walks until it has
+`limit` stranded runs, oldest first); an unreadable store read as an empty one,
+which would allocate `seq: 1` over whatever it already held; a failed surface
+refresh was swallowed at debug level, leaving a store that says the tail
+finished beside a card that is stale; and `tail.spawn` used plain truthiness,
+so a quoted `"false"` in YAML turned the spawn ON — the one direction the
+OFF-by-default rollout exists to prevent.
+
+## The one the seats did not find
+
+`runs.current_run_dir()` is a **ContextVar** — process-local. The spawned
+child pinned nothing, and `runs.record_llm_call` **no-ops when no run-dir is
+active**, with record-mode ON by default. So `tail.spawn=on` would have
+silently stopped capturing the tail's LLM calls into `<run_dir>/build/calls/`,
+and the run card's `n_calls` — counted from exactly those files — would have
+under-reported calls the run actually paid for. The codebase already documents
+this hazard one lane over (`llm.py:1368`, where the fetch tool's capture dir
+is resolved in the parent and handed down explicitly *because* a fresh process
+sees None).
+
+Found by reading during the tree freeze, not by a seat. Four adversarial
+reviewers looked at a process-spawn diff and none of them asked what ambient
+process state the child does not inherit — worth remembering as a lens gap
+next time the subject is a new process rather than new logic.
+
+## Receipts
+
+Mutation spec 28 → 50, **50/50 accounted for** (1 standing equivalent). The
+first sweep after the fixes returned six SKIPs and two survivors: the SKIPs
+were anchors bound to lines my own fixes had rewritten — re-anchored before
+the sweep was called green, because a skipped mutation is not a passed one —
+and both survivors were single-kind fixtures that could not tell a whole-run
+drain from a filtered one, or a silent skip from an announced one. Tests
+30 → 47. Full suite green.
+
+## What is still not proven
+
+Everything named in "What was NOT probed" above still stands, plus one
+correction: the DEFAULTS.md line claiming the process "exits at the answer"
+was an overclaim and has been narrowed — `maybe_consolidate` still runs inline
+in the same `finally` block. The seats found that too, independently.
+
+Per the skill's own coverage note: one round surfaces roughly 75–80% of what
+two find, and across ~50 recorded rounds the prior round's fix layer is the
+single likeliest home of the next round's worst finding. **This fix layer is
+unreviewed.**

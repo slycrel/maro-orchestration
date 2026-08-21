@@ -191,6 +191,52 @@ what the tail does, but it changes where its LLM spend and store writes
 happen. Probed: 30 tests + `tests/mutation/tail_jobs.json` 28/28 (27 on the
 first sweep; the survivor was real — age is not abandonment).
 
+*Its adversarial r1 (2026-08-20, FOUR codex seats — Skeptic, Architect,
+Minimalist, Expert QA): **REJECT.** Six HIGHs, all six reproduced, zero
+hallucinations, and the top finding is the chunk's own commit message turned
+around. **Append-only is not atomic.** Byte-level safety says no line is
+overwritten and says nothing about a decision made from a read that a later
+write depends on — and every state-dependent write here was one of those:
+`_next_seq` read the rows and appended outside the lock (two registrars
+allocate `seq: 1` twice, both lines on disk, one job invisible because the
+executor is keyed by seq — probed literally), and `run_jobs` checked the
+standing claim before appending its own, so "one tail process per handle_id"
+was a comment rather than a mechanism. Both go through one locked
+read-decide-append now. Next: **the default lane had lost the run's adapter**
+— `handle()` passed `adapter=None`, so even with `tail.spawn` OFF the tail
+rebuilt from the recorded identity, dropping a FailoverAdapter's live state
+and any injected adapter, which makes "phase-1 behaviour exactly" false in the
+one place it was load-bearing (`_handle_impl` builds its own adapter when the
+caller passes none, so the object is not recoverable from `handle()`'s scope;
+it is remembered at record time now). **"Every job kind is idempotent" was too
+broad** — `run_post_run_maintenance` advances DURABLE cadence counters, so a
+child that died after a tick would have it counted twice by the sweep; the
+hazard did not exist in phase 1 because phase 1 had no sweep, i.e. the
+recovery mechanism introduced it and a correct-looking blanket claim hid it.
+Per-kind now: learning re-drains, maintenance whose drain already started is
+surfaced under `needs_operator`. **A failed job was visible nowhere** — done,
+so not pending, and pending was all `find_stranded` reported, two lines under
+a comment claiming otherwise. Also: append failures on claim/done/release were
+computed and discarded; the sweep truncated candidates to `limit * 4`
+newest-first BEFORE filtering, and heartbeat passes `limit=3`, so twelve
+healthy recent runs could hide an old abandoned tail forever; an unreadable
+store read as an empty one; a failed surface refresh was swallowed at debug
+level; and `bool("false")` is True, so a quoted YAML value turned the spawn ON
+— the one direction the OFF default exists to prevent. **The one the seats did
+not find**, caught while reading during the tree freeze: `runs.current_run_dir()`
+is a ContextVar, so the spawned child pinned nothing, and `record_llm_call`
+NO-OPS with no run-dir active with record-mode ON by default — the spawned
+lane would have stopped capturing the tail's LLM calls into `build/calls/` and
+the run card's `n_calls`, counted from those files, would have under-reported
+calls the run paid for. Four reviewers read a process-spawn diff and none
+asked what ambient process state the child does not inherit; worth carrying as
+a lens gap. Receipts: spec 28 -> 50, 50/50 after (the first post-fix sweep
+returned six SKIPs — anchors bound to lines my own fixes had rewritten,
+re-anchored before it was called green — and two survivors, both single-kind
+fixtures that could not tell a whole-run drain from a filtered one); tests
+30 -> 47; suite green. Record:
+`docs/history/2026-08-20-async-tail-process-spawn.md`.*
+
 **Open residuals, in the order burn-in should look at them:**
 
 - [ ] **Box burn-in + the flip.** The 53% figure is phase 1's cost on one
@@ -211,6 +257,11 @@ first sweep; the survivor was real — age is not abandonment).
       survive as the fallback for a handle that owns no run-dir, which is
       rare — and their own refresh blocks are largely inert on that lane
       anyway (no run dir to re-render). Worth a census, not a guess.
+- [ ] **The r1 fix layer is unreviewed**, and across ~50 recorded rounds the
+      prior round's fix layer is the single likeliest home of the next
+      round's worst finding. A second round on `8fe0a9b..HEAD` is the
+      cheapest remaining evidence — one round surfaces roughly 75-80% of what
+      two find.
 
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 

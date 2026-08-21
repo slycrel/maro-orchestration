@@ -3712,3 +3712,37 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   `knowledge_web.maybe_consolidate()` — still in-process, still on the
   caller's exit path when its ~24h marker fires. Record:
   `docs/history/2026-08-20-async-tail-process-spawn.md`.
+- **2026-08-20 — async-tail r1: REJECT, and the finding is the chunk's
+  own commit message turned around.** Four codex seats (Skeptic,
+  Architect, Minimalist, Expert QA) on the phase-3 tail spawn. Six HIGHs,
+  all reproduced, zero hallucinations. **Append-only is not atomic** —
+  byte-level safety says no line is overwritten and says nothing about a
+  decision made from a read that a later write depends on. Two
+  registrars could allocate the same `seq` (both lines on disk, one job
+  invisible — the executor is keyed by seq, probed literally) and two
+  drainers could both read "unclaimed"; "one tail process per handle_id"
+  was a comment, not a mechanism. The chunk had leaned on the wrong half
+  of the ten-round destructive-rewrite arc's lesson: that arc was about
+  what a REWRITE destroys, and this store's exposure was never the
+  rewrite. Three more shapes worth carrying: (1) a claim of EQUIVALENCE
+  ("phase-1 behaviour exactly") is a testable claim and this one was
+  false — the default lane rebuilt the adapter instead of using the
+  run's live one; (2) **the recovery mechanism introduced the hazard the
+  blanket claim hid** — "every job kind is idempotent" was true enough
+  until a sweep existed to re-run maintenance, whose cadence counters are
+  durable, so phase 1 was safe by having no recovery at all; (3) a
+  failure record that nothing reads is not a record — a failed job is
+  done, so not pending, and pending was all the sweep reported, two lines
+  under a comment saying otherwise. **The one the four seats missed, and
+  the lens gap to carry: what ambient PROCESS state does a child not
+  inherit?** `runs.current_run_dir()` is a ContextVar; `record_llm_call`
+  no-ops without it and record-mode is ON by default, so the spawned lane
+  would have silently stopped capturing the tail's LLM calls and the run
+  card's `n_calls` would have under-reported paid calls. Four reviewers
+  read a process-spawn diff and all of them reviewed the LOGIC. Receipts:
+  spec 28 -> 50, 50/50 (first post-fix sweep: six SKIPs from anchors my
+  own fixes moved — re-anchored, since a skip is not a pass — and two
+  survivors, both single-kind fixtures that could not tell a whole-run
+  drain from a filtered one); tests 30 -> 47; suite green. The r1 fix
+  layer is UNREVIEWED. Record:
+  `docs/history/2026-08-20-async-tail-process-spawn.md`.
