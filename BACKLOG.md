@@ -1735,6 +1735,37 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       Accepted LOW: stranded messages count logical ids not physical
       rows. Mutation spec 302 → 308 (3 re-anchored, incl. the r20
       revert-guard mutant retargeted at the split comparison door).*
+    - *Its adversarial r22 (2026-08-21, five sonnet-medium seats on
+      the r21 fix layer): three clusters — and the arc's first round
+      where whole clusters came back "confirmed sound" under probing
+      (the r21 drop partition and the skill_update lock both held).
+      The skill_create revert archived the stale pre-lock snapshot —
+      a concurrent edit racing the revert vanished from live store
+      AND archive, the retention decree's own recovery path failing
+      exactly when invoked (branch now reads/archives/writes under
+      one lock; the shared pre-lock snapshot REMOVED so no branch has
+      a stale authority to shadow); r21's fail-closed guard conflated
+      absent with empty — an empty-suggestion apply wrote "" as the
+      description, a fully verifiable value, and refusing it made
+      those applies permanently un-revertible (absent still refuses,
+      empty verifies); and the r21 lock had no committed behavioral
+      pin — this round's own attempt PROVED the standing rationale
+      (in-thread injection rides the reentrancy), so the pins are
+      structural: no-read-precedes-the-first-lock, create-branch
+      source order, plus a live archive-content test. Mutation spec
+      308 → 312 (6 re-anchored).*
+    - *Open item (r22, deferred): verify_post_apply logs a refused
+      revert as a warning and moves on, where evolver_scans stamps
+      degraded_revert_failed BLOCKING for the same outcome. Residual
+      is legacy-rows-only after the absent/empty split; upgrade edge
+      is porting the stamp, not a new verdict enum mid-arc.*
+    - *Carried lesson from r22: **retention is a read too — archive
+      the world you delete, not the world you planned to delete.** A
+      recovery path built from stale bytes fails exactly when
+      invoked. Corollary: fail-closed has a precision obligation —
+      "cannot verify" must mean CANNOT, not "the evidence is falsy";
+      refusing a verifiable case deletes the undo button and calls
+      it safety.*
     - *Carried lesson from r21: **a guard that cannot verify must
       refuse, and a claim of completeness must hedge over everything
       it could not read.** `if evidence and evidence_says_stop:` reads

@@ -2263,3 +2263,62 @@ is the difference between a message the operator can act on and one
 that trains them to trust a lie. Both are the twenty-second lesson's
 corollary made mechanical: when you harden a verb, its guard and its
 announcement are siblings too.
+
+## Round 22 (2026-08-21): retention archives the world it deletes
+
+Five sonnet-medium seats (codex still capped) on the r21 fix layer
+(9f4a313f + f7d0fdf3). Three clusters — and for the first time in the
+arc, two seats returned "confirmed sound, no defect found" on entire
+clusters, with probes: the r21 drop-bucket partition and the
+skill_update lock both survived five adversarial reads. The round's
+real findings:
+
+- **The create revert archived a stale snapshot** (three seats, HIGH,
+  probed live): `revert_suggestion`'s skill_create branch built its
+  removal — and therefore the ARCHIVED copy, the retention decree's
+  only recovery path — from the shared pre-lock `load_skills()`
+  snapshot. A concurrent edit racing the revert vanished from the
+  live store AND the archive: the deletion was id-keyed and safe, the
+  retention was not. One seat traced the same shape to the
+  r16-accepted cull residual; with the lock machinery now one line
+  away, acceptance is no longer the cheap answer. The branch now
+  reads fresh, archives, and writes inside one
+  `locked_write(require=True)` — and the shared pre-lock snapshot is
+  REMOVED entirely, so no branch has a stale authority left to
+  shadow.
+- **Absent conflated with empty** (two seats, HIGH, probed): r21's
+  fail-closed guard refused on falsy `suggestion_text`, but an apply
+  whose suggestion was `""` wrote `""` as the description — a fully
+  VERIFIABLE value. Refusing it made every empty-suggestion apply
+  permanently un-revertible, stranding verify_post_apply's
+  auto-revert safety net for a shape reachable today. Absent (key
+  missing — legacy) still refuses; empty now verifies.
+- **The lock had no committed behavioral pin** (Architect, MEDIUM):
+  and this round's own fix attempt PROVED the standing rationale — a
+  mid-window in-thread injection rode the reentrant lock straight
+  into the critical section, so the behavioral test cannot exist.
+  Committed instead: a no-read-precedes-the-first-lock pin (the
+  outer snapshot cannot quietly return), the create-branch
+  source-order pin, and a live archive-content test.
+
+Judged: verify_post_apply's warning-only handling of a refused
+revert — BACKLOG'd, not built (fix B removes the common case; the
+residual is legacy-rows-only; a new verdict enum mid-arc repeats the
+churn r20 rejected). The "repair, then confirm" phrasing naming a
+verb that does not exist — standing r19 note; the surface grew.
+
+### The twenty-fourth lesson
+
+**Retention is a read too — archive the world you delete, not the
+world you planned to delete.** The deletion was safe: id-keyed,
+self-verifying, carried by a writer that re-reads under its own
+lock. The SAFETY NET was not: the archived copy serialized whatever
+the pre-lock snapshot held, which is exactly backwards — the archive
+exists for the case where the deletion turns out to be wrong, and
+that case is likeliest precisely when the world moved between
+snapshot and delete. A recovery path built from stale bytes is a
+recovery path that fails exactly when invoked. Corollary, from the
+same round's other cluster: fail-closed has a precision obligation —
+"cannot verify" must mean CANNOT, not "the evidence is falsy."
+Refusing a verifiable case is not caution; it deletes the undo
+button and calls it safety.
