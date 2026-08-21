@@ -3791,3 +3791,9 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   drops without updating the baseline — cross-session courtesy fix,
   box session's tree unharmed). Spec 65/65; suite green under the
   flipped default.
+- **2026-08-21 — wrap adjudications:** the four link-farm steal
+  candidates promoted from run artifacts into BACKLOG (Jeremy: "not
+  'next', but probably worth a visit before later"); **"done means
+  done" RESOLVED — declined** (Jeremy: "we're past done means done" —
+  the done≠achieved doctrine already encodes the sharper version; no
+  prompt-rule codification).

@@ -397,6 +397,65 @@ on matched tickets, scored on cost-per-accepted-outcome, not tokens.
 
 Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
 
+### Link-farm research leads — four adjudicated steal candidates (FOUND 2026-08-20/21, runs 0ebadc02/f89bf29b/92491e53; Jeremy: "not 'next', but probably worth a visit before later")
+
+Promoted from the link-farm-maro-scan burn-in series' deliverables (full
+artifacts with verification trails live in the box project dir;
+`ranks-4-7-assessment.md` also records three documented PASSes — ranks 4, 6,
+7 — so the non-entries have reasons, not silence). Citations verified
+against `link-farm/db/ai_links.db` by the runs, read-only.
+
+**1. Compare the worker/reviewer pipeline against Vercel's "Foreman" 4-station design.**
+- [ ] Pull Foreman's station breakdown (Classifier/Analyst/Implementer/
+      Reviewer, each sandboxed, reviewer on a DIFFERENT model vendor seeing
+      only the pushed branch — never the implementer's reasoning) and diff
+      against `container_exec.py` + the worker/reviewer flow.
+- [ ] Why: same-vendor review has a known blind spot (a model under-catches
+      its own mistake class — the exact premise of our cross-model
+      adversarial-review skill, which currently exists at the DEV layer but
+      not inside maro's own closure/review stages). Spike: implementer and
+      reviewer on different model families in separately-sandboxed
+      `container_exec` invocations; compare catch rate on a known-flawed
+      sample. Source: Granite @granite0x,
+      https://x.com/granite0x/status/2087960767287230592 (2026-08-14).
+
+**2. Re-check default fan-out width against the DeepMind/MIT coordination-cost study.** ← the one to take first
+- [ ] Get the actual paper (260 multi-agent configs, 6 benchmarks: past a
+      ~45% single-agent baseline, adding agents is net-negative; error
+      amplification up to 17.2x; every multi-agent variant underperformed
+      solo on SWE-bench). Extract the degradation curve's shape.
+- [ ] Audit recent multi-agent runs against solo baselines IN OUR OWN LOGS —
+      cheap, uses data we already have — and if the pattern reproduces, add
+      a guard against reflexive fan-out where a solo agent already scores
+      high. NOTE the provenance loop: Jeremy dispatched this exact link
+      2026-08-14 (`751e2dea`, ended incomplete — see the Re-run identity
+      live-miss entry); this item is that unfinished question, properly
+      resourced. Source: Yarchi @undefinedki,
+      https://x.com/undefinedki/status/2087634870260449474 (2026-08-14).
+
+**3. Automated multi-agent topology search — read as the complement to #2.**
+- [ ] Google/Cambridge line: search sub-agent prompts + communication graphs
+      (mutation/pruning, compute-optimal topology per task) instead of
+      hand-designing. Our workflow patterns are hand-designed topologies; if
+      searched graphs consistently win, the fixed pattern library is leaving
+      performance on the table. Deliberately sequenced AFTER #2 lands — a
+      complement, not independent work. Source: marfin @marfinxx,
+      https://x.com/marfinxx/status/2087671840596459629 (2026-08-13).
+
+**4. Evaluate vercel-labs/deepsec as an agent-driven vulnerability harness** (carried Jeremy's `flag: review` from save time).
+- [ ] Pull the repo's actual approach (verified live: "a security harness
+      for finding vulnerabilities in your codebase powered by coding
+      agents"). maro's current surfaces are narrower: `security.py` is
+      prompt-injection detection on fetched content, `bughunter.py` is
+      fixed-rule AST static analysis, `/security-review` is prompted LLM
+      review — none is an agentic vulnerability hunter.
+- [ ] Run deepsec against a known branch (or deliberately-vulnerable sample)
+      and compare findings against `bughunter.py` + `/security-review` on
+      the same input: replacement, complement, or redundant. Source: David
+      Ondrej @davidondrej1,
+      https://x.com/davidondrej1/status/2087862257279459422 (2026-08-14,
+      notes=`flag: review`).
+
 ### File-derived mutation coverage — sweep the rest of the tree (Jeremy, 2026-08-16)
 
 - [ ] **Run a file-derived mutation sweep over everything that hasn't
