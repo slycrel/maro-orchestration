@@ -462,6 +462,22 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
         if _tails.get("stranded"):
             result["stranded_tails"] = len(_tails["stranded"])
             result["stranded_tail_jobs_drained"] = _tails.get("drained", 0)
+            # Two lanes the sweep does NOT fix, surfaced rather than counted
+            # as handled: a maintenance job whose drain already started (a
+            # repeat would re-tick durable cadence counters), and a job that
+            # RAISED — done, so not pending, so invisible without this.
+            if _tails.get("needs_operator"):
+                result["stranded_tails_needing_operator"] = \
+                    _tails["needs_operator"]
+                log.warning("stranded-tail sweep: %d run(s) need an operator "
+                            "(a drain already started): %s",
+                            len(_tails["needs_operator"]),
+                            ", ".join(_tails["needs_operator"]))
+            if _tails.get("failed_jobs"):
+                result["tail_jobs_failed"] = _tails["failed_jobs"]
+                log.warning("tail jobs FAILED on %d run(s): %s",
+                            len(_tails["failed_jobs"]),
+                            ", ".join(_tails["failed_jobs"]))
             log.info("stranded-tail sweep: %d run(s), %d job(s) drained",
                      len(_tails["stranded"]), _tails.get("drained", 0))
             if verbose:

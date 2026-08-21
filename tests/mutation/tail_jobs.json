@@ -194,5 +194,160 @@
   "anchor": "        if not st[\"pending\"] or _live_claim(st[\"claim\"]):",
   "replacement": "        if not st[\"pending\"]:",
   "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "sequence is allocated outside the store lock (the r1 race)",
+  "file": "src/tail_jobs.py",
+  "anchor": "    recorded, _ = _transact(path, lambda rows: ({\n        \"event\": \"job\",\n        \"seq\": _next_seq(rows),\n        \"kind\": KIND_LEARNING,",
+  "replacement": "    recorded = _append(path, ({\n        \"event\": \"job\",\n        \"seq\": _next_seq(_read_rows(path) or []),\n        \"kind\": KIND_LEARNING,",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the claim is decided outside the store lock (the r1 race)",
+  "file": "src/tail_jobs.py",
+  "anchor": "    claimed, value = _transact(path, _claim)",
+  "replacement": "    _rows_unlocked = _read_rows(path) or []\n    _row_unlocked, value = _claim(_rows_unlocked)\n    claimed = bool(_row_unlocked) and _append(path, _row_unlocked)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the transaction appends without re-reading under the lock",
+  "file": "src/tail_jobs.py",
+  "anchor": "            rows = _read_rows(path)\n            if rows is None:\n                return False, None",
+  "replacement": "            rows = []\n            if rows is None:\n                return False, None",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the inline lane rebuilds the adapter instead of using the live one",
+  "file": "src/tail_jobs.py",
+  "anchor": "    job_adapter = (adapter if adapter is not None\n                   else _LIVE_ADAPTERS.get(str(handle_id))\n                   or _build_adapter(spec))",
+  "replacement": "    job_adapter = adapter if adapter is not None else _build_adapter(spec)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the live adapter is never released, so the cache leaks",
+  "file": "src/tail_jobs.py",
+  "anchor": "    _forget_adapter(handle_id)",
+  "replacement": "    pass",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a claim that could not be published still drains",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if not claimed:",
+  "replacement": "    if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an unrecordable completion passes in silence",
+  "file": "src/tail_jobs.py",
+  "anchor": "        log.error(\"tail_jobs: %s job (seq %s) for %s RAN but its completion \"",
+  "replacement": "        log.debug(\"tail_jobs: %s job (seq %s) for %s RAN but its completion \"",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the job runs with no run pinned, so record_llm_call no-ops",
+  "file": "src/tail_jobs.py",
+  "anchor": "        _pin = _scoped_run(_rd_for_pin(str(handle_id)))",
+  "replacement": "        from contextlib import nullcontext as _nc\n        _pin = _nc()",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the run pin is left set, contaminating the sweep's own process",
+  "file": "src/tail_jobs.py",
+  "anchor": "        from runs import scoped_run_dir as _scoped_run, run_dir as _rd_for_pin",
+  "replacement": "        from contextlib import nullcontext\n        from runs import run_dir as _rd_for_pin, set_current_run_dir as _scr\n        def _scoped_run(p):\n            _scr(p)\n            return nullcontext()",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "maintenance is re-run after a drain already started",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if kind == KIND_LEARNING:\n        return True\n    return not started",
+  "replacement": "    return True",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an unreleased claim is not read as a started drain",
+  "file": "src/tail_jobs.py",
+  "anchor": "            return not r.get(\"released_at\")",
+  "replacement": "            return False",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the sweep runs everything it found, not only what is safe",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if dry_run or not item[\"drainable\"]:",
+  "replacement": "        if dry_run:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the sweep drains the whole job set, ignoring the safe subset",
+  "file": "src/tail_jobs.py",
+  "anchor": "            drained += run_jobs(item[\"handle_id\"],\n                                kinds=tuple(item[\"drainable\"]))",
+  "replacement": "            drained += run_jobs(item[\"handle_id\"])",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the candidate list is truncated before stranded runs are filtered",
+  "file": "src/tail_jobs.py",
+  "anchor": "    for p in candidates:\n        if len(out) >= max(1, limit):",
+  "replacement": "    for p in candidates[::-1][:max(1, limit) * 4]:\n        if len(out) >= max(1, limit):",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an unreadable job store is classified as not stranded",
+  "file": "src/tail_jobs.py",
+  "anchor": "        rows = _read_rows(p)\n        if rows is None:      # unreadable != \"nothing here\"",
+  "replacement": "        rows = _read_rows(p) or []\n        if False:      # unreadable != \"nothing here\"",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a quoted \"false\" enables the spawn (plain truthiness)",
+  "file": "src/tail_jobs.py",
+  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", False), False)",
+  "replacement": "        return bool(_cfg_get(\"tail.spawn\", False))",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an uninterpretable flag value is read as ON",
+  "file": "src/tail_jobs.py",
+  "anchor": "    log.warning(\"tail_jobs: uninterpretable flag value %r \u2014 using %s\",\n                value, default)\n    return default",
+  "replacement": "    return True",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an unreadable store is recorded into as though it were empty",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if path is None:\n        return None\n    if not path.exists():\n        return []",
+  "replacement": "    if path is None:\n        return None\n    if not path.exists():\n        return []\n    if True:\n        pass",
+  "tests": "tests/test_tail_jobs.py",
+  "equivalent": "a no-op inserted after the two real branches; kept only to prove the anchor still binds the missing-vs-unreadable split"
+ },
+ {
+  "name": "a failed job is not collected, so nothing surfaces it",
+  "file": "src/tail_jobs.py",
+  "anchor": "            if r.get(\"ok\") is False:\n                failed.append(r)",
+  "replacement": "            if False:\n                failed.append(r)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the sweep reports no failed jobs",
+  "file": "src/tail_jobs.py",
+  "anchor": "        \"failed_jobs\": [i[\"handle_id\"] for i in found if i[\"failed\"]],",
+  "replacement": "        \"failed_jobs\": [],",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a run with only failed jobs is skipped by the sweep entirely",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if not st[\"pending\"] and not st[\"failed\"]:",
+  "replacement": "        if not st[\"pending\"]:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a failed surface refresh is swallowed at debug level again",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if path is not None:\n            _append(path, {\"event\": \"refresh\", \"ok\": False,",
+  "replacement": "        if False:\n            _append(path, {\"event\": \"refresh\", \"ok\": False,",
+  "tests": "tests/test_tail_jobs.py"
  }
 ]

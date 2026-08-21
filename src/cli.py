@@ -1567,22 +1567,48 @@ def _cmd_finalize_tail(args: argparse.Namespace) -> int:
             print(json.dumps(result, indent=2))
         else:
             for item in result["stranded"]:
-                print(f"{item['handle_id']}  pending={','.join(item['pending'])} "
-                      f"age={item['age_s']}s")
+                line = (f"{item['handle_id']}  pending={','.join(item['pending'])} "
+                        f"age={item['age_s']}s")
+                if item["needs_operator"]:
+                    line += ("  NEEDS OPERATOR: " +
+                             ",".join(item["needs_operator"]) +
+                             " (a drain already started — repeating it would "
+                             "re-tick durable cadence counters)")
+                if item["failed"]:
+                    line += f"  FAILED: {'; '.join(item['failed'])[:200]}"
+                print(line)
             verb = "would drain" if args.list else "drained"
             print(f"[maro] {len(result['stranded'])} stranded tail(s); "
                   f"{verb} {result['drained']} job(s)")
+            if result["needs_operator"]:
+                print(f"[maro] {len(result['needs_operator'])} left for you: "
+                      f"{', '.join(result['needs_operator'])}")
         return 0
 
     if not args.handle_id:
         return fail("E_USAGE", "finalize-tail needs --handle-id or --sweep")
 
     if args.list:
-        pending = _tj.pending_jobs(args.handle_id)
-        payload = {"handle_id": args.handle_id,
-                   "pending": [str(j.get("kind")) for j in pending]}
-        print(json.dumps(payload, indent=2) if args.json
-              else f"{args.handle_id}: pending={','.join(payload['pending']) or '(none)'}")
+        st = _tj.state(args.handle_id)
+        payload = {
+            "handle_id": args.handle_id,
+            "pending": [str(j.get("kind")) for j in st["pending"]],
+            # A job that RAISED is done, so it is not pending — and without
+            # its own lane it would be visible nowhere at all.
+            "failed": [{"seq": f.get("seq"), "error": f.get("error")}
+                       for f in st["failed"]],
+            "unreadable": st["unreadable"],
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"{args.handle_id}: "
+                  f"pending={','.join(payload['pending']) or '(none)'}"
+                  + (f" failed={len(payload['failed'])}"
+                     if payload["failed"] else "")
+                  + (" STORE UNREADABLE" if payload["unreadable"] else ""))
+            for f in payload["failed"]:
+                print(f"  seq {f['seq']}: {f['error']}")
         return 0
 
     ran = _tj.run_jobs(args.handle_id)

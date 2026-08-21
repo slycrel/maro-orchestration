@@ -141,7 +141,7 @@ def test_run_jobs_executes_and_marks_done(monkeypatch):
         seen["spec"] = spec
 
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", _fake_learning)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000001", _FakeLoop(loop_id="L9"))
 
     assert tail_jobs.run_jobs("tj000001") == 1
@@ -193,7 +193,7 @@ def test_refresh_false_skips_the_surface_pass(monkeypatch):
     called = []
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
     monkeypatch.setattr(tail_jobs, "_refresh_surfaces",
-                        lambda hid: called.append(hid))
+                        lambda hid, path=None: called.append(hid))
     tail_jobs.record_learning("tj000001", _FakeLoop())
     tail_jobs.run_jobs("tj000001", refresh=False)
     assert called == []
@@ -221,7 +221,7 @@ def test_live_claim_declines_a_second_drainer(monkeypatch):
 def test_a_dead_claim_does_not_block(monkeypatch):
     _make_run()
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000001", _FakeLoop())
     path = tail_jobs.jobs_path("tj000001")
     monkeypatch.setattr(tail_jobs, "_is_pid_alive", lambda pid: False)
@@ -258,7 +258,7 @@ def test_dispatch_is_inline_when_spawn_is_off(monkeypatch):
     _make_run()
     monkeypatch.setattr(tail_jobs, "spawn_enabled", lambda: False)
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000001", _FakeLoop())
     out = tail_jobs.drain_or_spawn("tj000001")
     assert out == {"mode": "inline", "pid": None, "ran": 1}
@@ -271,7 +271,7 @@ def test_a_spawn_that_cannot_be_made_falls_back_inline(monkeypatch):
     monkeypatch.setattr(tail_jobs, "spawn_enabled", lambda: True)
     monkeypatch.setattr(tail_jobs, "spawn", lambda hid: None)
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000001", _FakeLoop())
     out = tail_jobs.drain_or_spawn("tj000001")
     assert out["mode"] == "inline" and out["ran"] == 1
@@ -377,7 +377,7 @@ def test_stranded_tail_is_discoverable_and_drainable(monkeypatch):
     is idempotent, so draining it later is safe."""
     _make_run("tj000004")
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000004", _FakeLoop())
     path = tail_jobs.jobs_path("tj000004")
     # A claim from a process that no longer exists — the crash signature.
@@ -480,7 +480,7 @@ def test_a_released_claim_does_not_block_a_later_job(monkeypatch):
     _make_run("tj000008")
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
     monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance", lambda s, a: None)
-    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000008", _FakeLoop())
     assert tail_jobs.run_jobs("tj000008") == 1
     # Same process is still alive; only the release makes the claim inert.
@@ -517,7 +517,7 @@ def test_refresh_is_skipped_when_nothing_ran(monkeypatch):
 
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", _boom)
     monkeypatch.setattr(tail_jobs, "_refresh_surfaces",
-                        lambda hid: called.append(hid))
+                        lambda hid, path=None: called.append(hid))
     tail_jobs.record_learning("tj000009", _FakeLoop())
     assert tail_jobs.run_jobs("tj000009") == 0
     assert called == []
@@ -580,3 +580,329 @@ def test_a_tail_with_a_live_claim_is_not_reported_stranded():
 
     assert tail_jobs.find_stranded(min_age_s=900) == []
     assert tail_jobs.sweep_stranded(min_age_s=900)["stranded"] == []
+
+
+# ---------------------------------------------------------------------------
+# Adversarial round 1 — the fix layer
+# ---------------------------------------------------------------------------
+
+def _lock_held_for(path):
+    """Is this thread inside the store's lock right now?"""
+    import file_lock
+    key = str((path.parent / (path.name + ".lock")).resolve())
+    return key in file_lock._get_held()
+
+
+def test_sequence_is_allocated_inside_the_store_lock():
+    """Append-only is not atomic.
+
+    Two registrars that read the same rows both allocated `seq: 1` — both
+    lines physically on disk, one job invisible, because the executor is keyed
+    by seq. Byte-level safety says nothing about a decision made from a read
+    that a later write depends on, so the read, the decision and the append
+    are one transaction. This asserts the property that makes the race
+    impossible rather than trying to lose a race on purpose.
+    """
+    _make_run("tj000012")
+    path = tail_jobs.jobs_path("tj000012")
+    seen = []
+    real_next = tail_jobs._next_seq
+
+    def _watched(rows):
+        seen.append(_lock_held_for(path))
+        return real_next(rows)
+
+    tail_jobs._next_seq = _watched
+    try:
+        tail_jobs.record_learning("tj000012", _FakeLoop())
+        tail_jobs.record_maintenance("tj000012", loop_id="L1")
+    finally:
+        tail_jobs._next_seq = real_next
+    assert seen == [True, True], "sequence allocated outside the store lock"
+
+
+def test_claim_is_decided_inside_the_store_lock():
+    """The other half of the same defect: check-then-append let two drainers
+    both read "unclaimed" and both run the same jobs."""
+    _make_run("tj000013")
+    path = tail_jobs.jobs_path("tj000013")
+    tail_jobs.record_learning("tj000013", _FakeLoop())
+    seen = []
+    real_live = tail_jobs._live_claim
+
+    def _watched(claim):
+        seen.append(_lock_held_for(path))
+        return real_live(claim)
+
+    tail_jobs._live_claim = _watched
+    try:
+        tail_jobs.run_jobs("tj000013")
+    finally:
+        tail_jobs._live_claim = real_live
+    assert seen and all(seen), "claim decided outside the store lock"
+
+
+def test_two_jobs_recorded_from_two_threads_both_survive():
+    """The end the transaction exists for, exercised through real contention."""
+    import threading
+    _make_run("tj000014")
+    barrier = threading.Barrier(2)
+
+    def _rec(fn):
+        barrier.wait(timeout=10)
+        fn()
+
+    threads = [
+        threading.Thread(target=_rec, args=(
+            lambda: tail_jobs.record_learning("tj000014", _FakeLoop()),)),
+        threading.Thread(target=_rec, args=(
+            lambda: tail_jobs.record_maintenance("tj000014", loop_id="L1"),)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    kinds = sorted(j["kind"] for j in tail_jobs.pending_jobs("tj000014"))
+    assert kinds == ["learning", "maintenance"], kinds
+
+
+def test_the_inline_lane_uses_the_runs_live_adapter(monkeypatch):
+    """Phase 1's closures captured the adapter OBJECT, and `_handle_impl`
+    builds its own when the caller passes none — so it is not recoverable from
+    `handle()`'s scope. Rebuilding from the recorded identity drops a
+    failover adapter's live state and any injected adapter, in the lane that
+    ships ON by default. The object stays reachable where it still exists.
+    """
+    _make_run("tj000015")
+    live = _FakeAdapter()
+    got = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda spec, adapter: got.append(adapter))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    monkeypatch.setattr(tail_jobs, "_build_adapter",
+                        lambda spec: pytest.fail("rebuilt instead of reusing"))
+    tail_jobs.record_learning("tj000015", _FakeLoop(), adapter=live)
+    assert tail_jobs.run_jobs("tj000015") == 1
+    assert got == [live], "the inline lane did not use the live adapter"
+
+
+def test_the_live_adapter_is_released_after_the_drain(monkeypatch):
+    """It is a fidelity cache, not a registry — holding the adapter of every
+    run this process ever finalized would be a leak."""
+    _make_run("tj000016")
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_learning("tj000016", _FakeLoop(), adapter=_FakeAdapter())
+    assert "tj000016" in tail_jobs._LIVE_ADAPTERS
+    tail_jobs.run_jobs("tj000016")
+    assert "tj000016" not in tail_jobs._LIVE_ADAPTERS
+
+
+def test_a_claim_that_cannot_be_published_declines_the_drain(monkeypatch):
+    """A claim we could not write is a claim we do not hold. Running anyway is
+    the unsafe direction for a store whose whole job is telling a second
+    drainer to stand down."""
+    _make_run("tj000017")
+    tail_jobs.record_learning("tj000017", _FakeLoop())
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: ran.append(1))
+    monkeypatch.setattr(tail_jobs, "_append", lambda path, row: False)
+    assert tail_jobs.run_jobs("tj000017") == 0
+    assert ran == [], "drained without holding a claim"
+
+
+def test_a_completion_that_cannot_be_recorded_is_loud(monkeypatch, caplog):
+    """The side effect happened and the store does not know — the next sweep
+    will see the job pending. That is the one case where per-kind idempotence
+    is doing real work, and the operator should know it was leaned on."""
+    import logging
+    _make_run("tj000018")
+    tail_jobs.record_learning("tj000018", _FakeLoop())
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    real_append = tail_jobs._append
+
+    def _fail_done(path, row):
+        if row.get("event") == "done":
+            return False
+        return real_append(path, row)
+
+    monkeypatch.setattr(tail_jobs, "_append", _fail_done)
+    with caplog.at_level(logging.ERROR, logger="maro.tail_jobs"):
+        tail_jobs.run_jobs("tj000018")
+    assert any("could not be recorded" in r.message or
+               "could not be recorded" in r.getMessage()
+               for r in caplog.records), caplog.text
+
+
+def test_the_job_runs_with_its_run_pinned(monkeypatch):
+    """`runs.current_run_dir()` is a ContextVar — process-local — so a spawned
+    child inherits nothing. `runs.record_llm_call` NO-OPS with no run-dir
+    active and record-mode is ON by default, so the spawned lane would have
+    stopped capturing the tail's LLM calls into `build/calls/` and the run
+    card's `n_calls` would under-report calls the run paid for.
+    """
+    import runs
+    rd = _make_run("tj000019")
+    seen = {}
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: seen.setdefault("pinned",
+                                                     runs.current_run_dir()))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_learning("tj000019", _FakeLoop())
+    before = runs.current_run_dir()
+    tail_jobs.run_jobs("tj000019")
+    assert seen["pinned"] == rd
+    # ...and restored, because the heartbeat sweep drains ANOTHER run's tail
+    # inside its own process.
+    assert runs.current_run_dir() == before
+
+
+def test_maintenance_whose_drain_already_started_is_surfaced_not_repeated(monkeypatch):
+    """`run_post_run_maintenance` advances DURABLE cadence counters, so
+    threshold-based is not idempotent: a child that died after a tick and
+    before its done row would have that tick counted twice."""
+    _make_run("tj000020")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append(1))
+    tail_jobs.record_maintenance("tj000020", loop_id="L1")
+    path = tail_jobs.jobs_path("tj000020")
+    # The crash signature: a claim that was never released, by a dead pid.
+    monkeypatch.setattr(tail_jobs, "_is_pid_alive", lambda pid: False)
+    tail_jobs._append(path, {"event": "claim", "pid": 999999,
+                             "host": tail_jobs._hostname(),
+                             "claimed_at": "then"})
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    found = tail_jobs.find_stranded(min_age_s=900)
+    assert found[0]["needs_operator"] == ["maintenance"]
+    assert found[0]["drainable"] == []
+    result = tail_jobs.sweep_stranded(min_age_s=900)
+    assert ran == [], "a partially-run maintenance job was repeated"
+    assert result["needs_operator"] == ["tj000020"]
+
+
+def test_maintenance_that_never_started_is_drained(monkeypatch):
+    """The other direction: nothing has happened yet, so nothing repeats."""
+    _make_run("tj000021")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append(1))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_maintenance("tj000021", loop_id="L1")
+    path = tail_jobs.jobs_path("tj000021")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    assert tail_jobs.find_stranded(min_age_s=900)[0]["drainable"] == ["maintenance"]
+    assert tail_jobs.sweep_stranded(min_age_s=900)["drained"] == 1
+    assert ran == [1]
+
+
+def test_an_old_stranded_tail_is_found_behind_many_newer_ones(monkeypatch):
+    """The scan walks until it has `limit` stranded runs, rather than
+    truncating the candidate list first.
+
+    Heartbeat calls this with limit=3, and the first cut looked at only
+    `limit * 4` newest-first stores — twelve healthy recent runs were enough
+    to hide an old abandoned tail from every tick, forever.
+    """
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    old_run = _make_run("tjold001")
+    tail_jobs.record_learning("tjold001", _FakeLoop())
+    op = tail_jobs.jobs_path("tjold001")
+    ancient = time.time() - 7200
+    os.utime(op, (ancient, ancient))
+    # 20 newer decoys, all completed (nothing pending) — the shape that used
+    # to fill the whole window.
+    for i in range(20):
+        hid = f"tjnew{i:03d}"
+        _make_run(hid)
+        p = tail_jobs.jobs_path(hid)
+        tail_jobs._append(p, {"event": "job", "seq": 1, "kind": "learning",
+                              "spec": {}})
+        tail_jobs._append(p, {"event": "done", "seq": 1, "ok": True})
+        recent = time.time() - 3000
+        os.utime(p, (recent, recent))
+
+    found = tail_jobs.find_stranded(limit=3, min_age_s=900)
+    assert [f["handle_id"] for f in found] == ["tjold001"], found
+
+
+def test_a_quoted_false_does_not_enable_the_spawn(monkeypatch):
+    """`bool("false")` is True, and YAML hands back a string whenever the
+    value was quoted — ON in the one direction the OFF default exists to
+    prevent."""
+    import config
+    for value in ("false", "False", "no", "off", "0", ""):
+        monkeypatch.setattr(config, "get",
+                            lambda key, default=None, _v=value: _v)
+        assert tail_jobs.spawn_enabled() is False, value
+    for value in ("true", "yes", "on", "1", True):
+        monkeypatch.setattr(config, "get",
+                            lambda key, default=None, _v=value: _v)
+        assert tail_jobs.spawn_enabled() is True, value
+    # A value nobody can read is a value nobody decided: take the default.
+    monkeypatch.setattr(config, "get", lambda key, default=None: "banana")
+    assert tail_jobs.spawn_enabled() is False
+
+
+def test_an_unreadable_store_is_not_an_empty_one(monkeypatch):
+    """Treating unreadable as empty would allocate seq 1 over whatever the
+    store already holds, and would declare a run un-stranded from a read that
+    failed."""
+    _make_run("tj000022")
+    monkeypatch.setattr(tail_jobs, "_read_rows", lambda path: None)
+    # The caller keeps the work rather than believing it was handed over.
+    assert tail_jobs.record_learning("tj000022", _FakeLoop()) is False
+    assert tail_jobs.record_maintenance("tj000022") is False
+    assert tail_jobs.state("tj000022")["unreadable"] is True
+    assert tail_jobs.run_jobs("tj000022") == 0
+
+
+def test_a_failed_job_is_visible_in_state_and_the_sweep(monkeypatch):
+    """A job that RAISED is done, so it is not pending — and pending is all
+    find_stranded reports. Without its own lane the failure is visible
+    nowhere, while the comment claimed the sweep reported it."""
+    _make_run("tj000023")
+
+    def _boom(spec, adapter):
+        raise RuntimeError("the tail broke here")
+
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", _boom)
+    tail_jobs.record_learning("tj000023", _FakeLoop())
+    tail_jobs.run_jobs("tj000023")
+
+    st = tail_jobs.state("tj000023")
+    assert st["pending"] == []
+    assert len(st["failed"]) == 1
+    assert "the tail broke here" in st["failed"][0]["error"]
+
+    path = tail_jobs.jobs_path("tj000023")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    result = tail_jobs.sweep_stranded(min_age_s=900)
+    assert result["failed_jobs"] == ["tj000023"]
+    assert result["drained"] == 0
+
+
+def test_a_failed_surface_refresh_is_recorded(monkeypatch):
+    """Every job is already marked done by the time refresh runs, so a silent
+    failure leaves a store confidently saying the tail finished beside a card
+    and a report that are stale — a record that lies."""
+    _make_run("tj000024")
+
+    def _boom(handle_id):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    import runs
+    monkeypatch.setattr(runs, "slice_log_for_run", _boom)
+    tail_jobs.record_learning("tj000024", _FakeLoop())
+    tail_jobs.run_jobs("tj000024")
+    rows = tail_jobs.state("tj000024")["rows"]
+    refresh_rows = [r for r in rows if r.get("event") == "refresh"]
+    assert refresh_rows and refresh_rows[0]["ok"] is False
+    assert "render failed" in refresh_rows[0]["error"]
