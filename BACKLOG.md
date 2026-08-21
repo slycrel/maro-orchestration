@@ -1613,6 +1613,48 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       to the whole transaction + DEBUG catch sites promoted to WARNING;
       commit() raising after durability now says outcome-UNKNOWN;
       _StatsRead survives the copy protocols.*
+    - *Its adversarial r17 (2026-08-21, five codex seats on the r16 fix
+      layer): **REJECT — the collision twin**: 12 deduped clusters,
+      three multi-seat HIGHs, all probed real (THIRTEENTH
+      zero-hallucination round). Possession was read as ownership
+      (_save_skills let a stale snapshot's copy replace a concurrently
+      REVISED live row — updated_ids is the write twin of dropped_ids:
+      only a named id takes the caller's version, unnamed rows carry
+      verbatim from the live store, stale copies cannot resurrect
+      deleted rows, contradictory intent refused; all 11 call sites
+      name their writes — A/B retirement also mutates its promoted
+      parents, which only the census caught); locked_append's tail
+      inspection failed open (unreadable tail now refuses the append);
+      evolver skill_create rollback deleted every name-match with no
+      retention (created id minted at capture + recorded in the audit
+      row, rollback by exact id, archive-before-delete; bookkeeping
+      failure warned not swallowed); the attribution marker was trusted
+      by presence, checked outside any lock, and its write failure lied
+      post-commit (check→batch→marker under the stats lock, content
+      validated — invalid = UNKNOWN never auto-re-applied, honest split
+      messages); manifest ids str()-coerced into stats identities (both
+      readers admit strings only, announced); batch recorder
+      double-counted duplicates / would iterate a bare string (doors
+      added); SQLite append/rewrite joined transform's commit-boundary
+      contract; scanner's flattened alias map minted false RISK from
+      unrelated scopes (per-class lexical-chain resolution, negative
+      control pinned). Partial accept: backend rewrite()'s "announced
+      by design" docstring claim was false and is corrected — the
+      omission-deletion interface itself is BACKLOG'd below (unkeyed
+      collections, zero production callers, transform() is the
+      sanctioned API). Rejected: writer-side manifest validation
+      (receiver-decides, r11/r15 precedent). Mutation spec 258 → 279
+      (11 re-anchored, 21 new; the r16 structural pin was
+      indentation-bound and is now regex-based).*
+    - *Carried lesson from r17: **a mutable interface must take its
+      writes by name, not by possession** — "this id is in my list" is
+      ambiguous between "I changed it" and "I happened to load it",
+      and the writer resolved the ambiguity destructively; every
+      mutation class carries explicit per-id intent, everything
+      unnamed defaults to carry. Corollary: **presence is not proof —
+      an idempotence token must be validated against what completion
+      would have written, and checked inside the transaction boundary
+      it guards.***
     - *Carried lesson from r15: **enumerate the twins by the PROPERTY,
       not by the file.** r14's census converted the twins visible from
       the defect's own file, and each fix still stopped one twin short —
@@ -1633,6 +1675,14 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       from "I never saw it" — an explicit dropped_ids makes the
       decision the caller's and turns every unnamed absence into a
       carry).*
+    - *Open item (r17, Architect — real, interface-level, deferred):
+      the backend ABC's `rewrite(collection, records)` deletes by
+      omission over unkeyed collections and cannot announce the loss;
+      transform() is the sanctioned mutation API and rewrite() has no
+      production caller outside transform's in-lock delegation. Upgrade
+      edge: retire rewrite() from the public surface or give the ABC a
+      deletions-by-name contract; docstrings corrected r17 to stop
+      claiming the loss is announced.*
     - *Open design item (r12, Failure Operator — real, pre-existing,
       out of the byte-safety arc's scope): `poll()` durably writes
       `applied=True` BEFORE the loop side applies anything

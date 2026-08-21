@@ -1881,3 +1881,108 @@ decided to remove this" and "I never saw this" — and the writer cannot
 tell which, so for years it resolved the ambiguity in the destructive
 direction. An explicit `dropped_ids` makes the decision the caller's,
 visibly, and turns every unnamed absence into a carry.
+
+## Round 17 (2026-08-21): a write must be named too
+
+Five codex seats on the r16 fix layer (087365bd + 15070f48). Twelve
+deduped finding clusters, three multi-seat HIGHs, and the THIRTEENTH
+consecutive zero-hallucination round — every cluster reproduced by
+probe before any fix. Convergence was again judged NOT reached (three
+HIGH clusters in the previous round's fix layer).
+
+The centerpiece is the write half of r16's deletions-by-name lesson.
+r16 taught `_save_skills` to carry any live row absent from the
+caller's list unless the id was named in `dropped_ids` — and three
+seats independently showed the collision twin: a row PRESENT in the
+caller's stale snapshot still replaced the live row wholesale, so a
+concurrent `save_skill(B)` was silently reverted by any unrelated
+caller that loaded before it and saved after it (utility updates,
+demotion, island assignment, variant outcomes — every bulk caller).
+The fix is `updated_ids`, the write twin of `dropped_ids`: only a
+named id takes the caller's version; every other live row — including
+ids the caller's list holds a stale copy of — carries verbatim in
+place, and an unnamed stale copy cannot resurrect a row another
+process deleted. All eleven call sites now name their writes; the A/B
+retirement site turned out to mutate its promoted parents too, which
+only the census caught. Contradictory intent (an id both updated and
+dropped, an updated id absent from the list, a dropped id still in the
+list) is refused before the lock touches anything.
+
+The rest of the round, by family: `locked_append`'s tail inspection
+failed OPEN (`except OSError: needs_frame = False`) — an unreadable
+tail now refuses the append rather than risk fusing the retention
+archive's only copy. The evolver's `skill_create` rollback matched by
+mutable name-or-id and deleted every match with no retention copy —
+the created id is now minted at before_state capture and recorded in
+the audit row, rollback removes exactly that id (legacy rows keep the
+name match), and every removal archives first; its suggestions-store
+bookkeeping failure was a bare `except: pass` inside a result claiming
+the revert completed — now warned with the store path and carried in
+the returned detail. The attribution seam trusted `marker.exists()`
+(a zero-byte marker silently suppressed a run's verdicts), checked it
+outside any lock (two live stampers could both pass and double-apply),
+and reported a marker-write failure with the pre-commit "NOT recorded"
+message after the batch had committed — check→batch→marker now runs
+under the stats lock, marker content is validated (invalid = UNKNOWN,
+warned, never auto-re-applied — the batch may already hold), and the
+two failure legs say what the store holds. Manifest ids were
+str()-coerced ("True"/"7" minted as stats identities) — both readers
+now admit only non-empty strings and announce exclusions. The batch
+recorder double-counted duplicate ids and would have iterated a bare
+string character by character — both doors added. SQLite append() and
+rewrite() joined transform's three-way commit-boundary contract
+(UNKNOWN after a raised commit). And the r16 scanner's flattened alias
+map let an unrelated function's `Alias = Dangerous` mint false RISK on
+a module-level class — aliases now resolve per class along its lexical
+chain for Name bases plus attribute-reachable bindings for dotted
+bases, with the negative control pinned and every r15/r16 must-detect
+fixture still passing.
+
+One partial accept: the Architect's demand that backend `rewrite()`
+stop deleting by omission. The interface's collections are unkeyed, so
+carry-by-omission cannot apply; `transform()` already exists as the
+sanctioned in-lock mutation API and `rewrite()` has zero production
+callers outside transform's own in-lock delegation. What WAS false was
+the docstring's claim that the loss is "announced by design" — no
+announcement is possible through a bare List[Dict]; corrected, with
+the interface upgrade (deletions by name for the backend ABC)
+BACKLOG'd. One rejection: writer-side manifest validation — admission
+belongs to the reader (receiver-decides, r11/r15 precedent).
+
+Mutation spec: 11 anchors re-anchored after the restructures (the
+sqlite commit pattern now exists in three write paths, so the
+transform anchors gained disambiguating context; the r16 ledger
+mutant's structural pin was indentation-bound and its re-nested per-id
+loop would have walked past it — the pin is now regex-based and
+indentation-agnostic). 21 new r17 mutants, 258 → 279.
+
+The sweep came back 278/279; the survivor was the round's own
+guard-in-front-of-a-guard: `if False:` on the contradictory-intent
+overlap check passed its raise-only test, because every overlap input
+also trips a sibling door — an overlapping id is either in the
+caller's list (still-present door) or not (absent-from-list door), so
+raise-vs-not cannot see the overlap door at all. Its contribution is
+the MESSAGE: the operator reads "named both updated and dropped"
+instead of a misleading sibling diagnosis. The test pins each door's
+message with `pytest.raises(match=...)` now; 279/279 after. Fourth
+appearance of the pattern in this arc, first time on a fixture written
+in the same round as the guard it failed to distinguish.
+
+### The nineteenth lesson
+
+**A mutable interface must take its writes by name, not by
+possession.** r16 named the deletions; r17 found the same ambiguity in
+the write direction: "this id is in my list" is ambiguous between "I
+changed this row" and "I happened to load it", and the writer resolved
+the ambiguity in the destructive direction — the stale copy won. The
+general form covers both halves: every mutation class a bulk interface
+can perform (write, drop) carries explicit per-id intent, and
+everything unnamed defaults to the non-destructive action (carry the
+live row). The corollary that closed the marker findings: **presence
+is not proof — an idempotence token must be validated against what
+completion would have written, and checked inside the transaction
+boundary it guards.** A zero-byte marker passed `exists()`; two live
+stampers both passed it outside the lock; and a marker that failed to
+write after the batch committed was reported with the pre-commit
+message. The token is only meaningful as part of the transaction it
+acknowledges.
