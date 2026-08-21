@@ -2134,3 +2134,72 @@ Sweep: 294/295 on the batch run, 295/295 accounted for — the lone
 when re-run in isolation against the identical commit; recorded as a
 batch-run anomaly (suspect: inter-mutant state in the shared sweep
 copy or a caplog capture flake), the first of its kind in this arc.
+
+## Round 20 (2026-08-21): deletions earn the same truths
+
+Five sonnet-medium seats (codex still capped) on the r19 fix layer
+(195df396 + 821c2fce). Eleven findings deduped to four clusters, all
+verified against the code, every seat carrying literal probe output —
+and every cluster a hole in the PREVIOUS round's own fixes, which is
+what a fixpoint loop is for:
+
+- **Named DROPS never got r19's three-way treatment** (five seats,
+  HIGH, the arc's widest agreement yet): r19 taught named WRITES to
+  tell present-but-unprovable from truly-absent, and left deletions
+  with r16's two-valued world. A drop naming a stranded row silently
+  no-op'd — the caller believes the row is gone, the row is live in
+  the store — and a drop that removed the provable row said nothing
+  about an unprovable duplicate carrying the same id straight through
+  the rewrite. `stranded_dropped` and `partially_dropped` now get the
+  same announcements writes earned: "NOT applied — present but
+  unprovable, carried verbatim; the row was NOT removed; repair, then
+  confirm the drop" and "removed the provable row(s), but unprovable
+  duplicate row(s) remain".
+- **The ghost hedge counted only byte-tainted rows** (two seats): an
+  unprovable row that parses as JSON but whose id field is missing or
+  unreadable was in nobody's ledger — the ghost message asserted "no
+  parseable live row holds these id(s)" over a row that might hold
+  exactly that id. New `unprovable_unnamed` counter; the hedge now
+  covers both unreadable-id populations.
+- **r19's fresh re-read left the TOCTOU open** (three seats, HIGH):
+  the re-read moved the stale window from seconds to milliseconds and
+  called it closed — no lock spanned read→write, so `save_skill`'s
+  blind upsert could still revert a circuit-breaker trip landing in
+  the tail, and resurrect a row removed there. The whole
+  read-modify-write now sits inside `locked_write(require=True)`;
+  `file_lock`'s thread-reentrancy lets `save_skill`'s inner
+  acquisition compose while cross-process writers are excluded for
+  the full span. The pin is STRUCTURAL (lock-line precedes read
+  precedes write, via `inspect.getsource`) because a behavioral race
+  test cannot see reentrant composition: in-thread injection rides
+  the reentrancy, cross-thread injection deadlocks by design.
+- **The revert destroyed later edits and called it clean** (two
+  seats, HIGH, probed): `revert_suggestion` restored the snapshot
+  `old_description` over a concurrent edit made AFTER the apply,
+  reporting `reverted: True` — and the apply path clobbered
+  concurrent description edits with no announcement. Revert now
+  refuses when the live description is no longer the suggestion's own
+  text ("blind restore refused"); apply announces the clobber and
+  names the audit row's snapshot basis.
+
+Judged, not fixed: a distinct "vanished" status for suggestion rows
+whose skill disappeared mid-apply (the log line already names the
+cause; a status-enum change ripples through every consumer for no new
+information), and zombie unprovable duplicates accumulating across
+rewrites (real, slow, BACKLOG'd — the repair verb is the fix, not
+more carrying).
+
+### The twenty-second lesson
+
+**A fix teaches one verb and the reviewers ask about its siblings.**
+Every cluster this round was the previous round's fix applied to the
+operation standing next to it: writes learned three truths, drops
+kept two; the re-read shrank the window, the lock was the actual
+answer; the apply got snapshot discipline, the revert kept trusting
+its own. When a round hardens a verb, the next round's first question
+is which verbs share its preconditions and didn't get the treatment —
+asking it yourself before the reviewers do is how a fixpoint
+converges instead of oscillating. The corollary is r20's own version
+of naming-is-not-creation: a DELETION is a write. It needs the same
+proof standard, the same three-way honesty, and the same refusal to
+report an effect it cannot demonstrate.

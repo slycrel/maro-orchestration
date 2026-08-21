@@ -1689,6 +1689,41 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       (three truths told apart, hedged where ids are unrecoverable);
       transform()'s fn-attribution judged accepted with a comment.
       Mutation spec 290 → 295 (2 re-anchored).*
+    - *Its adversarial r20 (2026-08-21, five sonnet-medium seats on
+      the r19 fix layer): 11 findings, four clusters, all probed real —
+      each one the previous round's fix missing from the operation next
+      to it. Named DROPS never got r19's three-way treatment (a drop on
+      a stranded row silently no-op'd; a drop leaving an unprovable
+      duplicate said nothing — stranded_dropped / partially_dropped now
+      announced like writes, five seats HIGH); the ghost hedge counted
+      only byte-tainted rows and asserted absence over id-less
+      unprovable rows (unprovable_unnamed now hedged); r19's fresh
+      re-read left the TOCTOU open — no lock spanned read→write, so
+      save_skill's blind upsert still reverted breaker trips landing in
+      the tail (whole RMW now inside locked_write(require=True),
+      reentrancy composes; structural source-order pin because a
+      behavioral race test cannot see reentrant composition);
+      revert_suggestion restored the snapshot value over LATER
+      concurrent edits reporting reverted:True, and the apply clobbered
+      unannounced (revert refuses — "blind restore refused"; apply
+      announces the clobber and names the audit row's snapshot basis).
+      Judged, not fixed: a distinct "vanished" suggestion status (log
+      names the cause; enum churn buys nothing). Mutation spec
+      295 → 302 (3 re-anchored).*
+    - *Open item (r20, deferred): unprovable duplicate rows are
+      carried verbatim forever — a store that keeps tainting
+      accumulates zombie twins that partial drops must keep
+      announcing. The fix is a repair verb (parse, prove, rewrite or
+      quarantine by operator decision), not more carrying; build it
+      when a real store shows accumulation.*
+    - *Carried lesson from r20: **a fix teaches one verb; ask which
+      verbs share its preconditions before the reviewers do.** Writes
+      learned three truths, drops kept two; the re-read shrank the
+      window, the lock was the answer; the apply got snapshot
+      discipline, the revert kept trusting its own. Corollary: a
+      DELETION is a write — same proof standard, same three-way
+      honesty, same refusal to report an effect it cannot
+      demonstrate.*
     - *Carried lesson from r19: **decide from the snapshot, write from
       the world — and announce only what you proved.** A snapshot is
       the right authority for a decision, the wrong authority for the
