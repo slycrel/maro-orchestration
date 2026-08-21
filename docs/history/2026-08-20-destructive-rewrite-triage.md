@@ -2382,3 +2382,60 @@ two holes: a dispatcher's ELSE is part of its contract (fallthrough
 plus a shared success tail is a forged receipt), and evidence has a
 TYPE — a guard comparing recorded text must first prove the record
 is text, or the comparison launders garbage into a verdict.
+
+## Round 24 (2026-08-21): CONVERGED
+
+Five sonnet-medium seats (codex still capped) on the r23 fix layer
+(cff32689 + a6cd5f62). **No HIGH or MEDIUM finding survived any
+seat's verification** — the arc's convergence standard met. What the
+round DID produce is the strongest verification pass of the arc:
+every seat independently reran the r23 tests against the pre-fix
+403f4a86 (both defect pins fail there, the qa fixture passes on both
+as declared), re-proved the deleted archive-content test decorative
+against f7d0fdf3, probed the typed guard and the fail-closed else
+with corrupted rows (non-dict before_state, None types, NaN rows,
+surrogate-laden strings — all refuse or strand upstream), traced
+both production callers end to end, and hand-applied the new mutants
+to confirm the kills. Two seats confirmed the surrogate/str-subclass
+attack surface is unreachable through loads_clean by construction.
+
+Six LOWs, all applied in the closing commit or recorded: the
+refusal diagnostic now names WHICH door fired (absent vs
+wrong-typed — "unavailable" during a live corruption event sent the
+operator hunting a legacy row); the unrecognized-type refusal logs
+like its sibling guards and truncates repr(state_type) to 100 chars;
+the dead "not in match" clause collapsed (isinstance covers
+absence); a fixture pinning the SPECIFIC r23 hazard (suggestion_text
+0 over a live "" — the coerced "" matched and pre-fix
+blind-restored, which the parametrized test never reached); and one
+history receipt corrected (the int case's pre-fix message was
+"'int' object is not subscriptable" — "slice(...)" belonged to the
+dict case).
+
+### The arc closes
+
+Eight rounds this segment (r17–r24), five sonnet-medium seats each
+from r18 on, every round to a full pipeline: dedupe → verify (probe
+or code-inspection with seat probe output) → root-cause fix → tests
+→ spec → sweep → receipts → land. The trajectory the fixpoint
+standard predicts: r18–r20 multi-seat HIGHs in each fix layer;
+r21–r22 HIGHs that were the previous round's fix missing from a
+sibling verb; r23 a test-honesty HIGH and degenerate-input MEDIUMs;
+r24 lows only. Mutation spec 279 → 314 across the segment, six
+zero-survivor first-pass sweeps, one batch anomaly (resolved — did
+not recur), one baseline refusal (the runner's gate catching a
+renamed kill test). Lessons nineteen through twenty-five minted; the
+twenty-second ("ask which verbs share the preconditions before the
+reviewers do") predicted r21's entire round the day before it
+happened.
+
+Residuals, all recorded with owners: the repair verb (r19, BACKLOG),
+zombie unprovable duplicates (r20, BACKLOG — repair verb is the
+fix), verify_post_apply's warning-only refused-revert handling (r22,
+BACKLOG, legacy-rows-only after the absent/empty split), the fsync'd
+archive append inside the skills-store lock (r23, BACKLOG latency
+note), and the global stats lock serialization (r18, BACKLOG scale
+note). The codex lane reopens Aug 27; the zero-hallucination streak
+remains a codex-lane metric — this segment's sonnet seats supplied
+literal probe output and every verified finding was real, but the
+streak was not extended by them.

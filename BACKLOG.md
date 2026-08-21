@@ -1780,6 +1780,22 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       concurrent skill writer blocks for the fsync. Deliberate
       correctness-over-throughput; revisit only if a latency hunt
       lands here.*
+    - *Its adversarial r24 (2026-08-21, five sonnet-medium seats on
+      the r23 fix layer): **CONVERGED — no HIGH or MEDIUM survived
+      any seat's verification**, the arc's closing standard met.
+      Every seat independently reran the r23 pins against pre-fix
+      code, re-proved the deleted test decorative, probed the typed
+      guard and fail-closed else with corrupted rows, and traced
+      both production callers. Six LOWs applied in the closing
+      commit: diagnostic names which door fired (absent vs
+      wrong-typed), the else logs like its siblings + truncates
+      repr(state_type), dead clause collapsed, the 0-over-live-""
+      blind-restore fixture added (the specific hazard the
+      parametrized test never reached), one history receipt
+      corrected. Mutation spec closed at 314 after six zero-survivor
+      first-pass sweeps this segment (r17–r24, spec 279 → 314).
+      Lessons 19–25 minted; full arc record in
+      docs/history/2026-08-20-destructive-rewrite-triage.md.*
     - *Carried lesson from r23: **prove the test against the defect,
       not against the fixed code.** A regression test's birth
       certificate is a run against the code it claims to catch — the
