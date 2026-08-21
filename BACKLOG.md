@@ -1646,6 +1646,35 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       (receiver-decides, r11/r15 precedent). Mutation spec 258 → 279
       (11 re-anchored, 21 new; the r16 structural pin was
       indentation-bound and is now regex-based).*
+    - *Its adversarial r18 (2026-08-21, five seats on the r17 fix
+      layer — **sonnet-medium lane**, codex usage-capped until 08-27;
+      same-model fallback declared per the skill): 12 findings, six
+      clusters, all probed real. The marker validated its verdict by
+      TYPE not value (a legitimately corrected re-stamp was silently
+      absorbed and skill stats kept the stale verdict forever — now
+      compared by value and announced, never auto-re-applied); r17's
+      own tail append resurrected deliberately dropped rows when a
+      named id had vanished (naming is not creation — dropped and
+      announced, the deletion stands); the evolver audit row and its
+      action read the world twice (a racing create made the audit row
+      record a phantom skill_create for what ran as an overwrite —
+      one snapshot drives both now); a mutated-but-unnamed row died in
+      silence (divergence warning added — the omission twin of the
+      contradiction ValueErrors); commit-boundary honesty narrowed to
+      sqlite3.Error (widened; close-bomb tests pin the committed
+      branch); drop announcements count physical rows; hash backfill
+      scoped to named writes. Mutation spec 279 → 290 (4 re-anchored).*
+    - *Carried lesson from r18: **a claim must be checked against the
+      world it claims about** — shape validation (well-formed id, a
+      bool, a parseable row) catches corruption; only world validation
+      (does the row still exist, does the value match, did the action
+      read the same world the record describes) catches staleness.*
+    - *Open item (r18, Architect — scale note, deferred): the
+      attribution seam serializes ALL runs' verdict stamps behind the
+      one global skill-stats lock and holds it across manifest/marker
+      I/O; correctness-safe, but a choke point if injection volume
+      grows. Upgrade edge: a per-loop marker lock under the run dir,
+      reserving the stats lock for the stats mutation.*
     - *Carried lesson from r17: **a mutable interface must take its
       writes by name, not by possession** — "this id is in my list" is
       ambiguous between "I changed it" and "I happened to load it",

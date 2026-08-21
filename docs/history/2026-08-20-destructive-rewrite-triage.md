@@ -1986,3 +1986,90 @@ stampers both passed it outside the lock; and a marker that failed to
 write after the batch committed was reported with the pre-commit
 message. The token is only meaningful as part of the transaction it
 acknowledges.
+
+## Round 18 (2026-08-21): a claim must be checked against the world
+
+Five seats on the r17 fix layer (42b25a75 + fc96ff40). **Lane note,
+declared per the skill:** codex hit its usage cap mid-round (capped
+until 08-27), so the seats ran as `claude -p` **sonnet-medium** — the
+same-model fallback the adversarial-review skill sanctions when the
+opposite CLI is unavailable. The zero-hallucination streak is a
+codex-lane metric and is not extended by this round; for what it is
+worth, all six accepted clusters here reproduced under my own probes
+too, and every seat supplied literal probe output.
+
+Twelve findings deduped to six clusters, all probed real:
+
+- **The marker validated the verdict by TYPE, not value** (Architect +
+  Minimalist + Failure Operator, all HIGH, all probed independently —
+  the round's headline). `isinstance(m.get("goal_achieved"), bool)`
+  accepted a marker whose verdict a later stamp had legitimately
+  CORRECTED — `stamp_outcome_verdict` re-stamps by design (decree
+  2026-08-10: corrections may flip a verdict but be honest about it) —
+  so the correction never reached skill stats and *nothing was
+  logged*. The fix compares `m["goal_achieved"] == achieved`: a
+  flipped verdict still must not auto-re-apply (the committed batch
+  cannot be decremented in place), but it is announced ("a corrected
+  verdict does NOT auto-adjust skill stats"), never absorbed.
+- **Naming is not creation** (QA, HIGH, probed): r17's tail append —
+  "an updated id whose live row vanished" — silently resurrected a
+  row a concurrent cull/retirement/rollback had deliberately dropped,
+  reasoning and archive trail gone. No call site creates rows through
+  `_save_skills` (the census checked), so a named-but-absent write is
+  now dropped and ANNOUNCED; the deletion stands.
+- **The audit row and the action read the world twice**
+  (Skeptic + Architect, HIGH, probed): `_apply_suggestion_action`
+  captured before_state from one `load_skills()` and decided
+  create-vs-update from a second, so a racing same-name create turned
+  the action into an UPDATE that overwrote the concurrent skill while
+  the audit row recorded a phantom `skill_create` with an id that was
+  never written — and `revert_suggestion` then hunted that phantom id
+  and silently failed. One snapshot now drives both.
+- **A mutated-but-unnamed row died in silence** (Failure Operator):
+  the contradiction ValueErrors cannot see an *omission*, so
+  forgetting to name an edited id discarded the edit with no signal.
+  Unnamed rows whose modeled content differs from the live store are
+  warned post-commit (content_hash excluded — it is derived).
+- **Commit-boundary honesty narrowed to sqlite errors** (Skeptic;
+  test gap QA): an OSError from `close()` after a successful commit
+  escaped without the "store HOLDS — do not retry" message. Handlers
+  widened to `Exception`; close-bomb tests now pin the committed
+  branch for append and rewrite, including the non-sqlite shape.
+- **Two small honesty fixes**: the drop announcement counts physical
+  rows, not just ids (Architect — duplicate legacy rows announced
+  fewer removals than performed); the content-hash backfill is scoped
+  to named writes (Minimalist — only named rows are serialized since
+  r17, so backfilling unnamed in-memory copies stamped hashes the
+  store never held).
+
+Judged, not fixed: the global stats lock serializing ALL runs'
+attribution (Architect MED) is recorded as a scale note in BACKLOG —
+correctness-safe, and injection volume on this box is nowhere near the
+choke point; a per-loop marker lock is the named upgrade edge.
+Rejected: stamping the manifest's malformed-count into the marker
+(Failure Operator LOW) — id-set equality already moves under any
+admission change; the residual coincidence shape is contrived.
+
+### The twentieth lesson
+
+**A claim must be checked against the world it claims about.** Three
+shapes of one defect this round, all in the previous round's own fix
+layer: a named write claimed a row the world no longer held (and the
+claim was honored as a create); a marker claimed a verdict it merely
+resembled in type (and the claim was honored as proof); an audit row
+claimed a create the action's world contradicted (and the claim
+became the rollback's target). In each case the claim was validated
+against its own SHAPE — the id is well-formed, the field is a bool,
+the row parses — when the defect was in its relation to the current
+world: does the row still exist, does the value match, did the action
+read the same world the record describes. Shape validation catches
+corruption; only world validation catches staleness. The r17 lesson
+said a write must be named; r18's coda is that the name is only half
+— the other half is checking the named world still holds.
+
+The sweep came back **290/290 accounted for on the first pass** (284
+detected + the 6 standing equivalents surviving as claimed) — the
+arc's third zero-survivor, zero-SKIP first run, and the first for a
+round whose fixes rewrote this much of the previous round's own new
+code: four moved anchors were re-anchored before the sweep, and every
+new mutant was written against a fixture that already existed.
