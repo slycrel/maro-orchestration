@@ -188,7 +188,12 @@ def _transact(path: Optional[Path], decide):
         return False, None
     try:
         from file_lock import locked_write
-        with locked_write(path):
+        # require=True: locked_write's environment fallback (lock file
+        # uncreatable) yields UNLOCKED by long-standing contract — fine for
+        # its other callers, fatal here, because an unlocked transaction is
+        # the round-1 race wearing the fix's clothes (adversarial r2, Expert
+        # QA HIGH). A transaction that cannot be exclusive declines instead.
+        with locked_write(path, require=True):
             rows = _read_rows(path)
             if rows is None:
                 return False, None
@@ -244,13 +249,32 @@ def _adapter_identity(adapter) -> Dict[str, str]:
 _LIVE_ADAPTERS: dict = {}
 
 
-def _remember_adapter(handle_id: str, adapter) -> None:
-    if adapter is not None and handle_id:
-        _LIVE_ADAPTERS[str(handle_id)] = adapter
+def _remember_adapter(handle_id: str, seq: int, adapter) -> None:
+    # Keyed by (handle_id, seq), not handle_id (adversarial r2, 3 seats):
+    # one key per handle meant every registration overwrote the last — so a
+    # maintenance job recorded with the run's adapter and a post-escalation
+    # learning job recorded with the ESCALATED one handed maintenance the
+    # wrong adapter — and any subset drain forgot the adapter of jobs still
+    # pending (the escalation lane drains learning early; maintenance paid).
+    if adapter is not None and handle_id and seq:
+        _LIVE_ADAPTERS[(str(handle_id), int(seq))] = adapter
 
 
-def _forget_adapter(handle_id: str) -> None:
-    _LIVE_ADAPTERS.pop(str(handle_id), None)
+def _forget_adapter(handle_id: str, seq: int) -> None:
+    _LIVE_ADAPTERS.pop((str(handle_id), int(seq)), None)
+
+
+def _forget_all_adapters(handle_id: str) -> None:
+    """Drop every cached adapter for a handle — the spawn/empty handoffs.
+
+    A detached child has its own module dict and can never consume the
+    parent's objects, so a successful spawn that kept them was a leak in
+    every long-lived caller (drain loops, daemons) — one adapter per handled
+    run, forever (adversarial r2, 3 seats).
+    """
+    hid = str(handle_id)
+    for key in [k for k in _LIVE_ADAPTERS if k[0] == hid]:
+        _LIVE_ADAPTERS.pop(key, None)
 
 
 def _step_rows(step_outcomes) -> List[Dict[str, Any]]:
@@ -314,15 +338,14 @@ def record_learning(
         "verbose": bool(verbose),
         "adapter": _adapter_identity(adapter),
     }
-    recorded, _ = _transact(path, lambda rows: ({
-        "event": "job",
-        "seq": _next_seq(rows),
-        "kind": KIND_LEARNING,
-        "recorded_at": _now(),
-        "spec": spec,
-    }, None))
+    def _decide(rows):
+        seq = _next_seq(rows)
+        return ({"event": "job", "seq": seq, "kind": KIND_LEARNING,
+                 "recorded_at": _now(), "spec": spec}, seq)
+
+    recorded, seq = _transact(path, _decide)
     if recorded:
-        _remember_adapter(handle_id, adapter)
+        _remember_adapter(handle_id, seq, adapter)
     return recorded
 
 
@@ -337,19 +360,20 @@ def record_maintenance(
     path = jobs_path(handle_id)
     if path is None:
         return False
-    recorded, _ = _transact(path, lambda rows: ({
-        "event": "job",
-        "seq": _next_seq(rows),
-        "kind": KIND_MAINTENANCE,
-        "recorded_at": _now(),
-        "spec": {
-            "loop_id": str(loop_id or ""),
-            "verbose": bool(verbose),
-            "adapter": _adapter_identity(adapter),
-        },
-    }, None))
+    spec = {
+        "loop_id": str(loop_id or ""),
+        "verbose": bool(verbose),
+        "adapter": _adapter_identity(adapter),
+    }
+
+    def _decide(rows):
+        seq = _next_seq(rows)
+        return ({"event": "job", "seq": seq, "kind": KIND_MAINTENANCE,
+                 "recorded_at": _now(), "spec": spec}, seq)
+
+    recorded, seq = _transact(path, _decide)
     if recorded:
-        _remember_adapter(handle_id, adapter)
+        _remember_adapter(handle_id, seq, adapter)
     return recorded
 
 
@@ -387,10 +411,13 @@ def _state_from_rows(rows: Optional[List[Dict[str, Any]]],
     """
     if rows is None:
         return {"path": path, "rows": [], "pending": [], "done": set(),
-                "failed": [], "claim": None, "unreadable": True}
+                "started": set(), "failed": [], "refresh_failed": [],
+                "claim": None, "unreadable": True}
     jobs: Dict[int, Dict[str, Any]] = {}
     done: set = set()
-    failed: List[Dict[str, Any]] = []
+    started: set = set()
+    failed_raw: List[Dict[str, Any]] = []
+    refresh_failed: List[Dict[str, Any]] = []
     claim: Optional[Dict[str, Any]] = None
     for r in rows:
         if not isinstance(r, dict):
@@ -401,6 +428,18 @@ def _state_from_rows(rows: Optional[List[Dict[str, Any]]],
                 jobs[int(r.get("seq") or 0)] = r
             except (TypeError, ValueError):
                 continue
+        elif event == "started":
+            # The per-job touch marker, appended before a runner is invoked.
+            # This is the evidence `_resweep_safe` reads: round 2 (4/4
+            # seats) showed the store-global "was there an unreleased
+            # claim?" heuristic was laundered by the first partial recovery
+            # sweep — its own claim+release became the newest claim, and the
+            # NEXT sweep re-ran maintenance that had already ticked durable
+            # counters. Per-job evidence has no global bit to launder.
+            try:
+                started.add(int(r.get("seq") or 0))
+            except (TypeError, ValueError):
+                continue
         elif event == "done":
             try:
                 done.add(int(r.get("seq") or 0))
@@ -409,17 +448,31 @@ def _state_from_rows(rows: Optional[List[Dict[str, Any]]],
             # A job that RAISED is done — it must not be re-run, because its
             # first half already happened — but it is not finished work, and
             # the first cut left it visible nowhere: `find_stranded` reports
-            # pending jobs, and a failed job is not pending. The comment
-            # claiming otherwise was unwired (adversarial round 1, 2 seats).
-            if r.get("ok") is False:
-                failed.append(r)
+            # pending jobs, and a failed job is not pending (round 1).
+            # `is not True` rather than `is False` (round 2, Expert QA): a
+            # forged or schema-drifted `"ok": "false"` is a STRING, which
+            # `is False` read as success — a done row this cannot read as
+            # success is surfaced, not trusted.
+            if r.get("ok") is not True:
+                failed_raw.append(r)
+        elif event == "refresh":
+            # Recorded by round 1, read by nobody until round 2 (2 seats):
+            # a durable event with no reader is not surfaced.
+            if r.get("ok") is not True:
+                refresh_failed.append(r)
         elif event == "claim":
             claim = r
     pending = [jobs[s] for s in sorted(jobs) if s not in done]
     pending.sort(key=lambda j: (_KIND_ORDER.get(str(j.get("kind")), 9),
                                 int(j.get("seq") or 0)))
+    # An orphan done row (no matching job) completes nothing and must not
+    # fabricate a failure for a job that never existed.
+    failed = [r for r in failed_raw
+              if int(r.get("seq") or 0) in jobs]
     return {"path": path, "rows": rows, "pending": pending, "done": done,
-            "failed": failed, "claim": claim, "unreadable": False}
+            "started": started, "failed": failed,
+            "refresh_failed": refresh_failed, "claim": claim,
+            "unreadable": False}
 
 
 def state(handle_id: str) -> Dict[str, Any]:
@@ -613,54 +666,90 @@ def _refresh_surfaces(handle_id: str, path: Optional[Path] = None) -> bool:
 
 
 def _run_one(job: Dict[str, Any], path: Path, handle_id: str, adapter,
-             tail_cost_scope) -> bool:
-    """Run one job and record its outcome. True when it completed.
+             tail_cost_scope) -> str:
+    """Run one job and record its outcome: "ok" | "failed" | "skipped".
 
-    Never raises: the tail must not change the outcome of the run it belongs
-    to, and by the time it runs the user already has the answer.
+    "skipped" means the runner was never invoked — nothing happened, so the
+    caller's refresh decision must not count it as an attempt.
+
+    Never raises, and the whole body means it now: round 2 (Expert QA HIGH)
+    fed a row whose `spec` was a string — valid JSONL, wrong container — and
+    `spec.get(...)` raised BEFORE the old try block, straight out of
+    `run_jobs`, leaving the claim unreleased and a spawned child crashing on
+    the same row forever. Decoding is inside the belt now, and a malformed
+    job is recorded and retired instead of retried.
     """
-    kind = str(job.get("kind") or "")
-    runner = _RUNNERS.get(kind)
+    seq, kind = 0, ""
     try:
-        seq = int(job.get("seq") or 0)
-    except (TypeError, ValueError):
-        seq = 0
-    if runner is None:
-        log.warning("tail_jobs: unknown job kind %r (seq %s) — skipped",
-                    kind, seq)
+        try:
+            seq = int(job.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        kind = str(job.get("kind") or "")
+        runner = _RUNNERS.get(kind)
+        spec = job.get("spec")
+        problem = ""
+        if runner is None:
+            problem = f"unknown kind {kind!r}"
+        elif not isinstance(spec, dict):
+            problem = f"malformed spec ({type(spec).__name__}, not an object)"
+        if problem:
+            log.warning("tail_jobs: job seq %s not runnable — %s",
+                        seq, problem)
+            _append(path, {"event": "done", "seq": seq, "ok": False,
+                           "error": problem, "finished_at": _now()})
+            return "skipped"
+
+        # The touch marker, BEFORE the runner: the per-job evidence
+        # `_resweep_safe` reads (see _state_from_rows). If we cannot record
+        # that a non-idempotent job is about to run, we do not run it — an
+        # unprovable touch is exactly the state the marker exists to prevent.
+        # Learning is idempotent by its own design, so it proceeds.
+        if not _append(path, {"event": "started", "seq": seq,
+                              "pid": os.getpid(), "ts": _now()}):
+            if kind != KIND_LEARNING:
+                log.error("tail_jobs: could not record the start of "
+                          "non-idempotent %s job (seq %s) for %s — declining "
+                          "rather than running unprovably", kind, seq,
+                          handle_id)
+                return "skipped"
+
+        # The live adapter when this process still holds it (the inline
+        # lane), the recorded identity when it does not (the spawned child,
+        # the sweep). Per-job key: see _remember_adapter.
+        job_adapter = (adapter if adapter is not None
+                       else _LIVE_ADAPTERS.get((str(handle_id), seq))
+                       or _build_adapter(spec))
+        ok, err = True, ""
+        try:
+            with tail_cost_scope(str(spec.get("loop_id") or ""),
+                                 _KIND_PHASE.get(kind, "tail")):
+                runner(spec, job_adapter)
+        except Exception as exc:   # noqa: BLE001 — the tail never raises out
+            ok, err = False, f"{type(exc).__name__}: {exc}"
+            log.warning("tail_jobs: %s job (seq %s) failed for %s: %s",
+                        kind, seq, handle_id, exc)
+        # Marked done either way, and the failure recorded next to it: a job
+        # that raised already had its effect on whatever it touched before it
+        # raised, and re-running it from a sweep would repeat that half.
+        # `state()["failed"]` is where that record surfaces (round 1).
+        if not _append(path, {"event": "done", "seq": seq, "ok": ok,
+                              "error": err, "finished_at": _now()}):
+            # The side effect happened and the store does not know. Loud,
+            # because the next sweep sees this job pending and may run it
+            # again.
+            log.error("tail_jobs: %s job (seq %s) for %s RAN but its "
+                      "completion could not be recorded — a later sweep will "
+                      "see it as pending", kind, seq, handle_id)
+        _forget_adapter(handle_id, seq)
+        return "ok" if ok else "failed"
+    except Exception as exc:   # noqa: BLE001 — belt for the belt
+        log.error("tail_jobs: job seq %s handling itself failed for %s: %s",
+                  seq, handle_id, exc)
         _append(path, {"event": "done", "seq": seq, "ok": False,
-                       "error": f"unknown kind {kind!r}",
+                       "error": f"{type(exc).__name__}: {exc}",
                        "finished_at": _now()})
-        return False
-    spec = job.get("spec") or {}
-    # The live adapter when this process still holds it (the inline lane),
-    # the recorded identity when it does not (the spawned child, the sweep).
-    job_adapter = (adapter if adapter is not None
-                   else _LIVE_ADAPTERS.get(str(handle_id))
-                   or _build_adapter(spec))
-    ok, err = True, ""
-    try:
-        with tail_cost_scope(str(spec.get("loop_id") or ""),
-                             _KIND_PHASE.get(kind, "tail")):
-            runner(spec, job_adapter)
-    except Exception as exc:   # noqa: BLE001 — the tail never raises out
-        ok, err = False, f"{type(exc).__name__}: {exc}"
-        log.warning("tail_jobs: %s job (seq %s) failed for %s: %s",
-                    kind, seq, handle_id, exc)
-    # Marked done either way, and the failure recorded next to it: a job that
-    # raised already had its effect on whatever it touched before it raised,
-    # and re-running it from a sweep would repeat that half.
-    # `state()["failed"]` is where that record surfaces — `find_stranded`
-    # reports PENDING work, and a failed job is not pending, so the failure
-    # needed its own lane (adversarial round 1).
-    if not _append(path, {"event": "done", "seq": seq, "ok": ok,
-                          "error": err, "finished_at": _now()}):
-        # The side effect happened and the store does not know. Loud, because
-        # the next sweep sees this job pending and may run it again.
-        log.error("tail_jobs: %s job (seq %s) for %s RAN but its completion "
-                  "could not be recorded — a later sweep will see it as "
-                  "pending", kind, seq, handle_id)
-    return ok
+        return "failed"
 
 
 def run_jobs(
@@ -745,20 +834,32 @@ def run_jobs(
         from contextlib import nullcontext
         _pin = nullcontext()
 
-    ran = 0
-    with _pin:
-        for job in pending:
-            if _run_one(job, path, handle_id, adapter, tail_cost_scope):
-                ran += 1
-        if ran and refresh:
-            _refresh_surfaces(handle_id, path)
-
-    if not _append(path, {"event": "claim", "pid": os.getpid(),
-                          "host": _hostname(), "released_at": _now()}):
-        log.error("tail_jobs: could not release the claim on %s — later "
-                  "drains will decline while pid %s is alive",
-                  handle_id, os.getpid())
-    _forget_adapter(handle_id)
+    ran = attempted = 0
+    try:
+        with _pin:
+            for job in pending:
+                outcome = _run_one(job, path, handle_id, adapter,
+                                   tail_cost_scope)
+                if outcome != "skipped":
+                    attempted += 1
+                if outcome == "ok":
+                    ran += 1
+            # Refresh on ATTEMPTED, not succeeded (round 2, Minimalist): a
+            # learning job can make paid LLM calls, write lessons, and THEN
+            # raise — "failed" is not "nothing happened", and the run-dir
+            # pin exists precisely because those calls are captured. Only a
+            # drain where no runner was ever invoked leaves the close_run
+            # totals standing.
+            if attempted and refresh:
+                _refresh_surfaces(handle_id, path)
+    finally:
+        # The release is owed however the drain ended — round 2 (Expert QA)
+        # showed a raising job used to leave the claim standing forever.
+        if not _append(path, {"event": "claim", "pid": os.getpid(),
+                              "host": _hostname(), "released_at": _now()}):
+            log.error("tail_jobs: could not release the claim on %s — later "
+                      "drains will decline while pid %s is alive",
+                      handle_id, os.getpid())
     return ran
 
 
@@ -784,7 +885,17 @@ def _strict_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return bool(value)
+        # Only the two numbers that MEAN a boolean. `bool(nan)` is True and
+        # YAML's `.nan`/`.inf` parse as floats, so plain numeric truthiness
+        # turned malformed config into spawn-ON — the unsafe direction again
+        # (round 2, 3 seats). 2, -1, inf: nobody decided those either.
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+        log.warning("tail_jobs: uninterpretable flag value %r — using %s",
+                    value, default)
+        return default
     token = str(value).strip().lower()
     if token in _TRUE_TOKENS:
         return True
@@ -870,10 +981,17 @@ def drain_or_spawn(handle_id: str, *, adapter=None) -> Dict[str, Any]:
     Returns {"mode": "spawned"|"inline"|"empty", "pid": int|None, "ran": int}.
     """
     if not pending_jobs(handle_id):
+        # Someone else (a child, a sweep) already took the work — the cached
+        # adapters have no consumer left in this process.
+        _forget_all_adapters(handle_id)
         return {"mode": "empty", "pid": None, "ran": 0}
     if spawn_enabled():
         pid = spawn(handle_id)
         if pid is not None:
+            # The child has its own module dict and can never consume the
+            # parent's objects — keeping them was one adapter leaked per
+            # handled run in every long-lived caller (round 2, 3 seats).
+            _forget_all_adapters(handle_id)
             return {"mode": "spawned", "pid": pid, "ran": 0}
         log.info("tail_jobs: spawn unavailable — draining %s inline", handle_id)
     ran = run_jobs(handle_id, adapter=adapter)
@@ -885,59 +1003,50 @@ def drain_or_spawn(handle_id: str, *, adapter=None) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _resweep_safe(kind: str, started: bool) -> bool:
-    """May a sweep RUN this pending job, given that a drain already started?
+    """May a sweep RUN this pending job, given whether ITS runner was invoked?
 
-    "Every job kind is idempotent" was too broad, and the round caught it.
+    "Every job kind is idempotent" was too broad, and round 1 caught it;
+    round 2 caught the evidence being store-global. `started` is now THIS
+    job's own durable marker (a `started` row appended before its runner —
+    see _run_one), not a "was there ever an unreleased claim" heuristic:
 
-      * **learning** is idempotent by its own design and says so:
-        `extract_deferred_lessons` skips rows that already carry lessons, and
-        crystallization re-checks the verdict gate. Re-running it converges.
-      * **maintenance** is not. `run_post_run_maintenance` advances DURABLE
-        cadence counters (`evolver_store.evolver_cadence_tick`, the inspector
-        twin). A child that died after a tick and before its `done` row would
-        have that tick counted twice by a sweep — firing a meta-cycle early
-        and mis-associating it with the number of runs that actually
-        finished. "Threshold-based" is not idempotence.
+      * the heuristic was LAUNDERED by recovery itself — the first partial
+        sweep's own claim+release became the newest claim, so the second
+        sweep read "never started" and re-ran maintenance that had already
+        ticked durable cadence counters (round 2, 4/4 seats);
+      * and it was store-global, so a crash AFTER learning but BEFORE
+        maintenance stranded the untouched maintenance job forever — safe
+        against duplication, failing the drainable half of the contract
+        (round 2, Expert QA).
 
-    So a maintenance job whose drain never STARTED is safe to run — nothing
-    has happened yet. One whose drain started and died is surfaced instead,
-    which is this project's standing posture for work it cannot prove safe to
-    repeat: surface, and let the operator decide.
+    Per-job evidence answers both: a maintenance job whose own runner was
+    never invoked is safe to run; one whose runner started and never
+    finished is surfaced instead — surface, and let the operator decide.
+    Learning re-runs either way: `extract_deferred_lessons` skips rows that
+    already carry lessons and crystallization re-checks the verdict gate.
     """
     if kind == KIND_LEARNING:
         return True
     return not started
 
 
-def _drain_started(rows: List[Dict[str, Any]]) -> bool:
-    """Did some drainer claim this store and never release it?
-
-    A claim row that was never released is the crash signature: whatever it
-    was running may have half-happened. No claim row at all means no drain
-    ever began, and every pending job is untouched.
-    """
-    for r in reversed(rows or []):
-        if isinstance(r, dict) and r.get("event") == "claim":
-            return not r.get("released_at")
-    return False
-
-
-def find_stranded(*, limit: int = 50, min_age_s: float = 900.0,
-                  scan_cap: int = 2000) -> List[Dict[str, Any]]:
+def find_stranded(*, limit: int = 50,
+                  min_age_s: float = 900.0) -> List[Dict[str, Any]]:
     """Runs whose tail jobs are pending with no live claim, oldest first.
 
     min_age_s keeps a tail that is merely young out of the report: a job
     recorded seconds ago belongs to a run whose child may not have started
     yet, and calling that stranded would make the sweep race the spawn.
 
-    The scan walks candidates until `limit` STRANDED runs are found rather
-    than truncating the candidate list first. The first cut looked at
-    `limit * 4` newest-first stores, and heartbeat calls this with `limit=3`:
-    twelve healthy recent runs were enough to hide an old abandoned tail from
-    every tick, forever (adversarial round 1, 2 seats). Oldest-first for the
-    same reason — the run that has been waiting longest is the one to
-    recover. `scan_cap` bounds the walk itself; when it bites, that is said
-    out loud rather than reported as "nothing stranded".
+    The scan walks candidates until `limit` STRANDED runs are found, and the
+    candidate walk itself is UNBOUNDED on purpose. The first cut truncated to
+    `limit * 4` newest-first and heartbeat's twelve healthiest runs hid an
+    old abandoned tail forever (round 1); the fix added a `scan_cap=2000`
+    that was the same starvation one magnitude up — a fixed oldest-first
+    prefix that a store past position 2000 could never enter (round 2, 2
+    seats). Both were magic-number enforcement where the standing decree is
+    observational: the scan logs its size and walks everything. The real
+    bound is the number of job stores on disk, which run pruning owns.
     """
     out: List[Dict[str, Any]] = []
     try:
@@ -952,11 +1061,9 @@ def find_stranded(*, limit: int = 50, min_age_s: float = 900.0,
                             key=lambda p: p.stat().st_mtime)
     except Exception:
         return out
-    if len(candidates) > scan_cap:
-        log.warning("tail_jobs: %d job stores, scanning the %d oldest — "
-                    "raise scan_cap to see the rest",
-                    len(candidates), scan_cap)
-        candidates = candidates[:scan_cap]
+    if len(candidates) > 500:
+        log.info("tail_jobs: stranded scan walking %d job stores",
+                 len(candidates))
     now = datetime.now(timezone.utc).timestamp()
     for p in candidates:
         if len(out) >= max(1, limit):
@@ -976,19 +1083,22 @@ def find_stranded(*, limit: int = 50, min_age_s: float = 900.0,
         st = _state_from_rows(rows, p)
         if _live_claim(st["claim"]):
             continue
-        if not st["pending"] and not st["failed"]:
+        if not st["pending"] and not st["failed"] and not st["refresh_failed"]:
             continue
-        started = _drain_started(rows)
-        kinds = [str(j.get("kind")) for j in st["pending"]]
+        drainable, needs_operator = [], []
+        for j in st["pending"]:
+            kind = str(j.get("kind"))
+            job_started = int(j.get("seq") or 0) in st["started"]
+            (drainable if _resweep_safe(kind, job_started)
+             else needs_operator).append(kind)
         out.append({
             "handle_id": handle_id,
             "run_dir": str(p.parent.parent),
-            "pending": kinds,
-            "drainable": [k for k in kinds if _resweep_safe(k, started)],
-            "needs_operator": [k for k in kinds
-                               if not _resweep_safe(k, started)],
+            "pending": [str(j.get("kind")) for j in st["pending"]],
+            "drainable": drainable,
+            "needs_operator": needs_operator,
             "failed": [str(f.get("error") or "") for f in st["failed"]],
-            "drain_started": started,
+            "refresh_failed": bool(st["refresh_failed"]),
             "age_s": round(age, 1),
         })
     return out
@@ -998,10 +1108,12 @@ def sweep_stranded(*, limit: int = 10, min_age_s: float = 900.0,
                    dry_run: bool = False) -> Dict[str, Any]:
     """Drain what is safe to drain; surface the rest.
 
-    Not "idempotent by construction" — see `_resweep_safe`. A maintenance job
-    whose drain already started is reported under `needs_operator` and left
+    Not "idempotent by construction" — see `_resweep_safe`, which now judges
+    each job on its OWN started marker. A maintenance job whose runner was
+    invoked and never finished is reported under `needs_operator` and left
     alone, because repeating a durable cadence tick is a real cost and this
-    project's posture on work it cannot prove safe to repeat is to surface it.
+    project's posture on work it cannot prove safe to repeat is to surface
+    it. One whose runner was never reached is drained like anything else.
     """
     found = find_stranded(limit=limit, min_age_s=min_age_s)
     drained = 0
@@ -1021,4 +1133,6 @@ def sweep_stranded(*, limit: int = 10, min_age_s: float = 900.0,
         "needs_operator": [i["handle_id"] for i in found
                            if i["needs_operator"]],
         "failed_jobs": [i["handle_id"] for i in found if i["failed"]],
+        "refresh_failed": [i["handle_id"] for i in found
+                           if i.get("refresh_failed")],
     }

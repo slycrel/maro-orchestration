@@ -506,9 +506,16 @@ def test_a_permission_error_means_the_pid_exists(monkeypatch):
     assert tail_jobs._is_pid_alive(4242) is False
 
 
-def test_refresh_is_skipped_when_nothing_ran(monkeypatch):
-    """Every job failed, so close_run's totals still stand — re-deriving the
-    surfaces would rewrite the card off work that did not happen."""
+def test_refresh_follows_attempts_not_successes(monkeypatch):
+    """A failed job is not "nothing happened".
+
+    A learning job can make paid LLM calls, write lessons, and THEN raise —
+    the round-1 version of this test pinned the opposite premise (skip the
+    refresh when every job failed) and round 2 called it out: the run-dir pin
+    exists precisely because those calls are captured, so the surfaces must
+    be re-derived after any ATTEMPT. Only a drain where no runner was ever
+    invoked leaves the close_run totals standing.
+    """
     _make_run("tj000009")
     called = []
 
@@ -519,7 +526,17 @@ def test_refresh_is_skipped_when_nothing_ran(monkeypatch):
     monkeypatch.setattr(tail_jobs, "_refresh_surfaces",
                         lambda hid, path=None: called.append(hid))
     tail_jobs.record_learning("tj000009", _FakeLoop())
-    assert tail_jobs.run_jobs("tj000009") == 0
+    assert tail_jobs.run_jobs("tj000009") == 0     # nothing SUCCEEDED
+    assert called == ["tj000009"]                  # but something ran
+
+    # And the true nothing-happened case: a job whose runner is never
+    # invoked (unknown kind) must not trigger a refresh.
+    _make_run("tj000027")
+    path = tail_jobs.jobs_path("tj000027")
+    tail_jobs._append(path, {"event": "job", "seq": 1,
+                             "kind": "from-the-future", "spec": {}})
+    called.clear()
+    tail_jobs.run_jobs("tj000027")
     assert called == []
 
 
@@ -693,9 +710,9 @@ def test_the_live_adapter_is_released_after_the_drain(monkeypatch):
     monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
     monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
     tail_jobs.record_learning("tj000016", _FakeLoop(), adapter=_FakeAdapter())
-    assert "tj000016" in tail_jobs._LIVE_ADAPTERS
+    assert ("tj000016", 1) in tail_jobs._LIVE_ADAPTERS
     tail_jobs.run_jobs("tj000016")
-    assert "tj000016" not in tail_jobs._LIVE_ADAPTERS
+    assert ("tj000016", 1) not in tail_jobs._LIVE_ADAPTERS
 
 
 def test_a_claim_that_cannot_be_published_declines_the_drain(monkeypatch):
@@ -759,21 +776,26 @@ def test_the_job_runs_with_its_run_pinned(monkeypatch):
     assert runs.current_run_dir() == before
 
 
-def test_maintenance_whose_drain_already_started_is_surfaced_not_repeated(monkeypatch):
+def test_maintenance_whose_runner_started_is_surfaced_not_repeated(monkeypatch):
     """`run_post_run_maintenance` advances DURABLE cadence counters, so
     threshold-based is not idempotent: a child that died after a tick and
-    before its done row would have that tick counted twice."""
+    before its done row would have that tick counted twice. The evidence is
+    the job's OWN `started` row — round 2 showed the store-global claim
+    heuristic was laundered by the first recovery sweep's own release."""
     _make_run("tj000020")
     ran = []
     monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
                         lambda s, a: ran.append(1))
     tail_jobs.record_maintenance("tj000020", loop_id="L1")
     path = tail_jobs.jobs_path("tj000020")
-    # The crash signature: a claim that was never released, by a dead pid.
+    # The crash signature: the runner was invoked (started row) and never
+    # finished (no done row); the claim's pid is dead.
     monkeypatch.setattr(tail_jobs, "_is_pid_alive", lambda pid: False)
     tail_jobs._append(path, {"event": "claim", "pid": 999999,
                              "host": tail_jobs._hostname(),
                              "claimed_at": "then"})
+    tail_jobs._append(path, {"event": "started", "seq": 1, "pid": 999999,
+                             "ts": "then"})
     old = time.time() - 3600
     os.utime(path, (old, old))
 
@@ -783,6 +805,86 @@ def test_maintenance_whose_drain_already_started_is_surfaced_not_repeated(monkey
     result = tail_jobs.sweep_stranded(min_age_s=900)
     assert ran == [], "a partially-run maintenance job was repeated"
     assert result["needs_operator"] == ["tj000020"]
+
+
+def test_untouched_maintenance_behind_a_crashed_claim_is_drainable(monkeypatch):
+    """The other direction round 2 caught: a child that claimed the store,
+    finished learning, and died BEFORE invoking maintenance leaves an
+    unreleased claim — but maintenance's own runner was never reached, and
+    the store proves it (no started row for seq 2). The store-global
+    heuristic stranded that job forever; per-job evidence drains it."""
+    _make_run("tj000028")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append("maintenance"))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    path = tail_jobs.jobs_path("tj000028")
+    monkeypatch.setattr(tail_jobs, "_is_pid_alive", lambda pid: False)
+    for row in [
+        {"event": "job", "seq": 1, "kind": "learning", "spec": {}},
+        {"event": "job", "seq": 2, "kind": "maintenance", "spec": {}},
+        {"event": "claim", "pid": 999999, "host": tail_jobs._hostname(),
+         "claimed_at": "then"},
+        {"event": "started", "seq": 1, "pid": 999999, "ts": "then"},
+        {"event": "done", "seq": 1, "ok": True},
+        # ...and the child died here: seq 2 never started.
+    ]:
+        tail_jobs._append(path, row)
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    found = tail_jobs.find_stranded(min_age_s=900)
+    assert found[0]["drainable"] == ["maintenance"]
+    assert found[0]["needs_operator"] == []
+    assert tail_jobs.sweep_stranded(min_age_s=900)["drained"] == 1
+    assert ran == ["maintenance"]
+
+
+def test_a_partial_recovery_sweep_does_not_launder_the_crash_evidence(monkeypatch):
+    """The round-2 top finding, pinned end to end.
+
+    A child starts BOTH jobs and dies. The first sweep drains learning (safe)
+    and leaves maintenance surfaced. That sweep appends its own claim and
+    release — which, under the old store-global heuristic, became the newest
+    claim and made the SECOND sweep read "no drain ever started" and re-run
+    the maintenance job that had already ticked durable counters. Per-job
+    started rows cannot be laundered by someone else's release.
+    """
+    _make_run("tj000029")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: ran.append("learning"))
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append("maintenance"))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    path = tail_jobs.jobs_path("tj000029")
+    real_alive = tail_jobs._is_pid_alive
+    monkeypatch.setattr(tail_jobs, "_is_pid_alive",
+                        lambda pid: False if pid == 999999 else real_alive(pid))
+    for row in [
+        {"event": "job", "seq": 1, "kind": "learning", "spec": {}},
+        {"event": "job", "seq": 2, "kind": "maintenance", "spec": {}},
+        {"event": "claim", "pid": 999999, "host": tail_jobs._hostname(),
+         "claimed_at": "then"},
+        {"event": "started", "seq": 1, "pid": 999999, "ts": "then"},
+        {"event": "started", "seq": 2, "pid": 999999, "ts": "then"},
+        # child died: no done rows, no release.
+    ]:
+        tail_jobs._append(path, row)
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    # Sweep 1: learning re-drains (idempotent), maintenance surfaced.
+    r1 = tail_jobs.sweep_stranded(min_age_s=900)
+    assert ran == ["learning"]
+    assert r1["needs_operator"] == ["tj000029"]
+
+    # Sweep 2 — after sweep 1's own claim+release. Maintenance must STILL be
+    # surfaced, not re-classified as safe.
+    os.utime(path, (old, old))
+    r2 = tail_jobs.sweep_stranded(min_age_s=900)
+    assert ran == ["learning"], "the second sweep re-ran touched maintenance"
+    assert r2["needs_operator"] == ["tj000029"]
 
 
 def test_maintenance_that_never_started_is_drained(monkeypatch):
@@ -928,6 +1030,11 @@ def test_the_sweep_drains_only_the_safe_kinds_of_a_mixed_run(monkeypatch):
     tail_jobs._append(path, {"event": "claim", "pid": 999999,
                              "host": tail_jobs._hostname(),
                              "claimed_at": "then"})
+    # Both runners were invoked before the crash — per-job evidence.
+    tail_jobs._append(path, {"event": "started", "seq": 1, "pid": 999999,
+                             "ts": "then"})
+    tail_jobs._append(path, {"event": "started", "seq": 2, "pid": 999999,
+                             "ts": "then"})
     old = time.time() - 3600
     os.utime(path, (old, old))
 
@@ -962,3 +1069,206 @@ def test_an_unclassifiable_job_store_is_announced(monkeypatch, caplog):
     assert found == []
     assert any("unreadable" in r.getMessage() and "tj000026" in r.getMessage()
                for r in caplog.records), caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Adversarial round 2 — the fix layer's fix layer
+# ---------------------------------------------------------------------------
+
+def test_a_transaction_that_cannot_lock_declines(monkeypatch):
+    """`locked_write`'s environment fallback yields UNLOCKED by contract —
+    fine for its other callers, fatal for a read-decide-append transaction,
+    which unlocked is just the round-1 race again. `require=True` turns that
+    fallback into a refusal, and the transaction declines."""
+    import file_lock
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cannot_lock(path, timeout_s=None, require=False):
+        if require:
+            raise OSError("lock file uncreatable")
+        yield   # the legacy fallback: proceed unlocked
+
+    monkeypatch.setattr(file_lock, "locked_write", _cannot_lock)
+    _make_run("tj000030")
+    # The caller keeps the work — never a silent unlocked write.
+    assert tail_jobs.record_learning("tj000030", _FakeLoop()) is False
+
+
+def test_a_malformed_spec_is_retired_not_crash_looped():
+    """Round 2's Expert QA HIGH: a valid JSONL row whose `spec` is a string
+    raised out of `run_jobs` BEFORE the old try block — claim never released,
+    spawned child dying on the same row forever. Contained now: the job is
+    recorded as failed and retired, the claim is released, and the store
+    stays drainable."""
+    _make_run("tj000031")
+    path = tail_jobs.jobs_path("tj000031")
+    tail_jobs._append(path, {"event": "job", "seq": 1, "kind": "learning",
+                             "spec": "not-a-dict"})
+    assert tail_jobs.run_jobs("tj000031") == 0        # nothing ran...
+    st = tail_jobs.state("tj000031")
+    assert st["pending"] == []                        # ...and nothing loops
+    assert st["failed"] and "malformed spec" in st["failed"][0]["error"]
+    claims = [r for r in st["rows"] if r.get("event") == "claim"]
+    assert claims[-1].get("released_at"), "claim left standing"
+
+
+def test_the_claim_is_released_even_when_job_handling_raises(monkeypatch):
+    """The release moved into `finally` — a drain that dies mid-loop must not
+    leave the store claimed by a live parent forever."""
+    _make_run("tj000032")
+    tail_jobs.record_learning("tj000032", _FakeLoop())
+
+    def _explode(job, path, handle_id, adapter, scope):
+        raise RuntimeError("handling itself broke")
+
+    monkeypatch.setattr(tail_jobs, "_run_one", _explode)
+    try:
+        tail_jobs.run_jobs("tj000032")
+    except RuntimeError:
+        pass   # run_jobs may propagate; the claim must still be released
+    claims = [r for r in tail_jobs.state("tj000032")["rows"]
+              if r.get("event") == "claim"]
+    assert claims and claims[-1].get("released_at"), "claim not released"
+
+
+def test_an_unprovable_start_declines_maintenance_but_not_learning(monkeypatch):
+    """If the started marker cannot be recorded, running a non-idempotent job
+    means a future sweep can never know it was touched — so maintenance
+    declines and stays pending (safe: it did NOT run), while learning, safe
+    to repeat by design, proceeds."""
+    _make_run("tj000033")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: ran.append("learning"))
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append("maintenance"))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_learning("tj000033", _FakeLoop())
+    tail_jobs.record_maintenance("tj000033", loop_id="L1")
+    real_append = tail_jobs._append
+
+    def _no_started(path, row):
+        if row.get("event") == "started":
+            return False
+        return real_append(path, row)
+
+    monkeypatch.setattr(tail_jobs, "_append", _no_started)
+    tail_jobs.run_jobs("tj000033")
+    assert ran == ["learning"]
+    assert [j["kind"] for j in tail_jobs.pending_jobs("tj000033")] == [
+        "maintenance"]
+
+
+def test_each_job_gets_its_own_recorded_adapter(monkeypatch):
+    """The cache is keyed by (handle_id, seq): one key per handle meant every
+    registration overwrote the last, so maintenance recorded with the run's
+    adapter and learning recorded post-escalation with the ESCALATED one
+    handed maintenance the wrong adapter."""
+    _make_run("tj000034")
+    a_run, a_esc = _FakeAdapter(), _FakeAdapter()
+    got = {}
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: got.__setitem__("maintenance", a))
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: got.__setitem__("learning", a))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    monkeypatch.setattr(tail_jobs, "_build_adapter",
+                        lambda spec: pytest.fail("rebuilt instead of reusing"))
+    tail_jobs.record_maintenance("tj000034", loop_id="L1", adapter=a_run)
+    tail_jobs.record_learning("tj000034", _FakeLoop(), adapter=a_esc)
+    tail_jobs.run_jobs("tj000034")
+    assert got["learning"] is a_esc
+    assert got["maintenance"] is a_run
+
+
+def test_the_escalation_early_drain_keeps_maintenances_adapter(monkeypatch):
+    """The literal escalation shape: learning drains early (kinds filter),
+    maintenance later. Round 2 (3 seats): the whole-handle forget on the
+    early drain threw away maintenance's adapter before it ran."""
+    _make_run("tj000035")
+    live = _FakeAdapter()
+    got = {}
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: got.__setitem__("maintenance", a))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_learning("tj000035", _FakeLoop(), adapter=live)
+    tail_jobs.record_maintenance("tj000035", loop_id="L1", adapter=live)
+    # The early drain (escalation lane): learning only.
+    tail_jobs.run_jobs("tj000035", kinds=(tail_jobs.KIND_LEARNING,),
+                       refresh=False, respect_claim=False)
+    # The final drain: maintenance must still see the live object.
+    monkeypatch.setattr(tail_jobs, "_build_adapter",
+                        lambda spec: pytest.fail("maintenance lost its adapter"))
+    tail_jobs.run_jobs("tj000035")
+    assert got["maintenance"] is live
+
+
+def test_a_successful_spawn_releases_the_parents_cached_adapters(monkeypatch):
+    """The child has its own module dict and can never consume the parent's
+    objects — keeping them was one adapter leaked per handled run in every
+    long-lived caller (drain loops, daemons)."""
+    _make_run("tj000036")
+    tail_jobs.record_learning("tj000036", _FakeLoop(), adapter=_FakeAdapter())
+    assert any(k[0] == "tj000036" for k in tail_jobs._LIVE_ADAPTERS)
+    monkeypatch.setattr(tail_jobs, "spawn_enabled", lambda: True)
+    monkeypatch.setattr(tail_jobs, "spawn", lambda hid: 4242)
+    out = tail_jobs.drain_or_spawn("tj000036")
+    assert out["mode"] == "spawned"
+    assert not any(k[0] == "tj000036" for k in tail_jobs._LIVE_ADAPTERS)
+
+
+def test_a_string_typed_ok_is_surfaced_as_failure():
+    """`"ok": "false"` is a STRING — `is False` read it as success, so a
+    forged or schema-drifted done row hid a failure while still retiring the
+    job. A done row this cannot read as success is surfaced, not trusted."""
+    st = tail_jobs._state_from_rows(
+        [{"event": "job", "seq": 1, "kind": "learning", "spec": {}},
+         {"event": "done", "seq": 1, "ok": "false", "error": "boom"}], None)
+    assert st["pending"] == []          # done retires it either way
+    assert len(st["failed"]) == 1       # ...but the doubt is visible
+
+
+def test_an_orphan_done_row_fabricates_nothing():
+    """A done row with no matching job completes nothing that exists — it
+    must not invent a failed job for the operator to chase."""
+    st = tail_jobs._state_from_rows(
+        [{"event": "done", "seq": 99, "ok": False, "error": "forged"}], None)
+    assert st["failed"] == []
+    assert st["pending"] == []
+
+
+def test_nonfinite_and_arbitrary_numerics_take_the_default():
+    """`bool(nan)` is True and YAML's `.nan`/`.inf` parse as floats — plain
+    numeric truthiness turned malformed config into spawn-ON. Only the two
+    numbers that MEAN a boolean are accepted."""
+    for v in (float("nan"), float("inf"), float("-inf"), 2, -1, 0.5):
+        assert tail_jobs._strict_bool(v, False) is False, v
+        assert tail_jobs._strict_bool(v, True) is True, v
+    assert tail_jobs._strict_bool(0, True) is False
+    assert tail_jobs._strict_bool(1, False) is True
+    assert tail_jobs._strict_bool(0.0, True) is False
+    assert tail_jobs._strict_bool(1.0, False) is True
+
+
+def test_a_failed_refresh_is_surfaced_by_state_and_the_sweep(monkeypatch):
+    """Round 1 recorded the refresh failure; round 2 found no reader — a
+    durable event nobody reads is not surfaced. It rides state, the sweep
+    result, and (via the sweep) heartbeat now."""
+    _make_run("tj000037")
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    import runs
+    monkeypatch.setattr(runs, "slice_log_for_run",
+                        lambda hid: (_ for _ in ()).throw(RuntimeError("render died")))
+    tail_jobs.record_learning("tj000037", _FakeLoop())
+    tail_jobs.run_jobs("tj000037")
+
+    st = tail_jobs.state("tj000037")
+    assert st["refresh_failed"] and "render died" in st["refresh_failed"][0]["error"]
+
+    path = tail_jobs.jobs_path("tj000037")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    result = tail_jobs.sweep_stranded(min_age_s=900)
+    assert result["refresh_failed"] == ["tj000037"]

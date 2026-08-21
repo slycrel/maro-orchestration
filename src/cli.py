@@ -1597,6 +1597,7 @@ def _cmd_finalize_tail(args: argparse.Namespace) -> int:
             # its own lane it would be visible nowhere at all.
             "failed": [{"seq": f.get("seq"), "error": f.get("error")}
                        for f in st["failed"]],
+            "refresh_failed": [f.get("error") for f in st["refresh_failed"]],
             "unreadable": st["unreadable"],
         }
         if args.json:
@@ -1606,17 +1607,42 @@ def _cmd_finalize_tail(args: argparse.Namespace) -> int:
                   f"pending={','.join(payload['pending']) or '(none)'}"
                   + (f" failed={len(payload['failed'])}"
                      if payload["failed"] else "")
+                  + (" refresh-FAILED" if payload["refresh_failed"] else "")
                   + (" STORE UNREADABLE" if payload["unreadable"] else ""))
             for f in payload["failed"]:
                 print(f"  seq {f['seq']}: {f['error']}")
         return 0
 
-    ran = _tj.run_jobs(args.handle_id)
+    ran = _tj.run_jobs(args.handle_id,
+                       respect_claim=not getattr(args, "force", False))
+    # Honesty about the ending (adversarial r2, Expert QA): "ran 0" covers
+    # four different outcomes — empty store, declined to a live claim,
+    # unreadable store, unpublishable claim — and a supervisor reading exit 0
+    # recorded all of them as success. Report the state left behind, and exit
+    # nonzero when work remains undone.
+    st = _tj.state(args.handle_id)
+    payload = {
+        "handle_id": args.handle_id,
+        "ran": ran,
+        "pending": [str(j.get("kind")) for j in st["pending"]],
+        "failed": len(st["failed"]),
+        "refresh_failed": bool(st["refresh_failed"]),
+        "unreadable": st["unreadable"],
+    }
     if args.json:
-        print(json.dumps({"handle_id": args.handle_id, "ran": ran}, indent=2))
+        print(json.dumps(payload, indent=2))
     else:
-        print(f"[maro] finalize-tail {args.handle_id}: ran {ran} job(s)")
-    return 0
+        line = f"[maro] finalize-tail {args.handle_id}: ran {ran} job(s)"
+        if payload["pending"]:
+            line += f"; still pending: {','.join(payload['pending'])}"
+        if payload["failed"]:
+            line += f"; {payload['failed']} job(s) FAILED (see --list)"
+        if payload["refresh_failed"]:
+            line += "; surface refresh FAILED (card/report may be stale)"
+        if payload["unreadable"]:
+            line += "; STORE UNREADABLE"
+        print(line)
+    return 1 if (payload["unreadable"] or payload["pending"]) else 0
 
 
 def _cmd_mission(args: argparse.Namespace) -> int:

@@ -478,6 +478,12 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                 log.warning("tail jobs FAILED on %d run(s): %s",
                             len(_tails["failed_jobs"]),
                             ", ".join(_tails["failed_jobs"]))
+            if _tails.get("refresh_failed"):
+                result["tail_refresh_failed"] = _tails["refresh_failed"]
+                log.warning("tail surface refresh FAILED on %d run(s) — "
+                            "cards/reports may be stale: %s",
+                            len(_tails["refresh_failed"]),
+                            ", ".join(_tails["refresh_failed"]))
             log.info("stranded-tail sweep: %d run(s), %d job(s) drained",
                      len(_tails["stranded"]), _tails.get("drained", 0))
             if verbose:

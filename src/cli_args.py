@@ -564,6 +564,11 @@ def build_parser() -> argparse.ArgumentParser:
              "a job recorded seconds ago may belong to a child still starting")
     p_tail.add_argument("--limit", type=int, default=10,
                         help="Max runs to touch in a sweep (default 10)")
+    p_tail.add_argument(
+        "--force", action="store_true",
+        help="Drain even past a live-looking claim (single-run form only). "
+             "The operator overrule for the claim's known blind spot: pid "
+             "reuse can make a dead child's claim read as live forever")
     p_tail.add_argument("--json", action="store_true", help="JSON output")
 
     return parser

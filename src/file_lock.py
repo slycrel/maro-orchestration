@@ -103,7 +103,8 @@ def _get_held() -> set:
 
 
 @contextmanager
-def locked_write(path: Path, *, timeout_s: float | None = None) -> Generator[None, None, None]:
+def locked_write(path: Path, *, timeout_s: float | None = None,
+                 require: bool = False) -> Generator[None, None, None]:
     """Acquire an exclusive lock on path.lock, yield, then release.
 
     Uses a separate .lock file so the data file can be safely rewritten.
@@ -117,6 +118,14 @@ def locked_write(path: Path, *, timeout_s: float | None = None) -> Generator[Non
 
     For reentrant calls (same thread already holds the lock), skips
     acquisition to avoid deadlock.
+
+    require=True makes acquisition mandatory for THIS call: the
+    environment-failure fallback (lock file uncreatable -> proceed unlocked)
+    and the fail-open timeout override both raise instead of yielding
+    unlocked. Default False keeps the long-standing contract for every
+    existing caller. Added for tail_jobs._transact (adversarial r2, Expert
+    QA): a read-decide-append transaction that silently runs unlocked is the
+    round-1 race wearing the fix's clothes.
     """
     lock_path = path.parent / (path.name + ".lock")
     lock_key = str(lock_path.resolve())
@@ -155,7 +164,7 @@ def locked_write(path: Path, *, timeout_s: float | None = None) -> Generator[Non
             lock_fd.close()
             lock_fd = None
             _report_timeout(lock_path, waited)
-            if not _fail_open():
+            if require or not _fail_open():
                 raise FileLockTimeout(
                     f"file_lock: could not acquire {lock_path} within "
                     f"{waited:.1f}s (holder alive?). Set "
@@ -172,7 +181,11 @@ def locked_write(path: Path, *, timeout_s: float | None = None) -> Generator[Non
     except Exception as exc:
         # Lock file can't be created/locked at all (RO fs, permissions):
         # environment problem, not contention — blocking wouldn't protect
-        # anything, so fall through unlocked with a warning.
+        # anything, so fall through unlocked with a warning. Unless the
+        # caller REQUIRES exclusivity: a transaction that must not run
+        # unlocked propagates the environment failure instead.
+        if require:
+            raise
         logger.warning(
             "file_lock: failed to acquire lock on %s: %s — proceeding unlocked",
             lock_path, exc,
