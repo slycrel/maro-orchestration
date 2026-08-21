@@ -2476,6 +2476,7 @@ def _save_skills(skills: List[Skill], *,
             divergent: set = set()
             ghost_ids: list = []
             strand_ids: set = set()
+            unprovable_unnamed = 0
             compacted = tainted = unprovable = 0
             if path.exists():
                 # split("\n"), not splitlines(): the latter also breaks on
@@ -2516,6 +2517,14 @@ def _save_skills(skills: List[Skill], *,
                         _sid = d.get("id") if isinstance(d, dict) else None
                         if isinstance(_sid, str) and _sid:
                             strand_ids.add(_sid)
+                        else:
+                            # No recoverable id — this row could be
+                            # ANY named id; the ghost message must
+                            # hedge on it (adversarial r20, two seats,
+                            # probed: an id-less unprovable row let
+                            # the ghost message assert absence the
+                            # scan had not proved).
+                            unprovable_unnamed += 1
                         out.append(line)
                         continue
                     if row.id in dropped_ids:
@@ -2615,6 +2624,18 @@ def _save_skills(skills: List[Skill], *,
             stranded_named = sorted(sid for sid in updated_ids
                                     if sid not in slot
                                     and sid in strand_ids)
+            # The DROP twin (adversarial r20, five seats, probed): the
+            # dropped_ids branch is only reachable for PROVABLE rows,
+            # so a named drop whose live row fails the proof silently
+            # no-oped — the cull returned clean, the row survived, and
+            # the only signal was the id-less carry line. Deletions by
+            # name earn the same three truths as writes by name.
+            stranded_dropped = sorted(sid for sid in dropped_ids
+                                      if sid in strand_ids
+                                      and sid not in dropped_seen)
+            partially_dropped = sorted(sid for sid in dropped_ids
+                                       if sid in strand_ids
+                                       and sid in dropped_seen)
             ghost_ids = sorted(sid for sid in updated_ids
                                if sid not in slot
                                and sid not in strand_ids)
@@ -2650,6 +2671,21 @@ def _save_skills(skills: List[Skill], *,
                     "named id(s) removed by this rewrite (%s): %s",
                     dropped_rows, len(dropped_seen), path,
                     sorted(dropped_seen))
+            if stranded_dropped:
+                logger.warning(
+                    "[skills] _save_skills: %d named drop(s) NOT "
+                    "applied — the live row(s) for these id(s) are "
+                    "present but unprovable, carried verbatim; the row "
+                    "was NOT removed; repair, then confirm the drop "
+                    "(%s): %s",
+                    len(stranded_dropped), path, stranded_dropped)
+            if partially_dropped:
+                logger.warning(
+                    "[skills] _save_skills: %d named drop(s) removed "
+                    "the provable row(s), but unprovable duplicate "
+                    "row(s) for these id(s) remain in the store, "
+                    "carried verbatim (%s): %s",
+                    len(partially_dropped), path, partially_dropped)
             if stranded_named:
                 # Present, not deleted (adversarial r19, two seats,
                 # probed): the row for this named id is stranded
@@ -2676,8 +2712,10 @@ def _save_skills(skills: List[Skill], *,
                     "was written for them and nothing was removed by "
                     "this refusal (%s): %s",
                     len(ghost_ids),
-                    (", or held by one of the %d unparseable row(s) "
-                     "carried verbatim" % tainted) if tainted else "",
+                    (", or held by one of the %d row(s) carried "
+                     "verbatim whose id could not be read"
+                     % (tainted + unprovable_unnamed))
+                    if (tainted + unprovable_unnamed) else "",
                     path, ghost_ids)
             if divergent:
                 logger.warning(

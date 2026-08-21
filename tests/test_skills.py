@@ -4544,7 +4544,7 @@ class TestTheAnnouncementTellsTheTruth:
             sk._save_skills(caller, updated_ids={"T"})
         msgs = [r.getMessage() for r in caplog.records]
         assert any("no parseable live row" in m
-                   and "unparseable row(s) carried verbatim" in m
+                   and "carried verbatim whose id could not be read" in m
                    for m in msgs)
 
     def test_a_clean_ghost_message_does_not_hedge(
@@ -4561,7 +4561,7 @@ class TestTheAnnouncementTellsTheTruth:
             sk._save_skills(pool, updated_ids={"X"})
         msgs = [r.getMessage() for r in caplog.records]
         assert any("no parseable live row" in m for m in msgs)
-        assert not any("unparseable row(s) carried verbatim" in m
+        assert not any("carried verbatim whose id could not be read" in m
                        for m in msgs)
 
     def test_the_divergence_warning_names_both_causes(
@@ -4595,3 +4595,83 @@ class TestTheAnnouncementTellsTheTruth:
                            and "either" in m for m in div)
         assert not any("the caller's edit was NOT applied" in m
                        for m in div)
+
+
+class TestDeletionsEarnTheSameTruths:
+    """Adversarial r20 (five seats, HIGH, probed): the dropped_ids
+    branch is only reachable for PROVABLE rows, so a named drop whose
+    live row failed the proof silently no-oped — the cull returned
+    clean, the row survived, and the only signal was the id-less carry
+    line. Deletions by name get the same three truths writes got in
+    r19."""
+
+    @staticmethod
+    def _mk(sid, desc="d"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=sid, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    @staticmethod
+    def _corrupt_row(path):
+        import json as _json
+        row = _json.loads(path.read_text().strip())
+        row["utility_score"] = "nope"
+        path.write_text(_json.dumps(row) + "\n")
+
+    def test_a_named_drop_on_an_unprovable_row_is_announced_not_silent(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("K"))
+        self._corrupt_row(sk._skills_path())
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills([], dropped_ids={"K"}, updated_ids=frozenset())
+        # The row was NOT removed — and the failure names the id.
+        assert '"K"' in sk._skills_path().read_text()
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("named drop(s) NOT applied" in m and "'K'" in m
+                   and "repair, then confirm the drop" in m for m in msgs)
+        assert not any("removed by this rewrite" in m for m in msgs)
+
+    def test_a_partial_drop_names_its_surviving_duplicate(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("P"))
+        # A second, unprovable physical row for the same id.
+        with sk._skills_path().open("a", encoding="utf-8") as f:
+            f.write('{"id": "P", "name": "P", "utility_score": "nope"}\n')
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills([], dropped_ids={"P"}, updated_ids=frozenset())
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("removed the provable row(s)" in m
+                   and "unprovable duplicate" in m and "'P'" in m
+                   for m in msgs)
+        # The provable row is gone; the unprovable duplicate remains.
+        assert '"nope"' in sk._skills_path().read_text()
+
+    def test_an_idless_unprovable_row_earns_the_ghost_hedge(
+            self, tmp_path, monkeypatch, caplog):
+        """Adversarial r20 (two seats, probed): the hedge counted only
+        byte-tainted rows, so an unprovable row whose id field itself
+        was unreadable let the ghost message assert absence the scan
+        had not proved."""
+        import json as _json
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("G"))
+        path = sk._skills_path()
+        row = _json.loads(path.read_text().strip())
+        row["id"] = 12345
+        path.write_text(_json.dumps(row) + "\n")
+        caller = [self._mk("G", "revised")]
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(caller, updated_ids={"G"})
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("no parseable live row" in m
+                   and "whose id could not be read" in m for m in msgs)

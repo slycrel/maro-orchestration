@@ -497,17 +497,44 @@ def _apply_suggestion_action(d: dict) -> bool:
                 # and write is a lost race with a deliberate drop —
                 # refused and announced, not resurrected (the r18
                 # naming-is-not-creation rule, applied here too).
-                _fresh = next((s for s in load_skills()
-                               if s.id == existing.id), None)
-                if _fresh is None:
-                    log.warning(
-                        "apply_suggestion %s: skill %r (id %s) vanished "
-                        "between snapshot and write — concurrently "
-                        "removed; suggestion NOT applied",
-                        suggestion_id, target, existing.id)
-                    return False
-                _fresh.description = suggestion_text[:500]
-                save_skill(_fresh)
+                # ONE lock spans read -> mutate -> write
+                # (adversarial r20, three seats, probed): the r19
+                # fresh read was unlocked, so a writer landing between
+                # it and save_skill's own lock was still reverted —
+                # and a drop landing there was resurrected by
+                # save_skill's unconditional upsert. locked_write is
+                # reentrant for this thread, so save_skill's inner
+                # acquisition composes; cross-process writers are
+                # excluded for the whole read-modify-write.
+                from file_lock import locked_write as _lw
+                with _lw(_sp(), require=True):
+                    _fresh = next((s for s in load_skills()
+                                   if s.id == existing.id), None)
+                    if _fresh is None:
+                        log.warning(
+                            "apply_suggestion %s: skill %r (id %s) "
+                            "vanished between snapshot and write — "
+                            "concurrently removed; suggestion NOT "
+                            "applied", suggestion_id, target,
+                            existing.id)
+                        return False
+                    if _fresh.description != existing.description:
+                        # The audit row's old_description was captured
+                        # from the SNAPSHOT; the world moved in between
+                        # (adversarial r20, two seats, probed). The
+                        # suggestion is still the authority for the
+                        # description — but the clobber is announced,
+                        # and the audit row's basis is named.
+                        log.warning(
+                            "apply_suggestion %s: skill %r description "
+                            "changed between snapshot and write — the "
+                            "concurrent edit is overwritten by this "
+                            "suggestion, and the audit row's "
+                            "old_description holds the SNAPSHOT value, "
+                            "not the overwritten one", suggestion_id,
+                            target)
+                    _fresh.description = suggestion_text[:500]
+                    save_skill(_fresh)
             else:
                 # Create a new provisional skill from the suggestion text.
                 # The id was minted at before_state capture so the audit
@@ -944,10 +971,31 @@ def revert_suggestion(suggestion_id: str) -> dict:
             state_type = before_state.get("type", "")
 
             if state_type == "skill_update":
-                # Restore old description
+                # Restore old description — but only over the value
+                # THIS suggestion wrote (adversarial r20, two seats,
+                # probed): a blind restore of the snapshot value
+                # destroyed a concurrent edit made AFTER the apply,
+                # twice — once losing the edit, once reporting
+                # "reverted" as if the undo were clean. If the live
+                # description is no longer the suggestion's own text,
+                # the world moved on; refuse and say so.
                 old_desc = before_state.get("old_description", "")
+                _sugg_text = (match.get("suggestion_text", "") or "")[:500]
                 for s in skills:
                     if s.name == target or s.id == target:
+                        if _sugg_text and s.description != _sugg_text:
+                            log.warning(
+                                "revert_suggestion %s: skill %r "
+                                "description changed since this "
+                                "suggestion was applied — refusing "
+                                "blind restore; the live value is "
+                                "kept", suggestion_id, target)
+                            return {"reverted": False,
+                                    "behavioral": False,
+                                    "category": category,
+                                    "detail": "description changed "
+                                              "since apply — blind "
+                                              "restore refused"}
                         s.description = old_desc
                         detail = f"restored description for skill '{s.name}'"
                         restored_id = s.id

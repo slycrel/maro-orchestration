@@ -4529,3 +4529,113 @@ class TestTheUpdateWritesTheFreshestRow:
         assert sk.load_skills() == []
         assert any("vanished between snapshot and write" in
                    r.getMessage() for r in caplog.records)
+
+
+class TestTheReadModifyWriteHoldsOneLock:
+    """Adversarial r20 (three seats, HIGH, probed): the r19 fresh read
+    was unlocked, so a writer landing between it and save_skill's own
+    lock was still reverted — and a concurrent drop landing there was
+    resurrected by save_skill's unconditional upsert. One locked_write
+    now spans read → mutate → write; and the audit/revert pair stops
+    trusting the snapshot over the world."""
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _mk(sid, name, desc="orig"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=name, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_the_fresh_read_and_the_write_share_the_lock(self):
+        """Structural pin: within the skill_pattern update branch, the
+        locked_write acquisition precedes the fresh read, which
+        precedes save_skill — one critical section, in source order.
+        (A behavioral race test cannot see this: in-thread injection
+        rides the reentrant lock, and cross-thread injection
+        deadlocks by design.)"""
+        import inspect
+        import evolver_store
+        src = inspect.getsource(evolver_store._apply_suggestion_action)
+        lock_at = src.index("with _lw(_sp(), require=True):")
+        read_at = src.index("_fresh = next((s for s in load_skills()")
+        write_at = src.index("save_skill(_fresh)")
+        assert lock_at < read_at < write_at
+
+    def test_a_concurrent_description_edit_is_announced_when_clobbered(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        import file_lock as fl
+        from evolver_store import _apply_suggestion_action
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("d1", "target-skill"))
+        real_append = fl.locked_append
+        fired = {"done": False}
+
+        def racing_append(path, line, **kw):
+            if not fired["done"] and "change_log" in str(path):
+                fired["done"] = True
+                live = {s.id: s for s in sk.load_skills()}
+                live["d1"].description = "concurrent-legit-edit"
+                sk.save_skill(live["d1"])
+            return real_append(path, line, **kw)
+
+        monkeypatch.setattr(fl, "locked_append", racing_append)
+        with caplog.at_level(logging.WARNING):
+            assert _apply_suggestion_action({
+                "category": "skill_pattern", "suggestion": "sugg text",
+                "target": "target-skill", "suggestion_id": "sug-d1",
+                "confidence": 0.5}) is True
+        assert fired["done"]
+        row = next(s for s in sk.load_skills() if s.id == "d1")
+        assert row.description == "sugg text"
+        assert any("description changed between snapshot and write" in
+                   r.getMessage() and "SNAPSHOT value" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_a_revert_refuses_to_destroy_a_later_edit(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("r1", "target-skill", "before"))
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "applied text",
+            "target": "target-skill", "suggestion_id": "sug-r1",
+            "confidence": 0.5}) is True
+        # A later, unrelated legitimate edit.
+        live = {s.id: s for s in sk.load_skills()}
+        live["r1"].description = "later-legit-edit"
+        sk.save_skill(live["r1"])
+        with caplog.at_level(logging.WARNING):
+            res = revert_suggestion("sug-r1")
+        assert res["reverted"] is False
+        assert "blind restore refused" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "r1")
+        assert row.description == "later-legit-edit"
+        assert any("refusing" in r.getMessage() and "blind restore"
+                   in r.getMessage() for r in caplog.records)
+
+    def test_an_undisturbed_revert_still_restores(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("r2", "target-skill", "before"))
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "applied text",
+            "target": "target-skill", "suggestion_id": "sug-r2",
+            "confidence": 0.5}) is True
+        res = revert_suggestion("sug-r2")
+        assert res["reverted"] is True
+        row = next(s for s in sk.load_skills() if s.id == "r2")
+        assert row.description == "before"
