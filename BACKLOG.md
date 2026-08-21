@@ -1542,6 +1542,39 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       into "not stored" and exempts exactly the value the constructor
       launders most quietly (bool(None)); check membership, then the
       value.*
+    - *Its adversarial r15 (2026-08-21, five codex seats on the r14 fix
+      layer): **REJECT, still narrowing** — 7 deduped findings against
+      13, two HIGH clusters, every finding again the prior round's fix
+      stopping one twin short. All probed real — ELEVENTH consecutive
+      zero-hallucination round. The require-lock fix did not travel
+      (both skill-stats RMW recorders rode bare locked_write — fail-open
+      lost one of two concurrent outcomes with two normal returns;
+      require=True now, contended fail-open pin + structural keyword
+      pin); a failed stats write returned an ordinary None (warn-and-
+      return converted disk-full into apparent success — recorders
+      RAISE now; all three production callers already wrap and degrade
+      visibly); the duplicate lane still announced from the read (a
+      pure read logged "will be compacted by the next rewrite" —
+      _StatsRead carries .compacted, the read announces an exclusion
+      from itself, the writer announces compaction after commit); the
+      strict-reader fix missed the sibling input (router's skills.jsonl
+      side raw-loaded rows validate_skill_row rejects into training
+      features — rides read_jsonl_announced + validate_skill_row now;
+      the site left the scanner's view because the framing moved into
+      the shared reader, recorded in the manifest, 71 RISK); the class
+      graph read bases literally (Alias = Base and Base[str] both
+      severed provenance — module-level alias lattice over the shared
+      binding walk, Subscript unwrap, ambiguity unions toward RISK,
+      negative control pins aliases cannot MINT provenance); the
+      retention archive rode the page cache while the delete it
+      justifies fsyncs (locked_append gains require=/durable= — flush,
+      fsync file, fsync new-file parent dir; the archive uses both);
+      and a committed sqlite transform reported "store unchanged" on a
+      post-commit close failure (committed flag; the message now says
+      the store HOLDS the transform, do not retry). REJECTED with
+      reasons: Minimalist's cross-module conservative-RISK ask for the
+      scanner — contradicts r11 receiver-decides; cross-module, the
+      receiver's own module owns the proof.*
     - *Carried lesson from r14: **the fix for "doctrine must travel"
       must itself travel — convert the twins in the SAME commit, not
       the same arc.** r13 wrote the twin-conversion lesson and its own
@@ -1556,6 +1589,15 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       the feature exists to prevent** (a one-lock transaction that
       honors fail-open is the race wearing the fix's clothes —
       require the lock).*
+    - *Carried lesson from r15: **enumerate the twins by the PROPERTY,
+      not by the file.** r14's census converted the twins visible from
+      the defect's own file, and each fix still stopped one twin short —
+      the twin lived behind a different spelling of the same property
+      (every RMW over a keyed store, every destructive-claim log line,
+      every training input — not "what else is in this file").
+      Corollaries: **a retention copy must be at least as durable as
+      the deletion it authorizes**, and **a post-failure message must
+      state what the store HOLDS, not what the code intended**.*
     - *Open design item (r12, Failure Operator — real, pre-existing,
       out of the byte-safety arc's scope): `poll()` durably writes
       `applied=True` BEFORE the loop side applies anything

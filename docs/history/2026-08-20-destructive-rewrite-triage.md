@@ -1497,6 +1497,78 @@ is REMOVED (the caller drives convergence — simpler code, one
 mechanism) and the mutant retargeted at the OUTER fixpoint, which the
 reversed-order chain fixture genuinely exercises. 230/230 after.
 
+## Adversarial round 15 (2026-08-21, five codex seats — the fix layer again)
+
+Five seats on the r14 fix layer. **REJECT, still narrowing**: seven
+deduped findings against thirteen last round, but two unanimous-shape
+HIGHs, and every finding is again the prior round's fix stopping one
+twin short. Every probed claim was real — the eleventh consecutive
+zero-hallucination round.
+
+- **The require-lock fix did not travel** (four seats, HIGH, probed).
+  r14 put `require=True` on `JSONLBackend.transform` and left the two
+  skill-stats RMW recorders on bare `locked_write(path)` — under the
+  documented fail-open mode two concurrent recorders both read
+  `total_uses: N`, both wrote N+1, and one outcome vanished with two
+  normal returns. Both recorders require the lock now, pinned by a
+  contended fail-open test and a structural keyword pin.
+- **A failed write returned an ordinary None** (four seats, HIGH,
+  probed). Both recorders caught `_write_skill_stats` failures, warned,
+  and returned — disk-full indistinguishable from success, execution
+  evidence silently gone, router training biased forever. They raise
+  now; all three production callers already wrap the call in their own
+  `except Exception` and degrade visibly (memory_ledger's docstring
+  even says "attribution is telemetry" — the swallow belongs THERE,
+  where the caller can see it, not in the writer).
+- **The duplicate lane still announced from the read** (four seats,
+  probed). r14 moved the strandee-carry announcement behind commit and
+  left its duplicate twin: a PURE read of two same-id rows logged
+  "will be compacted by the next rewrite" — a destructive claim from a
+  path that changes nothing, wrong in both directions (no rewrite may
+  follow; a failed rewrite already claimed it). `_read_skill_stats`
+  returns a `_StatsRead` tuple-subclass carrying `.compacted`; the
+  read announces an exclusion from its own result, the writer
+  announces the compaction after its commit.
+- **The strict-reader fix did not reach the sibling input** (four
+  seats, probed). r14 made the router's STATS side strict and left the
+  skills side on `read_text` + bare `json.loads` in `except: pass` — a
+  JSON-valid row `validate_skill_row` rejects (`description: 7`), one
+  that can never enter the live pool, still fed str()-coerced text to
+  training. The skills side now rides `read_jsonl_announced` +
+  `validate_skill_row`; unadmitted rows are excluded and announced.
+  The site thereby left the scanner's view entirely (the framing moved
+  into the shared reader) — recorded in the triage manifest, 71 RISK.
+- **The class graph read bases literally** (four seats, probed).
+  `Alias = Base` and the generic spelling `Base[str]` (an
+  `ast.Subscript`, discarded outright) both severed decoder provenance
+  at the inheritance boundary — an inherited raw destructive parse
+  scanner-green again, one round after inheritance was made provenance.
+  A module-level alias lattice now resolves base names (fixpoint over
+  the same shared binding walk, ambiguity unions toward RISK) and
+  Subscript bases unwrap; a negative control pins that an alias cannot
+  MINT provenance.
+- **The retention archive was less durable than the deletion it
+  justifies** (two seats, HIGH, probed). `_archive_skills`' append rode
+  the page cache while the live-pool removal that follows goes through
+  fsyncing `atomic_write` — a power loss could keep the delete and lose
+  the retention copy; and the retention writer honored fail-open.
+  `locked_append` gains `require=` and `durable=` (flush + fsync the
+  file, fsync the parent dir when the append created it), and the
+  archive uses both.
+- **A committed transform reported "store unchanged"** (one seat, LOW,
+  probed). A `sqlite3.Error` raised AFTER `con.commit()` — a `close()`
+  failure — fell into the outer handler, whose message invites a retry
+  that would apply a non-idempotent transform twice. A `committed`
+  flag branches the message: "COMMITTED … the store HOLDS the
+  transform; do not retry."
+
+One ask was rejected with reasons: the Minimalist's standing request to
+treat CROSS-module `.decode` receivers as conservative RISK. That
+contradicts r11's receiver-decides doctrine — `.decode` is not
+parse-shaped wholesale, and the false-positive flood would train
+operators to ignore the scanner. Ambiguity within the module unions
+toward RISK; across modules the receiver's own module owns the proof.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1697,3 +1769,21 @@ Enumerate the twins BEFORE writing the fix; let the round's fixtures
 double as the census; and when a negative control fails during the
 fix, treat it as the census working — round 14's own control surfaced
 the third private copy of the binding walk that no reviewer had found.
+
+The seventeenth is round 15's, and it sharpens the census the sixteenth
+asked for: **enumerate the twins by the PROPERTY, not by the file.**
+Round 14 converted the twins it could see from the defect's own file —
+and each of its fixes still stopped one twin short, because the twin
+lived behind a different spelling of the same property: require-the-lock
+reached the backend named in the finding but not the two recorders doing
+the same read-modify-write two files away; announce-after-commit reached
+the strandee lane but not the duplicate lane six lines up; strict-reads
+reached the stats input but not the skills input in the same function.
+The census that works is "what else HOLDS this property" (every RMW over
+a keyed store, every destructive-claim log line, every training input),
+not "what else is in this file". And two corollaries earned their own
+sentences: **a retention copy must be at least as durable as the
+deletion it authorizes** (an fsynced delete paired with a page-cache
+archive is retention theater), and **a post-failure message must state
+what the store HOLDS, not what the code intended** ("store unchanged"
+after a successful commit is an instruction to double-apply).
