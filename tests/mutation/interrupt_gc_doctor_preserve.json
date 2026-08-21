@@ -2159,7 +2159,7 @@
     "file": "src/evolver_store.py",
     "anchor": "                            if _sugg_missing:",
     "replacement": "                            if False:",
-    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_refuses_too"
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_is_verifiable_not_refused"
   },
   {
     "name": "r22 evolver :: the create revert reads before the lock",
