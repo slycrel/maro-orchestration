@@ -2475,6 +2475,7 @@ def _save_skills(skills: List[Skill], *,
             dropped_rows = 0
             divergent: set = set()
             ghost_ids: list = []
+            strand_ids: set = set()
             compacted = tainted = unprovable = 0
             if path.exists():
                 # split("\n"), not splitlines(): the latter also breaks on
@@ -2507,6 +2508,14 @@ def _save_skills(skills: List[Skill], *,
                         row = validate_skill_row(d)
                     except Exception:
                         unprovable += 1
+                        # The row failed the PROOF, but its declared id
+                        # may still parse — recovered so a NAMED write
+                        # against it can be announced honestly as
+                        # "present but unprovable", not "concurrently
+                        # removed" (adversarial r19, two seats, probed).
+                        _sid = d.get("id") if isinstance(d, dict) else None
+                        if isinstance(_sid, str) and _sid:
+                            strand_ids.add(_sid)
                         out.append(line)
                         continue
                     if row.id in dropped_ids:
@@ -2544,10 +2553,19 @@ def _save_skills(skills: List[Skill], *,
                         # carried verbatim, holding its ordinal.
                         # A caller that MUTATED an unnamed copy gets a
                         # warning, not silence (adversarial r18, Failure
-                        # Operator, probed): forgetting to name an id in
-                        # updated_ids discarded the edit with no signal
-                        # anywhere — the omission twin of the
-                        # contradiction ValueErrors, which cannot see it.
+                        # Operator): forgetting to name an id in
+                        # updated_ids discards the edit with no signal.
+                        # But divergence has TWO causes this function
+                        # cannot tell apart (adversarial r19, four
+                        # seats, probed): a forgotten edit, and a
+                        # CONCURRENT named write that legitimately moved
+                        # the live row after the caller's snapshot — the
+                        # exact case r16/r17 carry silently by design.
+                        # So the announcement states the fact and names
+                        # both causes; it must not assert "the caller's
+                        # edit" — under load, staleness is the common
+                        # cause and a lying warning trains operators to
+                        # ignore the honest one.
                         # content_hash is excluded: it is derived, and a
                         # not-yet-backfilled empty hash is not an edit.
                         cand = by_id.get(row.id)
@@ -2594,8 +2612,12 @@ def _save_skills(skills: List[Skill], *,
             # went unparseable mid-flight: the raw row is stranded
             # above and announced; the operator repairs, the caller
             # retries.
+            stranded_named = sorted(sid for sid in updated_ids
+                                    if sid not in slot
+                                    and sid in strand_ids)
             ghost_ids = sorted(sid for sid in updated_ids
-                               if sid not in slot)
+                               if sid not in slot
+                               and sid not in strand_ids)
             atomic_write(
                 path,
                 "\n".join([l for l in out if l is not None]) + "\n",
@@ -2628,18 +2650,43 @@ def _save_skills(skills: List[Skill], *,
                     "named id(s) removed by this rewrite (%s): %s",
                     dropped_rows, len(dropped_seen), path,
                     sorted(dropped_seen))
-            if ghost_ids:
+            if stranded_named:
+                # Present, not deleted (adversarial r19, two seats,
+                # probed): the row for this named id is stranded
+                # verbatim above — "concurrently removed" would send
+                # the operator hunting a deletion that never happened
+                # when the fix is to repair the row and retry.
                 logger.warning(
                     "[skills] _save_skills: %d named write(s) NOT "
-                    "applied — id(s) absent from the live store, "
-                    "concurrently removed; the deletion stands (%s): %s",
-                    len(ghost_ids), path, ghost_ids)
+                    "applied — the live row(s) for these id(s) are "
+                    "present but unprovable, carried verbatim; repair "
+                    "and retry (%s): %s",
+                    len(stranded_named), path, stranded_named)
+            if ghost_ids:
+                # No parseable live row holds these ids. The causes
+                # this function cannot tell apart: concurrently
+                # removed, never created, or riding one of the
+                # byte-tainted rows whose ids are unrecoverable — the
+                # message claims only what the scan proved
+                # (adversarial r19, two seats).
+                logger.warning(
+                    "[skills] _save_skills: %d named write(s) NOT "
+                    "applied — no parseable live row holds these id(s) "
+                    "(concurrently removed or never created%s); nothing "
+                    "was written for them and nothing was removed by "
+                    "this refusal (%s): %s",
+                    len(ghost_ids),
+                    (", or held by one of the %d unparseable row(s) "
+                     "carried verbatim" % tainted) if tainted else "",
+                    path, ghost_ids)
             if divergent:
                 logger.warning(
-                    "[skills] _save_skills: %d row(s) in the caller's "
-                    "list differ from the live store but were NOT named "
-                    "in updated_ids — the caller's edit was NOT applied; "
-                    "the live row was carried (%s): %s",
+                    "[skills] _save_skills: %d unnamed row(s) in the "
+                    "caller's list differ from the live store — either "
+                    "an unnamed edit was discarded, or a concurrent "
+                    "write legitimately moved the row after the "
+                    "caller's snapshot; the live row was carried "
+                    "either way (%s): %s",
                     len(divergent), path, sorted(divergent))
     except Exception as e:
         # Name the store and RAISE (adversarial r16, two seats, probed):

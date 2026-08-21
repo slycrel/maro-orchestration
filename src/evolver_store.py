@@ -483,9 +483,31 @@ def _apply_suggestion_action(d: dict) -> bool:
                         _shutil.copy2(str(_src), str(_src) + ".bak")
                 except Exception as _be:
                     print(f"[evolver] skill backup failed (non-blocking): {_be}", file=sys.stderr)
-                # Update description with the suggestion; keep rest intact
-                existing.description = suggestion_text[:500]
-                save_skill(existing)
+                # Update description with the suggestion; keep rest
+                # intact. The snapshot decides CLASSIFICATION only —
+                # the row actually written is re-read fresh here
+                # (adversarial r19, four seats, probed): writing the
+                # capture-time object back through save_skill's
+                # whole-row replace silently reverted every field a
+                # concurrent writer had legitimately advanced in the
+                # window (an open circuit breaker reset to closed, a
+                # utility demotion undone), and r18's snapshot-reuse
+                # had WIDENED that window. The description lands on the
+                # freshest row; a row that vanished between snapshot
+                # and write is a lost race with a deliberate drop —
+                # refused and announced, not resurrected (the r18
+                # naming-is-not-creation rule, applied here too).
+                _fresh = next((s for s in load_skills()
+                               if s.id == existing.id), None)
+                if _fresh is None:
+                    log.warning(
+                        "apply_suggestion %s: skill %r (id %s) vanished "
+                        "between snapshot and write — concurrently "
+                        "removed; suggestion NOT applied",
+                        suggestion_id, target, existing.id)
+                    return False
+                _fresh.description = suggestion_text[:500]
+                save_skill(_fresh)
             else:
                 # Create a new provisional skill from the suggestion text.
                 # The id was minted at before_state capture so the audit

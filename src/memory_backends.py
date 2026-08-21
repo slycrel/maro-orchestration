@@ -562,6 +562,12 @@ class SQLiteBackend(MemoryBackend):
                         continue
                     vouched.append(row_id)
                     records.append(value)
+                # fn() failures ride the widened handler below and are
+                # logged as "transform NOT performed, store unchanged" —
+                # TRUE (the rollback ran), but the defect may be in the
+                # caller's fn, not the store; the exception itself
+                # propagates unwrapped either way (adversarial r19,
+                # three seats, judged: accurate message, accepted).
                 out = fn(records)
                 datas = [prove_record_line(r) for r in out]
                 con.executemany(

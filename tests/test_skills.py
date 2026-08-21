@@ -4398,7 +4398,8 @@ class TestNamingIsNotCreation:
             sk._save_skills(pool, updated_ids={"X"})
         assert sk.load_skills() == [], "retired row resurrected"
         assert any("named write(s) NOT applied" in r.getMessage()
-                   and "deletion stands" in r.getMessage()
+                   and "no parseable live row holds these id(s)" in
+                   r.getMessage()
                    and str(sk._skills_path()) in r.getMessage()
                    for r in caplog.records)
 
@@ -4430,10 +4431,8 @@ class TestNamingIsNotCreation:
         with caplog.at_level(logging.WARNING):
             sk._save_skills(pool, updated_ids=frozenset())
         assert sk.load_skills()[0].description == "orig"
-        assert any("NOT named" in r.getMessage()
+        assert any("differ from the live store" in r.getMessage()
                    and "'M'" in r.getMessage()
-                   or ("updated_ids" in r.getMessage()
-                       and "M" in r.getMessage())
                    for r in caplog.records)
 
     def test_an_untouched_unnamed_row_raises_no_divergence_noise(
@@ -4489,3 +4488,110 @@ class TestNamingIsNotCreation:
         assert sk.load_skills() == []
         assert any("2 physical row(s) for 1 named id(s)" in r.getMessage()
                    for r in caplog.records)
+
+
+class TestTheAnnouncementTellsTheTruth:
+    """Adversarial r19 (multi-seat, probed): the r18 announcements
+    over-claimed their causes. 'Concurrently removed; the deletion
+    stands' fired for a row physically present but unprovable — and
+    for an id never created at all; the divergence warning asserted
+    'the caller's edit was NOT applied' when the common cause under
+    load is a concurrent NAMED write legitimately moving the row. A
+    message states what the scan PROVED, never a guessed cause."""
+
+    @staticmethod
+    def _mk(sid, desc="d"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=sid, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_a_named_write_against_an_unprovable_row_says_present(
+            self, tmp_path, monkeypatch, caplog):
+        import json as _json
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("U"))
+        # Drift the live row so it parses but fails the proof.
+        path = sk._skills_path()
+        row = _json.loads(path.read_text().strip())
+        row["utility_score"] = "nope"
+        path.write_text(_json.dumps(row) + "\n")
+        raw = path.read_bytes()
+        caller = [self._mk("U", "revised")]
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(caller, updated_ids={"U"})
+        # The unprovable row rode through verbatim.
+        assert raw.strip() in path.read_bytes()
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("present but unprovable" in m and "'U'" in m
+                   for m in msgs)
+        assert not any("no parseable live row" in m for m in msgs)
+        assert not any("concurrently removed" in m for m in msgs)
+
+    def test_a_tainted_store_earns_the_ghost_message_a_hedge(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("T"))
+        path = sk._skills_path()
+        path.write_bytes(path.read_bytes().replace(b'"T"', b'"T\xff"'))
+        caller = [self._mk("T", "revised")]
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(caller, updated_ids={"T"})
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("no parseable live row" in m
+                   and "unparseable row(s) carried verbatim" in m
+                   for m in msgs)
+
+    def test_a_clean_ghost_message_does_not_hedge(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("X"))
+        pool = sk.load_skills()
+        live = sk.load_skills()
+        sk._archive_skills(live, reason="test_cull")
+        sk._save_skills([], dropped_ids={"X"}, updated_ids=frozenset())
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids={"X"})
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("no parseable live row" in m for m in msgs)
+        assert not any("unparseable row(s) carried verbatim" in m
+                       for m in msgs)
+
+    def test_the_divergence_warning_names_both_causes(
+            self, tmp_path, monkeypatch, caplog):
+        """The steady-state shape under load: a third party's NAMED
+        write moves a row this caller never touched. The warning may
+        fire — but it must state the ambiguity, never assert the
+        caller made an edit."""
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A"))
+        sk.save_skill(self._mk("B"))
+        snapshot = sk.load_skills()          # caller: will touch only A
+        live = sk.load_skills()              # concurrent legit writer
+        for s in live:
+            if s.id == "B":
+                s.description = "moved-by-b-writer"
+        sk._save_skills(live, updated_ids={"B"})
+        for s in snapshot:
+            if s.id == "A":
+                s.description = "a-edit"
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(snapshot, updated_ids={"A"})
+        by_id = {s.id: s for s in sk.load_skills()}
+        assert by_id["B"].description == "moved-by-b-writer"
+        assert by_id["A"].description == "a-edit"
+        div = [r.getMessage() for r in caplog.records
+               if "differ from the live store" in r.getMessage()]
+        assert div and all("concurrent write" in m
+                           and "either" in m for m in div)
+        assert not any("the caller's edit was NOT applied" in m
+                       for m in div)

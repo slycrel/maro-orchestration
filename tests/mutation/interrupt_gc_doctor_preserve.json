@@ -1821,7 +1821,7 @@
  {
   "name": "r17 pool :: the stale tail resurrects deleted rows again",
   "file": "src/skills.py",
-  "anchor": "            ghost_ids = sorted(sid for sid in updated_ids\n                               if sid not in slot)\n",
+  "anchor": "            ghost_ids = sorted(sid for sid in updated_ids\n                               if sid not in slot\n                               and sid not in strand_ids)\n",
   "replacement": "            out.extend(_prove_line(s)\n                       for s in skills\n                       if s.id not in slot)\n            ghost_ids = []\n",
   "tests": "tests/test_skills.py::TestAWriteMustBeNamed"
  },
@@ -1961,7 +1961,7 @@
  {
   "name": "r18 pool :: the resurrection tail returns",
   "file": "src/skills.py",
-  "anchor": "            ghost_ids = sorted(sid for sid in updated_ids\n                               if sid not in slot)",
+  "anchor": "            ghost_ids = sorted(sid for sid in updated_ids\n                               if sid not in slot\n                               and sid not in strand_ids)",
   "replacement": "            out.extend(_prove_line(s)\n                       for s in skills\n                       if s.id in updated_ids and s.id not in slot)\n            ghost_ids = []",
   "tests": "tests/test_skills.py::TestNamingIsNotCreation::test_a_stale_named_write_cannot_resurrect_a_dropped_row"
  },
@@ -2034,5 +2034,40 @@
   "anchor": "message too\n            if committed:\n                log.error(\"SQLiteBackend.append(%s): append COMMITTED \"",
   "replacement": "message too\n            if committed and isinstance(exc, sqlite3.Error):\n                log.error(\"SQLiteBackend.append(%s): append COMMITTED \"",
   "tests": "tests/test_memory_backend.py::TestACommittedWriteSaysSoEvenWhenCleanupFails::test_a_non_sqlite_close_failure_still_says_holds"
+ },
+ {
+  "name": "r19 pool :: a stranded id reads as removed again",
+  "file": "src/skills.py",
+  "anchor": "                        _sid = d.get(\"id\") if isinstance(d, dict) else None\n                        if isinstance(_sid, str) and _sid:\n                            strand_ids.add(_sid)",
+  "replacement": "                        pass",
+  "tests": "tests/test_skills.py::TestTheAnnouncementTellsTheTruth::test_a_named_write_against_an_unprovable_row_says_present"
+ },
+ {
+  "name": "r19 pool :: the ghost message stops hedging on tainted rows",
+  "file": "src/skills.py",
+  "anchor": "                    (\", or held by one of the %d unparseable row(s) \"\n                     \"carried verbatim\" % tainted) if tainted else \"\",",
+  "replacement": "                    \"\",",
+  "tests": "tests/test_skills.py::TestTheAnnouncementTellsTheTruth::test_a_tainted_store_earns_the_ghost_message_a_hedge"
+ },
+ {
+  "name": "r19 pool :: the divergence warning blames the caller again",
+  "file": "src/skills.py",
+  "anchor": "                    \"[skills] _save_skills: %d unnamed row(s) in the \"\n                    \"caller's list differ from the live store \u2014 either \"\n                    \"an unnamed edit was discarded, or a concurrent \"\n                    \"write legitimately moved the row after the \"\n                    \"caller's snapshot; the live row was carried \"\n                    \"either way (%s): %s\",",
+  "replacement": "                    \"[skills] _save_skills: %d row(s) in the caller's \"\n                    \"list differ from the live store \u2014 the caller's edit \"\n                    \"was NOT applied (%s): %s\",",
+  "tests": "tests/test_skills.py::TestTheAnnouncementTellsTheTruth::test_the_divergence_warning_names_both_causes"
+ },
+ {
+  "name": "r19 evolver :: the update writes the stale snapshot again",
+  "file": "src/evolver_store.py",
+  "anchor": "                _fresh = next((s for s in load_skills()\n                               if s.id == existing.id), None)",
+  "replacement": "                _fresh = existing",
+  "tests": "tests/test_evolver.py::TestTheUpdateWritesTheFreshestRow::test_a_concurrent_field_advance_survives_the_apply"
+ },
+ {
+  "name": "r19 evolver :: a vanished row is resurrected again",
+  "file": "src/evolver_store.py",
+  "anchor": "                if _fresh is None:",
+  "replacement": "                if False:\n                    pass\n                elif _fresh is None and not (_fresh := existing):",
+  "tests": "tests/test_evolver.py::TestTheUpdateWritesTheFreshestRow::test_a_vanished_row_refuses_the_update"
  }
 ]

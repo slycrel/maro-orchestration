@@ -4439,3 +4439,93 @@ class TestTheAuditRowAndTheActionShareOneSnapshot:
         minted = row["before_state"]["created_skill_id"]
         assert minted in by_id
         assert minted != "c-race"
+
+
+class TestTheUpdateWritesTheFreshestRow:
+    """Adversarial r19 (four seats, HIGH, probed): the r18 snapshot
+    reuse widened the read→write window on the UPDATE path, and
+    save_skill's whole-row replace silently reverted every field a
+    concurrent writer had advanced in it — an open circuit breaker
+    reset to closed, a utility demotion undone. The snapshot decides
+    classification only; the row written is re-read fresh at the last
+    moment, and a row that vanished is a lost race with a deliberate
+    drop — refused, not resurrected."""
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _mk(sid, name):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=name, description="orig",
+            trigger_patterns=["x"], steps_template=["s"],
+            source_loop_ids=[], created_at="2026-08-21T00:00:00+00:00")
+
+    def test_a_concurrent_field_advance_survives_the_apply(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        import file_lock as fl
+        from evolver_store import _apply_suggestion_action
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("f1", "target-skill"))
+        # Land a concurrent, properly-saved field advance INSIDE the
+        # window: hook the audit-trail append, which sits between the
+        # snapshot capture and the write.
+        real_append = fl.locked_append
+        fired = {"done": False}
+
+        def racing_append(path, line, **kw):
+            if not fired["done"] and "change_log" in str(path):
+                fired["done"] = True
+                live = {s.id: s for s in sk.load_skills()}
+                live["f1"].circuit_state = "open"
+                live["f1"].utility_score = 0.05
+                sk.save_skill(live["f1"])
+            return real_append(path, line, **kw)
+
+        monkeypatch.setattr(fl, "locked_append", racing_append)
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "better steps",
+            "target": "target-skill", "suggestion_id": "sug-f1",
+            "confidence": 0.5}) is True
+        assert fired["done"]
+        row = next(s for s in sk.load_skills() if s.id == "f1")
+        # The suggestion's edit landed AND the concurrent advance
+        # survived — the breaker was not silently reset.
+        assert row.description == "better steps"
+        assert row.circuit_state == "open"
+        assert row.utility_score == 0.05
+
+    def test_a_vanished_row_refuses_the_update(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        import file_lock as fl
+        from evolver_store import _apply_suggestion_action
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("f2", "doomed-skill"))
+        real_append = fl.locked_append
+        fired = {"done": False}
+
+        def racing_drop(path, line, **kw):
+            if not fired["done"] and "change_log" in str(path):
+                fired["done"] = True
+                live = sk.load_skills()
+                sk._archive_skills(live, reason="race")
+                sk._save_skills([], dropped_ids={"f2"},
+                                updated_ids=frozenset())
+            return real_append(path, line, **kw)
+
+        monkeypatch.setattr(fl, "locked_append", racing_drop)
+        with caplog.at_level(logging.WARNING):
+            applied = _apply_suggestion_action({
+                "category": "skill_pattern", "suggestion": "too late",
+                "target": "doomed-skill", "suggestion_id": "sug-f2",
+                "confidence": 0.5})
+        assert applied is False
+        assert sk.load_skills() == []
+        assert any("vanished between snapshot and write" in
+                   r.getMessage() for r in caplog.records)
