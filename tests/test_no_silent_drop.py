@@ -238,7 +238,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     # JSONLBackend.read_all was here until adversarial r10 surfaced it as a
     # live read->rewrite pair (family A + B at once) and moved it onto the
     # shared announced reader. Deleting the line IS the fix landing.
-    ("memory_backends.py", "SQLiteBackend.read_all"): 1,
 
     ("metrics.py", "spend_for_loops"): 1,
     ("metrics.py", "spend_today"): 1,
@@ -277,7 +276,7 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("revisit.py", "_dead_ends"): 1,
 
-    ("router.py", "build_training_data"): 2,
+    ("router.py", "build_training_data"): 1,
 
     ("run_curation.py", "_load_loop_log"): 1,
     ("run_curation.py", "find_unconsumed_skill_candidates"): 1,
