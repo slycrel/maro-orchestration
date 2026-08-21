@@ -44,6 +44,39 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
+
+Surfaced as a byproduct of a documented PASS: the round-3 assessment declined
+to backlog a graph-engineering-101 tweet because maro already implements
+everything it describes — and in proving that, read the architecture closely
+enough to find the gap the tweet's payoff line points at.
+
+The facts, independently verified against the checkout (not taken from the
+run's self-report — its own claim-review lane flagged the crux fact as
+needing confirmation, and it confirmed):
+
+- `KnowledgeEdge` exists (`knowledge_web.py` — source/target/typed
+  relation/weight), edges are WRITTEN (`append_knowledge_edge`, called from
+  `knowledge_bridge.py`), and `load_knowledge_edges()` has **zero callers**
+  outside its own definition.
+- `query_knowledge()` is TF-IDF text search over node title/description/tags
+  only. `relation`, `weight`, and edge structure are never consulted by any
+  retrieval path — "multi-hop reasoning", the payoff the graph shape exists
+  for, is structurally unreachable.
+
+So the K2 layer pays the write cost of a graph and collects the read benefit
+of a list. Decision-shaped, not a rider: either (a) wire edge traversal into
+retrieval (e.g. one-hop expansion from TF-IDF seeds, relation-weighted),
+with an A/B against text-only recall before it earns a default; or (b)
+conclude edges have no consumer worth building and stop minting them —
+subtract-before-add cuts both ways, and this entry deliberately does not
+presume (a). Candidate input for the memory-as-module bake-off (arc -1) and
+a natural first nominee for the subtraction audit (Vision/Deferred) if (b).
+
+- [ ] Adjudicate (a)-vs-(b) with usage evidence: how many edges exist on the
+      box, what relations, would any live recall have changed with one-hop
+      expansion? Measure before building.
+
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 
 **The incident.** Asked whether we could route step work to cheap models, I
