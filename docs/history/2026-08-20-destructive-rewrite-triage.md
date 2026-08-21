@@ -2322,3 +2322,60 @@ same round's other cluster: fail-closed has a precision obligation —
 "cannot verify" must mean CANNOT, not "the evidence is falsy."
 Refusing a verifiable case is not caution; it deletes the undo
 button and calls it safety.
+
+## Round 23 (2026-08-21): the decorative test goes; a revert that cannot recognize its row refuses
+
+Five sonnet-medium seats (codex still capped) on the r22 fix layer
+(85fc8115 + 4b9faf0e + 403f4a86). The round's shape marks the arc's
+turn toward convergence: the only multi-seat agreement was about a
+TEST, not production code, and every production finding was a
+degenerate-input edge or a pre-existing gap the round's scope
+surfaced — no fix from r22 itself was wrong.
+
+- **The archive-content test was decorative** (four seats, the
+  round's widest agreement — each independently reran it against the
+  pre-fix f7d0fdf3 and watched it pass): the racing-load injection
+  fires inside the single `load_skills()` call both code shapes
+  make, so it cannot distinguish read-before-lock from
+  read-inside-lock. DELETED. The two structural pins — which every
+  seat verified DO fail on the pre-fix code and which the mutation
+  spec wires as the killers — are the honest coverage, exactly as
+  the r22 rationale conceded a behavioral pin cannot exist here. The
+  lesson-22 corollary applies to tests too: a test that cannot fail
+  in the direction it was written for is a claim, not a guard.
+- **An unrecognized `before_state.type` claimed success** (Failure
+  Operator, MEDIUM, probed, pre-existing): a corrupted audit row's
+  type fell through both dispatch branches and the tail returned
+  `reverted: True` with `detail: ""` — stamping applied=False,
+  writing EVOLVER_REVERTED to the captain's log, and telling
+  verify_post_apply the rollback succeeded while the mutation stayed
+  live. Now refuses by name.
+- **Non-string `suggestion_text` slipped every door differently**
+  (Skeptic HIGH + two seats LOW, probed): `0` coerced to `""` and
+  could blind-restore over a live `""`; a list refused through the
+  misleading "description changed" message; an int threw
+  `TypeError` into the generic handler as "revert failed:
+  slice(...)". Present-but-not-a-string is now CANNOT VERIFY.
+
+Also shipped: an undisturbed missing-text fixture (qa — the
+missing-text mutant's kill was riding the description-changed door's
+detail string). BACKLOG'd: the r22 lock holds a durable fsync'd
+archive append inside the skills-store lock (Architect — deliberate
+correctness-over-throughput trade, recorded so a future latency hunt
+doesn't rediscover it from the diff).
+
+### The twenty-fifth lesson
+
+**Prove the test against the defect, not against the fixed code.**
+Four seats caught in one round what the author missed while writing
+it: the archive-content test was green from birth on both sides of
+the fix, because its injection lived inside the very call whose
+placement the fix changed. A regression test's birth certificate is
+a run against the code it claims to catch — the same discipline the
+mutation spec enforces mechanically ("a mutant is written with its
+killing fixture") applied to hand-written behavioral tests, where
+no runner checks it for you. The corollary closed this round's other
+two holes: a dispatcher's ELSE is part of its contract (fallthrough
+plus a shared success tail is a forged receipt), and evidence has a
+TYPE — a guard comparing recorded text must first prove the record
+is text, or the comparison launders garbage into a verdict.

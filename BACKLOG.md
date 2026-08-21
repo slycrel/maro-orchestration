@@ -1759,6 +1759,35 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       degraded_revert_failed BLOCKING for the same outcome. Residual
       is legacy-rows-only after the absent/empty split; upgrade edge
       is porting the stamp, not a new verdict enum mid-arc.*
+    - *Its adversarial r23 (2026-08-21, five sonnet-medium seats on
+      the r22 fix layer): convergence signal — the only multi-seat
+      agreement was a TEST-honesty finding: the r22 archive-content
+      test passed on the pre-fix code (four seats each reran it
+      against f7d0fdf3; the injection rides the single load_skills
+      call in both shapes) — DELETED, the mutation-wired structural
+      pins are the honest coverage. Production: an unrecognized
+      before_state.type fell through both dispatch branches to the
+      shared success tail — reverted:True, detail "", applied
+      flipped, captain's log stamped, for a revert that never ran
+      (now refuses by name); non-string suggestion_text slipped
+      every door differently — 0→"" could blind-restore over a live
+      "", a list refused via the misleading door, an int threw into
+      the generic handler (present-but-not-a-string is now CANNOT
+      VERIFY). Mutation spec 312 → 314.*
+    - *Open item (r23, Architect, deferred): the r22 create-revert
+      lock holds _archive_skills' durable fsync'd append (different
+      file, nested lock) inside the skills-store lock — every
+      concurrent skill writer blocks for the fsync. Deliberate
+      correctness-over-throughput; revisit only if a latency hunt
+      lands here.*
+    - *Carried lesson from r23: **prove the test against the defect,
+      not against the fixed code.** A regression test's birth
+      certificate is a run against the code it claims to catch — the
+      discipline the mutation spec enforces mechanically, applied to
+      hand-written tests where no runner checks it. Corollaries: a
+      dispatcher's ELSE is part of its contract (fallthrough + a
+      shared success tail = a forged receipt), and evidence has a
+      TYPE — prove the record is text before comparing it.*
     - *Carried lesson from r22: **retention is a read too — archive
       the world you delete, not the world you planned to delete.** A
       recovery path built from stale bytes fails exactly when
