@@ -393,3 +393,31 @@ unreviewed** — the same sentence round 1 ended on, one layer deeper. The
 convergence signal is real though: round 2 found no defect in the round-1
 STORE design (transaction, append-only, records), only in its policy edges —
 the rounds are narrowing.
+
+---
+
+# First burn-in, 2026-08-20 — run `0ebadc02-plucky-ember`
+
+A real goal (review the 15 newest link-farm posts for maro relevance),
+dispatched on the box from a clean clone of r12 with `tail.spawn: true` in the
+box workspace config. The claim the chunk exists for, observed in production:
+
+- **The CLI exited at the answer.** Process exit 05:33:52 UTC — the same
+  second the `spawn` and `claim` rows were stamped. Loop ended ~05:33:23;
+  the ~29s between is close_run/curation, not the tail.
+- **The detached child ran the tail until 05:41:34** — learning done
+  05:34:21, maintenance done 05:41:16, claim released. **7m42s (~27% of
+  total wall clock) the caller did not pay.** Under phase 1 the same
+  process would have held its caller through all of it.
+- **The ContextVar pin earned its keep on its first outing:** 1 LLM call
+  landed in `build/calls/` AFTER the parent was dead — the call capture
+  that round 1's missed-by-all-four-seats finding was about.
+- **The surfaces converged:** the run card's mtime is 05:41:33, re-curated
+  by the child after the tail's cost rows landed, exactly as the refresh
+  contract says.
+
+The deliverable itself held up (ranked review with a self-verification pass
+that corrected its own over-claim), with one conflation caught by the
+operator lens: it described the link-farm's `concepts` schema as maro's —
+carried as a correction into the follow-on run, which is burning in the r2
+fix layer (da5b14a) as its second data point.

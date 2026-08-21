@@ -281,6 +281,21 @@ and the r2 fix layer is itself unreviewed. Record:
       answer's caller actually exit at the answer, does the child's tail
       finish, do the surfaces (card, report, captains-log slice) come out
       the same as an inline run's.
+      **First evidence, 2026-08-20 (run `0ebadc02-plucky-ember`, a real
+      link-farm review goal, `tail.spawn: true` box-wide, clean r12
+      clone):** CLI exited at 05:33:52 UTC — the same second the spawn was
+      stamped — and the detached child ran the tail until 05:41:34:
+      **7m42s (~27% of total wall clock) the caller did not wait for.**
+      Both jobs done ok, claim released, run card re-curated by the child
+      at 05:41:33 (after the tail's cost rows), and 1 LLM call captured
+      into `build/calls/` AFTER the parent exited — the ContextVar pin
+      doing its job in production. Store event sequence exactly as
+      designed: job, job, spawn, claim, done, done, release. Note
+      `tail.spawn: true` is now LIVE in the box workspace config (burn-in
+      decree 2026-08-20), so organic runs are accumulating more evidence;
+      the fresh-install default stays OFF until Jeremy flips. A second run
+      (the follow-on backlog-recommendation goal) is burning in the r2 fix
+      layer (da5b14a).
 - [ ] **`knowledge_web.maybe_consolidate()` is still in-process** — same
       `finally` block, after the tail dispatch. Marker-gated to ~once per
       24h, but when it fires the caller waits for the dream cycle (decay +
