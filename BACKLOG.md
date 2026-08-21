@@ -326,9 +326,17 @@ and the r2 fix layer is itself unreviewed. Record:
       designed: job, job, spawn, claim, done, done, release. Note
       `tail.spawn: true` is now LIVE in the box workspace config (burn-in
       decree 2026-08-20), so organic runs are accumulating more evidence;
-      the fresh-install default stays OFF until Jeremy flips. A second run
-      (the follow-on backlog-recommendation goal) is burning in the r2 fix
-      layer (da5b14a).
+      the fresh-install default stays OFF until Jeremy flips. Runs 2-3
+      (f89bf29b, 92491e53) repeated the pattern on the r2 fix layer —
+      per-job `started` rows live in production. **Deliberate crash test
+      2026-08-21 (Jeremy's ask): SIGKILL mid-maintenance, 5s into real
+      work.** Sweep surfaced `needs_operator` and did NOT re-run; second
+      sweep identical (no evidence laundering); heartbeat's grace window
+      held; cadence counters frozen until the OPERATOR drained it
+      deliberately (`finalize-tail`, exit 0) — single tick, measured, and
+      the whole incident reads off eleven rows of the append-only store.
+      Full table in the history record. **The go/no-go checklist is filled
+      from this side; the fresh-install flip is Jeremy's call.**
 - [ ] **`knowledge_web.maybe_consolidate()` is still in-process** — same
       `finally` block, after the tail dispatch. Marker-gated to ~once per
       24h, but when it fires the caller waits for the dream cycle (decay +

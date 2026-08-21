@@ -421,3 +421,35 @@ that corrected its own over-claim), with one conflation caught by the
 operator lens: it described the link-farm's `concepts` schema as maro's —
 carried as a correction into the follow-on run, which is burning in the r2
 fix layer (da5b14a) as its second data point.
+
+---
+
+# Deliberate crash test, 2026-08-21 — run `92491e53-sunny-pine`
+
+Jeremy's ask, after three clean runs: the happy path can't prove recovery, so
+crash one on purpose. A watcher waited for the maintenance job's `started`
+row, gave the runner 5 seconds of real work, then SIGKILLed the detached
+child (pid 611340, 06:29:29 UTC).
+
+Every recovery property held, in production, on the real workspace:
+
+| Check | Result |
+|---|---|
+| Crash signature on disk | maintenance pending, its own `started` row, no `done`, claim unreleased by a dead pid |
+| Sweep classification | `needs_operator: [maintenance]`, `drainable: []` |
+| Sweep behaviour | surfaced, drained 0 — did NOT re-run touched non-idempotent work |
+| Second sweep | identical — the r2 laundering scenario cannot occur (per-job evidence has no global bit for a recovery pass to overwrite) |
+| Heartbeat grace window | correctly blind to a 50s-old crash (1800s gate) |
+| Durable cadence counters | frozen through both sweeps |
+| Operator resolution | `finalize-tail --handle-id 92491e53` drained it deliberately: ran 1 job, exit 0, nothing left stranded |
+| **The double-tick question** | evolve 2→3, inspect 0→1 — **exactly one tick each.** The kill landed before the tick (skill maintenance runs first), so the operator re-run single-ticked. Had it landed after, the operator drain WOULD double-tick — which is exactly why that call belongs to the operator and never to the sweep |
+
+The append-only store doubled as the forensic record: the whole incident —
+spawn, first attempt, kill, operator retry, completion, release — reads off
+eleven rows of `tail_jobs.jsonl` with no other source needed.
+
+Burn-in ledger after one day: three clean runs (7m42s, ~6m, ~6m of tail the
+caller never waited for; per-job `started` rows live from run 2 onward; one
+post-parent-death LLM call captured) plus one deliberate crash with full
+recovery semantics. The go/no-go checklist for the fresh-install flip is
+filled from this side; the flip remains Jeremy's call.
