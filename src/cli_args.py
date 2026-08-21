@@ -543,4 +543,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["text", "line"], default="text",
         help="'line' prints the one-line summary (what land.sh shows)")
 
+    p_tail = sub.add_parser(
+        "finalize-tail",
+        help="Run a finished run's post-answer tail (deferred learning, "
+             "maintenance, surface refresh) from its durable job record")
+    p_tail.add_argument(
+        "--handle-id", default="",
+        help="Run to finalize. This is the whole handoff: the tail is "
+             "reconstructed from the run's tail_jobs.jsonl, not inherited")
+    p_tail.add_argument(
+        "--sweep", action="store_true",
+        help="Instead of one run: drain every stranded tail (jobs pending, "
+             "no live claim, older than --min-age)")
+    p_tail.add_argument(
+        "--list", action="store_true",
+        help="Report what is pending without running anything")
+    p_tail.add_argument(
+        "--min-age", type=float, default=900.0,
+        help="Sweep only tails older than this many seconds (default 900) — "
+             "a job recorded seconds ago may belong to a child still starting")
+    p_tail.add_argument("--limit", type=int, default=10,
+                        help="Max runs to touch in a sweep (default 10)")
+    p_tail.add_argument("--json", action="store_true", help="JSON output")
+
     return parser

@@ -1020,10 +1020,26 @@ def handle(
                 # extraction, crystallization, promotion validation, evolver)
                 # join the loop's cost rows via the same scope.
                 _drain_cost_scope = _fin_cost_scope
-                # Answer-first: deferred learning runs only now, after the
-                # user has heard the outcome. Lessons feed curation's
-                # decision priors and classification, so refresh those card
-                # fields + re-render — the same contract audit repair uses.
+                # Async tail phase 3 (2026-08-20, Jeremy: "that's not really
+                # async if we're blocking the CLI call"). The tail is a
+                # durable job record now, so it can leave this process
+                # entirely: with `tail.spawn` on, drain_or_spawn starts a
+                # detached `maro finalize-tail --handle-id` child and returns
+                # immediately, and the answer's caller stops paying for the
+                # ~53% of wall clock the tail costs (measured 2026-08-19).
+                # With it off — or when the spawn cannot be made — the same
+                # jobs run right here, which is exactly the phase-1 ordering.
+                # Either lane runs the SAME executor over the SAME records;
+                # the surface refresh belongs to whoever ran them.
+                try:
+                    from tail_jobs import drain_or_spawn as _drain_or_spawn
+                    _drain_or_spawn(_hid, adapter=None)
+                except Exception as _tail_exc:
+                    log.warning("tail dispatch failed for %s: %s",
+                                _hid, _tail_exc)
+                # In-process registries: the fallback lane for a handle that
+                # owns no run-dir to record into. Empty whenever the durable
+                # record took the work, so this drains nothing twice.
                 _learning_drained = False
                 with _drain_cost_scope(_tail_lid, "learning"):
                     _learning_drained = bool(_drain_deferred_learning(_hid))
@@ -3256,17 +3272,33 @@ def _handle_impl(
                     "learning: %d loop(s) held out as contested — recorded, "
                     "but not voting for or against",
                     len(_contested_verdict_loop_ids))
-            _defer_learning_post_notify(
-                handle_id,
-                lambda: finalize_deferred_learning(
-                    _dl_result,
+            # Durable first (async-tail phase 3, 2026-08-20): a record can
+            # cross a process boundary and a closure cannot, so the tail is
+            # written to <run_dir>/build/tail_jobs.jsonl and the spawned
+            # `maro finalize-tail` child reads it back. The in-process
+            # closure stays as the fallback for a handle that owns no
+            # run-dir — there is nowhere to record for those, and a phase
+            # may move in time but never silently drop.
+            from tail_jobs import record_learning as _record_learning
+            if not _record_learning(
+                    handle_id, _dl_result,
                     adapter=adapter,
                     project=_dl_project,
                     dry_run=dry_run,
                     verbose=verbose,
                     extra_loop_ids=_dl_extra,
-                    skip_loop_ids=_dl_skip,
-                ))
+                    skip_loop_ids=_dl_skip):
+                _defer_learning_post_notify(
+                    handle_id,
+                    lambda: finalize_deferred_learning(
+                        _dl_result,
+                        adapter=adapter,
+                        project=_dl_project,
+                        dry_run=dry_run,
+                        verbose=verbose,
+                        extra_loop_ids=_dl_extra,
+                        skip_loop_ids=_dl_skip,
+                    ))
         except Exception as _dl_exc:
             log.warning("deferred learning failed for loop %s: %s",
                         getattr(loop_result, "loop_id", ""), _dl_exc)
@@ -3443,6 +3475,21 @@ def _handle_impl(
                         with _esc_scope(
                                 getattr(loop_result, "loop_id", "") or "",
                                 "learning"):
+                            # Durable records first (they hold the tail since
+                            # 2026-08-20), then the in-process fallback
+                            # registry. LEARNING only, and no surface
+                            # refresh: the run is not over — maintenance is
+                            # still owed to the finalize block, and the card
+                            # this would re-render is mid-flight.
+                            try:
+                                from tail_jobs import (run_jobs as _tail_run,
+                                                       KIND_LEARNING)
+                                _tail_run(handle_id, kinds=(KIND_LEARNING,),
+                                          refresh=False, respect_claim=False)
+                            except Exception as _esc_tail_exc:
+                                log.warning(
+                                    "early learning drain failed for %s: %s",
+                                    handle_id, _esc_tail_exc)
                             _drain_deferred_learning(handle_id)
                         _escalated_adapter = build_adapter(model=_next_tier)
                         _pre_escalation_loop = loop_result
@@ -3742,16 +3789,27 @@ def _handle_impl(
                                                     "loop_id", "") or ""]
                                 except Exception:
                                     _dl_post_skip = None
-                                _defer_learning_post_notify(
-                                    handle_id,
-                                    lambda: _fdl_post(
-                                        _dl_post_result,
+                                # Durable first, closure as fallback — same
+                                # contract as the normal lane above.
+                                from tail_jobs import (
+                                    record_learning as _record_learning_post)
+                                if not _record_learning_post(
+                                        handle_id, _dl_post_result,
                                         adapter=_dl_post_adapter,
                                         project=_dl_post_project,
                                         dry_run=False,
                                         verbose=verbose,
-                                        skip_loop_ids=_dl_post_skip,
-                                    ))
+                                        skip_loop_ids=_dl_post_skip):
+                                    _defer_learning_post_notify(
+                                        handle_id,
+                                        lambda: _fdl_post(
+                                            _dl_post_result,
+                                            adapter=_dl_post_adapter,
+                                            project=_dl_post_project,
+                                            dry_run=False,
+                                            verbose=verbose,
+                                            skip_loop_ids=_dl_post_skip,
+                                        ))
                             except Exception as _post_dl_exc:
                                 log.warning(
                                     "post-escalate deferred learning failed for loop %s: %s",

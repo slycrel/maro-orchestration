@@ -446,6 +446,31 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception:
         log.debug("verdict-orphan sweep failed", exc_info=True)
 
+    # Async-tail phase 3 stranded-tail sweep: a run whose tail process died —
+    # or whose parent never dispatched one — leaves its jobs pending in
+    # `<run_dir>/build/tail_jobs.jsonl` with no live claim. Phase 1's
+    # in-process registry could strand the same work with no trace at all;
+    # the record is what makes this findable. Every job kind is idempotent
+    # (lesson extraction skips rows that carry lessons, crystallization
+    # re-checks the verdict gate, maintenance is cadence-based), so draining
+    # one late repeats nothing. The DRAIN can spend LLM calls, which is why
+    # the grace window is generous — this must never race a child that is
+    # still starting.
+    try:
+        from tail_jobs import sweep_stranded
+        _tails = sweep_stranded(limit=3, min_age_s=1800.0)
+        if _tails.get("stranded"):
+            result["stranded_tails"] = len(_tails["stranded"])
+            result["stranded_tail_jobs_drained"] = _tails.get("drained", 0)
+            log.info("stranded-tail sweep: %d run(s), %d job(s) drained",
+                     len(_tails["stranded"]), _tails.get("drained", 0))
+            if verbose:
+                for _t in _tails["stranded"]:
+                    print(f"[heartbeat] sweep: stranded tail {_t['handle_id']} "
+                          f"({','.join(_t['pending'])}, {_t['age_s']}s old)")
+    except Exception:
+        log.debug("stranded-tail sweep failed", exc_info=True)
+
     try:
         result["resumable_runs"] = _find_resumable_runs()
         for entry in result["resumable_runs"]:

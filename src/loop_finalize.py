@@ -878,6 +878,20 @@ def _finalize_loop(
         _maint_deferred = False
         if defer_maintenance and handle_id:
             try:
+                # Durable first (async-tail phase 3, 2026-08-20): recorded to
+                # the run's tail_jobs store so a spawned `maro finalize-tail`
+                # child can run it after this process has exited. The
+                # in-process closure below stays as the fallback for a handle
+                # with no run-dir to record into.
+                from tail_jobs import record_maintenance as _record_maintenance
+                _maint_deferred = _record_maintenance(
+                    handle_id, loop_id=loop_id, adapter=adapter,
+                    verbose=verbose)
+            except Exception as _rec_exc:
+                log.debug("maintenance record failed — trying in-process "
+                          "deferral: %s", _rec_exc)
+        if defer_maintenance and handle_id and not _maint_deferred:
+            try:
                 def _deferred_maintenance(_adapter=adapter, _verbose=verbose,
                                           _lid=loop_id):
                     # Re-enter this loop's captains-log scope: the drain

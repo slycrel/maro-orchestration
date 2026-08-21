@@ -1548,6 +1548,51 @@ def _cmd_dev_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_finalize_tail(args: argparse.Namespace) -> int:
+    """Run a finished run's tail from its durable job record.
+
+    This is the standalone entry point the async tail needed: `handle` spawns
+    it detached and exits with the answer, and it reconstructs everything it
+    needs from `<run_dir>/build/tail_jobs.jsonl` — no in-memory result object
+    crosses the boundary, which is also why the module-identity hazard the
+    in-process registries kept generating cannot arise here.
+    """
+    import tail_jobs as _tj
+
+    if args.sweep:
+        result = _tj.sweep_stranded(limit=max(1, args.limit),
+                                    min_age_s=max(0.0, args.min_age),
+                                    dry_run=bool(args.list))
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            for item in result["stranded"]:
+                print(f"{item['handle_id']}  pending={','.join(item['pending'])} "
+                      f"age={item['age_s']}s")
+            verb = "would drain" if args.list else "drained"
+            print(f"[maro] {len(result['stranded'])} stranded tail(s); "
+                  f"{verb} {result['drained']} job(s)")
+        return 0
+
+    if not args.handle_id:
+        return fail("E_USAGE", "finalize-tail needs --handle-id or --sweep")
+
+    if args.list:
+        pending = _tj.pending_jobs(args.handle_id)
+        payload = {"handle_id": args.handle_id,
+                   "pending": [str(j.get("kind")) for j in pending]}
+        print(json.dumps(payload, indent=2) if args.json
+              else f"{args.handle_id}: pending={','.join(payload['pending']) or '(none)'}")
+        return 0
+
+    ran = _tj.run_jobs(args.handle_id)
+    if args.json:
+        print(json.dumps({"handle_id": args.handle_id, "ran": ran}, indent=2))
+    else:
+        print(f"[maro] finalize-tail {args.handle_id}: ran {ran} job(s)")
+    return 0
+
+
 def _cmd_mission(args: argparse.Namespace) -> int:
     import mission as _mission_mod
     goal_str = " ".join(args.goal)
@@ -2550,6 +2595,7 @@ _COMMAND_HANDLERS = {
     "eval": _cmd_eval,
     "opstatus": _cmd_opstatus,
     "dev-status": _cmd_dev_status,
+    "finalize-tail": _cmd_finalize_tail,
     "mission": _cmd_mission,
     "mission-status": _cmd_mission_status,
     "background": _cmd_background,

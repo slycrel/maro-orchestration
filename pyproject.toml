@@ -264,6 +264,7 @@ py-modules = [
     "stop_verdicts",
     "strategy_evaluator",
     "system_health",
+    "tail_jobs",
     "task_store",
     "team",
     "telegram_listener",
