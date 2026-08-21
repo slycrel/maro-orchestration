@@ -174,21 +174,21 @@ def test_the_drift_gate_catches_a_brand_new_risk_site():
     (2026-08-20): the committed test only checked that --check passes today,
     so `main()` always returning 0 would still have passed it."""
     tm = _manifest()
-    live = (set(tm.SITES) - tm.FIXED) | {"brand_new.py:some_rewrite"}
-    untriaged, stale, regressed, vanished, blind = tm.compare(live)
+    live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {"brand_new.py:some_rewrite"}
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live)
     assert untriaged == ["brand_new.py:some_rewrite"]
-    assert not stale and not regressed and not vanished
+    assert not stale and not regressed and not vanished and not resurfaced
 
 
 def test_the_drift_gate_catches_a_stale_manifest_entry():
     tm = _manifest()
-    live = set(tm.SITES) - tm.FIXED
+    live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     # not a MOVED site: those are exempt from `stale` on purpose (r10), and
     # picking one would test the exemption instead of the leg.
     dropped = sorted(live - set(tm.MOVED))[0]
-    untriaged, stale, regressed, vanished, blind = tm.compare(live - {dropped})
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live - {dropped})
     assert stale == [dropped]
-    assert not untriaged and not regressed and not vanished
+    assert not untriaged and not regressed and not vanished and not resurfaced
 
 
 def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
@@ -196,11 +196,14 @@ def test_the_drift_gate_catches_a_fixed_site_turning_destructive_again():
     neither untriaged (it is in SITES) nor stale (FIXED exempted it), so
     re-introducing the exact destructive rewrite passed silently."""
     tm = _manifest()
-    resurfaced = "interrupt.py:poll"
-    assert resurfaced in tm.FIXED, "fixture drifted"
-    live = (set(tm.SITES) - tm.FIXED) | {resurfaced}
-    untriaged, stale, regressed, vanished, blind = tm.compare(live)
-    assert regressed == [resurfaced]
+    back = "interrupt.py:poll"
+    assert back in tm.FIXED, "fixture drifted"
+    live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {back}
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live)
+    assert regressed == [back]
+    # poll is also a MOVED site, so its outer name coming back fires the
+    # r11 resurfaced leg too — both are true and both should say so.
+    assert resurfaced == [back]
     assert not untriaged and not stale and not vanished
 
 
@@ -236,7 +239,7 @@ def test_the_check_verb_exits_zero_on_a_clean_scan(monkeypatch, capsys):
     import sys as _sys
 
     tm = _manifest()
-    live = set(tm.SITES) - tm.FIXED
+    live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
     assert tm.main() == 0
@@ -311,10 +314,10 @@ def test_the_drift_gate_catches_a_fixed_site_leaving_the_scanners_view():
     its fixed sites (adversarial r3). Watching a site means being able to see
     it."""
     tm = _manifest()
-    live = set(tm.SITES) - tm.FIXED
+    live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     gone = sorted(tm.FIXED - set(tm.MOVED))[0]
     seen = live | (tm.FIXED - {gone})
-    untriaged, stale, regressed, vanished, blind = tm.compare(live, seen)
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, seen)
     assert vanished == [gone]
     assert not untriaged and not regressed
 
@@ -322,9 +325,10 @@ def test_the_drift_gate_catches_a_fixed_site_leaving_the_scanners_view():
 def test_the_vanished_leg_is_quiet_when_every_fixed_site_is_still_visible():
     """Negative control — a gate that always fires is not a gate."""
     tm = _manifest()
-    live = set(tm.SITES) - tm.FIXED
-    untriaged, stale, regressed, vanished, blind = tm.compare(live, live | tm.FIXED)
-    assert not (untriaged or stale or regressed or vanished or blind)
+    live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
+    untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, live | tm.FIXED)
+    assert not (untriaged or stale or regressed or vanished or blind
+                or resurfaced)
 
 
 def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, capsys):
@@ -333,7 +337,7 @@ def test_the_check_verb_exits_nonzero_on_a_vanished_fixed_site(monkeypatch, caps
     import sys as _sys
 
     tm = _manifest()
-    live = set(tm.SITES) - tm.FIXED
+    live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
     gone = sorted(tm.FIXED - set(tm.MOVED))[0]
     monkeypatch.setattr(tm, "_scan", lambda: (live, live | (tm.FIXED - {gone})))
     monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
@@ -352,9 +356,9 @@ class TestTheMovedExemptionKeepsPayingForItself:
     def test_a_moved_sites_new_home_leaving_the_scan_is_caught(self):
         tm = _manifest()
         twin = next(t for t in tm.MOVED.values() if t is not None)
-        live = set(tm.SITES) - tm.FIXED
+        live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
         seen = (live | tm.FIXED) - {twin}
-        untriaged, stale, regressed, vanished, blind = tm.compare(live, seen)
+        untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(live, seen)
         assert blind == [twin]
 
     def test_the_moved_sites_themselves_are_not_reported_stale(self):
@@ -363,9 +367,9 @@ class TestTheMovedExemptionKeepsPayingForItself:
         on a clean tree."""
         tm = _manifest()
         live = (set(tm.SITES) - tm.FIXED) - set(tm.MOVED)
-        untriaged, stale, regressed, vanished, blind = tm.compare(
+        untriaged, stale, regressed, vanished, blind, resurfaced = tm.compare(
             live, live | tm.FIXED)
-        assert not (stale or vanished or blind)
+        assert not (stale or vanished or blind or resurfaced)
 
     def test_the_check_verb_exits_nonzero_on_a_blind_moved_site(
             self, monkeypatch, capsys):
@@ -374,7 +378,7 @@ class TestTheMovedExemptionKeepsPayingForItself:
 
         tm = _manifest()
         twin = next(t for t in tm.MOVED.values() if t is not None)
-        live = set(tm.SITES) - tm.FIXED
+        live = set(tm.SITES) - tm.FIXED - set(tm.MOVED)
         monkeypatch.setattr(
             tm, "_scan", lambda: (live, (live | tm.FIXED) - {twin}))
         monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
@@ -947,3 +951,149 @@ class TestANestedScopeCannotVouchForItsParent:
                "    loads_clean = clean\n"
                + self.DESTRUCTIVE % ("loads_clean", ""))
         assert _scan(src).get("rewrite") == "OK"
+
+
+class TestAProofInsideAGeneratorExpressionProvesNothing:
+    """Adversarial r11 (F7): a genexp body is DEFERRED code — `(loads_clean(s)
+    for s in ())` never runs a thing, yet the scanner credited its clean
+    call to the enclosing function and certified a raw rewrite OK. The rule
+    is asymmetric on purpose: clean-in-genexp proves nothing, but
+    raw-in-genexp still poisons (if it ever runs, it runs raw), and EAGER
+    comprehensions execute at the expression so their proof value stands."""
+
+    GENEXP = '''
+from jsonl_utils import loads_clean
+def rewrite(path, parser):
+    keep = []
+    for line in open(path).read().split("\\n"):
+        if line == "":
+            continue
+        row = parser(line)
+        if row.get("ok"):
+            keep.append(line)
+    _unused = (loads_clean(s) for s in ())
+    atomic_write(path, "\\n".join(keep))
+'''
+
+    def test_an_inert_genexp_cannot_certify_a_raw_rewrite(self):
+        assert _scan(self.GENEXP)["rewrite"] == "RISK"
+
+    def test_the_same_call_in_a_list_comprehension_still_counts(self):
+        """Negative control: eager comprehensions run where they stand —
+        excluding them would turn real hardened code into false RISK."""
+        src = self.GENEXP.replace("(loads_clean(s) for s in ())",
+                                  "[loads_clean(s) for s in ()]")
+        assert _scan(src)["rewrite"] == "OK"
+
+    def test_a_raw_parse_inside_a_genexp_still_poisons(self):
+        """The asymmetry's other half: deferred raw is still raw."""
+        src = '''
+def rewrite(path):
+    rows = (json.loads(l) for l in open(path).read().split("\\n") if l != "")
+    keep = [l for l in rows]
+    atomic_write(path, "x")
+'''
+        assert _scan(src)["rewrite"] == "RISK"
+
+
+class TestAJSONDecoderIsAParserTheScannerCanSee:
+    """Adversarial r11 (F8): `json.JSONDecoder().decode(line)` is stdlib
+    spelling for the same raw parse as `json.loads`, and the scanner did
+    not know the name — one rename made a destructive rewrite invisible."""
+
+    def test_a_bound_decoder_marks_the_site_raw(self):
+        src = '''
+from jsonl_utils import loads_clean
+def rewrite(path):
+    decoder = json.JSONDecoder()
+    keep = []
+    for line in open(path).read().split("\\n"):
+        if line == "":
+            continue
+        try:
+            row = decoder.decode(line)
+        except Exception:
+            continue
+        keep.append(line)
+    _probe = loads_clean('{}')
+    atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_a_direct_decoder_call_is_seen_too(self):
+        src = '''
+def rewrite(path):
+    keep = []
+    for line in open(path).read().split("\\n"):
+        try:
+            row = json.JSONDecoder().decode(line)
+        except Exception:
+            continue
+        keep.append(line)
+    atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_plain_bytes_decode_is_not_a_parse(self):
+        """Negative control: `.decode` is also how BYTES become text —
+        flagging `raw.decode("utf-8")` would drown the scan in noise."""
+        src = '''
+from jsonl_utils import loads_clean
+def rewrite(path):
+    keep = []
+    for raw in open(path, "rb").read().split(b"\\n"):
+        line = raw.decode("utf-8", errors="surrogateescape")
+        if line == "":
+            continue
+        try:
+            row = loads_clean(line)
+        except Exception:
+            continue
+        keep.append(line)
+    atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "OK"
+
+
+class TestAMovedSiteComingBackIsCaught:
+    """Adversarial r11 (F10): `MOVED` excuses a site from `stale` because
+    its scan-visible name moved inward — which also excuses its OUTER name
+    from ever being questioned if it comes back. `blind` watches the twin
+    disappearing; this leg watches the outer name REAPPEARING (someone put
+    framing back in the outer scope). The exemption doctrine, fifth
+    application: every exemption needs a counter-check that keeps being
+    checked."""
+
+    def test_compare_reports_a_pure_resurfacer(self):
+        """A MOVED-but-not-FIXED site: only `resurfaced` may fire — this
+        isolates the leg from `regressed` (which needs FIXED)."""
+        tm = _manifest()
+        outer = next(s for s in tm.MOVED if s not in tm.FIXED)
+        live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
+        untriaged, stale, regressed, vanished, blind, resurfaced = \
+            tm.compare(live)
+        assert resurfaced == [outer]
+        assert not (untriaged or stale or regressed or vanished)
+
+    def test_the_twinless_moved_entry_is_covered_by_the_same_leg(self):
+        """`llm.py:_run_subprocess_safe` has no inner twin (`None`), so
+        `blind` can never speak for it — resurfaced is its ONLY watch."""
+        tm = _manifest()
+        outer = next(s for s, t in tm.MOVED.items() if t is None)
+        live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
+        *_, resurfaced = tm.compare(live)
+        assert resurfaced == [outer]
+
+    def test_the_check_verb_exits_nonzero_on_a_resurfaced_site(
+            self, monkeypatch, capsys):
+        """And the GATE, not just its arithmetic."""
+        import sys as _sys
+
+        tm = _manifest()
+        outer = next(s for s in tm.MOVED if s not in tm.FIXED)
+        live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
+        monkeypatch.setattr(tm, "_scan", lambda: (live, live | tm.FIXED))
+        monkeypatch.setattr(_sys, "argv", ["triage_manifest.py", "--check"])
+
+        assert tm.main() == 1
+        assert "RESURFACED" in capsys.readouterr().out

@@ -241,8 +241,9 @@ def _called_names(node: ast.AST) -> set[str]:
 
 def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     """Return (verdict, lineno, qualified_name) for every flagged function."""
-    global _PARSERS
+    global _PARSERS, _MODULE_DECODERS
     _PARSERS = _parser_names(tree)
+    _MODULE_DECODERS = _decoder_names(tree)
     parents: dict[ast.AST, ast.AST] = {}
     for p in ast.walk(tree):
         for c in ast.iter_child_nodes(p):
@@ -428,10 +429,59 @@ def _is_open_call(node) -> bool:
            (isinstance(f, ast.Attribute) and f.attr == "open")
 
 
+_MODULE_DECODERS: set = set()
+
+
+def _lazy_nodes(fn) -> set:
+    """ids of every node inside a GeneratorExp in this scope.
+
+    Adversarial r11 (Expert QA, probed): `_own_scope` stops at function
+    scopes but a generator expression is ALSO deferred code — it may never
+    be consumed, so `_unused = (loads_clean(s) for s in ())` certified a
+    rewrite that parsed every real row with a raw parser. The rule is
+    asymmetric on purpose: a clean call inside a genexp proves nothing
+    (it might never run), but a raw call inside one still poisons (it
+    might). Eager comprehensions (list/set/dict) DO execute in the
+    enclosing control flow and keep their proof value — the negative
+    control pins that, because half the repo parses via listcomp.
+    """
+    out: set = set()
+    for n in _own_scope(fn):
+        if isinstance(n, ast.GeneratorExp):
+            for inner in ast.walk(n):
+                out.add(id(inner))
+    return out
+
+
+def _decoder_names(scope) -> set:
+    """Names bound from `json.JSONDecoder(...)` in this scope.
+
+    Adversarial r11 (Expert QA, probed): `decoder.decode(line)` is a raw
+    JSON parse wearing a spelling the parse-shaped rule never matched —
+    `.decode` is overwhelmingly bytes.decode, so it cannot be treated as
+    parse-shaped wholesale. The receiver decides: a name proven to hold a
+    JSONDecoder makes its `.decode` a raw parse; every other `.decode`
+    stays invisible, which is what keeps this from flagging every UTF-8
+    decode in the tree.
+    """
+    out: set = set()
+    for n in _own_scope(scope):
+        for target, value in _bindings(n):
+            if isinstance(value, ast.Call) and isinstance(target, ast.Name):
+                f = value.func
+                name = f.id if isinstance(f, ast.Name) else \
+                    f.attr if isinstance(f, ast.Attribute) else ""
+                if name == "JSONDecoder":
+                    out.add(target.id)
+    return out
+
+
 def _parse_calls(fn) -> "tuple[bool, bool]":
     """(calls a proven-clean parser, calls anything else parse-shaped)."""
     clean_names, raw_names = _PARSERS
     shadow = _shadowed(fn)
+    lazy = _lazy_nodes(fn)
+    decoders = _decoder_names(fn) | _MODULE_DECODERS
     # A dotted proof is only as good as its RECEIVER. `import jsonl_utils`
     # proves `jsonl_utils.loads_clean`, and `def rewrite(path, jsonl_utils)`
     # or a local `jsonl_utils = shim` replaces the object that name points
@@ -464,8 +514,17 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
         # naming convention below it.
         if dotted in raw_names or name in raw_names:
             used_raw = True
+        elif name == "decode" and isinstance(f, ast.Attribute) and (
+                (isinstance(f.value, ast.Name) and f.value.id in decoders)
+                or (isinstance(f.value, ast.Call)
+                    and isinstance(f.value.func, (ast.Name, ast.Attribute))
+                    and (getattr(f.value.func, "id", "")
+                         or getattr(f.value.func, "attr", ""))
+                    == "JSONDecoder")):
+            used_raw = True          # json.JSONDecoder().decode — a raw parse
         elif name in clean_names or dotted in clean_names:
-            used_clean = True
+            if id(n) not in lazy:    # a proof inside a genexp may never run
+                used_clean = True
         elif name == "loads" or name.endswith("_loads") \
                 or name in ("loads_clean", "_loads_clean"):
             used_raw = True          # parse-shaped and unproven

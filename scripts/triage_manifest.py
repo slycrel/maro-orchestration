@@ -201,8 +201,8 @@ def _live_sites() -> set[str]:
 
 
 def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
-        "tuple[list[str], list[str], list[str], list[str], list[str]]":
-    """(untriaged, stale, regressed, vanished, blind) for a live scan result.
+        "tuple[list, list, list, list, list, list]":
+    """(untriaged, stale, regressed, vanished, blind, resurfaced) legs.
 
     Pure, so the drift gate itself can be tested against a synthetic live set
     — the runner's own must-detect rule applied to the runner.
@@ -235,6 +235,16 @@ def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
     new home is itself in the live scan; if that twin disappears, the
     surface is unwatched and this leg says so. The exemption has to keep
     paying for itself.
+
+    `resurfaced` exists because of adversarial r11, which found the other
+    direction `blind` cannot see: a MOVED site is expected ABSENT from the
+    scan, so if its OUTER name comes back as RISK — someone put framing
+    back in the outer scope — it is neither untriaged (it is in SITES),
+    nor stale (MOVED exempts it), nor blind (the twin is still there),
+    and its years-old triage label silently absorbs materially new code.
+    A moved site reappearing means the move is no longer true; the entry
+    must be re-triaged, not inherited. This also covers the one MOVED
+    entry with no twin (`llm.py:_run_subprocess_safe`).
     """
     untriaged = sorted(live - set(SITES))
     stale = sorted((set(SITES) - FIXED - set(MOVED)) - live)
@@ -243,13 +253,15 @@ def compare(live: "set[str]", seen: "set[str] | None" = None) -> \
     blind = sorted(t for t in MOVED.values()
                    if t is not None and t not in seen) \
         if seen is not None else []
-    return untriaged, stale, regressed, vanished, blind
+    resurfaced = sorted(live & set(MOVED))
+    return untriaged, stale, regressed, vanished, blind, resurfaced
 
 
 def main() -> int:
     if "--check" in sys.argv:
         live, seen = _scan()
-        untriaged, stale, regressed, vanished, blind = compare(live, seen)
+        (untriaged, stale, regressed, vanished, blind,
+         resurfaced) = compare(live, seen)
         for n in untriaged:
             print(f"UNTRIAGED  {n} — new RISK site, not in the manifest")
         for n in stale:
@@ -262,10 +274,13 @@ def main() -> int:
         for n in blind:
             print(f"BLIND      {n} — a moved site's new home is not in the "
                   f"scan either; the MOVED exemption covers nothing")
-        if untriaged or stale or regressed or vanished or blind:
+        for n in resurfaced:
+            print(f"RESURFACED {n} — a moved site is back in the scan under "
+                  f"its outer name; the move is no longer true, re-triage it")
+        if untriaged or stale or regressed or vanished or blind or resurfaced:
             print(f"\n{len(untriaged)} untriaged, {len(stale)} stale, "
                   f"{len(regressed)} regressed, {len(vanished)} vanished, "
-                  f"{len(blind)} blind")
+                  f"{len(blind)} blind, {len(resurfaced)} resurfaced")
             return 1
         # len(live), not a count derived from the manifest: with FIXED and
         # MOVED both subtracted the arithmetic version drifted from what

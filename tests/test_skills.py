@@ -1083,6 +1083,10 @@ def _phase32_skill(tmp_path, skill_id="p32skill", tier="provisional", utility=1.
     )
     skills_file = tmp_path / "skills.jsonl"
     import json
+    # Stamp the hash the way every production writer does (save_skill,
+    # _save_skills fill) — r11 made load_skills admission the proof, and a
+    # hash-less row is exactly what it refuses.
+    skill.content_hash = compute_skill_hash(skill)
     skills_file.write_text(json.dumps(_skill_to_dict(skill)) + "\n")
     return skill
 
@@ -1215,6 +1219,7 @@ def test_maybe_auto_promote_respects_limit(monkeypatch, tmp_path):
             use_count=AUTO_PROMOTE_MIN_USES, success_rate=1.0,
             tier="provisional", utility_score=1.0,
         )
+        s.content_hash = compute_skill_hash(s)   # admission requires proof (r11)
         rows.append(json.dumps(_skill_to_dict(s)))
     (tmp_path / "skills.jsonl").write_text("\n".join(rows) + "\n")
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
@@ -1284,6 +1289,7 @@ def test_maybe_auto_promote_limit_caps_llm_candidates(monkeypatch, tmp_path):
             use_count=AUTO_PROMOTE_MIN_USES, success_rate=1.0,
             tier="provisional", utility_score=1.0,
         )
+        s.content_hash = compute_skill_hash(s)   # admission requires proof (r11)
         rows.append(json.dumps(_skill_to_dict(s)))
     (tmp_path / "skills.jsonl").write_text("\n".join(rows) + "\n")
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
@@ -3048,3 +3054,303 @@ class TestTheSkillStatsRewriteKeepsWhatItCannotRead:
         assert list(records) == ["b"], f"the row was framed apart: {records}"
         assert records["b"]["note"] == "x\u2028y"
         assert not stranded
+
+
+class TestAdmissionIsTheProof:
+    """Adversarial r11 (four of five seats, independently): r10 put
+    `validate_skill_row` on the WRITERS, so `load_skills` still admitted via
+    the tolerant `dict_to_skill` constructor — and the gap between a
+    tolerant loader and a strict writer is a launder mint. A row carrying
+    `"utility_score": "1.0"` loaded fine, and `_save_skills` emitted a
+    NORMALIZED CLONE (float 1.0) that won last-row-wins: constructible !=
+    provable != deliverable. One admission predicate on both ends —
+    admitted == provable — kills the clone structurally, not per-field."""
+
+    def _write(self, tmp_path, monkeypatch, rows):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        f.write_text("".join(json.dumps(r) + "\n" for r in rows),
+                     encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        return f
+
+    def _valid_row(self, **over):
+        s = Skill(id="x", name="n", description="d", trigger_patterns=[],
+                  steps_template=["s"], source_loop_ids=[],
+                  created_at="2026-01-01T00:00:00+00:00")
+        s.content_hash = compute_skill_hash(s)
+        return {**_skill_to_dict(s), **over}
+
+    def test_a_coercible_but_unprovable_row_is_not_admitted(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        import skills as skills_mod
+
+        self._write(tmp_path, monkeypatch,
+                    [self._valid_row(utility_score="1.0")])
+        with caplog.at_level(logging.WARNING):
+            assert skills_mod.load_skills() == []
+        assert any("not loadable as Skill" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_no_normalized_clone_is_minted(self, tmp_path, monkeypatch):
+        """The data-loss half: the raw row must survive AND no clean twin
+        may appear to win last-row-wins over it."""
+        import skills as skills_mod
+
+        f = self._write(tmp_path, monkeypatch,
+                        [self._valid_row(utility_score="1.0",
+                                         operator_note="keep")])
+        skills_mod._save_skills(skills_mod.load_skills())
+
+        after = f.read_text(encoding="utf-8")
+        lines = [l for l in after.split("\n") if l]
+        assert sum('"id": "x"' in l for l in lines) == 1, lines
+        assert '"utility_score": "1.0"' in after     # raw row verbatim
+        assert '"operator_note": "keep"' in after
+
+    def test_an_admit_fail_row_cannot_shadow_an_older_valid_one(
+            self, tmp_path, monkeypatch):
+        """r11's shadow-delete: the loader used to claim the id BEFORE the
+        proof, so a construct-ok/hash-fail newer row hid the older valid row
+        from every caller — and `_save_skills` then deleted the valid one.
+        The id is claimed only by a row that proves out."""
+        import skills as skills_mod
+
+        good = self._valid_row(id="same", name="good")
+        bad = dict(good, description=7, name="bad")   # constructs; proof fails
+        f = self._write(tmp_path, monkeypatch, [good, bad])
+
+        loaded = skills_mod.load_skills()
+        assert [s.name for s in loaded] == ["good"]
+
+        skills_mod._save_skills(loaded)
+        after = f.read_text(encoding="utf-8")
+        assert '"name": "good"' in after
+        assert '"name": "bad"' in after, "the unprovable row was deleted"
+
+
+class TestTheWriterCannotOutrunItsReader:
+    """Adversarial r11 (F2c): `json.dumps` happily writes CPython `NaN` and
+    clean `\\udcXX` escapes — rows this module's own strict reader then
+    refuses. A writer that can emit what its reader strands is minting
+    strandees; `_prove_line` runs every emitted line back through the same
+    admission door, and a failure ABORTS BEFORE THE STORE IS TOUCHED."""
+
+    def _seed(self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skills.jsonl"
+        monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
+        skills_mod.save_skill(Skill(
+            id="v", name="valid", description="d", trigger_patterns=[],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00"))
+        return f
+
+    def test_save_skill_refuses_a_nan_score(self, tmp_path, monkeypatch):
+        import math as _math
+
+        import skills as skills_mod
+
+        f = self._seed(tmp_path, monkeypatch)
+        before = f.read_bytes()
+        nan_skill = Skill(id="v", name="v2", description="d",
+                          trigger_patterns=[], steps_template=["s"],
+                          source_loop_ids=[],
+                          created_at="2026-01-01T00:00:00+00:00",
+                          utility_score=_math.nan)
+
+        with pytest.raises(ValueError):
+            skills_mod.save_skill(nan_skill)
+
+        assert f.read_bytes() == before, "the store was touched on abort"
+        assert [s.name for s in skills_mod.load_skills()] == ["valid"]
+
+    def test_save_skills_aborts_on_a_row_its_reader_would_strand(
+            self, tmp_path, monkeypatch):
+        """The bulk-writer twin: every emission point runs the same proof.
+        A caller mutating a loaded Skill in memory (the update-utility
+        shape) must not be able to write what the next load strands."""
+        import math as _math
+
+        import skills as skills_mod
+
+        f = self._seed(tmp_path, monkeypatch)
+        before = f.read_bytes()
+        loaded = skills_mod.load_skills()
+        loaded[0].utility_score = _math.nan
+
+        # _save_skills has a never-raise contract (outer except -> warning),
+        # so the abort is announced rather than raised — but it must still
+        # be an ABORT: proof fails before atomic_write runs.
+        with self._warning_capture() as records:
+            skills_mod._save_skills(loaded)
+
+        assert f.read_bytes() == before, "the store was touched on abort"
+        assert any("_save_skills failed" in r.getMessage() for r in records), \
+            [r.getMessage() for r in records]
+
+    @staticmethod
+    def _warning_capture():
+        import contextlib
+        import logging
+
+        @contextlib.contextmanager
+        def _cap():
+            records = []
+
+            class _H(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            h = _H(level=logging.WARNING)
+            logging.getLogger("skills").addHandler(h)
+            try:
+                yield records
+            finally:
+                logging.getLogger("skills").removeHandler(h)
+
+        return _cap()
+
+    def test_save_skill_refuses_an_escaped_lone_surrogate(
+            self, tmp_path, monkeypatch):
+        """`tier` is hash-excluded, so the hash proof cannot see it — but
+        dumps would emit it as a CLEAN six-char escape the reader strands.
+        The write must fail loudly instead, with the old row intact."""
+        import skills as skills_mod
+
+        f = self._seed(tmp_path, monkeypatch)
+        before = f.read_bytes()
+        sur = Skill(id="v", name="v2", description="d", trigger_patterns=[],
+                    steps_template=["s"], source_loop_ids=[],
+                    created_at="2026-01-01T00:00:00+00:00",
+                    tier="\udcff")
+
+        with pytest.raises(Exception):
+            skills_mod.save_skill(sur)
+
+        assert f.read_bytes() == before, "the store was touched on abort"
+        assert [s.name for s in skills_mod.load_skills()] == ["valid"]
+
+
+class TestTheStatsWriterCannotOutrunItsReader:
+    """Adversarial r11 (Architect): non-finite telemetry — a NaN
+    avg_latency, say — would write the CPython token `NaN`, which the
+    strict reader strands on the next load: the writer manufacturing its
+    own unreadable row. Raising aborts the update with the store intact."""
+
+    def test_write_skill_stats_refuses_nonfinite_telemetry(self, tmp_path):
+        import math as _math
+
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text('{"skill_id": "a", "uses": 3}\n', encoding="utf-8")
+        before = f.read_bytes()
+
+        with pytest.raises(ValueError):
+            skills_mod._write_skill_stats(
+                f, {"a": {"skill_id": "a", "avg_latency_ms": _math.nan}}, [])
+
+        assert f.read_bytes() == before, "the store was touched on abort"
+
+
+class TestSkillStatsKeysAreIdentity:
+    """Adversarial r11 (Expert QA): JSON `1` and `true` are different rows,
+    but Python dict keys say `1 == True` — so a keyed rebuild of the stats
+    store silently deleted one of them. A non-string id is not an identity
+    this store can key on; such rows are strandees, kept verbatim."""
+
+    def test_json_1_and_true_do_not_collide(self, tmp_path):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text('{"skill_id": 1, "skill_name": "first"}\n'
+                     '{"skill_id": true, "skill_name": "second"}\n',
+                     encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+        assert records == {}
+        assert len(stranded) == 2
+
+        skills_mod._write_skill_stats(f, records, stranded)
+        after = f.read_text(encoding="utf-8")
+        assert '"first"' in after and '"second"' in after
+
+    def test_a_string_keyed_row_is_still_a_record(self, tmp_path):
+        """Negative control — the live store is 100% string-keyed."""
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text('{"skill_id": "a", "uses": 3}\n', encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+
+        assert list(records) == ["a"] and not stranded
+
+
+class TestStatsUpdateMergesOverTheStoredRow:
+    """Adversarial r11 (F6): both outcome recorders rebuilt the row from
+    `SkillStats.to_dict()`, so any field this module does not model — an
+    operator's note, a foreign tool's stamp — was deleted by the next
+    routine update. The update now merges over the stored row: unknown
+    fields ride through untouched."""
+
+    def test_record_skill_outcome_keeps_unknown_fields(
+            self, tmp_path, monkeypatch):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text(json.dumps({"skill_id": "s", "skill_name": "n",
+                                 "operator_note": "keep"}) + "\n",
+                     encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skill_stats_path", lambda: f)
+
+        skills_mod.record_skill_outcome("s", True)
+
+        after = f.read_text(encoding="utf-8")
+        assert '"operator_note": "keep"' in after
+        # Fields SkillStats models (needs_escalation, success_rate...) are
+        # this module's to recompute — the merge protects only what it does
+        # not own.
+        assert '"total_uses": 1' in after
+
+    def test_record_skill_injection_outcome_keeps_unknown_fields(
+            self, tmp_path, monkeypatch):
+        """The branch twin (sibling census: same rebuild, other recorder)."""
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text(json.dumps({"skill_id": "s", "skill_name": "n",
+                                 "operator_note": "keep"}) + "\n",
+                     encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_skill_stats_path", lambda: f)
+
+        skills_mod.record_skill_injection_outcome("s", True)
+
+        assert '"operator_note": "keep"' in f.read_text(encoding="utf-8")
+
+
+class TestTheFinalTornFrameGainsATerminatorOnPurpose:
+    """Adversarial r11 F4, ACCEPTED WITH REASON rather than fixed: a torn
+    final fragment with no trailing LF is carried with one added. The
+    alternative preserves the missing terminator — and then the next
+    `locked_append` concatenates a fresh record INTO the torn fragment,
+    corrupting both. Content bytes are intact; only the frame is
+    normalized. This pin is the record of that decision — if it fires,
+    someone 'fixed' F4 and reopened the concatenation hole."""
+
+    def test_the_strand_keeps_its_bytes_and_gains_only_an_lf(self, tmp_path):
+        import skills as skills_mod
+
+        f = tmp_path / "skill-stats.jsonl"
+        f.write_text('{"skill_id": "a"}\n{"torn": ', encoding="utf-8")
+
+        records, stranded = skills_mod._read_skill_stats(f)
+        skills_mod._write_skill_stats(f, records, stranded)
+
+        assert f.read_text(encoding="utf-8") == (
+            '{"skill_id": "a"}\n{"torn": \n')

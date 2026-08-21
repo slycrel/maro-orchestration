@@ -58,7 +58,11 @@ class MemoryBackend(abc.ABC):
 
     @abc.abstractmethod
     def rewrite(self, collection: str, records: List[Dict[str, Any]]) -> None:
-        """Replace all records in collection with records (atomic where possible)."""
+        """Replace all PARSEABLE records in collection with records (atomic
+        where possible). A stored row the strict reader cannot vouch for is
+        NOT replaced — it is carried through the rewrite verbatim and
+        announced, because `read_all` never returned it and the caller
+        therefore cannot be deciding anything about it (adversarial r11)."""
 
     @abc.abstractmethod
     def append_text(self, collection: str, text: str) -> None:
@@ -151,11 +155,43 @@ class JSONLBackend(MemoryBackend):
         # but still lost concurrent appends landing between the caller's
         # read_all and this replace. Callers doing read→transform→rewrite
         # should hold locked_write(path) across both (reentrant here).
+        #
+        # Strandees are THIS method's job, not the caller's. Adversarial
+        # r11 — all five seats, independently, the round's only unanimous
+        # finding: read_all() announces a row it cannot vouch for and
+        # returns a list WITHOUT it, so the documented read_all ->
+        # transform -> rewrite composition deleted the announced row. The
+        # caller cannot preserve what its input never contained; the
+        # rewrite is the destructive half, so the rewrite re-reads the
+        # store under its own lock and carries every raw line loads_clean
+        # refuses, verbatim, after the caller's records (this store has no
+        # per-row key, so ordinals cannot be reassigned; relative strandee
+        # order is kept).
+        from jsonl_utils import is_frame_blank, loads_clean, store_text
         path = self._path(collection)
         try:
             from file_lock import locked_write, atomic_write
             with locked_write(path):
-                atomic_write(path, "".join(json.dumps(r) + "\n" for r in records))
+                stranded: List[str] = []
+                if path.exists():
+                    for line in store_text(path).split("\n"):
+                        if is_frame_blank(line):
+                            continue
+                        try:
+                            loads_clean(line)
+                        except Exception:
+                            stranded.append(line)
+                if stranded:
+                    log.warning(
+                        "JSONLBackend.rewrite(%s): %d unreadable row(s) "
+                        "carried through the rewrite verbatim (%s)",
+                        collection, len(stranded), path)
+                atomic_write(
+                    path,
+                    "".join(json.dumps(r, allow_nan=False) + "\n"
+                            for r in records)
+                    + "".join(l + "\n" for l in stranded),
+                    errors="surrogateescape")
         except OSError as exc:
             log.warning("JSONLBackend.rewrite(%s): %s", collection, exc)
 

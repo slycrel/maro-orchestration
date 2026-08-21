@@ -1057,3 +1057,103 @@ class TestAQueueOfNothingButUnreadableRowsStillSpeaks:
             assert q.poll() == []
 
         assert not caplog.records, [r.message for r in caplog.records]
+
+
+class TestAnUndeliverableRowIsNeverMarkedApplied:
+    """Adversarial r11 (F9, three seats): `Interrupt.from_dict` is a
+    constructor, not a validator — `"new_steps": "not-a-list"` sailed
+    through it, poll() marked the row applied ON DISK, and the consumer
+    then crashed on `steps + interrupt.new_steps`. On retry the queue was
+    empty: the operator's interrupt was recorded as delivered and was
+    never delivered. Constructible != deliverable — `_prove_deliverable`
+    runs BEFORE the applied mark, so a row that cannot be applied strands
+    raw, unapplied, and announced every poll until a human reads it."""
+
+    BAD = {"id": "bad", "message": "stop", "source": "cli",
+           "intent": "additive", "new_steps": "not-a-list",
+           "replacement_goal": None,
+           "timestamp": "2026-08-20T00:00:00+00:00", "applied": False}
+
+    def test_poll_strands_it_unapplied_and_announces(self, tmp_path, caplog):
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        good = dict(self.BAD, id="good", new_steps=["step"])
+        p.write_text(json.dumps(self.BAD) + "\n" + json.dumps(good) + "\n",
+                     encoding="utf-8")
+        q = InterruptQueue(p)
+
+        with caplog.at_level(logging.WARNING):
+            got = q.poll()
+
+        # the deliverable row delivers; the undeliverable one does not
+        assert [i.id for i in got] == ["good"]
+        text = p.read_text(encoding="utf-8")
+        assert '"new_steps": "not-a-list"' in text, "the raw row was rewritten"
+        assert text.count('"applied": true') == 1, \
+            "an undeliverable row was recorded as delivered"
+        assert caplog.records, "the stranded interrupt was silent"
+
+    def test_it_stays_announced_on_every_later_poll(self, tmp_path, caplog):
+        """The failure being prevented is a QUIET loss — the row must keep
+        speaking, not just survive."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        p.write_text(json.dumps(self.BAD) + "\n", encoding="utf-8")
+        q = InterruptQueue(p)
+        q.poll()
+
+        with caplog.at_level(logging.WARNING):
+            assert q.poll() == []
+
+        assert caplog.records, "the second poll reported a quiet queue"
+
+    def test_clear_does_not_acknowledge_it_either(self, tmp_path):
+        """clear()'s applied-mark is the same write under the other verb —
+        the sibling the census rule exists for."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        good = dict(self.BAD, id="good", new_steps=["step"])
+        p.write_text(json.dumps(self.BAD) + "\n" + json.dumps(good) + "\n",
+                     encoding="utf-8")
+        q = InterruptQueue(p)
+
+        cleared = q.clear()
+
+        assert cleared == 1
+        text = p.read_text(encoding="utf-8")
+        assert '"new_steps": "not-a-list"' in text
+        assert text.count('"applied": true') == 1
+
+    def test_peek_does_not_deliver_it_and_announces(self, tmp_path, caplog):
+        """peek() is the third door into the queue (poll/clear/peek) — the
+        sibling census. It must not hand the consumer an Interrupt whose
+        fields cannot be acted on."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        good = dict(self.BAD, id="good", new_steps=["step"])
+        p.write_text(json.dumps(self.BAD) + "\n" + json.dumps(good) + "\n",
+                     encoding="utf-8")
+        q = InterruptQueue(p)
+
+        with caplog.at_level(logging.WARNING):
+            got = q.peek()
+
+        assert [i.id for i in got] == ["good"]
+        assert caplog.records, "the undeliverable row passed unannounced"
+
+    def test_a_deliverable_row_still_flows_whole(self, tmp_path):
+        """Negative control: every field the consumer acts on arrives with
+        the type it acts on."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        good = dict(self.BAD, id="good", new_steps=["step"],
+                    replacement_goal="new goal")
+        p.write_text(json.dumps(good) + "\n", encoding="utf-8")
+        q = InterruptQueue(p)
+
+        got = q.poll()
+
+        assert len(got) == 1
+        assert ["pre"] + got[0].new_steps == ["pre", "step"]
+        assert got[0].replacement_goal == "new goal"
+        assert '"applied": true' in p.read_text(encoding="utf-8")

@@ -268,6 +268,35 @@ class Interrupt:
 _LOCK = threading.Lock()
 
 
+def _prove_deliverable(d: dict) -> None:
+    """Raise TypeError unless this row can actually be DELIVERED.
+
+    Adversarial r11 (Failure Operator, probed): parsing plus a readable
+    `applied` flag was treated as proof of deliverability, but
+    `Interrupt.from_dict` is a constructor — `new_steps` as a string
+    sailed through it, `poll()` durably marked the row applied, and the
+    caller's `steps + interrupt.new_steps` then raised TypeError. On
+    restart the row was "already applied", so the operator's control
+    action was acknowledged and lost. Non-coercing checks, run BEFORE any
+    mark: a row that fails stays on disk unapplied and is announced as
+    undeliverable, every poll, until a human looks.
+
+    Census before the flip: 2 live queue rows, both pass.
+    """
+    if not (isinstance(d.get("id"), str) and d["id"]):
+        raise TypeError(f"id is not a non-empty string: {d.get('id')!r}")
+    if not isinstance(d.get("message"), str):
+        raise TypeError(f"message is not a string: {d.get('message')!r}")
+    if d.get("intent") not in VALID_INTENTS:
+        raise TypeError(f"unknown intent: {d.get('intent')!r}")
+    steps = d.get("new_steps", [])
+    if not (isinstance(steps, list) and all(isinstance(x, str) for x in steps)):
+        raise TypeError(f"new_steps is not a list of strings: {steps!r}")
+    goal = d.get("replacement_goal")
+    if goal is not None and not isinstance(goal, str):
+        raise TypeError(f"replacement_goal is not a string or null: {goal!r}")
+
+
 def _applied_state(d: dict) -> "Optional[bool]":
     """Tri-state read of a row's `applied` flag: True, False, or None.
 
@@ -405,6 +434,11 @@ class InterruptQueue:
                         if state is None:
                             raise TypeError("unreadable applied flag")
                         if not state:
+                            # BEFORE the mark. A row that cannot be applied
+                            # must never be recorded as applied — that is
+                            # the exact write that lost the operator's
+                            # action (r11).
+                            _prove_deliverable(d)
                             d["applied"] = True
                             pending.append(Interrupt.from_dict(d))
                         updated.append(json.dumps(d))
@@ -488,6 +522,7 @@ class InterruptQueue:
                 if state is None:
                     raise TypeError(f"unreadable applied flag: {d.get('applied')!r}")
                 if not state:
+                    _prove_deliverable(d)      # r11: constructible != deliverable
                     result.append(Interrupt.from_dict(d))
             except (json.JSONDecodeError, TypeError):
                 dropped += 1
@@ -524,6 +559,12 @@ class InterruptQueue:
                         if state is None:
                             raise TypeError("unreadable applied flag")
                         if not state:
+                            # Same rule as poll (r11): clear() acknowledges
+                            # pending interrupts, and a row that could never
+                            # be delivered is not acknowledged by marking it
+                            # applied — it strands, visible, until a human
+                            # reads it.
+                            _prove_deliverable(d)
                             d["applied"] = True
                             counted["n"] += 1
                         updated.append(json.dumps(d))

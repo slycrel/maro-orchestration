@@ -191,13 +191,24 @@ def load_skills() -> List[Skill]:
             sid = d.get("id", "")
             if sid in seen_ids:
                 continue
-            skill = _dict_to_skill(d)
-            # AFTER the conversion, not before: a schema-drifted row used
-            # to claim its id on the way past and then fail, so the newest
-            # BROKEN row for an id hid the newest WORKING one and the
-            # skill went missing from the library with only a count in the
-            # log (adversarial r10, probed). An unloadable row is not a
-            # version of anything.
+            # validate_skill_row, not dict_to_skill. Adversarial r11 (four
+            # of five seats, from four different call sites): the loader
+            # ADMITTED rows the writers refuse to vouch for, and every list
+            # that flows from load_skills into _save_skills carried the
+            # mismatch. A coercible-but-unprovable row (utility_score as a
+            # string) became a live Skill, _save_skills stranded the raw
+            # row AND appended the normalized clone — which, landing last,
+            # won last-row-wins: the launder twin again, minted from the
+            # gap between two predicates. One predicate now, both ends:
+            # admitted == provable. Census: 423/423 live rows pass.
+            #
+            # AFTER the proof, not before: a schema-drifted row used to
+            # claim its id on the way past and then fail, so the newest
+            # BROKEN row for an id hid the newest WORKING one (r10) — and
+            # r11 showed the worse half: with the id claimed and the row
+            # skipped, the older VALID row was in no caller's list, and
+            # the next _save_skills deleted it as a deliberate drop.
+            skill = validate_skill_row(d)
             seen_ids.add(sid)
             # Phase 14: verify hash if one is recorded
             stored_hash = d.get("content_hash", "")
@@ -217,6 +228,25 @@ def load_skills() -> List[Skill]:
         logger.warning("[skills] load_skills: %d row(s) are JSON but not "
                        "loadable as Skill — skipped (%s)", drifted, path)
     return skills
+
+
+def _prove_line(skill: Skill) -> str:
+    """Serialize one skill AND prove the next read will accept the line.
+
+    Adversarial r11 (Skeptic + Architect, both probed): both writers
+    emitted rows their own reader refuses. `json.dumps` defaults to
+    `allow_nan=True`, so a NaN utility_score wrote the CPython token
+    `NaN`; and a lone surrogate in `tier` — a field compute_skill_hash
+    never touches — serialized as a clean-looking `\\udcff` escape. Either
+    way the save DELETED the prior valid row and replaced it with one
+    `loads_clean` strands: the skill vanished from the live pool while
+    its bytes sat on disk. Raising HERE aborts the save before the store
+    is touched — the file stays intact, which is the safe direction
+    (same contract as _read_skill_stats's OSError raise).
+    """
+    line = json.dumps(_skill_to_dict(skill), allow_nan=False)
+    _loads_clean(line)      # escaped surrogates, dup names — same door as reads
+    return line
 
 
 def save_skill(skill: Skill) -> None:
@@ -264,7 +294,7 @@ def save_skill(skill: Skill) -> None:
                 if row.id == skill.id:
                     continue  # replaced below
                 out.append(line)
-        out.append(json.dumps(_skill_to_dict(skill)))
+        out.append(_prove_line(skill))
         from file_lock import atomic_write
         atomic_write(path, "\n".join(out) + "\n", errors="surrogateescape")
 
@@ -992,7 +1022,14 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
             tainted += 1
             stranded.append(line)
             continue
-        if not sid:
+        if not (isinstance(sid, str) and sid):
+            # A non-empty STRING, not merely truthy. Adversarial r11 (QA,
+            # probed): JSON `1` and JSON `true` are distinct stored rows,
+            # but Python keys them equal (`1 == True`), so the second
+            # silently overwrote the first in this map and the rewrite
+            # deleted a row with no strand and no warning. A key this
+            # store cannot represent faithfully strands like any other
+            # unreadable row.
             keyless += 1
             stranded.append(line)
             continue
@@ -1010,9 +1047,14 @@ def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
     from file_lock import atomic_write
     # `stranded` holds raw lines WITHOUT their framing newline (r10), so
     # the writer owns the framing for both halves.
+    # allow_nan=False: non-finite telemetry (a NaN avg_latency, say) would
+    # otherwise write the CPython token `NaN`, which the r10 reader strands
+    # on the next load — the writer manufacturing its own unreadable row
+    # (adversarial r11, Architect). Raising aborts the counter update and
+    # leaves the store intact.
     atomic_write(
         path,
-        "".join(json.dumps(d) + "\n" for d in records.values())
+        "".join(json.dumps(d, allow_nan=False) + "\n" for d in records.values())
         + "".join(l + "\n" for l in stranded),
         errors="surrogateescape",
     )
@@ -1124,8 +1166,15 @@ def record_skill_outcome(
             n = stats.total_uses
             stats.avg_confidence = stats.avg_confidence * (prev_uses / n) + confidence / n
 
-        # Update the map and write back (full rewrite for consistency)
-        all_records[skill_id] = stats.to_dict()
+        # Update the map and write back (full rewrite for consistency).
+        # Merge OVER the stored row, not replace it: to_dict() emits only
+        # the dataclass schema, so any field this updater does not own — an
+        # operator's hand-added note, a forward-version field — was deleted
+        # by every routine counter bump (adversarial r11, Minimalist,
+        # probed: `operator_note` gone with no warning). The updater wins
+        # on the fields it writes; everything else rides through.
+        all_records[skill_id] = {**all_records.get(skill_id, {}),
+                                 **stats.to_dict()}
         try:
             _write_skill_stats(path, all_records, stranded)
         except Exception as e:
@@ -1171,7 +1220,9 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
             stats.injected_successes / max(stats.injected_runs, 1))
         stats.last_injected_verdict_at = datetime.now(timezone.utc).isoformat()
 
-        all_records[skill_id] = stats.to_dict()
+        # Same merge-over-stored rule as record_skill_outcome (r11).
+        all_records[skill_id] = {**all_records.get(skill_id, {}),
+                                 **stats.to_dict()}
         try:
             _write_skill_stats(path, all_records, stranded)
         except Exception as e:
@@ -2047,8 +2098,8 @@ def _save_skills(skills: List[Skill]) -> None:
                 if not s.content_hash:
                     s.content_hash = compute_skill_hash(s)
             for sid, i in slot.items():
-                out[i] = json.dumps(_skill_to_dict(by_id[sid]))
-            out.extend(json.dumps(_skill_to_dict(s))
+                out[i] = _prove_line(by_id[sid])
+            out.extend(_prove_line(s)
                        for s in skills if s.id not in slot)
             if tainted or unprovable:
                 logger.warning(
