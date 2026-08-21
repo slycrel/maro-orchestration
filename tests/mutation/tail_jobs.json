@@ -58,15 +58,15 @@
  {
   "name": "a job that raised is left pending for a sweep to half-repeat",
   "file": "src/tail_jobs.py",
-  "anchor": "        _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": ok,\n                       \"error\": err, \"finished_at\": _now()})",
-  "replacement": "        pass",
+  "anchor": "    if not _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": ok,\n                          \"error\": err, \"finished_at\": _now()}):",
+  "replacement": "    if True:",
   "tests": "tests/test_tail_jobs.py"
  },
  {
   "name": "an unknown job kind is skipped in silence, not recorded",
   "file": "src/tail_jobs.py",
-  "anchor": "            _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": False,\n                           \"error\": f\"unknown kind {kind!r}\",\n                           \"finished_at\": _now()})",
-  "replacement": "            pass",
+  "anchor": "        _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": False,\n                       \"error\": f\"unknown kind {kind!r}\",\n                       \"finished_at\": _now()})",
+  "replacement": "        pass",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -79,8 +79,8 @@
  {
   "name": "the kinds filter is ignored, so the early drain takes the whole tail",
   "file": "src/tail_jobs.py",
-  "anchor": "        pending = [j for j in pending if str(j.get(\"kind\")) in wanted]",
-  "replacement": "        pending = list(pending)",
+  "anchor": "                if wanted is None or str(j.get(\"kind\")) in wanted]",
+  "replacement": "                if True]",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -163,8 +163,8 @@
  {
   "name": "the config default is ON, so a fresh install inherits the spawn",
   "file": "src/tail_jobs.py",
-  "anchor": "        return bool(_cfg_get(\"tail.spawn\", False))",
-  "replacement": "        return bool(_cfg_get(\"tail.spawn\", True))",
+  "anchor": "        return _strict_bool(_cfg_get(\"tail.spawn\", False), False)",
+  "replacement": "        return _strict_bool(_cfg_get(\"tail.spawn\", True), True)",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -177,8 +177,8 @@
  {
   "name": "the sweep's dry run drains anyway",
   "file": "src/tail_jobs.py",
-  "anchor": "        if dry_run:\n            continue",
-  "replacement": "        if False:\n            continue",
+  "anchor": "        if dry_run or not item[\"drainable\"]:\n            continue",
+  "replacement": "        if not item[\"drainable\"]:\n            continue",
   "tests": "tests/test_tail_jobs.py"
  },
  {
@@ -191,8 +191,8 @@
  {
   "name": "a stranded run with a live claim is drained out from under it",
   "file": "src/tail_jobs.py",
-  "anchor": "        if not st[\"pending\"] or _live_claim(st[\"claim\"]):",
-  "replacement": "        if not st[\"pending\"]:",
+  "anchor": "        if _live_claim(st[\"claim\"]):\n            continue",
+  "replacement": "        if False:\n            continue",
   "tests": "tests/test_tail_jobs.py"
  },
  {

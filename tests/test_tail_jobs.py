@@ -906,3 +906,59 @@ def test_a_failed_surface_refresh_is_recorded(monkeypatch):
     refresh_rows = [r for r in rows if r.get("event") == "refresh"]
     assert refresh_rows and refresh_rows[0]["ok"] is False
     assert "render failed" in refresh_rows[0]["error"]
+
+
+def test_the_sweep_drains_only_the_safe_kinds_of_a_mixed_run(monkeypatch):
+    """A stranded run usually holds BOTH kinds, and only one is safe to
+    repeat. Draining the run wholesale would re-tick the maintenance cadence
+    counters the per-kind rule exists to protect — the single-kind fixtures
+    could not tell a whole-run drain from a filtered one.
+    """
+    _make_run("tj000025")
+    ran = []
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning",
+                        lambda s, a: ran.append("learning"))
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance",
+                        lambda s, a: ran.append("maintenance"))
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid, path=None: True)
+    tail_jobs.record_learning("tj000025", _FakeLoop())
+    tail_jobs.record_maintenance("tj000025", loop_id="L1")
+    path = tail_jobs.jobs_path("tj000025")
+    monkeypatch.setattr(tail_jobs, "_is_pid_alive", lambda pid: False)
+    tail_jobs._append(path, {"event": "claim", "pid": 999999,
+                             "host": tail_jobs._hostname(),
+                             "claimed_at": "then"})
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    found = tail_jobs.find_stranded(min_age_s=900)
+    assert found[0]["drainable"] == ["learning"]
+    assert found[0]["needs_operator"] == ["maintenance"]
+
+    tail_jobs.sweep_stranded(min_age_s=900)
+    assert ran == ["learning"], ran
+    # The maintenance job is still owed, and still visible as owed.
+    assert [j["kind"] for j in tail_jobs.pending_jobs("tj000025")] == ["maintenance"]
+
+
+def test_an_unclassifiable_job_store_is_announced(monkeypatch, caplog):
+    """A store the sweep cannot read is a run it cannot vouch for either way.
+
+    Skipping it is right — guessing "nothing pending" from a failed read would
+    drop a tail — but skipping it in SILENCE means the run is never recovered
+    and nobody ever learns why. The skip and the announcement are one
+    behaviour, and only the announcement is observable.
+    """
+    import logging
+    _make_run("tj000026")
+    tail_jobs.record_learning("tj000026", _FakeLoop())
+    path = tail_jobs.jobs_path("tj000026")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    monkeypatch.setattr(tail_jobs, "_read_rows",
+                        lambda p: None if p == path else [])
+    with caplog.at_level(logging.WARNING, logger="maro.tail_jobs"):
+        found = tail_jobs.find_stranded(min_age_s=900)
+    assert found == []
+    assert any("unreadable" in r.getMessage() and "tj000026" in r.getMessage()
+               for r in caplog.records), caplog.text
