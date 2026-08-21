@@ -1186,6 +1186,101 @@ re-admits NaN` is a genuine twin-lock equivalent, marked with its reason:
 direction, no observable difference. 165/165 accounted for after
 (163 detected + 2 marked equivalents in the spec's history).
 
+## Adversarial round 12 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r11 fix layer. **REJECT.** Eight findings, every one
+reproduced by probe before being touched — the eighth consecutive round
+with zero hallucinations. Three seats converged on the writer/reader gap
+from three different stores, and all five seats independently bypassed
+the r11 decoder rule, each with a *different* spelling.
+
+- **The proof proved parse-clean, not admission** (Skeptic + Minimalist,
+  HIGH, probed). r11 moved `load_skills` onto `validate_skill_row` and
+  left `_prove_line` on bare `_loads_clean` — so a constructible Skill
+  with `tier=7` (hash-excluded, JSON-clean) was emitted, REPLACED the
+  healthy row, and stranded on the next load. The writer now proves the
+  COMPLETE admission predicate: `validate_skill_row(_loads_clean(line))`.
+- **Every JSONL writer could outrun its reader** (four of five seats,
+  HIGH, probed from four call sites). `json.dumps` serializes a lone
+  surrogate as a clean-looking `\udcXX` escape and (by default) writes
+  the CPython `NaN` token — rows `loads_clean` strands. r11 fixed this
+  for skill rows only. New shared door `jsonl_utils.prove_record_line`
+  (serialize with `allow_nan=False`, re-read through `loads_clean`,
+  require a dict), now behind `memory_backends.append`, `rewrite`, and
+  `_write_skill_stats`. The payload is built before the write, so a
+  refusal aborts with the store untouched.
+- **The queue accepted under a weaker predicate than its consumer
+  delivers by** (three seats, HIGH, probed). r11 proved deliverability
+  at poll/clear/peek and left `post()` on bare `json.dumps` — so an
+  operator STOP holding a lone surrogate was acknowledged at the door
+  and never deliverable by anyone. `_append` now serializes, proves the
+  line through the reader's door, and proves deliverability BEFORE
+  `locked_append`.
+- **The strand rule mirrored the parser, not the reader** (QA + one
+  other, MEDIUM, probed). `read_all` announces-and-skips clean non-dict
+  JSON (`null`, arrays, strings), so those rows were never in the
+  caller's list — and r11's re-read pass stranded only parse failures,
+  deleting a `null` row the round before had just taught it not to.
+  The re-read now strands everything `read_all` would exclude.
+- **The stats store was the skills store, one round behind** (two
+  seats, MEDIUM, probed). The keyed stats read fed
+  `SkillStats.from_dict`, a COERCING constructor — `float("1.0")`
+  passes, `bool("false")` is True — so a schema-drifted row was
+  silently rewritten with laundered values by the next counter bump,
+  and the injection recorder flipped a stored `"false"` to `true`. New
+  `validate_skill_stats_row` (raw values, no coercion) strands drift
+  verbatim; census before the flip: 203/203 live rows pass. Both
+  recorders also now refuse a non-string or non-encodable `skill_id`
+  at the door (`record_skill_outcome(1, ...)` wrote a row every future
+  read carried as an unreadable strandee), and duplicate string ids —
+  still compacted last-wins, matching the keyed read — are counted and
+  announced instead of collapsing in silence.
+- **Provenance, not final call syntax, decides** (all five seats, one
+  spelling each, all probed: import alias, object alias, bound method,
+  AnnAssign, `raw_decode`). The r11 decoder rule matched the literal
+  `JSONDecoder` constructor and the literal `decoder.decode(...)` call
+  shape. `_decoder_ctors` now tracks `from json import JSONDecoder as
+  X`; `_decoder_names` resolves instance aliases and bound-method
+  bindings to a fixpoint; `_bindings` learned AnnAssign and walrus;
+  `raw_decode` counts as a parse. All five spellings (plus walrus) now
+  read RISK; the bytes-`.decode` negative control holds; blast radius
+  unchanged at 72 RISK.
+- **The resurfaced leg was blind to an OK resurfacer** (Skeptic,
+  MEDIUM, probed). `resurfaced` intersected the RISK-only `live` set
+  with MOVED — but the move's premise is that the outer name is absent
+  from the scan, which is falsified by the name coming back at ANY
+  verdict. An OK resurfacer means framing returned to the outer scope
+  with a superficially clean parse beside it: more suspicious, not
+  less. The leg now reads `seen`, falling back to `live` for three-leg
+  callers.
+
+Two findings were judged rather than fixed:
+
+- **Hash equality stays OUT of the admission predicate**
+  (accept-with-reason; three seats wanted mismatches stranded). The
+  `content_hash` is a tamper-EVIDENT tripwire, not a boundary — there
+  is no secret key, so anyone who can forge a row can also write a
+  valid hash, and stranding on mismatch would stop no attacker. The
+  case it WOULD catch is a legitimate operator hand-edit whose hash is
+  merely stale, which the rehash-on-update flow handles correctly.
+  Warn-and-load is the decided behavior, now pinned with this
+  reasoning on `test_load_skills_warns_on_hash_mismatch`.
+- **The poll-ack crash window is real and deferred** (Failure
+  Operator). `poll()` durably writes `applied=True` before the loop
+  side applies anything; a crash between poll and apply loses a fully
+  deliverable STOP, and the retry converges to "nothing pending". This
+  is a pre-existing delivery-semantics design gap (lease/ack, not a
+  byte-safety door) — BACKLOG'd as design work, out of this arc's
+  scope.
+
+Sweep: **185/185 accounted for on the FIRST pass** — 179 detected plus
+all six marked equivalents (five standing, one new this round)
+surviving as claimed. Twelve rounds
+in, this is the first sweep with zero survivors and zero SKIPs on its
+first run: the eight re-anchors were done BEFORE the sweep (a SKIP is
+not a pass), and each new mutant was written against a fixture that
+already existed. Suite and manifest green; blast radius 72 RISK.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1337,3 +1432,20 @@ checked.** `FIXED` was one-directional until r2 added `regressed`;
 `blind` leg did not re-check that each named twin is still visible. Write
 the exemption with the counter-check in the same commit, or the exemption
 is a deletion with a comment on it.
+
+The fourteenth is round 12's, and it is the eighth lesson (denylists)
+wearing AST clothes: **provenance, not final call syntax, decides — a
+rule keyed on spelling invites one bypass per spelling.** Five seats
+each walked past the decoder rule with a different standard Python
+spelling of the same dataflow: an import alias, an object alias, a bound
+method, an annotated assignment, `raw_decode`. A syntactic match on the
+call shapes you have met is a denylist; the fix is to track where the
+VALUE came from, resolve aliases to a fixpoint, and let every call site
+inherit the receiver's verdict. Two corollaries from the same round:
+**a queue must not accept under a weaker predicate than its consumer
+delivers by** — the producer is a door too, and an accepted-but-
+undeliverable row is a promise the store cannot keep; and **a shared
+emission door beats N copies of the same proof** — once three writers
+each need "serialize, re-read through the strict reader, require the
+reader's shape", the proof belongs in one helper the writers cannot
+drift from.

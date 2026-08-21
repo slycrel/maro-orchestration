@@ -1191,6 +1191,48 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       165/165 after; 24 new must-detect tests incl. rewriting the r10
       backend test whose NAME promised the composition it never ran,
       and an accept-with-reason pin on F4.*
+    - *Its adversarial r12 (2026-08-20, five codex seats on the r11 fix
+      layer): **REJECT — twelfth round.** Eight findings, all eight
+      reproduced, zero hallucinations for the EIGHTH round running.
+      The r11 proof proved parse-clean, not admission (`_prove_line`
+      on bare `_loads_clean` while the reader admits via
+      `validate_skill_row` — a constructible `tier=7` skill replaced
+      the healthy row and stranded on the next load); every generic
+      JSONL writer could outrun its reader (`json.dumps` writes lone
+      surrogates as clean `\udcXX` escapes and NaN as the CPython
+      token — new shared door `jsonl_utils.prove_record_line` behind
+      backend append/rewrite and the stats writer, payload built
+      before the write so refusal leaves the store intact); the
+      interrupt QUEUE accepted under a weaker predicate than its
+      consumers deliver by (post() now proves the line + deliverability
+      before locked_append — an operator STOP with a surrogate was
+      acknowledged and never deliverable); the rewrite strand rule
+      mirrored the parser, not the reader (clean non-dict JSON —
+      `null`, arrays — deleted; now stranded the way read_all
+      excludes them); the stats store repeated the skills arc one
+      round behind (coercing `SkillStats.from_dict` laundered drifted
+      rows, `bool("false")` is True — new raw-value
+      `validate_skill_stats_row`, census 203/203 before the flip;
+      recorders refuse non-string/non-encodable ids at the door;
+      duplicate string ids compact last-wins but ANNOUNCED now); the
+      decoder rule fell to five spellings, one per seat (import
+      alias, object alias, bound method, AnnAssign, raw_decode —
+      provenance now resolved to a fixpoint, walrus too, all six
+      fixtures RISK, bytes-decode control holds, blast radius
+      unchanged 72 RISK); and the manifest resurfaced leg was blind
+      to an OK-verdict resurfacer (now reads `seen` — ANY verdict
+      falsifies the move premise). F5 ACCEPTED WITH REASON, pinned:
+      hash equality stays out of the admission predicate — the
+      content_hash is a tamper-evident tripwire, not a boundary (no
+      secret key: a forger writes a valid hash; stranding would
+      misfile legitimate operator hand-edits while stopping no
+      attacker). Receipts: spec 165 -> 185 (8 re-anchors first — a
+      SKIP is not a pass; 1 new twin-lock equivalent, the
+      prove_record_line NaN leg, same shape as r11's), 16 new
+      must-detect tests. Sweep: 185/185 accounted for on the FIRST pass — 179 detected +
+      all 6 marked equivalents (5 standing + this round's new
+      twin-lock) surviving as claimed; the arc's first
+      zero-survivor, zero-SKIP first run.*
     - *Carried lesson from r9: **the idiom everyone writes is the one
       nobody reviews.** `line = raw.strip()` sat in five readers,
       survived eight adversarial rounds whose subject was "what can a
@@ -1231,6 +1273,32 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       the composition** — the r10 backend test named read-then-rewrite
       and called only the read, which is how the round's unanimous HIGH
       shipped under a green suite.*
+    - *Carried lesson from r12: **provenance, not final call syntax,
+      decides — and a rule keyed on spelling invites one bypass per
+      spelling.** All five seats independently walked past the r11
+      decoder rule, each with a different standard Python spelling of
+      the same dataflow (import alias, object alias, bound method,
+      AnnAssign, walrus, raw_decode). A syntactic match on the shapes
+      you have met is the denylist lesson (r8) wearing AST clothes;
+      the fix is to track where the VALUE came from, resolved to a
+      fixpoint, and let the call site inherit the verdict. Two
+      corollaries: **a queue must not accept under a weaker predicate
+      than its consumer delivers by** (the producer is a door too —
+      prove at post(), not just at poll()); and **the strand rule must
+      mirror the reader's full admission, not just its parser** (what
+      read_all announces-and-skips was never in the caller's list, so
+      the rewrite deletes it unless the re-read strands it).*
+    - *Open design item (r12, Failure Operator — real, pre-existing,
+      out of the byte-safety arc's scope): `poll()` durably writes
+      `applied=True` BEFORE the loop side applies anything
+      (`loop_post_step.apply_interrupt_fn`), so a crash between poll
+      and apply loses a fully deliverable STOP — the retry converges
+      to "nothing pending". The byte-safety doors cannot fix this;
+      it is delivery semantics: separate claiming from
+      acknowledgement (inflight lease/attempt token, idempotent
+      apply, ack after the loop-side effect commits, startup
+      re-delivers expired claims — or an intent-application journal
+      keyed by interrupt id). Design work, not a patch.*
     - *Carried lesson from r8, the arc's most durable: **naming the
       cases you have met is a denylist, and a denylist in a safety check
       fails open on the case nobody has met yet.** Three files, one
