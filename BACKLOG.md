@@ -1675,6 +1675,26 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       I/O; correctness-safe, but a choke point if injection volume
       grows. Upgrade edge: a per-loop marker lock under the run dir,
       reserving the stats lock for the stats mutation.*
+    - *Its adversarial r19 (2026-08-21, five sonnet-medium seats on
+      the r18 fix layer): 12 findings, four clusters, all probed. The
+      r18 divergence warning asserted "the caller's edit" for what is
+      usually legitimate concurrent staleness (message now names both
+      causes); the r18 snapshot-reuse WIDENED the update path's stale
+      window and save_skill's whole-row replace silently reverted
+      concurrent field advances — an open breaker reset, a demotion
+      undone (snapshot now decides classification only, the mutated
+      row is re-read fresh at the last moment, a vanished row refuses
+      the update); the ghost message said "concurrently removed" for
+      rows physically present but unprovable and for ids never created
+      (three truths told apart, hedged where ids are unrecoverable);
+      transform()'s fn-attribution judged accepted with a comment.
+      Mutation spec 290 → 295 (2 re-anchored).*
+    - *Carried lesson from r19: **decide from the snapshot, write from
+      the world — and announce only what you proved.** A snapshot is
+      the right authority for a decision, the wrong authority for the
+      bytes written; an operator-facing message may state only what
+      the scan proved, and names the ambiguity it cannot resolve —
+      a guessed cause is how the one true firing gets ignored.*
     - *Carried lesson from r17: **a mutable interface must take its
       writes by name, not by possession** — "this id is in my list" is
       ambiguous between "I changed it" and "I happened to load it",

@@ -2073,3 +2073,64 @@ arc's third zero-survivor, zero-SKIP first run, and the first for a
 round whose fixes rewrote this much of the previous round's own new
 code: four moved anchors were re-anchored before the sweep, and every
 new mutant was written against a fixture that already existed.
+
+## Round 19 (2026-08-21): decide from the snapshot, write from the world
+
+Five sonnet-medium seats (codex still capped) on the r18 fix layer
+(9810ef68 + 769159bb). Twelve findings deduped to four clusters, all
+verified against the code, every seat carrying literal probe output:
+
+- **The r18 divergence warning lied about its cause** (four seats, the
+  round's widest agreement): "the caller's edit was NOT applied"
+  cannot be distinguished, from inside `_save_skills`, from a
+  concurrent NAMED write legitimately moving a row after the caller's
+  snapshot — the exact case r16/r17 carry silently by design, and the
+  steady-state shape under load. A warning that is usually a false
+  accusation trains operators to ignore the honest firing. The message
+  now states the fact and names both causes.
+- **The r18 snapshot-reuse widened a real data-loss window** (four
+  seats, HIGH, probed in both directions — the pre-fix code preserved
+  a concurrent field advance, the r18 code reverted it): reusing the
+  capture-time snapshot for the UPDATE write put the audit-trail I/O
+  inside the stale window, and `save_skill`'s whole-row replace
+  silently reset an open circuit breaker and undid a utility
+  demotion. The snapshot now decides CLASSIFICATION only; the row
+  mutated is re-read fresh immediately before the write, and a row
+  that vanished in the window refuses the update — naming is not
+  creation, applied to the evolver too.
+- **The ghost message over-claimed** (three seats): "concurrently
+  removed; the deletion stands" fired for a named id whose row was
+  physically PRESENT but unprovable (stranded verbatim in the same
+  commit), and for ids never created at all. Three truths now told
+  apart: present-but-unprovable ("repair and retry", ids recovered
+  from rows that parse but fail the proof), truly absent
+  ("concurrently removed or never created" — hedged when byte-tainted
+  rows whose ids are unrecoverable rode the rewrite), and nothing
+  guessed.
+- **transform() attributes caller fn bugs to the storage layer**
+  (three seats, LOW, judged accepted): the widened handler's message
+  is factually true (the rollback ran, the store is unchanged) and
+  the exception propagates unwrapped; a comment now marks the
+  attribution seam.
+
+### The twenty-first lesson
+
+**Decide from the snapshot, write from the world — and announce only
+what you proved.** Two halves. r18 fixed a classification lie by
+sharing one snapshot, and in doing so quietly widened the data
+window: a snapshot is the right authority for a DECISION (create or
+update, drop or carry, what the audit row claims) but the wrong
+authority for the BYTES WRITTEN — those must come from the freshest
+read the lock allows, or every field the world advanced in between is
+reverted by an unrelated caller. And when a function announces what
+it did, the announcement may state only what its own scan proved:
+"absent from every parseable row" is provable; "concurrently removed"
+and "the caller's edit" are guesses wearing the voice of fact, and a
+guessed cause in an operator-facing warning is how the one true
+firing gets ignored. Name the ambiguity when you cannot resolve it.
+
+Sweep: 294/295 on the batch run, 295/295 accounted for — the lone
+"survivor" (`the divergence warning goes silent`) is DETECTED reliably
+when re-run in isolation against the identical commit; recorded as a
+batch-run anomaly (suspect: inter-mutant state in the shared sweep
+copy or a caplog capture flake), the first of its kind in this arc.
