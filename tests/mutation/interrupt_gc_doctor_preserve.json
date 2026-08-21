@@ -1604,8 +1604,8 @@
  {
   "name": "r14 scanner :: the class walk runs a single pass",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "    changed = True\n    while changed:\n        changed = False\n        for m in cls.body:",
-  "replacement": "    for _pass in (0,):\n        for m in cls.body:",
+  "anchor": "    changed = True\n    while changed:\n        changed = False\n        for c in classes:",
+  "replacement": "    for _pass in (0,):\n        for c in classes:",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {

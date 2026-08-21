@@ -597,30 +597,29 @@ def _class_decoder_sets(cls, module_ctors,
     ctors_at |= {"@." + n for n in body_ctors if "." not in n}
     insts |= {"@." + n for n in body_insts if "." not in n}
     methods |= {"@." + n for n in body_methods if "." not in n}
-    changed = True
-    while changed:
-        changed = False
-        for m in cls.body:
-            if not isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            first = _receiver_arg(m)
-            if first is None:
-                continue
-            pref = first + "."
-            seed_ctors = {pref + n[2:] for n in ctors_at}
-            seed_insts = {pref + n[2:] for n in insts}
-            seed_methods = {pref + n[2:] for n in methods}
-            ctors = _decoder_ctors(m, seed_ctors) | module_ctors
-            mi, mm = _decoder_names(m, ctors, insts=seed_insts,
-                                    methods=seed_methods)
-            for found, into in ((ctors, ctors_at), (mi, insts),
-                                (mm, methods)):
-                for n in found:
-                    if n.startswith(pref):
-                        norm = "@." + n[len(pref):]
-                        if norm not in into:
-                            into.add(norm)
-                            changed = True
+    # ONE sweep over the methods. Convergence is driven by the caller:
+    # scan_module re-seeds and re-runs this per class until the sets
+    # stop growing (its class-graph fixpoint), so an inner fixpoint
+    # here would be a redundant second loop on the same door — the r14
+    # sweep proved it (the single-pass mutant survived because the
+    # outer loop converges either way).
+    for m in cls.body:
+        if not isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        first = _receiver_arg(m)
+        if first is None:
+            continue
+        pref = first + "."
+        seed_ctors = {pref + n[2:] for n in ctors_at}
+        seed_insts = {pref + n[2:] for n in insts}
+        seed_methods = {pref + n[2:] for n in methods}
+        ctors = _decoder_ctors(m, seed_ctors) | module_ctors
+        mi, mm = _decoder_names(m, ctors, insts=seed_insts,
+                                methods=seed_methods)
+        for found, into in ((ctors, ctors_at), (mi, insts),
+                            (mm, methods)):
+            into |= {"@." + n[len(pref):] for n in found
+                     if n.startswith(pref)}
     return ctors_at, insts, methods
 
 
