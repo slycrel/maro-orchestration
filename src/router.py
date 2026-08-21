@@ -170,23 +170,36 @@ def build_training_data(
     if not stats_by_id:
         return [], [], []
 
-    # Load skill descriptions
+    # Load skill descriptions through the operational admission path,
+    # not bare json.loads (adversarial r15, four seats, probed): a
+    # JSON-valid row `validate_skill_row` rejects — one that can never
+    # enter the live pool — still supplied str()-coerced description and
+    # trigger text as training features, and a non-UTF-8 store was
+    # swallowed whole by `except: pass`. Same lesson as the r14 stats
+    # side: train only on rows the operational readers admit.
     skills_by_id: dict = {}
     if skills_p.exists():
         try:
-            for line in skills_p.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
+            from skills import _read_store, validate_skill_row
+            rejected = 0
+            for d in _read_store(skills_p, "router.build_training_data"):
                 try:
-                    d = json.loads(line)
-                    sid = d.get("id", "")
-                    if sid:
-                        skills_by_id[sid] = d
+                    validate_skill_row(d)
                 except Exception:
+                    rejected += 1
                     continue
-        except Exception:
-            pass
+                sid = d.get("id", "")
+                if isinstance(sid, str) and sid:
+                    skills_by_id[sid] = d
+            if rejected:
+                logger.warning(
+                    "router: %d skill row(s) failed the operational "
+                    "predicate and were excluded from training features "
+                    "(%s)", rejected, skills_p)
+        except OSError as exc:
+            logger.warning(
+                "router: skills store unreadable, training features "
+                "degrade to stats names (%s): %s", skills_p, exc)
 
     X_texts: List[str] = []
     y_labels: List[float] = []

@@ -259,6 +259,51 @@ def _called_names(node: ast.AST) -> set[str]:
     return out
 
 
+def _class_alias_map(tree, by_class_name):
+    """name -> set of same-module class names it may denote.
+
+    Aliases are inheritance too (adversarial r15, four seats, probed):
+    `Alias = Base` followed by `class Child(Alias)` carried Base's
+    decoder provenance in every real sense, but the class graph matched
+    bases against literal ClassDef names only — so the inherited raw
+    decoder walked past the scan and an unrelated clean call earned
+    Child.rewrite an OK. Module-scope Name bindings whose value chain
+    ends at a known class resolve to it; a name bound ambiguously
+    unions ALL candidates (RISK direction); a chain that ends anywhere
+    else resolves to nothing, which keeps an alias to a bytes-holding
+    class from minting false provenance.
+    """
+    ref: "dict[str, set[str]]" = {}
+    for target, value in _scope_bindings(tree):
+        if not isinstance(target, ast.Name):
+            continue
+        v = value
+        while isinstance(v, ast.Subscript):
+            v = v.value
+        vname = v.id if isinstance(v, ast.Name) else \
+            v.attr if isinstance(v, ast.Attribute) else None
+        if vname is not None:
+            ref.setdefault(target.id, set()).add(vname)
+
+    resolved: "dict[str, set[str]]" = {}
+
+    def _resolve(name, seen):
+        if name in by_class_name:
+            return {name}
+        if name in resolved:
+            return resolved[name]
+        if name in seen or name not in ref:
+            return set()
+        seen.add(name)
+        out: set = set()
+        for r in ref[name]:
+            out |= _resolve(r, seen)
+        resolved[name] = out
+        return out
+
+    return {a: _resolve(a, set()) for a in ref}
+
+
 def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     """Return (verdict, lineno, qualified_name) for every flagged function."""
     global _PARSERS, _MODULE_DECODER_CTORS, _MODULE_DECODERS, \
@@ -273,6 +318,7 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     for c in classes:
         by_class_name.setdefault(c.name, []).append(c)
     sets_by_id = {id(c): (set(), set(), set()) for c in classes}
+    alias_map = _class_alias_map(tree, by_class_name)
     # Inheritance is provenance too (adversarial r14, two seats,
     # probed): a decoder initialized in `Base.__init__` was invisible
     # from `Child(Base).rewrite` because the map stopped at the
@@ -287,9 +333,18 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
         for c in classes:
             seed = [set(x) for x in sets_by_id[id(c)]]
             for b in c.bases:
+                # Base[str] is an ast.Subscript wrapping the base
+                # (adversarial r15, two seats, probed): generics were
+                # discarded outright, severing provenance at every
+                # Generic[...] boundary. Unwrap to the real base.
+                while isinstance(b, ast.Subscript):
+                    b = b.value
                 bname = b.id if isinstance(b, ast.Name) else \
                     b.attr if isinstance(b, ast.Attribute) else None
-                for bc in by_class_name.get(bname, ()):
+                names = {bname} if bname in by_class_name else \
+                    alias_map.get(bname, set())
+                for bc in (bc for n in names
+                           for bc in by_class_name.get(n, ())):
                     if bc is not c:
                         for k in range(3):
                             seed[k] |= sets_by_id[id(bc)][k]

@@ -1470,3 +1470,69 @@ class Repairer:
         atomic_write(path, "".join(out))
 '''
         assert _scan(src)["rewrite"] == "RISK"
+
+
+class TestAnAliasedBaseIsStillABase:
+    """Adversarial r15 (four seats, probed): the r14 class graph matched
+    bases against literal ClassDef names only, so `Alias = Base` or the
+    generic spelling `Base[str]` (an ast.Subscript) severed decoder
+    provenance at the inheritance boundary — a routine spelling turned
+    an inherited raw destructive parse scanner-green while an unrelated
+    clean call earned the method OK."""
+
+    BASE = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Base:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+'''
+
+    CHILD = '''
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+
+    def test_a_name_alias_carries_provenance(self):
+        src = self.BASE + "\nAlias = Base\n\nclass Child(Alias):\n" \
+            + self.CHILD
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_an_alias_chain_carries_provenance(self):
+        src = self.BASE + "\nA1 = Base\nA2 = A1\n\nclass Child(A2):\n" \
+            + self.CHILD
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_a_subscript_base_carries_provenance(self):
+        src = self.BASE + "\nclass Child(Base[str]):\n" + self.CHILD
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_an_alias_to_a_clean_class_stays_clean(self):
+        """Negative control: an alias must not MINT provenance. The
+        base holds a bytes attribute whose .decode is charset decoding,
+        and every parse in the child is proven clean."""
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class CleanBase:
+    def __init__(self):
+        self.blob = b"x"
+
+Alias = CleanBase
+
+class Child(Alias):
+    def rewrite(self, path):
+        out = []
+        for line in open(path):
+            try:
+                out.append(loads_clean(line))
+            except Exception:
+                continue
+        self.blob.decode("utf-8")
+        atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["rewrite"] == "OK"

@@ -194,3 +194,53 @@ class TestByteSafeRmw:
         path.write_text(content, encoding="utf-8")
         locked_rmw(path, lambda old: old)
         assert path.read_text(encoding="utf-8") == content
+
+
+class TestADurableAppendReachesTheDisk:
+    """Adversarial r15 (two seats, probed): locked_append rode the page
+    cache while atomic_write fsyncs — so a retention archive was LESS
+    durable than the deletion it justifies. durable=True flushes and
+    fsyncs the file, plus the parent directory when the append created
+    the file; require=True forbids the fail-open unlocked fallback."""
+
+    def test_durable_fsyncs_file_and_new_parent_dir(
+            self, tmp_path, monkeypatch):
+        import os as _os
+        from file_lock import locked_append
+        path = tmp_path / "a.jsonl"
+        fsyncs = []
+        real = _os.fsync
+        monkeypatch.setattr(
+            _os, "fsync", lambda fd: (fsyncs.append(fd), real(fd))[1])
+        locked_append(path, "one", durable=True)
+        assert len(fsyncs) == 2, "create: file + parent dir"
+        fsyncs.clear()
+        locked_append(path, "two", durable=True)
+        assert len(fsyncs) == 1, "existing file: file only"
+        assert path.read_text(encoding="utf-8") == "one\ntwo\n"
+
+    def test_plain_append_does_not_fsync(self, tmp_path, monkeypatch):
+        import os as _os
+        from file_lock import locked_append
+        fsyncs = []
+        real = _os.fsync
+        monkeypatch.setattr(
+            _os, "fsync", lambda fd: (fsyncs.append(fd), real(fd))[1])
+        locked_append(tmp_path / "a.jsonl", "one")
+        assert fsyncs == []
+
+    def test_require_refuses_the_fail_open_fallback(
+            self, tmp_path, monkeypatch):
+        import fcntl
+        import pytest
+        from file_lock import FileLockTimeout, locked_append
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        path = tmp_path / "a.jsonl"
+        holder = open(str(path) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            with pytest.raises(FileLockTimeout):
+                locked_append(path, "one", timeout_s=0.2, require=True)
+            assert not path.exists()
+        finally:
+            holder.close()

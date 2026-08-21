@@ -280,7 +280,8 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8",
         raise
 
 
-def locked_append(path: Path, line: str, *, timeout_s: float | None = None) -> None:
+def locked_append(path: Path, line: str, *, timeout_s: float | None = None,
+                  require: bool = False, durable: bool = False) -> None:
     """Append a newline-terminated line to path atomically via flock.
 
     Acquires the same .lock file used by locked_write(), so append and
@@ -289,12 +290,30 @@ def locked_append(path: Path, line: str, *, timeout_s: float | None = None) -> N
 
     Fail-closed like locked_write: raises FileLockTimeout past the deadline
     (unless fail-open is enabled). timeout_s overrides the deadline for
-    this call (see locked_write).
+    this call (see locked_write). require=True forwards to locked_write —
+    the append refuses to run unlocked.
+
+    durable=True flushes and fsyncs the file (and, when this append
+    CREATED it, fsyncs the parent directory) before returning — for
+    appends whose durability ORDER matters relative to a later write
+    (adversarial r15, two seats: the skills archive rode the page cache
+    while the live-pool removal went through fsyncing atomic_write, so a
+    power loss could keep the deletion and lose the retention copy).
     """
-    with locked_write(path, timeout_s=timeout_s):
+    with locked_write(path, timeout_s=timeout_s, require=require):
         path.parent.mkdir(parents=True, exist_ok=True)
+        created = not path.exists()
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+            if durable:
+                fh.flush()
+                os.fsync(fh.fileno())
+        if durable and created:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
 
 
 def locked_rmw(path: Path, fn, *, default: str = "") -> str:

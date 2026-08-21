@@ -180,7 +180,13 @@ def _archive_skills(skills_to_archive: List[Skill], *, reason: str) -> None:
     # still duplicates the batch — in an append-only retention store a
     # duplicate is noise, not loss, and the unsafe direction (dropping
     # rows to dedupe) is the one the retention decree forbids.
-    locked_append(path, "\n".join(lines))
+    # require=True + durable=True (adversarial r15, two seats, probed):
+    # the live-pool removal that follows goes through fsyncing
+    # atomic_write, but this append rode the page cache — a power loss
+    # could keep the deletion and lose the retention copy. The archive
+    # must be durable BEFORE the removal is allowed to happen, and the
+    # retention writer must never run unlocked.
+    locked_append(path, "\n".join(lines), require=True, durable=True)
 
 
 # Aliases — internal names delegate to skill_types public API
@@ -1064,6 +1070,18 @@ def validate_skill_stats_row(d: dict) -> None:
             raise TypeError(f"needs_escalation must be a bool, got {v!r}")
 
 
+class _StatsRead(tuple):
+    """(records, stranded) 2-tuple that ALSO carries `.compacted` — the
+    count of older same-id duplicates the keyed read excluded — so the
+    writer can announce the actual compaction after its commit without
+    breaking every `records, stranded = ...` unpack site (r15)."""
+
+    def __new__(cls, records, stranded, compacted=0):
+        self = super().__new__(cls, (records, stranded))
+        self.compacted = compacted
+        return self
+
+
 def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
     """Announced read of skill-stats.jsonl → ({skill_id: row}, stranded).
 
@@ -1082,7 +1100,7 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
     try:
         text = _store_text(path)
     except FileNotFoundError:
-        return records, stranded
+        return _StatsRead(records, stranded)
     except OSError:
         # Unreadable store: refuse to rebuild from nothing. Raising here
         # aborts the caller's write, which leaves the file intact — the
@@ -1160,14 +1178,22 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
             "store verbatim (%s)",
             tainted, keyless, path)
     if compacted:
+        # A read announces what the READ did (adversarial r15, four
+        # seats, probed — the duplicate twin of r14's strandee fix):
+        # the old message claimed a future rewrite ("will be compacted")
+        # from a read-only path, an audit line about a deletion that may
+        # never happen. The actual compaction is announced by
+        # `_write_skill_stats`, after its commit, via the count this
+        # result carries.
         logger.warning(
             "[skills] skill-stats: %d older duplicate row(s) for already-"
-            "seen id(s) will be compacted by the next rewrite — last row "
-            "per id wins, matching this keyed read (%s)", compacted, path)
-    return records, stranded
+            "seen id(s) excluded from this keyed read — last row per id "
+            "wins; the store still holds them (%s)", compacted, path)
+    return _StatsRead(records, stranded, compacted)
 
 
-def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
+def _write_skill_stats(path: Path, records: dict, stranded: List[str],
+                       *, compacted: int = 0) -> None:
     """Crash-safe, byte-safe write-back of the keyed store + its strandees."""
     from file_lock import atomic_write
     # `stranded` holds raw lines WITHOUT their framing newline (r10), so
@@ -1224,6 +1250,12 @@ def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
         logger.warning(
             "[skills] skill-stats: %d stranded row(s) carried through "
             "the rewrite verbatim (%s)", len(stranded), path)
+    if compacted:
+        # The deletion the keyed read predicted, announced by the write
+        # that actually performed it (adversarial r15, four seats).
+        logger.warning(
+            "[skills] skill-stats: %d older duplicate row(s) compacted "
+            "by this rewrite — last row per id won (%s)", compacted, path)
 
 
 def get_all_skill_stats() -> List[SkillStats]:
@@ -1316,10 +1348,18 @@ def record_skill_outcome(
 
     path = _skill_stats_path()
 
-    with locked_write(path):
+    # require=True (adversarial r15, three seats, probed): this is a
+    # read-modify-write over the whole keyed store, and the documented
+    # fail-open lock mode would degrade it into the exact lost-update
+    # race r14 closed for JSONLBackend.transform — two recorders both
+    # read N, both write N+1, one outcome silently gone. A transaction
+    # that cannot lock must refuse to run.
+    with locked_write(path, require=True):
         # Announced read; `stranded` rides the rewrite verbatim so a torn
         # or keyless row is never deleted by a counter update.
-        all_records, stranded = _read_skill_stats(path)
+        _read = _read_skill_stats(path)
+        all_records, stranded = _read
+        compacted = _read.compacted
 
         # Find or create the record
         if skill_id in all_records:
@@ -1369,14 +1409,19 @@ def record_skill_outcome(
         all_records[skill_id] = {**all_records.get(skill_id, {}),
                                  **stats.to_dict()}
         try:
-            _write_skill_stats(path, all_records, stranded)
+            _write_skill_stats(path, all_records, stranded,
+                               compacted=compacted)
         except Exception as e:
-            # The outcome is DISCARDED here — say which store lost it
-            # (adversarial r13, two seats: the warning named neither the
-            # path nor the skill, and the caller sees a normal return).
-            logger.warning(
+            # Name what was lost and where — then RAISE (adversarial
+            # r15, four seats, probed): the r13 version warned and
+            # returned a normal None, so a disk-full lost the outcome
+            # while the caller proceeded as if evidence existed. An
+            # error result must not be a valid value; every production
+            # caller wraps this in its own except and degrades visibly.
+            logger.error(
                 "[skills] record_skill_outcome: outcome for %r NOT "
                 "persisted (%s): %s", skill_id, path, e)
+            raise
 
 
 def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
@@ -1410,10 +1455,18 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
 
     path = _skill_stats_path()
 
-    with locked_write(path):
+    # require=True (adversarial r15, three seats, probed): this is a
+    # read-modify-write over the whole keyed store, and the documented
+    # fail-open lock mode would degrade it into the exact lost-update
+    # race r14 closed for JSONLBackend.transform — two recorders both
+    # read N, both write N+1, one outcome silently gone. A transaction
+    # that cannot lock must refuse to run.
+    with locked_write(path, require=True):
         # Announced read; `stranded` rides the rewrite verbatim so a torn
         # or keyless row is never deleted by a counter update.
-        all_records, stranded = _read_skill_stats(path)
+        _read = _read_skill_stats(path)
+        all_records, stranded = _read
+        compacted = _read.compacted
 
         if skill_id in all_records:
             stats = SkillStats.from_dict(all_records[skill_id])
@@ -1439,11 +1492,14 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
         all_records[skill_id] = {**all_records.get(skill_id, {}),
                                  **stats.to_dict()}
         try:
-            _write_skill_stats(path, all_records, stranded)
+            _write_skill_stats(path, all_records, stranded,
+                               compacted=compacted)
         except Exception as e:
-            logger.warning(
+            # Same contract as record_skill_outcome (r15): name it, raise.
+            logger.error(
                 "[skills] record_skill_injection_outcome: verdict for %r "
                 "NOT persisted (%s): %s", skill_id, path, e)
+            raise
 
 
 def get_skills_needing_escalation() -> List[SkillStats]:

@@ -844,3 +844,47 @@ class TestVerbatimMeansThePayload:
         assert path.read_bytes() == b'\xff\n{"id": "good"}\n'
         jb.rewrite("led", [{"id": "good"}])        # idempotent
         assert path.read_bytes() == b'\xff\n{"id": "good"}\n'
+
+
+class TestACommittedTransformTellsTheTruth:
+    """Adversarial r15 (Skeptic, probed): a sqlite3.Error raised AFTER
+    con.commit() — a close() failure — fell into the outer handler,
+    which logged "transform NOT performed, store unchanged" about a
+    store that HOLDS the transform. That message invites a retry, and a
+    non-idempotent transform would then apply twice. The handler now
+    branches on a committed flag and says what actually happened."""
+
+    def test_a_close_failure_after_commit_is_honest(
+            self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        from memory_backends import SQLiteBackend
+        be = SQLiteBackend(tmp_path / "mem.db")
+        be.append("led", {"k": 1})
+
+        class CloseBomb:
+            def __init__(self, con):
+                self._con = con
+
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+
+            def close(self):
+                raise sqlite3.OperationalError("simulated close failure")
+
+        real_connect = be._connect
+        be._connect = lambda: CloseBomb(real_connect())
+        try:
+            with caplog.at_level(
+                    logging.ERROR, logger="maro.memory_backends"):
+                with pytest.raises(sqlite3.Error):
+                    be.transform(
+                        "led",
+                        lambda rows: rows + [{"k": 2}])
+        finally:
+            be._connect = real_connect
+        assert "COMMITTED" in caplog.text
+        assert "do not retry" in caplog.text
+        assert "store unchanged" not in caplog.text
+        assert be.read_all("led") == [{"k": 1}, {"k": 2}]

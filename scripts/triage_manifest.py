@@ -88,7 +88,7 @@ _add("read-only", """
  evolver_scans.py:_record_suggestion_outcomes graduation.py:scan_candidates
  graduation.py:_already_proposed graduation.py:verify_graduation_rules
  shadow_lane.py:_today_ledger_count shadow_lane.py:_status
- router.py:build_training_data router.py:_count_skill_stats
+ router.py:_count_skill_stats
  memory_quality.py:_load_corpus_from_workspace memory_quality.py:_load_paraphrase_queries
  navigator_shadow.py:_load_navigator_events memory_jsonl.py:_replay
  jsonl_utils.py:_iter_lines_reverse
@@ -130,6 +130,13 @@ FIXED = {n for n, c in SITES.items() if c == "REAL"} | {
 # code regressed" from "the rule got stricter" would have reported this as a
 # REGRESSION, which is why the resolution is a hand re-read and a recorded
 # reason, not a silently widened exemption.
+# `router.py:build_training_data` was listed under "read-only" until r15
+# (2026-08-21). Its skills side moved from read_text + bare json.loads onto
+# read_jsonl_announced + validate_skill_row, so the function no longer frames
+# or parses lines itself — the surface is still watched, inside the shared
+# announced reader that now owns the framing. Its triage was correct and the
+# fix was about WHAT it trains on, not about a rewrite; removed rather than
+# marked FIXED because the scanner cannot see a site that no longer exists.
 # `gc_memory.py:_gc_outcomes._trim` used to be listed here. The `vanished`
 # leg below caught it on its first run — `_trim` no longer frames lines at
 # all (it calls `_classify`, which does, and which the scanner reports as its

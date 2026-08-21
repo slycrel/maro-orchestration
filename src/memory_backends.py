@@ -474,6 +474,7 @@ class SQLiteBackend(MemoryBackend):
         back with the store untouched.
         """
         from jsonl_utils import loads_clean, prove_record_line
+        committed = False
         try:
             con = self._connect()
             try:
@@ -503,6 +504,7 @@ class SQLiteBackend(MemoryBackend):
                     "VALUES (?, ?)",
                     [(collection, d) for d in datas])
                 con.commit()
+                committed = True
             except BaseException:
                 con.rollback()
                 raise
@@ -516,9 +518,22 @@ class SQLiteBackend(MemoryBackend):
                     collection, carried, self._db_path)
             return out
         except sqlite3.Error as exc:
-            log.error("SQLiteBackend.transform(%s): transform NOT "
-                      "performed, store unchanged (%s): %s",
-                      collection, self._db_path, exc)
+            if committed:
+                # The transaction COMMITTED and then the connection
+                # failed to close (adversarial r15, Skeptic, probed):
+                # the old message said "store unchanged", inviting a
+                # retry that would apply a non-idempotent transform
+                # twice. Rollback is impossible after COMMIT — say what
+                # actually happened.
+                log.error("SQLiteBackend.transform(%s): transform "
+                          "COMMITTED but the connection failed to close "
+                          "cleanly (%s): %s — the store HOLDS the "
+                          "transform; do not retry",
+                          collection, self._db_path, exc)
+            else:
+                log.error("SQLiteBackend.transform(%s): transform NOT "
+                          "performed, store unchanged (%s): %s",
+                          collection, self._db_path, exc)
             raise
 
     def append_text(self, collection: str, text: str) -> None:

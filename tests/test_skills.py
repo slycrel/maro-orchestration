@@ -3761,7 +3761,8 @@ class TestTheArchiveBatchCannotSplit:
         real = file_lock.locked_append
         monkeypatch.setattr(
             file_lock, "locked_append",
-            lambda path, line: (calls.append(1), real(path, line))[1])
+            lambda path, line, **kw: (
+                calls.append(1), real(path, line, **kw))[1])
         sk._archive_skills(self._skills(["a", "b"]), reason="cull")
         assert len(calls) == 1
         ids = [json.loads(l)["id"]
@@ -3776,10 +3777,217 @@ class TestTheArchiveBatchCannotSplit:
         arch = tmp_path / "archive.jsonl"
         monkeypatch.setattr(sk, "_skills_archive_path", lambda: arch)
 
-        def boom(path, line):
+        def boom(path, line, **kw):
             raise OSError("disk full")
 
         monkeypatch.setattr(file_lock, "locked_append", boom)
         with pytest.raises(OSError):
             sk._archive_skills(self._skills(["a", "b"]), reason="cull")
         assert not arch.exists() or arch.read_text() == ""
+
+
+class TestTheRecordersFailClosed:
+    """Adversarial r15 (four seats, probed): the two skill-stats
+    read-modify-write recorders were the untraveled twins of the r14
+    transform fix — bare locked_write() let fail-open run the RMW
+    unlocked (two concurrent recorders both read N, both wrote N+1,
+    one outcome silently lost), and a failed _write_skill_stats was
+    caught, warned, and converted into the recorders' ordinary None
+    return, so a caller could not distinguish disk-full from success."""
+
+    def _scratch(self, monkeypatch, tmp_path):
+        import skills as sk
+        p = tmp_path / "skill-stats.jsonl"
+        monkeypatch.setattr(sk, "_skill_stats_path", lambda: p)
+        return sk, p
+
+    def test_record_skill_outcome_raises_when_the_write_fails(
+            self, tmp_path, monkeypatch):
+        import pytest
+        sk, _ = self._scratch(monkeypatch, tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sk, "_write_skill_stats", boom)
+        with pytest.raises(OSError):
+            sk.record_skill_outcome("s", True)
+
+    def test_record_skill_injection_outcome_raises_when_the_write_fails(
+            self, tmp_path, monkeypatch):
+        import pytest
+        sk, _ = self._scratch(monkeypatch, tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sk, "_write_skill_stats", boom)
+        with pytest.raises(OSError):
+            sk.record_skill_injection_outcome("s", True)
+
+    def test_both_recorders_take_the_lock_with_require(self):
+        """Cheap structural pin: the keyword is the fix (same shape as
+        TestTransformRefusesToRunUnlocked's pin in
+        tests/test_memory_backend.py)."""
+        import ast
+        import inspect
+        import skills as sk
+        for fn in (sk.record_skill_outcome,
+                   sk.record_skill_injection_outcome):
+            src = inspect.getsource(fn)
+            calls = [n for n in ast.walk(ast.parse(src.lstrip()))
+                     if isinstance(n, ast.Call)
+                     and getattr(n.func, "id", "") == "locked_write"]
+            assert calls, f"{fn.__name__} no longer calls locked_write"
+            kw = {k.arg: getattr(k.value, "value", None)
+                  for k in calls[0].keywords}
+            assert kw.get("require") is True, fn.__name__
+
+    def test_contended_fail_open_raises_before_the_recorder_writes(
+            self, tmp_path, monkeypatch):
+        import fcntl
+        import pytest
+        from file_lock import FileLockTimeout
+        sk, p = self._scratch(monkeypatch, tmp_path)
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "1")
+        holder = open(str(p) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            with pytest.raises(FileLockTimeout):
+                sk.record_skill_outcome("s", True)
+            assert not p.exists()
+        finally:
+            holder.close()
+
+
+class TestADuplicateCompactionIsAnnouncedByTheWriter:
+    """Adversarial r15 (four seats, probed): the r14 fix moved the
+    stranded-carry announcement behind commit but left its duplicate
+    twin behind — a PURE READ of two same-id rows logged "will be
+    compacted by the next rewrite", an unconditional destructive claim
+    from a path that changes nothing. If no rewrite follows, or the
+    write fails, the audit record overstates what happened. The read
+    now reports an exclusion from ITS OWN result and hands the count to
+    the writer, which announces compaction only after its commit."""
+
+    ROWS = ('{"skill_id": "d", "total_uses": 1}\n'
+            '{"skill_id": "d", "total_uses": 2}\n')
+
+    def test_a_pure_read_claims_no_rewrite(self, tmp_path, caplog):
+        import logging
+        from skills import _read_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text(self.ROWS, encoding="utf-8")
+        before = path.read_bytes()
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            read = _read_skill_stats(path)
+        assert path.read_bytes() == before
+        assert read.compacted == 1
+        assert "excluded from this keyed read" in caplog.text
+        assert "compacted by" not in caplog.text
+        assert "will be compacted" not in caplog.text
+
+    def test_the_writer_announces_compaction_after_commit(
+            self, tmp_path, caplog):
+        import logging
+        from skills import _read_skill_stats, _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text(self.ROWS, encoding="utf-8")
+        read = _read_skill_stats(path)
+        records, stranded = read
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            _write_skill_stats(path, records, stranded,
+                               compacted=read.compacted)
+        assert "compacted by this rewrite" in caplog.text
+        lines = [l for l in
+                 path.read_text(encoding="utf-8").splitlines() if l]
+        assert len(lines) == 1
+
+    def test_a_failed_write_claims_no_compaction(
+            self, tmp_path, caplog, monkeypatch):
+        import logging
+        import pytest
+        import file_lock
+        from skills import _read_skill_stats, _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text(self.ROWS, encoding="utf-8")
+        read = _read_skill_stats(path)
+        records, stranded = read
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(file_lock, "atomic_write", boom)
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            with pytest.raises(OSError):
+                _write_skill_stats(path, records, stranded,
+                                   compacted=read.compacted)
+        assert "compacted by this rewrite" not in caplog.text
+
+
+class TestTheArchiveIsDurableBeforeTheDelete:
+    """Adversarial r15 (two seats, probed): the live-pool removal that
+    follows _archive_skills goes through fsyncing atomic_write, but the
+    archive append rode the page cache — a power loss could keep the
+    deletion and lose the retention copy, and bare locked_write let
+    fail-open run the retention writer unlocked. The append is now
+    require=True + durable=True (fsync the file, and the parent dir
+    when the append created it)."""
+
+    def _skills(self, ids):
+        from skills import _dict_to_skill
+        return [_dict_to_skill({
+            "id": i, "name": i, "description": "d",
+            "trigger_patterns": [], "steps": [],
+            "created_at": "t", "version": 1}) for i in ids]
+
+    def test_the_append_fsyncs_file_and_new_parent_dir(
+            self, tmp_path, monkeypatch):
+        import os as _os
+        import skills as sk
+        arch = tmp_path / "archive.jsonl"
+        monkeypatch.setattr(sk, "_skills_archive_path", lambda: arch)
+        fsyncs = []
+        real = _os.fsync
+        monkeypatch.setattr(
+            _os, "fsync", lambda fd: (fsyncs.append(fd), real(fd))[1])
+        sk._archive_skills(self._skills(["a"]), reason="cull")
+        assert len(fsyncs) == 2, "expected file + parent-dir fsync"
+        fsyncs.clear()
+        sk._archive_skills(self._skills(["b"]), reason="cull")
+        assert len(fsyncs) == 1, "existing file: file fsync only"
+
+    def test_the_archive_call_is_require_and_durable(self):
+        """Cheap structural pin: the keywords are the fix."""
+        import ast
+        import inspect
+        import skills as sk
+        src = inspect.getsource(sk._archive_skills)
+        calls = [n for n in ast.walk(ast.parse(src.lstrip()))
+                 if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == "locked_append"]
+        assert calls, "_archive_skills no longer calls locked_append"
+        kw = {k.arg: getattr(k.value, "value", None)
+              for k in calls[0].keywords}
+        assert kw.get("require") is True
+        assert kw.get("durable") is True
+
+    def test_contended_fail_open_archives_nothing(
+            self, tmp_path, monkeypatch):
+        import fcntl
+        import pytest
+        import skills as sk
+        from file_lock import FileLockTimeout
+        arch = tmp_path / "archive.jsonl"
+        monkeypatch.setattr(sk, "_skills_archive_path", lambda: arch)
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "1")
+        holder = open(str(arch) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            with pytest.raises(FileLockTimeout):
+                sk._archive_skills(self._skills(["a"]), reason="cull")
+            assert not arch.exists()
+        finally:
+            holder.close()

@@ -1204,8 +1204,8 @@
  {
   "name": "stats compaction :: the announce goes quiet",
   "file": "src/skills.py",
-  "anchor": "    if compacted:\n        logger.warning(",
-  "replacement": "    if False:\n        logger.warning(",
+  "anchor": "    if compacted:\n        # The deletion the keyed read predicted, announced by the write\n        # that actually performed it (adversarial r15, four seats).\n        logger.warning(",
+  "replacement": "    if False:\n        # The deletion the keyed read predicted, announced by the write\n        # that actually performed it (adversarial r15, four seats).\n        logger.warning(",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1555,8 +1555,8 @@
  {
   "name": "r14 skills archive :: the batch splits again",
   "file": "src/skills.py",
-  "anchor": "    locked_append(path, \"\\n\".join(lines))",
-  "replacement": "    for line in lines:\n        locked_append(path, line)",
+  "anchor": "    locked_append(path, \"\\n\".join(lines), require=True, durable=True)",
+  "replacement": "    for line in lines:\n        locked_append(path, line, require=True, durable=True)",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1569,8 +1569,8 @@
  {
   "name": "r14 scanner :: inheritance stops carrying provenance",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "            for b in c.bases:\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                for bc in by_class_name.get(bname, ()):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
-  "replacement": "            pass",
+  "anchor": "                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                names = {bname} if bname in by_class_name else \\\n                    alias_map.get(bname, set())\n                for bc in (bc for n in names\n                           for bc in by_class_name.get(n, ())):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
+  "replacement": "                pass",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
@@ -1614,5 +1614,103 @@
   "anchor": "    ctors = set(ctors) | _decoder_ctors(scope, ctors)\n    insts: set = set(insts)\n    methods: set = set(methods)",
   "replacement": "    ctors = set(ctors) | _decoder_ctors(scope, ctors)\n    insts: set = set()\n    methods: set = set()",
   "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "r15 recorder :: outcome write failure goes quiet again",
+  "file": "src/skills.py",
+  "anchor": "            logger.error(\n                \"[skills] record_skill_outcome: outcome for %r NOT \"\n                \"persisted (%s): %s\", skill_id, path, e)\n            raise",
+  "replacement": "            logger.warning(\n                \"[skills] record_skill_outcome: outcome for %r NOT \"\n                \"persisted (%s): %s\", skill_id, path, e)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 recorder :: injection write failure goes quiet again",
+  "file": "src/skills.py",
+  "anchor": "            logger.error(\n                \"[skills] record_skill_injection_outcome: verdict for %r \"\n                \"NOT persisted (%s): %s\", skill_id, path, e)\n            raise",
+  "replacement": "            logger.warning(\n                \"[skills] record_skill_injection_outcome: verdict for %r \"\n                \"NOT persisted (%s): %s\", skill_id, path, e)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 recorder :: the outcome lock fails open again",
+  "file": "src/skills.py",
+  "anchor": "                or not math.isfinite(_tv):\n            raise TypeError(\n                f\"{_tname} must be a finite number, got {_tv!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path, require=True):",
+  "replacement": "                or not math.isfinite(_tv):\n            raise TypeError(\n                f\"{_tname} must be a finite number, got {_tv!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path):",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 recorder :: the injection lock fails open again",
+  "file": "src/skills.py",
+  "anchor": "    # non-bool verdict must not count as goal_achieved.\n    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path, require=True):",
+  "replacement": "    # non-bool verdict must not count as goal_achieved.\n    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")\n    from file_lock import locked_write\n\n    path = _skill_stats_path()\n\n    # require=True (adversarial r15, three seats, probed): this is a\n    # read-modify-write over the whole keyed store, and the documented\n    # fail-open lock mode would degrade it into the exact lost-update\n    # race r14 closed for JSONLBackend.transform \u2014 two recorders both\n    # read N, both write N+1, one outcome silently gone. A transaction\n    # that cannot lock must refuse to run.\n    with locked_write(path):",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 stats read :: the read claims a rewrite again",
+  "file": "src/skills.py",
+  "anchor": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) excluded from this keyed read \u2014 last row per id \"\n            \"wins; the store still holds them (%s)\", compacted, path)",
+  "replacement": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) will be compacted by the next rewrite \u2014 last row \"\n            \"per id wins (%s)\", compacted, path)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 stats read :: the compacted count stops travelling",
+  "file": "src/skills.py",
+  "anchor": "    return _StatsRead(records, stranded, compacted)",
+  "replacement": "    return _StatsRead(records, stranded, 0)",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r15 router :: unadmitted skill rows train the model again",
+  "file": "src/router.py",
+  "anchor": "            for d in _read_store(skills_p, \"router.build_training_data\"):\n                try:\n                    validate_skill_row(d)\n                except Exception:\n                    rejected += 1\n                    continue",
+  "replacement": "            for d in _read_store(skills_p, \"router.build_training_data\"):\n                if False:\n                    rejected += 1\n                    continue",
+  "tests": "tests/test_router.py"
+ },
+ {
+  "name": "r15 scanner :: aliases stop resolving to bases",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                names = {bname} if bname in by_class_name else \\\n                    alias_map.get(bname, set())",
+  "replacement": "                names = {bname} if bname in by_class_name else \\\n                    set()",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "r15 scanner :: generic bases are discarded again",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\",
+  "replacement": "                bname = b.id if isinstance(b, ast.Name) else \\",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "r15 archive :: the append rides the page cache again",
+  "file": "src/skills.py",
+  "anchor": "    locked_append(path, \"\\n\".join(lines), require=True, durable=True)",
+  "replacement": "    locked_append(path, \"\\n\".join(lines))",
+  "tests": "tests/test_skills.py tests/test_file_lock.py"
+ },
+ {
+  "name": "r15 file_lock :: durable stops fsyncing the file",
+  "file": "src/file_lock.py",
+  "anchor": "            if durable:\n                fh.flush()\n                os.fsync(fh.fileno())",
+  "replacement": "            if False:\n                fh.flush()\n                os.fsync(fh.fileno())",
+  "tests": "tests/test_file_lock.py"
+ },
+ {
+  "name": "r15 file_lock :: durable stops fsyncing the new parent dir",
+  "file": "src/file_lock.py",
+  "anchor": "        if durable and created:",
+  "replacement": "        if False:",
+  "tests": "tests/test_file_lock.py"
+ },
+ {
+  "name": "r15 sqlite :: the committed flag never flips",
+  "file": "src/memory_backends.py",
+  "anchor": "                con.commit()\n                committed = True",
+  "replacement": "                con.commit()",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "r15 sqlite :: a committed transform lies again",
+  "file": "src/memory_backends.py",
+  "anchor": "            if committed:",
+  "replacement": "            if False:",
+  "tests": "tests/test_memory_backend.py"
  }
 ]

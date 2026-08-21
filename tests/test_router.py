@@ -721,3 +721,33 @@ def test_build_training_data_refuses_drifted_evidence(monkeypatch, tmp_path):
 
     X, y, ids = router.build_training_data(skill_stats_path=sp)
     assert ids == ["good"]
+
+
+def test_build_training_data_refuses_unadmitted_skill_rows(
+        monkeypatch, tmp_path):
+    """Adversarial r15 (four seats, probed): r14 made the STATS side of
+    this loader strict but left its sibling input raw — a JSON-valid
+    skill row validate_skill_row rejects (description: 7), one that can
+    never enter the live pool, still supplied str()-coerced text as
+    training features. The skills side now rides the same operational
+    admission path; unadmitted rows are excluded and announced, and the
+    loader falls back to the stats row's skill_name."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import router
+
+    sp = _write_skill_stats(tmp_path, [
+        {"skill_id": "poison", "skill_name": "fallback-name",
+         "total_uses": 5, "successes": 5, "failures": 0,
+         "success_rate": 0.9},
+    ])
+    skills_p = tmp_path / "memory" / "skills.jsonl"
+    skills_p.write_text(
+        json.dumps({"id": "poison", "name": "OPERATOR_FORGED",
+                    "description": 7}) + "\n",
+        encoding="utf-8")
+
+    X, y, ids = router.build_training_data(skill_stats_path=sp)
+    assert ids == ["poison"]
+    assert "OPERATOR_FORGED" not in " ".join(X)
+    assert "7" not in " ".join(X)
+    assert "fallback-name" in " ".join(X)
