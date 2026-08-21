@@ -719,27 +719,20 @@ def load_log(
     if not path.exists():
         return []
 
+    # Byte-tolerant, announced read (probed 2026-08-18): the old strict
+    # iteration raised UnicodeDecodeError on one crash-torn byte — this is
+    # the dispatch-recall hot path, and the whole loader died on it.
+    from jsonl_utils import read_jsonl_announced
     entries = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(entry, dict):
-                continue
+    for entry in read_jsonl_announced(path, "captains_log.load_log"):
+        if since and entry.get("timestamp", "") < since:
+            continue
+        if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
+            continue
+        if subject and subject.lower() not in entry.get("subject", "").lower():
+            continue
 
-            if since and entry.get("timestamp", "") < since:
-                continue
-            if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
-                continue
-            if subject and subject.lower() not in entry.get("subject", "").lower():
-                continue
-
-            entries.append(entry)
+        entries.append(entry)
 
     # Most recent first, limited (0 = unlimited, matching query_log /
     # event_slice — before 2026-07-30 limit=0 returned nothing here, which
@@ -817,46 +810,40 @@ def query_log(
     query_lower = query.lower()
     entries: List[Dict[str, Any]] = []
 
+    # Byte-tolerant, announced read (probed 2026-08-18): the strict
+    # iteration let one crash-torn byte in ANY archive kill the whole
+    # archaeology query with UnicodeDecodeError.
+    from jsonl_utils import read_jsonl_announced
     for path in _all_log_paths():
-        if not path.exists():
-            continue
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(entry, dict):
+        for entry in read_jsonl_announced(path, "captains_log.query_log"):
+            ts = entry.get("timestamp", "")
+            if since and ts < since:
+                continue
+            if until and ts >= until:
+                continue
+            if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
+                continue
+            if subject and subject.lower() not in str(entry.get("subject", "")).lower():
+                continue
+
+            # Full-text match across all string fields. `or ""` throughout:
+            # an explicit JSON null (e.g. "note": null — legitimate rows
+            # have it) made the join raise TypeError and killed the whole
+            # query (probed 2026-08-18).
+            if query_lower:
+                searchable = " ".join([
+                    str(entry.get("subject") or ""),
+                    str(entry.get("summary") or ""),
+                    str(entry.get("note") or ""),
+                    str(entry.get("loop_id") or ""),
+                    " ".join(str(r) for r in (entry.get("related_ids") or [])),
+                    # Flatten context values
+                    " ".join(str(v) for v in (entry.get("context") or {}).values()),
+                ]).lower()
+                if query_lower not in searchable:
                     continue
 
-                ts = entry.get("timestamp", "")
-                if since and ts < since:
-                    continue
-                if until and ts >= until:
-                    continue
-                if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
-                    continue
-                if subject and subject.lower() not in str(entry.get("subject", "")).lower():
-                    continue
-
-                # Full-text match across all string fields
-                if query_lower:
-                    searchable = " ".join([
-                        entry.get("subject", ""),
-                        entry.get("summary", ""),
-                        entry.get("note", ""),
-                        entry.get("loop_id", ""),
-                        " ".join(entry.get("related_ids", [])),
-                        # Flatten context values
-                        " ".join(str(v) for v in (entry.get("context") or {}).values()),
-                    ]).lower()
-                    if query_lower not in searchable:
-                        continue
-
-                entries.append(entry)
+            entries.append(entry)
 
     entries.reverse()  # Most recent first
     if limit > 0:
@@ -887,36 +874,26 @@ def timeline(
     """
     from collections import Counter
 
+    # Byte-tolerant, announced read (probed 2026-08-18) — third sibling of
+    # the load_log/query_log strict-iteration crash.
+    from jsonl_utils import read_jsonl_announced
     buckets: Dict[str, Counter] = {}
     for path in _all_log_paths():
-        if not path.exists():
-            continue
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(entry, dict):
-                    continue
+        for entry in read_jsonl_announced(path, "captains_log.timeline"):
+            ts = entry.get("timestamp", "")
+            if since and ts < since:
+                continue
+            if until and ts >= until:
+                continue
 
-                ts = entry.get("timestamp", "")
-                if since and ts < since:
-                    continue
-                if until and ts >= until:
-                    continue
+            if bucket == "hour":
+                key = ts[:13]  # "2026-04-10T03"
+            else:
+                key = ts[:10]  # "2026-04-10"
 
-                if bucket == "hour":
-                    key = ts[:13]  # "2026-04-10T03"
-                else:
-                    key = ts[:10]  # "2026-04-10"
-
-                if key not in buckets:
-                    buckets[key] = Counter()
-                buckets[key][entry.get("event_type", "UNKNOWN")] += 1
+            if key not in buckets:
+                buckets[key] = Counter()
+            buckets[key][entry.get("event_type", "UNKNOWN")] += 1
 
     result = []
     for date_key in sorted(buckets.keys()):

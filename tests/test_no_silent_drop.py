@@ -183,12 +183,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("camera_readout.py", "_lesson_origins"): 1,
 
-    # NOTE: another session is mid-chunk on captains_log.py; these three
-    # are theirs to clear when their conversion lands (2026-08-17).
-    ("captains_log.py", "load_log"): 1,
-    ("captains_log.py", "query_log"): 1,
-    ("captains_log.py", "timeline"): 1,
-
 
     ("constraint.py", "_load_dynamic_constraints"): 1,
 
