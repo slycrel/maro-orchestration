@@ -4383,3 +4383,59 @@ class TestARevertReportsItsBookkeepingHonestly:
         assert res["reverted"] is True
         assert "NOT updated" in res["detail"]
         assert "suggestions.jsonl" in caplog.text
+
+
+class TestTheAuditRowAndTheActionShareOneSnapshot:
+    """Adversarial r18 (two seats, HIGH, probed): before_state capture
+    and the action each called load_skills() independently, so a store
+    change in the window between them made the audit row LIE — a
+    phantom skill_create recorded while the action actually ran an
+    update that overwrote a concurrently created skill, leaving
+    revert_suggestion hunting a minted id that was never written. One
+    read now drives both."""
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def test_a_racing_create_cannot_turn_the_action_into_an_update(
+            self, tmp_path, monkeypatch):
+        import json as _json
+        import skills as sk
+        from orch_items import memory_dir
+        from evolver_store import _apply_suggestion_action
+        self._env(monkeypatch, tmp_path)
+        concurrent = sk.Skill(
+            id="c-race", name="target-skill", description="THEIRS",
+            trigger_patterns=["x"], steps_template=["s"],
+            source_loop_ids=[], created_at="2026-08-21T00:00:00+00:00")
+        sk.save_skill(concurrent)
+        real_load = sk.load_skills
+        calls = {"n": 0}
+
+        def racing_load():
+            # First call (the capture) sees the world BEFORE the
+            # concurrent create landed; any later call sees the truth.
+            calls["n"] += 1
+            return [] if calls["n"] == 1 else real_load()
+
+        monkeypatch.setattr(sk, "load_skills", racing_load)
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "new steps",
+            "target": "target-skill", "suggestion_id": "sug-race",
+            "confidence": 0.5}) is True
+        monkeypatch.setattr(sk, "load_skills", real_load)
+        by_id = {s.id: s for s in real_load()}
+        # The concurrent skill was NOT overwritten by the racing apply.
+        assert by_id["c-race"].description == "THEIRS"
+        rows = [_json.loads(l) for l in
+                (memory_dir() / "change_log.jsonl").read_text().splitlines()]
+        row = next(r for r in rows if r["suggestion_id"] == "sug-race")
+        # The audit row says CREATE — and the action really did create
+        # exactly that id, so the row tells the truth and rollback can
+        # act on it.
+        assert row["before_state"]["type"] == "skill_create"
+        minted = row["before_state"]["created_skill_id"]
+        assert minted in by_id
+        assert minted != "c-race"

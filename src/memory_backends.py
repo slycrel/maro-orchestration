@@ -394,7 +394,7 @@ class SQLiteBackend(MemoryBackend):
                 raise
             finally:
                 con.close()
-        except sqlite3.Error as exc:
+        except Exception as exc:  # widened r18 (Skeptic): an OSError from close() after a successful commit deserves the HOLDS message too
             if committed:
                 log.error("SQLiteBackend.append(%s): append COMMITTED "
                           "but the connection failed to close cleanly "
@@ -504,7 +504,7 @@ class SQLiteBackend(MemoryBackend):
                     "SQLiteBackend.rewrite(%s): %d unreadable row(s) "
                     "carried through the rewrite verbatim (%s)",
                     collection, carried, self._db_path)
-        except sqlite3.Error as exc:
+        except Exception as exc:  # widened r18 (Skeptic): an OSError from close() after a successful commit deserves the HOLDS message too
             # Same three-way outcome as transform (adversarial r17,
             # Architect, probed): "store unchanged" after a commit
             # attempt was a lie for a rewrite that had already deleted
@@ -592,7 +592,7 @@ class SQLiteBackend(MemoryBackend):
                     "carried through the rewrite verbatim (%s)",
                     collection, carried, self._db_path)
             return out
-        except sqlite3.Error as exc:
+        except Exception as exc:  # widened r18 (Skeptic): an OSError from close() after a successful commit deserves the HOLDS message too
             if committed:
                 # The transaction COMMITTED and then the connection
                 # failed to close (adversarial r15, Skeptic, probed):

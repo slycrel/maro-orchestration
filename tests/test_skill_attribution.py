@@ -341,3 +341,48 @@ class TestManifestIdsAreAdmittedNotCoerced:
             f.write(json.dumps({"skills": [
                 {"id": True}, {"id": 7}, {"id": "ok"}]}) + "\n")
         assert runs_module.read_injected_skill_ids(run_dir) == {"ok"}
+
+
+class TestACorrectedVerdictIsAnnouncedNotAbsorbed:
+    """Adversarial r18 (three seats, HIGH, all probed): the marker
+    predicate checked goal_achieved was A bool, never THE verdict this
+    stamp computed — so a legitimately corrected verdict (re-stamp via
+    stamp_outcome_verdict, decree 2026-08-10) was absorbed as
+    already-attributed, silently, and skill stats kept the stale
+    verdict forever. A correction still must not auto-re-apply (the
+    committed batch cannot be decremented here) — but it is announced,
+    never absorbed."""
+
+    def test_a_flip_restamp_warns_and_does_not_reapply(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+        _setup(monkeypatch, tmp_path)
+        _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "x", loop_id="lp-flip")
+        assert _stamp("lp-flip", achieved=True).status == "updated"
+        s1 = get_skill_stats("sk-a")
+        assert (s1.injected_runs, s1.injected_successes) == (1, 1)
+        with caplog.at_level(logging.WARNING):
+            _stamp("lp-flip", achieved=False)
+        s2 = get_skill_stats("sk-a")
+        # NOT re-applied in either direction — no double count, no
+        # silent decrement.
+        assert (s2.injected_runs, s2.injected_successes) == (1, 1)
+        assert any("corrected verdict does NOT auto-adjust"
+                   in r.getMessage() for r in caplog.records)
+
+    def test_a_matching_restamp_stays_silent(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+        _setup(monkeypatch, tmp_path)
+        _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "x", loop_id="lp-same")
+        assert _stamp("lp-same", achieved=True).status == "updated"
+        with caplog.at_level(logging.WARNING):
+            _stamp("lp-same", achieved=True)
+        s = get_skill_stats("sk-a")
+        assert (s.injected_runs, s.injected_successes) == (1, 1)
+        assert not any("corrected verdict" in r.getMessage()
+                       for r in caplog.records)
+        assert not any("attribution marker" in r.getMessage()
+                       for r in caplog.records)

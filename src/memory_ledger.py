@@ -1153,14 +1153,36 @@ def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
                 # be in the stats store.
                 try:
                     m = json.loads(marker.read_text(encoding="utf-8"))
-                    valid = (isinstance(m, dict)
-                             and m.get("loop_id") == loop_id
-                             and isinstance(m.get("goal_achieved"), bool)
-                             and isinstance(m.get("skill_ids"), list)
-                             and set(m["skill_ids"]) == set(skill_ids))
+                    structural = (isinstance(m, dict)
+                                  and m.get("loop_id") == loop_id
+                                  and isinstance(m.get("goal_achieved"),
+                                                 bool)
+                                  and isinstance(m.get("skill_ids"), list)
+                                  and set(m["skill_ids"])
+                                  == set(skill_ids))
+                    # The verdict is compared by VALUE, not just shape
+                    # (adversarial r18 — three seats, HIGH, all probed):
+                    # "is a bool" accepted a marker whose verdict a
+                    # later stamp had legitimately CORRECTED
+                    # (stamp_outcome_verdict re-stamps by design), so
+                    # the correction never reached skill stats and
+                    # nothing was logged. A flipped verdict still must
+                    # NOT auto-re-apply — the committed batch cannot be
+                    # decremented here — but it is announced, not
+                    # absorbed.
+                    verdict_matches = (structural
+                                       and m["goal_achieved"] == achieved)
                 except Exception:
-                    valid = False
-                if not valid:
+                    structural = verdict_matches = False
+                if structural and not verdict_matches:
+                    log.warning(
+                        "attribution for %s was recorded with "
+                        "goal_achieved=%s but this stamp says %s — a "
+                        "corrected verdict does NOT auto-adjust skill "
+                        "stats (the batch is already committed); adjust "
+                        "manually if the correction matters (%s)",
+                        loop_id, m.get("goal_achieved"), achieved, marker)
+                elif not structural:
                     log.warning(
                         "attribution marker for %s is unreadable or does "
                         "not match this run (%s) — attribution state "

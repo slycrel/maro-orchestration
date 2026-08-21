@@ -2414,6 +2414,16 @@ def _save_skills(skills: List[Skill], *,
     unnamed copies are never written, so "I loaded it" no longer
     implies "I own it".
 
+    Naming is also not creation (adversarial r18 — QA, HIGH, probed):
+    a named id ABSENT from the live store is a lost race with a
+    deliberate drop (cull, retirement, rollback), and the r17 tail
+    append silently resurrected the retired row. No call site creates
+    rows through this function — creation is save_skill's job — so a
+    named-but-absent write is now dropped and ANNOUNCED, and the
+    deletion stands. A caller that mutated a row but forgot to name it
+    gets a divergence warning instead of silence (r18, Failure
+    Operator).
+
     (Residual, recorded: an id in dropped_ids OR updated_ids whose row
     was revised after the caller's snapshot still loses that revision —
     naming an id claims it. Upgrade edge: a transform-style primitive
@@ -2462,6 +2472,9 @@ def _save_skills(skills: List[Skill], *,
             out: "List[Optional[str]]" = []
             slot: dict = {}
             dropped_seen: set = set()
+            dropped_rows = 0
+            divergent: set = set()
+            ghost_ids: list = []
             compacted = tainted = unprovable = 0
             if path.exists():
                 # split("\n"), not splitlines(): the latter also breaks on
@@ -2499,7 +2512,12 @@ def _save_skills(skills: List[Skill], *,
                     if row.id in dropped_ids:
                         # A NAMED deliberate drop (island cull, A/B
                         # retirement, rollback) — that IS a decision.
+                        # Physical rows counted apart from ids
+                        # (adversarial r18, Architect): a legacy store
+                        # holding duplicate rows for a dropped id used
+                        # to announce fewer removals than it performed.
                         dropped_seen.add(row.id)
+                        dropped_rows += 1
                     elif row.id in updated_ids:
                         # A NAMED write. Hold this row's ORDINAL.
                         # Appending survivors after the rewritten skills
@@ -2524,6 +2542,22 @@ def _save_skills(skills: List[Skill], *,
                         # updated (r17: the live row is at least as
                         # fresh as the caller's stale copy) — is
                         # carried verbatim, holding its ordinal.
+                        # A caller that MUTATED an unnamed copy gets a
+                        # warning, not silence (adversarial r18, Failure
+                        # Operator, probed): forgetting to name an id in
+                        # updated_ids discarded the edit with no signal
+                        # anywhere — the omission twin of the
+                        # contradiction ValueErrors, which cannot see it.
+                        # content_hash is excluded: it is derived, and a
+                        # not-yet-backfilled empty hash is not an edit.
+                        cand = by_id.get(row.id)
+                        if cand is not None and row.id not in divergent:
+                            _cd = skill_to_dict(cand)
+                            _ld = skill_to_dict(row)
+                            _cd.pop("content_hash", None)
+                            _ld.pop("content_hash", None)
+                            if _cd != _ld:
+                                divergent.add(row.id)
                         out.append(line)
             # A writer must not emit a row it would itself refuse. Every
             # row this function writes is read back by the NEXT call to it,
@@ -2537,19 +2571,31 @@ def _save_skills(skills: List[Skill], *,
             # cull left every culled skill live. `save_skill` has always
             # recomputed on write; this fills the gap for the bulk writer
             # without erasing a hash the caller deliberately carries.
+            # Scoped to NAMED writes (adversarial r18, Minimalist): only
+            # named rows are serialized since r17 — everything else is
+            # carried verbatim from disk — so backfilling an unnamed
+            # in-memory copy mutated an object whose hash the store
+            # would never hold.
             for s in skills:
-                if not s.content_hash:
+                if s.id in updated_ids and not s.content_hash:
                     s.content_hash = compute_skill_hash(s)
             for sid, i in slot.items():
                 out[i] = _prove_line(by_id[sid])
-            # Only NAMED writes the live loop never placed are appended:
-            # a new id, or an updated id whose live row vanished. An
-            # unnamed id absent from the live store stays absent — the
-            # caller's stale copy must not resurrect a row another
-            # process deleted (r17).
-            out.extend(_prove_line(s)
-                       for s in skills
-                       if s.id in updated_ids and s.id not in slot)
+            # A NAMED write the live loop never placed is NOT appended
+            # (adversarial r18, QA, probed): "an updated id whose live
+            # row vanished" is a lost race with a DELIBERATE drop — an
+            # island cull, an A/B retirement, a rollback — and the r17
+            # tail append silently resurrected the retired row, with
+            # none of the retirement's reasoning and no signal at all.
+            # No call site creates rows through this function
+            # (creation is save_skill's job; the census checked all of
+            # them), so the deletion stands and is announced below.
+            # The same branch covers a named id whose SOLE live row
+            # went unparseable mid-flight: the raw row is stranded
+            # above and announced; the operator repairs, the caller
+            # retries.
+            ghost_ids = sorted(sid for sid in updated_ids
+                               if sid not in slot)
             atomic_write(
                 path,
                 "\n".join([l for l in out if l is not None]) + "\n",
@@ -2578,9 +2624,23 @@ def _save_skills(skills: List[Skill], *,
                 # default level — same reasoning as the reader
                 # announcements.
                 logger.warning(
-                    "[skills] _save_skills: %d named row(s) removed by "
-                    "this rewrite (%s): %s", len(dropped_seen), path,
+                    "[skills] _save_skills: %d physical row(s) for %d "
+                    "named id(s) removed by this rewrite (%s): %s",
+                    dropped_rows, len(dropped_seen), path,
                     sorted(dropped_seen))
+            if ghost_ids:
+                logger.warning(
+                    "[skills] _save_skills: %d named write(s) NOT "
+                    "applied — id(s) absent from the live store, "
+                    "concurrently removed; the deletion stands (%s): %s",
+                    len(ghost_ids), path, ghost_ids)
+            if divergent:
+                logger.warning(
+                    "[skills] _save_skills: %d row(s) in the caller's "
+                    "list differ from the live store but were NOT named "
+                    "in updated_ids — the caller's edit was NOT applied; "
+                    "the live row was carried (%s): %s",
+                    len(divergent), path, sorted(divergent))
     except Exception as e:
         # Name the store and RAISE (adversarial r16, two seats, probed):
         # the warn-and-return-None shape let a cull report "retired"

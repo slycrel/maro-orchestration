@@ -402,12 +402,21 @@ def _apply_suggestion_action(d: dict) -> bool:
     suggestion_id = d.get("suggestion_id", "")
     confidence = float(d.get("confidence", 0.5))
 
-    # Capture before-state for rollback surface.
+    # Capture before-state for rollback surface. The SAME snapshot
+    # drives the action below (adversarial r18 — two seats, HIGH,
+    # probed): capture and action each called load_skills()
+    # independently, so a store change in the ~40-line window between
+    # them made the audit row lie — a phantom "skill_create" recorded
+    # for what actually ran as an UPDATE that overwrote a concurrently
+    # created skill's content, leaving revert_suggestion hunting a
+    # minted id that was never written. One read, one decision.
     before_state = None
+    _pool_snapshot = None
     try:
         if category == "skill_pattern":
             from skills import load_skills as _ls_audit, _skills_path as _sp_audit
-            _existing = next((s for s in _ls_audit() if s.name == target or s.id == target), None)
+            _pool_snapshot = _ls_audit()
+            _existing = next((s for s in _pool_snapshot if s.name == target or s.id == target), None)
             if _existing is not None:
                 before_state = {"type": "skill_update", "old_description": _existing.description[:500]}
             else:
@@ -456,7 +465,13 @@ def _apply_suggestion_action(d: dict) -> bool:
             from skill_types import Skill
             from skills import load_skills, save_skill, _skills_path as _sp
             import uuid as _uuid
-            skills = load_skills()
+            # Reuse the capture snapshot so the audit row and the
+            # action cannot disagree on create-vs-update (r18, above).
+            # A fresh load only when the capture block failed — in
+            # which case before_state is None and the audit row makes
+            # no create/update claim to contradict.
+            skills = _pool_snapshot if _pool_snapshot is not None \
+                else load_skills()
             existing = next((s for s in skills if s.name == target or s.id == target), None)
             if existing is not None:
                 # Backup the skill file before mutating so rollback is possible.

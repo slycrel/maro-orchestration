@@ -979,3 +979,68 @@ class TestEveryWritePathTellsTheTruthAtTheCommitBoundary:
                 be.rewrite("led", [{"k": 2}])
         assert "commit outcome UNKNOWN" in caplog.text
         assert "store unchanged" not in caplog.text
+
+
+class TestACommittedWriteSaysSoEvenWhenCleanupFails:
+    """Adversarial r18 (QA + Skeptic): the committed-then-close-failed
+    branch existed but no test exercised it — and the outer handler
+    caught only sqlite3.Error, so an OSError from close() after a
+    successful commit escaped without the HOLDS guidance. The message
+    matters: it is the only thing telling an operator NOT to retry a
+    write that is already in the store."""
+
+    class _CloseBomb:
+        def __init__(self, con, exc):
+            self._con = con
+            self._exc = exc
+
+        def __getattr__(self, name):
+            return getattr(self._con, name)
+
+        def close(self):
+            self._con.close()
+            raise self._exc
+
+    def _bombed(self, tmp_path, exc):
+        from memory_backends import SQLiteBackend
+        be = SQLiteBackend(tmp_path / "mem.db")
+        real = be._connect
+        be._connect = lambda: self._CloseBomb(real(), exc)
+        return be
+
+    def test_append_close_failure_says_holds(self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        be = self._bombed(
+            tmp_path, sqlite3.OperationalError("close-boom"))
+        with caplog.at_level(logging.ERROR, logger="maro.memory_backends"):
+            with pytest.raises(sqlite3.Error):
+                be.append("led", {"k": 1})
+        assert "HOLDS" in caplog.text
+        assert "do not retry" in caplog.text
+        from memory_backends import SQLiteBackend
+        assert SQLiteBackend(tmp_path / "mem.db").read_all("led") == [
+            {"k": 1}]
+
+    def test_rewrite_close_failure_says_holds(self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        be = self._bombed(
+            tmp_path, sqlite3.OperationalError("close-boom"))
+        with caplog.at_level(logging.ERROR, logger="maro.memory_backends"):
+            with pytest.raises(sqlite3.Error):
+                be.rewrite("led", [{"k": 2}])
+        assert "HOLDS" in caplog.text
+
+    def test_a_non_sqlite_close_failure_still_says_holds(
+            self, tmp_path, caplog):
+        import logging
+        import pytest
+        be = self._bombed(tmp_path, OSError("fs went away"))
+        with caplog.at_level(logging.ERROR, logger="maro.memory_backends"):
+            with pytest.raises(OSError):
+                be.append("led", {"k": 3})
+        assert "HOLDS" in caplog.text
+        assert "do not retry" in caplog.text

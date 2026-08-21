@@ -2428,7 +2428,8 @@ class TestCullArchive:
     def test_cull_archives_instead_of_deleting(self):
         import json
         import skills as skills_mod
-        from skills import Skill, cull_island_bottom_half, load_skills, _save_skills
+        from skills import (Skill, cull_island_bottom_half, load_skills,
+                            _save_skills, save_skill)
 
         def mk(id_, state, util):
             return Skill(
@@ -2444,7 +2445,11 @@ class TestCullArchive:
             mk("s3", "closed", 0.5),
             mk("s4", "closed", 0.6),
         ]
-        _save_skills(pool, updated_ids={s.id for s in pool})
+        # Seed via save_skill: _save_skills never creates rows (r18 —
+        # a named id absent from the live store is a lost race with
+        # a deliberate drop, not a create).
+        for _s in pool:
+            save_skill(_s)
         culled = cull_island_bottom_half("research", min_island_size=4)
         assert len(culled) == 1
 
@@ -4359,3 +4364,128 @@ class TestTheBatchRecorderAdmitsOneVerdictPerSkill:
         with pytest.raises(TypeError):
             sk.record_skill_injection_outcomes("bare-id", True)
         assert sk.get_skill_stats("b") is None
+
+
+class TestNamingIsNotCreation:
+    """Adversarial r18 (QA, HIGH, probed): 'an updated id whose live row
+    vanished' is a lost race with a DELIBERATE drop — cull, retirement,
+    rollback — and the r17 tail append silently resurrected the retired
+    row, reasoning and archive trail gone. No call site creates rows
+    through _save_skills (creation is save_skill's job), so a
+    named-but-absent write is dropped and ANNOUNCED; the deletion
+    stands."""
+
+    @staticmethod
+    def _mk(sid, desc="d"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=sid, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_a_stale_named_write_cannot_resurrect_a_dropped_row(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("X"))
+        pool = sk.load_skills()          # in-flight caller's snapshot
+        live = sk.load_skills()          # concurrent deliberate cull
+        sk._archive_skills(live, reason="test_cull")
+        sk._save_skills([], dropped_ids={"X"}, updated_ids=frozenset())
+        assert sk.load_skills() == []
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids={"X"})
+        assert sk.load_skills() == [], "retired row resurrected"
+        assert any("named write(s) NOT applied" in r.getMessage()
+                   and "deletion stands" in r.getMessage()
+                   and str(sk._skills_path()) in r.getMessage()
+                   for r in caplog.records)
+
+    def test_an_applied_named_write_is_not_announced_as_a_ghost(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("Y"))
+        pool = sk.load_skills()
+        pool[0].description = "revised"
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids={"Y"})
+        assert sk.load_skills()[0].description == "revised"
+        assert not any("NOT applied" in r.getMessage()
+                       for r in caplog.records)
+
+    def test_a_mutated_unnamed_row_is_warned_not_silent(
+            self, tmp_path, monkeypatch, caplog):
+        """Adversarial r18 (Failure Operator, probed): forgetting to
+        name a mutated id discarded the edit with no signal anywhere —
+        the omission twin of the contradiction ValueErrors."""
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("M", "orig"))
+        pool = sk.load_skills()
+        pool[0].description = "mutated-but-forgot-to-name"
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids=frozenset())
+        assert sk.load_skills()[0].description == "orig"
+        assert any("NOT named" in r.getMessage()
+                   and "'M'" in r.getMessage()
+                   or ("updated_ids" in r.getMessage()
+                       and "M" in r.getMessage())
+                   for r in caplog.records)
+
+    def test_an_untouched_unnamed_row_raises_no_divergence_noise(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("Q"))
+        pool = sk.load_skills()
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids=frozenset())
+        assert not any("differ from the live store" in r.getMessage()
+                       for r in caplog.records)
+
+    def test_an_empty_backfill_hash_is_not_flagged_as_divergence(
+            self, tmp_path, monkeypatch, caplog):
+        """content_hash is derived — an unnamed copy whose hash was
+        cleared in memory is not an edit (r18, Minimalist corollary)."""
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("H"))
+        pool = sk.load_skills()
+        pool[0].content_hash = ""
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(pool, updated_ids=frozenset())
+        assert not any("differ from the live store" in r.getMessage()
+                       for r in caplog.records)
+        # And the in-memory copy was NOT mutated by the backfill: only
+        # named rows are serialized, so backfilling an unnamed copy
+        # would stamp a hash the store never holds.
+        assert pool[0].content_hash == ""
+
+    def test_the_drop_announcement_counts_physical_rows(
+            self, tmp_path, monkeypatch, caplog):
+        """Adversarial r18 (Architect): duplicate physical rows for one
+        dropped id used to announce fewer removals than performed."""
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        s = self._mk("D")
+        sk.save_skill(s)
+        # save_skill dedupes same-id rows, so seed the legacy duplicate
+        # raw — a provable second physical line for the same id.
+        with sk._skills_path().open("a", encoding="utf-8") as f:
+            _dup = self._mk("D", "second-copy")
+            _dup.content_hash = sk.compute_skill_hash(_dup)
+            f.write(sk._prove_line(_dup) + "\n")
+        pool = sk.load_skills()
+        assert [x.id for x in pool] == ["D"]
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills([], dropped_ids={"D"}, updated_ids=frozenset())
+        assert sk.load_skills() == []
+        assert any("2 physical row(s) for 1 named id(s)" in r.getMessage()
+                   for r in caplog.records)
