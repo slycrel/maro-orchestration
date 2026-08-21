@@ -1275,6 +1275,13 @@ def test_nonfinite_and_arbitrary_numerics_take_the_default():
     assert tail_jobs._strict_bool(1, False) is True
     assert tail_jobs._strict_bool(0.0, True) is False
     assert tail_jobs._strict_bool(1.0, False) is True
+    # An unrecognized STRING takes the default too — in BOTH directions.
+    # Pre-flip this was pinned incidentally through spawn_enabled's OFF
+    # default; the flip made that path indistinguishable from "read junk as
+    # ON", so the helper is pinned directly: junk must never carry a
+    # direction of its own.
+    assert tail_jobs._strict_bool("banana", False) is False
+    assert tail_jobs._strict_bool("banana", True) is True
 
 
 def test_a_failed_refresh_is_surfaced_by_state_and_the_sweep(monkeypatch):
