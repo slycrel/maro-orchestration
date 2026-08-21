@@ -58,6 +58,44 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 <!-- /dev-status -->
 
+## 2026-08-21
+
+**Async tail becomes a process; the flip; maro burns itself in** —
+threads: async-tail, link-farm-maro-scan, adversarial-review. The
+post-run tail (the learning/maintenance work that used to run in-process
+after the answer) became a durable job record
+(`<run_dir>/build/tail_jobs.jsonl`) drained by a detached
+`maro finalize-tail` child — the registration had to stop being a
+closure before it could cross a process boundary. Two same-day
+cross-model adversarial rounds (four codex seats each), both REJECT,
+both fixed same-day: r1's headline was that append-only is not atomic
+(read-decide-append now one locked transaction); r2's was that the r1
+fixes answered per-job questions with store-global state — the crash
+evidence could be laundered by recovery itself, fixed with per-job
+`started` rows. Burn-in ran as real work: three organic link-farm
+review runs (goal: rank recent research links for maro relevance)
+produced three genuine deliverables while measuring the machinery —
+6-8 minutes of tail per run the caller no longer waits for — then a
+deliberate SIGKILL mid-maintenance verified every recovery property in
+production (sweep surfaces, never re-runs touched non-idempotent work;
+counters single-tick only on the operator's deliberate drain). Jeremy
+flipped `tail.spawn` to default-ON on that evidence; `MARO_TAIL_SPAWN`
+env override added so the test suite never forks real children.
+Byproducts filed: the runs resurfaced Jeremy's own forgotten 2026-08-14
+dispatch of the fan-out study (attached to Re-run identity as an
+entity-not-lexical miss), found that knowledge edges are minted but
+never traversed, and seeded the subtraction-audit backlog item (the
+"kudzu culling" pass). Session record:
+`docs/history/2026-08-20-async-tail-process-spawn.md`.
+**Surprised by:** all eight adversarial seats across two rounds
+reviewed a process-spawn diff and not one asked what ambient process
+state a child does not inherit — the ContextVar hole (run-pinned LLM
+call capture would have silently died) was found by reading during the
+tree freeze, not by any lens. Reviewers attack logic, not inheritance.
+Runner-up: the burn-in runs cited a study's exact numbers twice without
+discovering maro's own prior incomplete run on it — the system's
+sharpest instrument and its blindest spot were the same corpus.
+
 ## 2026-07-30
 
 **System self-health lane v1 + captain's-log dual contract** — the
