@@ -88,7 +88,7 @@ and nothing verifies that a rotation preserved retrievability. Worth a cheap
 guard: after any doc rotation, query for a distinctive string from the moved
 content and confirm it still returns.
 
-### The "async tail" is not async — it is reordering. Make it a real process spawn (Jeremy, 2026-08-20)
+### The "async tail" is not async — it is reordering. Make it a real process spawn (Jeremy, 2026-08-20) — **SHIPPED 2026-08-20, OFF by default pending box burn-in**
 
 Jeremy: *"That's not really async if we're blocking the CLI call right? is this
 an exec level spawn of another process to make it truly async in cases like
@@ -134,6 +134,83 @@ suggest the answer is already partly there).
 **Watch-item inherited from Phase 1** (still open, listed under the original
 async-tail entry): `handle()`'s `_hid=None` exception path can strand registered
 callables. A spawn design should make stranding impossible rather than rarer.
+
+**SHIPPED 2026-08-20** (`src/tail_jobs.py`, record:
+`docs/history/2026-08-20-async-tail-process-spawn.md`). All four steps of
+the named shape, and the watch-item with them.
+
+The move that made it possible is the one the entry called for without
+naming: a closure cannot cross a process boundary and a module-level dict
+cannot survive one, so **the registration became a serializable record**
+appended to `<run_dir>/build/tail_jobs.jsonl`, and the drain became a
+function over that store. `maro finalize-tail --handle-id X` reconstructs
+and runs it; `handle()`'s finalize calls `drain_or_spawn`, which either
+starts a detached child (`start_new_session`, stdin `/dev/null`, output to
+`build/tail.log` — an inherited pipe would keep `out=$(maro handle ...)`
+blocked until the last writer closed it) and returns, or runs the same jobs
+in the same place phase 1 ran them. **Both lanes run the same executor over
+the same records** — a fallback that re-implements the work is a sibling
+that drifts.
+
+That also retires the module-identity bug class by construction rather than
+by careful placement: a store keyed by handle_id has no module identity to
+get wrong.
+
+One correction to this entry's premise: "run records are already durable on
+disk" is true of everything EXCEPT the field the tail actually reads.
+`build/loop-*-log.json` persists `result_length`, not `result`, and
+`build/loop-*-step-NN.md` is a rendered artifact with a synthesized header,
+not the field. So the step outcomes ride the handoff whole, serialized from
+the objects the parent already holds — the "explicit state handoff" half.
+The adapter travels as `backend` + `model_key` and the child rebuilds
+(exact, then same-model auto, then default: a tail on a neighbouring backend
+beats no tail).
+
+Contract for step (4), overlapping tails: **one tail process per handle_id**
+(claim row + host-scoped `os.kill(pid, 0)` liveness; EPERM counts as alive).
+Tails for DIFFERENT runs may overlap — they already do, because heartbeat
+runs skill maintenance on its own tick, and every store these phases touch
+is lock-protected. Serializing across runs would be a guarantee this
+codebase has never had.
+
+The **watch-item is answered by the record, not by care**: a stranded tail
+is now discoverable. `find_stranded()` reports pending jobs with no live
+claim, `maro finalize-tail --sweep` drains them, and heartbeat runs that
+sweep on its health tick with a 1800s grace window so it cannot race a child
+that is still starting. Every job kind is idempotent, so a late drain
+repeats nothing. A job that RAISES is marked done with its error rather than
+left pending — it already had its effect on whatever it touched, and a sweep
+would repeat that half.
+
+The store is append-only on purpose: two processes write it, and the
+ten-round destructive-rewrite arc above is the record of what
+read→transform→rewrite does to a store under exactly those conditions.
+
+`tail.spawn` is **OFF by default** (DEFAULTS.md): the spawn does not change
+what the tail does, but it changes where its LLM spend and store writes
+happen. Probed: 30 tests + `tests/mutation/tail_jobs.json` 28/28 (27 on the
+first sweep; the survivor was real — age is not abandonment).
+
+**Open residuals, in the order burn-in should look at them:**
+
+- [ ] **Box burn-in + the flip.** The 53% figure is phase 1's cost on one
+      run; what a real workload's wall clock looks like with `tail.spawn`
+      ON is unmeasured, and is the evidence the flip needs. Watch: does the
+      answer's caller actually exit at the answer, does the child's tail
+      finish, do the surfaces (card, report, captains-log slice) come out
+      the same as an inline run's.
+- [ ] **`knowledge_web.maybe_consolidate()` is still in-process** — same
+      `finally` block, after the tail dispatch. Marker-gated to ~once per
+      24h, but when it fires the caller waits for the dream cycle (decay +
+      a size-gated LLM compress). It is post-answer work that this chunk's
+      own logic says should be a job; left alone because the ask named the
+      tail phases and moving a non-run-scoped phase into a per-run store is
+      its own decision. **This is the remaining "still busy after the
+      answer" surface.**
+- [ ] **Census the in-process registries before deleting them.** They
+      survive as the fallback for a handle that owns no run-dir, which is
+      rare — and their own refresh blocks are largely inert on that lane
+      anyway (no run dir to re-render). Worth a census, not a guess.
 
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 

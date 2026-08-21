@@ -3679,3 +3679,36 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   9480. Review-light by stated reason: the chunk IS a review finding,
   applies a thrice-reviewed pattern read-only, and both launder
   directions are mutant-pinned.
+- **2026-08-20 — Async tail phase 3: the tail is a PROCESS now, not a
+  reordering.** Jeremy's directed chunk (*"That's not really async if
+  we're blocking the CLI call right? is this an exec level spawn of
+  another process?"*). Phase 1 registered the tail as in-process
+  closures and drained them after the notify — same process, same
+  thread — so notify consumers benefited and anything waiting on
+  process exit paid all 53% of wall clock the tail costs (measured
+  2026-08-19: answer at 14m37s, process alive to 31m08s). The chunk is
+  one decision: **a closure cannot cross a process boundary and a
+  module-level dict cannot survive one**, so the registration became a
+  serializable record in `<run_dir>/build/tail_jobs.jsonl` and the
+  drain became a function over that store — run by a detached
+  `maro finalize-tail --handle-id X` child, or by the parent when
+  `tail.spawn` is off. Both lanes run the SAME executor over the SAME
+  records, because a fallback that re-implements the work is a sibling
+  that drifts. Three things fell out of the record rather than being
+  designed: the `python -m handle` module-identity hazard (which cost a
+  3-lens review round in `707a541` and left a placement rule for every
+  future author) is retired by construction; the phase-1 stranding
+  watch-item is answered by a heartbeat sweep over pending jobs with no
+  live claim, not by care; and the overlapping-tail contract is
+  one-tail-per-handle_id, since cross-run tails already overlap with
+  heartbeat's own maintenance tick. One premise in the design note was
+  wrong and is corrected in the record: run records are NOT sufficient
+  to rebuild the tail — `loop-*-log.json` persists `result_length`, not
+  `result` — so the step outcomes ride the handoff whole. Probed: 30
+  tests, mutation spec 28/28 (27 first pass, the survivor real — age is
+  not abandonment), full suite 9926 green. OFF by default: the spawn
+  changes WHERE the tail's spend and writes happen, which wants box
+  burn-in. Named unprobed: the end-to-end saving, and
+  `knowledge_web.maybe_consolidate()` — still in-process, still on the
+  caller's exit path when its ~24h marker fires. Record:
+  `docs/history/2026-08-20-async-tail-process-spawn.md`.

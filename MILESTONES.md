@@ -3,16 +3,25 @@
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
 **Next directed chunk (Jeremy, 2026-08-20): make the post-run tail
-actually async.** Takes priority over resuming the treasure-map arc
-below. The current "async tail" only *reorders* — it defers the tail
-until after the notification, then drains it synchronously in-process
-(`handle.py:190/194`), so notify consumers benefit and anything waiting
-on process exit does not. Measured: 53% of a run's wall clock spent
-post-deliverable. Jeremy's call on shape: *"is this an exec level spawn
-of another process to make it truly async in cases like that? Seems
-like something that's solveable with a little effort."* Design + the
-module-identity rationale for why a separate process is the clean fix
-(not a workaround) are in BACKLOG § "The 'async tail' is not async".
+actually async — SHIPPED 2026-08-20, OFF by default.** The registration
+became a durable record (`<run_dir>/build/tail_jobs.jsonl`) and the
+drain a function over that store, so `maro finalize-tail --handle-id X`
+can run the tail in a detached child while the answer's caller exits.
+Both lanes — spawned and inline — run the same executor over the same
+records; `tail.spawn` gates which. The module-identity bug class that
+in-process deferral kept generating is retired by construction, and the
+phase-1 stranding watch-item is answered by a sweep over the records
+(heartbeat-wired) rather than by care. Record:
+`docs/history/2026-08-20-async-tail-process-spawn.md`.
+
+**What is left is box-side and Jeremy's**: burn in a real workload with
+`tail.spawn` on (does the caller exit at the answer, does the child
+finish, do the surfaces match an inline run), then flip. The one
+remaining in-process post-answer phase is
+`knowledge_web.maybe_consolidate()` — marker-gated to ~once per 24h,
+but the dream cycle when it fires. Both residuals are checkboxed in
+BACKLOG § "The 'async tail' is not async".
+
 Cheap-tier step execution was considered alongside it and **parked by
 Jeremy the same day** — revisit during a future optimization pass, not a
 current bookmark (BACKLOG § Vision/Deferred). The MID-floor decree
