@@ -1134,6 +1134,63 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       248ms -> 1098ms on the largest live store and was brought to 730ms
       by replacing a per-character surrogate loop with
       `isascii()` + a UTF-8 encode.*
+    - *Its adversarial r11 (2026-08-20, five codex seats on the r10 fix
+      layer): **REJECT — eleventh round.** Ten findings, all ten
+      reproduced, zero hallucinations for the SEVENTH round running,
+      and the HIGH was UNANIMOUS — all five seats, five independent
+      routes, the same two lines: **`rewrite(read_all(...))` deletes
+      the strandees `read_all` announces.** r10's announced reader
+      strands a torn row correctly and returns a list WITHOUT it;
+      `rewrite()` wrote that list back, so the documented composition
+      deleted the exact row the log had promised was safe — and the
+      r10 test NAMED for this composition never called `rewrite()`.
+      Fixed where the destruction lives: `rewrite()` re-reads under its
+      own lock and carries every line `loads_clean` refuses, verbatim.
+      The round's organizing lesson: **constructible ≠ provable ≠
+      deliverable.** `dict_to_skill` and `Interrupt.from_dict` are
+      constructors, not validators, and the gap between a tolerant
+      loader and a strict writer is a LAUNDER MINT — a stored
+      `"utility_score": "1.0"` loaded fine and `_save_skills` emitted a
+      normalized clone (float 1.0) that won last-row-wins over the
+      operator's bytes. One admission predicate on both ends (admitted
+      == provable; `load_skills` on `validate_skill_row`, id claimed
+      only AFTER proof — which also closed the shadow-delete) kills the
+      clone structurally. Also: `_prove_line` — a writer must not mint
+      what its own reader strands (`json.dumps` writes `NaN` and clean
+      `\udcXX` escapes by default; save now aborts BEFORE the store is
+      touched); an undeliverable interrupt was marked applied on disk
+      and lost on retry (`_prove_deliverable` before every applied-mark
+      — poll, clear, peek); JSON `1`/`true` collide as one Python dict
+      key so the keyed stats rebuild silently deleted a row (non-string
+      ids strand now); routine counter bumps rebuilt stats rows from
+      the model and deleted every field it doesn't know (recorders now
+      merge over the stored row); a proof inside a GENERATOR EXPRESSION
+      certified a raw rewrite (deferred code may never run —
+      asymmetric rule: clean-in-genexp proves nothing, raw-in-genexp
+      still poisons, eager comprehensions keep proof value);
+      `json.JSONDecoder().decode` was invisible to the scanner; a
+      MOVED site coming back under its OUTER name passed the gate
+      (sixth leg `resurfaced`, the only watch on the twinless
+      `llm.py:_run_subprocess_safe` — exemption doctrine's fifth
+      application); and F4 ACCEPTED WITH REASON, pinned: the final torn
+      frame gains a terminator LF on purpose, because preserving the
+      missing LF lets the next append concatenate into the torn
+      fragment. Censuses before the flips, all zero-cost: 423/423
+      skills, 2/2 interrupts deliverable, 203/203 stats string-keyed,
+      no NaN in either store; manifest green at 72 RISK sites.
+      Receipts: spec 146 -> 165 (5 re-anchors first — a SKIP
+      is not a pass), 163/165 on the first sweep with both gaps
+      teachers: the clear-launder survivor was a hole r11's own fix
+      created (`_prove_deliverable` strands a field-poor row on its
+      own, so the torn fixture stopped distinguishing the taint door
+      from the proof door — the killing fixture must be
+      deliverable-shaped with one raw byte in `message`), and the
+      NaN-proof mutant is a marked twin-lock equivalent
+      (`_loads_clean`'s `parse_constant` refuses the token
+      `allow_nan=False` would not mint — same abort either way).
+      165/165 after; 24 new must-detect tests incl. rewriting the r10
+      backend test whose NAME promised the composition it never ran,
+      and an accept-with-reason pin on F4.*
     - *Carried lesson from r9: **the idiom everyone writes is the one
       nobody reviews.** `line = raw.strip()` sat in five readers,
       survived eight adversarial rounds whose subject was "what can a
@@ -1161,6 +1218,19 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       checked** — `FIXED` needed `regressed`, `regressed` needed
       `vanished`, and r10's `MOVED` needed `blind`, or it is a deletion
       with a comment on it.*
+    - *Carried lesson from r11: **constructible ≠ provable ≠
+      deliverable.** A constructor that assigns fields is not a
+      validator, a validator on the writers is not one on the loader,
+      and a row that loads is not yet one the consumer can act on. The
+      launder twin (r10: read side; r11: the loader/writer GAP) keeps
+      reassembling from whichever half of the round trip trusts a
+      different predicate than the other — the structural kill is ONE
+      admission predicate on both ends, admitted == provable, and a
+      writer that re-reads its own emission through the reader's door.
+      Corollary: **a test whose name promises a composition must run
+      the composition** — the r10 backend test named read-then-rewrite
+      and called only the read, which is how the round's unanimous HIGH
+      shipped under a green suite.*
     - *Carried lesson from r8, the arc's most durable: **naming the
       cases you have met is a denylist, and a denylist in a safety check
       fails open on the case nobody has met yet.** Three files, one

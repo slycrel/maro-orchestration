@@ -1238,21 +1238,20 @@ def test_synthesize_skill_saves_when_not_dry_run(tmp_path):
 def test_synthesize_skill_skips_duplicate_name(tmp_path):
     """synthesize_skill returns None if a skill with the same name already exists."""
     import json as _json
+    from skills import Skill, _skill_to_dict, compute_skill_hash
     skills_path = tmp_path / "skills.jsonl"
-    # Pre-populate with the same name
-    existing = {
-        "id": "existing1",
-        "name": "web_search_summarize",
-        "description": "existing skill",
-        "trigger_patterns": ["web research"],
-        "steps_template": ["do stuff"],
-        "source_loop_ids": [],
-        "created_at": "2026-01-01T00:00:00+00:00",
-        "use_count": 0,
-        "tier": "provisional",
-        "circuit_state": "closed",
-    }
-    skills_path.write_text(_json.dumps(existing) + "\n", encoding="utf-8")
+    # Pre-populate with the same name — stamped the way every production
+    # writer stamps (r11: load_skills admission requires the proof, and a
+    # hash-less hand-written dict is exactly what it refuses).
+    existing = Skill(
+        id="existing1", name="web_search_summarize",
+        description="existing skill", trigger_patterns=["web research"],
+        steps_template=["do stuff"], source_loop_ids=[],
+        created_at="2026-01-01T00:00:00+00:00", tier="provisional",
+    )
+    existing.content_hash = compute_skill_hash(existing)
+    skills_path.write_text(_json.dumps(_skill_to_dict(existing)) + "\n",
+                           encoding="utf-8")
     with patch("skills._skills_path", return_value=skills_path):
         skill = synthesize_skill(
             goal="search and summarize recent news on AI",
@@ -1725,6 +1724,8 @@ def test_apply_action_audit_trail_captures_skill_before_state(tmp_path, monkeypa
         trigger_patterns=[], steps_template=[], source_loop_ids=[],
         created_at="2026-01-01T00:00:00+00:00", tier="provisional", utility_score=0.5,
     )
+    from skills import compute_skill_hash
+    skill.content_hash = compute_skill_hash(skill)   # admission requires proof (r11)
     skills_path = tmp_path / "skills.jsonl"
     skills_path.write_text(json.dumps(skill.__dict__) + "\n")
     monkeypatch.setattr("skills._skills_path", lambda: skills_path)

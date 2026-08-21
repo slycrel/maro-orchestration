@@ -1058,6 +1058,134 @@ pass.
 Landed with 146 mutations in the spec (129 → 146), the manifest green at 72
 RISK sites, and 21 new must-detect tests.
 
+## Adversarial round 11 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r10 fix layer. **REJECT.** Ten findings, every one
+reproduced by probe before being touched — the seventh consecutive round
+with zero hallucinations. The HIGH was unanimous: all five seats, by five
+independent routes, converged on the same two lines of
+`memory_backends.py`.
+
+- **`rewrite(read_all(...))` deletes the strandees `read_all` announces**
+  (all five seats, HIGH, probed). r10 put `JSONLBackend.read_all` on the
+  announced reader, which strands a torn row correctly — and returns a
+  list WITHOUT it. `rewrite()` then wrote that list back. The caller
+  cannot preserve what its input never contained, so the documented
+  "read_all → transform → rewrite" composition deleted the exact row the
+  log had just promised was safe. Worse, the r10 test named for this —
+  `test_the_torn_row_is_not_destroyed_by_a_read_then_rewrite` — never
+  called `rewrite()`. Fixed where the destruction lives: `rewrite()`
+  re-reads the store under its own lock and carries every raw line
+  `loads_clean` refuses, verbatim, announced with the path. The test now
+  runs the composition its name promises.
+
+- **The gap between a tolerant loader and a strict writer is a launder
+  mint** (four of five seats, HIGH, probed). r10 put `validate_skill_row`
+  on the WRITERS; `load_skills` still admitted via the `dict_to_skill`
+  CONSTRUCTOR. A stored `"utility_score": "1.0"` loaded fine — and
+  `_save_skills`, proving each emission, wrote a NORMALIZED CLONE (float
+  `1.0`) while stranding the raw row above it. Last-row-wins then
+  promoted the clone: a row nobody wrote, winning over the bytes the
+  operator owns. The round's lesson in one line: **constructible ≠
+  provable ≠ deliverable**, and the only structural kill is ONE admission
+  predicate on both ends — admitted == provable. `load_skills` now admits
+  via `validate_skill_row` (census: 423/423 live rows pass), which also
+  closed the shadow-delete the same seats probed: the loader claimed an
+  id BEFORE the proof, so a construct-ok/hash-fail row hid the older
+  valid row for its id from every caller, and the next `_save_skills`
+  deleted it. The id is claimed only by a row that proves out.
+
+- **A writer must not mint what its own reader strands** (three seats,
+  HIGH, probed). `json.dumps` happily writes CPython `NaN`
+  (`allow_nan=True` is the default) and serialises a lone surrogate in a
+  hash-excluded field as a CLEAN six-character escape — both rows the
+  strict reader then refuses. `save_skill` could therefore replace a
+  healthy row with one no future load returns. `_prove_line` now runs
+  every emitted skill row back through the reader's own door
+  (`allow_nan=False` + `loads_clean`) before the store is touched;
+  failure aborts with the old bytes intact. Same rule at
+  `_write_skill_stats` and the backend `rewrite()`.
+
+- **An undeliverable interrupt was recorded as delivered** (three seats,
+  HIGH, probed). `Interrupt.from_dict` is a constructor too:
+  `"new_steps": "not-a-list"` sailed through it, `poll()` marked the row
+  applied ON DISK, and the consumer crashed on `steps +
+  interrupt.new_steps`. The retry saw an empty queue — the operator's
+  STOP was gone, recorded as acted on. `_prove_deliverable` now runs
+  before every applied-mark (poll, clear, and peek's result): a row that
+  cannot be applied strands raw, unapplied, and announced every poll
+  until a human reads it.
+
+- **JSON `1` and JSON `true` are one Python dict key** (Expert QA,
+  MEDIUM, probed). `1 == True` in Python, so the keyed stats rebuild
+  collapsed two distinct rows into one and silently deleted the other.
+  A non-string id is not an identity this store can key on; such rows
+  are strandees now, carried verbatim.
+
+- **Routine counter bumps deleted every field the model doesn't know**
+  (Minimalist, MEDIUM, probed). Both outcome recorders rebuilt the row
+  from `SkillStats.to_dict()`, so an operator's note — or any foreign
+  tool's stamp — vanished on the next update with no warning. The
+  recorders now merge over the stored row: the updater wins on the
+  fields it writes, everything else rides through.
+
+- **A proof inside a generator expression proves nothing** (two seats,
+  MEDIUM, probed). A genexp body is deferred code — `(loads_clean(s) for
+  s in ())` never runs a thing, yet the scanner credited the clean call
+  to the enclosing function and certified a raw rewrite OK. The rule is
+  asymmetric on purpose: clean-in-genexp proves nothing, raw-in-genexp
+  still poisons (if it ever runs, it runs raw), and EAGER comprehensions
+  execute where they stand, so their proof value survives.
+
+- **`json.JSONDecoder().decode(line)` was invisible** (two seats,
+  MEDIUM, probed). Stdlib spelling for the same raw parse as
+  `json.loads`; one rename made a destructive rewrite vanish from the
+  scan. The scanner now tracks names bound from `JSONDecoder(...)` and
+  flags `.decode` through them — while plain `bytes.decode` stays
+  unflagged (the negative control: it is how bytes become text, not a
+  parse).
+
+- **A MOVED site coming back under its outer name passed the gate**
+  (two seats, MEDIUM, probed). `MOVED` excuses a site from `stale`
+  because its scan-visible name moved inward — which also excused the
+  OUTER name from ever being questioned if someone puts framing back in
+  the outer scope: not untriaged (it is in SITES), not stale (MOVED
+  exempts it), not blind (the twin is still there). A sixth leg,
+  `resurfaced`, fires on `live ∩ MOVED` — and it is the ONLY watch on
+  the one twinless MOVED entry (`llm.py:_run_subprocess_safe`). The
+  exemption doctrine's fifth application: FIXED→`regressed`,
+  seen→`vanished`, MOVED→`blind`, and now MOVED→`resurfaced`.
+
+- **Accepted with reason, and pinned as such:** the final torn frame
+  gains a terminator LF on the way through a stats rewrite (its content
+  bytes are untouched). Preserving the missing LF would let the next
+  `locked_append` concatenate a fresh record INTO the torn fragment,
+  corrupting both. A pin test records the decision so a future round
+  cannot "fix" F4 and reopen the concatenation hole.
+
+Censuses before the strictness flips, all zero-cost on live data: 423/423
+skill rows pass `validate_skill_row`; 2/2 live interrupt-queue rows are
+deliverable; 203/203 skill-stats rows are string-keyed; no `NaN` /
+`Infinity` in either skill store. The scanner changes moved the blast
+radius not at all: 72 RISK sites, manifest green.
+
+**The sweep — 163/165 on the first pass, and both gaps were teachers.**
+Five moved anchors were re-anchored before the sweep ran (a SKIP is not a
+pass), and 19 new file-derived mutants rode in with the fixes. The
+`interrupt launder (clear)` survivor was a hole THIS round's own fix
+created: `_prove_deliverable` strands a field-poor row on its own, so the
+old torn fixture could no longer tell the taint door from the proof door
+— the killing fixture must be DELIVERABLE-shaped with one raw byte in
+`message`, which is exactly why the poll twin (whose fixture already was)
+died on schedule. A guard added in front of another guard disarms the
+second guard's tests; only the sweep says so. And `the proof line
+re-admits NaN` is a genuine twin-lock equivalent, marked with its reason:
+`_prove_line`'s very next line runs the emitted text through
+`_loads_clean`, whose `parse_constant` (r9) refuses the token
+`allow_nan=False` would have refused to mint — same abort, same
+direction, no observable difference. 165/165 accounted for after
+(163 detected + 2 marked equivalents in the spec's history).
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
