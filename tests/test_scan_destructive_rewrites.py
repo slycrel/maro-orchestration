@@ -1265,3 +1265,208 @@ class T:
         atomic_write(path, "\\n".join(keep))
 '''
         assert _scan(src)["rewrite"] == "OK"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial r14
+# ---------------------------------------------------------------------------
+
+
+_R14_BODY = '''
+        out = []
+        for line in open(path):
+            try:
+                out.append(self.decoder.decode(line))
+            except Exception:
+                continue
+        atomic_write(path, "".join(out))
+'''
+
+
+class TestProvenanceCrossesEveryClassBoundary:
+    """Adversarial r14 (four seats between them, all probed): four ways
+    a class-held raw decoder stayed invisible while an unrelated clean
+    call earned the method OK — an attribute-held CONSTRUCTOR alias, a
+    CLASS-BODY decoder binding, a decoder inherited from a same-module
+    BASE class, and a positional-only receiver that left args.args
+    empty."""
+
+    def test_attribute_held_ctor_alias(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Repairer:
+    def __init__(self):
+        self.Ctor = json.JSONDecoder
+        self.decoder = self.Ctor()
+
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_class_body_decoder_binding(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Repairer:
+    decoder = json.JSONDecoder()
+
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_inherited_decoder(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Base:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+
+class Child(Base):
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_grandparent_decoder(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class A:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+
+class B(A):
+    pass
+
+class C(B):
+    def rewrite(self, path):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_positional_only_receiver(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Repairer:
+    def __init__(self, /):
+        self.decoder = json.JSONDecoder()
+
+    def rewrite(self, path, /):
+        loads_clean("{}")
+''' + _R14_BODY
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_negative_control_inherited_bytes_attribute(self):
+        """An inherited ordinary-bytes attribute must NOT poison the
+        child's `.decode` — the receiver still decides."""
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Base:
+    def __init__(self):
+        self.blob = b"data"
+
+class Child(Base):
+    def rewrite(self, path):
+        out = []
+        for line in open(path):
+            try:
+                out.append(self.blob.decode("utf-8"))
+            except Exception:
+                continue
+        loads_clean("{}")
+        atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["rewrite"] == "OK"
+
+
+class TestDestructuredAliasesAreBindingsToo:
+    """Adversarial r14 (Minimalist, probed): `parser, _x = json.loads,
+    None` put a Tuple in the target slot and _parser_names rejected it
+    one line before _expand_binding could expose the pair — the same
+    private-copy-of-a-shared-walk shape as r13."""
+
+    def test_destructured_raw_parser(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+def rewrite(path):
+    parser, _unused = json.loads, None
+    loads_clean("{}")
+    out = []
+    for line in open(path):
+        try:
+            out.append(parser(line))
+        except Exception:
+            continue
+    atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_negative_control_destructured_clean_parser(self):
+        src = '''
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+def rewrite(path):
+    parser, _unused = loads_clean, None
+    out = []
+    for line in open(path):
+        try:
+            out.append(parser(line))
+        except Exception:
+            continue
+    atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["rewrite"] == "OK"
+
+
+class TestTheClassWalkIsAFixpoint:
+    """Adversarial r14 follow-through: provenance chains that SPAN
+    methods must resolve regardless of definition order — a single
+    in-order pass resolves the easy direction and silently misses the
+    reversed one."""
+
+    def test_reversed_order_cross_method_chain(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class Repairer:
+    def helper(self):
+        self.d2 = self.d1
+
+    def __init__(self):
+        self.d1 = json.JSONDecoder()
+
+    def rewrite(self, path):
+        loads_clean("{}")
+        out = []
+        for line in open(path):
+            try:
+                out.append(self.d2.decode(line))
+            except Exception:
+                continue
+        atomic_write(path, "".join(out))
+'''
+        assert _scan(src)["rewrite"] == "RISK"

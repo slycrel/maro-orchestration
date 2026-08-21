@@ -172,8 +172,15 @@ def _archive_skills(skills_to_archive: List[Skill], *, reason: str) -> None:
         rec["archived_at"] = now
         rec["archived_reason"] = reason
         lines.append(prove_record_line(rec))
-    for line in lines:
-        locked_append(path, line)
+    # ONE append for the whole batch (adversarial r14, Failure Operator,
+    # probed): per-line appends let a mid-batch failure land a partial
+    # batch, and the caller's retry then duplicated the already-landed
+    # skills. A single write cannot split the batch. Residual, accepted:
+    # a retry after a SUCCESSFUL append that failed later in the caller
+    # still duplicates the batch — in an append-only retention store a
+    # duplicate is noise, not loss, and the unsafe direction (dropping
+    # rows to dedupe) is the one the retention decree forbids.
+    locked_append(path, "\n".join(lines))
 
 
 # Aliases — internal names delegate to skill_types public API
@@ -1019,7 +1026,20 @@ def validate_skill_stats_row(d: dict) -> None:
     auditing is an inspector's job; stranding implausible-but-readable
     rows would misfile legitimate legacy data behind a "corruption"
     warning.
+
+    Identity is part of the predicate (adversarial r14, four seats,
+    probed): the reader keys this store on a NON-EMPTY STRING skill_id,
+    but this validator checked only the modeled statistic fields, so
+    `_write_skill_stats` vouched for a `skill_id: null` row the reader
+    immediately strands as keyless. The reader itself never reaches this
+    check — it routes identity failures to its keyless strand first —
+    so reader counters are unchanged; the writer now refuses to mint a
+    row no reader will ever return.
     """
+    sid = d.get("skill_id")
+    if not (isinstance(sid, str) and sid):
+        raise TypeError(
+            f"skill_id must be a non-empty string, got {sid!r}")
     for name in ("total_uses", "successes", "failures",
                  "injected_runs", "injected_successes"):
         if name in d:
@@ -1127,9 +1147,17 @@ def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
             compacted += 1
         records[sid] = d
     if tainted or keyless:
+        # A read announces what the READ did — exclusion from this
+        # result — never a rewrite it has no knowledge of (adversarial
+        # r14, Architect, probed): pure readers like get_all_skill_stats
+        # logged "carried through the rewrite" with no rewrite anywhere,
+        # and a recorder could log the claim and then fail its write.
+        # The carry-through announcement now lives in
+        # `_write_skill_stats`, after its commit.
         logger.warning(
             "[skills] skill-stats: %d unparseable/unprovable and %d "
-            "keyless row(s) carried through the rewrite verbatim (%s)",
+            "keyless row(s) excluded from this read; they remain in the "
+            "store verbatim (%s)",
             tainted, keyless, path)
     if compacted:
         logger.warning(
@@ -1162,15 +1190,40 @@ def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
     # admission predicate on both ends — same rule as `_prove_line`.
     from jsonl_utils import prove_record_line
     lines = []
-    for d in records.values():
+    for key, d in records.items():
+        # The map key and the row's own identity must agree — a rekeyed
+        # entry would silently write a row the next keyed read files
+        # under a different id than the caller updated (adversarial r14,
+        # Minimalist).
+        if d.get("skill_id") != key:
+            raise ValueError(
+                f"records key {key!r} disagrees with row skill_id "
+                f"{d.get('skill_id')!r}")
         validate_skill_stats_row(d)
         lines.append(prove_record_line(d))
+    # Strandees ride FIRST (adversarial r14, three seats, probed): r13
+    # moved generic-rewrite strandees to the head so a keyed
+    # last-row-wins consumer can never let a stranded legacy row shadow
+    # the caller's fresh record — and this sibling writer kept the old
+    # tail position, where a same-id stranded row overrode the repaired
+    # one for any naive parser. Same doctrine, same ordinal.
+    # A stranded final row that lost its LF gains one here — required
+    # framing once strandees ride first; payload bytes are unchanged and
+    # re-splitting yields the identical strandee (r14, accept-and-pin).
     atomic_write(
         path,
-        "".join(line + "\n" for line in lines)
-        + "".join(l + "\n" for l in stranded),
+        "".join(l + "\n" for l in stranded)
+        + "".join(line + "\n" for line in lines),
         errors="surrogateescape",
     )
+    # Announce AFTER the commit — the carry-through claim belongs to the
+    # writer that performed it, not the reader (adversarial r14,
+    # Architect: the read-side warning claimed a rewrite that had not
+    # happened, and a failed atomic_write left a false audit line).
+    if stranded:
+        logger.warning(
+            "[skills] skill-stats: %d stranded row(s) carried through "
+            "the rewrite verbatim (%s)", len(stranded), path)
 
 
 def get_all_skill_stats() -> List[SkillStats]:

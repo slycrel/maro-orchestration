@@ -114,7 +114,13 @@ def _parser_names(tree) -> "tuple[set[str], set[str]]":
             # `(parser := json.loads)` both walked past the Assign-only
             # alias pass — r12 taught `_bindings` these forms and this
             # scan kept its own private walk).
-            for target, v in _bindings(n):
+            # ...and every binding must ALSO destructure (adversarial
+            # r14, Minimalist, probed: `parser, _x = json.loads, None`
+            # put a Tuple in the target slot and this walk rejected it
+            # one line before _expand_binding could expose the pair —
+            # the same private-copy-of-a-shared-walk shape as r13).
+            for target, v in (pair for b in _bindings(n)
+                              for pair in _expand_binding(*b)):
                 if not isinstance(target, ast.Name):
                     continue
                 bound = target.id
@@ -227,9 +233,16 @@ def _shadowed(fn) -> set:
         # cleared the shadow on the outer function's own
         # `loads_clean=json.loads` parameter and certified it OK
         # (adversarial r10, Minimalist, probed).
-        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Name) \
-                and n.value.id in module_clean:
-            keep |= {tgt.id for tgt in n.targets if isinstance(tgt, ast.Name)}
+        # Every binding form, destructuring expanded — the third private
+        # copy of this walk in as many rounds (adversarial r14, found by
+        # this round's own negative control: `parser, _x = loads_clean,
+        # None` re-proved nothing because this loop read only plain
+        # Assign-of-Name, so the clean alias stayed shadowed).
+        for target, v in (pair for b in _bindings(n)
+                          for pair in _expand_binding(*b)):
+            if isinstance(target, ast.Name) and isinstance(v, ast.Name) \
+                    and v.id in module_clean:
+                keep.add(target.id)
     return local - (keep - local_raw)
 
 
@@ -255,14 +268,43 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
     _MODULE_DECODERS, _MODULE_DECODER_METHODS = \
         _decoder_names(tree, _MODULE_DECODER_CTORS)
     _CLASS_DECODER_MAP.clear()
-    for cls in ast.walk(tree):
-        if isinstance(cls, ast.ClassDef):
-            ci, cm = _class_decoder_sets(cls, _MODULE_DECODER_CTORS)
-            if ci or cm:
-                for m in cls.body:
-                    if isinstance(m, (ast.FunctionDef,
-                                      ast.AsyncFunctionDef)):
-                        _CLASS_DECODER_MAP[id(m)] = (ci, cm)
+    classes = [c for c in ast.walk(tree) if isinstance(c, ast.ClassDef)]
+    by_class_name: "dict[str, list]" = {}
+    for c in classes:
+        by_class_name.setdefault(c.name, []).append(c)
+    sets_by_id = {id(c): (set(), set(), set()) for c in classes}
+    # Inheritance is provenance too (adversarial r14, two seats,
+    # probed): a decoder initialized in `Base.__init__` was invisible
+    # from `Child(Base).rewrite` because the map stopped at the
+    # ClassDef boundary — a routine base-class extraction turned a raw
+    # destructive parse scanner-green. Same-module bases propagate to a
+    # fixpoint; a base name bound to several classes unions ALL
+    # candidates (ambiguity errs toward RISK, the direction the scanner
+    # is allowed to be wrong in).
+    changed = True
+    while changed:
+        changed = False
+        for c in classes:
+            seed = [set(x) for x in sets_by_id[id(c)]]
+            for b in c.bases:
+                bname = b.id if isinstance(b, ast.Name) else \
+                    b.attr if isinstance(b, ast.Attribute) else None
+                for bc in by_class_name.get(bname, ()):
+                    if bc is not c:
+                        for k in range(3):
+                            seed[k] |= sets_by_id[id(bc)][k]
+            new_sets = _class_decoder_sets(
+                c, _MODULE_DECODER_CTORS, seed=tuple(seed))
+            if new_sets != sets_by_id[id(c)]:
+                sets_by_id[id(c)] = new_sets
+                changed = True
+    for c in classes:
+        cc, ci, cm = sets_by_id[id(c)]
+        if cc or ci or cm:
+            for m in c.body:
+                if isinstance(m, (ast.FunctionDef,
+                                  ast.AsyncFunctionDef)):
+                    _CLASS_DECODER_MAP[id(m)] = (cc, ci, cm)
     parents: dict[ast.AST, ast.AST] = {}
     for p in ast.walk(tree):
         for c in ast.iter_child_nodes(p):
@@ -506,7 +548,7 @@ def _is_open_call(node) -> bool:
 _MODULE_DECODER_CTORS: set = set()
 _MODULE_DECODERS: set = set()
 _MODULE_DECODER_METHODS: set = set()
-# id(method) -> (insts, methods) proven on the instance by ANY sibling
+# id(method) -> (ctors, insts, methods) proven on the instance by ANY sibling
 # method of the same class, normalized to an "@." prefix ("@.decoder").
 # Adversarial r13 (Failure Operator, probed): `self.decoder =
 # json.JSONDecoder()` in __init__ plus `self.decoder.decode(line)` in the
@@ -517,21 +559,69 @@ _MODULE_DECODER_METHODS: set = set()
 _CLASS_DECODER_MAP: dict = {}
 
 
-def _class_decoder_sets(cls, module_ctors) -> "tuple[set, set]":
-    insts: set = set()
-    methods: set = set()
-    for m in cls.body:
-        if not isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if not m.args.args:
-            continue
-        first = m.args.args[0].arg
-        ctors = _decoder_ctors(m) | module_ctors
-        mi, mm = _decoder_names(m, ctors)
-        pref = first + "."
-        insts |= {"@." + n[len(pref):] for n in mi if n.startswith(pref)}
-        methods |= {"@." + n[len(pref):] for n in mm if n.startswith(pref)}
-    return insts, methods
+def _receiver_arg(fn):
+    """Name of fn's first parameter — positional-only params INCLUDED.
+
+    Adversarial r14 (Skeptic, probed): `def rewrite(self, path, /)` has
+    no entries in args.args, only posonlyargs, so both the class-map
+    builder and its consumer skipped the method entirely and a raw
+    `self.decoder.decode(line)` was invisible."""
+    params = list(fn.args.posonlyargs) + list(fn.args.args)
+    return params[0].arg if params else None
+
+
+def _class_decoder_sets(cls, module_ctors,
+                        seed=(frozenset(), frozenset(),
+                              frozenset())) -> "tuple[set, set, set]":
+    """(ctor aliases, decoder instances, bound parse methods) proven on
+    this class's instances, normalized to an "@." prefix.
+
+    Three r14 holes, all probed: constructor ALIASES held on the
+    instance (`self.Ctor = json.JSONDecoder`) were never carried across
+    methods, only finished instances were; CLASS-BODY bindings
+    (`decoder = json.JSONDecoder()` in the class body, read as
+    `self.decoder` from every method) were not read at all; and the
+    per-method pass ran once in definition order, so provenance
+    established by a LATER method never reached an earlier one. The
+    walk is now a fixpoint over the methods with the class-level sets
+    re-spelled into each method's receiver as seeds. `seed` carries
+    provenance inherited from base classes (see scan_module)."""
+    ctors_at: set = set(seed[0])
+    insts: set = set(seed[1])
+    methods: set = set(seed[2])
+    # Class-body bindings are instance-reachable state: `decoder =
+    # json.JSONDecoder()` at class level is `self.decoder` in a method.
+    body_ctors = _decoder_ctors(cls) - {"JSONDecoder"}
+    body_insts, body_methods = _decoder_names(cls, _decoder_ctors(cls)
+                                              | module_ctors)
+    ctors_at |= {"@." + n for n in body_ctors if "." not in n}
+    insts |= {"@." + n for n in body_insts if "." not in n}
+    methods |= {"@." + n for n in body_methods if "." not in n}
+    changed = True
+    while changed:
+        changed = False
+        for m in cls.body:
+            if not isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            first = _receiver_arg(m)
+            if first is None:
+                continue
+            pref = first + "."
+            seed_ctors = {pref + n[2:] for n in ctors_at}
+            seed_insts = {pref + n[2:] for n in insts}
+            seed_methods = {pref + n[2:] for n in methods}
+            ctors = _decoder_ctors(m, seed_ctors) | module_ctors
+            mi, mm = _decoder_names(m, ctors, insts=seed_insts,
+                                    methods=seed_methods)
+            for found, into in ((ctors, ctors_at), (mi, insts),
+                                (mm, methods)):
+                for n in found:
+                    if n.startswith(pref):
+                        norm = "@." + n[len(pref):]
+                        if norm not in into:
+                            into.add(norm)
+                            changed = True
+    return ctors_at, insts, methods
 
 
 def _lazy_nodes(fn) -> set:
@@ -555,12 +645,14 @@ def _lazy_nodes(fn) -> set:
     return out
 
 
-def _decoder_ctors(scope) -> set:
+def _decoder_ctors(scope, seed=frozenset()) -> set:
     """Names that CONSTRUCT a JSONDecoder in this scope: the literal
     spelling plus `from json import JSONDecoder as X` aliases (adversarial
     r12, Failure Operator, probed: the import alias was a standard spelling
-    the literal match walked past)."""
-    out = {"JSONDecoder"}
+    the literal match walked past). `seed` carries ctor names proven
+    OUTSIDE this scope (a sibling method, the class body) so chains off
+    them resolve here (adversarial r14)."""
+    out = {"JSONDecoder"} | set(seed)
     for n in _own_scope(scope):
         if isinstance(n, ast.ImportFrom) and n.module == "json":
             for a in n.names:
@@ -574,17 +666,24 @@ def _decoder_ctors(scope) -> set:
     while changed:
         changed = False
         for target, value in _scope_bindings(scope):
-            if not isinstance(target, ast.Name) or target.id in out:
+            # Dotted targets too (adversarial r14, three seats, probed):
+            # `self.Ctor = json.JSONDecoder` bound the constructor to an
+            # instance attribute this Name-only walk never recorded, so
+            # `self.Ctor()` read as an ordinary call and the raw decoder
+            # it built was invisible.
+            tname = _dotted_target(target)
+            if tname is None or tname in out:
                 continue
             if ((isinstance(value, ast.Attribute)
                  and value.attr == "JSONDecoder")
-                    or (isinstance(value, ast.Name) and value.id in out)):
-                out.add(target.id)
+                    or _dotted_target(value) in out):
+                out.add(tname)
                 changed = True
     return out
 
 
-def _decoder_names(scope, ctors=frozenset()) -> "tuple[set, set]":
+def _decoder_names(scope, ctors=frozenset(), insts=(),
+                   methods=()) -> "tuple[set, set]":
     """(names holding a JSONDecoder instance, names bound to its parse
     methods) in this scope.
 
@@ -602,9 +701,14 @@ def _decoder_names(scope, ctors=frozenset()) -> "tuple[set, set]":
     alias and `raw_decode` all bypassed the r11 literal match. Aliases
     resolve to a fixpoint so chains (`a = decoder; b = a`) are covered.
     """
-    ctors = set(ctors) | _decoder_ctors(scope)
-    insts: set = set()
-    methods: set = set()
+    # Seeds carry provenance proven outside this scope — instance
+    # attributes a sibling method or the class body established
+    # (adversarial r14): seeding BEFORE the fixpoint lets in-scope
+    # chains (`d = self.decoder; d.decode(line)`) resolve, where the
+    # old post-hoc union could only catch direct spellings.
+    ctors = set(ctors) | _decoder_ctors(scope, ctors)
+    insts: set = set(insts)
+    methods: set = set(methods)
     changed = True
     while changed:
         changed = False
@@ -617,7 +721,10 @@ def _decoder_names(scope, ctors=frozenset()) -> "tuple[set, set]":
                 f = value.func
                 name = f.id if isinstance(f, ast.Name) else \
                     f.attr if isinstance(f, ast.Attribute) else ""
-                if name in ctors:
+                # The dotted spelling too: `self.Ctor()` has attr
+                # "Ctor", but the proof is filed under "self.Ctor"
+                # (adversarial r14, three seats, probed).
+                if name in ctors or _dotted_target(f) in ctors:
                     got = (insts, tname)
             elif (isinstance(value, ast.Attribute)
                     and value.attr in ("decode", "raw_decode")
@@ -641,14 +748,23 @@ def _parse_calls(fn) -> "tuple[bool, bool]":
     shadow = _shadowed(fn)
     lazy = _lazy_nodes(fn)
     ctors = _decoder_ctors(fn) | _MODULE_DECODER_CTORS
-    decoders, decoder_methods = _decoder_names(fn, ctors)
+    # Re-spell the class-level provenance into this method's receiver
+    # BEFORE the name analysis runs, so in-method chains off inherited
+    # state resolve (adversarial r14): ctor aliases feed the ctor set,
+    # instances/methods seed the fixpoint. The receiver helper counts
+    # positional-only params (r14, Skeptic).
+    cc, ci, cm = _CLASS_DECODER_MAP.get(id(fn), (set(), set(), set()))
+    seed_insts: set = set()
+    seed_methods: set = set()
+    first = _receiver_arg(fn)
+    if (cc or ci or cm) and first:
+        ctors |= {first + n[1:] for n in cc}
+        seed_insts = {first + n[1:] for n in ci}
+        seed_methods = {first + n[1:] for n in cm}
+    decoders, decoder_methods = _decoder_names(
+        fn, ctors, insts=seed_insts, methods=seed_methods)
     decoders |= _MODULE_DECODERS
     decoder_methods |= _MODULE_DECODER_METHODS
-    ci, cm = _CLASS_DECODER_MAP.get(id(fn), (set(), set()))
-    if (ci or cm) and fn.args.args:
-        first = fn.args.args[0].arg
-        decoders |= {first + n[1:] for n in ci}
-        decoder_methods |= {first + n[1:] for n in cm}
     # A dotted proof is only as good as its RECEIVER. `import jsonl_utils`
     # proves `jsonl_utils.loads_clean`, and `def rewrite(path, jsonl_utils)`
     # or a local `jsonl_utils = shim` replaces the object that name points

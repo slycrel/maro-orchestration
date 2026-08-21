@@ -3387,8 +3387,11 @@ class TestTheFinalTornFrameGainsATerminatorOnPurpose:
         records, stranded = skills_mod._read_skill_stats(f)
         skills_mod._write_skill_stats(f, records, stranded)
 
+        # Strandees ride FIRST since adversarial r14 (same ordinal rule
+        # as the r13 backend rewrite); the torn frame keeps its bytes
+        # and gains only its framing LF.
         assert f.read_text(encoding="utf-8") == (
-            '{"skill_id": "a"}\n{"torn": \n')
+            '{"torn": \n{"skill_id": "a"}\n')
 
 
 class TestStatsAdmissionIsTheProof:
@@ -3599,3 +3602,184 @@ class TestTheArchiveIsAWriterToo:
         assert not arch.exists(), "a partial archive was written"
         skills_mod._archive_skills([good], reason="test")
         assert arch.exists()
+
+
+# ---------------------------------------------------------------------------
+# Adversarial r14
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityIsPartOfThePredicate:
+    """Adversarial r14 (four seats, probed): the reader keys this store
+    on a non-empty STRING skill_id, but validate_skill_stats_row checked
+    only the modeled statistic fields — so _write_skill_stats vouched
+    for a skill_id:null row the reader immediately strands as keyless.
+    Admitted == provable includes identity."""
+
+    def test_validator_refuses_bad_identity(self):
+        import pytest
+        from skills import validate_skill_stats_row
+        for sid in (None, "", 7, True):
+            with pytest.raises(TypeError):
+                validate_skill_stats_row({"skill_id": sid, "total_uses": 1})
+        with pytest.raises(TypeError):
+            validate_skill_stats_row({"total_uses": 1})
+
+    def test_writer_refuses_a_keyless_row(self, tmp_path):
+        import pytest
+        from skills import _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        with pytest.raises((TypeError, ValueError)):
+            _write_skill_stats(
+                path, {"x": {"skill_id": None, "total_uses": 1}}, [])
+        assert not path.exists(), "refusal must abort before the write"
+
+    def test_writer_refuses_a_rekeyed_row(self, tmp_path):
+        """The map key and the row's own identity must agree
+        (adversarial r14, Minimalist)."""
+        import pytest
+        from skills import _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        with pytest.raises(ValueError):
+            _write_skill_stats(
+                path, {"other": {"skill_id": "s", "total_uses": 1}}, [])
+        assert not path.exists()
+
+
+class TestTheStatsWriterPutsStrandeesFirst:
+    """Adversarial r14 (three seats, probed): r13 moved generic-rewrite
+    strandees to the head of the payload so a keyed last-row-wins
+    consumer can never let a stranded legacy row shadow the caller's
+    fresh record — and this sibling writer kept the old tail position,
+    where a same-id stranded row overrode the repaired one for any
+    naive parser."""
+
+    def test_strandees_ride_first(self, tmp_path):
+        import json
+        from skills import _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        legacy = '{"skill_id":"s","needs_escalation":"false"}'
+        _write_skill_stats(
+            path, {"s": {"skill_id": "s", "total_uses": 3}}, [legacy])
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == legacy
+        # A naive keyed last-row-wins parser sees the VALID row.
+        naive = {}
+        for line in lines:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            naive[d.get("skill_id")] = d
+        assert naive["s"]["total_uses"] == 3
+        assert "needs_escalation" not in naive["s"]
+
+    def test_unterminated_strandee_round_trips(self, tmp_path):
+        """r14 accept-and-pin twin of the backend pin: the strandee's
+        payload bytes survive verbatim; the appended LF is framing."""
+        from skills import _read_skill_stats, _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_bytes(b'{"skill_id":"s","total_uses":1}\n\xff')
+        records, stranded = _read_skill_stats(path)
+        _write_skill_stats(path, records, stranded)
+        first = path.read_bytes().split(b"\n", 1)[0]
+        assert first == b"\xff"
+        records2, stranded2 = _read_skill_stats(path)
+        assert stranded2 == stranded
+
+
+class TestAReadAnnouncesAReadNotARewrite:
+    """Adversarial r14 (Architect, probed): _read_skill_stats logged
+    "carried through the rewrite verbatim" from PURE READS —
+    get_all_skill_stats never rewrites, and a recorder could log the
+    claim and then fail its write. The carry-through announcement
+    belongs to the writer, after its commit."""
+
+    def test_pure_read_does_not_claim_a_rewrite(self, tmp_path, caplog):
+        import logging
+        from skills import _read_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text("BROKEN\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            _read_skill_stats(path)
+        text = caplog.text
+        assert "excluded from this read" in text
+        assert "carried through the rewrite" not in text
+
+    def test_the_writer_announces_after_the_commit(self, tmp_path, caplog):
+        import logging
+        from skills import _write_skill_stats
+        path = tmp_path / "skill-stats.jsonl"
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            _write_skill_stats(
+                path, {"s": {"skill_id": "s", "total_uses": 1}},
+                ["BROKEN"])
+        assert "carried through the rewrite verbatim" in caplog.text
+
+    def test_a_refused_write_leaves_no_carry_claim(
+            self, tmp_path, caplog, monkeypatch):
+        import logging
+        import pytest
+        import file_lock
+        from skills import _write_skill_stats
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(file_lock, "atomic_write", boom)
+        path = tmp_path / "skill-stats.jsonl"
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            with pytest.raises(OSError):
+                _write_skill_stats(
+                    path, {"s": {"skill_id": "s", "total_uses": 1}},
+                    ["BROKEN"])
+        assert "carried through the rewrite" not in caplog.text
+
+
+class TestTheArchiveBatchCannotSplit:
+    """Adversarial r14 (Failure Operator, probed): per-line appends let
+    a mid-batch failure land HALF a batch, and the caller's retry then
+    duplicated the already-landed skills. One append call per batch: a
+    failure lands nothing, so a retry starts clean. (Residual, accepted:
+    a retry after a successful append still duplicates — in an
+    append-only retention store a duplicate is noise, not loss.)"""
+
+    def _skills(self, ids):
+        from skills import _dict_to_skill
+        return [_dict_to_skill({
+            "id": i, "name": i, "description": "d",
+            "trigger_patterns": [], "steps": [],
+            "created_at": "t", "version": 1}) for i in ids]
+
+    def test_one_append_call_per_batch(self, tmp_path, monkeypatch):
+        import json
+        import file_lock
+        import skills as sk
+        arch = tmp_path / "archive.jsonl"
+        monkeypatch.setattr(sk, "_skills_archive_path", lambda: arch)
+        calls = []
+        real = file_lock.locked_append
+        monkeypatch.setattr(
+            file_lock, "locked_append",
+            lambda path, line: (calls.append(1), real(path, line))[1])
+        sk._archive_skills(self._skills(["a", "b"]), reason="cull")
+        assert len(calls) == 1
+        ids = [json.loads(l)["id"]
+               for l in arch.read_text(encoding="utf-8").splitlines()
+               if l.strip()]
+        assert ids == ["a", "b"]
+
+    def test_a_failed_batch_lands_nothing(self, tmp_path, monkeypatch):
+        import pytest
+        import file_lock
+        import skills as sk
+        arch = tmp_path / "archive.jsonl"
+        monkeypatch.setattr(sk, "_skills_archive_path", lambda: arch)
+
+        def boom(path, line):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(file_lock, "locked_append", boom)
+        with pytest.raises(OSError):
+            sk._archive_skills(self._skills(["a", "b"]), reason="cull")
+        assert not arch.exists() or arch.read_text() == ""

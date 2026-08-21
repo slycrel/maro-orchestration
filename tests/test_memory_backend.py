@@ -617,3 +617,230 @@ class TestTheSQLiteTwinKeepsTheSameDoctrine:
         with pytest.raises(Exception):
             sb.rewrite("lessons", [{"v": float("nan")}])
         assert sb.read_all("lessons") == []
+
+
+# ---------------------------------------------------------------------------
+# Adversarial r14
+# ---------------------------------------------------------------------------
+
+
+class TestTransformIsTheContractNotANicety:
+    """Adversarial r14 (five seats, probed): r13 added transform() to
+    JSONLBackend only, so the selectable SQLite twin kept the exact
+    lost-update race the method exists to close — a clean append between
+    a caller's read_all() and rewrite() was reader-vouched by rewrite's
+    own re-select, deleted, and never reinserted."""
+
+    def test_transform_is_abstract_on_the_interface(self):
+        import abc
+        from memory_backends import MemoryBackend
+        assert "transform" in MemoryBackend.__abstractmethods__
+
+    def test_sqlite_transform_reads_modifies_writes(self, tmp_path):
+        from memory_backends import SQLiteBackend
+        b = SQLiteBackend(tmp_path / "m.db")
+        b.append("led", {"id": "old", "n": 1})
+        out = b.transform(
+            "led", lambda rows: [dict(r, n=r["n"] + 1) for r in rows])
+        assert out == [{"id": "old", "n": 2}]
+        assert b.read_all("led") == [{"id": "old", "n": 2}]
+
+    def test_sqlite_transform_carries_unreadable_rows(self, tmp_path):
+        import sqlite3
+        from memory_backends import SQLiteBackend
+        db = tmp_path / "m.db"
+        b = SQLiteBackend(db)
+        b.append("led", {"id": "old"})
+        with sqlite3.connect(str(db)) as con:
+            con.execute(
+                "INSERT INTO memory_records (collection, data) "
+                "VALUES (?, ?)", ("led", "BROKEN"))
+            con.commit()
+        b.transform("led", lambda rows: rows)
+        with sqlite3.connect(str(db)) as con:
+            datas = [r[0] for r in con.execute(
+                "SELECT data FROM memory_records").fetchall()]
+        assert "BROKEN" in datas
+
+    def test_sqlite_transform_blocks_a_concurrent_append(self, tmp_path):
+        """The append attempted while fn deliberates lands AFTER the
+        commit — never inside the transaction's replace window."""
+        import sqlite3
+        import threading
+        import time
+        from memory_backends import SQLiteBackend
+        db = tmp_path / "m.db"
+        b = SQLiteBackend(db)
+        b.append("led", {"id": "old"})
+        landed_during_fn = []
+
+        def fn(rows):
+            t = threading.Thread(
+                target=lambda: SQLiteBackend(db).append(
+                    "led", {"id": "concurrent"}))
+            t.start()
+            time.sleep(0.4)
+            with sqlite3.connect(str(db)) as con:
+                landed_during_fn.extend(
+                    r[0] for r in con.execute(
+                        "SELECT data FROM memory_records").fetchall()
+                    if "concurrent" in r[0])
+            fn.t = t
+            return rows + [{"id": "from-fn"}]
+
+        b.transform("led", fn)
+        fn.t.join(15)
+        assert not landed_during_fn, "append landed inside the transaction"
+        ids = {r["id"] for r in b.read_all("led")}
+        assert ids == {"old", "from-fn", "concurrent"}
+
+    def test_sqlite_transform_rolls_back_when_fn_raises(self, tmp_path):
+        import pytest
+        from memory_backends import SQLiteBackend
+        b = SQLiteBackend(tmp_path / "m.db")
+        b.append("led", {"id": "old"})
+
+        def fn(rows):
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            b.transform("led", fn)
+        assert b.read_all("led") == [{"id": "old"}]
+
+    def test_sqlite_transform_refuses_an_unprovable_emission(self, tmp_path):
+        import pytest
+        from memory_backends import SQLiteBackend
+        b = SQLiteBackend(tmp_path / "m.db")
+        b.append("led", {"id": "old"})
+        with pytest.raises((TypeError, ValueError)):
+            b.transform("led", lambda rows: rows + [{"bad": float("nan")}])
+        assert b.read_all("led") == [{"id": "old"}]
+
+
+class TestAFailedReadIsNotAnEmptyStore:
+    """Adversarial r14 (two seats, probed): SQLite read_all() converted
+    every sqlite3.Error into [], indistinguishable from verified-empty —
+    a transient lock during a repair's read phase handed the caller a
+    valid-looking empty list and the next rewrite deleted every healthy
+    row."""
+
+    def test_read_all_raises_on_sqlite_error(self, tmp_path):
+        import pytest
+        import sqlite3
+        from memory_backends import SQLiteBackend
+        b = SQLiteBackend(tmp_path / "m.db")
+        b.append("led", {"id": "healthy"})
+
+        class Boom:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, *a):
+                raise sqlite3.OperationalError("database is locked")
+
+        b._connect = Boom
+        with pytest.raises(sqlite3.Error):
+            b.read_all("led")
+
+    def test_the_failed_read_cannot_feed_a_rewrite(self, tmp_path):
+        """The r14 composition: read fails transiently, connection
+        recovers, caller would have rewritten []. With the raise the
+        caller never gets a list; after recovery the store is intact."""
+        import sqlite3
+        from memory_backends import SQLiteBackend
+        b = SQLiteBackend(tmp_path / "m.db")
+        b.append("led", {"id": "healthy"})
+        real_connect = b._connect
+        calls = {"n": 0}
+
+        class Boom:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, *a):
+                raise sqlite3.OperationalError("database is locked")
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return Boom()
+            return real_connect()
+
+        b._connect = flaky
+        try:
+            rows = b.read_all("led")
+        except sqlite3.Error:
+            rows = None
+        assert rows is None
+        assert b.read_all("led") == [{"id": "healthy"}]
+
+
+class TestTransformRefusesToRunUnlocked:
+    """Adversarial r14 (four seats, probed): transform() passed no
+    require flag, so MARO_FILELOCK_FAIL_OPEN=1 (or an uncreatable lock
+    file) let the "one lock" transaction run unlocked — the lost-update
+    race wearing the fix's clothes."""
+
+    def test_contended_fail_open_raises_before_fn(
+            self, tmp_path, monkeypatch):
+        import fcntl
+        import pytest
+        from file_lock import FileLockTimeout
+        from memory_backends import JSONLBackend
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "1")
+        jb = JSONLBackend(tmp_path / "mem")
+        jb.append("led", {"id": "x"})
+        path = jb._path("led")
+        before = path.read_bytes()
+        holder = open(str(path) + ".lock", "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            ran = {"fn": False}
+            with pytest.raises(FileLockTimeout):
+                jb.transform(
+                    "led",
+                    lambda rows: (ran.__setitem__("fn", True), rows)[1])
+            assert not ran["fn"], "fn ran without the lock"
+            assert path.read_bytes() == before
+        finally:
+            holder.close()
+
+    def test_transform_passes_require(self):
+        """Cheap structural pin: the keyword is the fix."""
+        import ast
+        import inspect
+        from memory_backends import JSONLBackend
+        src = inspect.getsource(JSONLBackend.transform)
+        call = [n for n in ast.walk(ast.parse(src.lstrip()))
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "id", "") == "locked_write"]
+        assert call, "transform no longer calls locked_write directly"
+        kw = {k.arg: getattr(k.value, "value", None)
+              for k in call[0].keywords}
+        assert kw.get("require") is True
+
+
+class TestVerbatimMeansThePayload:
+    """Adversarial r14 (two seats, probed) — judged accept-and-pin: a
+    torn FINAL row that lost its LF terminator gains one on rewrite.
+    That LF is required row framing once strandees ride first; the
+    payload bytes are unchanged and the round-trip is stable. This pin
+    documents the accepted shape so a future round doesn't re-litigate
+    it — and catches any drift into ACTUAL payload mutation."""
+
+    def test_unterminated_final_strandee_round_trips(self, tmp_path):
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        path = jb._path("led")
+        path.write_bytes(b'{"id":"good"}\n\xff')   # torn final row, no LF
+        jb.rewrite("led", [{"id": "good"}])
+        assert path.read_bytes() == b'\xff\n{"id": "good"}\n'
+        jb.rewrite("led", [{"id": "good"}])        # idempotent
+        assert path.read_bytes() == b'\xff\n{"id": "good"}\n'

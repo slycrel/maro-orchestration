@@ -150,23 +150,22 @@ def build_training_data(
     stats_p = _skill_stats_path(skill_stats_path)
     skills_p = _skills_path()
 
-    # Load skill stats
+    # Load skill stats through the store's OWN strict reader, not a raw
+    # json.loads walk (adversarial r14, QA, probed): a schema-drifted row
+    # like `"total_uses": "1", "success_rate": "1.0"` is stranded by
+    # every operational reader, but this loader coerced it with int()/
+    # float() and trained the selection model on a confident success no
+    # reader would ever return. The strict reader also announces what it
+    # excludes instead of `except: continue`.
     stats_by_id: dict = {}
     if stats_p.exists():
         try:
-            for line in stats_p.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                    sid = d.get("skill_id", "")
-                    if sid:
-                        stats_by_id[sid] = d
-                except Exception:
-                    continue
-        except Exception:
-            pass
+            from skills import _read_skill_stats
+            stats_by_id, _stranded = _read_skill_stats(stats_p)
+        except OSError as exc:
+            logger.warning("router: skill-stats unreadable, no training "
+                           "data (%s): %s", stats_p, exc)
+            return [], [], []
 
     if not stats_by_id:
         return [], [], []

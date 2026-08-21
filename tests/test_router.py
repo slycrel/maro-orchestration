@@ -697,3 +697,27 @@ def test_evolver_calls_maybe_retrain(monkeypatch, tmp_path):
         evolver.run_evolver(min_outcomes=0, dry_run=True, verbose=False)
 
     assert retrain_called[0] is True
+
+
+def test_build_training_data_refuses_drifted_evidence(monkeypatch, tmp_path):
+    """Adversarial r14 (QA, probed): a schema-drifted stats row like
+    `"total_uses": "1", "success_rate": "1.0"` is stranded by every
+    operational reader, but this loader coerced it with int()/float()
+    and trained the selection model on a confident success no reader
+    would ever return. The loader now rides the store's own strict
+    reader, so drifted rows are excluded (and announced), not
+    laundered into evidence."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import router
+
+    stats_entries = [
+        {"skill_id": "good", "skill_name": "g", "total_uses": 5,
+         "successes": 5, "failures": 0, "success_rate": 0.9},
+    ]
+    sp = _write_skill_stats(tmp_path, stats_entries)
+    with open(sp, "a", encoding="utf-8") as fh:
+        fh.write('{"skill_id":"drifted","skill_name":"d",'
+                 '"total_uses":"1","success_rate":"1.0"}\n')
+
+    X, y, ids = router.build_training_data(skill_stats_path=sp)
+    assert ids == ["good"]

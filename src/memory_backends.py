@@ -65,6 +65,20 @@ class MemoryBackend(abc.ABC):
         therefore cannot be deciding anything about it (adversarial r11)."""
 
     @abc.abstractmethod
+    def transform(self, collection: str,
+                  fn: "Any") -> List[Dict[str, Any]]:
+        """Atomically read -> fn(records) -> rewrite, as ONE transaction.
+
+        Part of the abstract contract, not a JSONL nicety (adversarial
+        r14, five seats, probed): r13 added this to JSONLBackend only,
+        so the selectable SQLite twin kept the exact lost-update race
+        the method exists to close — a clean append between a caller's
+        read_all() and rewrite() was reader-vouched, deleted, and never
+        reinserted. Every backend must make the read-modify-write
+        decidable by construction. Returns the record list fn produced
+        (and the store now holds)."""
+
+    @abc.abstractmethod
     def append_text(self, collection: str, text: str) -> None:
         """Append raw text to a text collection (e.g. daily log)."""
 
@@ -219,6 +233,13 @@ class JSONLBackend(MemoryBackend):
                 # as skills._save_skills, r7). A generic rewrite has no
                 # slot metadata, so exact ordinals cannot be preserved;
                 # oldest-content-first is the honest deterministic choice.
+                # A torn FINAL row that lost its LF terminator gains one
+                # here: strandees no longer ride last, so the LF is
+                # required row framing, the payload bytes are unchanged,
+                # and re-splitting yields the identical strandee
+                # (adversarial r14, two seats, probed; judged
+                # accept-and-pin — "verbatim" means the payload, not the
+                # terminator state of a row torn mid-write).
                 payload = (
                     "".join(l + "\n" for l in stranded)
                     + "".join(prove_record_line(r) + "\n" for r in records))
@@ -257,7 +278,13 @@ class JSONLBackend(MemoryBackend):
         """
         path = self._path(collection)
         from file_lock import locked_write
-        with locked_write(path):   # reentrant: read_all/rewrite re-enter
+        # require=True: locked_write's documented fail-open path
+        # (MARO_FILELOCK_FAIL_OPEN=1, or a lock file that cannot be
+        # created) yields WITHOUT a lock — and an unlocked transform is
+        # precisely the lost-update race this method exists to close
+        # (adversarial r14, four seats, probed). A transaction that
+        # cannot lock must refuse to run, not degrade into the bug.
+        with locked_write(path, require=True):   # reentrant re-enter ok
             records = fn(self.read_all(collection))
             self.rewrite(collection, records)
             return records
@@ -377,8 +404,15 @@ class SQLiteBackend(MemoryBackend):
                     collection, dropped, self._db_path)
             return records
         except sqlite3.Error as exc:
-            log.warning("SQLiteBackend.read_all(%s): %s", collection, exc)
-            return []
+            # Raise, never return [] (adversarial r14, two seats, probed):
+            # an empty list is indistinguishable from a verified-empty
+            # store, so a transient lock/IO error during a repair's read
+            # phase handed the caller a valid-looking [] and the next
+            # rewrite deleted every healthy row. A read that did not
+            # happen must not look like a store with nothing in it.
+            log.error("SQLiteBackend.read_all(%s): read NOT performed "
+                      "(%s): %s", collection, self._db_path, exc)
+            raise
 
     def rewrite(self, collection: str, records: List[Dict[str, Any]]) -> None:
         # Doctrine parity with the JSONL twin (adversarial r13,
@@ -421,6 +455,69 @@ class SQLiteBackend(MemoryBackend):
         except sqlite3.Error as exc:
             log.error("SQLiteBackend.rewrite(%s): rewrite NOT performed, "
                       "store unchanged (%s): %s",
+                      collection, self._db_path, exc)
+            raise
+
+    def transform(self, collection: str,
+                  fn: "Any") -> List[Dict[str, Any]]:
+        """Atomic read -> fn(records) -> rewrite in ONE write transaction.
+
+        The JSONL twin's r13 transform never travelled here (adversarial
+        r14, five seats, probed): a clean append between read_all() and
+        rewrite() was reader-vouched by rewrite's own re-select, deleted,
+        and never reinserted — the exact lost-update race transform
+        exists to close. BEGIN IMMEDIATE takes the write lock BEFORE the
+        read, so fn decides over the same rows the commit replaces; only
+        the ids this transaction's own read vouched for are deleted, and
+        every emission is proven through the reader's door first. Any
+        failure — fn raising, a refused emission, an sqlite error — rolls
+        back with the store untouched.
+        """
+        from jsonl_utils import loads_clean, prove_record_line
+        try:
+            con = self._connect()
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                cur = con.execute(
+                    "SELECT id, data FROM memory_records WHERE "
+                    "collection=? ORDER BY id ASC", (collection,))
+                vouched, records, carried = [], [], 0
+                for row_id, data in cur.fetchall():
+                    try:
+                        value = loads_clean(data)
+                    except Exception:
+                        carried += 1
+                        continue
+                    if not isinstance(value, dict):
+                        carried += 1
+                        continue
+                    vouched.append(row_id)
+                    records.append(value)
+                out = fn(records)
+                datas = [prove_record_line(r) for r in out]
+                con.executemany(
+                    "DELETE FROM memory_records WHERE id=?",
+                    [(i,) for i in vouched])
+                con.executemany(
+                    "INSERT INTO memory_records (collection, data) "
+                    "VALUES (?, ?)",
+                    [(collection, d) for d in datas])
+                con.commit()
+            except BaseException:
+                con.rollback()
+                raise
+            finally:
+                con.close()
+            # Announce AFTER the commit, same as the twins (r13, QA).
+            if carried:
+                log.warning(
+                    "SQLiteBackend.transform(%s): %d unreadable row(s) "
+                    "carried through the rewrite verbatim (%s)",
+                    collection, carried, self._db_path)
+            return out
+        except sqlite3.Error as exc:
+            log.error("SQLiteBackend.transform(%s): transform NOT "
+                      "performed, store unchanged (%s): %s",
                       collection, self._db_path, exc)
             raise
 
