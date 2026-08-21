@@ -4794,45 +4794,91 @@ class TestTheRevertHoldsTheLockItWritesUnder:
                                 arch_at)
         assert lock_at < read_at < arch_at < write_at
 
-    def test_a_create_revert_archives_what_was_live_at_delete_time(
+    def test_a_non_string_suggestion_text_refuses_as_unverifiable(
             self, tmp_path, monkeypatch):
-        """Adversarial r22 (three seats, HIGH, probed): the
-        skill_create revert archived the stale pre-lock snapshot — a
-        concurrent edit racing the revert vanished from the live
-        store AND the archive. Retention must be at least as durable
-        as the deletion it authorizes."""
+        """Adversarial r23 (three seats, probed): 0 coerced to "" and
+        could blind-restore over a live "" description; a list
+        refused through the misleading "description changed" door.
+        Present-but-not-a-string is CANNOT VERIFY."""
         import json
         import skills as sk
         from evolver_store import _apply_suggestion_action, \
             revert_suggestion
+        from orch_items import memory_dir
+        for i, bad in enumerate((0, ["a", "b"], 12345, {"nope": 1})):
+            sid = f"nx{i}"
+            self._env(monkeypatch, tmp_path / str(i))
+            sk.save_skill(self._mk(sid, "target-skill", "before"))
+            assert _apply_suggestion_action({
+                "category": "skill_pattern", "suggestion": "applied",
+                "target": "target-skill",
+                "suggestion_id": f"sug-{sid}",
+                "confidence": 0.5}) is True
+            cl = memory_dir() / "change_log.jsonl"
+            rows = [json.loads(l) for l in
+                    cl.read_text().splitlines() if l.strip()]
+            for r in rows:
+                r["suggestion_text"] = bad
+            cl.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            res = revert_suggestion(f"sug-{sid}")
+            assert res["reverted"] is False, bad
+            assert "suggestion_text unavailable" in res["detail"], bad
+
+    def test_an_undisturbed_missing_text_revert_still_refuses(
+            self, tmp_path, monkeypatch):
+        """Only the missing-text guard can fire here (the live value
+        still equals the suggestion's own text), so the kill is not
+        an accident of the description-changed door (adversarial
+        r23, qa)."""
+        import json
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        from orch_items import memory_dir
         self._env(monkeypatch, tmp_path)
-        # A create-apply (no existing skill named this).
+        sk.save_skill(self._mk("um1", "target-skill", "before"))
         assert _apply_suggestion_action({
-            "category": "skill_pattern", "suggestion": "created body",
-            "target": "brand-new-skill", "suggestion_id": "sug-cr1",
+            "category": "skill_pattern", "suggestion": "applied text",
+            "target": "target-skill", "suggestion_id": "sug-um1",
             "confidence": 0.5}) is True
-        real_load = sk.load_skills
-        fired = {"done": False}
-
-        def racing_load(*a, **k):
-            out = real_load(*a, **k)
-            if not fired["done"]:
-                fired["done"] = True
-                live = [s for s in real_load()
-                        if s.name == "brand-new-skill"]
-                live[0].description = "concurrent-edit-worth-keeping"
-                sk.save_skill(live[0])
-                return real_load(*a, **k)
-            return out
-
-        monkeypatch.setattr(sk, "load_skills", racing_load)
-        res = revert_suggestion("sug-cr1")
-        assert res["reverted"] is True
-        archive = sk._skills_archive_path()
+        cl = memory_dir() / "change_log.jsonl"
         rows = [json.loads(l) for l in
-                archive.read_text().splitlines() if l.strip()]
-        mine = [r for r in rows
-                if r.get("archived_reason")
-                == "evolver_skill_create_reverted"]
-        assert mine and mine[-1]["description"] \
-            == "concurrent-edit-worth-keeping"
+                cl.read_text().splitlines() if l.strip()]
+        for r in rows:
+            r.pop("suggestion_text", None)
+        cl.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        res = revert_suggestion("sug-um1")
+        assert res["reverted"] is False
+        assert "suggestion_text unavailable" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "um1")
+        assert row.description == "applied text"
+
+    def test_an_unrecognized_state_type_refuses_not_false_success(
+            self, tmp_path, monkeypatch):
+        """Adversarial r23 (Failure Operator, probed): a corrupted
+        before_state.type fell through both branches and the tail
+        returned reverted:True with detail "" — a false success for
+        a revert that never ran."""
+        import json
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        from orch_items import memory_dir
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("ut1", "target-skill", "before"))
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "applied text",
+            "target": "target-skill", "suggestion_id": "sug-ut1",
+            "confidence": 0.5}) is True
+        cl = memory_dir() / "change_log.jsonl"
+        rows = [json.loads(l) for l in
+                cl.read_text().splitlines() if l.strip()]
+        for r in rows:
+            if isinstance(r.get("before_state"), dict):
+                r["before_state"]["type"] = "skill_update_typo"
+        cl.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        res = revert_suggestion("sug-ut1")
+        assert res["reverted"] is False
+        assert "unrecognized before_state.type" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "ut1")
+        assert row.description == "applied text"

@@ -1000,9 +1000,18 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # never recorded suggestion_text (legacy) is
                 # unverifiable; refusing the verifiable case stranded
                 # the post-apply auto-revert safety net forever.
+                # Present-but-not-a-string is CANNOT VERIFY too
+                # (adversarial r23, three seats, probed): a corrupted
+                # row's 0/False coerced to "" and could blind-restore
+                # over a live "" description; a list refused via the
+                # misleading "description changed" door; an int threw
+                # into the generic handler. Only a recorded STRING
+                # (including "") is verifiable evidence.
+                _raw_sugg = match.get("suggestion_text")
                 _sugg_missing = ("suggestion_text" not in match
-                                 or match.get("suggestion_text") is None)
-                _sugg_text = (match.get("suggestion_text") or "")[:500]
+                                 or not isinstance(_raw_sugg, str))
+                _sugg_text = (_raw_sugg or "")[:500] \
+                    if isinstance(_raw_sugg, str) else ""
                 from file_lock import locked_write as _lw
                 from skills import _skills_path as _sp
                 with _lw(_sp(), require=True):
@@ -1106,6 +1115,20 @@ def revert_suggestion(suggestion_id: str) -> dict:
                     else:
                         return {"reverted": False, "behavioral": False, "category": category,
                                 "detail": f"skill '{target}' not found for removal"}
+
+            else:
+                # An unrecognized before_state.type fell through BOTH
+                # branches and the tail still returned reverted:True
+                # with detail "" — a false success stamping
+                # applied=False for a revert that never ran
+                # (adversarial r23, Failure Operator, probed: a
+                # corrupted audit row's type defeated every guard this
+                # arc built, silently). A revert that cannot recognize
+                # its own audit row must refuse.
+                return {"reverted": False, "behavioral": False,
+                        "category": category,
+                        "detail": "unrecognized before_state.type "
+                                  f"{state_type!r} — refusing"}
 
         elif category == "new_guardrail":
             # Remove matching pattern from dynamic-constraints.jsonl
