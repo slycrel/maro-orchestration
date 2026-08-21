@@ -260,7 +260,8 @@ def _called_names(node: ast.AST) -> set[str]:
 
 
 def _class_alias_map(tree, by_class_name):
-    """name -> set of same-module class names it may denote.
+    """id(ClassDef) -> {name -> set of same-module class names it may
+    denote at that class's definition site}.
 
     Aliases are inheritance too (adversarial r15, four seats, probed):
     `Alias = Base` followed by `class Child(Alias)` carried Base's
@@ -273,24 +274,45 @@ def _class_alias_map(tree, by_class_name):
     else resolves to nothing, which keeps an alias to a bytes-holding
     class from minting false provenance.
     """
-    ref: "dict[str, set[str]]" = {}
     # EVERY scope, not just the module (adversarial r16, four seats,
     # probed): `Alias = Base` inside a class body or a factory function
     # is same-module inheritance too, and the module-only walk left a
-    # nested Child(Alias) without its base's decoder provenance. Scopes
-    # are flattened into one map — lexically imprecise, but imprecision
-    # UNIONS candidates, which errs toward RISK. A dotted target
-    # (Outer.Alias = Base) contributes its final attribute for the same
-    # reason base extraction reads Attribute bases by .attr.
+    # nested Child(Alias) without its base's decoder provenance. But
+    # scoped by the LEXICAL CHAIN, not flattened (adversarial r17, four
+    # seats, probed): the r16 flattening let an unrelated function's
+    # `Alias = Dangerous` taint a module-level `class Child(Alias)`
+    # whose runtime base is the module's clean `Alias = Safe` — a false
+    # RISK that erodes the instrument. Each ClassDef resolves its bases
+    # against the bindings of its own enclosing scopes only (imprecision
+    # WITHIN that chain still unions toward RISK — including enclosing
+    # class bodies Python would skip at runtime). A dotted target
+    # (Outer.Alias = Base) still contributes its final attribute from
+    # ANY scope — an attribute binding's home namespace is not
+    # statically known here, so it stays chain-independent (RISK
+    # direction), for the same reason base extraction reads Attribute
+    # bases by .attr.
+    scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
     scopes = [tree] + [n for n in ast.walk(tree)
-                       if isinstance(n, (ast.FunctionDef,
-                                         ast.AsyncFunctionDef,
-                                         ast.ClassDef))]
+                       if isinstance(n, scope_types)]
+    per_scope: "dict[int, dict[str, set[str]]]" = {}
+    # Bindings reachable through an ATTRIBUTE base from anywhere in the
+    # module: dotted targets (Outer.Alias = Base), and Name bindings in
+    # any CLASS body (`class Outer: Alias = Base` is `Outer.Alias` to
+    # the rest of the module — the r16 class-body fixture). Function
+    # locals are not attribute-reachable and stay chain-only.
+    attr_reachable: "dict[str, set[str]]" = {}
     for scope in scopes:
+        m = per_scope.setdefault(id(scope), {})
         for target, value in _scope_bindings(scope):
-            tname = target.id if isinstance(target, ast.Name) else \
-                target.attr if isinstance(target, ast.Attribute) else None
-            if tname is None:
+            if isinstance(target, ast.Name):
+                tname = target.id
+                buckets = [m]
+                if isinstance(scope, ast.ClassDef):
+                    buckets.append(attr_reachable)
+            elif isinstance(target, ast.Attribute):
+                tname = target.attr
+                buckets = [attr_reachable]
+            else:
                 continue
             v = value
             while isinstance(v, ast.Subscript):
@@ -298,28 +320,64 @@ def _class_alias_map(tree, by_class_name):
             vname = v.id if isinstance(v, ast.Name) else \
                 v.attr if isinstance(v, ast.Attribute) else None
             if vname is not None and vname != tname:
-                ref.setdefault(tname, set()).add(vname)
+                for bucket in buckets:
+                    bucket.setdefault(tname, set()).add(vname)
 
-    resolved: "dict[str, set[str]]" = {}
+    parents: "dict[ast.AST, ast.AST]" = {}
+    for p in ast.walk(tree):
+        for ch in ast.iter_child_nodes(p):
+            parents[ch] = p
 
-    def _resolve(name, seen):
-        # A name that is BOTH a ClassDef and an alias target (`class
-        # Safe: ...; Safe = Dangerous`) carries BOTH provenances — the
-        # literal class must not short-circuit the rebinding
-        # (adversarial r16, Minimalist, probed).
-        base = {name} if name in by_class_name else set()
-        if name in resolved:
-            return base | resolved[name]
-        if name in seen or name not in ref:
-            return base
-        seen.add(name)
-        out: set = set()
-        for r in ref[name]:
-            out |= _resolve(r, seen)
-        resolved[name] = out
-        return base | out
+    def _chain(node):
+        # Enclosing scopes, innermost first, module last. The class's
+        # own body is excluded on purpose: base expressions evaluate
+        # before the body exists.
+        chain = []
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, scope_types) or isinstance(cur, ast.Module):
+                chain.append(cur)
+            cur = parents.get(cur)
+        return chain
 
-    return {a: _resolve(a, set()) for a in ref}
+    def _resolved(ref):
+        resolved: "dict[str, set[str]]" = {}
+
+        def _resolve(name, seen):
+            # A name that is BOTH a ClassDef and an alias target (`class
+            # Safe: ...; Safe = Dangerous`) carries BOTH provenances — the
+            # literal class must not short-circuit the rebinding
+            # (adversarial r16, Minimalist, probed).
+            base = {name} if name in by_class_name else set()
+            if name in resolved:
+                return base | resolved[name]
+            if name in seen or name not in ref:
+                return base
+            seen.add(name)
+            out: set = set()
+            for r in ref[name]:
+                out |= _resolve(r, seen)
+            resolved[name] = out
+            return base | out
+
+        return {a: _resolve(a, set()) for a in ref}
+
+    # Per class: a NAME base sees the lexical chain; an ATTRIBUTE base
+    # additionally sees every attribute-reachable binding — that is how
+    # `class Child(Outer.Alias)` finds the class-body alias without an
+    # unrelated function local ever tainting a bare-name base.
+    out_maps: "dict[int, tuple]" = {}
+    for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        name_ref: "dict[str, set[str]]" = {}
+        for scope in _chain(cls):
+            for tname, cands in per_scope.get(id(scope), {}).items():
+                name_ref.setdefault(tname, set()).update(cands)
+        attr_ref: "dict[str, set[str]]" = {
+            k: set(v) for k, v in name_ref.items()}
+        for tname, cands in attr_reachable.items():
+            attr_ref.setdefault(tname, set()).update(cands)
+        out_maps[id(cls)] = (_resolved(name_ref), _resolved(attr_ref))
+    return out_maps
 
 
 def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
@@ -365,8 +423,10 @@ def scan_module(tree: ast.Module) -> list[tuple[str, int, str]]:
                 # Safe = Dangerous`) must carry BOTH provenances —
                 # letting the literal class shadow the rebinding turned
                 # a rebound raw decoder scanner-green.
+                _name_m, _attr_m = alias_map.get(id(c), ({}, {}))
+                _m = _attr_m if isinstance(b, ast.Attribute) else _name_m
                 names = ({bname} if bname in by_class_name else set()) \
-                    | alias_map.get(bname, set())
+                    | _m.get(bname, set())
                 for bc in (bc for n in names
                            for bc in by_class_name.get(n, ())):
                     if bc is not c:

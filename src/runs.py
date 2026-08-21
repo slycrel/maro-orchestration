@@ -1735,8 +1735,11 @@ def read_injected_skill_ids(run_dir_path: Optional[Path] = None) -> Optional[set
             except json.JSONDecodeError:
                 continue
             for entry in rec.get("skills") or []:
-                sid = str(entry.get("id", "") or "")
-                if sid:
+                # String ids only, never coerced (adversarial r17, two
+                # seats — the memory_ledger twin minted "True"/"7"
+                # identities out of malformed rows via str()).
+                sid = entry.get("id") if isinstance(entry, dict) else None
+                if isinstance(sid, str) and sid:
                     ids.add(sid)
         return ids
     except Exception:

@@ -418,10 +418,13 @@ class TestRetirementArchive:
 
         parent = _skill("parent", utility_score=0.85, use_count=10)
         challenger = _skill("c1", variant_of="parent", variant_wins=3, variant_losses=7)
-        # Mock only the load — let _save_skills and the archive write for
-        # real into the isolated tmp workspace.
-        with mock.patch("skills.load_skills", return_value=[parent, challenger]):
-            result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
+        # Seed the REAL store (r17): _save_skills now carries the live
+        # file for every id the caller does not name, so a load_skills
+        # mock over an empty store reads as "everything was concurrently
+        # deleted" — the production shape is rows on disk.
+        skills_mod.save_skill(parent)
+        skills_mod.save_skill(challenger)
+        result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
 
         assert "c1" in result["retired"]
         # Live pool no longer has the loser...

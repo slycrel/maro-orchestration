@@ -318,8 +318,17 @@ def locked_append(path: Path, line: str, *, timeout_s: float | None = None,
                     with open(path, "rb") as _tail:
                         _tail.seek(-1, os.SEEK_END)
                         needs_frame = _tail.read(1) != b"\n"
-            except OSError:
-                needs_frame = False
+            except OSError as exc:
+                # Fail CLOSED (adversarial r17, three seats, probed): the
+                # old `needs_frame = False` here turned an inspection
+                # failure (unreadable file, transient I/O error) into an
+                # append that may fuse onto a torn tail — for the
+                # retention archive, an unreadable sole copy while the
+                # live delete stands. If the tail cannot be known framed,
+                # the append must not run.
+                raise OSError(
+                    f"locked_append: cannot inspect the existing tail of "
+                    f"{path}; refusing to append: {exc}") from exc
         with open(path, "a", encoding="utf-8") as fh:
             if needs_frame:
                 fh.write("\n")

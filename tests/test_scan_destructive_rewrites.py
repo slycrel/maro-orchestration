@@ -1608,3 +1608,73 @@ class Child(Safe):
         loads_clean("{}")
 ''' + _R14_BODY
         assert _scan(src)["rewrite"] == "RISK"
+
+
+class TestAnUnrelatedScopeCannotTaintProvenance:
+    """Adversarial r17 (four seats, probed): the r16 flattened alias
+    map let an unrelated function's `Alias = Dangerous` union into a
+    module-level `class Child(Alias)` whose runtime base is the
+    module's clean Alias — a false RISK that erodes the instrument.
+    Aliases now resolve along each class's lexical chain; the r16
+    must-detect shapes (class-body alias via a dotted base, factory-
+    local alias from within the chain) stay covered by their own
+    tests."""
+
+    _CHILD = '''
+class Child(Alias):
+    def rewrite(self, path):
+        out = []
+        for line in open(path):
+            try:
+                row = loads_clean(line)
+                self.decoder.decode(line)
+                out.append(row)
+            except Exception:
+                continue
+        atomic_write(path, "".join(str(o) for o in out))
+'''
+    _HEAD = '''
+import json
+from jsonl_utils import loads_clean
+from file_lock import atomic_write
+
+class SafeDecoder:
+    def decode(self, s):
+        return s
+
+class Safe:
+    def __init__(self):
+        self.decoder = SafeDecoder()
+
+Alias = Safe
+'''
+    _UNRELATED = '''
+def unrelated():
+    class Dangerous:
+        def __init__(self):
+            self.decoder = json.JSONDecoder()
+    Alias = Dangerous
+    return Alias
+'''
+
+    def test_the_negative_control(self):
+        # Without the unrelated scope this shape is OK — the pin the
+        # r16 suite lacked.
+        assert _scan(self._HEAD + self._CHILD)["rewrite"] == "OK"
+
+    def test_an_unrelated_local_alias_does_not_flip_it(self):
+        assert _scan(
+            self._HEAD + self._UNRELATED + self._CHILD)["rewrite"] == "OK"
+
+    def test_a_chain_visible_rebinding_still_taints(self):
+        # The same Dangerous binding at MODULE scope is genuinely
+        # visible to Child — must stay RISK (detection preserved).
+        module_rebind = '''
+class Dangerous:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+
+Alias = Dangerous
+'''
+        assert _scan(
+            self._HEAD + module_rebind + self._CHILD)["rewrite"] == "RISK"

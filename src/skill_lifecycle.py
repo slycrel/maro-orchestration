@@ -231,7 +231,7 @@ Rules:
     target.content_hash = compute_skill_hash(target)
     target.failure_notes = target.failure_notes[-2:]  # keep last 2 for history
 
-    _save_skills(skills)
+    _save_skills(skills, updated_ids={target.id})
 
     # Captain's log — SKILL_REWRITE was registered + consumed (recall.py loop
     # context, evolver.py learning-activity header) since 2026-06-24 but never

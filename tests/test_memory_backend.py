@@ -929,3 +929,53 @@ class TestACommitBoundaryErrorClaimsNothing:
         assert "commit outcome UNKNOWN" in caplog.text
         assert "store unchanged" not in caplog.text
         assert be.read_all("led") == [{"k": 1}, {"k": 2}]
+
+
+class TestEveryWritePathTellsTheTruthAtTheCommitBoundary:
+    """Adversarial r17 (Architect, probed): r16 gave transform() the
+    three-way commit outcome, but append() still said "record NOT
+    persisted" and rewrite() "store unchanged" when commit() raised
+    AFTER the transaction became durable — each an invitation to
+    double-apply. The commit-boundary contract is a property of every
+    SQLite write path, not of one method."""
+
+    class _CommitBomb:
+        def __init__(self, con):
+            self._con = con
+
+        def __getattr__(self, name):
+            return getattr(self._con, name)
+
+        def commit(self):
+            self._con.commit()
+            raise __import__("sqlite3").OperationalError(
+                "post-commit transport")
+
+    def _bombed(self, tmp_path):
+        from memory_backends import SQLiteBackend
+        be = SQLiteBackend(tmp_path / "mem.db")
+        real = be._connect
+        be._connect = lambda: self._CommitBomb(real())
+        return be
+
+    def test_append_commit_error_says_unknown(self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        be = self._bombed(tmp_path)
+        with caplog.at_level(logging.ERROR, logger="maro.memory_backends"):
+            with pytest.raises(sqlite3.Error):
+                be.append("led", {"k": 1})
+        assert "commit outcome UNKNOWN" in caplog.text
+        assert "NOT persisted" not in caplog.text
+
+    def test_rewrite_commit_error_says_unknown(self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        import pytest
+        be = self._bombed(tmp_path)
+        with caplog.at_level(logging.ERROR, logger="maro.memory_backends"):
+            with pytest.raises(sqlite3.Error):
+                be.rewrite("led", [{"k": 2}])
+        assert "commit outcome UNKNOWN" in caplog.text
+        assert "store unchanged" not in caplog.text

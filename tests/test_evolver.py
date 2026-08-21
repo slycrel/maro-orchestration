@@ -3332,7 +3332,7 @@ class TestRewriteSkillEmitsEvent:
 
         skill = self._make_skill()
         monkeypatch.setattr(skills_mod, "load_skills", lambda: [skill])
-        monkeypatch.setattr(skills_mod, "_save_skills", lambda s: None)
+        monkeypatch.setattr(skills_mod, "_save_skills", lambda s, **kw: None)
 
         events = []
         monkeypatch.setattr(
@@ -3414,7 +3414,7 @@ class TestRewriteSkillChallengerMint:
         saves = []
         monkeypatch.setattr(skills_mod, "load_skills", lambda: [skill])
         monkeypatch.setattr(skills_mod, "_save_skills",
-                            lambda s: saves.append(s))
+                            lambda s, **kw: saves.append(s))
 
         challenger = rewrite_skill(skill, adapter=self._GoodAdapter(),
                                    verbose=False, in_place=False)
@@ -4230,3 +4230,156 @@ def test_applied_alarm_updates_one_playbook_entry(tmp_path, monkeypatch):
     text = playbook.load_playbook()
     assert text.count("calibration:observation") == 1
     assert "0.31" in text and "0.27" not in text
+
+
+class TestRollbackTakesItsDeletionByRecordedId:
+    """Adversarial r17 (two seats, HIGH, probed): a skill_create change
+    row recorded only {"type": "skill_create"}, so rollback matched by
+    mutable name-or-id and deleted EVERY match — an operator's
+    independent same-name skill included — with no retention copy. The
+    id is now minted at capture time and recorded in the audit row;
+    rollback removes exactly that id, and archives before deleting."""
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _mk(sid, name):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=name, description="d", trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    @staticmethod
+    def _change_row(sid, target, before_state):
+        from orch_items import memory_dir
+        p = memory_dir() / "change_log.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "suggestion_id": sid, "category": "skill_pattern",
+                "target": target, "before_state": before_state}) + "\n")
+
+    def test_an_operator_same_name_skill_survives(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from evolver_store import revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("created-id", "shared"))
+        sk.save_skill(self._mk("operator-id", "shared"))
+        self._change_row("sug-1", "shared",
+                         {"type": "skill_create",
+                          "created_skill_id": "created-id"})
+        res = revert_suggestion("sug-1")
+        assert res["reverted"] is True
+        assert {s.id for s in sk.load_skills()} == {"operator-id"}
+
+    def test_the_removed_row_is_archived_first(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from orch_items import memory_dir
+        from evolver_store import revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("created-id", "solo"))
+        self._change_row("sug-2", "solo",
+                         {"type": "skill_create",
+                          "created_skill_id": "created-id"})
+        revert_suggestion("sug-2")
+        arch = memory_dir() / "skills_archive.jsonl"
+        assert arch.exists()
+        text = arch.read_text(encoding="utf-8")
+        assert '"created-id"' in text
+        assert "evolver_skill_create_reverted" in text
+
+    def test_a_failed_archive_leaves_the_pool_untouched(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from evolver_store import revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("created-id", "solo"))
+        self._change_row("sug-3", "solo",
+                         {"type": "skill_create",
+                          "created_skill_id": "created-id"})
+
+        def boom(*a, **k):
+            raise OSError("archive disk full")
+        monkeypatch.setattr(sk, "_archive_skills", boom)
+        res = revert_suggestion("sug-3")
+        assert res["reverted"] is False
+        assert {s.id for s in sk.load_skills()} == {"created-id"}
+
+    def test_a_legacy_row_still_archives_what_it_removes(
+            self, tmp_path, monkeypatch):
+        """Change rows that predate created_skill_id keep the name
+        match — but the removal is recoverable now."""
+        import skills as sk
+        from orch_items import memory_dir
+        from evolver_store import revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("c1", "shared"))
+        sk.save_skill(self._mk("c2", "shared"))
+        self._change_row("sug-4", "shared", {"type": "skill_create"})
+        revert_suggestion("sug-4")
+        text = (memory_dir() / "skills_archive.jsonl").read_text()
+        assert '"c1"' in text and '"c2"' in text
+
+    def test_apply_records_the_created_id_in_the_audit_row(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from orch_items import memory_dir
+        from evolver_store import _apply_suggestion_action
+        self._env(monkeypatch, tmp_path)
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "do the thing",
+            "target": "brand-new-skill", "suggestion_id": "sug-5",
+            "confidence": 0.5}) is True
+        live = {s.name: s.id for s in sk.load_skills()}
+        assert "brand-new-skill" in live
+        rows = [json.loads(l) for l in
+                (memory_dir() / "change_log.jsonl").read_text().splitlines()]
+        row = next(r for r in rows if r["suggestion_id"] == "sug-5")
+        assert row["before_state"]["created_skill_id"] == \
+            live["brand-new-skill"]
+
+
+class TestARevertReportsItsBookkeepingHonestly:
+    """Adversarial r17 (Skeptic, probed): a locked_rmw failure while
+    flipping applied=False was swallowed by a bare `pass`, so the
+    function returned a clean "reverted" result while the suggestion
+    store still said applied=True."""
+
+    def test_a_bookkeeping_failure_is_named_in_detail_and_log(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        import file_lock as fl
+        from orch_items import memory_dir
+        from evolver_store import revert_suggestion
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(sk.Skill(
+            id="c9", name="only", description="d", trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00"))
+        md = memory_dir()
+        md.mkdir(parents=True, exist_ok=True)
+        with (md / "change_log.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "suggestion_id": "sug-9", "category": "skill_pattern",
+                "target": "only",
+                "before_state": {"type": "skill_create",
+                                 "created_skill_id": "c9"}}) + "\n")
+        (md / "suggestions.jsonl").write_text(
+            json.dumps({"suggestion_id": "sug-9", "applied": True}) + "\n")
+
+        def boom(*a, **k):
+            raise OSError("lock denied")
+        monkeypatch.setattr(fl, "locked_rmw", boom)
+        with caplog.at_level(logging.WARNING):
+            res = revert_suggestion("sug-9")
+        assert res["reverted"] is True
+        assert "NOT updated" in res["detail"]
+        assert "suggestions.jsonl" in caplog.text

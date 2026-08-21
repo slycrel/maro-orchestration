@@ -411,7 +411,15 @@ def _apply_suggestion_action(d: dict) -> bool:
             if _existing is not None:
                 before_state = {"type": "skill_update", "old_description": _existing.description[:500]}
             else:
-                before_state = {"type": "skill_create"}
+                # Mint the created skill's id HERE so the audit row
+                # carries it (adversarial r17, two seats, HIGH, probed):
+                # a change row holding only {"type": "skill_create"}
+                # forced rollback to match by mutable name-or-id, which
+                # deleted every same-name skill — including an
+                # operator's independent record.
+                import uuid as _uuid_pre
+                before_state = {"type": "skill_create",
+                                "created_skill_id": _uuid_pre.uuid4().hex[:8]}
         elif category == "new_guardrail":
             before_state = {"type": "guardrail_append"}
         elif category == "prompt_tweak":
@@ -464,9 +472,14 @@ def _apply_suggestion_action(d: dict) -> bool:
                 existing.description = suggestion_text[:500]
                 save_skill(existing)
             else:
-                # Create a new provisional skill from the suggestion text
+                # Create a new provisional skill from the suggestion text.
+                # The id was minted at before_state capture so the audit
+                # row names it (r17); fall back to a fresh one if the
+                # capture path was skipped.
+                _pre_id = (before_state or {}).get("created_skill_id") \
+                    if isinstance(before_state, dict) else None
                 new_skill = Skill(
-                    id=_uuid.uuid4().hex[:8],
+                    id=_pre_id or _uuid.uuid4().hex[:8],
                     name=target or f"evolver-skill-{suggestion_id}",
                     description=suggestion_text[:500],
                     trigger_patterns=[target] if target and target != "all" else [],
@@ -900,23 +913,42 @@ def revert_suggestion(suggestion_id: str) -> dict:
                     if s.name == target or s.id == target:
                         s.description = old_desc
                         detail = f"restored description for skill '{s.name}'"
+                        restored_id = s.id
                         break
                 else:
                     return {"reverted": False, "behavioral": False, "category": category,
                             "detail": f"skill '{target}' not found for rollback"}
-                _save_skills(skills)
+                _save_skills(skills, updated_ids={restored_id})
                 behavioral = True
 
             elif state_type == "skill_create":
-                # Remove the created skill
-                original_len = len(skills)
-                _removed = {s.id for s in skills
-                            if s.name == target or s.id == target}
-                skills = [s for s in skills if s.name != target and s.id != target]
-                if len(skills) < original_len:
+                # Remove the created skill — by the id the audit row
+                # recorded, never by mutable name (adversarial r17, two
+                # seats, HIGH, probed: the name-or-id match deleted an
+                # operator's independent same-name skill alongside the
+                # created one). Legacy change rows that predate
+                # created_skill_id keep the name-or-id match, but every
+                # removal now archives first — the rollback is
+                # recoverable either way (retention decree).
+                created_id = before_state.get("created_skill_id", "")
+                if created_id:
+                    removal = [s for s in skills if s.id == created_id]
+                else:
+                    removal = [s for s in skills
+                               if s.name == target or s.id == target]
+                if removal:
+                    from skills import _archive_skills
+                    _removed = {s.id for s in removal}
+                    # Archive BEFORE the delete; _archive_skills raises
+                    # on failure, so a failed retention copy aborts the
+                    # removal with the live pool untouched.
+                    _archive_skills(removal,
+                                    reason="evolver_skill_create_reverted")
+                    skills = [s for s in skills if s.id not in _removed]
                     # dropped_ids: a deliberate removal must be named
                     # (r16 _save_skills contract).
-                    _save_skills(skills, dropped_ids=_removed)
+                    _save_skills(skills, dropped_ids=_removed,
+                                 updated_ids=frozenset())
                     detail = f"removed created skill '{target}'"
                     behavioral = True
                 else:
@@ -986,8 +1018,19 @@ def revert_suggestion(suggestion_id: str) -> dict:
 
             from file_lock import locked_rmw
             locked_rmw(p, _mark_reverted)
-    except Exception:
-        pass
+    except Exception as exc:
+        # The behavioral revert above COMMITTED; only this bookkeeping
+        # failed. Say so, name the store, and let the returned detail
+        # carry the contradiction (adversarial r17, Skeptic, probed: a
+        # locked_rmw failure here was swallowed by a bare `pass`, so the
+        # suggestion stayed applied=True inside a result claiming the
+        # revert completed).
+        log.warning(
+            "revert_suggestion %s: revert applied but suggestions.jsonl "
+            "was NOT updated (%s) — the suggestion still reads "
+            "applied=True: %s", suggestion_id, _suggestions_path(), exc)
+        detail += ("; suggestion store NOT updated — still marked "
+                   "applied")
 
     # Captain's log
     try:

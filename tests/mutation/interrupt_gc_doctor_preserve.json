@@ -58,7 +58,7 @@
  {
   "name": "gc conservative-keep :: an unparseable row is dropped from the trim instead of kept",
   "file": "src/gc_memory.py",
-  "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error \u2192 keep conservatively",
+  "anchor": "            except Exception:\n                unreadable += 1\n                keep.append(raw)  # parse error → keep conservatively",
   "replacement": "            except Exception:\n                unreadable += 1",
   "tests": "tests/test_gc_memory.py"
  },
@@ -79,7 +79,7 @@
  {
   "name": "gc collection :: old rows stop being collected at all",
   "file": "src/gc_memory.py",
-  "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old \u2014 collected",
+  "anchor": "                    if ts >= cutoff:\n                        keep.append(raw)\n                    # else: too old — collected",
   "replacement": "                    keep.append(raw)",
   "tests": "tests/test_gc_memory.py"
  },
@@ -152,7 +152,7 @@
   "anchor": "                if not isinstance(row, dict):\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
   "replacement": "                if False:\n                    # `[]`, `null` and `\"x\"` are valid JSON but not rows;",
   "tests": "tests/test_doctor.py",
-  "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) \u2014 so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
+  "equivalent": "No longer a behaviour change. The r2 fix added dict_to_skill(row) validation on the very next line, and every non-dict JSON value ([], null, \"x\", 3, true) raises TypeError inside it (probed) — so with the isinstance guard removed the row still lands in `stranded` and is still carried. Only the error message changes. The guard stays for that message; the mutation cannot fail, so it is marked rather than pinned. Row-shape detection is pinned by 'doctor schema' instead."
  },
  {
   "name": "doctor raw-carry :: the stranded row is stripped instead of carried byte-for-byte",
@@ -202,7 +202,7 @@
   "anchor": "                if not isinstance(d, dict):\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
   "replacement": "                if False:\n                    raise TypeError(f\"not a JSON object: {type(d).__name__}\")",
   "tests": "tests/test_gc_memory.py",
-  "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way \u2014 no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
+  "equivalent": "Without the isinstance guard, `[]`.get() raises AttributeError into the SAME broad `except Exception` that the explicit TypeError lands in, so the row is kept and counted unreadable either way — no observable difference. The guard states the intent and survives a future narrowing of that except; it does not change behaviour today. Survivor found 2026-08-20; kept as a marked equivalent rather than deleted, per the runner's contract."
  },
  {
   "name": "interrupt legacy-applied :: a legacy \"true\"/1 row is re-delivered and applied twice",
@@ -368,7 +368,7 @@
  {
   "name": "interrupt commit-failure :: a failed commit looks like an empty queue",
   "file": "src/interrupt.py",
-  "anchor": "                log.error(\"interrupt queue: could not commit %s (%s) \u2014 \"\n                          \"pending interrupts were NOT delivered this pass\",\n                          self.path, exc)\n                return []",
+  "anchor": "                log.error(\"interrupt queue: could not commit %s (%s) — \"\n                          \"pending interrupts were NOT delivered this pass\",\n                          self.path, exc)\n                return []",
   "replacement": "                return []",
   "tests": "tests/test_interrupt.py"
  },
@@ -487,7 +487,7 @@
  {
   "name": "doctor validator (required) :: an absent content_hash or created_at is a default again",
   "file": "src/skill_types.py",
-  "anchor": "    for name in (\"content_hash\", \"created_at\"):\n        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of\n        # these are fields the destructive caller ACTS ON: a missing\n        # content_hash makes `_skill_hash_is_stale` answer \"not stale\" (it\n        # has nothing to compare), and created_at is the tiebreaker that\n        # decides which row of a duplicate group survives. Both are also\n        # deliberately excluded from `_dedup_identity`, so neither absence\n        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,\n        # probed) chained exactly that: a row identical to a healthy one but\n        # with `content_hash` omitted and a later `created_at` validated,\n        # counted as non-stale, grouped, won, and DELETED the verified row.\n        # r4's constructor-first check happened to catch this \u2014 `dict_to_skill`\n        # defaults the field to \"\" and the empty check fired \u2014 so r5's move to\n        # raw values, which was right, silently dropped a guard on the way.\n        if name not in d:\n            raise KeyError(f\"{name} is required to take part in a removal \"\n                           f\"decision (absent is not empty, and neither is \"\n                           f\"proof)\")",
+  "anchor": "    for name in (\"content_hash\", \"created_at\"):\n        # Absence is not a default here, it is an ABSENCE OF PROOF. Both of\n        # these are fields the destructive caller ACTS ON: a missing\n        # content_hash makes `_skill_hash_is_stale` answer \"not stale\" (it\n        # has nothing to compare), and created_at is the tiebreaker that\n        # decides which row of a duplicate group survives. Both are also\n        # deliberately excluded from `_dedup_identity`, so neither absence\n        # shows up as a difference. Adversarial r6 (2026-08-20, 4 lenses,\n        # probed) chained exactly that: a row identical to a healthy one but\n        # with `content_hash` omitted and a later `created_at` validated,\n        # counted as non-stale, grouped, won, and DELETED the verified row.\n        # r4's constructor-first check happened to catch this — `dict_to_skill`\n        # defaults the field to \"\" and the empty check fired — so r5's move to\n        # raw values, which was right, silently dropped a guard on the way.\n        if name not in d:\n            raise KeyError(f\"{name} is required to take part in a removal \"\n                           f\"decision (absent is not empty, and neither is \"\n                           f\"proof)\")",
   "replacement": "    pass",
   "tests": "tests/test_doctor.py"
  },
@@ -630,7 +630,7 @@
   "tests": "tests/test_scan_destructive_rewrites.py",
   "anchor": "    return clean - raw, raw",
   "replacement": "    return clean, raw",
-  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent \u2014 pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
+  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _parse_calls checks raw_names BEFORE clean_names, so `from json import loads as _loads_clean` reads RISK with or without the subtraction. Kept because the two are independent — pinned by the poisoned-alias fixture through the ordering mutation above, not by this one."
  },
  {
   "name": "scanner bindings :: only plain assignment targets are counted again",
@@ -685,8 +685,8 @@
   "name": "doctor announce :: the stale row it deletes loses its timestamp",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"",
-  "replacement": "                  f\"in {workspace_skills} \u2014 \""
+  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} — \"",
+  "replacement": "                  f\"in {workspace_skills} — \""
  },
  {
   "name": "doctor kind :: a readable row is announced as unreadable",
@@ -771,7 +771,7 @@
   "tests": "tests/test_scan_destructive_rewrites.py",
   "anchor": "            for target in n.targets:\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
   "replacement": "            for target in ast.walk(n):\n                if isinstance(target, ast.Name):\n                    resolved[id(target)] = n.value.value",
-  "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering \u2014 `consts` is read for the separator's actual value."
+  "equivalent": "the verdict reads the COUNT of bindings, not their values: a name bound twice is unresolved whatever the values are, and a name bound once by a tuple target never reaches the resolver (its Assign value is a Tuple, not a Constant). Mis-attributing a constant therefore cannot change any verdict. Kept because the resolver is one edit away from mattering — `consts` is read for the separator's actual value."
  },
  {
   "name": "loads_clean constants :: a CPython extension constant is admitted again",
@@ -812,15 +812,15 @@
   "name": "doctor path :: the duplicate removal line drops the store",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) from {workspace_skills} \"\n                  f\"\u2014 same behaviour, older\")",
-  "replacement": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \"\n                  f\"\u2014 same behaviour, older\")"
+  "anchor": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) from {workspace_skills} \"\n                  f\"— same behaviour, older\")",
+  "replacement": "            print(f\"      removing '{s.get('id', '?')}' \"\n                  f\"({s.get('created_at', '?')}) \"\n                  f\"— same behaviour, older\")"
  },
  {
   "name": "doctor path :: the stale removal line drops the store",
   "file": "src/doctor.py",
   "tests": "tests/test_doctor.py",
-  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} \u2014 \"\n                  f\"stored hash doesn't match content\")",
-  "replacement": "                  f\"({s.get('created_at', '?')}) \u2014 \"\n                  f\"stored hash doesn't match content\")"
+  "anchor": "                  f\"({s.get('created_at', '?')}) in {workspace_skills} — \"\n                  f\"stored hash doesn't match content\")",
+  "replacement": "                  f\"({s.get('created_at', '?')}) — \"\n                  f\"stored hash doesn't match content\")"
  },
  {
   "name": "gc launder :: the timestamp is read out of a stripped copy",
@@ -1045,7 +1045,7 @@
   "anchor": "    line = json.dumps(_skill_to_dict(skill), allow_nan=False)",
   "replacement": "    line = json.dumps(_skill_to_dict(skill))",
   "tests": "tests/test_skills.py",
-  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _prove_line's very next line runs the emitted text through _loads_clean, whose parse_constant (r9) refuses the NaN/Infinity tokens json.dumps would mint \u2014 so with allow_nan=False removed the save still aborts before the store is touched, with the same ValueError family, and no test can observe a difference. The dumps-side guard stays because it survives a future weakening of loads_clean; the reader-door refusal is pinned by the save_skill NaN test through the emit-an-unproven-line mutants, not by this one. Survivor found on the r11 sweep; marked rather than deleted, per the runner's contract."
+  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _prove_line's very next line runs the emitted text through _loads_clean, whose parse_constant (r9) refuses the NaN/Infinity tokens json.dumps would mint — so with allow_nan=False removed the save still aborts before the store is touched, with the same ValueError family, and no test can observe a difference. The dumps-side guard stays because it survives a future weakening of loads_clean; the reader-door refusal is pinned by the save_skill NaN test through the emit-an-unproven-line mutants, not by this one. Survivor found on the r11 sweep; marked rather than deleted, per the runner's contract."
  },
  {
   "name": "skills writer proof :: save_skill emits an unproven line",
@@ -1141,7 +1141,7 @@
  {
   "name": "scanner decoder :: JSONDecoder.decode is invisible again",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (\n                (_dotted_target(f.value) in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    in ctors)):\n            used_raw = True          # json.JSONDecoder().decode \u2014 a raw parse",
+  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (\n                (_dotted_target(f.value) in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    in ctors)):\n            used_raw = True          # json.JSONDecoder().decode — a raw parse",
   "replacement": "        elif False:\n            used_raw = True",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1197,8 +1197,8 @@
  {
   "name": "stats compaction :: duplicate ids compact without being counted",
   "file": "src/skills.py",
-  "anchor": "            compacted += 1",
-  "replacement": "            pass",
+  "anchor": "            compacted += 1\n        records[sid] = d",
+  "replacement": "        records[sid] = d",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1211,8 +1211,8 @@
  {
   "name": "stats recorder door :: record_skill_outcome mints junk ids again",
   "file": "src/skills.py",
-  "anchor": "        confidence:  Confidence tag from step outcome (optional, 0.0\u20131.0).\n    \"\"\"\n    # A non-string id would mint the exact row the reader strands as\n    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote\n    # {\"skill_id\": 1} and reported success while every future read carried\n    # it as an unreadable strandee). Refuse at the door, store untouched.\n    if not (isinstance(skill_id, str) and skill_id):\n        raise TypeError(f\"skill_id must be a non-empty string, \"\n                        f\"got {skill_id!r}\")\n    try:\n        skill_id.encode(\"utf-8\")   # a lone surrogate can never be re-read\n    except UnicodeEncodeError:\n        raise TypeError(f\"skill_id is not encodable text: {skill_id!r}\") \\\n            from None",
-  "replacement": "        confidence:  Confidence tag from step outcome (optional, 0.0\u20131.0).\n    \"\"\"",
+  "anchor": "        confidence:  Confidence tag from step outcome (optional, 0.0–1.0).\n    \"\"\"\n    # A non-string id would mint the exact row the reader strands as\n    # keyless (adversarial r12: `record_skill_outcome(1, ...)` wrote\n    # {\"skill_id\": 1} and reported success while every future read carried\n    # it as an unreadable strandee). Refuse at the door, store untouched.\n    if not (isinstance(skill_id, str) and skill_id):\n        raise TypeError(f\"skill_id must be a non-empty string, \"\n                        f\"got {skill_id!r}\")\n    try:\n        skill_id.encode(\"utf-8\")   # a lone surrogate can never be re-read\n    except UnicodeEncodeError:\n        raise TypeError(f\"skill_id is not encodable text: {skill_id!r}\") \\\n            from None",
+  "replacement": "        confidence:  Confidence tag from step outcome (optional, 0.0–1.0).\n    \"\"\"",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1298,7 +1298,7 @@
   "anchor": "    line = json.dumps(record, allow_nan=False)\n    value = loads_clean(line)",
   "replacement": "    line = json.dumps(record)\n    value = loads_clean(line)",
   "tests": "tests/test_memory_backend.py",
-  "equivalent": "Twin lock (same as 'skills writer proof :: the proof line re-admits NaN', r11): with allow_nan defaulted back to True the dumps emits the CPython token `NaN`, but the very next line runs the emission through loads_clean, whose parse_constant refuses that token \u2014 the door still raises before any store is touched, just from the second lock. The mutation cannot change observable behavior."
+  "equivalent": "Twin lock (same as 'skills writer proof :: the proof line re-admits NaN', r11): with allow_nan defaulted back to True the dumps emits the CPython token `NaN`, but the very next line runs the emission through loads_clean, whose parse_constant refuses that token — the door still raises before any store is touched, just from the second lock. The mutation cannot change observable behavior."
  },
  {
   "name": "stats null :: a present null counter reads as absent again",
@@ -1569,7 +1569,7 @@
  {
   "name": "r14 scanner :: inheritance stops carrying provenance",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "            for b in c.bases:\n                # Base[str] is an ast.Subscript wrapping the base\n                # (adversarial r15, two seats, probed): generics were\n                # discarded outright, severing provenance at every\n                # Generic[...] boundary. Unwrap to the real base.\n                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                # UNION the literal class with any alias candidates\n                # (adversarial r16, Minimalist, probed): a name that is\n                # both a ClassDef and a later alias (`class Safe: ...;\n                # Safe = Dangerous`) must carry BOTH provenances \u2014\n                # letting the literal class shadow the rebinding turned\n                # a rebound raw decoder scanner-green.\n                names = ({bname} if bname in by_class_name else set()) \\\n                    | alias_map.get(bname, set())\n                for bc in (bc for n in names\n                           for bc in by_class_name.get(n, ())):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
+  "anchor": "            for b in c.bases:\n                # Base[str] is an ast.Subscript wrapping the base\n                # (adversarial r15, two seats, probed): generics were\n                # discarded outright, severing provenance at every\n                # Generic[...] boundary. Unwrap to the real base.\n                while isinstance(b, ast.Subscript):\n                    b = b.value\n                bname = b.id if isinstance(b, ast.Name) else \\\n                    b.attr if isinstance(b, ast.Attribute) else None\n                # UNION the literal class with any alias candidates\n                # (adversarial r16, Minimalist, probed): a name that is\n                # both a ClassDef and a later alias (`class Safe: ...;\n                # Safe = Dangerous`) must carry BOTH provenances —\n                # letting the literal class shadow the rebinding turned\n                # a rebound raw decoder scanner-green.\n                _name_m, _attr_m = alias_map.get(id(c), ({}, {}))\n                _m = _attr_m if isinstance(b, ast.Attribute) else _name_m\n                names = ({bname} if bname in by_class_name else set()) \\\n                    | _m.get(bname, set())\n                for bc in (bc for n in names\n                           for bc in by_class_name.get(n, ())):\n                    if bc is not c:\n                        for k in range(3):\n                            seed[k] |= sets_by_id[id(bc)][k]",
   "replacement": "            pass",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1646,8 +1646,8 @@
  {
   "name": "r15 stats read :: the read claims a rewrite again",
   "file": "src/skills.py",
-  "anchor": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) excluded from this keyed read \u2014 last row per id \"\n            \"wins; the store still holds them (%s)\", compacted, path)",
-  "replacement": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) will be compacted by the next rewrite \u2014 last row \"\n            \"per id wins (%s)\", compacted, path)",
+  "anchor": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) excluded from this keyed read — last row per id \"\n            \"wins; the store still holds them (%s)\", compacted, path)",
+  "replacement": "            \"[skills] skill-stats: %d older duplicate row(s) for already-\"\n            \"seen id(s) will be compacted by the next rewrite — last row \"\n            \"per id wins (%s)\", compacted, path)",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1667,7 +1667,7 @@
  {
   "name": "r15 scanner :: aliases stop resolving to bases",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "                names = ({bname} if bname in by_class_name else set()) \\\n                    | alias_map.get(bname, set())",
+  "anchor": "                _name_m, _attr_m = alias_map.get(id(c), ({}, {}))\n                _m = _attr_m if isinstance(b, ast.Attribute) else _name_m\n                names = ({bname} if bname in by_class_name else set()) \\\n                    | _m.get(bname, set())",
   "replacement": "                names = ({bname} if bname in by_class_name else set())",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1702,22 +1702,22 @@
  {
   "name": "r15 sqlite :: the committed flag never flips",
   "file": "src/memory_backends.py",
-  "anchor": "                con.commit()\n                committed = True",
-  "replacement": "                con.commit()",
+  "anchor": "                    [(collection, d) for d in datas])\n                commit_issued = True\n                con.commit()\n                committed = True",
+  "replacement": "                    [(collection, d) for d in datas])\n                commit_issued = True\n                con.commit()",
   "tests": "tests/test_memory_backend.py"
  },
  {
   "name": "r15 sqlite :: a committed transform lies again",
   "file": "src/memory_backends.py",
-  "anchor": "            if committed:",
-  "replacement": "            if False:",
+  "anchor": "            if committed:\n                # The transaction COMMITTED",
+  "replacement": "            if False:\n                # The transaction COMMITTED",
   "tests": "tests/test_memory_backend.py"
  },
  {
   "name": "r16 pool :: an unnamed absence deletes again",
   "file": "src/skills.py",
-  "anchor": "                    elif row.id in dropped_ids:\n                        # A NAMED deliberate drop (island cull, A/B\n                        # retirement, rollback) \u2014 that IS a decision.\n                        pass\n                    else:\n                        # Absent from the caller's list but NOT named as\n                        # dropped: a row this snapshot cannot account\n                        # for (a concurrent save, or a row load_skills\n                        # skipped). Carry it verbatim (r16).\n                        out.append(line)",
-  "replacement": "                    elif row.id in dropped_ids:\n                        # A NAMED deliberate drop (island cull, A/B\n                        # retirement, rollback) \u2014 that IS a decision.\n                        pass",
+  "anchor": "                    else:\n                        # Everything else — a row absent from the\n                        # caller's list (concurrent save, a row\n                        # load_skills skipped — r16) AND a row the\n                        # caller's list holds but did not NAME as\n                        # updated (r17: the live row is at least as\n                        # fresh as the caller's stale copy) — is\n                        # carried verbatim, holding its ordinal.\n                        out.append(line)",
+  "replacement": "                    else:\n                        # Everything else — a row absent from the\n                        # caller's list (concurrent save, a row\n                        # load_skills skipped — r16) AND a row the\n                        # caller's list holds but did not NAME as\n                        # updated (r17: the live row is at least as\n                        # fresh as the caller's stale copy) — is\n                        # carried verbatim, holding its ordinal.\n                        pass",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1744,15 +1744,15 @@
  {
   "name": "r16 ledger :: attribution splits into per-id commits again",
   "file": "src/memory_ledger.py",
-  "anchor": "        from skills import record_skill_injection_outcomes\n        record_skill_injection_outcomes(skill_ids, achieved)",
-  "replacement": "        from skills import record_skill_injection_outcome\n        for sid in skill_ids:\n            record_skill_injection_outcome(sid, achieved)",
+  "anchor": "            record_skill_injection_outcomes(skill_ids, achieved)",
+  "replacement": "            from skills import record_skill_injection_outcome\n            for sid in skill_ids:\n                record_skill_injection_outcome(sid, achieved)",
   "tests": "tests/test_skill_attribution.py"
  },
  {
   "name": "r16 ledger :: the attribution failure goes quiet again",
   "file": "src/memory_ledger.py",
-  "anchor": "        log.warning(\n            \"skill-injection attribution failed for %s \u2014 verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
-  "replacement": "        log.debug(\n            \"skill-injection attribution failed for %s \u2014 verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
+  "anchor": "        log.warning(\n            \"skill-injection attribution failed for %s — verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
+  "replacement": "        log.debug(\n            \"skill-injection attribution failed for %s — verdict NOT \"\n            \"recorded for this run's skills\", loop_id,\n            exc_info=True)",
   "tests": "tests/test_skill_attribution.py"
  },
  {
@@ -1765,7 +1765,7 @@
  {
   "name": "r16 file_lock :: a torn tail fuses again",
   "file": "src/file_lock.py",
-  "anchor": "        needs_frame = False\n        if not created:\n            try:\n                size = path.stat().st_size\n                if size:\n                    with open(path, \"rb\") as _tail:\n                        _tail.seek(-1, os.SEEK_END)\n                        needs_frame = _tail.read(1) != b\"\\n\"\n            except OSError:\n                needs_frame = False",
+  "anchor": "        needs_frame = False\n        if not created:\n            try:\n                size = path.stat().st_size\n                if size:\n                    with open(path, \"rb\") as _tail:\n                        _tail.seek(-1, os.SEEK_END)\n                        needs_frame = _tail.read(1) != b\"\\n\"\n            except OSError as exc:\n                # Fail CLOSED (adversarial r17, three seats, probed): the\n                # old `needs_frame = False` here turned an inspection\n                # failure (unreadable file, transient I/O error) into an\n                # append that may fuse onto a torn tail — for the\n                # retention archive, an unreadable sole copy while the\n                # live delete stands. If the tail cannot be known framed,\n                # the append must not run.\n                raise OSError(\n                    f\"locked_append: cannot inspect the existing tail of \"\n                    f\"{path}; refusing to append: {exc}\") from exc",
   "replacement": "        needs_frame = False",
   "tests": "tests/test_file_lock.py"
  },
@@ -1779,22 +1779,22 @@
  {
   "name": "r16 sqlite :: a commit-boundary error claims unchanged again",
   "file": "src/memory_backends.py",
-  "anchor": "            elif commit_issued:",
-  "replacement": "            elif False:",
+  "anchor": "            elif commit_issued:\n                # commit() itself raised",
+  "replacement": "            elif False:\n                # commit() itself raised",
   "tests": "tests/test_memory_backend.py"
  },
  {
   "name": "r16 statsread :: the copy protocol breaks again",
   "file": "src/skills.py",
-  "anchor": "    def __getnewargs__(self):\n        # Default tuple reduction reconstructs a subclass from ONE tuple\n        # argument, so copy/deepcopy/pickle raised TypeError (adversarial\n        # r16, four seats, probed). The method's EXISTENCE is the fix;\n        # the third element is belt-and-suspenders \u2014 pickle also restores\n        # the instance __dict__ after __new__, which carries .compacted\n        # (the r16 sweep proved that: a mutant zeroing this element could\n        # not fail, and was retargeted at removing the method).\n        return (self[0], self[1], self.compacted)",
+  "anchor": "    def __getnewargs__(self):\n        # Default tuple reduction reconstructs a subclass from ONE tuple\n        # argument, so copy/deepcopy/pickle raised TypeError (adversarial\n        # r16, four seats, probed). The method's EXISTENCE is the fix;\n        # the third element is belt-and-suspenders — pickle also restores\n        # the instance __dict__ after __new__, which carries .compacted\n        # (the r16 sweep proved that: a mutant zeroing this element could\n        # not fail, and was retargeted at removing the method).\n        return (self[0], self[1], self.compacted)",
   "replacement": "    # __getnewargs__ removed (mutant)",
   "tests": "tests/test_skills.py"
  },
  {
   "name": "r16 scanner :: nested scopes go invisible again",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "    scopes = [tree] + [n for n in ast.walk(tree)\n                       if isinstance(n, (ast.FunctionDef,\n                                         ast.AsyncFunctionDef,\n                                         ast.ClassDef))]",
-  "replacement": "    scopes = [tree]",
+  "anchor": "    scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)\n    scopes = [tree] + [n for n in ast.walk(tree)\n                       if isinstance(n, scope_types)]",
+  "replacement": "    scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)\n    scopes = [tree]",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
@@ -1807,8 +1807,155 @@
  {
   "name": "r16 evolver :: the rollback stops naming its drops",
   "file": "src/evolver_store.py",
-  "anchor": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, dropped_ids=_removed)",
-  "replacement": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills)",
+  "anchor": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, dropped_ids=_removed,\n                                 updated_ids=frozenset())",
+  "replacement": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, updated_ids=frozenset())",
   "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "r17 pool :: an unnamed stale copy overwrites the live row again",
+  "file": "src/skills.py",
+  "anchor": "                    elif row.id in updated_ids:",
+  "replacement": "                    elif row.id in by_id:",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed"
+ },
+ {
+  "name": "r17 pool :: the stale tail resurrects deleted rows again",
+  "file": "src/skills.py",
+  "anchor": "            out.extend(_prove_line(s)\n                       for s in skills\n                       if s.id in updated_ids and s.id not in slot)",
+  "replacement": "            out.extend(_prove_line(s)\n                       for s in skills\n                       if s.id not in slot)",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed"
+ },
+ {
+  "name": "r17 pool :: contradictory intent slips through",
+  "file": "src/skills.py",
+  "anchor": "    if updated_ids & dropped_ids:",
+  "replacement": "    if False:",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed::test_contradictory_intent_is_refused_before_the_store"
+ },
+ {
+  "name": "r17 pool :: the drop announcement goes silent",
+  "file": "src/skills.py",
+  "anchor": "            if dropped_seen:\n                # warning, not info: the announcement exists for\n                # operator visibility, and info is invisible at the\n                # default level — same reasoning as the reader\n                # announcements.\n                logger.warning(\n                    \"[skills] _save_skills: %d named row(s) removed by \"\n                    \"this rewrite (%s): %s\", len(dropped_seen), path,\n                    sorted(dropped_seen))",
+  "replacement": "            if dropped_seen:\n                pass",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed::test_a_named_drop_is_announced_with_the_store_path"
+ },
+ {
+  "name": "r17 pool :: a named update compacts without being counted",
+  "file": "src/skills.py",
+  "anchor": "                        if row.id in slot:\n                            compacted += 1\n                        slot[row.id] = len(out)",
+  "replacement": "                        slot[row.id] = len(out)",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed::test_a_named_updates_duplicate_is_compacted_and_announced"
+ },
+ {
+  "name": "r17 pool :: the carry announcement moves pre-commit again",
+  "file": "src/skills.py",
+  "anchor": "            atomic_write(\n                path,\n                \"\\n\".join([l for l in out if l is not None]) + \"\\n\",\n                errors=\"surrogateescape\",\n            )\n            # Announce AFTER the commit (adversarial r17, Minimalist,\n            # probed): the carried-verbatim warning used to precede\n            # atomic_write, so a failed rewrite left a log claiming rows\n            # were carried through a rewrite that never happened.\n            if tainted or unprovable:\n                logger.warning(\n                    \"[skills] _save_skills: %d unparseable/byte-tainted and \"\n                    \"%d unprovable row(s) carried through the rewrite \"\n                    \"verbatim (%s)\", tainted, unprovable, path)",
+  "replacement": "            if tainted or unprovable:\n                logger.warning(\n                    \"[skills] _save_skills: %d unparseable/byte-tainted and \"\n                    \"%d unprovable row(s) carried through the rewrite \"\n                    \"verbatim (%s)\", tainted, unprovable, path)\n            atomic_write(\n                path,\n                \"\\n\".join([l for l in out if l is not None]) + \"\\n\",\n                errors=\"surrogateescape\",\n            )",
+  "tests": "tests/test_skills.py::TestAWriteMustBeNamed::test_the_announcement_is_post_commit"
+ },
+ {
+  "name": "r17 file_lock :: an uninspectable tail appends anyway",
+  "file": "src/file_lock.py",
+  "anchor": "            except OSError as exc:\n                # Fail CLOSED (adversarial r17, three seats, probed): the\n                # old `needs_frame = False` here turned an inspection\n                # failure (unreadable file, transient I/O error) into an\n                # append that may fuse onto a torn tail — for the\n                # retention archive, an unreadable sole copy while the\n                # live delete stands. If the tail cannot be known framed,\n                # the append must not run.\n                raise OSError(\n                    f\"locked_append: cannot inspect the existing tail of \"\n                    f\"{path}; refusing to append: {exc}\") from exc",
+  "replacement": "            except OSError:\n                needs_frame = False",
+  "tests": "tests/test_file_lock.py::TestAnUninspectableTailRefusesTheAppend"
+ },
+ {
+  "name": "r17 batch :: duplicate ids double-count again",
+  "file": "src/skills.py",
+  "anchor": "        if sid in seen_ids:\n            dup += 1\n            continue\n        seen_ids.add(sid)\n        ids.append(sid)",
+  "replacement": "        ids.append(sid)",
+  "tests": "tests/test_skills.py::TestTheBatchRecorderAdmitsOneVerdictPerSkill"
+ },
+ {
+  "name": "r17 batch :: a bare string is iterated again",
+  "file": "src/skills.py",
+  "anchor": "    if isinstance(skill_ids, (str, bytes)):",
+  "replacement": "    if False:",
+  "tests": "tests/test_skills.py::TestTheBatchRecorderAdmitsOneVerdictPerSkill::test_a_bare_string_is_refused"
+ },
+ {
+  "name": "r17 ledger :: marker presence is trusted again",
+  "file": "src/memory_ledger.py",
+  "anchor": "                try:\n                    m = json.loads(marker.read_text(encoding=\"utf-8\"))\n                    valid = (isinstance(m, dict)\n                             and m.get(\"loop_id\") == loop_id\n                             and isinstance(m.get(\"goal_achieved\"), bool)\n                             and isinstance(m.get(\"skill_ids\"), list)\n                             and set(m[\"skill_ids\"]) == set(skill_ids))\n                except Exception:\n                    valid = False",
+  "replacement": "                valid = True",
+  "tests": "tests/test_skill_attribution.py::TestTheMarkerIsProofNotPresence"
+ },
+ {
+  "name": "r17 ledger :: a marker failure lies about the commit again",
+  "file": "src/memory_ledger.py",
+  "anchor": "            try:\n                atomic_write(marker, json.dumps({\n                    \"loop_id\": loop_id,\n                    \"goal_achieved\": achieved,\n                    \"skill_ids\": skill_ids,\n                    \"attributed_at\": datetime.now(timezone.utc).isoformat(),\n                }))\n            except Exception:\n                # The batch COMMITTED; only the marker failed. The\n                # outer catch's \"NOT recorded\" would be a lie here\n                # (adversarial r17, QA, probed) — say what the store\n                # holds.\n                log.warning(\n                    \"skill-injection stats commit for %s SUCCEEDED but \"\n                    \"the attribution marker was NOT written (%s) — a \"\n                    \"later verdict stamp may re-apply this batch\",\n                    loop_id, marker, exc_info=True)",
+  "replacement": "            atomic_write(marker, json.dumps({\n                    \"loop_id\": loop_id,\n                    \"goal_achieved\": achieved,\n                    \"skill_ids\": skill_ids,\n                    \"attributed_at\": datetime.now(timezone.utc).isoformat(),\n                }))",
+  "tests": "tests/test_skill_attribution.py::TestTheMarkerIsProofNotPresence::test_marker_write_failure_reports_the_commit_honestly"
+ },
+ {
+  "name": "r17 ledger :: manifest ids are coerced again",
+  "file": "src/memory_ledger.py",
+  "anchor": "                sid = entry.get(\"id\") if isinstance(entry, dict) else None\n                # A manifest id must BE a string (adversarial r17, two\n                # seats, probed): str() coercion minted stats identities\n                # \"True\" and \"7\" out of malformed rows — laundered\n                # evidence, not admission. Malformed entries are\n                # excluded and announced, never coerced.\n                if not isinstance(sid, str) or not sid:\n                    malformed += 1\n                    continue",
+  "replacement": "                sid = str(entry.get(\"id\", \"\") or \"\") if isinstance(entry, dict) else \"\"\n                if not sid:\n                    malformed += 1\n                    continue",
+  "tests": "tests/test_skill_attribution.py::TestManifestIdsAreAdmittedNotCoerced"
+ },
+ {
+  "name": "r17 runs :: the sibling reader coerces again",
+  "file": "src/runs.py",
+  "anchor": "                sid = entry.get(\"id\") if isinstance(entry, dict) else None\n                if isinstance(sid, str) and sid:\n                    ids.add(sid)",
+  "replacement": "                sid = str(entry.get(\"id\", \"\") or \"\")\n                if sid:\n                    ids.add(sid)",
+  "tests": "tests/test_skill_attribution.py::TestManifestIdsAreAdmittedNotCoerced::test_the_sibling_reader_rejects_them_too"
+ },
+ {
+  "name": "r17 sqlite :: append lies at the commit boundary again",
+  "file": "src/memory_backends.py",
+  "anchor": "            elif commit_issued:\n                log.error(\"SQLiteBackend.append(%s): commit outcome \"",
+  "replacement": "            elif False:\n                log.error(\"SQLiteBackend.append(%s): commit outcome \"",
+  "tests": "tests/test_memory_backend.py::TestEveryWritePathTellsTheTruthAtTheCommitBoundary::test_append_commit_error_says_unknown"
+ },
+ {
+  "name": "r17 sqlite :: rewrite lies at the commit boundary again",
+  "file": "src/memory_backends.py",
+  "anchor": "            elif commit_issued:\n                log.error(\"SQLiteBackend.rewrite(%s): commit outcome \"",
+  "replacement": "            elif False:\n                log.error(\"SQLiteBackend.rewrite(%s): commit outcome \"",
+  "tests": "tests/test_memory_backend.py::TestEveryWritePathTellsTheTruthAtTheCommitBoundary::test_rewrite_commit_error_says_unknown"
+ },
+ {
+  "name": "r17 evolver :: rollback matches by mutable name again",
+  "file": "src/evolver_store.py",
+  "anchor": "                if created_id:\n                    removal = [s for s in skills if s.id == created_id]",
+  "replacement": "                if False:\n                    removal = [s for s in skills if s.id == created_id]",
+  "tests": "tests/test_evolver.py::TestRollbackTakesItsDeletionByRecordedId::test_an_operator_same_name_skill_survives"
+ },
+ {
+  "name": "r17 evolver :: the rollback stops archiving again",
+  "file": "src/evolver_store.py",
+  "anchor": "                    _archive_skills(removal,\n                                    reason=\"evolver_skill_create_reverted\")",
+  "replacement": "                    pass",
+  "tests": "tests/test_evolver.py::TestRollbackTakesItsDeletionByRecordedId::test_the_removed_row_is_archived_first"
+ },
+ {
+  "name": "r17 evolver :: the created id goes unrecorded again",
+  "file": "src/evolver_store.py",
+  "anchor": "                before_state = {\"type\": \"skill_create\",\n                                \"created_skill_id\": _uuid_pre.uuid4().hex[:8]}",
+  "replacement": "                before_state = {\"type\": \"skill_create\"}",
+  "tests": "tests/test_evolver.py::TestRollbackTakesItsDeletionByRecordedId::test_apply_records_the_created_id_in_the_audit_row"
+ },
+ {
+  "name": "r17 evolver :: bookkeeping failure goes silent again",
+  "file": "src/evolver_store.py",
+  "anchor": "    except Exception as exc:\n        # The behavioral revert above COMMITTED; only this bookkeeping\n        # failed. Say so, name the store, and let the returned detail\n        # carry the contradiction (adversarial r17, Skeptic, probed: a\n        # locked_rmw failure here was swallowed by a bare `pass`, so the\n        # suggestion stayed applied=True inside a result claiming the\n        # revert completed).\n        log.warning(\n            \"revert_suggestion %s: revert applied but suggestions.jsonl \"\n            \"was NOT updated (%s) — the suggestion still reads \"\n            \"applied=True: %s\", suggestion_id, _suggestions_path(), exc)\n        detail += (\"; suggestion store NOT updated — still marked \"\n                   \"applied\")",
+  "replacement": "    except Exception:\n        pass",
+  "tests": "tests/test_evolver.py::TestARevertReportsItsBookkeepingHonestly"
+ },
+ {
+  "name": "r17 scanner :: scopes flatten again",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "        for scope in _chain(cls):",
+  "replacement": "        for scope in scopes:",
+  "tests": "tests/test_scan_destructive_rewrites.py::TestAnUnrelatedScopeCannotTaintProvenance"
+ },
+ {
+  "name": "r17 ledger :: the marker check escapes the lock again",
+  "file": "src/memory_ledger.py",
+  "anchor": "        with locked_write(_skill_stats_path(), require=True):\n            if marker.exists():",
+  "replacement": "        if marker.exists():\n            return\n        with locked_write(_skill_stats_path(), require=True):\n            if marker.exists():",
+  "tests": "tests/test_skill_attribution.py::TestTheMarkerIsProofNotPresence::test_the_check_batch_marker_section_holds_the_stats_lock"
  }
 ]

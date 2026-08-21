@@ -1107,31 +1107,89 @@ def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
         if not manifest.is_file():
             return
         marker = Path(rd) / "source" / "skill_attribution.json"
-        if marker.exists():
-            return
         skill_ids: list = []
         seen: set = set()
+        malformed = 0
         for rec in _read_store(manifest, "_maybe_record_skill_injection_outcomes"):
             for entry in rec.get("skills") or []:
-                sid = str(entry.get("id", "") or "")
-                if sid and sid not in seen:
+                sid = entry.get("id") if isinstance(entry, dict) else None
+                # A manifest id must BE a string (adversarial r17, two
+                # seats, probed): str() coercion minted stats identities
+                # "True" and "7" out of malformed rows — laundered
+                # evidence, not admission. Malformed entries are
+                # excluded and announced, never coerced.
+                if not isinstance(sid, str) or not sid:
+                    malformed += 1
+                    continue
+                if sid not in seen:
                     seen.add(sid)
                     skill_ids.append(sid)
+        if malformed:
+            log.warning(
+                "skills manifest for %s: %d entr(ies) without a string "
+                "id excluded from attribution (%s)",
+                loop_id, malformed, manifest)
         if not skill_ids:
             return
         achieved = bool(row["goal_achieved"])
-        # ONE transaction for the whole manifest (adversarial r16, four
-        # seats, probed): the per-id loop made a partial batch reachable
-        # once the recorder started raising — id A committed, id B
-        # failed, no marker, and the retry credited A twice.
-        from skills import record_skill_injection_outcomes
-        record_skill_injection_outcomes(skill_ids, achieved)
-        marker.write_text(json.dumps({
-            "loop_id": loop_id,
-            "goal_achieved": achieved,
-            "skill_ids": skill_ids,
-            "attributed_at": datetime.now(timezone.utc).isoformat(),
-        }), encoding="utf-8")
+        from skills import record_skill_injection_outcomes, \
+            _skill_stats_path
+        from file_lock import locked_write, atomic_write
+        # ONE critical section spans marker-check -> batch -> marker
+        # write (adversarial r17, Minimalist, probed): with the check
+        # outside any lock, two live stampers both saw no marker, both
+        # committed the batch, and both reported success — double
+        # attribution with no crash involved. The stats lock is the
+        # natural boundary (the batch recorder re-enters it). The
+        # crash window between commit and marker write remains the
+        # recorded r16 residual.
+        with locked_write(_skill_stats_path(), require=True):
+            if marker.exists():
+                # A marker is only proof when it says what completion
+                # would have said (adversarial r17, two seats, probed:
+                # a zero-byte or copied marker silently suppressed the
+                # whole run's verdicts). An invalid marker is UNKNOWN —
+                # warn and do NOT auto-re-apply: the batch may already
+                # be in the stats store.
+                try:
+                    m = json.loads(marker.read_text(encoding="utf-8"))
+                    valid = (isinstance(m, dict)
+                             and m.get("loop_id") == loop_id
+                             and isinstance(m.get("goal_achieved"), bool)
+                             and isinstance(m.get("skill_ids"), list)
+                             and set(m["skill_ids"]) == set(skill_ids))
+                except Exception:
+                    valid = False
+                if not valid:
+                    log.warning(
+                        "attribution marker for %s is unreadable or does "
+                        "not match this run (%s) — attribution state "
+                        "UNKNOWN; NOT re-applying; inspect the marker",
+                        loop_id, marker)
+                return
+            # ONE transaction for the whole manifest (adversarial r16,
+            # four seats, probed): the per-id loop made a partial batch
+            # reachable once the recorder started raising — id A
+            # committed, id B failed, no marker, and the retry credited
+            # A twice.
+            record_skill_injection_outcomes(skill_ids, achieved)
+            try:
+                atomic_write(marker, json.dumps({
+                    "loop_id": loop_id,
+                    "goal_achieved": achieved,
+                    "skill_ids": skill_ids,
+                    "attributed_at": datetime.now(timezone.utc).isoformat(),
+                }))
+            except Exception:
+                # The batch COMMITTED; only the marker failed. The
+                # outer catch's "NOT recorded" would be a lie here
+                # (adversarial r17, QA, probed) — say what the store
+                # holds.
+                log.warning(
+                    "skill-injection stats commit for %s SUCCEEDED but "
+                    "the attribution marker was NOT written (%s) — a "
+                    "later verdict stamp may re-apply this batch",
+                    loop_id, marker, exc_info=True)
     except Exception:
         # WARNING, not debug (r16): attribution is telemetry and never
         # raises out of here, but a required-lock or write failure must

@@ -293,3 +293,33 @@ class TestLockedRmwRequiresItsLock:
             assert p.read_text(encoding="utf-8") == "x\n"
         finally:
             holder.close()
+
+
+class TestAnUninspectableTailRefusesTheAppend:
+    """Adversarial r17 (three seats, HIGH, probed): the tail-framing
+    check wrapped its stat/read in `except OSError: needs_frame =
+    False` — an inspection failure became a normal append that could
+    fuse onto a torn tail, making the retention archive's sole copy
+    unreadable while the live delete stood. If the tail cannot be known
+    framed, the append must not run."""
+
+    def test_an_unreadable_tail_aborts_with_bytes_untouched(self, tmp_path):
+        import os
+        import pytest
+        from file_lock import locked_append
+        t = tmp_path / "arch.jsonl"
+        t.write_bytes(b'{"old":')          # torn, no trailing LF
+        os.chmod(t, 0o300)                 # append would work; read cannot
+        try:
+            with pytest.raises(OSError, match="cannot inspect"):
+                locked_append(t, '{"new": 1}')
+        finally:
+            os.chmod(t, 0o600)
+        assert t.read_bytes() == b'{"old":'
+
+    def test_a_readable_tail_still_appends(self, tmp_path):
+        from file_lock import locked_append
+        t = tmp_path / "arch.jsonl"
+        t.write_bytes(b'{"old": 1}\n')
+        locked_append(t, '{"new": 2}')
+        assert t.read_bytes() == b'{"old": 1}\n{"new": 2}\n'

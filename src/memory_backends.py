@@ -272,7 +272,16 @@ class JSONLBackend(MemoryBackend):
         construction: fn receives the records read under the same lock
         the write commits under. Use this for every read-modify-write;
         `rewrite()` remains for whole-store replacement where losing a
-        concurrent append is acceptable and announced by design.
+        concurrent append is ACCEPTED BY DESIGN — and, corrected r17
+        (Architect): that loss is NOT announceable. rewrite()'s bare
+        List[Dict] cannot distinguish "the caller decided to drop this
+        row" from "the caller never saw it", so a clean row appended
+        between the caller's read and its rewrite is deleted silently.
+        These collections are unkeyed, so a carry-by-omission contract
+        (the skills-pool answer) cannot apply. Do not hand rewrite() a
+        stale read — every read-modify-write belongs here, in
+        transform(). (Interface upgrade — deletions by name for the
+        backend ABC — is BACKLOG'd.)
 
         Returns the record list fn produced (and the store now holds).
         """
@@ -360,16 +369,46 @@ class SQLiteBackend(MemoryBackend):
         # three rounds closing).
         from jsonl_utils import prove_record_line
         data = prove_record_line(record)
+        # Commit-boundary honesty, same three-way outcome as transform
+        # (adversarial r17, Architect, probed): SQLite can report an
+        # error at the commit boundary AFTER the transaction is durable,
+        # and "record NOT persisted" there invited a duplicate append on
+        # retry.
+        committed = False
+        commit_issued = False
         try:
-            with self._connect() as con:
+            con = self._connect()
+            try:
                 con.execute(
                     "INSERT INTO memory_records (collection, data) VALUES (?, ?)",
                     (collection, data),
                 )
+                commit_issued = True
                 con.commit()
+                committed = True
+            except BaseException:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                con.close()
         except sqlite3.Error as exc:
-            log.error("SQLiteBackend.append(%s): record NOT persisted "
-                      "(%s): %s", collection, self._db_path, exc)
+            if committed:
+                log.error("SQLiteBackend.append(%s): append COMMITTED "
+                          "but the connection failed to close cleanly "
+                          "(%s): %s — the store HOLDS the record; do "
+                          "not retry", collection, self._db_path, exc)
+            elif commit_issued:
+                log.error("SQLiteBackend.append(%s): commit outcome "
+                          "UNKNOWN — the commit was issued and raised "
+                          "(%s): %s — inspect the store before "
+                          "retrying", collection, self._db_path, exc)
+            else:
+                log.error("SQLiteBackend.append(%s): record NOT "
+                          "persisted, store unchanged (%s): %s",
+                          collection, self._db_path, exc)
             raise
 
     def read_all(self, collection: str) -> List[Dict[str, Any]]:
@@ -424,8 +463,11 @@ class SQLiteBackend(MemoryBackend):
         # verbatim, and is announced after the commit.
         from jsonl_utils import loads_clean, prove_record_line
         datas = [prove_record_line(r) for r in records]
+        committed = False
+        commit_issued = False
         try:
-            with self._connect() as con:
+            con = self._connect()
+            try:
                 cur = con.execute(
                     "SELECT id, data FROM memory_records WHERE collection=?",
                     (collection,))
@@ -446,16 +488,41 @@ class SQLiteBackend(MemoryBackend):
                     "INSERT INTO memory_records (collection, data) VALUES (?, ?)",
                     [(collection, d) for d in datas],
                 )
+                commit_issued = True
                 con.commit()
+                committed = True
+            except BaseException:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                con.close()
             if carried:
                 log.warning(
                     "SQLiteBackend.rewrite(%s): %d unreadable row(s) "
                     "carried through the rewrite verbatim (%s)",
                     collection, carried, self._db_path)
         except sqlite3.Error as exc:
-            log.error("SQLiteBackend.rewrite(%s): rewrite NOT performed, "
-                      "store unchanged (%s): %s",
-                      collection, self._db_path, exc)
+            # Same three-way outcome as transform (adversarial r17,
+            # Architect, probed): "store unchanged" after a commit
+            # attempt was a lie for a rewrite that had already deleted
+            # and replaced rows.
+            if committed:
+                log.error("SQLiteBackend.rewrite(%s): rewrite COMMITTED "
+                          "but the connection failed to close cleanly "
+                          "(%s): %s — the store HOLDS the rewrite; do "
+                          "not retry", collection, self._db_path, exc)
+            elif commit_issued:
+                log.error("SQLiteBackend.rewrite(%s): commit outcome "
+                          "UNKNOWN — the commit was issued and raised "
+                          "(%s): %s — inspect the store before "
+                          "retrying", collection, self._db_path, exc)
+            else:
+                log.error("SQLiteBackend.rewrite(%s): rewrite NOT "
+                          "performed, store unchanged (%s): %s",
+                          collection, self._db_path, exc)
             raise
 
     def transform(self, collection: str,

@@ -660,7 +660,8 @@ def cull_island_bottom_half(
         # the two leaves a harmless duplicate, never a destroyed skill).
         _archive_skills(culled, reason="island_cull")
         surviving = [s for s in all_skills if s.id not in cull_set]
-        _save_skills(surviving, dropped_ids=cull_set)
+        _save_skills(surviving, dropped_ids=cull_set,
+                     updated_ids=frozenset())
         for s in culled:
             try:
                 write_skill_provenance(
@@ -691,15 +692,15 @@ def run_island_cycle(
     """
     skills = load_skills()
     assigned = 0
-    changed = False
+    assigned_ids: set = set()
     for skill in skills:
         if not skill.island:
             skill.island = assign_island(skill)
             assigned += 1
-            changed = True
+            assigned_ids.add(skill.id)
 
-    if changed and not dry_run:
-        _save_skills(skills)
+    if assigned_ids and not dry_run:
+        _save_skills(skills, updated_ids=assigned_ids)
 
     islands_with_open = set(
         s.island for s in skills if s.circuit_state == "open" and s.island
@@ -1550,9 +1551,30 @@ def record_skill_injection_outcomes(skill_ids, goal_achieved: bool) -> None:
     marker write re-applies the whole batch on retry — the same
     ack-vs-apply window as the BACKLOG'd interrupt F9 design item, and
     the same design work resolves both.)"""
-    ids = list(skill_ids)
-    for sid in ids:
+    if isinstance(skill_ids, (str, bytes)):
+        # A lone id passed bare would be iterated character by
+        # character — five verdicts nobody asked for (adversarial r17,
+        # QA). Degenerate input fails loudly at the door.
+        raise TypeError(
+            f"skill_ids must be an iterable of ids, not a bare string: "
+            f"{skill_ids!r}")
+    ids: list = []
+    seen_ids: set = set()
+    dup = 0
+    for sid in skill_ids:
         _require_recordable_id(sid)
+        # One verdict per skill per batch (adversarial r17, two seats,
+        # probed): a duplicated id would credit one injected run twice.
+        # First-seen order is kept; the collapse is announced.
+        if sid in seen_ids:
+            dup += 1
+            continue
+        seen_ids.add(sid)
+        ids.append(sid)
+    if dup:
+        logger.warning(
+            "[skills] record_skill_injection_outcomes: %d duplicate "
+            "id(s) collapsed — one verdict per skill per batch", dup)
     if type(goal_achieved) is not bool:
         raise TypeError(
             f"goal_achieved must be a bool, got {goal_achieved!r}")
@@ -1715,7 +1737,7 @@ def update_skill_utility(
     # Recompute content hash after mutation
     target.content_hash = compute_skill_hash(target)
 
-    _save_skills(skills)
+    _save_skills(skills, updated_ids={target.id})
 
 
 def attribute_failure_to_skills(
@@ -1950,7 +1972,8 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
                 if s.id in _promoted_set:
                     s.tier = "established"
                     s.content_hash = compute_skill_hash(s)
-            _save_skills(fresh)
+            _save_skills(fresh,
+                         updated_ids=_promoted_set & {s.id for s in fresh})
         # Hermes steal: auto-export newly promoted skills as SKILL.md curated files
         for s in fresh:
             if s.id in _promoted_set:
@@ -2038,7 +2061,7 @@ def maybe_demote_skills() -> List[str]:
             pass
 
     if changed:
-        _save_skills(skills)
+        _save_skills(skills, updated_ids=set(demoted))
 
     return demoted
 
@@ -2230,7 +2253,7 @@ def record_variant_outcome(skill_id: str, success: bool) -> None:
             updated = True
             break
     if updated:
-        _save_skills(skills)
+        _save_skills(skills, updated_ids={skill_id})
 
 
 def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT_USES) -> dict:
@@ -2264,7 +2287,7 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
             s.id, s.name,
         )
     if _healed and not dry_run:
-        _save_skills(skills)
+        _save_skills(skills, updated_ids={s.id for s in _healed})
 
     # Skill.use_count is legacy-frozen (writer removed 2026-07-29) — parent
     # trial counts come from live SkillStats, max'd for old stores.
@@ -2331,7 +2354,12 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
         losers = [s for s in skills if s.id in retired_set]
         _archive_skills(losers, reason="ab_variant_retired")
         skills = [s for s in skills if s.id not in retired_set]
-        _save_skills(skills, dropped_ids=retired_set)
+        # updated_ids: a winning challenger's content was copied into
+        # its PARENT above — those parents are writes this save must
+        # name (r17). A parent that was itself retired this pass (a
+        # variant chain) is a drop, not a write.
+        _save_skills(skills, dropped_ids=retired_set,
+                     updated_ids=set(promoted) - retired_set)
         for s in losers:
             try:
                 write_skill_provenance(
@@ -2359,7 +2387,8 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
 
 
 def _save_skills(skills: List[Skill], *,
-                 dropped_ids: "frozenset[str] | set[str]" = frozenset()
+                 dropped_ids: "frozenset[str] | set[str]" = frozenset(),
+                 updated_ids: "frozenset[str] | set[str]",
                  ) -> None:
     """Overwrite skills.jsonl with the current list, carrying strandees.
 
@@ -2373,11 +2402,22 @@ def _save_skills(skills: List[Skill], *,
     id in `dropped_ids` is removed, and the destructive callers (island
     cull, A/B retirement, evolver rollback) name their drops.
 
-    (Residual, recorded: an id in dropped_ids whose row was UPDATED
-    after the caller's snapshot is still dropped, and the archive holds
-    the pre-update version — the id was leaving the pool either way.
-    Upgrade edge: a transform-style primitive that re-derives the
-    selection inside this lock.)
+    A deliberate WRITE must be named too (adversarial r17 — three
+    seats, HIGH, probed): r16 protected a concurrently ADDED id, but a
+    row present in the caller's stale snapshot still replaced the live
+    row wholesale — a concurrent `save_skill(B)` was reverted by any
+    unrelated caller that loaded before it and saved after it, with no
+    archive, announcement, or conflict signal. `updated_ids` is the
+    write twin of `dropped_ids`: only a named id takes the caller's
+    version; every other live row — including ids the caller's list
+    holds a stale copy of — is carried verbatim in place. The caller's
+    unnamed copies are never written, so "I loaded it" no longer
+    implies "I own it".
+
+    (Residual, recorded: an id in dropped_ids OR updated_ids whose row
+    was revised after the caller's snapshot still loses that revision —
+    naming an id claims it. Upgrade edge: a transform-style primitive
+    that re-derives the mutation inside this lock.)
 
     The list a caller hands us came from load_skills(), which cannot
     represent a row it could not parse — so a naive full rewrite from that
@@ -2393,6 +2433,25 @@ def _save_skills(skills: List[Skill], *,
     every line the in-memory list cannot account for.
     """
     path = _skills_path()
+    # Contradictory intent is a caller bug — refuse before the lock,
+    # store untouched (r17): an id both dropped and updated, an id
+    # "updated" that the caller's own list does not hold, or an id
+    # dropped while still in the list has no honest interpretation.
+    updated_ids = set(updated_ids)
+    dropped_ids = set(dropped_ids)
+    list_ids = {s.id for s in skills}
+    if updated_ids & dropped_ids:
+        raise ValueError(
+            f"_save_skills: id(s) named both updated and dropped: "
+            f"{sorted(updated_ids & dropped_ids)}")
+    if updated_ids - list_ids:
+        raise ValueError(
+            f"_save_skills: updated id(s) absent from the caller's list: "
+            f"{sorted(updated_ids - list_ids)}")
+    if dropped_ids & list_ids:
+        raise ValueError(
+            f"_save_skills: dropped id(s) still present in the caller's "
+            f"list: {sorted(dropped_ids & list_ids)}")
     try:
         from file_lock import locked_write, atomic_write
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2402,7 +2461,8 @@ def _save_skills(skills: List[Skill], *,
             by_id = {s.id: s for s in skills}
             out: "List[Optional[str]]" = []
             slot: dict = {}
-            tainted = unprovable = 0
+            dropped_seen: set = set()
+            compacted = tainted = unprovable = 0
             if path.exists():
                 # split("\n"), not splitlines(): the latter also breaks on
                 # U+2028/U+2029, which are legal INSIDE a JSON string, and
@@ -2436,26 +2496,34 @@ def _save_skills(skills: List[Skill], *,
                         unprovable += 1
                         out.append(line)
                         continue
-                    if row.id in by_id:
-                        # Hold this row's ORDINAL. Appending survivors after
-                        # the rewritten skills reorders the store, and this
-                        # store is read last-row-wins by id — so a carried
-                        # row could be promoted over a live skill purely by
-                        # being moved (adversarial r10, Minimalist). The
-                        # doctor's rewrite has preserved ordinals since r7;
-                        # this one now does too. Last occurrence wins, which
-                        # is what the reader would have picked anyway.
-                        slot[row.id] = len(out)
-                        out.append(None)
-                    elif row.id in dropped_ids:
+                    if row.id in dropped_ids:
                         # A NAMED deliberate drop (island cull, A/B
                         # retirement, rollback) — that IS a decision.
-                        pass
+                        dropped_seen.add(row.id)
+                    elif row.id in updated_ids:
+                        # A NAMED write. Hold this row's ORDINAL.
+                        # Appending survivors after the rewritten skills
+                        # reorders the store, and this store is read
+                        # last-row-wins by id — so a carried row could be
+                        # promoted over a live skill purely by being moved
+                        # (adversarial r10, Minimalist). Last occurrence
+                        # wins, which is what the reader would have picked
+                        # anyway; an earlier duplicate row this named
+                        # write supersedes is compacted — counted and
+                        # announced after the commit, like the stats twin
+                        # (adversarial r17, Minimalist).
+                        if row.id in slot:
+                            compacted += 1
+                        slot[row.id] = len(out)
+                        out.append(None)
                     else:
-                        # Absent from the caller's list but NOT named as
-                        # dropped: a row this snapshot cannot account
-                        # for (a concurrent save, or a row load_skills
-                        # skipped). Carry it verbatim (r16).
+                        # Everything else — a row absent from the
+                        # caller's list (concurrent save, a row
+                        # load_skills skipped — r16) AND a row the
+                        # caller's list holds but did not NAME as
+                        # updated (r17: the live row is at least as
+                        # fresh as the caller's stale copy) — is
+                        # carried verbatim, holding its ordinal.
                         out.append(line)
             # A writer must not emit a row it would itself refuse. Every
             # row this function writes is read back by the NEXT call to it,
@@ -2474,18 +2542,45 @@ def _save_skills(skills: List[Skill], *,
                     s.content_hash = compute_skill_hash(s)
             for sid, i in slot.items():
                 out[i] = _prove_line(by_id[sid])
+            # Only NAMED writes the live loop never placed are appended:
+            # a new id, or an updated id whose live row vanished. An
+            # unnamed id absent from the live store stays absent — the
+            # caller's stale copy must not resurrect a row another
+            # process deleted (r17).
             out.extend(_prove_line(s)
-                       for s in skills if s.id not in slot)
-            if tainted or unprovable:
-                logger.warning(
-                    "[skills] _save_skills: %d unparseable/byte-tainted and "
-                    "%d unprovable row(s) carried through the rewrite "
-                    "verbatim (%s)", tainted, unprovable, path)
+                       for s in skills
+                       if s.id in updated_ids and s.id not in slot)
             atomic_write(
                 path,
                 "\n".join([l for l in out if l is not None]) + "\n",
                 errors="surrogateescape",
             )
+            # Announce AFTER the commit (adversarial r17, Minimalist,
+            # probed): the carried-verbatim warning used to precede
+            # atomic_write, so a failed rewrite left a log claiming rows
+            # were carried through a rewrite that never happened.
+            if tainted or unprovable:
+                logger.warning(
+                    "[skills] _save_skills: %d unparseable/byte-tainted and "
+                    "%d unprovable row(s) carried through the rewrite "
+                    "verbatim (%s)", tainted, unprovable, path)
+            if compacted:
+                logger.warning(
+                    "[skills] _save_skills: %d older duplicate row(s) for "
+                    "updated id(s) compacted by this rewrite — last row "
+                    "per id won (%s)", compacted, path)
+            # A committed removal is operator-visible and names its
+            # store (adversarial r17, Failure Operator, probed: a cull
+            # or rollback removed rows with no line naming skills.jsonl).
+            if dropped_seen:
+                # warning, not info: the announcement exists for
+                # operator visibility, and info is invisible at the
+                # default level — same reasoning as the reader
+                # announcements.
+                logger.warning(
+                    "[skills] _save_skills: %d named row(s) removed by "
+                    "this rewrite (%s): %s", len(dropped_seen), path,
+                    sorted(dropped_seen))
     except Exception as e:
         # Name the store and RAISE (adversarial r16, two seats, probed):
         # the warn-and-return-None shape let a cull report "retired"

@@ -207,6 +207,137 @@ class TestAttributionIsOneTransaction:
         import memory_ledger as ml
         src = inspect.getsource(
             ml._maybe_record_skill_injection_outcomes)
+        import re
         assert "record_skill_injection_outcomes" in src
-        assert "for sid in skill_ids:\n            record_skill_injection_outcome(" \
-            not in src
+        # The singular per-id recorder must not be called here at ANY
+        # indentation (r17: the r16 pattern-match was indentation-bound
+        # and a re-nested per-id loop walked past it).
+        assert not re.search(r"record_skill_injection_outcome\(", src)
+
+
+class TestTheMarkerIsProofNotPresence:
+    """Adversarial r17 (three seats, probed): the seam trusted
+    marker.exists() — a zero-byte or copied marker silently suppressed a
+    whole run's verdicts; the check ran outside any lock, so two live
+    stampers could both pass it and double-apply; and a marker-write
+    failure after the batch committed was reported with the pre-commit
+    "NOT recorded" message. The check→batch→marker section now runs
+    under the stats lock, a marker only counts when its content matches
+    this run, and the two failure legs report what the store holds."""
+
+    def test_a_second_stamp_is_a_no_op(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "ok", loop_id="lp-idem")
+        assert _stamp("lp-idem", achieved=True).status == "updated"
+        assert _stamp("lp-idem", achieved=True).status == "updated"
+        assert get_skill_stats("sk-a").injected_runs == 1
+
+    def test_an_invalid_marker_is_unknown_not_reapplied(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+        _setup(monkeypatch, tmp_path)
+        rd = _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "ok", loop_id="lp-forge")
+        # A zero-byte marker: crash-torn or hand-created.
+        (rd / "source" / "skill_attribution.json").write_text("")
+        with caplog.at_level(logging.WARNING):
+            assert _stamp("lp-forge", achieved=True).status == "updated"
+        # NOT silently suppressed — and NOT auto-re-applied either (the
+        # batch may already be in the store): announced as UNKNOWN.
+        st = get_skill_stats("sk-a")
+        assert st is None or st.injected_runs == 0
+        assert "UNKNOWN" in caplog.text
+        assert "skill_attribution.json" in caplog.text
+
+    def test_a_mismatched_marker_is_unknown(
+            self, monkeypatch, tmp_path, caplog):
+        import json
+        import logging
+        _setup(monkeypatch, tmp_path)
+        rd = _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "ok", loop_id="lp-copied")
+        # A marker copied from ANOTHER run: valid JSON, wrong loop.
+        (rd / "source" / "skill_attribution.json").write_text(json.dumps({
+            "loop_id": "some-other-run", "goal_achieved": True,
+            "skill_ids": ["sk-a"]}))
+        with caplog.at_level(logging.WARNING):
+            _stamp("lp-copied", achieved=True)
+        st = get_skill_stats("sk-a")
+        assert st is None or st.injected_runs == 0
+        assert "UNKNOWN" in caplog.text
+
+    def test_marker_write_failure_reports_the_commit_honestly(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+        import file_lock as fl
+        _setup(monkeypatch, tmp_path)
+        rd = _seed_run_manifest(monkeypatch, tmp_path, skill_ids=["sk-a"])
+        record_outcome("goal", "done", "ok", loop_id="lp-marker")
+
+        real_aw = fl.atomic_write
+        def boom(path, content, **kw):
+            if getattr(path, "name", "") == "skill_attribution.json":
+                raise OSError("simulated ENOSPC")
+            return real_aw(path, content, **kw)
+        monkeypatch.setattr(fl, "atomic_write", boom)
+        with caplog.at_level(logging.WARNING):
+            assert _stamp("lp-marker", achieved=True).status == "updated"
+        # The batch COMMITTED — the message must say so, not "NOT
+        # recorded" (the pre-commit message would invite manual repair
+        # against false state).
+        assert get_skill_stats("sk-a").injected_runs == 1
+        assert not (rd / "source" / "skill_attribution.json").exists()
+        assert "SUCCEEDED" in caplog.text
+        assert "NOT written" in caplog.text
+        assert "verdict NOT recorded" not in caplog.text
+
+    def test_the_check_batch_marker_section_holds_the_stats_lock(self):
+        """Structural pin: the marker check must live INSIDE the
+        locked_write(_skill_stats_path()) section — outside it, two
+        live stampers both see no marker and double-apply."""
+        import inspect
+        import memory_ledger as ml
+        src = inspect.getsource(ml._maybe_record_skill_injection_outcomes)
+        lock_at = src.index("with locked_write(_skill_stats_path()")
+        check_at = src.index("if marker.exists():")
+        batch_at = src.index("record_skill_injection_outcomes(skill_ids")
+        assert lock_at < check_at < batch_at
+
+
+class TestManifestIdsAreAdmittedNotCoerced:
+    """Adversarial r17 (two seats, probed): `str(entry.get("id"))`
+    minted stats identities "True" and "7" out of malformed manifest
+    rows — laundered evidence that then blocked reprocessing via the
+    marker. A manifest id must BE a non-empty string; anything else is
+    excluded and announced."""
+
+    def test_non_string_ids_are_excluded_and_announced(
+            self, monkeypatch, tmp_path, caplog):
+        import json
+        import logging
+        _setup(monkeypatch, tmp_path)
+        run_dir = tmp_path / "runs" / "test-run"
+        (run_dir / "source").mkdir(parents=True, exist_ok=True)
+        with open(run_dir / "source" / "skills_manifest.jsonl", "w") as f:
+            f.write(json.dumps({"skills": [
+                {"id": True}, {"id": 7}, {"id": ""}, {"id": "ok"},
+                "not-a-dict"]}) + "\n")
+        monkeypatch.setattr(runs_module, "resolve_run_dir",
+                            lambda ref: run_dir)
+        record_outcome("goal", "done", "ok", loop_id="lp-coerce")
+        with caplog.at_level(logging.WARNING):
+            assert _stamp("lp-coerce", achieved=True).status == "updated"
+        assert get_skill_stats("ok").injected_runs == 1
+        for minted in ("True", "7"):
+            assert get_skill_stats(minted) is None, minted
+        assert "without a string id" in caplog.text
+
+    def test_the_sibling_reader_rejects_them_too(self, tmp_path):
+        import json
+        run_dir = tmp_path / "run"
+        (run_dir / "source").mkdir(parents=True)
+        with open(run_dir / "source" / "skills_manifest.jsonl", "w") as f:
+            f.write(json.dumps({"skills": [
+                {"id": True}, {"id": 7}, {"id": "ok"}]}) + "\n")
+        assert runs_module.read_injected_skill_ids(run_dir) == {"ok"}

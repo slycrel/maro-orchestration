@@ -1270,7 +1270,7 @@ def test_maybe_auto_promote_repaired_skill_lands_established(monkeypatch, tmp_pa
         pool = load_skills()
         target = next(s for s in pool if s.id == candidate.id)
         target.description = "repaired description"
-        _save_skills(pool)
+        _save_skills(pool, updated_ids={target.id})
         return target
 
     monkeypatch.setattr("skills.validate_skill_for_promotion", _validate)
@@ -2444,7 +2444,7 @@ class TestCullArchive:
             mk("s3", "closed", 0.5),
             mk("s4", "closed", 0.6),
         ]
-        _save_skills(pool)
+        _save_skills(pool, updated_ids={s.id for s in pool})
         culled = cull_island_bottom_half("research", min_island_size=4)
         assert len(culled) == 1
 
@@ -2738,7 +2738,8 @@ class TestTheSkillStoresSurviveATornByte:
         p = _skills_path()
         with p.open("ab") as f:
             f.write(b'{"id": "k2", "name": "torn\xff' + b"\n")
-        _save_skills(load_skills())
+        loaded = load_skills()
+        _save_skills(loaded, updated_ids={s.id for s in loaded})
         after = p.read_bytes()
         assert b'torn\xff' in after       # stranded, not deleted
         assert b'"k1"' in after
@@ -2758,7 +2759,7 @@ class TestTheSkillStoresSurviveATornByte:
         save_skill(_mk("k2"))
         kept = [s for s in load_skills() if s.id != "k2"]
         # r16: a deliberate drop must be NAMED — absence alone is carried.
-        _save_skills(kept, dropped_ids={"k2"})
+        _save_skills(kept, dropped_ids={"k2"}, updated_ids=frozenset())
         after = _skills_path().read_bytes()
         assert b'"k1"' in after and b'"k2"' not in after
 
@@ -2809,7 +2810,7 @@ class TestTheCarriedRowKeepsItsOwnBytes:
         f.write_text(torn + "\n", encoding="utf-8")
         monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
 
-        skills_mod._save_skills([])
+        skills_mod._save_skills([], updated_ids=frozenset())
 
         after = f.read_text(encoding="utf-8")
         assert torn in after, "\"carried verbatim\" rewrote the row's bytes"
@@ -2866,7 +2867,8 @@ class TestARowTheParserRefusesIsNotALiveSkill:
         f.write_text(self.ROW + "\n", encoding="utf-8")
         monkeypatch.setattr(skills_mod, "_skills_path", lambda: f)
 
-        skills_mod._save_skills(skills_mod.load_skills())
+        _loaded = skills_mod.load_skills()
+        skills_mod._save_skills(_loaded, updated_ids={s.id for s in _loaded})
 
         after = f.read_text(encoding="utf-8")
         assert after.count('"id"') == 1, f"a clone was minted: {after!r}"
@@ -2922,7 +2924,8 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
         row["operator_note"] = "keep this row"
         f.write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-        skills_mod._save_skills(skills_mod.load_skills())
+        _loaded = skills_mod.load_skills()
+        skills_mod._save_skills(_loaded, updated_ids={s.id for s in _loaded})
 
         after = f.read_text(encoding="utf-8")
         assert '"operator_note": "keep this row"' in after, \
@@ -2933,7 +2936,7 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
         loaded = skills_mod.load_skills()
         assert [s.id for s in loaded] == ["good"]
 
-        skills_mod._save_skills(loaded)
+        skills_mod._save_skills(loaded, updated_ids={s.id for s in loaded})
 
         after = f.read_text(encoding="utf-8")
         assert '"utility_score": "nope"' in after, \
@@ -2947,7 +2950,8 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
         live skill (adversarial r10, Minimalist)."""
         skills_mod, f = self._store(tmp_path, monkeypatch, drift_first=False)
 
-        skills_mod._save_skills(skills_mod.load_skills())
+        _loaded = skills_mod.load_skills()
+        skills_mod._save_skills(_loaded, updated_ids={s.id for s in _loaded})
 
         lines = f.read_text(encoding="utf-8").rstrip("\n").split("\n")
         # SECOND, deliberately. With the carried row first, appending it to
@@ -2991,7 +2995,7 @@ class TestAnUnprovableRowIsNotAVersionOfAnything:
                         created_at="2026-01-01T00:00:00+00:00"))
                 keep = [s for s in skills_mod.load_skills() if s.id == "a"]
                 # r16: the drop is named; an unnamed absence is carried.
-                skills_mod._save_skills(keep, dropped_ids={"b"})
+                skills_mod._save_skills(keep, dropped_ids={"b"}, updated_ids=frozenset())
                 after = f.read_text(encoding="utf-8")
         assert '"id": "a"' in after and '"id": "b"' not in after
 
@@ -3115,7 +3119,8 @@ class TestAdmissionIsTheProof:
         f = self._write(tmp_path, monkeypatch,
                         [self._valid_row(utility_score="1.0",
                                          operator_note="keep")])
-        skills_mod._save_skills(skills_mod.load_skills())
+        _loaded = skills_mod.load_skills()
+        skills_mod._save_skills(_loaded, updated_ids={s.id for s in _loaded})
 
         after = f.read_text(encoding="utf-8")
         lines = [l for l in after.split("\n") if l]
@@ -3138,7 +3143,7 @@ class TestAdmissionIsTheProof:
         loaded = skills_mod.load_skills()
         assert [s.name for s in loaded] == ["good"]
 
-        skills_mod._save_skills(loaded)
+        skills_mod._save_skills(loaded, updated_ids={s.id for s in loaded})
         after = f.read_text(encoding="utf-8")
         assert '"name": "good"' in after
         assert '"name": "bad"' in after, "the unprovable row was deleted"
@@ -3221,7 +3226,7 @@ class TestTheWriterCannotOutrunItsReader:
         # a valid value) — and the store must still be untouched.
         import pytest
         with pytest.raises(ValueError):
-            skills_mod._save_skills(loaded)
+            skills_mod._save_skills(loaded, updated_ids={s.id for s in loaded})
 
         assert f.read_bytes() == before, "the store was touched on abort"
 
@@ -4015,7 +4020,8 @@ class TestADeliberateDropMustBeNamed:
         sk.save_skill(self._mk("A"))
         snapshot = sk.load_skills()
         sk.save_skill(self._mk("C"))          # concurrent add
-        sk._save_skills(snapshot)             # C absent, NOT named
+        sk._save_skills(snapshot,             # C absent, NOT named
+                        updated_ids={s.id for s in snapshot})
         assert {s.id for s in sk.load_skills()} == {"A", "C"}
 
     def test_a_named_drop_removes_exactly_the_named_ids(
@@ -4025,7 +4031,7 @@ class TestADeliberateDropMustBeNamed:
         for i in ("A", "B", "C"):
             sk.save_skill(self._mk(i))
         keep = [s for s in sk.load_skills() if s.id != "B"]
-        sk._save_skills(keep, dropped_ids={"B"})
+        sk._save_skills(keep, dropped_ids={"B"}, updated_ids=frozenset())
         assert {s.id for s in sk.load_skills()} == {"A", "C"}
 
     def test_the_pool_writers_require_their_lock(self):
@@ -4058,7 +4064,8 @@ class TestADeliberateDropMustBeNamed:
         monkeypatch.setattr(file_lock, "atomic_write", boom)
         with caplog.at_level(logging.ERROR, logger="skills"):
             with pytest.raises(OSError):
-                sk._save_skills(sk.load_skills())
+                _l = sk.load_skills()
+                sk._save_skills(_l, updated_ids={s.id for s in _l})
         assert "pool rewrite NOT performed" in caplog.text
         assert str(sk._skills_path()) in caplog.text
 
@@ -4167,3 +4174,188 @@ class TestStatsReadSurvivesTheCopyProtocols:
                       copy.deepcopy(r), copy.copy(r)):
             assert clone == r
             assert clone.compacted == 2
+
+
+class TestAWriteMustBeNamed:
+    """Adversarial r17 (three seats, HIGH, probed): r16 protected a
+    concurrently ADDED id, but a row present in the caller's stale
+    snapshot still replaced the live row wholesale — a concurrent
+    save_skill(B) was silently reverted by any unrelated caller that
+    loaded before it and saved after it. `updated_ids` is the write
+    twin of `dropped_ids`: only a named id takes the caller's version;
+    everything else is carried verbatim from the LIVE store."""
+
+    @staticmethod
+    def _mk(sid, desc="d"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=sid, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_a_concurrent_revision_survives_an_unnamed_save(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A", "a-old"))
+        sk.save_skill(self._mk("B", "b-old"))
+        snapshot = sk.load_skills()
+        sk.save_skill(self._mk("B", "b-concurrent"))   # operator edit
+        for s in snapshot:
+            if s.id == "A":
+                s.description = "a-new"
+        sk._save_skills(snapshot, updated_ids={"A"})   # B NOT named
+        after = {s.id: s.description for s in sk.load_skills()}
+        assert after == {"A": "a-new", "B": "b-concurrent"}
+
+    def test_a_named_update_takes_the_callers_version(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A", "a-old"))
+        snapshot = sk.load_skills()
+        snapshot[0].description = "a-new"
+        sk._save_skills(snapshot, updated_ids={"A"})
+        assert sk.load_skills()[0].description == "a-new"
+
+    def test_an_unnamed_stale_copy_does_not_resurrect_a_deleted_row(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("X"))
+        sk.save_skill(self._mk("Y"))
+        snapshot = sk.load_skills()                 # holds X and Y
+        sk._save_skills([s for s in sk.load_skills() if s.id != "Y"],
+                        dropped_ids={"Y"}, updated_ids=frozenset())
+        for s in snapshot:
+            if s.id == "X":
+                s.description = "x2"
+        sk._save_skills(snapshot, updated_ids={"X"})   # stale Y unnamed
+        assert {s.id for s in sk.load_skills()} == {"X"}
+
+    def test_contradictory_intent_is_refused_before_the_store(
+            self, tmp_path, monkeypatch):
+        import pytest
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A"))
+        before = sk._skills_path().read_bytes()
+        pool = sk.load_skills()
+        # Each door is pinned by its MESSAGE, not just the raise: every
+        # overlap input also trips a sibling door (an overlapping id is
+        # either in the list — door 3 — or not — door 2), so raise-vs-not
+        # cannot tell the overlap door from its siblings. The message is
+        # the door's contribution: the operator reads "contradictory
+        # intent", not a misleading sibling diagnosis. (r17 sweep
+        # survivor: `if False:` on the overlap check passed this test's
+        # original raise-only form.)
+        with pytest.raises(ValueError, match="named both updated and dropped"):
+            sk._save_skills(pool, updated_ids={"A"}, dropped_ids={"A"})
+        with pytest.raises(ValueError, match="absent from the caller's list"):
+            sk._save_skills(pool, updated_ids={"ghost"})
+        with pytest.raises(ValueError, match="still present in the caller's"):
+            sk._save_skills(pool, dropped_ids={"A"},
+                            updated_ids=frozenset())
+        assert sk._skills_path().read_bytes() == before
+
+    def test_an_unnamed_duplicate_row_is_carried_not_compacted(
+            self, tmp_path, monkeypatch):
+        """Adversarial r17 (Minimalist, probed): an incidental rewrite
+        physically destroyed an older valid same-id row an operator kept
+        for recovery. Unnamed rows now carry verbatim — duplicates
+        included."""
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("same", "v1"))
+        v1 = sk._skills_path().read_text()
+        sk.save_skill(self._mk("same", "v2"))
+        sk._skills_path().write_text(v1 + sk._skills_path().read_text())
+        sk.save_skill(self._mk("other"))
+        pool = sk.load_skills()
+        sk._save_skills(pool, updated_ids={"other"})
+        lines = [l for l in sk._skills_path().read_text().splitlines() if l]
+        assert sum('"same"' in l for l in lines) == 2
+
+    def test_a_named_updates_duplicate_is_compacted_and_announced(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("same", "v1"))
+        v1 = sk._skills_path().read_text()
+        sk.save_skill(self._mk("same", "v2"))
+        sk._skills_path().write_text(v1 + sk._skills_path().read_text())
+        pool = sk.load_skills()
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            sk._save_skills(pool, updated_ids={"same"})
+        lines = [l for l in sk._skills_path().read_text().splitlines() if l]
+        assert sum('"same"' in l for l in lines) == 1
+        assert "compacted by this rewrite" in caplog.text
+
+    def test_a_named_drop_is_announced_with_the_store_path(
+            self, tmp_path, monkeypatch, caplog):
+        """Adversarial r17 (Failure Operator, probed): a committed cull
+        or rollback emitted no line naming skills.jsonl, so an operator
+        could not distinguish it from tampering or locate the store."""
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("keep"))
+        sk.save_skill(self._mk("gone"))
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            sk._save_skills(
+                [s for s in sk.load_skills() if s.id == "keep"],
+                dropped_ids={"gone"}, updated_ids=frozenset())
+        assert "removed by this rewrite" in caplog.text
+        assert str(sk._skills_path()) in caplog.text
+        assert "gone" in caplog.text
+
+    def test_the_announcement_is_post_commit(
+            self, tmp_path, monkeypatch, caplog):
+        """Adversarial r17 (Minimalist, probed): the carried-verbatim
+        warning preceded atomic_write, so a failed rewrite left a log
+        claiming rows were carried through a rewrite that never ran."""
+        import logging
+        import pytest
+        import file_lock
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("k1"))
+        with sk._skills_path().open("ab") as f:
+            f.write(b'{"id": "torn", "name": "torn\xff' + b"\n")
+
+        def boom(*a, **k):
+            raise OSError("simulated ENOSPC")
+        monkeypatch.setattr(file_lock, "atomic_write", boom)
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            with pytest.raises(OSError):
+                pool = sk.load_skills()
+                sk._save_skills(pool, updated_ids={"k1"})
+        assert "carried through the rewrite" not in caplog.text
+        assert "pool rewrite NOT performed" in caplog.text
+
+
+class TestTheBatchRecorderAdmitsOneVerdictPerSkill:
+    """Adversarial r17 (two seats, probed): the batch recorder applied
+    every element of its id list, so a duplicated id credited one
+    injected run twice; a bare string would have been iterated
+    character by character."""
+
+    def test_duplicate_ids_are_collapsed_to_one_verdict(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with caplog.at_level(logging.WARNING, logger="skills"):
+            sk.record_skill_injection_outcomes(["dup", "dup", "one"], True)
+        assert sk.get_skill_stats("dup").injected_runs == 1
+        assert sk.get_skill_stats("one").injected_runs == 1
+        assert "duplicate id(s) collapsed" in caplog.text
+
+    def test_a_bare_string_is_refused(self, tmp_path, monkeypatch):
+        import pytest
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with pytest.raises(TypeError):
+            sk.record_skill_injection_outcomes("bare-id", True)
+        assert sk.get_skill_stats("b") is None
