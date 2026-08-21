@@ -594,10 +594,14 @@ class TestTheSQLiteTwinKeepsTheSameDoctrine:
 
         with caplog.at_level(logging.WARNING):
             rows = sb.read_all("lessons")
-            sb.rewrite("lessons", rows)
-
+        # Pin the READ's own announcement, not the rewrite's — asserting a
+        # substring both guards emit let the read-side silent drop hide
+        # behind the rewrite's carry-through (r13 sweep survivor: the
+        # guard-in-front-of-a-guard hole, third appearance in this arc).
         assert rows == [{"id": "healthy"}]
-        assert any("unreadable row" in r.message for r in caplog.records)
+        assert any("excluded from the result" in r.message
+                   for r in caplog.records)
+        sb.rewrite("lessons", rows)
         con = sqlite3.connect(str(tmp_path / "m.db"))
         datas = [r[0] for r in con.execute(
             "SELECT data FROM memory_records WHERE collection='lessons'")]
