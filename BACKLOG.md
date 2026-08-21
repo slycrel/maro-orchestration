@@ -237,6 +237,42 @@ fixtures that could not tell a whole-run drain from a filtered one); tests
 30 -> 47; suite green. Record:
 `docs/history/2026-08-20-async-tail-process-spawn.md`.*
 
+*Its adversarial r2 (2026-08-20, FOUR fresh codex seats on the whole chunk
++ the r1 fix layer, primed with r1's findings): **REJECT — and the fix-layer
+statistic held a second time.** Every HIGH lives in the r1 fixes. Top
+finding, 4/4 seats independently: **the crash evidence could be laundered by
+recovery itself** — `_drain_started` read the LAST claim row, so the first
+partial sweep's own claim+release made the SECOND sweep read "never started"
+and re-run maintenance that had already ticked durable cadence counters; the
+same store-global bit also stranded UNTOUCHED maintenance forever when a
+child died between learning and maintenance. One mistake, two failures:
+store-global evidence for a per-job question. Per-job `started` rows now,
+judged per job. Also: the adapter cache was per-handle and lifecycle-unaware
+(last registration won; the escalation early drain forgot maintenance's
+adapter; a successful spawn leaked one adapter per run in long-lived
+callers) — keyed (handle_id, seq) now; `_transact` could run UNLOCKED via
+locked_write's environment fallback (file_lock grew require=True, defaults
+unchanged) — the r1 race wearing the fix's clothes; a malformed `spec`
+(string, valid JSONL) raised BEFORE the containment try and crash-looped the
+spawned child with the claim never released — decoding inside the belt,
+release in finally; my own r1 `scan_cap=2000` was the limit*4 starvation one
+magnitude up AND magic-number enforcement against the standing observational
+decree — deleted; refresh failures had a record and no READER — surfaced in
+state/CLI/sweep/heartbeat; `"ok": "false"` (string) read as success;
+refresh now follows ATTEMPTS not successes (the r1 test had pinned the false
+premise that failed = nothing happened); `_strict_bool` takes only 0/1
+numerically (bool(nan) is True); finalize-tail grew `--force` and honest
+exit codes. Deferred with premises: phase-result honesty (the runners
+swallow their own sub-failures — identical to phase-1 inline behaviour, its
+own chunk), cwd parity child-vs-inline (unmeasured; box runs from the
+checkout root), pid-reuse fingerprinting (documented + --force overrule, not
+engineered). Receipts: tests 47 -> 60; spec 50 -> 64, 64/64 FIRST sweep (9
+re-anchored, 1 deleted with its code, 15 added); suite green. Signal worth
+keeping: r2 found no defect in the r1 STORE design — transaction,
+append-only, records — only in its policy edges. The rounds are narrowing,
+and the r2 fix layer is itself unreviewed. Record:
+`docs/history/2026-08-20-async-tail-process-spawn.md`.*
+
 **Open residuals, in the order burn-in should look at them:**
 
 - [ ] **Box burn-in + the flip.** The 53% figure is phase 1's cost on one
@@ -257,11 +293,24 @@ fixtures that could not tell a whole-run drain from a filtered one); tests
       survive as the fallback for a handle that owns no run-dir, which is
       rare — and their own refresh blocks are largely inert on that lane
       anyway (no run dir to re-render). Worth a census, not a guess.
-- [ ] **The r1 fix layer is unreviewed**, and across ~50 recorded rounds the
-      prior round's fix layer is the single likeliest home of the next
-      round's worst finding. A second round on `8fe0a9b..HEAD` is the
-      cheapest remaining evidence — one round surfaces roughly 75-80% of what
-      two find.
+- [x] ~~The r1 fix layer is unreviewed~~ — r2 ran 2026-08-20 (four fresh
+      seats), REJECT, six findings fixed same-day (see the r2 entry above).
+      The r2 fix layer is now the unreviewed one; round 3 is optional —
+      the rounds are visibly narrowing (no store-design findings left,
+      policy edges only) and burn-in evidence is the better next instrument.
+- [ ] **Phase-result honesty** (r2 deferral, Expert QA): the tail runners
+      (`finalize_deferred_learning`, `run_post_run_maintenance`) swallow
+      their own subsystem failures by original design, so a job whose
+      sub-phase failed still records `ok: true` and the failed lane stays
+      empty. Identical to phase-1 inline behaviour — not a spawn regression
+      — but the durable record now EXISTS and could carry per-phase results
+      if the runners returned them. Its own chunk; touches the phase
+      contracts, not the store.
+- [ ] **cwd parity, child vs inline** (r2 deferral, Architect): the spawned
+      child runs from the repo root; the inline lane inherits the caller's
+      cwd. Premise for deferring: the box invokes from the checkout root, so
+      the lanes agree in production today. Re-check if a caller ever
+      dispatches from elsewhere.
 
 ### Director worker-review is ungated — we lose the sol-advisor efficiency comparison on our default path (FOUND 2026-08-19, maro self-analysis)
 

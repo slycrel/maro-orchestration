@@ -3746,3 +3746,29 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   drain from a filtered one); tests 30 -> 47; suite green. The r1 fix
   layer is UNREVIEWED. Record:
   `docs/history/2026-08-20-async-tail-process-spawn.md`.
+- **2026-08-20 — async-tail r2: REJECT, all six in the r1 fix layer, and
+  the arc's statistic holds twice running.** Four fresh codex seats on the
+  chunk + r1 fixes, primed with r1's findings. Top (4/4 seats): **recovery
+  laundered its own crash evidence** — `_drain_started` read the LAST
+  claim row, so the first partial sweep's claim+release made the second
+  sweep re-run maintenance that had already ticked durable counters; the
+  same store-global bit ALSO stranded untouched maintenance forever. One
+  mistake, two opposite failures: store-global evidence for a per-job
+  question. Per-job `started` rows now. Three durable shapes from the
+  round: (1) **a fix that answers a per-item question with global state
+  fails in both directions at once** — too eager and too timid are the
+  same bug; (2) **my own r1 fix reproduced the defect it fixed, one
+  magnitude up** (`scan_cap=2000` vs the `limit*4` starvation — and
+  against the standing correctness-over-frugality decree; deleted); (3)
+  **a record without a reader is not surfaced** (r1's refresh-failure row
+  had no consumer — the second time this arc shipped that shape, after
+  r1's failed-jobs lane). Also: adapter cache re-keyed per job (last
+  registration won; early drains starved later ones; spawns leaked),
+  `_transact` could run UNLOCKED via locked_write's environment fallback
+  (file_lock grew require=True), and a string-valued `spec` escaped the
+  never-raises belt and crash-looped the child. Receipts: tests 47->60,
+  spec 50->64 at 64/64 FIRST sweep, suite green. Narrowing signal: no
+  store-design findings left, policy edges only. Meanwhile the first
+  burn-in run (0ebadc02, link-farm review, tail.spawn ON box-wide) is
+  mid-loop on the box from a clean r12 clone. Record:
+  `docs/history/2026-08-20-async-tail-process-spawn.md`.

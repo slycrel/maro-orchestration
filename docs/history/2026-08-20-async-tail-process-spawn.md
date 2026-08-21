@@ -308,3 +308,88 @@ Per the skill's own coverage note: one round surfaces roughly 75–80% of what
 two find, and across ~50 recorded rounds the prior round's fix layer is the
 single likeliest home of the next round's worst finding. **This fix layer is
 unreviewed.**
+
+---
+
+# Adversarial round 2 — 2026-08-20, four fresh codex seats
+
+Same four lenses, on the whole chunk PLUS the round-1 fix layer, primed with
+what round 1 found so they would attack the fixes rather than re-find them.
+**Verdict: REJECT again** — and the arc's own statistic held a second time:
+every HIGH lives in the round-1 fix layer.
+
+**The crash evidence could be laundered by recovery itself** (4/4 seats,
+independently, same probe). `_drain_started` read the LAST claim row. The
+first partial sweep — correctly draining only learning — appended its own
+claim and release, which became the newest claim, so the SECOND sweep read
+"no drain ever started" and re-ran maintenance that had already ticked
+durable cadence counters. The precise failure `_resweep_safe` was built to
+prevent, reintroduced by the recovery path one layer up. And the same
+store-global bit failed the opposite direction too (Expert QA): a child that
+died after learning but before invoking maintenance left an unreleased
+claim, so the untouched maintenance job read as "started" and was stranded
+under `needs_operator` forever. One mistake, two failures: **store-global
+evidence for a per-job question.** Fixed with per-job `started` rows appended
+before each runner; `_resweep_safe` judges each job on its own marker, and a
+start that cannot be recorded declines non-idempotent work instead of
+running unprovably.
+
+**The adapter cache was per-handle and lifecycle-unaware** (3 seats). Last
+registration won, so post-escalation learning overwrote maintenance's
+adapter; the escalation lane's early learning drain forgot the whole handle's
+cache while maintenance was still pending; and a successful spawn kept
+objects the child can never consume — one adapter leaked per handled run in
+every long-lived caller. Keyed `(handle_id, seq)` now, forgotten per job on
+completion, wholesale on spawn/empty handoff.
+
+**`_transact` could run unlocked** (Expert QA). `locked_write`'s
+environment fallback (lock file uncreatable) proceeds unlocked by
+long-standing contract — fine for its other callers, fatal for a
+read-decide-append transaction, which unlocked is the round-1 race wearing
+the fix's clothes. `file_lock` grew `require=True` (default unchanged for
+every existing caller) and the transaction declines when exclusivity is
+unavailable.
+
+**A malformed spec escaped the "never raises" belt** (Expert QA). A job row
+whose `spec` is a string is valid JSONL, and `spec.get` ran BEFORE the try
+block — out of `run_jobs`, claim never released, a spawned child
+crash-looping on the same row forever. Decoding is inside the belt now, the
+claim release moved into `finally`, and malformed jobs are recorded and
+retired.
+
+Also accepted and fixed: `scan_cap` deleted — my own round-1 addition was the
+`limit * 4` starvation one magnitude up, and magic-number enforcement where
+the standing decree is observational; refresh failures got READERS
+(state/CLI/sweep/heartbeat), because a durable event nobody reads is not
+surfaced; `"ok": "false"` (a string) no longer reads as success; orphan done
+rows fabricate nothing; refresh follows ATTEMPTS, not successes — the
+round-1 test had pinned the opposite premise ("every job failed, so nothing
+happened"), which is false the moment a failed learning job has already made
+paid calls; `_strict_bool` accepts only 0/1 numerically (`bool(nan)` is
+True, and YAML's `.nan` is a float); and `finalize-tail` grew `--force` (the
+operator overrule for the claim's pid-reuse blind spot, which is documented
+rather than engineered around) and exits nonzero when work remains.
+
+**Deferred, with premises named:**
+
+- *Phase-result honesty* (Expert QA): `finalize_deferred_learning` and
+  `run_post_run_maintenance` swallow their own subsystem failures by
+  original design, so a job whose sub-phase failed still records `ok: true`.
+  True — and identical to phase-1 inline behaviour, so it is not a spawn
+  regression. Making the phases return structured partial results is its own
+  chunk, filed in BACKLOG.
+- *cwd parity* (Architect): the child runs from the repo root; the inline
+  lane inherits the caller's cwd. Real difference, unmeasured effect — the
+  box invokes from the checkout root anyway. Filed with the premise.
+- *PID birth-fingerprint* (Skeptic): pid reuse can make a dead claim read
+  live. Mitigated by `--force` plus the sweep's operator surfacing rather
+  than engineered away; a lease/heartbeat protocol is more machinery than
+  the exposure warrants until burn-in says otherwise.
+
+Receipts: tests 47 → 60, spec 50 → 64 (**64/64 on the first sweep** — 9
+re-anchored where the fixes moved their own lines, 1 deleted with the code
+it mutated, 15 added), full suite green. **The r2 fix layer is itself
+unreviewed** — the same sentence round 1 ended on, one layer deeper. The
+convergence signal is real though: round 2 found no defect in the round-1
+STORE design (transaction, append-only, records), only in its policy edges —
+the rounds are narrowing.
