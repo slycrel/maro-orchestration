@@ -1282,6 +1282,38 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       all 6 marked equivalents (5 standing + this round's new
       twin-lock) surviving as claimed; the arc's first
       zero-survivor, zero-SKIP first run.*
+    - *Its adversarial r13 (2026-08-20, five codex seats on the r12 fix
+      layer): **REJECT — thirteenth round, findings narrowing** (no
+      unanimous HIGH; mostly r12's own new code + twins the arc had
+      not visited). All probed real — NINTH zero-hallucination round.
+      Presence-is-not-absence (validate_skill_stats_row read d.get(),
+      so a stored JSON null rode the absence exemption and bool(None)
+      laundered it to false — every modeled field now checks `name in
+      d`, present null strands); recorder doors (truthy "false"
+      recorded a failure as a success; NaN telemetry discarded behind
+      a normal return — both TypeError at the door now, wrappers name
+      path+skill); _write_skill_stats proves the reader's FULL
+      predicate; _archive_skills — the retention decree's own writer —
+      proves every line before any append; rewrite audit honesty
+      (strandees FIRST, announce after commit, I/O failures propagate
+      loudly with the path); new transform() = read→fn→write under ONE
+      lock (bare read_all→rewrite is an undecidable lost-update race;
+      no production caller composes it today, so API hardening) with a
+      lock-held pin; SQLite twin brought to full doctrine parity (one
+      MARO_MEMORY_BACKEND flip from live, had silent-drop +
+      DELETE-all); scanner provenance now a lattice (ctor-assign
+      aliases to fixpoint, method-alias chains, tuple destructuring,
+      _parser_names on _bindings, dotted attribute paths, class-level
+      self.* map across sibling methods) — blast radius 72 RISK
+      unchanged. JUDGED not fixed: admission stays TYPE-level
+      (plausibility auditing is an inspector's job; total_uses=-4 is
+      faithfully representable — documented in the validator
+      docstring). Receipts: spec 185 -> 209 (7 re-anchors first),
+      16 new must-detect tests. Sweep: 208/209 first pass; the one
+      survivor was the guard-in-front-of-a-guard hole again (the
+      composition test matched a substring both guards emit, so the
+      read-side drop hid behind the rewrite's carry-through) —
+      fixture now pins the read's own announcement; 209/209 after.*
     - *Carried lesson from r9: **the idiom everyone writes is the one
       nobody reviews.** `line = raw.strip()` sat in five readers,
       survived eight adversarial rounds whose subject was "what can a
@@ -1337,6 +1369,18 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       mirror the reader's full admission, not just its parser** (what
       read_all announces-and-skips was never in the caller's list, so
       the rewrite deletes it unless the re-read strands it).*
+    - *Carried lesson from r13: **doctrine that does not travel to the
+      twins is local luck.** Three rounds of JSONL doors while the
+      selectable SQLite twin kept silent-drop + DELETE-all; the
+      retention archive was a writer nobody audited; _parser_names
+      kept a private Assign-only walk one round after _bindings
+      learned the other forms. When a rule hardens, enumerate its
+      twins by ROLE (config twin, sibling writer, private copy of a
+      shared walk) and convert them in the same commit. Corollary:
+      **presence is not absence** — d.get() collapses "stored null"
+      into "not stored" and exempts exactly the value the constructor
+      launders most quietly (bool(None)); check membership, then the
+      value.*
     - *Open design item (r12, Failure Operator — real, pre-existing,
       out of the byte-safety arc's scope): `poll()` durably writes
       `applied=True` BEFORE the loop side applies anything

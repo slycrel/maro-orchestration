@@ -1281,6 +1281,102 @@ first run: the eight re-anchors were done BEFORE the sweep (a SKIP is
 not a pass), and each new mutant was written against a fixture that
 already existed. Suite and manifest green; blast radius 72 RISK.
 
+## Adversarial round 13 (2026-08-20, five codex seats — the fix layer again)
+
+Five seats on the r12 fix layer. **REJECT**, but the findings are
+narrowing: no unanimous HIGH, and most of the round is r12's own new
+code plus config/sibling twins the arc had not yet visited. Every
+probed claim was real — the ninth consecutive zero-hallucination round.
+
+- **Presence is not absence** (three seats, HIGH, probed).
+  `validate_skill_stats_row` read fields with `d.get(name)`, so an
+  explicitly stored JSON `null` was indistinguishable from an absent
+  field: it rode the absence exemption, `bool(None)` laundered it to
+  `false` on the next counter bump — the exact r12 laundering class,
+  through `null` instead of `"false"` — and a `null` counter would make
+  the NEXT update raise mid-recorder. Every modeled field now checks
+  `name in d` and refuses a present null; the null row strands verbatim.
+- **The recorders trusted their callers' types** (Architect, probed).
+  `success="false"` is truthy, so a stringly-typed caller recorded a
+  FAILURE as a success — permanently wrong evidence that type-checks
+  clean forever after; and `cost_usd=NaN` sailed to the emission door,
+  whose refusal the never-raise write wrapper swallowed into a normal
+  `None` return with a pathless warning. Both refused at the door now;
+  the wrappers name the store path and the discarded skill.
+- **The writer/reader gap, one layer up** (Architect, probed).
+  `_write_skill_stats` proved clean-object JSON while its reader admits
+  via `validate_skill_stats_row` — the destructive writer had a weaker
+  contract than its own reader. It validates the full predicate now.
+- **The archive was a writer nobody had audited** (Skeptic, probed).
+  `_archive_skills` — the retention decree's own mechanism — used bare
+  `json.dumps`, so a skill holding a lone surrogate archived as a row
+  the strict reader strands and was then removed from the live pool.
+  Every line is proven before any append; a refusal aborts the
+  caller's removal too (archive-before-remove order verified at both
+  call sites).
+- **The rewrite's audit lied twice** (QA + Failure Operator, probed).
+  Strandees were re-homed to the tail, where a keyed last-row-wins
+  consumer would let a later-repaired legacy row outrank the caller's
+  records (they ride FIRST now, the same ordinal decision skills made
+  in r7); and the carry-through warning fired BEFORE the payload was
+  proven, so a refused emission left an audit line about a rewrite
+  that never happened (announce-after-commit now). `append` and
+  `rewrite` also converted I/O failure into apparent success — they
+  propagate loudly with the path now.
+- **The bare composition is an undecidable race** (Skeptic, probed).
+  A record appended between `read_all()` and `rewrite()` is CLEAN, so
+  the strandee pass cannot distinguish "the caller dropped it" from
+  "the caller never saw it" — with a bare list API that is
+  undecidable, and the concurrent append was silently deleted. New
+  `transform(collection, fn)` runs read → fn → write under ONE lock,
+  making the decision decidable by construction; a lock-held pin keeps
+  the no-lock revert out. `rewrite()` remains for whole-store
+  replacement. (No production caller composes the pair today — the
+  backend is the memory-port bake-off surface — so this landed as API
+  hardening, not a live-data fix.)
+- **The SQLite twin had none of it** (Minimalist, HIGH, probed).
+  `MARO_MEMORY_BACKEND=sqlite` selected a backend whose `read_all`
+  silently dropped a damaged row (`except JSONDecodeError: pass`) and
+  whose `rewrite` DELETE-all'd the collection — the standard
+  composition permanently destroyed the damaged row, with no
+  announcement, one env flip from live. Full doctrine parity now:
+  announced strict reads, rewrite deletes only rows the reader vouches
+  for and carries damaged `data` verbatim, emissions proven before the
+  transaction, loud failures.
+- **Provenance is a lattice, not a spelling list** (four seats, one
+  bypass each, all probed). r12's provenance rules still fell to
+  ordinary alias chains: `Ctor = json.JSONDecoder; decoder = Ctor()`,
+  a re-aliased bound method (`rebound = raw`), tuple destructuring,
+  `parser: object = json.loads` (r12 taught `_bindings` AnnAssign and
+  walrus — and `_parser_names` kept its own private Assign-only walk:
+  the r12 half-conversion lesson, one round later), and an instance
+  stored on `self` in `__init__` and used in `rewrite`. Constructor
+  aliases now resolve to a fixpoint; destructuring binds element-wise;
+  attribute chains resolve as dotted paths; and a class-level map
+  carries `self.*` provenance across sibling methods (normalized to
+  the receiver name, so `self`/`cls` spelling does not matter). Blast
+  radius unchanged at 72 RISK; both negative controls hold.
+
+Judged, not fixed:
+
+- **Admission stays TYPE-level** (QA wanted semantic invariants —
+  non-negative counters, successes ≤ total). A row claiming
+  `total_uses=-4` is faithfully representable and faithfully
+  re-emitted; the reader can vouch for its BYTES, which is what
+  admission means in this arc. Plausibility auditing is an inspector's
+  job, and stranding implausible-but-readable rows would misfile
+  legitimate legacy data behind a corruption warning. Documented in
+  the validator docstring.
+
+Sweep: 208/209 on the first pass (202 detected + the 6 standing
+equivalents), and the one survivor was a teacher: the SQLite
+composition test asserted a substring BOTH guards emit ("unreadable
+row"), so the read-side silent-drop revert hid behind the rewrite's
+carry-through warning — the guard-in-front-of-a-guard hole, third
+appearance in this arc. The fixture now pins the read's own
+announcement ("excluded from the result") before the rewrite runs.
+209/209 after.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1449,3 +1545,18 @@ emission door beats N copies of the same proof** — once three writers
 each need "serialize, re-read through the strict reader, require the
 reader's shape", the proof belongs in one helper the writers cannot
 drift from.
+
+The fifteenth is round 13's: **doctrine that does not travel to the twins
+is local luck.** The JSONL backend spent three rounds earning its doors
+while its selectable SQLite twin — one env flip away — kept the exact
+silent-drop-plus-DELETE-all composition r11 called unanimous; the
+retention archive, the mechanism of the retention decree itself, was a
+writer nobody had audited; and `_parser_names` kept a private Assign-only
+walk one round after `_bindings` learned the other forms — the r12
+half-conversion lesson, replayed on the file that teaches it. When a rule
+hardens, enumerate its twins by ROLE (config twin, sibling writer, private
+copy of a shared walk) and convert them in the same commit. Corollary:
+**presence is not absence** — `d.get(name)` collapses "stored null" into
+"not stored", and any predicate built on it exempts exactly the value the
+constructor launders most quietly (`bool(None)`); check membership, then
+check the value.
