@@ -1807,8 +1807,8 @@
   {
     "name": "r16 evolver :: the rollback stops naming its drops",
     "file": "src/evolver_store.py",
-    "anchor": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, dropped_ids=_removed,\n                                 updated_ids=frozenset())",
-    "replacement": "                    # dropped_ids: a deliberate removal must be named\n                    # (r16 _save_skills contract).\n                    _save_skills(skills, updated_ids=frozenset())",
+    "anchor": "                        # dropped_ids: a deliberate removal must be named\n                        # (r16 _save_skills contract).\n                        _save_skills(skills, dropped_ids=_removed,\n                                     updated_ids=frozenset())",
+    "replacement": "                        # dropped_ids: a deliberate removal must be named\n                        # (r16 _save_skills contract).\n                        _save_skills(skills, updated_ids=frozenset())",
     "tests": "tests/test_skills.py"
   },
   {
@@ -1919,15 +1919,15 @@
   {
     "name": "r17 evolver :: rollback matches by mutable name again",
     "file": "src/evolver_store.py",
-    "anchor": "                if created_id:\n                    removal = [s for s in skills if s.id == created_id]",
-    "replacement": "                if False:\n                    removal = [s for s in skills if s.id == created_id]",
+    "anchor": "                    if created_id:\n                        removal = [s for s in skills\n                                   if s.id == created_id]",
+    "replacement": "                    if False:\n                        removal = [s for s in skills\n                                   if s.id == created_id]",
     "tests": "tests/test_evolver.py::TestRollbackTakesItsDeletionByRecordedId::test_an_operator_same_name_skill_survives"
   },
   {
     "name": "r17 evolver :: the rollback stops archiving again",
     "file": "src/evolver_store.py",
-    "anchor": "                    _archive_skills(removal,\n                                    reason=\"evolver_skill_create_reverted\")",
-    "replacement": "                    pass",
+    "anchor": "                        _archive_skills(removal,\n                                        reason=\"evolver_skill_create_reverted\")",
+    "replacement": "                        pass",
     "tests": "tests/test_evolver.py::TestRollbackTakesItsDeletionByRecordedId::test_the_removed_row_is_archived_first"
   },
   {
@@ -2143,22 +2143,50 @@
   {
     "name": "r21 evolver :: the revert drops its lock",
     "file": "src/evolver_store.py",
-    "anchor": "                from skills import _skills_path as _sp\n                with _lw(_sp(), require=True):",
-    "replacement": "                from skills import _skills_path as _sp\n                if True:",
+    "anchor": "                from file_lock import locked_write as _lw\n                from skills import _skills_path as _sp\n                with _lw(_sp(), require=True):\n                    skills = load_skills()\n                    for s in skills:",
+    "replacement": "                from file_lock import locked_write as _lw\n                from skills import _skills_path as _sp\n                if True:\n                    skills = load_skills()\n                    for s in skills:",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_guard_reads_and_writes_under_one_lock"
   },
   {
     "name": "r21 evolver :: the guard reads the stale snapshot",
     "file": "src/evolver_store.py",
-    "anchor": "                    skills = load_skills()",
-    "replacement": "                    pass",
+    "anchor": "                with _lw(_sp(), require=True):\n                    skills = load_skills()\n                    for s in skills:",
+    "replacement": "                skills = load_skills()\n                with _lw(_sp(), require=True):\n                    for s in skills:",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_guard_reads_and_writes_under_one_lock"
   },
   {
     "name": "r21 evolver :: the missing-text guard blind restores again",
     "file": "src/evolver_store.py",
-    "anchor": "                            if not _sugg_text:",
+    "anchor": "                            if _sugg_missing:",
     "replacement": "                            if False:",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_refuses_too"
+  },
+  {
+    "name": "r22 evolver :: the create revert reads before the lock",
+    "file": "src/evolver_store.py",
+    "anchor": "                with _lw(_sp(), require=True):\n                    skills = load_skills()\n                    if created_id:",
+    "replacement": "                skills = load_skills()\n                with _lw(_sp(), require=True):\n                    if created_id:",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_create_revert_reads_archives_and_writes_under_one_lock"
+  },
+  {
+    "name": "r22 evolver :: the create revert drops its lock",
+    "file": "src/evolver_store.py",
+    "anchor": "                with _lw(_sp(), require=True):\n                    skills = load_skills()\n                    if created_id:",
+    "replacement": "                if True:\n                    skills = load_skills()\n                    if created_id:",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_create_revert_reads_archives_and_writes_under_one_lock"
+  },
+  {
+    "name": "r22 evolver :: absent conflates with empty again",
+    "file": "src/evolver_store.py",
+    "anchor": "                _sugg_missing = (\"suggestion_text\" not in match\n                                 or match.get(\"suggestion_text\") is None)",
+    "replacement": "                _sugg_missing = not (\n                    match.get(\"suggestion_text\") or \"\")",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_is_verifiable_not_refused tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores"
+  },
+  {
+    "name": "r22 evolver :: the shared pre-lock snapshot returns",
+    "file": "src/evolver_store.py",
+    "anchor": "            state_type = before_state.get(\"type\", \"\")",
+    "replacement": "            skills = load_skills()\n            state_type = before_state.get(\"type\", \"\")",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_no_read_precedes_the_first_lock"
   }
 ]

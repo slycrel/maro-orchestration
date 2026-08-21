@@ -4717,19 +4717,122 @@ class TestTheRevertHoldsTheLockItWritesUnder:
         assert any("cannot verify" in r.getMessage()
                    for r in caplog.records)
 
-    def test_an_empty_suggestion_text_refuses_too(
+    def test_an_empty_suggestion_text_is_verifiable_not_refused(
             self, tmp_path, monkeypatch):
+        """Absent is not empty (adversarial r22, two seats, probed):
+        an apply whose suggestion was "" wrote "" — a value the guard
+        can compare like any other. r21 conflated the two and refused
+        forever, stranding the post-apply auto-revert safety net for
+        a shape reachable today."""
         import skills as sk
         from evolver_store import _apply_suggestion_action, \
             revert_suggestion
         self._env(monkeypatch, tmp_path)
         sk.save_skill(self._mk("lg2", "target-skill", "before"))
-        # An empty LLM suggestion is a real, current shape — the audit
-        # row records suggestion_text: "" and the guard used to skip.
         assert _apply_suggestion_action({
             "category": "skill_pattern", "suggestion": "",
             "target": "target-skill", "suggestion_id": "sug-lg2",
             "confidence": 0.5}) is True
+        # Undisturbed: the live value IS the suggestion's "" — the
+        # revert verifies and restores.
         res = revert_suggestion("sug-lg2")
+        assert res["reverted"] is True
+        row = next(s for s in sk.load_skills() if s.id == "lg2")
+        assert row.description == "before"
+
+    def test_a_disturbed_empty_suggestion_revert_still_refuses(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("lg3", "target-skill", "before"))
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "",
+            "target": "target-skill", "suggestion_id": "sug-lg3",
+            "confidence": 0.5}) is True
+        live = {s.id: s for s in sk.load_skills()}
+        live["lg3"].description = "later-legit-edit"
+        sk.save_skill(live["lg3"])
+        res = revert_suggestion("sug-lg3")
         assert res["reverted"] is False
-        assert "suggestion_text unavailable" in res["detail"]
+        assert "blind restore refused" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "lg3")
+        assert row.description == "later-legit-edit"
+
+    def test_no_read_precedes_the_first_lock(self):
+        """Behavioral mid-window injection cannot pin the lock (the
+        in-thread competing write rides the reentrancy — proven by
+        this round's own attempt), so the pin is structural
+        (adversarial r22, Architect): revert_suggestion holds NO
+        pre-lock load_skills read for a branch to shadow — the first
+        read in the function comes after the first lock acquisition,
+        and exactly the two in-branch reads exist."""
+        import inspect
+        import evolver_store
+        src = inspect.getsource(evolver_store.revert_suggestion)
+        first_lock = src.index("with _lw(_sp(), require=True):")
+        first_read = src.index("skills = load_skills()")
+        assert first_lock < first_read
+        assert src.count("skills = load_skills()") == 2
+
+    def test_the_create_revert_reads_archives_and_writes_under_one_lock(
+            self):
+        """Structural pin for the r22 fix: within the skill_create
+        branch, lock < fresh read < archive < named-drop write — the
+        archived copy is what is live at delete time."""
+        import inspect
+        import evolver_store
+        src = inspect.getsource(evolver_store.revert_suggestion)
+        cr_at = src.index('elif state_type == "skill_create":')
+        end_at = src.index('elif category == "new_guardrail":')
+        branch = src[cr_at:end_at]
+        lock_at = branch.index("with _lw(_sp(), require=True):")
+        read_at = branch.index("skills = load_skills()", lock_at)
+        arch_at = branch.index("_archive_skills(removal,", read_at)
+        write_at = branch.index("_save_skills(skills, dropped_ids=_removed,",
+                                arch_at)
+        assert lock_at < read_at < arch_at < write_at
+
+    def test_a_create_revert_archives_what_was_live_at_delete_time(
+            self, tmp_path, monkeypatch):
+        """Adversarial r22 (three seats, HIGH, probed): the
+        skill_create revert archived the stale pre-lock snapshot — a
+        concurrent edit racing the revert vanished from the live
+        store AND the archive. Retention must be at least as durable
+        as the deletion it authorizes."""
+        import json
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        # A create-apply (no existing skill named this).
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "created body",
+            "target": "brand-new-skill", "suggestion_id": "sug-cr1",
+            "confidence": 0.5}) is True
+        real_load = sk.load_skills
+        fired = {"done": False}
+
+        def racing_load(*a, **k):
+            out = real_load(*a, **k)
+            if not fired["done"]:
+                fired["done"] = True
+                live = [s for s in real_load()
+                        if s.name == "brand-new-skill"]
+                live[0].description = "concurrent-edit-worth-keeping"
+                sk.save_skill(live[0])
+                return real_load(*a, **k)
+            return out
+
+        monkeypatch.setattr(sk, "load_skills", racing_load)
+        res = revert_suggestion("sug-cr1")
+        assert res["reverted"] is True
+        archive = sk._skills_archive_path()
+        rows = [json.loads(l) for l in
+                archive.read_text().splitlines() if l.strip()]
+        mine = [r for r in rows
+                if r.get("archived_reason")
+                == "evolver_skill_create_reverted"]
+        assert mine and mine[-1]["description"] \
+            == "concurrent-edit-worth-keeping"

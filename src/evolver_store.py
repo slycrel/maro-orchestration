@@ -967,7 +967,10 @@ def revert_suggestion(suggestion_id: str) -> dict:
     try:
         if category == "skill_pattern":
             from skills import load_skills, _save_skills
-            skills = load_skills()
+            # No snapshot read here: each branch reads fresh inside
+            # the lock it writes under (r21 skill_update, r22
+            # skill_create) — a shared pre-lock read is exactly the
+            # stale authority both rounds removed.
             state_type = before_state.get("type", "")
 
             if state_type == "skill_update":
@@ -990,14 +993,23 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # locked_write is thread-reentrant, so _save_skills'
                 # inner acquisition composes.
                 old_desc = before_state.get("old_description", "")
-                _sugg_text = (match.get("suggestion_text", "") or "")[:500]
+                # Absent is not empty (adversarial r22, two seats,
+                # probed): an apply whose suggestion was "" wrote ""
+                # as the description — a fully VERIFIABLE value the
+                # guard can compare like any other. Only a row that
+                # never recorded suggestion_text (legacy) is
+                # unverifiable; refusing the verifiable case stranded
+                # the post-apply auto-revert safety net forever.
+                _sugg_missing = ("suggestion_text" not in match
+                                 or match.get("suggestion_text") is None)
+                _sugg_text = (match.get("suggestion_text") or "")[:500]
                 from file_lock import locked_write as _lw
                 from skills import _skills_path as _sp
                 with _lw(_sp(), require=True):
                     skills = load_skills()
                     for s in skills:
                         if s.name == target or s.id == target:
-                            if not _sugg_text:
+                            if _sugg_missing:
                                 # No recorded suggestion text — the
                                 # guard CANNOT verify the live value is
                                 # this suggestion's own; refusing is
@@ -1054,29 +1066,46 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # removal now archives first — the rollback is
                 # recoverable either way (retention decree).
                 created_id = before_state.get("created_skill_id", "")
-                if created_id:
-                    removal = [s for s in skills if s.id == created_id]
-                else:
-                    removal = [s for s in skills
-                               if s.name == target or s.id == target]
-                if removal:
-                    from skills import _archive_skills
-                    _removed = {s.id for s in removal}
-                    # Archive BEFORE the delete; _archive_skills raises
-                    # on failure, so a failed retention copy aborts the
-                    # removal with the live pool untouched.
-                    _archive_skills(removal,
-                                    reason="evolver_skill_create_reverted")
-                    skills = [s for s in skills if s.id not in _removed]
-                    # dropped_ids: a deliberate removal must be named
-                    # (r16 _save_skills contract).
-                    _save_skills(skills, dropped_ids=_removed,
-                                 updated_ids=frozenset())
-                    detail = f"removed created skill '{target}'"
-                    behavioral = True
-                else:
-                    return {"reverted": False, "behavioral": False, "category": category,
-                            "detail": f"skill '{target}' not found for removal"}
+                # The read, the archive, and the delete hold one lock
+                # (adversarial r22, three seats, probed): the removal —
+                # and therefore the ARCHIVED copy, the retention
+                # decree's only recovery path — was built from the
+                # stale pre-lock snapshot, so a concurrent edit racing
+                # the revert vanished from the live store AND the
+                # archive. Retention must be at least as durable as
+                # the deletion it authorizes: archive what is live at
+                # delete time. Same lock closes the legacy name-match
+                # resolving identity against a stale list.
+                from file_lock import locked_write as _lw
+                from skills import _skills_path as _sp
+                with _lw(_sp(), require=True):
+                    skills = load_skills()
+                    if created_id:
+                        removal = [s for s in skills
+                                   if s.id == created_id]
+                    else:
+                        removal = [s for s in skills
+                                   if s.name == target or s.id == target]
+                    if removal:
+                        from skills import _archive_skills
+                        _removed = {s.id for s in removal}
+                        # Archive BEFORE the delete; _archive_skills
+                        # raises on failure, so a failed retention copy
+                        # aborts the removal with the live pool
+                        # untouched.
+                        _archive_skills(removal,
+                                        reason="evolver_skill_create_reverted")
+                        skills = [s for s in skills
+                                  if s.id not in _removed]
+                        # dropped_ids: a deliberate removal must be named
+                        # (r16 _save_skills contract).
+                        _save_skills(skills, dropped_ids=_removed,
+                                     updated_ids=frozenset())
+                        detail = f"removed created skill '{target}'"
+                        behavioral = True
+                    else:
+                        return {"reverted": False, "behavioral": False, "category": category,
+                                "detail": f"skill '{target}' not found for removal"}
 
         elif category == "new_guardrail":
             # Remove matching pattern from dynamic-constraints.jsonl
