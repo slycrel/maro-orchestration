@@ -1370,6 +1370,49 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       composition test matched a substring both guards emit, so the
       read-side drop hid behind the rewrite's carry-through) —
       fixture now pins the read's own announcement; 209/209 after.*
+    - *Its adversarial r14 (2026-08-21, five codex seats on the r13 fix
+      layer): **REJECT — fourteenth round, still narrowing in kind**
+      (one unanimous HIGH; every finding in r13's own new surface or a
+      twin it named but did not convert). All 13 deduped findings
+      probed real — TENTH zero-hallucination round. The contract did
+      not travel (r13's transform() reached JSONL only — now abstract
+      on MemoryBackend, and SQLite got a real one: BEGIN IMMEDIATE
+      before the read, proven emissions, vouched-only deletes, whole
+      rollback; threaded barrier test pins the append-cannot-land-
+      inside-the-window property); a failed SQLite read returned []
+      (indistinguishable from verified-empty — a transient lock error
+      fed rewrite an empty list and deleted the store; raises now);
+      transform honored fail-open (bare locked_write degrades unlocked
+      under MARO_FILELOCK_FAIL_OPEN — require=True now, contended
+      fail-open raises before fn); identity joined the stats predicate
+      (validate_skill_stats_row now requires non-empty string
+      skill_id; writer also refuses map-key/row disagreement); the
+      stats writer kept the pre-r13 ordinal (strandees ride FIRST
+      now); a pure read claimed a rewrite (read announces
+      exclusion-from-this-read; carry-through moved to the writer,
+      after commit); the router trained on rows every reader strands
+      (bare json.loads + int()/float() coercion laundered drifted rows
+      into confident evidence — rides _read_skill_stats now); the
+      archive batch could split mid-write (one locked append per
+      batch; duplicate-on-retry accepted: noise, not loss, in an
+      append-only retention store); scanner provenance stopped at four
+      more boundaries (instance-held ctor aliases, class-body
+      bindings, same-module inheritance, positional-only receivers —
+      plus the destructured-parser leg and a THIRD private copy of the
+      binding walk in _shadowed, found by this round's own negative
+      control; all fixpoints now, blast radius unchanged 72 RISK).
+      JUDGED not fixed: the framing LF on a torn final strandee —
+      accept-and-pin (payload bytes unchanged, round-trip stable; the
+      LF is required framing once strandees ride first; pinned
+      byte-for-byte in both writer families). Receipts: spec
+      209 -> 230 (7 re-anchors first), 31 new must-detect tests.
+      Sweep: 229/230 first pass (223 detected + 6 standing
+      equivalents); the survivor taught about the FIX, not the tests
+      — the inner class-walk fixpoint was a redundant second loop
+      (scan_module's outer class-graph fixpoint re-seeds until
+      convergence either way), so the redundant loop was removed
+      rather than marked equivalent and the mutant retargeted at the
+      outer fixpoint; 230/230 after.*
     - *Carried lesson from r9: **the idiom everyone writes is the one
       nobody reviews.** `line = raw.strip()` sat in five readers,
       survived eight adversarial rounds whose subject was "what can a
@@ -1437,6 +1480,20 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       into "not stored" and exempts exactly the value the constructor
       launders most quietly (bool(None)); check membership, then the
       value.*
+    - *Carried lesson from r14: **the fix for "doctrine must travel"
+      must itself travel — convert the twins in the SAME commit, not
+      the same arc.** r13 wrote the twin-conversion lesson and its own
+      fix layer shipped transform() to one backend of two, an ordinal
+      rule to one writer of two, and a shared binding walk to two call
+      sites of three; r14 was almost entirely that gap. Enumerate the
+      twins BEFORE writing the fix, and let the round's own fixtures
+      double as the census. Corollaries: **an error result must not be
+      a valid value** (returning [] for a failed read hands the caller
+      a verified-empty store; raise, or return a type that cannot be
+      consumed); and **a degraded mode must not include the failure
+      the feature exists to prevent** (a one-lock transaction that
+      honors fail-open is the race wearing the fix's clothes —
+      require the lock).*
     - *Open design item (r12, Failure Operator — real, pre-existing,
       out of the byte-safety arc's scope): `poll()` durably writes
       `applied=True` BEFORE the loop side applies anything
@@ -1448,6 +1505,13 @@ Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
       apply, ack after the loop-side effect commits, startup
       re-delivers expired claims — or an intent-application journal
       keyed by interrupt id). Design work, not a patch.*
+    - *Open item (r14, QA — real, display-surface, deferred):
+      `packaging_readout._read_jsonl` walks stores with bare
+      `json.loads` + `except: continue`, the same raw-loads shape the
+      router fix removed. It feeds a human readout, not a trainer or a
+      rewrite, so the stakes are presentation, not evidence or data —
+      convert it to the announced strict reader when next touching
+      that module.*
     - *Carried lesson from r8, the arc's most durable: **naming the
       cases you have met is a denylist, and a denylist in a safety check
       fails open on the case nobody has met yet.** Three files, one

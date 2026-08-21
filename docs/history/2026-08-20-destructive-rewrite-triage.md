@@ -1377,6 +1377,126 @@ appearance in this arc. The fixture now pins the read's own
 announcement ("excluded from the result") before the rewrite runs.
 209/209 after.
 
+## Adversarial round 14 (2026-08-21, five codex seats — the fix layer again)
+
+Five seats on the r13 fix layer. **REJECT, still narrowing in kind**:
+one unanimous HIGH, and every one of the thirteen deduped findings
+lives in r13's own new surface or a twin it named but did not convert.
+Every probed claim was real — the tenth consecutive zero-hallucination
+round.
+
+- **The contract did not travel** (all five seats, HIGH, probed).
+  r13 added `transform()` to JSONLBackend only — the abstract
+  `MemoryBackend` never learned it, and the selectable SQLite twin
+  kept the exact lost-update race the method exists to close: a clean
+  append between a caller's `read_all()` and `rewrite()` was
+  reader-vouched by rewrite's own re-select, deleted, and never
+  reinserted. The fifteenth lesson ("doctrine that does not travel to
+  the twins is local luck") applied to the fifteenth lesson's own fix
+  layer, one round later. `transform` is abstract contract now;
+  SQLite's implementation takes the write lock BEFORE the read
+  (`BEGIN IMMEDIATE`), proves every emission, deletes only ids its own
+  in-transaction read vouched for, and rolls back whole on any
+  failure. A threaded barrier test pins that a concurrent append
+  cannot land inside the replace window.
+- **A failed read looked like an empty store** (two seats, HIGH,
+  probed). SQLite `read_all()` converted every `sqlite3.Error` into
+  `[]` — indistinguishable from verified-empty, so a transient lock
+  during a repair's read phase handed the caller a valid-looking empty
+  list and the next rewrite deleted every healthy row. It raises now;
+  a read that did not happen must not look like a store with nothing
+  in it.
+- **The one-lock guarantee honored fail-open** (four seats, probed).
+  `transform()` called `locked_write(path)` bare, and the lock's
+  documented degraded mode (`MARO_FILELOCK_FAIL_OPEN=1`, or an
+  uncreatable lock file) yields WITHOUT a lock — the transaction
+  degrading into the exact race it exists to close. `require=True`
+  now; a contended fail-open transform raises before `fn` runs, store
+  untouched.
+- **Identity was not in the predicate** (four seats, probed). The
+  stats reader keys on a non-empty STRING `skill_id`, but
+  `validate_skill_stats_row` checked only the modeled statistic
+  fields — so the writer vouched for a `skill_id: null` row the reader
+  immediately strands as keyless. Identity is in the validator now
+  (the reader's own counters are unchanged: it routes identity
+  failures to the keyless strand before validating), and the writer
+  additionally refuses a map key that disagrees with the row's own id.
+- **The sibling kept the old ordinal** (three seats, probed). r13
+  moved generic-rewrite strandees to the head of the payload;
+  `_write_skill_stats` kept them at the tail, where a same-id stranded
+  legacy row overrode the freshly repaired record for any naive
+  last-row-wins consumer. Strandees ride first now — same doctrine,
+  same ordinal, one round late.
+- **A pure read claimed a rewrite** (Architect, probed).
+  `_read_skill_stats` warned "carried through the rewrite verbatim"
+  from reads that rewrite nothing (`get_all_skill_stats`), and a
+  recorder could log the claim and then fail its write — the r13
+  announce-before-commit finding, one layer up. Reads announce
+  exclusion-from-this-read now; the carry-through line moved to
+  `_write_skill_stats`, after its commit.
+- **The router trained on rows every reader strands** (QA, HIGH,
+  probed). `build_training_data` walked skill-stats with bare
+  `json.loads` and coerced with `int()`/`float()` — so a schema-
+  drifted row (`"total_uses": "1", "success_rate": "1.0"`) that the
+  strict reader strands and the repair path faithfully carries was
+  laundered into a confident training success no operational reader
+  would ever return. It rides `_read_skill_stats` now; drifted rows
+  are excluded and announced. (`packaging_readout._read_jsonl` shares
+  the raw-loads shape but is a display surface — BACKLOG'd, not
+  fixed here.)
+- **The archive batch could split** (Failure Operator, probed).
+  `_archive_skills` appended line by line, so a mid-batch failure
+  landed half a batch and the caller's retry duplicated the landed
+  half. One locked append per batch now — a failure lands nothing.
+  Residual, accepted and documented: a retry after a successful append
+  still duplicates the whole batch; in an append-only retention store
+  a duplicate is noise, not loss, and dedup-on-write is the direction
+  the retention decree forbids.
+- **Provenance stopped at four more boundaries** (four seats between
+  them, all probed). The r13 class-level map fell to: a constructor
+  alias held on the instance (`self.Ctor = json.JSONDecoder` —
+  `_decoder_ctors` recorded bare Names only), a class-BODY decoder
+  binding (read as `self.decoder` from every method, never read at
+  all), a same-module BASE class (`Base.__init__`'s decoder invisible
+  from `Child(Base).rewrite` — a routine base-class extraction turned
+  a raw destructive parse scanner-green), and a positional-only
+  receiver (`def rewrite(self, path, /)` has no `args.args`, so both
+  map construction and consumption skipped the method). And
+  `_parser_names` rejected tuple targets one line before
+  `_expand_binding` could expose `parser, _x = json.loads, None` — the
+  r13 private-copy disease again, whose fix then surfaced a THIRD
+  private copy in `_shadowed` (found by this round's own negative
+  control, not a reviewer). Ctor provenance now takes dotted targets
+  and dotted call sites; class-body bindings seed the map; the class
+  walk is a fixpoint over methods with seeds re-spelled per receiver;
+  same-module bases propagate to a fixpoint (ambiguous base names
+  union all candidates — RISK direction); receivers count
+  posonlyargs. Blast radius unchanged at 72 RISK; negative controls
+  hold (inherited bytes attribute, destructured clean parser).
+
+Judged, not fixed:
+
+- **The framing LF on a torn final strandee** (two seats). A final
+  row that lost its terminator to a crash gains an LF on rewrite in
+  every writer family. Judged accept-and-pin: once strandees ride
+  first the LF is required row framing, the payload bytes are
+  unchanged, and the round-trip is stable — "verbatim" means the
+  payload, not the terminator state of a row torn mid-write. Pinned
+  byte-for-byte in both writer families so drift into actual payload
+  mutation is caught; terminator-state tracking rejected as invasive
+  machinery guarding forensic metadata, not data.
+
+Sweep: 229/230 on the first pass (223 detected + the 6 standing
+equivalents), and the survivor was again a teacher — this time about
+the fix, not the tests: the single-pass mutant on
+`_class_decoder_sets`'s method walk survived because `scan_module`'s
+class-graph fixpoint re-seeds and re-runs the walk until the sets stop
+growing, so the inner while-loop was a redundant second fixpoint on
+the same door. Rather than marking it equivalent, the redundant loop
+is REMOVED (the caller drives convergence — simpler code, one
+mechanism) and the mutant retargeted at the OUTER fixpoint, which the
+reversed-order chain fixture genuinely exercises. 230/230 after.
+
 ## Lesson
 
 The scanner earned its keep by being *wrong 64 times out of 70* — because
@@ -1560,3 +1680,20 @@ copy of a shared walk) and convert them in the same commit. Corollary:
 "not stored", and any predicate built on it exempts exactly the value the
 constructor launders most quietly (`bool(None)`); check membership, then
 check the value.
+
+The sixteenth is round 14's, and it is the fifteenth turned on itself:
+**the fix for "doctrine must travel" must itself travel — convert the
+twins in the SAME commit, not the same arc.** r13 wrote the
+twin-conversion lesson and its own fix layer shipped `transform()` to
+one backend of two, an ordinal rule to one writer of two, and a shared
+binding walk to two call sites of three; round 14 was almost entirely
+that gap, plus the twins' own corollaries: **an error result must not
+be a valid value** (a failed read returning `[]` hands the caller a
+verified-empty store — raise, or return something a rewrite cannot
+consume), and **a degraded mode must not include the failure the
+feature exists to prevent** (a one-lock transaction that honors
+fail-open is the race wearing the fix's clothes — require the lock).
+Enumerate the twins BEFORE writing the fix; let the round's fixtures
+double as the census; and when a negative control fails during the
+fix, treat it as the census working — round 14's own control surfaced
+the third private copy of the binding walk that no reviewer had found.
