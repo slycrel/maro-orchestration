@@ -286,6 +286,9 @@ def test_dispatch_with_nothing_pending_does_nothing(monkeypatch):
 
 def test_spawn_enabled_reads_the_config_key(monkeypatch):
     import config
+    # A fresh install has no `tail.spawn` key at all, and inherits OFF: a
+    # detached child moves where the tail's LLM spend and store writes happen.
+    assert tail_jobs.spawn_enabled() is False
     monkeypatch.setattr(config, "get",
                         lambda key, default=None: True if key == "tail.spawn"
                         else default)
@@ -464,3 +467,93 @@ def test_a_base_backend_identity_is_not_replayed(monkeypatch):
     tail_jobs._build_adapter({"adapter": {"backend": "failover",
                                           "model_key": "mid"}})
     assert attempts == [{"model": "mid"}]
+
+
+def test_a_released_claim_does_not_block_a_later_job(monkeypatch):
+    """A claim is released when its drain finishes, so the NEXT job recorded
+    on the same run is not declined by the ghost of the last one.
+
+    `state()` keeps the most recent claim row, and after a completed drain
+    that row is the release. Without the `released_at` check the run would be
+    permanently claimed by a process that is often still alive — the parent.
+    """
+    _make_run("tj000008")
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", lambda s, a: None)
+    monkeypatch.setitem(tail_jobs._RUNNERS, "maintenance", lambda s, a: None)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces", lambda hid: None)
+    tail_jobs.record_learning("tj000008", _FakeLoop())
+    assert tail_jobs.run_jobs("tj000008") == 1
+    # Same process is still alive; only the release makes the claim inert.
+    tail_jobs.record_maintenance("tj000008", loop_id="L2")
+    assert tail_jobs.run_jobs("tj000008") == 1
+
+
+def test_a_permission_error_means_the_pid_exists(monkeypatch):
+    """EPERM from `os.kill(pid, 0)` is proof the process is there and owned by
+    someone else — reading it as "dead" would let a second drainer in."""
+    import os as _os
+
+    def _kill(pid, sig):
+        raise PermissionError("not yours")
+
+    monkeypatch.setattr(_os, "kill", _kill)
+    assert tail_jobs._is_pid_alive(4242) is True
+
+    def _gone(pid, sig):
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr(_os, "kill", _gone)
+    assert tail_jobs._is_pid_alive(4242) is False
+
+
+def test_refresh_is_skipped_when_nothing_ran(monkeypatch):
+    """Every job failed, so close_run's totals still stand — re-deriving the
+    surfaces would rewrite the card off work that did not happen."""
+    _make_run("tj000009")
+    called = []
+
+    def _boom(spec, adapter):
+        raise RuntimeError("no")
+
+    monkeypatch.setitem(tail_jobs._RUNNERS, "learning", _boom)
+    monkeypatch.setattr(tail_jobs, "_refresh_surfaces",
+                        lambda hid: called.append(hid))
+    tail_jobs.record_learning("tj000009", _FakeLoop())
+    assert tail_jobs.run_jobs("tj000009") == 0
+    assert called == []
+
+
+def test_spawn_detaches_the_child_and_redirects_its_streams(monkeypatch):
+    """The three properties that make this a real detachment.
+
+    Asserted on the arguments of a REAL spawn (the wrapper calls through), not
+    on a stand-in: a new session, /dev/null on stdin, and the child's output
+    pointed at a file handle rather than the parent's stdout. The last one is
+    the subtle one — an inherited pipe keeps `out=$(maro handle ...)` blocked
+    until the last writer closes it, so the caller would wait for the whole
+    tail while believing it had been handed an answer.
+    """
+    import subprocess as _sp
+    seen = {}
+    _real_popen = _sp.Popen
+
+    def _spy(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+        return _real_popen(cmd, **kwargs)
+
+    monkeypatch.setattr(tail_jobs.subprocess, "Popen", _spy)
+    _make_run("tj000010")
+    tail_jobs.record_learning("tj000010", _FakeLoop(
+        loop_id="detach-loop", status="stuck", project="", steps=[]))
+    assert tail_jobs.spawn("tj000010")
+
+    assert seen["kwargs"]["start_new_session"] is True
+    assert seen["kwargs"]["stdin"] == _sp.DEVNULL
+    assert seen["kwargs"]["stdout"] is not None
+    assert seen["kwargs"]["stdout"] not in (None, _sp.PIPE)
+    assert seen["kwargs"]["stderr"] == _sp.STDOUT
+    assert "finalize-tail" in seen["cmd"] and "tj000010" in seen["cmd"]
+    # The child must be able to import src/ regardless of how the parent ran.
+    assert str(Path(tail_jobs.__file__).resolve().parent) in \
+        seen["kwargs"]["env"]["PYTHONPATH"]

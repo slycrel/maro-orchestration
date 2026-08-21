@@ -1,0 +1,198 @@
+[
+ {
+  "name": "a run-dir that does not exist is recorded into anyway",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if not rd.exists():",
+  "replacement": "    if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "seq never advances, so the second job overwrites the first",
+  "file": "src/tail_jobs.py",
+  "anchor": "    return (max(seqs) + 1) if seqs else 1",
+  "replacement": "    return 1",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "maintenance may drain before learning",
+  "file": "src/tail_jobs.py",
+  "anchor": "_KIND_ORDER = {KIND_LEARNING: 0, KIND_MAINTENANCE: 1}",
+  "replacement": "_KIND_ORDER = {KIND_LEARNING: 1, KIND_MAINTENANCE: 0}",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a job marked done stays pending, so every drain repeats it",
+  "file": "src/tail_jobs.py",
+  "anchor": "    pending = [jobs[s] for s in sorted(jobs) if s not in done]",
+  "replacement": "    pending = [jobs[s] for s in sorted(jobs)]",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a claim stamped on another host counts as live here",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if host and host != _hostname():",
+  "replacement": "        if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a released claim goes on blocking the run it finished",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if claim.get(\"released_at\"):",
+  "replacement": "    if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "EPERM from kill(pid, 0) reads as a dead process",
+  "file": "src/tail_jobs.py",
+  "anchor": "    except PermissionError:\n        return True",
+  "replacement": "    except PermissionError:\n        return False",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the standing claim is never consulted, so two drainers overlap",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if respect_claim and _live_claim(st[\"claim\"]):",
+  "replacement": "    if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a job that raised is left pending for a sweep to half-repeat",
+  "file": "src/tail_jobs.py",
+  "anchor": "        _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": ok,\n                       \"error\": err, \"finished_at\": _now()})",
+  "replacement": "        pass",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "an unknown job kind is skipped in silence, not recorded",
+  "file": "src/tail_jobs.py",
+  "anchor": "            _append(path, {\"event\": \"done\", \"seq\": seq, \"ok\": False,\n                           \"error\": f\"unknown kind {kind!r}\",\n                           \"finished_at\": _now()})",
+  "replacement": "            pass",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the surface refresh runs even when no job ran",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if ran and refresh:",
+  "replacement": "    if refresh:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the kinds filter is ignored, so the early drain takes the whole tail",
+  "file": "src/tail_jobs.py",
+  "anchor": "        pending = [j for j in pending if str(j.get(\"kind\")) in wanted]",
+  "replacement": "        pending = list(pending)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a step row's unknown fields are handed to the constructor",
+  "file": "src/tail_jobs.py",
+  "anchor": "    kwargs = {k: v for k, v in row.items() if k in names}",
+  "replacement": "    kwargs = dict(row)",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "step outcomes travel by the lossy fallback shape",
+  "file": "src/tail_jobs.py",
+  "anchor": "            rows.append(dataclasses.asdict(s))",
+  "replacement": "            raise TypeError(\"forced onto the fallback shape\")",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the recorded adapter identity drops the model",
+  "file": "src/tail_jobs.py",
+  "anchor": "        \"model_key\": str(getattr(adapter, \"model_key\", \"\") or \"\"),",
+  "replacement": "        \"model_key\": \"\",",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a base/failover identity is replayed as a buildable backend",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if backend and backend not in {\"base\", \"failover\"}:",
+  "replacement": "    if backend:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "no default-adapter attempt, so a failed rebuild means no tail at all",
+  "file": "src/tail_jobs.py",
+  "anchor": "    attempts.append({})",
+  "replacement": "    pass",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the child inherits the parent's stdout",
+  "file": "src/tail_jobs.py",
+  "anchor": "                stdout=out_fh,",
+  "replacement": "                stdout=None,",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the child stays in the parent's process group",
+  "file": "src/tail_jobs.py",
+  "anchor": "                start_new_session=True,",
+  "replacement": "                start_new_session=False,",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the child is left to find src/ on its own",
+  "file": "src/tail_jobs.py",
+  "anchor": "    env[\"PYTHONPATH\"] = (f\"{src_dir}{os.pathsep}{existing}\"\n                         if existing else src_dir)",
+  "replacement": "    pass",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "spawn is attempted whatever the config says",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if spawn_enabled():",
+  "replacement": "    if True:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a spawn that returned no pid is reported as spawned",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if pid is not None:",
+  "replacement": "        if True:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a run with nothing pending still dispatches a tail",
+  "file": "src/tail_jobs.py",
+  "anchor": "    if not pending_jobs(handle_id):",
+  "replacement": "    if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the config default is ON, so a fresh install inherits the spawn",
+  "file": "src/tail_jobs.py",
+  "anchor": "        return bool(_cfg_get(\"tail.spawn\", False))",
+  "replacement": "        return bool(_cfg_get(\"tail.spawn\", True))",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a young tail is swept as stranded, racing the child that owns it",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if age < min_age_s:",
+  "replacement": "        if False:",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "the sweep's dry run drains anyway",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if dry_run:\n            continue",
+  "replacement": "        if False:\n            continue",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "one torn byte takes the whole job store with it",
+  "file": "src/tail_jobs.py",
+  "anchor": "        return read_jsonl_announced(path, \"tail_jobs\")",
+  "replacement": "        return [json.loads(line) for line in path.read_text(encoding=\"utf-8\").splitlines() if line.strip()]",
+  "tests": "tests/test_tail_jobs.py"
+ },
+ {
+  "name": "a stranded run with a live claim is drained out from under it",
+  "file": "src/tail_jobs.py",
+  "anchor": "        if not st[\"pending\"] or _live_claim(st[\"claim\"]):",
+  "replacement": "        if not st[\"pending\"]:",
+  "tests": "tests/test_tail_jobs.py"
+ }
+]
