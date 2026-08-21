@@ -1008,10 +1008,8 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # into the generic handler. Only a recorded STRING
                 # (including "") is verifiable evidence.
                 _raw_sugg = match.get("suggestion_text")
-                _sugg_missing = ("suggestion_text" not in match
-                                 or not isinstance(_raw_sugg, str))
-                _sugg_text = (_raw_sugg or "")[:500] \
-                    if isinstance(_raw_sugg, str) else ""
+                _sugg_missing = not isinstance(_raw_sugg, str)
+                _sugg_text = _raw_sugg[:500] if not _sugg_missing else ""
                 from file_lock import locked_write as _lw
                 from skills import _skills_path as _sp
                 with _lw(_sp(), require=True):
@@ -1028,14 +1026,27 @@ def revert_suggestion(suggestion_id: str) -> dict:
                                 # an empty/legacy suggestion_text
                                 # skipped the guard entirely and a
                                 # later edit died under reverted:True).
+                                # Absent and wrong-typed refuse
+                                # alike, but the DIAGNOSTIC names
+                                # which fired (adversarial r24,
+                                # Skeptic): "unavailable" for a
+                                # present-but-corrupted field sends
+                                # the operator hunting a legacy row
+                                # when the real event is live
+                                # corruption.
                                 log.warning(
-                                    "revert_suggestion %s: no "
-                                    "suggestion_text on the audit row "
-                                    "— cannot verify the live "
+                                    "revert_suggestion %s: %s — "
+                                    "cannot verify the live "
                                     "description is this suggestion's "
                                     "own; refusing blind restore; the "
                                     "live value is kept",
-                                    suggestion_id)
+                                    suggestion_id,
+                                    "no suggestion_text on the audit "
+                                    "row"
+                                    if "suggestion_text" not in match
+                                    else "suggestion_text is %s, not "
+                                    "str, on the audit row"
+                                    % type(_raw_sugg).__name__)
                                 return {"reverted": False,
                                         "behavioral": False,
                                         "category": category,
@@ -1125,10 +1136,20 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # corrupted audit row's type defeated every guard this
                 # arc built, silently). A revert that cannot recognize
                 # its own audit row must refuse.
+                # Log like the sibling guards (adversarial r24,
+                # Failure Operator: the refusal was silent at the
+                # source, surfaced only by whichever caller chose to
+                # print the detail) — and truncate the untrusted
+                # field like every other row value this file quotes.
+                _st = repr(state_type)[:100]
+                log.warning(
+                    "revert_suggestion %s: unrecognized "
+                    "before_state.type %s on the audit row — "
+                    "refusing", suggestion_id, _st)
                 return {"reverted": False, "behavioral": False,
                         "category": category,
                         "detail": "unrecognized before_state.type "
-                                  f"{state_type!r} — refusing"}
+                                  "%s — refusing" % _st}
 
         elif category == "new_guardrail":
             # Remove matching pattern from dynamic-constraints.jsonl

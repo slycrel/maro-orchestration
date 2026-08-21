@@ -4824,6 +4824,37 @@ class TestTheRevertHoldsTheLockItWritesUnder:
             assert res["reverted"] is False, bad
             assert "suggestion_text unavailable" in res["detail"], bad
 
+    def test_a_zero_over_a_live_empty_description_cannot_blind_restore(
+            self, tmp_path, monkeypatch):
+        """The specific hazard the r23 fix names (adversarial r24,
+        Architect): suggestion_text corrupted to 0 coerces to "",
+        which MATCHES a live "" description — pre-fix that restored
+        old_desc over the live value with reverted:True. The typed
+        guard must refuse before the comparison can lie."""
+        import json
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        from orch_items import memory_dir
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("z1", "target-skill", "orig"))
+        # An empty suggestion writes "" as the live description.
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "",
+            "target": "target-skill", "suggestion_id": "sug-z1",
+            "confidence": 0.5}) is True
+        cl = memory_dir() / "change_log.jsonl"
+        rows = [json.loads(l) for l in
+                cl.read_text().splitlines() if l.strip()]
+        for r in rows:
+            r["suggestion_text"] = 0
+        cl.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        res = revert_suggestion("sug-z1")
+        assert res["reverted"] is False
+        assert "suggestion_text unavailable" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "z1")
+        assert row.description == ""
+
     def test_an_undisturbed_missing_text_revert_still_refuses(
             self, tmp_path, monkeypatch):
         """Only the missing-text guard can fire here (the live value

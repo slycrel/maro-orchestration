@@ -2354,8 +2354,11 @@ surfaced — no fix from r22 itself was wrong.
   (Skeptic HIGH + two seats LOW, probed): `0` coerced to `""` and
   could blind-restore over a live `""`; a list refused through the
   misleading "description changed" message; an int threw
-  `TypeError` into the generic handler as "revert failed:
-  slice(...)". Present-but-not-a-string is now CANNOT VERIFY.
+  `TypeError` into the generic handler ("revert failed: 'int' object
+  is not subscriptable" — a dict-valued row produced the "slice(...)"
+  variant). Present-but-not-a-string is now CANNOT VERIFY.
+  *(Receipt corrected in r24 — the original text attributed the dict
+  case's message to the int case.)*
 
 Also shipped: an undisturbed missing-text fixture (qa — the
 missing-text mutant's kill was riding the description-changed door's

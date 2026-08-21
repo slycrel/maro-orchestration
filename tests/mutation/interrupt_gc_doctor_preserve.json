@@ -2178,7 +2178,7 @@
   {
     "name": "r22 evolver :: absent conflates with empty again",
     "file": "src/evolver_store.py",
-    "anchor": "                _raw_sugg = match.get(\"suggestion_text\")\n                _sugg_missing = (\"suggestion_text\" not in match\n                                 or not isinstance(_raw_sugg, str))\n                _sugg_text = (_raw_sugg or \"\")[:500] \\\n                    if isinstance(_raw_sugg, str) else \"\"",
+    "anchor": "                _raw_sugg = match.get(\"suggestion_text\")\n                _sugg_missing = not isinstance(_raw_sugg, str)\n                _sugg_text = _raw_sugg[:500] if not _sugg_missing else \"\"",
     "replacement": "                _sugg_missing = not (\n                    match.get(\"suggestion_text\") or \"\")\n                _sugg_text = (match.get(\"suggestion_text\") or \"\")[:500]",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_is_verifiable_not_refused tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores"
   },
@@ -2192,15 +2192,15 @@
   {
     "name": "r23 evolver :: an unrecognized revert claims success again",
     "file": "src/evolver_store.py",
-    "anchor": "                return {\"reverted\": False, \"behavioral\": False,\n                        \"category\": category,\n                        \"detail\": \"unrecognized before_state.type \"\n                                  f\"{state_type!r} \u2014 refusing\"}",
+    "anchor": "                _st = repr(state_type)[:100]\n                log.warning(\n                    \"revert_suggestion %s: unrecognized \"\n                    \"before_state.type %s on the audit row \u2014 \"\n                    \"refusing\", suggestion_id, _st)\n                return {\"reverted\": False, \"behavioral\": False,\n                        \"category\": category,\n                        \"detail\": \"unrecognized before_state.type \"\n                                  \"%s \u2014 refusing\" % _st}",
     "replacement": "                pass",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_unrecognized_state_type_refuses_not_false_success"
   },
   {
     "name": "r23 evolver :: a non-string reads as verifiable again",
     "file": "src/evolver_store.py",
-    "anchor": "                _raw_sugg = match.get(\"suggestion_text\")\n                _sugg_missing = (\"suggestion_text\" not in match\n                                 or not isinstance(_raw_sugg, str))\n                _sugg_text = (_raw_sugg or \"\")[:500] \\\n                    if isinstance(_raw_sugg, str) else \"\"",
-    "replacement": "                _sugg_missing = (\"suggestion_text\" not in match\n                                 or match.get(\"suggestion_text\") is None)\n                _sugg_text = (str(match.get(\"suggestion_text\") or \"\"))[:500]",
+    "anchor": "                _raw_sugg = match.get(\"suggestion_text\")\n                _sugg_missing = not isinstance(_raw_sugg, str)\n                _sugg_text = _raw_sugg[:500] if not _sugg_missing else \"\"",
+    "replacement": "                _raw_sugg = match.get(\"suggestion_text\")\n                _sugg_missing = _raw_sugg is None\n                _sugg_text = (str(_raw_sugg) if _raw_sugg is not None else \"\")[:500]",
     "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_non_string_suggestion_text_refuses_as_unverifiable"
   }
 ]
