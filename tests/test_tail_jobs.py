@@ -557,3 +557,26 @@ def test_spawn_detaches_the_child_and_redirects_its_streams(monkeypatch):
     # The child must be able to import src/ regardless of how the parent ran.
     assert str(Path(tail_jobs.__file__).resolve().parent) in \
         seen["kwargs"]["env"]["PYTHONPATH"]
+
+
+def test_a_tail_with_a_live_claim_is_not_reported_stranded():
+    """Old is not the same as abandoned.
+
+    A long tail — lesson extraction, ~10 promotion validations, the evolver —
+    outlives the sweep's grace window as a matter of course. Age alone would
+    report a working child as stranded; the claim is what distinguishes them.
+    `run_jobs` would still decline the drain, so the damage is a false report
+    rather than a double run, and a false report is what makes an operator
+    stop believing the sweep.
+    """
+    _make_run("tj000011")
+    tail_jobs.record_learning("tj000011", _FakeLoop())
+    path = tail_jobs.jobs_path("tj000011")
+    tail_jobs._append(path, {"event": "claim", "pid": os.getpid(),
+                             "host": tail_jobs._hostname(),
+                             "claimed_at": "now"})
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    assert tail_jobs.find_stranded(min_age_s=900) == []
+    assert tail_jobs.sweep_stranded(min_age_s=900)["stranded"] == []
