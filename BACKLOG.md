@@ -2124,6 +2124,29 @@ BACKLOG 2026-08-16".
   growing, the fix is one immutable snapshot per dispatch + a derived
   rebuildable exact-key index, not two lifetime scans.
 
+**Live miss attached 2026-08-21 (Jeremy: attach it, "pretend it hasn't
+[been addressed] and see what happens when we look again"):** on
+2026-08-14 — four days AFTER v1 shipped — Jeremy pushed the Yarchi
+fan-out-study link through directly (`751e2dea-merry-thicket`:
+"Please ask maro to research this against our own codebase", ended
+**incomplete, goal_achieved=False**). On 2026-08-20/21 the link-farm
+burn-in runs (`0ebadc02`, `f89bf29b`) reviewed and then RECOMMENDED
+the same study — citing its exact numbers (260 configs, 17.2x) —
+without either run discovering the prior incomplete attempt. Nothing
+misfired by v1's own lights: the goals share no wording, only a
+SUBJECT (the same X status id, which sits in the run artifacts and
+the link-farm DB, not in the later goals' text). That is the gap to
+examine fresh: prior art keyed by ENTITY (URL/status-id/repo), not
+goal similarity — the same entity-not-lexical shape as the dev-recall
+ranking miss (Actionable Stack, 2026-08-20), and plausibly the same
+fix surface. Concrete acceptance probe when someone picks this up:
+re-dispatch any goal naming that study and the brief should carry
+751e2dea's incomplete attempt.
+- [ ] Entity-keyed prior art: decide the join key set (URLs / X status
+      ids / repo slugs in goal text AND in cited artifacts), where it
+      lives (intake rows? a derived index?), and whether the
+      memory-as-module bake-off (arc -1) already owns this.
+
 
 ### MH. Model-or-Harness taxonomy — the ADOPT edges from maro's self-evaluation (OPENED 2026-08-09, from runs de790c13 + 6fa41f96)
 
@@ -4307,6 +4330,37 @@ strip-prose/fences pre-parse pass in `handle.py`'s scope path is the
 cheap fix.
 
 ## Vision / Deferred
+
+### Subtraction audit — the maro-shaped trimming pass (Jeremy, 2026-08-21, "for later")
+
+Jeremy, during the async-tail burn-in: *"at some point we're going to be
+working against our working system with all the bolt-on 'good ideas'...
+pretty sure we have a ways to go yet before we quite get there"* — and the
+aspiration named out loud: end up like the SpaceX booster, *"much much
+cleaner, simpler, and more efficient... I'm not saying we're that level of
+smart, but we're consistent and that's not nothin'."*
+
+The shape: a periodic maro run (or small series) whose GOAL is subtraction —
+"name the three mechanisms whose removal would cost least, with evidence" —
+rather than addition. Instrumentation to feed it already exists and keeps
+getting better (dev-status fan-out rate, the no-stopping-rule census,
+per-mechanism cost rows, shadow-lane comparisons); the precedent exists too
+(sandbox.py retired at −1,670 LOC as an unwired prototype, 2026-07-13;
+scan_cap deleted one round after it shipped, 2026-08-20). What does NOT
+exist is a recurring lens that treats removal as a first-class deliverable
+with the same rigor additions get (probes, adversarial review of the
+"nothing needs this" claim — a deletion's evidence bar is HIGHER, per the
+untrusted-deletion lessons).
+
+Deliberately "for later" — not evidence-gated, DATE-gated by feel: worth
+running once the current arc (async-tail flip, byte-safety convergence,
+treasure-map) quiets down. When it runs, pair it with the retention decree
+(surface, let the operator decide — the audit NOMINATES, Jeremy deletes)
+and the [[feedback_correctness_over_frugality]] posture: measured removal
+candidates, never vibes.
+
+- [ ] First subtraction-audit run: pick the instrument set, run the
+      nomination goal, adjudicate with Jeremy.
 
 ### Cheap-tier step execution — DEFERRED to a future optimization pass (Jeremy, 2026-08-20)
 
