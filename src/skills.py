@@ -2636,6 +2636,17 @@ def _save_skills(skills: List[Skill], *,
             partially_dropped = sorted(sid for sid in dropped_ids
                                        if sid in strand_ids
                                        and sid in dropped_seen)
+            # A named drop that landed in NO bucket: no provable row,
+            # no unprovable row with a recoverable id. If unreadable
+            # rows rode the rewrite, absence is NOT proven — the id may
+            # be riding one of them, tainted or id-less (adversarial
+            # r21, four seats, probed: a drop whose sole row was
+            # byte-tainted silently no-op'd with no line naming the
+            # id). With no unreadable rows, absence IS proven and the
+            # drop is vacuously satisfied — silence is honest.
+            unaccounted_dropped = sorted(sid for sid in dropped_ids
+                                         if sid not in dropped_seen
+                                         and sid not in strand_ids)
             ghost_ids = sorted(sid for sid in updated_ids
                                if sid not in slot
                                and sid not in strand_ids)
@@ -2666,11 +2677,19 @@ def _save_skills(skills: List[Skill], *,
                 # operator visibility, and info is invisible at the
                 # default level — same reasoning as the reader
                 # announcements.
+                # "removed" is an affirmative completeness claim; when
+                # unreadable rows rode the rewrite it must hedge — one
+                # of them could hold a surviving copy of a removed id
+                # (adversarial r21, Failure Operator, probed).
                 logger.warning(
                     "[skills] _save_skills: %d physical row(s) for %d "
-                    "named id(s) removed by this rewrite (%s): %s",
-                    dropped_rows, len(dropped_seen), path,
-                    sorted(dropped_seen))
+                    "named id(s) removed by this rewrite%s (%s): %s",
+                    dropped_rows, len(dropped_seen),
+                    ("; %d row(s) carried verbatim whose id could not "
+                     "be read may still hold copies"
+                     % (tainted + unprovable_unnamed))
+                    if (tainted + unprovable_unnamed) else "",
+                    path, sorted(dropped_seen))
             if stranded_dropped:
                 logger.warning(
                     "[skills] _save_skills: %d named drop(s) NOT "
@@ -2686,6 +2705,17 @@ def _save_skills(skills: List[Skill], *,
                     "row(s) for these id(s) remain in the store, "
                     "carried verbatim (%s): %s",
                     len(partially_dropped), path, partially_dropped)
+            if unaccounted_dropped and (tainted + unprovable_unnamed):
+                logger.warning(
+                    "[skills] _save_skills: %d named drop(s) could NOT "
+                    "be verified — no parseable live row holds these "
+                    "id(s), but %d row(s) carried verbatim whose id "
+                    "could not be read may still hold them; if one "
+                    "does, that row was NOT removed — repair, then "
+                    "confirm the drop (%s): %s",
+                    len(unaccounted_dropped),
+                    tainted + unprovable_unnamed, path,
+                    unaccounted_dropped)
             if stranded_named:
                 # Present, not deleted (adversarial r19, two seats,
                 # probed): the row for this named id is stranded

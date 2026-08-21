@@ -4639,3 +4639,97 @@ class TestTheReadModifyWriteHoldsOneLock:
         assert res["reverted"] is True
         row = next(s for s in sk.load_skills() if s.id == "r2")
         assert row.description == "before"
+
+
+class TestTheRevertHoldsTheLockItWritesUnder:
+    """Adversarial r21 (three seats, HIGH, probed): r20's revert guard
+    checked an UNLOCKED snapshot — a concurrent edit landing between
+    the check and _save_skills was still destroyed under
+    reverted:True, the same TOCTOU r20 closed on the apply path. And
+    five seats: an empty/legacy suggestion_text skipped the guard
+    entirely, falling back to the pre-guard blind restore. The guard
+    now reads fresh inside the lock it writes under, and refuses when
+    it cannot verify."""
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _mk(sid, name, desc="orig"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=name, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_the_guard_reads_and_writes_under_one_lock(self):
+        """Structural pin, same rationale as the apply-path pin: within
+        revert_suggestion's skill_update branch, the locked_write
+        acquisition precedes the fresh load_skills read, which
+        precedes _save_skills — one critical section, in source
+        order. (In-thread injection rides the reentrant lock;
+        cross-thread injection deadlocks by design.)"""
+        import inspect
+        import evolver_store
+        src = inspect.getsource(evolver_store.revert_suggestion)
+        upd_at = src.index('if state_type == "skill_update":')
+        create_at = src.index('elif state_type == "skill_create":')
+        branch = src[upd_at:create_at]
+        lock_at = branch.index("with _lw(_sp(), require=True):")
+        read_at = branch.index("skills = load_skills()", lock_at)
+        write_at = branch.index(
+            "_save_skills(skills, updated_ids={restored_id})")
+        assert lock_at < read_at < write_at
+
+    def test_a_missing_suggestion_text_refuses_not_blind_restores(
+            self, tmp_path, monkeypatch, caplog):
+        import json
+        import logging
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        from orch_items import memory_dir
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("lg1", "target-skill", "before"))
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "applied text",
+            "target": "target-skill", "suggestion_id": "sug-lg1",
+            "confidence": 0.5}) is True
+        # Simulate a legacy audit row: strip suggestion_text.
+        cl = memory_dir() / "change_log.jsonl"
+        rows = [json.loads(l) for l in
+                cl.read_text().splitlines() if l.strip()]
+        for r in rows:
+            r.pop("suggestion_text", None)
+        cl.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        # A later legitimate edit the blind restore would destroy.
+        live = {s.id: s for s in sk.load_skills()}
+        live["lg1"].description = "later-legit-edit"
+        sk.save_skill(live["lg1"])
+        with caplog.at_level(logging.WARNING):
+            res = revert_suggestion("sug-lg1")
+        assert res["reverted"] is False
+        assert "suggestion_text unavailable" in res["detail"]
+        row = next(s for s in sk.load_skills() if s.id == "lg1")
+        assert row.description == "later-legit-edit"
+        assert any("cannot verify" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_an_empty_suggestion_text_refuses_too(
+            self, tmp_path, monkeypatch):
+        import skills as sk
+        from evolver_store import _apply_suggestion_action, \
+            revert_suggestion
+        self._env(monkeypatch, tmp_path)
+        sk.save_skill(self._mk("lg2", "target-skill", "before"))
+        # An empty LLM suggestion is a real, current shape — the audit
+        # row records suggestion_text: "" and the guard used to skip.
+        assert _apply_suggestion_action({
+            "category": "skill_pattern", "suggestion": "",
+            "target": "target-skill", "suggestion_id": "sug-lg2",
+            "confidence": 0.5}) is True
+        res = revert_suggestion("sug-lg2")
+        assert res["reverted"] is False
+        assert "suggestion_text unavailable" in res["detail"]

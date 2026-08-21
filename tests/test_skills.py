@@ -4675,3 +4675,67 @@ class TestDeletionsEarnTheSameTruths:
         msgs = [r.getMessage() for r in caplog.records]
         assert any("no parseable live row" in m
                    and "whose id could not be read" in m for m in msgs)
+
+
+class TestADropCannotClaimWhatTheScanNeverProved:
+    """Adversarial r21 (four seats, HIGH, probed): the r20 drop buckets
+    were built entirely from strand_ids, which only unprovable rows
+    with recoverable ids feed — a named drop whose sole row was
+    byte-TAINTED (or unprovable and id-less) landed in no bucket and
+    silently no-op'd, and "removed" fired unhedged while a tainted
+    duplicate survived. Absence is asserted only when the scan proved
+    it."""
+
+    @staticmethod
+    def _mk(sid, desc="d"):
+        import skills as sk
+        return sk.Skill(
+            id=sid, name=sid, description=desc, trigger_patterns=["x"],
+            steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-21T00:00:00+00:00")
+
+    def test_a_drop_on_a_tainted_row_is_hedged_not_silent(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("K"))
+        path = sk._skills_path()
+        path.write_bytes(b'{"id": "K", "name": "K"  BROKEN \xff\xfe\n')
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills([], dropped_ids={"K"},
+                            updated_ids=frozenset())
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("could NOT be verified" in m and "'K'" in m
+                   and "was NOT removed" in m for m in msgs)
+        assert b"BROKEN" in path.read_bytes()
+
+    def test_a_provably_absent_drop_stays_silent(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("A"))
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills(sk.load_skills(), dropped_ids={"GONE"},
+                            updated_ids=frozenset())
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("could NOT be verified" in m for m in msgs)
+
+    def test_the_removed_claim_hedges_over_unreadable_rows(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        import skills as sk
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        sk.save_skill(self._mk("V"))
+        path = sk._skills_path()
+        with path.open("ab") as f:
+            f.write(b'{"id": "V", "name": "V"  TAINTED TWIN \xff\n')
+        with caplog.at_level(logging.WARNING):
+            sk._save_skills([], dropped_ids={"V"},
+                            updated_ids=frozenset())
+        msgs = [r.getMessage() for r in caplog.records]
+        removed = [m for m in msgs if "removed by this rewrite" in m]
+        assert removed and any(
+            "may still hold copies" in m for m in removed)
+        assert b"TAINTED TWIN" in path.read_bytes()

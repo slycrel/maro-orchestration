@@ -979,31 +979,69 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 # "reverted" as if the undo were clean. If the live
                 # description is no longer the suggestion's own text,
                 # the world moved on; refuse and say so.
+                #
+                # The whole read-modify-write holds one lock
+                # (adversarial r21, three seats, probed): the r20
+                # guard checked an UNLOCKED snapshot, so a concurrent
+                # edit landing between the check and _save_skills was
+                # still destroyed under reverted:True — the same
+                # TOCTOU r20 closed on the apply path. The guard now
+                # reads fresh inside the lock it writes under;
+                # locked_write is thread-reentrant, so _save_skills'
+                # inner acquisition composes.
                 old_desc = before_state.get("old_description", "")
                 _sugg_text = (match.get("suggestion_text", "") or "")[:500]
-                for s in skills:
-                    if s.name == target or s.id == target:
-                        if _sugg_text and s.description != _sugg_text:
-                            log.warning(
-                                "revert_suggestion %s: skill %r "
-                                "description changed since this "
-                                "suggestion was applied — refusing "
-                                "blind restore; the live value is "
-                                "kept", suggestion_id, target)
-                            return {"reverted": False,
-                                    "behavioral": False,
-                                    "category": category,
-                                    "detail": "description changed "
-                                              "since apply — blind "
-                                              "restore refused"}
-                        s.description = old_desc
-                        detail = f"restored description for skill '{s.name}'"
-                        restored_id = s.id
-                        break
-                else:
-                    return {"reverted": False, "behavioral": False, "category": category,
-                            "detail": f"skill '{target}' not found for rollback"}
-                _save_skills(skills, updated_ids={restored_id})
+                from file_lock import locked_write as _lw
+                from skills import _skills_path as _sp
+                with _lw(_sp(), require=True):
+                    skills = load_skills()
+                    for s in skills:
+                        if s.name == target or s.id == target:
+                            if not _sugg_text:
+                                # No recorded suggestion text — the
+                                # guard CANNOT verify the live value is
+                                # this suggestion's own; refusing is
+                                # the safe direction, not falling back
+                                # to the pre-guard blind restore
+                                # (adversarial r21, five seats, probed:
+                                # an empty/legacy suggestion_text
+                                # skipped the guard entirely and a
+                                # later edit died under reverted:True).
+                                log.warning(
+                                    "revert_suggestion %s: no "
+                                    "suggestion_text on the audit row "
+                                    "— cannot verify the live "
+                                    "description is this suggestion's "
+                                    "own; refusing blind restore; the "
+                                    "live value is kept",
+                                    suggestion_id)
+                                return {"reverted": False,
+                                        "behavioral": False,
+                                        "category": category,
+                                        "detail": "suggestion_text "
+                                                  "unavailable — blind "
+                                                  "restore refused"}
+                            if s.description != _sugg_text:
+                                log.warning(
+                                    "revert_suggestion %s: skill %r "
+                                    "description changed since this "
+                                    "suggestion was applied — refusing "
+                                    "blind restore; the live value is "
+                                    "kept", suggestion_id, target)
+                                return {"reverted": False,
+                                        "behavioral": False,
+                                        "category": category,
+                                        "detail": "description changed "
+                                                  "since apply — blind "
+                                                  "restore refused"}
+                            s.description = old_desc
+                            detail = f"restored description for skill '{s.name}'"
+                            restored_id = s.id
+                            break
+                    else:
+                        return {"reverted": False, "behavioral": False, "category": category,
+                                "detail": f"skill '{target}' not found for rollback"}
+                    _save_skills(skills, updated_ids={restored_id})
                 behavioral = True
 
             elif state_type == "skill_create":

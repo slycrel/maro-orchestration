@@ -1835,8 +1835,8 @@
   {
     "name": "r17 pool :: the drop announcement goes silent",
     "file": "src/skills.py",
-    "anchor": "            if dropped_seen:\n                # warning, not info: the announcement exists for\n                # operator visibility, and info is invisible at the\n                # default level \u2014 same reasoning as the reader\n                # announcements.\n                logger.warning(\n                    \"[skills] _save_skills: %d physical row(s) for %d \"\n                    \"named id(s) removed by this rewrite (%s): %s\",\n                    dropped_rows, len(dropped_seen), path,\n                    sorted(dropped_seen))",
-    "replacement": "            if dropped_seen:\n                pass",
+    "anchor": "            if dropped_seen:\n                # warning, not info: the announcement exists for\n                # operator visibility, and info is invisible at the\n                # default level \u2014 same reasoning as the reader\n                # announcements.",
+    "replacement": "            if dropped_seen and False:",
     "tests": "tests/test_skills.py::TestAWriteMustBeNamed::test_a_named_drop_is_announced_with_the_store_path"
   },
   {
@@ -1989,8 +1989,8 @@
   {
     "name": "r18 pool :: the physical-row count collapses to ids again",
     "file": "src/skills.py",
-    "anchor": "                    dropped_rows, len(dropped_seen), path,",
-    "replacement": "                    len(dropped_seen), len(dropped_seen), path,",
+    "anchor": "                    dropped_rows, len(dropped_seen),\n",
+    "replacement": "                    len(dropped_seen), len(dropped_seen),\n",
     "tests": "tests/test_skills.py::TestNamingIsNotCreation::test_the_drop_announcement_counts_physical_rows"
   },
   {
@@ -2115,8 +2115,50 @@
   {
     "name": "r20 evolver :: the revert blindly restores again",
     "file": "src/evolver_store.py",
-    "anchor": "                        if _sugg_text and s.description != _sugg_text:",
-    "replacement": "                        if False:",
+    "anchor": "                            if s.description != _sugg_text:",
+    "replacement": "                            if False:",
     "tests": "tests/test_evolver.py::TestTheReadModifyWriteHoldsOneLock::test_a_revert_refuses_to_destroy_a_later_edit"
+  },
+  {
+    "name": "r21 pool :: an unverifiable drop asserts silence",
+    "file": "src/skills.py",
+    "anchor": "            if unaccounted_dropped and (tainted + unprovable_unnamed):",
+    "replacement": "            if False:",
+    "tests": "tests/test_skills.py::TestADropCannotClaimWhatTheScanNeverProved::test_a_drop_on_a_tainted_row_is_hedged_not_silent"
+  },
+  {
+    "name": "r21 pool :: every drop reads as accounted",
+    "file": "src/skills.py",
+    "anchor": "            unaccounted_dropped = sorted(sid for sid in dropped_ids\n                                         if sid not in dropped_seen\n                                         and sid not in strand_ids)",
+    "replacement": "            unaccounted_dropped = []",
+    "tests": "tests/test_skills.py::TestADropCannotClaimWhatTheScanNeverProved::test_a_drop_on_a_tainted_row_is_hedged_not_silent"
+  },
+  {
+    "name": "r21 pool :: the removed claim stops hedging",
+    "file": "src/skills.py",
+    "anchor": "                    (\"; %d row(s) carried verbatim whose id could not \"\n                     \"be read may still hold copies\"\n                     % (tainted + unprovable_unnamed))\n                    if (tainted + unprovable_unnamed) else \"\",",
+    "replacement": "                    \"\",",
+    "tests": "tests/test_skills.py::TestADropCannotClaimWhatTheScanNeverProved::test_the_removed_claim_hedges_over_unreadable_rows"
+  },
+  {
+    "name": "r21 evolver :: the revert drops its lock",
+    "file": "src/evolver_store.py",
+    "anchor": "                from skills import _skills_path as _sp\n                with _lw(_sp(), require=True):",
+    "replacement": "                from skills import _skills_path as _sp\n                if True:",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_guard_reads_and_writes_under_one_lock"
+  },
+  {
+    "name": "r21 evolver :: the guard reads the stale snapshot",
+    "file": "src/evolver_store.py",
+    "anchor": "                    skills = load_skills()",
+    "replacement": "                    pass",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_the_guard_reads_and_writes_under_one_lock"
+  },
+  {
+    "name": "r21 evolver :: the missing-text guard blind restores again",
+    "file": "src/evolver_store.py",
+    "anchor": "                            if not _sugg_text:",
+    "replacement": "                            if False:",
+    "tests": "tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_a_missing_suggestion_text_refuses_not_blind_restores tests/test_evolver.py::TestTheRevertHoldsTheLockItWritesUnder::test_an_empty_suggestion_text_refuses_too"
   }
 ]
