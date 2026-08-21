@@ -1044,7 +1044,8 @@
   "file": "src/skills.py",
   "anchor": "    line = json.dumps(_skill_to_dict(skill), allow_nan=False)",
   "replacement": "    line = json.dumps(_skill_to_dict(skill))",
-  "tests": "tests/test_skills.py"
+  "tests": "tests/test_skills.py",
+  "equivalent": "defence in depth, and the OTHER lock is the one that fires: _prove_line's very next line runs the emitted text through _loads_clean, whose parse_constant (r9) refuses the NaN/Infinity tokens json.dumps would mint \u2014 so with allow_nan=False removed the save still aborts before the store is touched, with the same ValueError family, and no test can observe a difference. The dumps-side guard stays because it survives a future weakening of loads_clean; the reader-door refusal is pinned by the save_skill NaN test through the emit-an-unproven-line mutants, not by this one. Survivor found on the r11 sweep; marked rather than deleted, per the runner's contract."
  },
  {
   "name": "skills writer proof :: save_skill emits an unproven line",

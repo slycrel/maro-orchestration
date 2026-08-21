@@ -503,6 +503,26 @@ class TestTheInterruptChannelSurvivesATornByte:
         assert tainted in after
         assert b"udcff" not in after.lower()
 
+    def test_clear_never_launders_a_tainted_twin(self, tmp_path):
+        """The poll twin's sibling. The fixture must be DELIVERABLE-shaped:
+        r11's `_prove_deliverable` strands a field-poor row on its own, so a
+        torn fragment cannot distinguish the taint door from the proof door
+        — which is exactly how the clear-launder mutant survived the r11
+        sweep. A full row with one raw byte in `message` walks through the
+        proof and only `loads_clean` stands between it and a re-dump."""
+        from interrupt import InterruptQueue
+        p = tmp_path / "interrupts.jsonl"
+        tainted = json.dumps(self._row("i2", "tainted")).encode().replace(
+            b"tainted", b"tain\xffed")
+        p.write_bytes(json.dumps(self._row("i1", "stop")).encode() + b"\n"
+                      + tainted + b"\n")
+
+        InterruptQueue(queue_path=p).clear()
+
+        after = p.read_bytes()
+        assert tainted in after
+        assert b"udcff" not in after.lower()
+
     def test_clear_also_preserves_what_it_cannot_read(self, tmp_path):
         from interrupt import InterruptQueue
         p = tmp_path / "interrupts.jsonl"
