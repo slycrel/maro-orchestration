@@ -1716,6 +1716,32 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       announcing. The fix is a repair verb (parse, prove, rewrite or
       quarantine by operator decision), not more carrying; build it
       when a real store shows accumulation.*
+    - *Its adversarial r21 (2026-08-21, five sonnet-medium seats on
+      the r20 fix layer): three clusters, all probed — and all three
+      the r20 lesson firing on its first outing, r20's own fixes
+      missing from the operation next to them. The drop buckets were
+      built from strand_ids so a byte-tainted or id-less row's named
+      drop landed in NO bucket (silent no-op, "removed" fired as an
+      unhedged completeness claim while a tainted duplicate survived
+      — new unaccounted_dropped bucket announced with the hedge when
+      unreadable rows rode the rewrite; provably absent drops stay
+      silent; the removed claim hedges); revert_suggestion held no
+      lock across its read→guard→write, the same-commit twin of the
+      apply path r20 locked (whole branch now reads fresh and writes
+      inside locked_write(require=True), structural pin); and the
+      blind-restore guard was SKIPPED when suggestion_text was falsy
+      — reachable today via an empty LLM suggestion — reinstating the
+      pre-r20 blind restore (an unverifiable revert now refuses).
+      Accepted LOW: stranded messages count logical ids not physical
+      rows. Mutation spec 302 → 308 (3 re-anchored, incl. the r20
+      revert-guard mutant retargeted at the split comparison door).*
+    - *Carried lesson from r21: **a guard that cannot verify must
+      refuse, and a claim of completeness must hedge over everything
+      it could not read.** `if evidence and evidence_says_stop:` reads
+      as caution and is its opposite — the less evidence, the more
+      freely the destructive path runs. Fail closed; hedge the
+      announcement; the guard and the announcement are siblings of
+      the verb they protect.*
     - *Carried lesson from r20: **a fix teaches one verb; ask which
       verbs share its preconditions before the reviewers do.** Writes
       learned three truths, drops kept two; the re-read shrank the

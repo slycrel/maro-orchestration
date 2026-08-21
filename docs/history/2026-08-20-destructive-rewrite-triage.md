@@ -2203,3 +2203,63 @@ converges instead of oscillating. The corollary is r20's own version
 of naming-is-not-creation: a DELETION is a write. It needs the same
 proof standard, the same three-way honesty, and the same refusal to
 report an effect it cannot demonstrate.
+
+## Round 21 (2026-08-21): the sibling verbs get the treatment
+
+Five sonnet-medium seats (codex still capped) on the r20 fix layer
+(2286a89e + 4e459283). Findings deduped to three clusters, all
+verified — two of them probed live by the seats with mid-window
+injection — and all three are the twenty-second lesson firing on its
+first outing: r20's own fixes, missing from the operation standing
+next to them.
+
+- **The drop buckets were blind to tainted and id-less rows** (four
+  seats, HIGH): r20 built `stranded_dropped`/`partially_dropped`
+  entirely from `strand_ids`, which only unprovable rows with
+  RECOVERABLE ids feed. A named drop whose sole live row was
+  byte-tainted landed in no bucket — silent no-op, no line naming the
+  id — and when a provable copy was removed while a tainted duplicate
+  survived, "removed by this rewrite" fired as an unhedged
+  completeness claim the scan never proved. New `unaccounted_dropped`
+  bucket: named drops in no bucket are announced with the hedge
+  ("could NOT be verified ... if one does, that row was NOT removed")
+  whenever unreadable rows rode the rewrite; a provably absent drop
+  stays silent (absence proven = vacuous success); the removed
+  announcement hedges over carried unreadable rows.
+- **The revert held no lock** (three seats, HIGH, probed live):
+  `revert_suggestion`'s skill_update branch — changed in the SAME
+  r20 commit that locked the apply path — kept the unlocked
+  read→guard→write shape, so the r20 guard checked a stale snapshot
+  and a concurrent edit landing between the check and `_save_skills`
+  was still destroyed under `reverted: True`. The whole branch now
+  reads fresh and writes inside `locked_write(require=True)`, with
+  the same structural source-order pin and the same reentrancy
+  rationale as the apply path.
+- **The guard fell through when it could not verify** (five seats,
+  the round's widest agreement): `if _sugg_text and ...` skipped the
+  entire guard when `suggestion_text` was falsy — reachable today
+  (an empty LLM suggestion writes `suggestion_text: ""` into the
+  audit row), not just on legacy rows — silently reinstating the
+  pre-r20 blind restore. An unverifiable revert now refuses
+  ("suggestion_text unavailable — blind restore refused").
+
+Accepted (LOW, note only): stranded-side messages count logical ids,
+not physical rows — preserve the distinction if strand tracking ever
+extends to tainted rows.
+
+### The twenty-third lesson
+
+**A guard that cannot verify must refuse — and a claim of
+completeness must hedge over everything it could not read.** Two
+shapes of the same failure. The falsy-`suggestion_text` bypass is the
+canonical guard anti-pattern: `if evidence and evidence_says_stop:`
+reads as caution and is its opposite — the less evidence the guard
+has, the more freely the destructive path runs, so the guard is
+strongest exactly when it is least needed. Fail closed: no evidence
+means refuse, and say why. And "removed by this rewrite" over a store
+carrying rows nobody could read is the message twin: an affirmative
+claim whose scan had holes in it. The hedge is not hand-wringing — it
+is the difference between a message the operator can act on and one
+that trains them to trust a lie. Both are the twenty-second lesson's
+corollary made mechanical: when you harden a verb, its guard and its
+announcement are siblings too.
