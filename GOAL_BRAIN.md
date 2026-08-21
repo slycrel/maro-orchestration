@@ -3772,3 +3772,22 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   burn-in run (0ebadc02, link-farm review, tail.spawn ON box-wide) is
   mid-loop on the box from a clean r12 clone. Record:
   `docs/history/2026-08-20-async-tail-process-spawn.md`.
+- **2026-08-21 — the flip: `tail.spawn` defaults ON (Jeremy decree, on
+  burn-in evidence).** Three clean organic runs (6-8min of tail each that
+  the caller stopped paying for) + a deliberate mid-maintenance SIGKILL
+  with every recovery property verified: sweep surfaced without
+  re-running, no evidence laundering across sweeps, grace window held,
+  cadence counters single-ticked only on the operator's deliberate drain.
+  The flip's one real engineering piece: `MARO_TAIL_SPAWN` env override
+  (the `recording_enabled` env-wins contract) — conftest pins it `0` so
+  no unit test forks a real child, and it doubles as the operator
+  kill-switch. Same decree batch: knowledge-graph direction adjudicated
+  (a) — upgrade retrieval to USE the edges, A/B-gated (BACKLOG entry);
+  "done means done" left OPEN for discussion — the counter-position is
+  that maro's done≠achieved doctrine already encodes a sharper version
+  of the tweet's rule, and a prompt-rule restatement may be what you
+  write when you DON'T have closure verification. Also: landed the
+  silent-drop census fix for main's red CI (r14 retired two listed
+  drops without updating the baseline — cross-session courtesy fix,
+  box session's tree unharmed). Spec 65/65; suite green under the
+  flipped default.

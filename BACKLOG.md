@@ -73,9 +73,12 @@ subtract-before-add cuts both ways, and this entry deliberately does not
 presume (a). Candidate input for the memory-as-module bake-off (arc -1) and
 a natural first nominee for the subtraction audit (Vision/Deferred) if (b).
 
-- [ ] Adjudicate (a)-vs-(b) with usage evidence: how many edges exist on the
-      box, what relations, would any live recall have changed with one-hop
-      expansion? Measure before building.
+**Direction adjudicated (Jeremy, 2026-08-21): (a)** — *"that's definitely
+something I'd like to see upgraded to use."* The A/B gate stands: traversal
+earns a default with recall evidence, not by decree.
+- [ ] Measure first: how many edges exist on the box, what relations, would
+      any live recall have changed with one-hop expansion? Then wire
+      relation-weighted expansion behind a flag and A/B against text-only.
 
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 
@@ -308,7 +311,7 @@ and the r2 fix layer is itself unreviewed. Record:
 
 **Open residuals, in the order burn-in should look at them:**
 
-- [ ] **Box burn-in + the flip.** The 53% figure is phase 1's cost on one
+- [x] **Box burn-in + the flip — FLIPPED 2026-08-21 (Jeremy: "Let's make the flip").** `tail.spawn` defaults True; `MARO_TAIL_SPAWN` env override added (test-suite pin + operator kill-switch). The 53% figure is phase 1's cost on one
       run; what a real workload's wall clock looks like with `tail.spawn`
       ON is unmeasured, and is the evidence the flip needs. Watch: does the
       answer's caller actually exit at the answer, does the child's tail
