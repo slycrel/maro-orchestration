@@ -3283,7 +3283,10 @@ class TestTheStatsWriterCannotOutrunItsReader:
         f.write_text('{"skill_id": "a", "uses": 3}\n', encoding="utf-8")
         before = f.read_bytes()
 
-        with pytest.raises(ValueError):
+        # r13 put validate_skill_stats_row in FRONT of the emission
+        # proof, so the refusal now arrives as its TypeError — accept
+        # either door; the property under test is refuse-before-write.
+        with pytest.raises((TypeError, ValueError)):
             skills_mod._write_skill_stats(
                 f, {"a": {"skill_id": "a", "avg_latency_ms": _math.nan}}, [])
 
@@ -3476,3 +3479,123 @@ class TestStatsAdmissionIsTheProof:
         assert any("duplicate" in r.getMessage() and str(f) in r.getMessage()
                    for r in caplog.records), \
             "duplicate compaction passed in silence"
+
+
+class TestPresenceIsNotAbsence:
+    """Adversarial r13 (three seats, probed): `d.get(name)` made an
+    explicitly stored JSON `null` indistinguishable from an absent field,
+    so a present null rode the absence exemption, `bool(None)` laundered
+    it to `false` on the next counter bump, and a `null` counter would
+    have made the NEXT update raise mid-recorder. No modeled field is
+    nullable in the emitted schema."""
+
+    def test_a_present_null_is_refused_for_every_modeled_field(self):
+        from skills import validate_skill_stats_row
+        for field in ("total_uses", "success_rate", "skill_name",
+                      "needs_escalation"):
+            with pytest.raises(TypeError):
+                validate_skill_stats_row({"skill_id": "s", field: None})
+
+    def test_a_null_row_strands_instead_of_being_normalized(
+            self, tmp_path, monkeypatch):
+        import skills as skills_mod
+        _setup_workspace(monkeypatch, tmp_path)
+        path = skills_mod._skill_stats_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = json.dumps({"skill_id": "s1", "needs_escalation": None,
+                          "operator_note": "keep"})
+        path.write_text(raw + "\n")
+
+        skills_mod.record_skill_injection_outcome("s1", True)
+
+        text = path.read_text()
+        assert raw in text, "the null row was not carried verbatim"
+        assert '"operator_note"' in text
+
+
+class TestEvidenceArrivesAsEvidence:
+    """Adversarial r13 (Architect, probed): `success="false"` is truthy,
+    so a stringly-typed caller recorded a FAILURE as a success — evidence
+    that type-checks clean forever after. And non-finite telemetry
+    reached the emission door, whose refusal the never-raise write
+    wrapper swallowed — the outcome silently discarded with a normal
+    return. Both refused at the door now, store untouched."""
+
+    def test_the_recorders_refuse_truthy_nonbool_verdicts(
+            self, tmp_path, monkeypatch):
+        import skills as skills_mod
+        _setup_workspace(monkeypatch, tmp_path)
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_outcome("s", "false")
+        with pytest.raises(TypeError):
+            skills_mod.record_skill_injection_outcome("s", "false")
+        assert not skills_mod._skill_stats_path().exists()
+
+    def test_non_finite_telemetry_is_refused_before_any_mutation(
+            self, tmp_path, monkeypatch):
+        import math
+        import skills as skills_mod
+        _setup_workspace(monkeypatch, tmp_path)
+        for kw in ({"cost_usd": math.nan}, {"latency_ms": math.inf},
+                   {"confidence": True}):
+            with pytest.raises(TypeError):
+                skills_mod.record_skill_outcome("s", True, **kw)
+        assert not skills_mod._skill_stats_path().exists()
+
+
+class TestTheStatsWriterProvesTheReadersPredicate:
+    """Adversarial r13 (Architect, probed): `_write_skill_stats` proved
+    clean-object JSON while its reader admits via
+    `validate_skill_stats_row` — the writer could vouch for a row no
+    reader will ever return. One admission predicate on both ends."""
+
+    def test_the_writer_refuses_a_row_its_reader_strands(self, tmp_path):
+        import skills as skills_mod
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text('{"skill_id": "keep"}\n')
+        before = path.read_bytes()
+        with pytest.raises(TypeError):
+            skills_mod._write_skill_stats(
+                path, {"s": {"skill_id": "s", "needs_escalation": "false"}},
+                [])
+        assert path.read_bytes() == before, "the store was touched"
+
+    def test_the_writer_refuses_a_surrogate_it_cannot_re_read(self, tmp_path):
+        """The schema validator passes a lone surrogate (it IS a str), so
+        only the emission re-read stands between it and the store — pin
+        that second lock separately from the first."""
+        import skills as skills_mod
+        path = tmp_path / "skill-stats.jsonl"
+        path.write_text('{"skill_id": "keep"}\n')
+        before = path.read_bytes()
+        with pytest.raises(Exception):
+            skills_mod._write_skill_stats(
+                path, {"s": {"skill_id": "s", "skill_name": "bad\udcff"}},
+                [])
+        assert path.read_bytes() == before, "the store was touched"
+
+
+class TestTheArchiveIsAWriterToo:
+    """Adversarial r13 (Skeptic, probed): `_archive_skills` — the
+    retention guarantee itself — used bare json.dumps, so a skill holding
+    a lone surrogate archived as a row the strict reader strands, and was
+    then removed from the live pool. The archive proves every line
+    BEFORE any append; a refusal aborts the caller's removal too."""
+
+    def test_an_unprovable_skill_aborts_the_archive_before_any_append(
+            self, tmp_path, monkeypatch):
+        import skills as skills_mod
+        _setup_workspace(monkeypatch, tmp_path)
+        good = Skill(id="a", name="n", description="d", trigger_patterns=[],
+                     steps_template=["s"], source_loop_ids=[],
+                     created_at="2026-01-01T00:00:00+00:00")
+        bad = Skill(id="b", name="n\udcff", description="d",
+                    trigger_patterns=[], steps_template=["s"],
+                    source_loop_ids=[],
+                    created_at="2026-01-01T00:00:00+00:00")
+        arch = skills_mod._skills_archive_path()
+        with pytest.raises(Exception):
+            skills_mod._archive_skills([good, bad], reason="test")
+        assert not arch.exists(), "a partial archive was written"
+        skills_mod._archive_skills([good], reason="test")
+        assert arch.exists()

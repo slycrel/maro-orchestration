@@ -461,3 +461,155 @@ class TestTheRewriteStrandRuleMirrorsTheReadersAdmission:
         assert "null" in after, "a null row was deleted by the composition"
         assert "[1, 2]" in after, "an array row was deleted by the composition"
         assert '"keep": 1' in after
+
+
+class TestTheRewriteKeepsItsAuditHonest:
+    """Adversarial r13 (QA + Failure Operator, probed): the carry-through
+    warning fired BEFORE the payload was proven, so a refused emission
+    left an audit line about a rewrite that never happened; and strandees
+    were re-homed to the tail, where a keyed last-row-wins consumer would
+    let a later-repaired legacy row outrank the caller's records."""
+
+    def test_strandees_ride_first_not_last(self, tmp_path):
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        f = tmp_path / "mem" / "led.jsonl"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b'BROKEN\n{"id": "old"}\n')
+        jb.rewrite("led", jb.read_all("led"))
+        assert f.read_bytes() == b'BROKEN\n{"id": "old"}\n'
+
+    def test_a_refused_emission_does_not_announce_a_carry_through(
+            self, tmp_path, caplog):
+        import logging
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        f = tmp_path / "mem" / "led.jsonl"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b'BROKEN\n')
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(Exception):
+                jb.rewrite("led", [{"note": "bad\udcff"}])
+        assert not any("carried through" in r.message for r in caplog.records)
+        assert f.read_bytes() == b'BROKEN\n'
+
+
+class TestTheBackendFailsLoudly:
+    """Adversarial r13 (QA, probed): append caught OSError, warned with
+    only the collection name, and returned normally — a disk-full became
+    apparent success, and no later reader can announce a row that was
+    never written."""
+
+    def test_append_propagates_io_failure(self, tmp_path, monkeypatch):
+        from memory_backends import JSONLBackend
+        import file_lock
+        jb = JSONLBackend(tmp_path / "mem")
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+        monkeypatch.setattr(file_lock, "locked_append", boom)
+        with pytest.raises(OSError):
+            jb.append("led", {"id": "x"})
+
+    def test_rewrite_propagates_io_failure(self, tmp_path, monkeypatch):
+        from memory_backends import JSONLBackend
+        import file_lock
+        jb = JSONLBackend(tmp_path / "mem")
+        jb.append("led", {"id": "old"})
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+        monkeypatch.setattr(file_lock, "atomic_write", boom)
+        with pytest.raises(OSError):
+            jb.rewrite("led", [{"id": "new"}])
+
+
+class TestTransformDecidesUnderOneLock:
+    """Adversarial r13 (Skeptic, probed): with the bare
+    read_all -> transform -> rewrite composition, a record appended
+    between the read and the write is CLEAN, so the strandee pass cannot
+    distinguish "the caller dropped it" from "the caller never saw it" —
+    and the concurrent append was silently deleted. transform() reads and
+    writes under one lock, making the decision decidable."""
+
+    def test_transform_reads_modifies_writes(self, tmp_path):
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        jb.append("led", {"id": "old"})
+        out = jb.transform("led", lambda rows: rows + [{"id": "new"}])
+        assert [r["id"] for r in out] == ["old", "new"]
+        assert [r["id"] for r in jb.read_all("led")] == ["old", "new"]
+
+    def test_transform_runs_fn_under_the_store_lock(
+            self, tmp_path, monkeypatch):
+        """The lock IS the fix — pin that fn executes inside it, so the
+        no-lock revert (the racy bare composition) cannot come back."""
+        from contextlib import contextmanager
+        import file_lock
+        from memory_backends import JSONLBackend
+        jb = JSONLBackend(tmp_path / "mem")
+        jb.append("led", {"id": "old"})
+        state = {"held": 0}
+        real = file_lock.locked_write
+
+        @contextmanager
+        def wrap(path, *a, **k):
+            state["held"] += 1
+            try:
+                with real(path, *a, **k):
+                    yield
+            finally:
+                state["held"] -= 1
+        monkeypatch.setattr(file_lock, "locked_write", wrap)
+
+        def fn(rows):
+            assert state["held"] > 0, "fn ran outside the store lock"
+            return rows
+        jb.transform("led", fn)
+
+
+class TestTheSQLiteTwinKeepsTheSameDoctrine:
+    """Adversarial r13 (Minimalist, HIGH, probed): the selectable SQLite
+    backend was the destructive config twin — read_all silently dropped a
+    damaged row (`except JSONDecodeError: pass`) and rewrite's DELETE-all
+    then destroyed it for good, one MARO_MEMORY_BACKEND flip from live."""
+
+    def _seed_bad_row(self, db_path):
+        import sqlite3
+        con = sqlite3.connect(str(db_path))
+        con.execute(
+            "INSERT INTO memory_records (collection, data) VALUES (?, ?)",
+            ("lessons", "{bad json"))
+        con.commit()
+        con.close()
+
+    def test_the_read_then_rewrite_composition_preserves_the_bad_row(
+            self, tmp_path, caplog):
+        import logging
+        import sqlite3
+        from memory_backends import SQLiteBackend
+        sb = SQLiteBackend(tmp_path / "m.db")
+        sb.append("lessons", {"id": "healthy"})
+        self._seed_bad_row(tmp_path / "m.db")
+
+        with caplog.at_level(logging.WARNING):
+            rows = sb.read_all("lessons")
+            sb.rewrite("lessons", rows)
+
+        assert rows == [{"id": "healthy"}]
+        assert any("unreadable row" in r.message for r in caplog.records)
+        con = sqlite3.connect(str(tmp_path / "m.db"))
+        datas = [r[0] for r in con.execute(
+            "SELECT data FROM memory_records WHERE collection='lessons'")]
+        con.close()
+        assert "{bad json" in datas, "the damaged row was destroyed"
+        assert any('"id": "healthy"' in d for d in datas)
+
+    def test_the_sqlite_writer_cannot_outrun_its_reader(self, tmp_path):
+        from memory_backends import SQLiteBackend
+        sb = SQLiteBackend(tmp_path / "m.db")
+        with pytest.raises(Exception):
+            sb.append("lessons", {"note": "bad\udcff"})
+        with pytest.raises(Exception):
+            sb.rewrite("lessons", [{"v": float("nan")}])
+        assert sb.read_all("lessons") == []

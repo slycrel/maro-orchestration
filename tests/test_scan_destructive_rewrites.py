@@ -1189,3 +1189,79 @@ class TestAResurfacerIsCaughtAtAnyVerdict:
         live = (set(tm.SITES) - tm.FIXED - set(tm.MOVED)) | {outer}
         *_, resurfaced = tm.compare(live)
         assert resurfaced == [outer]
+
+
+class TestProvenanceSurvivesEverySpelling:
+    """Adversarial r13 (four seats, one spelling each, all probed): the
+    r12 provenance rules still fell to ordinary alias chains — the
+    constructor aliased by assignment, a bound method re-aliased, a tuple
+    unpacking, the raw parser bound via AnnAssign/walrus (r12 taught
+    `_bindings` those forms and `_parser_names` kept its own private
+    Assign-only walk), and an instance stored on `self` in a sibling
+    method. Provenance is a lattice over ALL binding forms, or it is a
+    denylist."""
+
+    BASE = TestDecoderProvenanceNotSpelling.BASE
+
+    @pytest.mark.parametrize("setup,call", [
+        ("import json\n    Ctor = json.JSONDecoder\n    decoder = Ctor()",
+         "decoder.decode(line)"),
+        ("import json\n    Ctor = json.JSONDecoder\n    Other = Ctor\n"
+         "    decoder = Other()",
+         "decoder.decode(line)"),
+        ("import json\n    decoder = json.JSONDecoder()\n"
+         "    raw = decoder.decode\n    rebound = raw",
+         "rebound(line)"),
+        ("import json\n    decoder, _x = json.JSONDecoder(), None",
+         "decoder.raw_decode(line)[0]"),
+        ("import json\n    parser: object = json.loads",
+         "parser(line)"),
+        ("import json\n    (parser := json.loads)",
+         "parser(line)"),
+    ], ids=["ctor-assign-alias", "ctor-chain", "bound-method-chain",
+            "tuple-unpack", "parser-annassign", "parser-walrus"])
+    def test_every_alias_chain_marks_the_site_raw(self, setup, call):
+        assert _scan(self.BASE % (setup, call))["rewrite"] == "RISK"
+
+    def test_an_instance_attribute_carries_provenance_across_methods(self):
+        src = '''
+import json
+from jsonl_utils import loads_clean
+class Repairer:
+    def __init__(self):
+        self.decoder = json.JSONDecoder()
+    def rewrite(self, path):
+        keep = []
+        for line in open(path).read().split("\\n"):
+            if line == "":
+                continue
+            try:
+                row = self.decoder.decode(line)
+            except Exception:
+                continue
+            keep.append(line)
+        _probe = loads_clean('{}')
+        atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "RISK"
+
+    def test_an_ordinary_self_attribute_decode_stays_invisible(self):
+        """Negative control: `self.blob.decode("utf-8")` is text decoding
+        on an attribute nobody proved to be a JSONDecoder."""
+        src = '''
+from jsonl_utils import loads_clean
+class T:
+    def __init__(self):
+        self.blob = b""
+    def rewrite(self, path):
+        keep = []
+        for raw in open(path, "rb").read().split(b"\\n"):
+            line = self.blob.decode("utf-8")
+            try:
+                row = loads_clean(line)
+            except Exception:
+                continue
+            keep.append(line)
+        atomic_write(path, "\\n".join(keep))
+'''
+        assert _scan(src)["rewrite"] == "OK"

@@ -158,11 +158,22 @@ def _archive_skills(skills_to_archive: List[Skill], *, reason: str) -> None:
     from file_lock import locked_append
     path = _skills_archive_path()
     now = datetime.now(timezone.utc).isoformat()
+    # The archive IS the retention guarantee, so its writer proves its
+    # emission like every other (adversarial r13, Skeptic, probed): a
+    # skill mutated in memory to hold a lone surrogate archived as a
+    # clean-looking \udcXX escape — a row the strict reader strands —
+    # and was then removed from the live pool. Build and prove EVERY
+    # line first: a refusal aborts the archive before any append, and
+    # the raised error aborts the caller's live-pool removal too.
+    from jsonl_utils import prove_record_line
+    lines = []
     for s in skills_to_archive:
         rec = _skill_to_dict(s)
         rec["archived_at"] = now
         rec["archived_reason"] = reason
-        locked_append(path, json.dumps(rec))
+        lines.append(prove_record_line(rec))
+    for line in lines:
+        locked_append(path, line)
 
 
 # Aliases — internal names delegate to skill_types public API
@@ -994,26 +1005,43 @@ def validate_skill_stats_row(d: dict) -> None:
     JSON `true`. Same rule as `validate_skill_row`: checks the RAW values,
     absence is fine (stats rows are sparse upserts), presence must be the
     type the model would write. Census 2026-08-20: 203/203 live rows pass.
+
+    Presence is `name in d`, NOT `get() is not None` (adversarial r13,
+    three seats, probed): an explicitly stored JSON `null` slipped
+    through the absence exemption, `bool(None)` laundered it to `false`
+    on the next counter bump, and a `null` counter field would make the
+    NEXT update raise mid-recorder. No modeled field is nullable in the
+    emitted schema, so a present null strands like any other drift.
+
+    Deliberately TYPE-level, not plausibility-level: a row claiming
+    `total_uses=-4, successes=100` is faithfully representable and
+    faithfully re-emitted, so it is ADMITTED (r13, judged) — semantic
+    auditing is an inspector's job; stranding implausible-but-readable
+    rows would misfile legitimate legacy data behind a "corruption"
+    warning.
     """
     for name in ("total_uses", "successes", "failures",
                  "injected_runs", "injected_successes"):
-        v = d.get(name)
-        if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
-            raise TypeError(f"{name} must be an int, got {v!r}")
+        if name in d:
+            v = d[name]
+            if isinstance(v, bool) or not isinstance(v, int):
+                raise TypeError(f"{name} must be an int, got {v!r}")
     for name in ("success_rate", "total_cost_usd", "avg_latency_ms",
                  "avg_confidence", "injected_success_rate"):
-        v = d.get(name)
-        if v is not None and (isinstance(v, bool)
-                              or not isinstance(v, (int, float))
-                              or not math.isfinite(v)):
-            raise TypeError(f"{name} must be a finite number, got {v!r}")
+        if name in d:
+            v = d[name]
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or not math.isfinite(v)):
+                raise TypeError(f"{name} must be a finite number, got {v!r}")
     for name in ("skill_name", "last_used", "last_injected_verdict_at"):
-        v = d.get(name)
-        if v is not None and not isinstance(v, str):
-            raise TypeError(f"{name} must be a string, got {v!r}")
-    v = d.get("needs_escalation")
-    if v is not None and not isinstance(v, bool):
-        raise TypeError(f"needs_escalation must be a bool, got {v!r}")
+        if name in d:
+            v = d[name]
+            if not isinstance(v, str):
+                raise TypeError(f"{name} must be a string, got {v!r}")
+    if "needs_escalation" in d:
+        v = d["needs_escalation"]
+        if not isinstance(v, bool):
+            raise TypeError(f"needs_escalation must be a bool, got {v!r}")
 
 
 def _read_skill_stats(path: Path) -> Tuple[dict, List[str]]:
@@ -1127,10 +1155,19 @@ def _write_skill_stats(path: Path, records: dict, stranded: List[str]) -> None:
     # row — the recorder reported an outcome no reader can ever return.
     # The payload is built before atomic_write runs, so a failure aborts
     # with the store intact.
+    # And prove the READER'S full predicate, not just clean-object JSON
+    # (adversarial r13, Architect, probed): this writer accepted a row
+    # `validate_skill_stats_row` strands, so the store could hold a row
+    # the writer vouched for and no reader will ever return. One
+    # admission predicate on both ends — same rule as `_prove_line`.
     from jsonl_utils import prove_record_line
+    lines = []
+    for d in records.values():
+        validate_skill_stats_row(d)
+        lines.append(prove_record_line(d))
     atomic_write(
         path,
-        "".join(prove_record_line(d) + "\n" for d in records.values())
+        "".join(line + "\n" for line in lines)
         + "".join(l + "\n" for l in stranded),
         errors="surrogateescape",
     )
@@ -1207,6 +1244,21 @@ def record_skill_outcome(
     except UnicodeEncodeError:
         raise TypeError(f"skill_id is not encodable text: {skill_id!r}") \
             from None
+    # Evidence must arrive as evidence (adversarial r13, Architect,
+    # probed): `success="false"` is truthy, so a stringly-typed caller
+    # recorded a FAILURE as a success — permanently wrong evidence that
+    # type-checks clean forever after. And non-finite telemetry
+    # (cost_usd=NaN) sailed to the emission door, whose refusal the
+    # never-raise write wrapper then swallowed — the outcome silently
+    # discarded. Refuse both at the door, before any lock or mutation.
+    if type(success) is not bool:
+        raise TypeError(f"success must be a bool, got {success!r}")
+    for _tname, _tv in (("cost_usd", cost_usd), ("latency_ms", latency_ms),
+                        ("confidence", confidence)):
+        if isinstance(_tv, bool) or not isinstance(_tv, (int, float)) \
+                or not math.isfinite(_tv):
+            raise TypeError(
+                f"{_tname} must be a finite number, got {_tv!r}")
     from file_lock import locked_write
 
     path = _skill_stats_path()
@@ -1266,7 +1318,12 @@ def record_skill_outcome(
         try:
             _write_skill_stats(path, all_records, stranded)
         except Exception as e:
-            logger.warning("[skills] record_skill_outcome write failed: %s", e)
+            # The outcome is DISCARDED here — say which store lost it
+            # (adversarial r13, two seats: the warning named neither the
+            # path nor the skill, and the caller sees a normal return).
+            logger.warning(
+                "[skills] record_skill_outcome: outcome for %r NOT "
+                "persisted (%s): %s", skill_id, path, e)
 
 
 def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
@@ -1291,6 +1348,11 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
     except UnicodeEncodeError:
         raise TypeError(f"skill_id is not encodable text: {skill_id!r}") \
             from None
+    # Same door as record_skill_outcome (adversarial r13): a truthy
+    # non-bool verdict must not count as goal_achieved.
+    if type(goal_achieved) is not bool:
+        raise TypeError(
+            f"goal_achieved must be a bool, got {goal_achieved!r}")
     from file_lock import locked_write
 
     path = _skill_stats_path()
@@ -1327,7 +1389,8 @@ def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
             _write_skill_stats(path, all_records, stranded)
         except Exception as e:
             logger.warning(
-                "[skills] record_skill_injection_outcome write failed: %s", e)
+                "[skills] record_skill_injection_outcome: verdict for %r "
+                "NOT persisted (%s): %s", skill_id, path, e)
 
 
 def get_skills_needing_escalation() -> List[SkillStats]:

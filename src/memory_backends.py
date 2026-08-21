@@ -133,7 +133,14 @@ class JSONLBackend(MemoryBackend):
             from file_lock import locked_append
             locked_append(path, line)
         except OSError as exc:
-            log.warning("JSONLBackend.append(%s): %s", collection, exc)
+            # Loud, and it PROPAGATES (adversarial r13, QA, probed): the
+            # old warn-and-return converted a disk-full into apparent
+            # success — the caller proceeded as though the record existed
+            # and no later reader can announce a row that was never
+            # written. The record is the caller's to retry or surface.
+            log.error("JSONLBackend.append(%s): record NOT persisted "
+                      "(%s): %s", collection, path, exc)
+            raise
 
     def read_all(self, collection: str) -> List[Dict[str, Any]]:
         """Every record in the collection, with any loss announced.
@@ -199,24 +206,61 @@ class JSONLBackend(MemoryBackend):
                                 stranded.append(line)
                         except Exception:
                             stranded.append(line)
-                if stranded:
-                    log.warning(
-                        "JSONLBackend.rewrite(%s): %d unreadable row(s) "
-                        "carried through the rewrite verbatim (%s)",
-                        collection, len(stranded), path)
                 # Prove every emission through the reader's own door
                 # BEFORE the replace — allow_nan=False alone let a lone
                 # surrogate ride through as a clean escape and replace
                 # healthy data with a row read_all() strands (adversarial
                 # r12, four seats, probed). The whole payload is built
                 # first, so a failure aborts with the store untouched.
-                atomic_write(
-                    path,
-                    "".join(prove_record_line(r) + "\n" for r in records)
-                    + "".join(l + "\n" for l in stranded),
-                    errors="surrogateescape")
+                # Strandees ride FIRST (adversarial r13, Failure Operator,
+                # probed: they were re-homed to the tail, where any keyed
+                # last-row-wins consumer would let a later-repaired legacy
+                # row outrank the caller's records — same ordinal decision
+                # as skills._save_skills, r7). A generic rewrite has no
+                # slot metadata, so exact ordinals cannot be preserved;
+                # oldest-content-first is the honest deterministic choice.
+                payload = (
+                    "".join(l + "\n" for l in stranded)
+                    + "".join(prove_record_line(r) + "\n" for r in records))
+                atomic_write(path, payload, errors="surrogateescape")
+                # Announce AFTER the commit (adversarial r13, QA, probed):
+                # the old order logged "carried through the rewrite" and
+                # THEN built the payload, so a refused emission left a
+                # false audit line about a rewrite that never happened.
+                if stranded:
+                    log.warning(
+                        "JSONLBackend.rewrite(%s): %d unreadable row(s) "
+                        "carried through the rewrite verbatim (%s)",
+                        collection, len(stranded), path)
         except OSError as exc:
-            log.warning("JSONLBackend.rewrite(%s): %s", collection, exc)
+            log.error("JSONLBackend.rewrite(%s): rewrite NOT performed, "
+                      "store unchanged (%s): %s", collection, path, exc)
+            raise
+
+    def transform(self, collection: str,
+                  fn: "Any") -> List[Dict[str, Any]]:
+        """Atomically read -> fn(records) -> rewrite, under ONE lock.
+
+        The bare `read_all() -> transform -> rewrite()` composition is a
+        lost-update race (adversarial r13, Skeptic, probed): a record
+        appended between the caller's read and its rewrite is CLEAN, so
+        the rewrite's strandee pass cannot distinguish "the caller
+        decided to drop it" from "the caller never saw it" — with a bare
+        list API that is undecidable, and the concurrent append was
+        silently deleted. This method makes the decision decidable by
+        construction: fn receives the records read under the same lock
+        the write commits under. Use this for every read-modify-write;
+        `rewrite()` remains for whole-store replacement where losing a
+        concurrent append is acceptable and announced by design.
+
+        Returns the record list fn produced (and the store now holds).
+        """
+        path = self._path(collection)
+        from file_lock import locked_write
+        with locked_write(path):   # reentrant: read_all/rewrite re-enter
+            records = fn(self.read_all(collection))
+            self.rewrite(collection, records)
+            return records
 
     def append_text(self, collection: str, text: str) -> None:
         path = self._text_path(collection)
@@ -283,15 +327,23 @@ class SQLiteBackend(MemoryBackend):
         return con
 
     def append(self, collection: str, record: Dict[str, Any]) -> None:
+        # Same emission door as the JSONL twin (adversarial r13,
+        # Minimalist: this backend is one MARO_MEMORY_BACKEND flip from
+        # live and had kept every writer/reader gap the JSONL side spent
+        # three rounds closing).
+        from jsonl_utils import prove_record_line
+        data = prove_record_line(record)
         try:
             with self._connect() as con:
                 con.execute(
                     "INSERT INTO memory_records (collection, data) VALUES (?, ?)",
-                    (collection, json.dumps(record)),
+                    (collection, data),
                 )
                 con.commit()
         except sqlite3.Error as exc:
-            log.warning("SQLiteBackend.append(%s): %s", collection, exc)
+            log.error("SQLiteBackend.append(%s): record NOT persisted "
+                      "(%s): %s", collection, self._db_path, exc)
+            raise
 
     def read_all(self, collection: str) -> List[Dict[str, Any]]:
         try:
@@ -301,30 +353,76 @@ class SQLiteBackend(MemoryBackend):
                     (collection,),
                 )
                 rows = cur.fetchall()
+            from jsonl_utils import loads_clean
             records: List[Dict[str, Any]] = []
+            dropped = 0
             for (data,) in rows:
+                # The announced strict reader, same admission as the JSONL
+                # twin (adversarial r13, Minimalist, probed): the bare
+                # `except JSONDecodeError: pass` silently dropped a
+                # damaged row, and rewrite() then deleted it for good.
                 try:
-                    records.append(json.loads(data))
-                except json.JSONDecodeError:
-                    pass
+                    value = loads_clean(data)
+                except Exception:
+                    dropped += 1
+                    continue
+                if not isinstance(value, dict):
+                    dropped += 1
+                    continue
+                records.append(value)
+            if dropped:
+                log.warning(
+                    "SQLiteBackend.read_all(%s): %d unreadable row(s) "
+                    "excluded from the result (%s)",
+                    collection, dropped, self._db_path)
             return records
         except sqlite3.Error as exc:
             log.warning("SQLiteBackend.read_all(%s): %s", collection, exc)
             return []
 
     def rewrite(self, collection: str, records: List[Dict[str, Any]]) -> None:
+        # Doctrine parity with the JSONL twin (adversarial r13,
+        # Minimalist, probed: DELETE-all + read_all's silent drop
+        # permanently destroyed a damaged row on the standard
+        # read -> transform -> rewrite composition). Emissions are proven
+        # BEFORE the transaction; only rows the strict reader vouches for
+        # are deleted — an unreadable `data` value stays in place,
+        # verbatim, and is announced after the commit.
+        from jsonl_utils import loads_clean, prove_record_line
+        datas = [prove_record_line(r) for r in records]
         try:
             with self._connect() as con:
-                con.execute(
-                    "DELETE FROM memory_records WHERE collection=?", (collection,)
-                )
+                cur = con.execute(
+                    "SELECT id, data FROM memory_records WHERE collection=?",
+                    (collection,))
+                readable = []
+                carried = 0
+                for row_id, data in cur.fetchall():
+                    try:
+                        if isinstance(loads_clean(data), dict):
+                            readable.append(row_id)
+                        else:
+                            carried += 1
+                    except Exception:
+                        carried += 1
+                con.executemany(
+                    "DELETE FROM memory_records WHERE id=?",
+                    [(i,) for i in readable])
                 con.executemany(
                     "INSERT INTO memory_records (collection, data) VALUES (?, ?)",
-                    [(collection, json.dumps(r)) for r in records],
+                    [(collection, d) for d in datas],
                 )
                 con.commit()
+            if carried:
+                log.warning(
+                    "SQLiteBackend.rewrite(%s): %d unreadable row(s) "
+                    "carried through the rewrite verbatim (%s)",
+                    collection, carried, self._db_path)
         except sqlite3.Error as exc:
-            log.warning("SQLiteBackend.rewrite(%s): %s", collection, exc)
+            log.error("SQLiteBackend.rewrite(%s): rewrite NOT performed, "
+                      "store unchanged (%s): %s",
+                      collection, self._db_path, exc)
+            raise
 
     def append_text(self, collection: str, text: str) -> None:
         try:

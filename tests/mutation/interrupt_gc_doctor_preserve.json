@@ -614,8 +614,8 @@
   "name": "scanner parser identity :: safety is read off the identifier again",
   "file": "scripts/scan_destructive_rewrites.py",
   "tests": "tests/test_scan_destructive_rewrites.py",
-  "anchor": "        if dotted in raw_names or name in raw_names:\n            used_raw = True\n        elif isinstance(f, ast.Name) and f.id in decoder_methods:",
-  "replacement": "        if name in (\"loads_clean\", \"_loads_clean\"):\n            used_clean = True\n        elif isinstance(f, ast.Name) and f.id in decoder_methods:"
+  "anchor": "        if dotted in raw_names or name in raw_names:\n            used_raw = True\n        elif dotted in decoder_methods or \\\n                (isinstance(f, ast.Name) and f.id in decoder_methods):",
+  "replacement": "        if name in (\"loads_clean\", \"_loads_clean\"):\n            used_clean = True\n        elif dotted in decoder_methods or \\\n                (isinstance(f, ast.Name) and f.id in decoder_methods):"
  },
  {
   "name": "scanner parser identity :: an aliased import binds the original name",
@@ -1085,8 +1085,8 @@
  {
   "name": "stats writer :: non-finite telemetry writes the NaN token again",
   "file": "src/skills.py",
-  "anchor": "        \"\".join(prove_record_line(d) + \"\\n\" for d in records.values())",
-  "replacement": "        \"\".join(json.dumps(d) + \"\\n\" for d in records.values())",
+  "anchor": "    lines = []\n    for d in records.values():\n        validate_skill_stats_row(d)\n        lines.append(prove_record_line(d))",
+  "replacement": "    lines = []\n    for d in records.values():\n        validate_skill_stats_row(d)\n        lines.append(json.dumps(d))",
   "tests": "tests/test_skills.py"
  },
  {
@@ -1127,8 +1127,8 @@
  {
   "name": "backend rewrite :: the writer mints the NaN token",
   "file": "src/memory_backends.py",
-  "anchor": "                    \"\".join(prove_record_line(r) + \"\\n\" for r in records)",
-  "replacement": "                    \"\".join(json.dumps(r) + \"\\n\" for r in records)",
+  "anchor": "                payload = (\n                    \"\".join(l + \"\\n\" for l in stranded)\n                    + \"\".join(prove_record_line(r) + \"\\n\" for r in records))",
+  "replacement": "                payload = (\n                    \"\".join(l + \"\\n\" for l in stranded)\n                    + \"\".join(json.dumps(r) + \"\\n\" for r in records))",
   "tests": "tests/test_memory_backend.py"
  },
  {
@@ -1141,7 +1141,7 @@
  {
   "name": "scanner decoder :: JSONDecoder.decode is invisible again",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (\n                (isinstance(f.value, ast.Name) and f.value.id in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    in ctors)):\n            used_raw = True          # json.JSONDecoder().decode — a raw parse",
+  "anchor": "        elif name in (\"decode\", \"raw_decode\") and isinstance(f, ast.Attribute) and (\n                (_dotted_target(f.value) in decoders)\n                or (isinstance(f.value, ast.Call)\n                    and isinstance(f.value.func, (ast.Name, ast.Attribute))\n                    and (getattr(f.value.func, \"id\", \"\")\n                         or getattr(f.value.func, \"attr\", \"\"))\n                    in ctors)):\n            used_raw = True          # json.JSONDecoder().decode — a raw parse",
   "replacement": "        elif False:\n            used_raw = True",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1232,21 +1232,21 @@
  {
   "name": "scanner decoder provenance :: the alias fixpoint leg goes blind",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "                elif isinstance(value, ast.Name) and value.id in insts:\n                    got = (insts, target.id)      # alias = decoder",
-  "replacement": "                elif False:\n                    pass",
+  "anchor": "            else:\n                vname = _dotted_target(value)\n                if vname in insts:\n                    got = (insts, tname)      # alias = decoder\n                elif vname in methods:\n                    got = (methods, tname)    # rebound = raw",
+  "replacement": "            else:\n                pass",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
   "name": "scanner decoder provenance :: the bound-method binding goes blind",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "                elif (isinstance(value, ast.Attribute)\n                        and value.attr in (\"decode\", \"raw_decode\")\n                        and isinstance(value.value, ast.Name)\n                        and value.value.id in insts):\n                    got = (methods, target.id)    # raw = decoder.decode",
-  "replacement": "                elif False:\n                    pass",
+  "anchor": "            elif (isinstance(value, ast.Attribute)\n                    and value.attr in (\"decode\", \"raw_decode\")\n                    and _dotted_target(value.value) in insts):\n                got = (methods, tname)        # raw = decoder.decode",
+  "replacement": "            elif False:\n                pass",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
  {
   "name": "scanner decoder provenance :: the bound-method call dispatch goes blind",
   "file": "scripts/scan_destructive_rewrites.py",
-  "anchor": "        elif isinstance(f, ast.Name) and f.id in decoder_methods:\n            used_raw = True          # raw = decoder.decode; raw(line)",
+  "anchor": "        elif dotted in decoder_methods or \\\n                (isinstance(f, ast.Name) and f.id in decoder_methods):\n            used_raw = True          # raw = decoder.decode; raw(line)",
   "replacement": "        elif False:\n            used_raw = True",
   "tests": "tests/test_scan_destructive_rewrites.py"
  },
@@ -1299,5 +1299,173 @@
   "replacement": "    line = json.dumps(record)\n    value = loads_clean(line)",
   "tests": "tests/test_memory_backend.py",
   "equivalent": "Twin lock (same as 'skills writer proof :: the proof line re-admits NaN', r11): with allow_nan defaulted back to True the dumps emits the CPython token `NaN`, but the very next line runs the emission through loads_clean, whose parse_constant refuses that token — the door still raises before any store is touched, just from the second lock. The mutation cannot change observable behavior."
+ },
+ {
+  "name": "stats null :: a present null counter reads as absent again",
+  "file": "src/skills.py",
+  "anchor": "    for name in (\"total_uses\", \"successes\", \"failures\",\n                 \"injected_runs\", \"injected_successes\"):\n        if name in d:\n            v = d[name]",
+  "replacement": "    for name in (\"total_uses\", \"successes\", \"failures\",\n                 \"injected_runs\", \"injected_successes\"):\n        if d.get(name) is not None:\n            v = d[name]",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats null :: a present null rate reads as absent again",
+  "file": "src/skills.py",
+  "anchor": "    for name in (\"success_rate\", \"total_cost_usd\", \"avg_latency_ms\",\n                 \"avg_confidence\", \"injected_success_rate\"):\n        if name in d:\n            v = d[name]",
+  "replacement": "    for name in (\"success_rate\", \"total_cost_usd\", \"avg_latency_ms\",\n                 \"avg_confidence\", \"injected_success_rate\"):\n        if d.get(name) is not None:\n            v = d[name]",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats null :: a present null string reads as absent again",
+  "file": "src/skills.py",
+  "anchor": "    for name in (\"skill_name\", \"last_used\", \"last_injected_verdict_at\"):\n        if name in d:\n            v = d[name]",
+  "replacement": "    for name in (\"skill_name\", \"last_used\", \"last_injected_verdict_at\"):\n        if d.get(name) is not None:\n            v = d[name]",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats null :: a present null flag is laundered to false again",
+  "file": "src/skills.py",
+  "anchor": "    if \"needs_escalation\" in d:\n        v = d[\"needs_escalation\"]\n        if not isinstance(v, bool):",
+  "replacement": "    v = d.get(\"needs_escalation\")\n    if v is not None:\n        if not isinstance(v, bool):",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "recorder door :: a truthy string counts as success again",
+  "file": "src/skills.py",
+  "anchor": "    if type(success) is not bool:\n        raise TypeError(f\"success must be a bool, got {success!r}\")",
+  "replacement": "    if False:\n        raise TypeError(f\"success must be a bool, got {success!r}\")",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "recorder door :: non-finite telemetry reaches the writer again",
+  "file": "src/skills.py",
+  "anchor": "    for _tname, _tv in ((\"cost_usd\", cost_usd), (\"latency_ms\", latency_ms),\n                        (\"confidence\", confidence)):\n        if isinstance(_tv, bool) or not isinstance(_tv, (int, float)) \\\n                or not math.isfinite(_tv):",
+  "replacement": "    for _tname, _tv in ((\"cost_usd\", cost_usd), (\"latency_ms\", latency_ms),\n                        (\"confidence\", confidence)):\n        if False:",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "recorder door :: a truthy string counts as goal_achieved again",
+  "file": "src/skills.py",
+  "anchor": "    if type(goal_achieved) is not bool:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
+  "replacement": "    if False:\n        raise TypeError(\n            f\"goal_achieved must be a bool, got {goal_achieved!r}\")",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "stats writer :: the writer stops proving the reader's predicate",
+  "file": "src/skills.py",
+  "anchor": "    lines = []\n    for d in records.values():\n        validate_skill_stats_row(d)\n        lines.append(prove_record_line(d))",
+  "replacement": "    lines = []\n    for d in records.values():\n        lines.append(prove_record_line(d))",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "skills archive :: the retention writer mints strandees again",
+  "file": "src/skills.py",
+  "anchor": "    from jsonl_utils import prove_record_line\n    lines = []\n    for s in skills_to_archive:\n        rec = _skill_to_dict(s)\n        rec[\"archived_at\"] = now\n        rec[\"archived_reason\"] = reason\n        lines.append(prove_record_line(rec))\n    for line in lines:\n        locked_append(path, line)",
+  "replacement": "    for s in skills_to_archive:\n        rec = _skill_to_dict(s)\n        rec[\"archived_at\"] = now\n        rec[\"archived_reason\"] = reason\n        locked_append(path, json.dumps(rec))",
+  "tests": "tests/test_skills.py"
+ },
+ {
+  "name": "backend rewrite :: strandees are re-homed to the tail again",
+  "file": "src/memory_backends.py",
+  "anchor": "                payload = (\n                    \"\".join(l + \"\\n\" for l in stranded)\n                    + \"\".join(prove_record_line(r) + \"\\n\" for r in records))",
+  "replacement": "                payload = (\n                    \"\".join(prove_record_line(r) + \"\\n\" for r in records)\n                    + \"\".join(l + \"\\n\" for l in stranded))",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "backend rewrite :: the carry-through is announced before it happens",
+  "file": "src/memory_backends.py",
+  "anchor": "                payload = (\n                    \"\".join(l + \"\\n\" for l in stranded)\n                    + \"\".join(prove_record_line(r) + \"\\n\" for r in records))\n                atomic_write(path, payload, errors=\"surrogateescape\")",
+  "replacement": "                if stranded:\n                    log.warning(\n                        \"JSONLBackend.rewrite(%s): %d unreadable row(s) \"\n                        \"carried through the rewrite verbatim (%s)\",\n                        collection, len(stranded), path)\n                    stranded_announced = True\n                payload = (\n                    \"\".join(l + \"\\n\" for l in stranded)\n                    + \"\".join(prove_record_line(r) + \"\\n\" for r in records))\n                atomic_write(path, payload, errors=\"surrogateescape\")",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "backend append :: an io failure reads as success again",
+  "file": "src/memory_backends.py",
+  "anchor": "            log.error(\"JSONLBackend.append(%s): record NOT persisted \"\n                      \"(%s): %s\", collection, path, exc)\n            raise",
+  "replacement": "            log.warning(\"JSONLBackend.append(%s): %s\", collection, exc)",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "backend rewrite :: an io failure reads as success again",
+  "file": "src/memory_backends.py",
+  "anchor": "            log.error(\"JSONLBackend.rewrite(%s): rewrite NOT performed, \"\n                      \"store unchanged (%s): %s\", collection, path, exc)\n            raise",
+  "replacement": "            log.warning(\"JSONLBackend.rewrite(%s): %s\", collection, exc)",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "backend transform :: the lock is dropped and the race returns",
+  "file": "src/memory_backends.py",
+  "anchor": "        with locked_write(path):   # reentrant: read_all/rewrite re-enter\n            records = fn(self.read_all(collection))\n            self.rewrite(collection, records)\n            return records",
+  "replacement": "        records = fn(self.read_all(collection))\n        self.rewrite(collection, records)\n        return records",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "sqlite read :: the silent drop returns",
+  "file": "src/memory_backends.py",
+  "anchor": "                try:\n                    value = loads_clean(data)\n                except Exception:\n                    dropped += 1\n                    continue\n                if not isinstance(value, dict):\n                    dropped += 1\n                    continue\n                records.append(value)",
+  "replacement": "                try:\n                    records.append(json.loads(data))\n                except json.JSONDecodeError:\n                    pass",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "sqlite rewrite :: DELETE-all destroys the damaged row again",
+  "file": "src/memory_backends.py",
+  "anchor": "                cur = con.execute(\n                    \"SELECT id, data FROM memory_records WHERE collection=?\",\n                    (collection,))\n                readable = []\n                carried = 0\n                for row_id, data in cur.fetchall():\n                    try:\n                        if isinstance(loads_clean(data), dict):\n                            readable.append(row_id)\n                        else:\n                            carried += 1\n                    except Exception:\n                        carried += 1\n                con.executemany(\n                    \"DELETE FROM memory_records WHERE id=?\",\n                    [(i,) for i in readable])",
+  "replacement": "                carried = 0\n                con.execute(\n                    \"DELETE FROM memory_records WHERE collection=?\",\n                    (collection,))",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "sqlite append :: the writer outruns its reader again",
+  "file": "src/memory_backends.py",
+  "anchor": "        from jsonl_utils import prove_record_line\n        data = prove_record_line(record)",
+  "replacement": "        data = json.dumps(record)",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "sqlite rewrite :: the emission proof is dropped",
+  "file": "src/memory_backends.py",
+  "anchor": "        from jsonl_utils import loads_clean, prove_record_line\n        datas = [prove_record_line(r) for r in records]",
+  "replacement": "        from jsonl_utils import loads_clean\n        datas = [json.dumps(r) for r in records]",
+  "tests": "tests/test_memory_backend.py"
+ },
+ {
+  "name": "scanner ctors :: the assignment alias fixpoint is dropped",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    changed = True\n    while changed:\n        changed = False\n        for target, value in _scope_bindings(scope):\n            if not isinstance(target, ast.Name) or target.id in out:\n                continue\n            if ((isinstance(value, ast.Attribute)\n                 and value.attr == \"JSONDecoder\")\n                    or (isinstance(value, ast.Name) and value.id in out)):\n                out.add(target.id)\n                changed = True\n    return out",
+  "replacement": "    return out",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner methods :: the method-alias chain goes blind",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "                elif vname in methods:\n                    got = (methods, tname)    # rebound = raw",
+  "replacement": "                elif False:\n                    pass",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner bindings :: destructuring stops binding",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    if (isinstance(target, (ast.Tuple, ast.List))\n            and isinstance(value, (ast.Tuple, ast.List))\n            and len(target.elts) == len(value.elts)\n            and not any(isinstance(t, ast.Starred) for t in target.elts)):",
+  "replacement": "    if False:",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner parser aliases :: only plain Assign binds again",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "            for target, v in _bindings(n):\n                if not isinstance(target, ast.Name):\n                    continue\n                bound = target.id",
+  "replacement": "            for target, v in (tv for tv in _bindings(n)\n                              if isinstance(n, ast.Assign)):\n                if not isinstance(target, ast.Name):\n                    continue\n                bound = target.id",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner dotted :: attribute chains stop resolving",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    parts = []\n    while isinstance(node, ast.Attribute):\n        parts.append(node.attr)\n        node = node.value\n    if isinstance(node, ast.Name):\n        parts.append(node.id)\n        return \".\".join(reversed(parts))\n    return None",
+  "replacement": "    if isinstance(node, ast.Name):\n        return node.id\n    return None",
+  "tests": "tests/test_scan_destructive_rewrites.py"
+ },
+ {
+  "name": "scanner class map :: instance provenance stops crossing methods",
+  "file": "scripts/scan_destructive_rewrites.py",
+  "anchor": "    ci, cm = _CLASS_DECODER_MAP.get(id(fn), (set(), set()))\n    if (ci or cm) and fn.args.args:\n        first = fn.args.args[0].arg\n        decoders |= {first + n[1:] for n in ci}\n        decoder_methods |= {first + n[1:] for n in cm}",
+  "replacement": "    ci, cm = _CLASS_DECODER_MAP.get(id(fn), (set(), set()))",
+  "tests": "tests/test_scan_destructive_rewrites.py"
  }
 ]
