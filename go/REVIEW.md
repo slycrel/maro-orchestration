@@ -2254,3 +2254,73 @@ proposal.
 Fix-layer mutations M91–M96 all DETECTED with COMPILING mutants. Full
 suite green, gofmt/vet clean. r3 (confirmation round) follows — needs two
 consecutive zero-HIGH rounds for fixpoint.
+
+### Round 3 (fix-layer re-review: Skeptic + Expert QA — sonnet-medium fallback; commit 1ec44926)
+
+**Verdict: CONTESTED → fixed.** Flagship pattern a THIRD time: the top
+HIGH lived in r2's own `cost_optimization`/`crystallization` fix (wrong
+status literal), plus a detector-evasion HIGH in the rewritten guard.
+
+**Verification Ledger:**
+
+- **VERIFIED HIGH (both lenses) — wrong status literal breaks the shared-
+  store contract.** r2 stamped `cost_optimization`/`crystallization`
+  `held_for_review`, but Python (`evolver_store.py:857,864`) stamps them
+  `pending_human_review` — and `observe.py:272` computes the operator
+  "pending" dashboard count over the SHARED store keying on exactly
+  `pending_human_review`, so Go-touched rows silently vanished from that
+  metric. My own r2 comment named the correct value while the code wrote
+  the wrong one. **Fixed:** both → `pending_human_review`; test asserts
+  the literal + a category-specific block_reason. M97 DETECTED.
+
+- **VERIFIED HIGH (Skeptic) — tab/newline-in-host detector evasion.**
+  `https://evil<TAB>collector.com/leak` scanned CLEAN: the candidate clip
+  and the shape's `[^\s]` class both stop at the tab, so the host reads
+  `evil` and the shape fails — yet a WHATWG URL parser fetches
+  `evilcollector.com`. Live-reproduced. **Fixed:** each candidate now has
+  ASCII tab/CR/LF removed (the WHATWG normalization step) before shape-
+  testing; the shape's `.tld/path` requirement means gluing a line-end
+  host to the next line can't forge a match. Pins for tab + newline
+  shapes. M98 DETECTED. Python shares it → backport candidate.
+
+- **VERIFIED MEDIUM (both lenses) — third `goal_achieved` reader
+  unhardened.** `recall.go:357` read the field with a raw `.(bool)`,
+  treating a malformed value as unjudged — diverging from the r1/r2
+  hardening of `inspector.goalAchieved` and `evolver.triState`, so a
+  corrupt prior attempt showed the director a neutral no-verdict instead
+  of a failure. **Fixed:** same conservative direction (non-bool →
+  judged-false). Pin
+  `TestFindPriorAttemptsMalformedGoalAchievedIsJudgedFalse`. M100
+  DETECTED.
+
+- **VERIFIED MEDIUM (QA) — Revert returned Reverted:true even when the
+  durable store write failed.** The behavioral undo could succeed while
+  `LockedRMW` to persist `applied=false` failed; the code appended a
+  detail note but still returned `Reverted:true`, so a caller was told it
+  completed and (with the r2 IsApplied guard) a second Revert could slip
+  through. **Fixed:** `Reverted` now reflects the persisted state
+  (`storePersisted`). Double-revert-after-success pin
+  `TestRevertTwiceRefusesSecond`; the merr-persistence-failure path is
+  fixed but its fault-injection test is deferred (no clean in-process
+  hook).
+
+- **REFUTED (QA #6) — trailing-dot FQDN false-positive.** The claimed
+  over-block (`https://r.jina.ai./leak` flagged) CANNOT occur: the exfil
+  shape requires `.(com|io|net)/` with the slash immediately after the
+  TLD, so a trailing-dot host never matches the shape and never reaches
+  `urlHostAllowed`. The r3 `TrimSuffix` "fix" was unreachable dead code
+  (M101 NOT DETECTED proved it) — removed, along with the misleading
+  fixture. Verify-before-fix caught a hallucinated finding.
+
+- **ACCEPTED-NAMED LOW (Skeptic #4) — constraintRowExists vs Revert match
+  asymmetry.** Intentional (idempotency only needs to recognize the row
+  this apply just wrote, always source==id); cross-ref comment added.
+
+- **ACCEPTED-NAMED LOW (QA #5) — URL findings report first match only.**
+  `break` after the first non-allowlisted URL is Python-parity (the URL
+  is one pattern, fires once); risk is already HIGH regardless. Left as
+  is.
+
+Fix-layer mutations M97/M98/M100 DETECTED with compiling mutants; M101
+void (refuted finding, dead code removed). Full suite green, gofmt/vet
+clean. r4 (confirmation) follows.

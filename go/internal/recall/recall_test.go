@@ -96,6 +96,33 @@ func TestFindPriorAttemptsMatchLanes(t *testing.T) {
 	}
 }
 
+// r3 review: recall is the THIRD reader of goal_achieved (siblings:
+// inspector.goalAchieved, evolver.triState). A present-but-non-bool value
+// must surface as judged-NOT-achieved, not unjudged — so a corrupt prior
+// attempt shows the director a failure, not a neutral no-verdict.
+func TestFindPriorAttemptsMalformedGoalAchievedIsJudgedFalse(t *testing.T) {
+	ws := t.TempDir()
+	goal := "reindex the corpus"
+	writeRunMeta(t, ws, "m1-x", map[string]any{
+		"handle_id": "m1", "started_at": isoAgo(time.Hour),
+		"prompt": goal, "status": "done", "goal_achieved": "false",
+	})
+	got, _, err := FindPriorAttempts(ws, goal, 24.0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 attempt, got %d", len(got))
+	}
+	a := got[0]
+	if a.GoalAchieved == nil {
+		t.Fatal("malformed goal_achieved read as unjudged (nil) — must be judged-false")
+	}
+	if *a.GoalAchieved {
+		t.Fatal("malformed goal_achieved read as achieved")
+	}
+}
+
 func TestFindPriorAttemptsWindowExcludeAndFallbacks(t *testing.T) {
 	ws := t.TempDir()
 	goal := "rebuild the index"

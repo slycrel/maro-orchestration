@@ -353,8 +353,18 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 		default:
 			continue
 		}
+		// Third reader of goal_achieved (siblings: inspector.goalAchieved,
+		// evolver.triState). A present-but-non-bool value is judged-NOT-
+		// achieved, NOT unjudged — the same conservative direction the r1/
+		// r2 hardening chose, so a corrupt prior-attempt row surfaces as a
+		// failure to the director instead of a neutral no-verdict (r3
+		// review sibling-census).
 		var ga *bool
-		if b, isBool := meta["goal_achieved"].(bool); isBool {
+		if v, present := meta["goal_achieved"]; present && v != nil {
+			b, isBool := v.(bool)
+			if !isBool {
+				b = false // malformed verdict → judged-false
+			}
 			ga = &b
 		}
 		sv, _ := meta["stop_verdict"].(string)

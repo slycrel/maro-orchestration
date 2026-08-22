@@ -72,6 +72,10 @@ var schemeRe = regexp.MustCompile(`(?i)https?://`)
 
 var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 
+// urlControlStripper removes ASCII tab/CR/LF from a URL candidate (the
+// WHATWG normalization step) so they can't hide inside a hostname.
+var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
+
 // Allowed source locations — auto-apply permitted without manual review
 // (Python _ALLOWED_SOURCE_DIRS, verbatim).
 var allowedSourceDirs = map[string]bool{
@@ -173,9 +177,17 @@ func ScanContent(content, source string) ScanReport {
 	// host never launders a non-allowlisted inner one.
 	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
 		cand := target[loc[0]:]
-		if i := strings.IndexAny(cand, " \t\r\n"); i >= 0 {
+		// Candidate ends at the next SPACE. ASCII tab/CR/LF are then
+		// REMOVED from within it, mirroring the WHATWG URL "remove all
+		// ASCII tab or newline" step — a real client fetches
+		// `https://evil<TAB>collector.com/x` as `evilcollector.com`, so a
+		// detector that let the tab terminate the host would miss it
+		// (r3 review). The exfil shape requires a `.tld/path`, so gluing
+		// a bare line-end host to the next line cannot forge a match.
+		if i := strings.IndexByte(cand, ' '); i >= 0 {
 			cand = cand[:i]
 		}
+		cand = urlControlStripper.Replace(cand)
 		if !exfilURLShape.MatchString(cand) || urlHostAllowed(cand) {
 			continue
 		}

@@ -996,6 +996,23 @@ inspector twin; `Revert` guards on `IsApplied` so it can't stamp
 `revert_suggestion` doesn't check applied-state. Fix-layer mutations
 M91–M96 all DETECTED (compiling mutants).
 
+**r3 fix-layer re-review (2026-08-22, skeptic+qa) — flagship a 3rd time.**
+Two HIGHs: (a) r2 stamped cost_optimization/crystallization
+`held_for_review` but Python uses `pending_human_review`, which the
+shared-store operator dashboard (observe.py) counts — Go-touched rows
+vanished from it; fixed to the Python literal. (b) Tab/newline-in-host
+detector evasion (`https://evil<TAB>collector.com/x` fetched as
+evilcollector.com by a WHATWG parser but read as host `evil` by the
+scanner); fixed by stripping ASCII tab/CR/LF from each URL candidate.
+MEDIUMs: recall.go was a THIRD unhardened goal_achieved reader (fixed to
+match the twins); Revert returned Reverted:true even when the durable
+store write failed (now reflects persisted state). One reviewer HIGH-
+adjacent LOW was REFUTED by verify-before-fix (trailing-dot false-
+positive can't occur — the exfil shape excludes it; the attempted fix was
+dead code, removed). NEW backport candidate: (9) Python's exfil scan
+shares the tab/newline-in-host evasion. Fix-layer mutations M97/M98/M100
+DETECTED (M101 void — refuted finding).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

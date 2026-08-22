@@ -573,7 +573,10 @@ func stringOr(v any) string {
 // does NOT check the row's pattern or its 30-day TTL (constraint.py load
 // filter), so it is not meant for re-applying an old expired id — an
 // edge that requires `applied` to stay false for weeks (r2 review LOW,
-// accepted-named).
+// accepted-named). NOTE: this presence check is narrower than Revert's
+// guardrail matcher (which also accepts the "evolver:<id>" legacy form
+// and a pattern-text fallback) on purpose — this only needs to recognize
+// a row THIS apply just wrote, which always carries source==id.
 func constraintRowExists(workspaceDir, suggestionID string) bool {
 	raw, err := os.ReadFile(dynamicConstraintsPath(workspaceDir))
 	if err != nil {
@@ -673,18 +676,20 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			d["block_reason"] = "inspection_finding is informational — nothing to apply; " +
 				"it surfaces friction for a human to act on"
 		case "cost_optimization":
-			// KNOWN Python category (evolver_store.py holds it
-			// pending_human_review). No Go auto-apply engine — HELD, not
-			// action_failed (r2 review: the inspection_finding fix was
-			// narrow; these two known Python categories share the store
-			// and deserve the same honest hold).
+			// KNOWN Python category. Python stamps it
+			// "pending_human_review" (evolver_store.py) — NOT
+			// "held_for_review" (which Python reserves for skill_pattern/
+			// sub_mission/guardrail-gate). The shared store's operator
+			// dashboard (observe.py) counts pending_human_review as the
+			// "needs triage" bucket, so the literal must match byte-for-
+			// byte or Go-touched rows vanish from that metric (r3 review).
 			d["applied"] = false
-			d["status"] = "held_for_review"
+			d["status"] = "pending_human_review"
 			d["block_reason"] = "cost_optimization has no auto-apply handler — review manually " +
 				"(or apply via the Python CLI, shared store)"
 		case "crystallization":
 			d["applied"] = false
-			d["status"] = "held_for_review"
+			d["status"] = "pending_human_review"
 			d["block_reason"] = "crystallization requires human review — run " +
 				"`maro-memory canon-candidates` via the Python CLI (shared store)"
 		case "new_guardrail":
@@ -888,6 +893,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 	// behavioral revert above — say so in the detail (Python r17: a
 	// swallowed failure left the row applied=True inside a result
 	// claiming the revert completed).
+	storePersisted := true
 	p := suggestionsPath(workspaceDir)
 	if _, err := os.Stat(p); err == nil {
 		merr := record.LockedRMW(p, func(old string) string {
@@ -916,6 +922,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 		})
 		if merr != nil {
 			detail += "; suggestion store NOT updated — still marked applied"
+			storePersisted = false
 		}
 	}
 
@@ -923,5 +930,10 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 		fmt.Sprintf("Reverted suggestion %s (%s): %s", suggestionID, category, detail),
 		map[string]any{"suggestion_id": suggestionID, "category": category, "target": target},
 		"")
-	return RevertResult{Reverted: true, Behavioral: behavioral, Category: category, Detail: detail}
+	// Reverted reflects the DURABLE state: if the store write failed, the
+	// row still reads applied=true, so IsApplied stays true and the
+	// caller must not be told the revert completed (r3 review — a
+	// Reverted:true over a non-persisted revert is a record that lies,
+	// and would also let a second Revert past the IsApplied guard).
+	return RevertResult{Reverted: storePersisted, Behavioral: behavioral, Category: category, Detail: detail}
 }

@@ -497,6 +497,10 @@ func TestApplyKnownPythonCategoriesHeld(t *testing.T) {
 		baseSuggestion("c-1", "cost_optimization", "all", "batch the cheap calls", 0.9),
 		baseSuggestion("c-2", "crystallization", "all", "promote this canon candidate", 0.9),
 	)
+	// Status MUST be Python's "pending_human_review" (not
+	// "held_for_review") — the shared-store operator dashboard counts
+	// that literal (r3 review). Block reason must be category-specific.
+	wantReason := map[string]string{"c-1": "cost_optimization", "c-2": "crystallization"}
 	for _, id := range []string{"c-1", "c-2"} {
 		if _, err := Apply(ws, rec, nil, id, true); err != nil {
 			t.Fatal(err)
@@ -504,9 +508,39 @@ func TestApplyKnownPythonCategoriesHeld(t *testing.T) {
 		if IsApplied(ws, id) {
 			t.Fatalf("%s: known Python category claimed applied", id)
 		}
-		if s := GetSuggestion(ws, id); s.Status != "held_for_review" || s.BlockReason == "" {
-			t.Fatalf("%s: must be held with a reason, got %+v", id, s)
+		s := GetSuggestion(ws, id)
+		if s.Status != "pending_human_review" {
+			t.Fatalf("%s: status %q, want pending_human_review (shared-store contract)", id, s.Status)
 		}
+		if !strings.Contains(s.BlockReason, wantReason[id]) {
+			t.Fatalf("%s: block_reason must name the category, got %q", id, s.BlockReason)
+		}
+	}
+}
+
+// A successful revert flips applied=false, so a SECOND revert must hit
+// the IsApplied guard and refuse — it can't re-run the behavioral undo
+// or re-stamp "reverted" (r3 review: double-revert must not slip past
+// the guard the r2 fix added).
+func TestRevertTwiceRefusesSecond(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	g := baseSuggestion("rt-1", "new_guardrail", "all", "block force push", 0.9)
+	g.Pattern = `git\s+push\s+--force`
+	mustSave(t, ws, g)
+	if _, err := Apply(ws, rec, nil, "rt-1", true); err != nil {
+		t.Fatal(err)
+	}
+	first := Revert(ws, rec, "rt-1")
+	if !first.Reverted || !first.Behavioral {
+		t.Fatalf("first revert should succeed behaviorally: %+v", first)
+	}
+	if IsApplied(ws, "rt-1") {
+		t.Fatal("successful revert did not clear applied")
+	}
+	second := Revert(ws, rec, "rt-1")
+	if second.Reverted || !strings.Contains(second.Detail, "not applied") {
+		t.Fatalf("second revert should refuse: %+v", second)
 	}
 }
 
