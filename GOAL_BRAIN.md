@@ -777,8 +777,13 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   the caps sweep: *"feels like another narrow patch. Probably too systemic
   at this point. Let's go nuts and pivot for a while. Let's make a branch
   and port maro to golang."* Read: the cap/discipline fragility is
-  systemic to how the Python codebase grew; an exploratory port tests
-  whether the lessons can be made STRUCTURAL (budgets as types carrying
+  systemic to how the Python codebase grew. AMENDED same session —
+  Jeremy: *"agree, this is the wrong reason for the port; I've been
+  considering it for months. Worst case we learn nothing and waste some
+  tokens."* So: a long-considered exploration in its own right, sanctioned
+  as low-stakes; the discipline thesis is Claude's framing of what to
+  test, not the motive. The port still tests whether the lessons can be
+  made STRUCTURAL (budgets as types carrying
   their written rationale, no bare slicing of prompt-bound text, no
   swallowed errors) instead of tripwire-enforced. Scope: exploration on
   branch `go-port` (worktree), spine-first vertical slice that runs a
