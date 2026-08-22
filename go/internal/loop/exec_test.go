@@ -205,7 +205,8 @@ func TestExecLaneStepBudgetCapMarksRunStuck(t *testing.T) {
 		t.Fatalf("expected the 2x cap to stop at 2 executed, got %d", len(res.Steps))
 	}
 	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
-	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	row := rows[len(rows)-1]
+	chain, _ := row["failure_chain"].([]any)
 	found := false
 	for _, c := range chain {
 		if strings.Contains(c.(string), "step budget exhausted") {
@@ -214,6 +215,15 @@ func TestExecLaneStepBudgetCapMarksRunStuck(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("budget exhaustion missing from failure chain: %+v", chain)
+	}
+	// The cap halt is a typed terminal too — Python stamps this exact
+	// halt out-of-budget (loop_execute.py:492-503); r2 stamped the three
+	// verdict terminals and missed this fourth site (ladder r3, QA HIGH).
+	if row["stop_verdict"] != "out-of-budget" {
+		t.Fatalf("cap halt not typed: stop_verdict=%v", row["stop_verdict"])
+	}
+	if sr, _ := row["stuck_reason"].(string); !strings.Contains(sr, "step budget exhausted") {
+		t.Fatalf("cap halt stuck_reason: %q", sr)
 	}
 }
 

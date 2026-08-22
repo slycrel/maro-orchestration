@@ -22,8 +22,9 @@
 //   - navigator shadow (decide-only A/B machinery).
 //   - _shape_steps' boundary/recon tag guards — the Go planner mints no
 //     such tags yet; shaping here is the plain exec+analyze pass.
-//   - stop_verdicts as a typed outcome field — the verdict string rides
-//     the failure chain text until the outcome schema grows the column.
+//   - (stop_verdict grew its typed outcome column in r2 2026-08-22 —
+//     Result.StopVerdict/StuckReason + the outcome row; the chain text
+//     is the prose view, no longer the only carrier.)
 package loop
 
 import (

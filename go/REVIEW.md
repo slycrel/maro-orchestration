@@ -816,3 +816,47 @@ uncommitted r2 fixes in that file; they were re-applied immediately
 (byte-identical — the test cache confirmed) and all mutation checks
 re-run with in-place string flips. Lesson: never use git checkout to
 unwind a mutation over uncommitted work.
+
+### Ladder round 3 — fixpoint check (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Commit under review: 4871c703 (the r2 fix layer). One lens (Expert QA),
+exit 0. The pattern held a **9th time**: the round's HIGH was a
+completeness gap in r2's own fix.
+
+1. **HIGH — the cap-exhaustion halt is a FOURTH terminal site r2
+   missed**: r2 stamped the three verdict terminals and claimed "all
+   three sites"; the queue-exhaustion break (the 2× cap, Go's stand-in
+   for max_iterations) still persisted stop_verdict:"" — and Python
+   types this exact halt (loop_execute.py:492-503,
+   stamp_stop("out-of-budget", "hit max_iterations=...")). A
+   runaway-inject halt read as unstamped to any consumer trusting the
+   new columns. VERIFIED. **FIXED** (out-of-budget stamp + stuck_reason
+   at the cap site) + the existing cap pin extended to assert the
+   persisted typed columns, mutation-verified.
+2. **MEDIUM — stale package-doc bullet** in blocked.go still said the
+   typed column was unported. VERIFIED. **FIXED** (bullet updated).
+3. **LOW — the new columns inherit WriteOutcome's single-point-of-loss**
+   (a failed append loses the whole row; res still carries the fields
+   to the caller). ACCEPTED, pre-existing whole-row behavior — named
+   here, not mitigated; a durable-sink strategy is the same open
+   question the Warnings doctrine already documents.
+4. **Verification-positive**: the lens traced the other two [stop:]
+   sites (adapter-hung, redecompose-failed) and confirmed their tags
+   sit before the remainder tail and cannot be clipped away — the r2
+   reorder was needed only where it was applied. Checked, not assumed.
+
+**FIXPOINT CALL (SAME-MODEL FALLBACK: sonnet-medium):** three rounds
+(4→2→1 lenses), every round's HIGH found inside the previous round's
+fix and closed same-day with a mutation-verified must-detect pin —
+the flagship pattern ran 7-for-7 through 9-for-9 across this tranche's
+rounds. r3 converged to one completeness HIGH (fixed in-round), one
+stale-comment MEDIUM (fixed), one accepted pre-existing LOW, and one
+verification-positive. Zero hallucinated reviewer claims across all
+three rounds (~26 findings). Terminal-path census now closed: all four
+halt sites stamp the typed columns. Full suite green across 12
+packages, race detector clean, binary rebuilt, two live smokes PASS
+(NEED_INFO research splits, honest absence reporting, shaped
+plan-mutation products, budget-exhausted terminal with remainder
+named). Residuals: the named-divergence lists in blocked.go/PORT.md
+(tier escalation, partial-output carrier, pending_context seam,
+iteration-budget machinery, text-keyed maps).

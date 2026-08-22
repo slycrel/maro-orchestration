@@ -322,6 +322,16 @@ stepLoop:
 	for len(queue) > 0 {
 		if len(res.Steps) >= capTotal {
 			haltedEarly = true
+			// The FOURTH terminal site — Python types this exact halt too
+			// (loop_execute.py:492-503, stamp_stop("out-of-budget", "hit
+			// max_iterations=...")). r2 stamped the three verdict
+			// terminals and missed this one; a runaway-inject halt
+			// persisted stop_verdict:"" and read as unstamped
+			// (adversarial ladder r3 2026-08-22, Expert QA HIGH).
+			res.StopVerdict = "out-of-budget"
+			res.StuckReason = fmt.Sprintf(
+				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining",
+				len(res.Steps), capTotal, len(queue))
 			failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining: ",
 				len(res.Steps), capTotal, len(queue))+nameRemainder()))
