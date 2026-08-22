@@ -1969,3 +1969,40 @@ HIGH sat inside r4's own marker-anchor fix.
   forgery) in both director and budget packages.
 
 Mutations M65–M66 DETECTED. Full suite green. r6 follows.
+
+## Director tranche — adversarial r6 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r5 fix layer. Flagship pattern, 22nd time — and this
+round closed the ROOT of the four-round marker arc.
+
+- **HIGH (both lenses): shape+position still wasn't provenance.**
+  budget.Clip is a NO-OP on under-limit text (the statistically
+  dominant case: median worker output 1,180 runes vs the 4000 cap) and
+  on the idempotency pass-through, so an unclipped worker result
+  ending in a forged well-formed marker sailed to StripMarker and was
+  stripped — tunable to flip reportEcho false→nil and suppress
+  WORKER_REPORT_OMISSION. The r2→r5 march (delete words → strip
+  anywhere → per-line anchor → true-end anchor) kept tightening
+  POSITION; the flaw was inferring provenance from shape at all.
+  FIXED at the actual root, the fix shape both lenses independently
+  demanded: `budget.ClipInfo` returns (clipped text, did-THIS-call-cut
+  bit); reportEcho strips only when the bit is true. An un-cut
+  window's marker-shaped tail is worker content and keeps its
+  vocabulary. Pinned end-to-end through the REAL WorkerJudgeWindow via
+  Run (forged tail → still judgeable → hard false → omission event
+  fires) plus a budget-side honest-bit pin covering the no-op and
+  idempotency paths (M67, M68 — M68 detected by both packages'
+  pins independently).
+- **LOW (both lenses): the r5 comment stated the one-directional
+  position guarantee as bidirectional.** FIXED alongside: reportEcho's
+  and StripMarker's docs now state exactly what position does and does
+  not prove, and that callers must gate on ClipInfo's bit.
+- **LOW (skeptic): "unexported ⇒ safe" for maxReviewRounds holds
+  because Run has one caller today.** Already deferred-named in r5's
+  ledger (options-struct threading when a second caller arrives); no
+  re-file, framing note accepted.
+- Skeptic verified the five tickets-shape branches mutually exclusive
+  and exhaustive; QA verified the accum grammar correctly out of
+  StripMarker's scope and writeLog atomicity. No other findings.
+
+Mutations M67–M68 DETECTED. Full suite green. r7 follows on this diff.

@@ -43,6 +43,18 @@ type Budget struct {
 // Clip bounds s at b.Limit, marking any cut.
 func (b Budget) Clip(s string) string { return Clip(s, b.Limit) }
 
+// ClipInfo is Clip plus an honest provenance bit: the bool is true only
+// when THIS call cut s and appended the marker. Callers that later
+// strip the marker must gate on it — marker-shaped text in un-cut
+// input (under the limit, or an over-limit string whose forged tail
+// rides the idempotency short-circuit) is the AUTHOR's content, not
+// Clip's (adversarial director r6, both lenses: true-end position
+// alone is forgeable by any input Clip passes through unchanged).
+func (b Budget) ClipInfo(s string) (string, bool) {
+	out := b.Clip(s)
+	return out, out != s
+}
+
 // Registered budgets. Values and rationales carry over from the Python
 // audit's measured distributions (2026-08 truncation audit + caps sweep).
 var (
@@ -212,11 +224,12 @@ var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} ch
 // StripMarker removes Clip's own marker from the true END of s — the
 // only position Clip ever writes it. Interior or line-final
 // marker-shaped text is CONTENT (possibly forged by whatever authored
-// s) and passes through untouched; callers judging text (e.g. the
-// director's report-echo check) use this so framework provenance never
-// has to be inferred from attacker-controllable shape (adversarial
-// director r5, both lenses: a multiline anchor let any line ending in
-// a forged marker be stripped).
+// s) and passes through untouched (adversarial director r5, both
+// lenses: a multiline anchor let any line ending in a forged marker be
+// stripped). Position alone is a one-directional guarantee — genuine
+// markers are always at the true end, but a true-end marker is only
+// genuine when Clip actually cut — so callers MUST gate on ClipInfo's
+// bit before stripping (adversarial director r6, both lenses).
 func StripMarker(s string) string {
 	return markerRe.ReplaceAllString(s, "")
 }

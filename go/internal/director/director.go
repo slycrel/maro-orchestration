@@ -716,9 +716,10 @@ func compileReport(ctx context.Context, adapter llm.Adapter, directive, spec str
 	// (adversarial director r1, Skeptic MED; Python still compares
 	// against the unclipped text — named divergence, honesty-direction).
 	windows := make([]string, len(wresults))
+	clipped := make([]bool, len(wresults))
 	var b strings.Builder
 	for i, r := range wresults {
-		windows[i] = budget.WorkerJudgeWindow.Clip(r.Result)
+		windows[i], clipped[i] = budget.WorkerJudgeWindow.ClipInfo(r.Result)
 		fmt.Fprintf(&b, "\n\n### Worker %d (%s)\nStatus: %s\n%s",
 			i+1, r.WorkerType, r.Status, windows[i])
 	}
@@ -735,7 +736,7 @@ func compileReport(ctx context.Context, adapter llm.Adapter, directive, spec str
 	}
 	report := strings.TrimSpace(resp.Content)
 	for i := range wresults {
-		wresults[i].ReportEchoed = reportEcho(windows[i], report)
+		wresults[i].ReportEchoed = reportEcho(windows[i], report, clipped[i])
 	}
 	return report, in, out
 }
@@ -784,21 +785,22 @@ func distinctiveTerms(text string) map[string]bool {
 // contact with this worker's output? nil = nothing to judge (short or
 // empty result, empty report) — consumers must keep nil distinct from
 // false.
-func reportEcho(resultText, reportText string) *bool {
+func reportEcho(resultText, reportText string, wasClipped bool) *bool {
 	if strings.TrimSpace(resultText) == "" || strings.TrimSpace(reportText) == "" {
 		return nil
 	}
-	// resultText is always budget.Clip output (the worker-judge
-	// window), so the only framework-authored marker is Clip's own, at
-	// the true END of the string — budget.StripMarker owns that grammar
-	// and strips exactly there. Everything else marker-shaped
-	// (mid-text, line-final, or the Accumulator's "entry" wording,
-	// which never reaches this path) is worker-authored CONTENT and
-	// keeps its vocabulary, mirroring the accum forged-marker doctrine
-	// (r2 Skeptic; r3 both lenses; r4 anchored per-line; r5 both
-	// lenses' HIGH: the (?m) anchor let a forged marker ending ANY
-	// line erase surrounding terms and suppress the omission signal).
-	terms := distinctiveTerms(budget.StripMarker(resultText))
+	// Strip Clip's marker ONLY when this window was actually cut this
+	// call: position is a one-directional guarantee (genuine markers
+	// sit at the true end, but Clip is a no-op on under-limit text, so
+	// a true-end marker on an un-cut window is worker-authored CONTENT
+	// and keeps its vocabulary). The march here: r2 deleted two words,
+	// r3 stripped by grammar anywhere, r4 anchored per-line, r5
+	// anchored at true end, r6 (both lenses' HIGH) closed the root —
+	// provenance comes from ClipInfo's bit, never from shape.
+	if wasClipped {
+		resultText = budget.StripMarker(resultText)
+	}
+	terms := distinctiveTerms(resultText)
 	if len(terms) < echoMinTerms {
 		return nil
 	}

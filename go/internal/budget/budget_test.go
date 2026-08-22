@@ -168,3 +168,24 @@ func TestStripMarkerEndOnly(t *testing.T) {
 		t.Fatalf("non-final-line marker is content and must survive: %q", got)
 	}
 }
+
+// TestClipInfoHonestBit: the bool reports whether THIS call cut —
+// false on under-limit input and on the idempotency pass-through
+// (a pre-existing well-formed tail), true only on a real cut
+// (adversarial director r6, both lenses: the bit is the only honest
+// provenance signal; shape+position is forgeable).
+func TestClipInfoHonestBit(t *testing.T) {
+	if out, cut := WorkerJudgeWindow.ClipInfo("short text"); cut || out != "short text" {
+		t.Fatalf("under-limit input must pass through uncut: %v %q", cut, out)
+	}
+	long := strings.Repeat("x", WorkerJudgeWindow.Limit+50)
+	out, cut := WorkerJudgeWindow.ClipInfo(long)
+	if !cut || !strings.Contains(out, "[truncated:") {
+		t.Fatalf("over-limit input must cut with marker: %v", cut)
+	}
+	// Idempotency pass-through: re-clipping Clip's own output is a
+	// no-op, and the bit must say so.
+	if again, cut2 := WorkerJudgeWindow.ClipInfo(out); cut2 || again != out {
+		t.Fatalf("idempotent re-clip must report no cut: %v", cut2)
+	}
+}

@@ -655,7 +655,13 @@ direction).
   content there), maxReviewRounds unexported (no cross-package races),
   absent tickets key warns like its empty/non-list siblings, non-list
   pin runs as t.Run subtests over five shapes. Mutations M65-M66
-  DETECTED.
+  DETECTED. Adversarial r6 (same day, skeptic+qa) closed the marker
+  arc's ROOT: Clip no-ops on under-limit text, so true-end position
+  still wasn't provenance — budget.ClipInfo now returns a
+  did-this-call-cut bit and reportEcho strips only when it's true; an
+  un-cut window's forged tail is content, pinned end-to-end through
+  Run (forged tail can no longer flip the omission stamp to nil).
+  Mutations M67-M68 DETECTED.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):
