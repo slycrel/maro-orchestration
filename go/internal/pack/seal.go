@@ -37,32 +37,41 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 	archivedReview := string(members["REVIEW.md"])
 
 	artifactBytes := map[string][]byte{}
-	var artifactOrder []string
 	for name, data := range members {
 		if name == "pack.json" || name == "REVIEW.md" {
 			continue
 		}
 		artifactBytes[name] = data
 	}
-	// Preserve the archive's member order on rewrite (map iteration is
-	// random; the manifest's artifact list is the stable order).
+	// The manifest's artifacts list and the archive's members must be a
+	// bijection BEFORE a human's review gets stamped onto the result: a
+	// missing member would otherwise seal a truncated pack (payloadSHA256
+	// also refuses, belt and braces), and an extra member would ride the
+	// sealed archive outside the digest and outside REVIEW.md
+	// (adversarial round 2026-08-22; Python still carries extras — named
+	// in PORT.md). The manifest's artifact order is the stable rewrite
+	// order (map iteration is random).
+	var artifactOrder []string
+	listed := map[string]bool{}
 	for _, a := range manifestArtifacts(manifest) {
-		if p, ok := a["path"].(string); ok {
-			if _, present := artifactBytes[p]; present {
-				artifactOrder = append(artifactOrder, p)
-			}
+		p, ok := a["path"].(string)
+		if !ok {
+			return nil, fmt.Errorf("seal refused: manifest artifact without a path")
 		}
+		if listed[p] {
+			return nil, fmt.Errorf("seal refused: manifest lists %q more than once", p)
+		}
+		listed[p] = true
+		if _, present := artifactBytes[p]; !present {
+			return nil, fmt.Errorf(
+				"seal refused: manifest names %q but the archive has no such member", p)
+		}
+		artifactOrder = append(artifactOrder, p)
 	}
 	for name := range artifactBytes {
-		found := false
-		for _, p := range artifactOrder {
-			if p == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			artifactOrder = append(artifactOrder, name)
+		if !listed[name] {
+			return nil, fmt.Errorf(
+				"seal refused: archive member %q is not listed in the manifest", name)
 		}
 	}
 

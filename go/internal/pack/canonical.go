@@ -21,10 +21,20 @@ import (
 // pyCanonJSON renders a decoded-JSON value exactly as Python's canonical
 // json.dumps does: sorted keys, no separators whitespace, raw UTF-8
 // (ensure_ascii=False), short escapes for the JSON control set, \u00xx
-// for other control chars. Numbers must arrive as json.Number so the
-// source literal survives verbatim (a float64 round-trip could turn 5
-// into 5.0 or shift a float's shortest form — both would silently change
-// the digest).
+// for other control chars.
+//
+// Numbers: json.Number literals are emitted VERBATIM, which matches
+// Python only because Python re-emits what json.dumps itself produced —
+// its json.loads parses to int/float and dumps re-normalizes ("5.00"
+// would become "5.0" there, but no exporter in either runtime ever
+// writes a non-canonical literal into the hashed metadata, and pack.json
+// is only ever machine-written by json.dumps/MarshalIndent). For a
+// hand-crafted manifest carrying a non-canonical spelling the two
+// runtimes' digests DIVERGE — deliberately unhandled, because the
+// failure direction is a digest mismatch, i.e. refusal (pinned by
+// TestCanonicalJSONNonCanonicalNumberLiteral). json.Number (not float64)
+// is still required so a decode can't silently reshape a literal both
+// sides agreed on.
 func pyCanonJSON(v any, sb *strings.Builder) error {
 	switch t := v.(type) {
 	case nil:
@@ -140,6 +150,11 @@ func sha256File(path string) (string, error) {
 // each artifact's canonical metadata, path, and payload, in sorted-path
 // order. files is keyed by the manifest "path" (with the artifacts/
 // prefix), exactly as Python keys it.
+//
+// A manifest path with no matching file is an ERROR, never a zero-length
+// payload — Python fails the same way by KeyError, and a Go map's nil
+// zero-value would otherwise let Seal stamp a "clean" digest over a
+// truncated archive (adversarial round 2026-08-22, Skeptic HIGH).
 func payloadSHA256(artifacts []map[string]any, files map[string][]byte) (string, error) {
 	byPath := map[string]map[string]any{}
 	for _, a := range artifacts {
@@ -158,7 +173,11 @@ func payloadSHA256(artifacts []map[string]any, files map[string][]byte) (string,
 		if err != nil {
 			return "", err
 		}
-		raw := files[p]
+		raw, present := files[p]
+		if !present {
+			return "", fmt.Errorf(
+				"payload digest: manifest names %q but no such file was provided", p)
+		}
 		h.Write([]byte(strconv.Itoa(len(metadata))))
 		h.Write([]byte{0})
 		h.Write(metadata)

@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/provenance"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -131,8 +132,22 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	if fmtNum, ok := manifest["pack_format"].(json.Number); ok {
-		if v, err := fmtNum.Int64(); err == nil && v > PackFormat {
+	// Fail CLOSED on a pack_format we can't even read as an integer — a
+	// string "99", a float, an array all refused, not silently skipped
+	// (adversarial round 2026-08-22, Minimalist HIGH: the type assertion
+	// alone let type-confused values bypass the version gate entirely.
+	// Python's `fmt > PACK_FORMAT` TypeErrors on the same input — an ugly
+	// crash, but closed).
+	if raw, present := manifest["pack_format"]; present {
+		num, ok := raw.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("import refused: pack_format is not a number: %v", raw)
+		}
+		v, err := num.Int64()
+		if err != nil || v < 0 {
+			return nil, fmt.Errorf("import refused: pack_format is not a valid integer: %v", raw)
+		}
+		if v > PackFormat {
 			return nil, fmt.Errorf("pack format %d > supported %d — upgrade maro", v, PackFormat)
 		}
 	}
@@ -156,7 +171,27 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 			return nil, fmt.Errorf(
 				"import refused: manifest names %q but the archive has no such member", p)
 		}
+		if _, dup := artifactBytes[p]; dup {
+			// A path listed twice (e.g. under two classes) would run one
+			// reviewed artifact through two trust lanes while the payload
+			// digest sees it once. Go-only hardening; Python shares the
+			// gap (named in PORT.md).
+			return nil, fmt.Errorf(
+				"import refused: manifest lists %q more than once", p)
+		}
 		artifactBytes[p] = data
+	}
+	// Bijection, the other direction: an archive member the manifest never
+	// mentions rides outside the digest and outside REVIEW.md. Refuse —
+	// neither runtime's exporter ever produces one.
+	for name := range members {
+		if name == "pack.json" || name == "REVIEW.md" {
+			continue
+		}
+		if _, listed := artifactBytes[name]; !listed {
+			return nil, fmt.Errorf(
+				"import refused: archive member %q is not listed in the manifest", name)
+		}
 	}
 
 	if humanReviewed {
@@ -217,9 +252,15 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	}
 
 	store := knowledge.NewStore(ws)
+	// The provenance killswitch reads the AMBIENT config (user tier +
+	// env-resolved workspace), exactly like Python's provenance_gate_enabled
+	// — an explicit -target does not move which config is consulted.
+	cfg, _ := config.Load()
 	imp := &importer{
 		ws: ws, store: store, packName: packName, label: opts.Label,
 		packTag: packTag, now: now, dryRun: opts.DryRun,
+		provGate: provenance.GateEnabled(
+			config.Get[any](cfg, "knowledge.provenance_gate_enabled", true)),
 	}
 
 	// The per-target gate makes each import's load/check/write decisions one
@@ -323,6 +364,25 @@ type importer struct {
 	packTag  string
 	now      string
 	dryRun   bool
+	provGate bool // knowledge.provenance_gate_enabled (default true)
+}
+
+// rowID extracts the identity field of one imported row, refusing rows
+// whose id is absent or not a string: with the "" fallback, every such
+// row collapses onto the SAME "imported-<pack>-" identity — the first
+// imports, the rest are silently eaten as "already_imported"
+// (adversarial round 2026-08-22, Skeptic; Python shares the collapse,
+// named in PORT.md).
+func rowID(row map[string]any, field string) (string, error) {
+	v, present := row[field]
+	if !present {
+		return "", fmt.Errorf("%s missing", field)
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return "", fmt.Errorf("%s is not a non-empty string: %v", field, v)
+	}
+	return s, nil
 }
 
 func (im *importer) provenanceStamp(originalID, originalClass string, row map[string]any) map[string]any {
@@ -355,7 +415,12 @@ func (im *importer) importRulesAsHypotheses(content string) ([]map[string]any, e
 		if json.Unmarshal([]byte(line), &row) != nil {
 			continue
 		}
-		originalID, _ := row["rule_id"].(string)
+		originalID, err := rowID(row, "rule_id")
+		if err != nil {
+			results = append(results, map[string]any{
+				"rule_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+			continue
+		}
 		ruleText, _ := row["rule"].(string)
 		hypID := fmt.Sprintf("imported-%s-%s", im.packName, originalID)
 		if snap.IDs[hypID] {
@@ -404,7 +469,12 @@ func (im *importer) importHypotheses(content string) ([]map[string]any, error) {
 		if json.Unmarshal([]byte(line), &row) != nil {
 			continue
 		}
-		originalID, _ := row["hyp_id"].(string)
+		originalID, err := rowID(row, "hyp_id")
+		if err != nil {
+			results = append(results, map[string]any{
+				"hyp_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+			continue
+		}
 		lessonText, _ := row["lesson"].(string)
 		hypID := fmt.Sprintf("imported-%s-%s", im.packName, originalID)
 		if snap.IDs[hypID] {
@@ -519,7 +589,12 @@ func (im *importer) importLessons(content string) ([]map[string]any, error) {
 		if json.Unmarshal([]byte(line), &row) != nil {
 			continue
 		}
-		originalID, _ := row["lesson_id"].(string)
+		originalID, err := rowID(row, "lesson_id")
+		if err != nil {
+			results = append(results, map[string]any{
+				"lesson_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+			continue
+		}
 		res := im.importOneLesson(row, originalID, snap)
 		results = append(results, res)
 	}
@@ -587,7 +662,10 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	if incoming != "prompt" && incoming != "outcome" {
 		incoming = ""
 	}
-	localClass := provenance.Classify(lessonText, asString(row["source_goal"]), "")
+	localClass := ""
+	if im.provGate {
+		localClass = provenance.Classify(lessonText, asString(row["source_goal"]), "")
+	}
 	mintedFrom := incoming
 	if incoming == "prompt" || localClass == "prompt" {
 		mintedFrom = "prompt"

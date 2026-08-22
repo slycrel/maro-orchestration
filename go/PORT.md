@@ -112,6 +112,48 @@ either runtime into one workspace serialize.
   Python's import call site — the evidence leg is a mint-time-only
   signal in both runtimes.
 
+**Pack adversarial round (2026-08-22, 4 lenses, sonnet-medium fallback)
+— fixed here, plus divergences deliberately kept and named:**
+
+Go is now STRICTER than Python on several hostile shapes (all
+refusal-direction, so no legitimate Python-produced pack is affected;
+each is a candidate to backport to `src/pack.py`): decompression bounds
+on untrusted archives (64MB/member, 256MB total, 4096 members — Python's
+tarfile path is still unbounded); refusal of invalid-UTF-8 members and
+lone-surrogate `\u` escapes in pack.json (Python crashes loudly on the
+same input, Go's decoders would have silently substituted U+FFFD);
+manifest/archive bijection at both seal and import (duplicate manifest
+paths, un-manifested stowaway members, and manifest rows with no archive
+member are all refused — Python KeyErrors on the missing-member case but
+silently carries stowaways and double-imports duplicate paths); rows
+whose id field is absent or non-string are reported `malformed_skipped`
+(Python collapses them onto one shared `imported-<pack>-` identity and
+silently eats all but the first as `already_imported`); `pack_format`
+that is present but not a valid integer is a hard refusal (Python
+TypeErrors — closed, but as a crash).
+
+Behavior ported to parity in the same round: the
+`knowledge.provenance_gate_enabled` killswitch (ambient config, string
+"false"/"0"/"no"/"off" normalized; the incoming-stamp quarantine path
+stays outside the gate, as in Python), the adopt audit row + full report
+shape (`label`/`adopted_at`/`dry_run`), and `AbsorbVariant` re-ported
+line-for-line (strip both sides, unicode-aware trim, pre- AND post-clip
+identity checks).
+
+Named textual divergences accepted (degenerate input only, no safety
+effect): `asString` renders a JSON array as `[a b]` where Python's
+`str()` gives `"['a', 'b']"`; RE2's `\b` is ASCII-only where Python's is
+unicode-aware, so a non-ASCII username/hostname in the scrub denylist
+could bound differently across runtimes (identifiers on this box are
+ASCII; the human review gate is the backstop). Canonical-digest numbers:
+Go preserves `json.Number` literals verbatim while Python re-normalizes
+through `json.loads`/`dumps` — identical for every machine-written
+manifest, divergent (→ digest mismatch → refusal) for hand-crafted
+non-canonical literals; pinned by test, documented in `canonical.go`.
+CLI drift: Go uses flags (`-pack`, `-name`) where Python's `maro-pack`
+uses positionals, and Go has no `export --seal` one-shot and no
+interactive confirm (missing `-yes` refuses rather than prompts).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. Tool-bearing worker steps (v0 runs `--tools ""` — the safe utility

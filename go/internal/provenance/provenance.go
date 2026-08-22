@@ -12,7 +12,10 @@
 // false negative contaminates future runs.
 package provenance
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 const (
 	MintedFromPrompt  = "prompt"
@@ -58,4 +61,30 @@ func Classify(lessonText, goalText, evidenceText string) string {
 		}
 	}
 	return MintedFromOutcome
+}
+
+// GateEnabled ports lesson_provenance.provenance_gate_enabled's
+// normalization: the killswitch value arrives as a raw YAML node, so a
+// quoted "false" is a truthy string unless normalized. bool and string
+// are meaningful; anything else (including absent → the caller's true
+// default) is Python's bool(val) — non-nil non-zero is on. Default ON.
+func GateEnabled(val any) bool {
+	switch t := val.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "false", "0", "no", "off":
+			return false
+		}
+		return true
+	case nil:
+		return false // Python bool(None)
+	case int:
+		return t != 0
+	case float64:
+		return t != 0
+	default:
+		return true
+	}
 }

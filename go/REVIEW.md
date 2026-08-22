@@ -199,3 +199,88 @@ anyway — each was cheap and the MEDIUM was real:
 3. **LOW — contention test asserted count, not content** — FIXED:
    the 200 rows must now carry 200 DISTINCT worker/iteration tags (a
    double-write compensating a drop no longer passes).
+
+# Pack tranche — adversarial rounds (89fe71ee)
+
+## Round 1 — 2026-08-22, on the pack tranche (89fe71ee)
+
+4 lenses (Skeptic / Architect / Minimalist / Expert QA), sonnet-medium
+SAME-MODEL FALLBACK (codex capped until 2026-08-27), defensive frame,
+hostile-pack watch-list. 32 raw findings → deduped to 18. Verification:
+every code claim was checked against both runtimes before fixing —
+**zero hallucinated claims** (the streak holds). Ledger below covers the
+four HIGHs; MEDIUMs/LOWs verified inline.
+
+### Verification Ledger (HIGHs)
+
+1. **Seal zero-fills a missing archive member (Skeptic)** — VERIFIED.
+   `payloadSHA256`'s `raw := files[p]` took the nil zero-value for a
+   manifest path with no member; `Seal` built `artifactBytes` only from
+   members present, so a truncated archive sealed "clean" where
+   Python's `files[path]` KeyErrors (pack.py:123) and aborts. Import
+   already failed closed via its own presence loop. **FIXED**:
+   `payloadSHA256` errors on an absent path, and `Seal` now checks the
+   manifest/archive bijection explicitly before stamping
+   (`TestSealRefusesMissingManifestMember`).
+2. **pack_format gate fails open on type-confused values (Minimalist)**
+   — VERIFIED. The `.(json.Number)` type assertion silently skipped the
+   whole check for `"99"`, `99.5`, `[99]`, `true`; Python's
+   `fmt > PACK_FORMAT` TypeErrors (crash = closed). **FIXED**: present
+   but not a valid non-negative integer is a hard refusal
+   (`TestImportRefusesTypeConfusedPackFormat`, with an absent-field
+   negative control).
+3. **Unbounded decompression (Architect; echoed by all four)** —
+   VERIFIED. `readArchive` did `io.ReadAll` per member, no caps, before
+   any hash gate. Shared with Python (tarfile equally unbounded).
+   **FIXED in Go**: per-member (64MB) / total (256MB) / member-count
+   (4096) bounds, refusal not OOM (`TestReadArchiveRefusesBombs`);
+   Python's gap named in PORT.md as a backport candidate.
+4. **Canonical-number "byte-parity" claim backwards (QA HIGH /
+   Architect MEDIUM)** — VERIFIED as a wrong comment + unpinned edge,
+   REFUTED as a trust bypass: Python re-normalizes numbers through
+   json.loads/dumps while Go preserves literals verbatim, so a
+   hand-crafted non-canonical literal ("5.00") diverges — into a digest
+   MISMATCH, i.e. refusal, the safe direction. Every machine-written
+   manifest is identical in both runtimes. **FIXED**: comment rewritten
+   truthfully, behavior pinned (`TestCanonicalJSONNonCanonicalNumberLiteral`),
+   residual documented in PORT.md.
+
+### MEDIUMs/LOWs (all VERIFIED unless noted, all fixed or named)
+
+- Adopt wrote no `imports.jsonl` audit row; report dropped
+  label/adopted_at/dry_run → ported to parity (CLI test asserts both
+  audit actions).
+- `provenance_gate_enabled` killswitch not ported → ported (ambient
+  config like Python, string-normalized; stamp path stays outside the
+  gate; `TestProvenanceKillswitchRespected`, `TestGateEnabledNormalization`).
+- Invalid UTF-8 / lone-surrogate escapes silently became U+FFFD where
+  Python refuses → refused at the boundary (`utf8.Valid` on every
+  member; `refuseLoneSurrogates` scanner on pack.json;
+  `TestReadArchiveRefusesInvalidUTF8`, `TestImportRefusesLoneSurrogateManifest`
+  with surrogate-pair + escaped-backslash negative controls).
+- Duplicate manifest paths double-imported one artifact through two
+  trust lanes; stowaway members rode outside digest and REVIEW.md
+  (shared with Python) → bijection enforced at seal AND import
+  (`TestImportRefusesDuplicateManifestPath`,
+  `TestSealAndImportRefuseUnlistedMember`); Python's gap named.
+- Id-less/mistyped-id rows collapsed onto one shared identity, eaten as
+  "already_imported" (shared with Python) → `malformed_skipped` per
+  row (`TestImportSkipsIdlessRowsAsMalformed`); divergence named.
+- `AbsorbVariant` diverged from `_absorb_variant` three ways (no
+  canonical strip, ASCII-only trim missing \r, no pre-clip check) →
+  re-ported line-for-line (`TestAbsorbVariantTrimsCanonicalAndUnicode`).
+- CLI path had zero test coverage → `TestRunPackLifecycleThroughCLI`
+  drives export→seal→import→adopt through `runPack` with env-resolved
+  workspace.
+- crossrt_smoke.sh was happy-path only → step 6 added: tamper a
+  Go-sealed pack, Python refuses; tamper a Python-sealed pack, Go
+  refuses. Live run: PASS both directions.
+- Doc-only: lock-ordering invariant (gate outermost) + Python
+  fail-open caveat on `record.Locked`; RE2 `\b` ASCII residual in
+  scrub.go; asString/CLI-drift residuals in PORT.md.
+
+Also carried from the round's own confirmations (Minimalist closing,
+Skeptic #8): traversal guards exact, tamper chain wired end-to-end with
+real negative controls, provenance regexes a verified regex-for-regex
+port, O_EXCL at the adopt write site, fixpoint ports (variant-union,
+border coercion, laundering gate) genuine.

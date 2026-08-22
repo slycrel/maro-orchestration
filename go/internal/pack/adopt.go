@@ -6,11 +6,14 @@
 package pack
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // AdoptOpts mirrors adopt()'s surface.
@@ -22,10 +25,16 @@ type AdoptOpts struct {
 	DryRun bool
 }
 
-// AdoptReport lists what moved and what was refused.
+// AdoptReport carries the same keys as Python's report dict so the audit
+// rows are cross-runtime comparable (adversarial round 2026-08-22:
+// label/adopted_at/dry_run were dropped and no audit row was written —
+// a Go-side adopt was invisible to every imports.jsonl reader).
 type AdoptReport struct {
-	Adopted []map[string]string `json:"adopted"`
-	Skipped []map[string]string `json:"skipped"`
+	Label     string              `json:"label"`
+	Adopted   []map[string]string `json:"adopted"`
+	Skipped   []map[string]string `json:"skipped"`
+	AdoptedAt string              `json:"adopted_at"`
+	DryRun    bool                `json:"dry_run"`
 }
 
 func stampProvenanceFrontmatter(content, label, now string) string {
@@ -99,7 +108,10 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 	}
 
 	now := nowISO()
-	report := &AdoptReport{Adopted: []map[string]string{}, Skipped: []map[string]string{}}
+	report := &AdoptReport{
+		Label: opts.Label, AdoptedAt: now, DryRun: opts.DryRun,
+		Adopted: []map[string]string{}, Skipped: []map[string]string{},
+	}
 	for _, c := range selected {
 		dest := filepath.Join(ws, c.kind, c.name)
 		raw, err := os.ReadFile(c.path)
@@ -140,6 +152,24 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 		}
 		report.Adopted = append(report.Adopted, map[string]string{
 			"kind": c.kind, "name": c.name})
+	}
+	// Audit trail: same row Python appends — a promotion from quarantine
+	// to live must be visible to whoever reads memory/imports.jsonl.
+	if !opts.DryRun && len(report.Adopted) > 0 {
+		raw, err := json.Marshal(struct {
+			*AdoptReport
+			Action string `json:"action"`
+		}{report, "adopt"})
+		if err != nil {
+			return nil, err
+		}
+		audit := filepath.Join(ws, "memory", "imports.jsonl")
+		if err := os.MkdirAll(filepath.Dir(audit), 0o755); err != nil {
+			return nil, err
+		}
+		if err := record.AppendRawLine(audit, raw); err != nil {
+			return nil, err
+		}
 	}
 	return report, nil
 }

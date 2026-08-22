@@ -101,6 +101,13 @@ func BuildIdentifiers(home, hostname string, denylist []string) *Identifiers {
 			token string
 		}{regexp.MustCompile(regexp.QuoteMeta(p.needle)), p.token})
 	}
+	// Named residual (adversarial round 2026-08-22): RE2's \b is
+	// ASCII-only where Python's re is unicode-aware, so a needle with
+	// non-ASCII letters can bound differently across runtimes — a
+	// potential export-side leak for non-ASCII usernames/hostnames. The
+	// identifiers on this box are ASCII, and the human review gate is the
+	// real backstop (package doc); revisit if a non-ASCII identifier ever
+	// enters the denylist.
 	for _, p := range bounded {
 		id.patterns = append(id.patterns, struct {
 			rx    *regexp.Regexp

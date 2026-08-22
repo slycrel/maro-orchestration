@@ -162,6 +162,19 @@ func (r *Recorder) appendJSONL(path string, row any) error {
 // the pack importer's read-modify-write surfaces (quarantine files,
 // CONFLICTS.md, tiered-lesson rewrites) so every cross-runtime writer
 // shares the one lock protocol.
+//
+// Lock-ordering invariant (deadlock freedom is by convention, not
+// structure): the pack-import gate (memory/.pack-import) is always the
+// OUTERMOST lock; per-store locks (hypotheses.jsonl, <tier>/lessons.jsonl,
+// quarantine files) nest inside it and never the other way. Any future
+// caller that holds a store lock must not then take the gate.
+//
+// Two named divergences from Python's file_lock, both deliberately
+// stricter: there is no MARO_FILELOCK_FAIL_OPEN escape hatch and no
+// proceed-unlocked-with-warning fallback for an uncreatable lock file —
+// Go always fails closed. Corollary: mutual exclusion with a Python
+// writer holds only while the Python side is not configured fail-open,
+// which is outside this runtime's control.
 func Locked(path string, fn func() error) error {
 	lockPath := path + ".lock"
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o644)

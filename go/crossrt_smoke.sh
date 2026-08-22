@@ -88,4 +88,50 @@ print("python import of Go-sealed pack OK — full circle closed")
 PYEOF
 )
 
+# --- 6. Cross-runtime tamper refusal (both directions) --------------------
+# The receiving runtime's hash gates must refuse a pack the OTHER runtime
+# sealed and someone then modified — the happy path alone proves parity,
+# not tamper-evidence (adversarial round 2026-08-22, QA).
+( cd "$PYREPO" && PYTHONPATH=src python3 - "$WORK" <<'PYEOF'
+import io, sys, tarfile
+from pathlib import Path
+import pack
+work = Path(sys.argv[1])
+
+def tamper(src: Path, dst: Path) -> None:
+    """Flip one byte in the first artifact member, keep everything else."""
+    entries = []
+    with tarfile.open(src, "r:gz") as tar:
+        for m in tar.getmembers():
+            data = tar.extractfile(m).read()
+            if m.name.startswith("artifacts/") and not any(e[0].startswith("artifacts/") for e in entries):
+                data = data[:-1] + (b"X" if data[-1:] != b"X" else b"Y")
+            entries.append((m.name, data))
+    with tarfile.open(dst, "w:gz") as tar:
+        for name, data in entries:
+            info = tarfile.TarInfo(name); info.size = len(data); info.mtime = 0; info.mode = 0o644
+            tar.addfile(info, io.BytesIO(data))
+
+# Go-sealed pack, tampered → Python must refuse.
+bad_go = work / "packs" / "xrt-go-tampered.maropack.tar.gz"
+tamper(work / "packs" / "xrt-go.maropack.tar.gz", bad_go)
+try:
+    pack.import_pack(bad_go, label="tamper", target=work / "pyws2")
+except SystemExit as e:
+    print("python refused tampered Go-sealed pack OK:", str(e)[:60])
+else:
+    raise AssertionError("python ACCEPTED a tampered Go-sealed pack")
+
+# Python-sealed pack, tampered → for Go to refuse in the next step.
+tamper(work / "packs" / "xrt-py.maropack.tar.gz",
+       work / "packs" / "xrt-py-tampered.maropack.tar.gz")
+PYEOF
+)
+if "$WORK/maro-go" pack import -pack "$WORK/packs/xrt-py-tampered.maropack.tar.gz" \
+  -label tamper -target "$WORK/gows" 2>"$WORK/go-tamper.err"; then
+  echo "FAIL: go ACCEPTED a tampered Python-sealed pack" >&2; exit 1
+fi
+grep -q "tampering\|not match" "$WORK/go-tamper.err"
+echo "go refused tampered Python-sealed pack OK"
+
 echo "== CROSS-RUNTIME ROUND TRIP: PASS ($WORK)"

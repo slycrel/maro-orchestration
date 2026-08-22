@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -227,33 +228,37 @@ func (s *Store) AppendMediumLesson(tl TieredLesson) error {
 	return record.AppendRawLine(path, raw)
 }
 
-// AbsorbVariant ports memory_ledger._absorb_variant — the ONE owner of
-// the variant-union rule: skip empties, the canonical text itself,
-// already-present texts, and everything past the cap; identity judged
-// BEFORE clipping.
+// AbsorbVariant ports memory_ledger._absorb_variant line for line — the
+// ONE owner of the variant-union rule: skip empties, the canonical text
+// itself, already-present texts, and everything past the cap. BOTH text
+// and canonical are stripped (Python strips both; adversarial round
+// 2026-08-22 caught the one-sided version), identity is judged before
+// clipping AND re-judged after (the clipped twin of the canonical or of
+// an existing variant is still a twin). Python's str.strip() is
+// unicode-aware, hence strings.TrimSpace, not a hand-rolled ASCII trim
+// (a trailing \r survived the old one and defeated cross-runtime dedup).
 func AbsorbVariant(variants []string, text, canonical string) []string {
-	trimmed := text
-	for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\n' || trimmed[0] == '\t') {
-		trimmed = trimmed[1:]
+	if len(variants) >= MergedVariantsCap {
+		return variants
 	}
-	for len(trimmed) > 0 {
-		last := trimmed[len(trimmed)-1]
-		if last != ' ' && last != '\n' && last != '\t' {
-			break
-		}
-		trimmed = trimmed[:len(trimmed)-1]
-	}
+	trimmed := strings.TrimSpace(text)
+	canonical = strings.TrimSpace(canonical)
 	if trimmed == "" || trimmed == canonical {
 		return variants
 	}
+	for _, v := range variants {
+		if v == trimmed {
+			return variants
+		}
+	}
 	clipped := budget.Clip(trimmed, VariantMaxChars)
+	if clipped == canonical {
+		return variants
+	}
 	for _, v := range variants {
 		if v == clipped {
 			return variants
 		}
-	}
-	if len(variants) >= MergedVariantsCap {
-		return variants
 	}
 	return append(variants, clipped)
 }
