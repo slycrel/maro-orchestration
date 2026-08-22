@@ -262,12 +262,19 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	// failure chain.
 	type queuedStep struct {
 		text     string
-		injected bool // worker-added via inject_steps, not planner-authored
+		injected bool   // worker-added via inject_steps, not planner-authored
+		hint     string // blocked-retry hint, injected into the retry prompt
 	}
 	queue := make([]queuedStep, 0, len(steps))
 	for _, s := range steps {
 		queue = append(queue, queuedStep{text: s})
 	}
+	// Blocked-ladder state (blocked.go): per-step retry counts and error
+	// fingerprints, run-wide replan budget, consecutive-timeout streak.
+	stepRetries := map[string]int{}
+	stepFingerprints := map[string][]string{}
+	replanCount := 0
+	consecTimeouts := 0
 	// Returns the RAW join — the caller clips the fully-assembled entry
 	// exactly once. Clip(prefix)+Clip(remainder) concatenated after
 	// clipping produced single failure_chain entries up to ~2× the
@@ -282,6 +289,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	}
 	capTotal := 2 * len(steps)
 	haltedEarly := false
+stepLoop:
 	for len(queue) > 0 {
 		if len(res.Steps) >= capTotal {
 			haltedEarly = true
@@ -295,7 +303,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		var out StepOutcome
 		var injected []string
 		if execMode {
-			out, injected = executeExecStep(ctx, a, goal, step.text,
+			out, injected = executeExecStep(ctx, a, goal, step.text, step.hint,
 				len(res.Steps)+1, len(res.Steps)+1+len(queue), res.Steps, res.ProjectDir)
 		} else {
 			out = executeStep(ctx, a, goal, step.text, res.Steps)
@@ -310,23 +318,128 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			failChain = append(failChain, budget.FailureChainEntry.Clip(
 				fmt.Sprintf("step %d blocked: %s", len(res.Steps)-1, out.Result)))
 			if execMode {
-				// EXEC MODE HALTS on the first non-done step. Python routes
-				// a blocked step through loop_blocked's retry/re-decompose
-				// ladder and breaks on its terminal verdict; none of that
-				// ladder is ported, and "no retry ladder" must not silently
-				// become "no stop conditions" — later steps hold a live
-				// Bash-capable agent that would keep acting on a plan whose
-				// premise just failed (adversarial exec review 2026-08-22,
-				// Skeptic HIGH). The tool-less lane keeps v0's run-through:
-				// its steps are single LLM calls whose prior-evidence
-				// filter already excludes blocked results, and partial
-				// completion still yields a useful summary.
-				if len(queue) > 0 {
-					haltedEarly = true
+				// The blocked ladder (blocked.go, Python _handle_blocked_
+				// step): retry / split / re-decompose on evidence, and HALT
+				// on its terminal verdict — the exec lane must never keep a
+				// live Bash-capable agent acting past a verdict that the
+				// plan's premise failed (adversarial exec review
+				// 2026-08-22, Skeptic HIGH; the flat first-block halt was
+				// the ladder's stand-in until this tranche). The tool-less
+				// lane keeps v0's run-through: its steps are single LLM
+				// calls whose prior-evidence filter already excludes
+				// blocked results.
+				fps := append(stepFingerprints[step.text],
+					// Go folds the stuck reason into Result; Summary is the
+					// closest analogue of Python's separate partial result.
+					errorFingerprint(out.Result, out.Summary))
+				stepFingerprints[step.text] = fps
+				retries := stepRetries[step.text]
+				d := handleBlockedStep(ctx, a, step.text, out, retries, fps,
+					res.Steps, replanCount)
+				action := "stuck"
+				switch {
+				case d.retry:
+					action = "retry"
+				case d.redecompose:
+					action = "redecompose"
+				case len(d.splitInto) > 0:
+					action = "split"
+				}
+				// Mirrors Python's captain's-log METACOGNITIVE_DECISION
+				// payload (subject=step head, context carries the evidence).
+				lastFps := fps
+				if len(lastFps) > 3 {
+					lastFps = lastFps[len(lastFps)-3:]
+				}
+				if evErr := rec.Event("METACOGNITIVE_DECISION",
+					budget.Clip(step.text, 80), d.metaReason,
+					map[string]any{
+						"step_idx": len(res.Steps) - 1, "retries": retries,
+						"fingerprints": lastFps, "replan_count": replanCount,
+						"action": action,
+					}, loopID); evErr != nil {
+					res.Warnings = append(res.Warnings, "metacognitive event write failed: "+evErr.Error())
+				}
+				switch {
+				case d.retry:
+					stepRetries[step.text] = retries + 1
 					failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
-						"halted after blocked step: %d step(s) not executed: ",
-						len(queue))+nameRemainder()))
-					break
+						"step %d retry %d with hint (%s)",
+						len(res.Steps)-1, retries+1, d.metaReason)))
+					queue = append([]queuedStep{{text: step.text,
+						injected: step.injected, hint: d.hint}}, queue...)
+				case len(d.splitInto) > 0:
+					// Adapter-hung bail: N consecutive DIFFERENT steps all
+					// dying at the timeout ceiling is a transport failure,
+					// not a step-size problem (Python parity, incl. the
+					// reset only on non-timeout splits).
+					if strings.Contains(strings.ToLower(out.Result), "timed out") ||
+						strings.Contains(strings.ToLower(out.Result), "timeout") {
+						consecTimeouts++
+						if consecTimeouts >= maxConsecutiveTimeouts {
+							haltedEarly = true
+							failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+								"adapter appears hung: %d consecutive steps timed out at the ceiling — "+
+									"transport failure, not step size [stop: external-interrupt]; "+
+									"%d step(s) not executed: ", consecTimeouts, len(queue))+nameRemainder()))
+							break stepLoop
+						}
+					} else {
+						consecTimeouts = 0
+					}
+					shaped := shapeSteps(d.splitInto)
+					failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+						"step %d split into %d parts (%s)",
+						len(res.Steps)-1, len(shaped), d.metaReason)))
+					add := make([]queuedStep, len(shaped))
+					for i, s := range shaped {
+						add[i] = queuedStep{text: s}
+					}
+					queue = append(add, queue...)
+					replanCount++
+				case d.redecompose:
+					subs, use, derr := planner.Decompose(ctx, a, rec.WorkspaceDir, step.text, 5)
+					res.TokensIn += use.TokensIn
+					res.TokensOut += use.TokensOut
+					res.Warnings = append(res.Warnings, use.Warnings...)
+					if derr != nil || len(subs) < 2 {
+						// Recovery tooling broke, not the goal — Python
+						// stamps external-interrupt to keep the two apart.
+						haltedEarly = true
+						failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+							"re-decompose failed after %d retries (%v) [stop: external-interrupt]; "+
+								"%d step(s) not executed: ", retries, derr, len(queue))+nameRemainder()))
+						break stepLoop
+					}
+					shaped := shapeSteps(subs)
+					failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+						"step %d re-decomposing into %d sub-steps (%s)",
+						len(res.Steps)-1, len(shaped), d.metaReason)))
+					add := make([]queuedStep, len(shaped))
+					for i, s := range shaped {
+						add[i] = queuedStep{text: s}
+					}
+					queue = append(add, queue...)
+					replanCount++
+				default:
+					// Terminal verdict: halt with the reason, the verdict,
+					// and the unexecuted remainder NAMED.
+					haltedEarly = true
+					stuck := d.stuckReason
+					if stuck == "" {
+						stuck = out.Result
+					}
+					entry := fmt.Sprintf("halted on terminal verdict: %s (%s)",
+						stuck, d.metaReason)
+					if d.stopVerdict != "" {
+						entry += " [stop: " + d.stopVerdict + "]"
+					}
+					failChain = append(failChain, budget.FailureChainEntry.Clip(entry))
+					if len(queue) > 0 {
+						failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+							"%d step(s) not executed: ", len(queue))+nameRemainder()))
+					}
+					break stepLoop
 				}
 			}
 		}
@@ -346,8 +459,17 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 	}
 	res.Status = "stuck"
-	if done == len(res.Steps) && !haltedEarly {
-		res.Status = "done"
+	if !haltedEarly {
+		if execMode {
+			// A recovered run legitimately carries blocked ATTEMPTS beside
+			// the done retries (Python parity: loop_status stays clean
+			// unless a terminal verdict fired). Every ladder decision
+			// either re-queues work or halts, so a drained queue without a
+			// halt means every piece's final attempt completed.
+			res.Status = "done"
+		} else if done == len(res.Steps) {
+			res.Status = "done"
+		}
 	}
 	res.Elapsed = time.Since(start)
 

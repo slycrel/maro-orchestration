@@ -227,7 +227,7 @@ const maxInjectPerStep = 3
 
 // executeExecStep runs one tool-bearing worker step and returns its
 // outcome plus any steps the worker injected into the plan.
-func executeExecStep(ctx context.Context, a llm.Adapter, goal, step string,
+func executeExecStep(ctx context.Context, a llm.Adapter, goal, step, hint string,
 	stepNum, totalSteps int, prior []StepOutcome, projectDir string) (StepOutcome, []string) {
 
 	var sb strings.Builder
@@ -238,6 +238,15 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step string,
 		" exists and persists across steps. Scratch/temp files belong in /tmp."+
 		" Do not write anywhere else.\n", projectDir)
 	sb.WriteString(renderPrior(prior))
+	if hint != "" {
+		// Blocked-retry hint plus Python's retry reminder verbatim — the
+		// retry must act on WHY it was blocked. (Divergence, named: Python
+		// routes this through the pending_context injection seam; Go has
+		// no context seam yet, so the hint rides the step prompt.)
+		fmt.Fprintf(&sb, "\n%s\n\nRETRY REMINDER — ORIGINAL GOAL: %s\n"+
+			"Focus only on completing the step above. "+
+			"Use data already in context. Target <500 tokens.\n", hint, goal)
+	}
 
 	tools := stepTools()
 	opts := llm.Options{

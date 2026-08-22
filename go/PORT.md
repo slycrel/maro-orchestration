@@ -250,14 +250,34 @@ direction).
   automated race-detector-clean concurrent-Run test.
   Unported, named in slot.go: `--wait` polling, in-process sibling
   slot sharing, the unlink/reacquire inode guard, busy_policy=worktree.
-- Exec mode HALTS on the first non-`done` step: Go has no
-  `loop_blocked` retry/re-decompose ladder yet (next-tranche #1), and
-  a live tool-bearing agent must not keep acting on a failed premise —
-  the halt is the port-honest stand-in for Python's terminal-verdict
-  break, with the unexecuted remainder named in the failure chain. The
-  tool-less lane keeps v0's run-through (steps hold no tools; partial
-  completion still yields the summary) — a deliberate, pinned
-  asymmetry.
+- The blocked-step LADDER (`loop/blocked.go`, Python `loop_blocked`'s
+  Phase 62 zoom-metacognition algorithm) replaces the flat first-block
+  halt: NEED_INFO spawns research-then-retry; a missing external input
+  is an honest terminal (never retried, split, or FABRICATED — the
+  fabricated-input false-success bug); combined exec+analyze steps get
+  the structural split; timeouts get an LLM split (45s, heuristic
+  sentence-boundary fallback) or an honest terminal; then
+  convergence-aware retry (md5-fingerprint parity with Python, pinned
+  against CPython fixtures; round-1 generic hint, round-2 LLM
+  refinement hint threaded into the retry prompt with the RETRY
+  REMINDER), sibling-failure-rate re-decomposition (>50% blocked with
+  ≥3 executed), re-decompose via the planner (≤5 sub-steps, capped at
+  2 replans), and a terminal verdict that halts with the reason, the
+  stop verdict (riding the failure-chain text — no typed column yet),
+  and the unexecuted remainder NAMED. Thresholds verbatim (3 retries /
+  0.5 sibling / 2 replans / 3-consecutive-ceiling-timeout adapter-hung
+  bail). Every decision is recorded as a METACOGNITIVE_DECISION event
+  with the evidence (retries, fingerprints, replan count, action). A
+  recovered run is DONE with its blocked attempts still in the record.
+  The tool-less lane keeps v0's run-through — deliberate asymmetry.
+  Unported ladder pieces, named: token_runaway abandonment (no ingest
+  brake), escape-pattern demotion hints (step_exec detectors), mid-loop
+  diagnosis consult (introspect, Phase 44), navigator shadow, per-role
+  model routing for split/hint calls, the pending_context injection
+  seam (hints ride the step prompt), boundary/recon tag guards in step
+  shaping, mid-loop iteration-budget bump (the 2× cap stays the outer
+  breaker — binding on small plans, so retries there exhaust budget
+  before the retry threshold).
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a
@@ -296,12 +316,11 @@ routing/trajectory escalation.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
-1. Retry/re-decompose ladder (`loop_blocked`'s decision algorithm).
-2. Memory recall + knowledge injection (lessons, playbook, edges).
-3. Closure verification / quality gate.
-4. Director, intent routing, NOW-vs-AGENDA lanes.
-5. Inspector/evolver self-improvement loop.
-6. Heartbeat, projects, escalation, notifications, viz.
+1. Memory recall + knowledge injection (lessons, playbook, edges).
+2. Closure verification / quality gate.
+3. Director, intent routing, NOW-vs-AGENDA lanes.
+4. Inspector/evolver self-improvement loop.
+5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
 4 lenses, sonnet-medium fallback; each of these was flagged and either

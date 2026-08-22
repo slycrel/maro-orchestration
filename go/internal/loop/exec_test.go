@@ -399,36 +399,44 @@ func TestExecLaneCollidingGoalsGetDistinctProjectDirs(t *testing.T) {
 	}
 }
 
-func TestExecLaneHaltsOnBlockedStepBeforeLaterSteps(t *testing.T) {
+func TestExecLaneTerminalVerdictHaltsWithRemainder(t *testing.T) {
+	// A MISSING_INPUT block is immediately terminal on the ladder (an
+	// absent input cannot be retried, split, or manufactured): exec mode
+	// must halt with the verdict, the reason, and the unexecuted
+	// remainder NAMED — later steps hold a live Bash-capable agent that
+	// must not act on a failed premise. (This test previously pinned the
+	// pre-ladder flat first-block halt; the ladder is its consumer.)
 	ws := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws)
 	fake := execFake(
-		`["clone the repo", "modify the code", "push the branch"]`,
-		`{"tool": "flag_stuck", "reason": "repo not found"}`,
+		`["read the config file", "modify the code", "push the branch"]`,
+		`{"tool": "flag_stuck", "reason": "config.yml does not exist"}`,
 		`{"tool": "complete_step", "result": "MUST NOT RUN", "summary": "s"}`,
 	)
 	rec := record.New(ws)
 	res, err := Run(context.Background(), fake, rec, Opts{
-		Goal: "halt on block", MaxSteps: 4, DryRun: true, Exec: true})
+		Goal: "terminal halt case", MaxSteps: 4, DryRun: true, Exec: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Status != "stuck" || len(res.Steps) != 1 {
-		t.Fatalf("exec mode must halt on the first blocked step: status=%s executed=%d",
+		t.Fatalf("exec mode must halt on a terminal verdict: status=%s executed=%d",
 			res.Status, len(res.Steps))
 	}
 	// Only planner + one step call reached the adapter.
 	if len(fake.Opts) != 2 {
 		t.Fatalf("later steps still executed: %d adapter calls", len(fake.Opts))
 	}
-	// The remainder is NAMED — contents, not just a count.
+	// The remainder is NAMED — contents, not just a count — and the
+	// verdict + honest-fail doctrine ride the chain.
 	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
 	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
 	joined := ""
 	for _, c := range chain {
 		joined += c.(string) + "\n"
 	}
-	for _, want := range []string{"repo not found", "halted after blocked step",
+	for _, want := range []string{"MISSING_INPUT", "config.yml does not exist",
+		"halted on terminal verdict", "[stop: external-interrupt]",
 		"modify the code", "push the branch"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("failure chain missing %q:\n%s", want, joined)
@@ -765,5 +773,241 @@ func TestFailureChainEntriesRespectBudget(t *testing.T) {
 			t.Fatalf("failure chain entry %d is %d chars, budget is %d + marker: %q",
 				i, n, budget.FailureChainEntry.Limit, c)
 		}
+	}
+}
+
+func TestErrorFingerprintPythonParity(t *testing.T) {
+	// Fixtures computed with CPython hashlib.md5 — the fingerprint is
+	// convergence EVIDENCE and must read identically across runtimes.
+	got := errorFingerprint("failed to fetch: connection refused", "partial output text")
+	if got != "5c93203e028a" {
+		t.Fatalf("fingerprint parity broken: %s", got)
+	}
+	// Head-normalization: >200 chars truncate, whitespace collapses.
+	long := strings.Repeat("x", 300) + "   tail"
+	if got := errorFingerprint(long, ""); got != "d13dd2657c95" {
+		t.Fatalf("normalized fingerprint parity broken: %s", got)
+	}
+	// Same failure → same fingerprint; different → different.
+	if errorFingerprint("a", "b") != errorFingerprint("a", "b") ||
+		errorFingerprint("a", "b") == errorFingerprint("a", "c") {
+		t.Fatal("fingerprint stability broken")
+	}
+}
+
+func TestIsConvergingThresholds(t *testing.T) {
+	cases := []struct {
+		fps  []string
+		want bool
+	}{
+		{[]string{"a"}, true},                // too few to judge
+		{[]string{"a", "a"}, false},          // 1/2 unique = .5, not > .5
+		{[]string{"a", "b"}, true},           // all unique
+		{[]string{"a", "a", "a"}, false},     // stuck loop
+		{[]string{"a", "b", "c", "a"}, true}, // 3/4 unique
+	}
+	for i, c := range cases {
+		if got := isConverging(c.fps); got != c.want {
+			t.Fatalf("case %d: isConverging(%v)=%v", i, c.fps, got)
+		}
+	}
+}
+
+func TestSplitExecAnalyzeConverges(t *testing.T) {
+	parts := splitExecAnalyze("Run pytest tests/ and summarize the failures")
+	if len(parts) != 2 ||
+		parts[0] != "Run pytest tests/ and save output to a file" ||
+		parts[1] != "Read the captured output and summarize the failures" {
+		t.Fatalf("split: %+v", parts)
+	}
+	// Neither half may re-trigger the compound detector — a re-split
+	// loop at the plan-mutation seam would never converge.
+	for _, p := range parts {
+		if isCombinedExecAnalyze(p) {
+			t.Fatalf("split half re-triggers the detector: %q", p)
+		}
+	}
+}
+
+func TestHeuristicTimeoutSplitEmulatesLookahead(t *testing.T) {
+	// The Python regex splits bare " and " only BEFORE a Capitalized
+	// clause (RE2 has no lookahead; Go emulates it).
+	parts := generateTimeoutSplit(context.Background(), nil,
+		"download the dataset; clean the records and Compute the summary statistics")
+	want := []string{"download the dataset", "clean the records", "Compute the summary statistics"}
+	if len(parts) != 3 || parts[0] != want[0] || parts[1] != want[1] || parts[2] != want[2] {
+		t.Fatalf("heuristic split: %+v", parts)
+	}
+	// Lowercase after "and" is NOT a boundary — and one part is no split.
+	if got := generateTimeoutSplit(context.Background(), nil, "read the file and analyze it thoroughly"); got != nil {
+		t.Fatalf("lowercase and must not split: %+v", got)
+	}
+}
+
+func TestHandleBlockedStepTimeoutTerminalWhenUnsplittable(t *testing.T) {
+	out := StepOutcome{Step: "shortstep", Status: "blocked",
+		Result: "claude CLI timed out after 10m0s (purpose=step-execute)"}
+	d := handleBlockedStep(context.Background(), nil, "shortstep", out, 0, nil, nil, 0)
+	if d.retry || d.redecompose || len(d.splitInto) != 0 {
+		t.Fatalf("unsplittable timeout must be terminal: %+v", d)
+	}
+	if !strings.Contains(d.stuckReason, "TIMEOUT and split-recovery failed") ||
+		d.stopVerdict != "out-of-budget" {
+		t.Fatalf("terminal shape: %+v", d)
+	}
+}
+
+func TestHandleBlockedStepSiblingFailureTriggersRedecompose(t *testing.T) {
+	siblings := []StepOutcome{
+		{Status: "blocked"}, {Status: "blocked"}, {Status: "done"},
+	}
+	out := StepOutcome{Step: "assemble the pieces", Status: "blocked", Result: "some error"}
+	d := handleBlockedStep(context.Background(), nil, "assemble the pieces", out, 0, []string{"f1"}, siblings, 0)
+	if !d.redecompose {
+		t.Fatalf("67%% sibling failure must redecompose: %+v", d)
+	}
+	// Replan budget exhausted: falls through to the converging retry.
+	d2 := handleBlockedStep(context.Background(), nil, "assemble the pieces", out, 0, []string{"f1"}, siblings, redecomposeThreshold)
+	if !d2.retry {
+		t.Fatalf("replan-exhausted sibling case must fall through to retry: %+v", d2)
+	}
+}
+
+func TestExecLaneNeedInfoSpawnsResearchStep(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["find the dataset", "write the report"]`,
+		`{"tool": "flag_stuck", "reason": "NEED_INFO: dataset URL", "attempted": "searched"}`,
+		`{"tool": "complete_step", "result": "url is example.com/d.csv", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "dataset found", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "report done", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "need info case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 4 {
+		t.Fatalf("status=%s steps=%d", res.Status, len(res.Steps))
+	}
+	// Research first, then the ORIGINAL step retried, then the plan.
+	if res.Steps[1].Step != "Research: dataset URL" {
+		t.Fatalf("research step: %q", res.Steps[1].Step)
+	}
+	if res.Steps[2].Step != "find the dataset" || res.Steps[2].Status != "done" {
+		t.Fatalf("original step must rerun after research: %+v", res.Steps[2])
+	}
+	// A recovered run is DONE despite the blocked attempt in its record.
+	if res.Steps[0].Status != "blocked" {
+		t.Fatalf("blocked attempt must stay recorded: %+v", res.Steps[0])
+	}
+}
+
+func TestExecLaneRetryHintReachesPrompt(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["assemble the summary"]`,
+		`{"tool": "complete_step", "result": "", "summary": "s"}`, // empty → blocked
+		`{"tool": "complete_step", "result": "summary assembled", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "hint threading", MaxSteps: 2, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 2 {
+		t.Fatalf("status=%s steps=%d", res.Status, len(res.Steps))
+	}
+	retryPrompt := fake.Prompts[2]
+	for _, want := range []string{
+		"[Previous attempt blocked:",
+		"RETRY REMINDER — ORIGINAL GOAL: hint threading",
+		"NEED_INFO: [what's missing]",
+	} {
+		if !strings.Contains(retryPrompt, want) {
+			t.Fatalf("retry prompt missing %q", want)
+		}
+	}
+	// The first attempt's prompt must NOT carry a hint.
+	if strings.Contains(fake.Prompts[1], "RETRY REMINDER") {
+		t.Fatal("hint leaked into the first attempt")
+	}
+}
+
+func TestExecLaneRedecomposeOnNonConvergingErrors(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["assemble the widget", "step b", "step c"]`,
+		`{"tool": "flag_stuck", "reason": "identical error X"}`,
+		`{"tool": "flag_stuck", "reason": "identical error X"}`, // same fp → not converging
+		`["sub one", "sub two"]`,                                // re-decompose plan
+		`{"tool": "complete_step", "result": "sub one done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "sub two done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "b done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "c done", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "redecompose case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 6 {
+		t.Fatalf("status=%s steps=%d %+v", res.Status, len(res.Steps), res.Steps)
+	}
+	wantOrder := []string{"assemble the widget", "assemble the widget",
+		"sub one", "sub two", "step b", "step c"}
+	for i, w := range wantOrder {
+		if res.Steps[i].Step != w {
+			t.Fatalf("step %d = %q, want %q", i, res.Steps[i].Step, w)
+		}
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	joined := ""
+	for _, c := range chain {
+		joined += c.(string) + "\n"
+	}
+	if !strings.Contains(joined, "re-decomposing into 2 sub-steps") {
+		t.Fatalf("redecompose missing from chain:\n%s", joined)
+	}
+}
+
+func TestExecLaneAdapterHungBailsAfterConsecutiveTimeouts(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	splitResp := "1. handle the first portion carefully\n2. handle the second portion carefully"
+	fake := execFake(
+		`["download alpha corpus fully", "download beta corpus fully", "download gamma corpus fully"]`,
+		`{"tool": "flag_stuck", "reason": "operation timed out at the ceiling"}`,
+		splitResp,
+		`{"tool": "flag_stuck", "reason": "operation timed out at the ceiling"}`,
+		splitResp,
+		`{"tool": "flag_stuck", "reason": "operation timed out at the ceiling"}`,
+		splitResp,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "hung adapter case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" {
+		t.Fatalf("hung adapter must end stuck: %s", res.Status)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	joined := ""
+	for _, c := range chain {
+		joined += c.(string) + "\n"
+	}
+	if !strings.Contains(joined, "adapter appears hung") ||
+		!strings.Contains(joined, "[stop: external-interrupt]") {
+		t.Fatalf("hung bail missing from chain:\n%s", joined)
 	}
 }
