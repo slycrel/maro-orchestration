@@ -180,16 +180,67 @@ pack.json; Import refuses `pack.json`/`REVIEW.md` listed as artifacts
 gate ON in Go where Python's `bool(None)` turns it OFF (pinned, safe
 direction).
 
+**Executor tranche (2026-08-22, tool-bearing worker steps):**
+
+`maro run` now defaults to the EXECUTOR lane on the subprocess backend
+(`-safe` opts back into utility mode; the dry backend never requests it):
+
+- Two subprocess lanes, matching Python's `no_tools` split: utility keeps
+  `--tools ""` + a `CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000` runaway brake;
+  executor enables the CLI's own tools with `--disallowedTools
+  WebFetch,WebSearch`, binds cwd to the run's project dir
+  (`<workspace>/projects/<goal-slug>/`), and caps per-tool-call Bash
+  output via `BASH_MAX_OUTPUT_LENGTH` with Python
+  `_bash_output_cap_env`'s full precedence — including the
+  disable-means-UNSET-in-child semantics that Python's 2026-07-27 review
+  paid for.
+- The simulated tool-call protocol (`_TOOL_INJECTION_TEMPLATE` verbatim,
+  with the load-bearing "Never execute it" line): workers report via
+  `complete_step` (result/summary/confidence/inject_steps) or
+  `flag_stuck` (reason/attempted); no parseable tool call falls back to
+  content-as-result (Python parity). Parsing is strict (whole-span,
+  UseNumber, trailing data refused) and lives in the LOOP, not the
+  adapter — a named divergence: Python parses adapter-side because its
+  API backends have native tool_use; Go grows that when one is ported.
+- Plan mutation: `inject_steps` splices at the FRONT of the queue
+  (Python `remaining_steps[:0]`), capped 3/step; total executed steps
+  are capped at 2× the planned count — an honest stand-in for Python's
+  `max_iterations` machinery (adaptive bumping not ported); exhaustion
+  marks the run stuck with the remainder named in the failure chain.
+- Long-running step classification ported (keyword sets verbatim,
+  `MARO_LONG_RUNNING_TIMEOUT`, full-suite ×2 capped at 3600s); executor
+  default timeout 600s like Python's adapter default.
+- Per-step transcripts: the merged stream-json capture persists to
+  `<project>/artifacts/step-N-transcript.jsonl` (artifacts-over-streams;
+  kept on success AND failure, never deleted by the adapter).
+- Capability is structural: `SupportsAgentTools()` on the backend; a
+  requested exec run on an incapable backend degrades to the tool-less
+  path WITH a warning (never silently), and the `-model` CLI wrapper
+  forwards the capability (interface embedding would otherwise strip it).
+- `EXECUTE_SYSTEM` ported as the sections whose machinery exists here
+  (synchronous-execution, anti-hallucination, NEED_INFO, URL-fetch
+  discipline, file-edit protocol, token efficiency). Deliberately
+  dropped, because advertising a silently-dropped field is worse than
+  omitting it: artifacts, decisions, world_facts channels,
+  ask-may-be-wrong, also-noticed, pre-fetched-URL block,
+  create_team_worker, step-type classification/prompt extras
+  (data-pipeline, artifact-materialize, long-lived-process,
+  recon-flavor). Each returns with its consumer.
+
+Unported from Python's executor lane, named: container wrap
+(`executor.container`), executor sessions + fork-master, token-runaway
+brake, constraint tiers/HITL gates, URL pre-fetch, worker push guard
+(`missing_write_targets`), tool-pathology classification, per-step model
+routing/trajectory escalation.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
-1. Tool-bearing worker steps (v0 runs `--tools ""` — the safe utility
-   mode; real work needs the worker tool protocol).
-2. Retry/re-decompose ladder (`loop_blocked`'s decision algorithm).
-3. Memory recall + knowledge injection (lessons, playbook, edges).
-4. Closure verification / quality gate.
-5. Director, intent routing, NOW-vs-AGENDA lanes.
-6. Inspector/evolver self-improvement loop.
-7. Heartbeat, projects, escalation, notifications, viz.
+1. Retry/re-decompose ladder (`loop_blocked`'s decision algorithm).
+2. Memory recall + knowledge injection (lessons, playbook, edges).
+3. Closure verification / quality gate.
+4. Director, intent routing, NOW-vs-AGENDA lanes.
+5. Inspector/evolver self-improvement loop.
+6. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
 4 lenses, sonnet-medium fallback; each of these was flagged and either
@@ -225,8 +276,12 @@ go build ./cmd/maro
 MARO_WORKSPACE=/tmp/maro-go-smoke ./maro run "say hi" -backend dry
 
 # Real run (claude CLI backend, writes to the resolved workspace —
-# the first output line SAYS which):
+# the first output line SAYS which). Tool-bearing executor steps are the
+# DEFAULT on the subprocess backend: the worker's own tools do real work
+# in <workspace>/projects/<goal-slug>/, per-step transcripts land in its
+# artifacts/ dir. -safe forces the tool-less utility mode.
 ./maro run "summarize the difference between a breaker and a truncator" -max-steps 3
+./maro run -safe "classify this goal, do not execute it" -max-steps 2
 ```
 
 ## Branch mechanics

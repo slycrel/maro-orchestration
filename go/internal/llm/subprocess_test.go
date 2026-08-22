@@ -188,3 +188,44 @@ func TestCompleteCarriesSuspectsOnErrorResult(t *testing.T) {
 		t.Fatalf("suspect dropped on error branch: %v", re.Warnings)
 	}
 }
+
+func TestCompleteExecutorLaneBindsCwdEnvAndKeepsTranscript(t *testing.T) {
+	// The fixture proves the executor contract end-to-end: pwd is the
+	// bound Cwd, BASH_MAX_OUTPUT_LENGTH is injected, the utility-only
+	// output ceiling is NOT, and the merged capture survives at
+	// TranscriptPath (data-retention: kept on success, not just failure).
+	t.Setenv("MARO_BASH_MAX_OUTPUT_CHARS", "7777")
+	a := fixtureBin(t, `printf '{"type":"result","subtype":"success","result":"pwd=%s bash_cap=%s ceiling=%s","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}\n' "$(pwd)" "${BASH_MAX_OUTPUT_LENGTH:-unset}" "${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-unset}"`)
+	cwd := t.TempDir()
+	tr := filepath.Join(t.TempDir(), "step-1-transcript.jsonl")
+	resp, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "work"}},
+		Options{AgentTools: true, Cwd: cwd, TranscriptPath: tr, Purpose: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Content, "pwd="+cwd) {
+		t.Fatalf("cwd not bound: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "bash_cap=7777") {
+		t.Fatalf("bash cap not injected: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "ceiling=unset") {
+		t.Fatalf("utility ceiling leaked into executor lane: %q", resp.Content)
+	}
+	raw, err := os.ReadFile(tr)
+	if err != nil || !strings.Contains(string(raw), `"type":"result"`) {
+		t.Fatalf("transcript not kept at %s: %v", tr, err)
+	}
+}
+
+func TestCompleteUtilityLaneCeilingReachesChild(t *testing.T) {
+	a := fixtureBin(t, `printf '{"type":"result","subtype":"success","result":"ceiling=%s","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}\n' "${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-unset}"`)
+	resp, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "classify"}},
+		Options{Purpose: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Content, "ceiling=16000") {
+		t.Fatalf("utility output ceiling missing: %q", resp.Content)
+	}
+}

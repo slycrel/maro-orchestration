@@ -1,10 +1,13 @@
 // Package loop is the spine: decompose → execute steps → record.
 //
-// v0 scope, stated honestly: steps execute as single tool-less LLM calls
-// (the subprocess backend runs --tools ""), there is no retry ladder, no
-// re-decomposition, no closure verification, no memory recall — those are
-// later port tranches (see PORT.md). What v0 DOES carry from day one are
-// the invariants the Python runtime paid to learn:
+// Scope, stated honestly: steps execute either tool-less (single LLM
+// call, the v0 path) or through the tool-bearing executor lane (exec.go,
+// Opts.Exec — the worker agent's own tools do real work in the run's
+// project dir, reporting via complete_step/flag_stuck, with inject_steps
+// plan mutation). Still unported: retry ladder, re-decomposition,
+// closure verification, memory recall — later tranches (see PORT.md).
+// What the loop DOES carry from day one are the invariants the Python
+// runtime paid to learn:
 //
 //   - evidence windows are budgeted and marked, never bare-sliced
 //     (budget package);
@@ -18,6 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,6 +43,12 @@ type StepOutcome struct {
 	Result    string
 	TokensIn  int
 	TokensOut int
+	// Summary/Confidence come from the executor lane's complete_step
+	// call (empty on the tool-less path).
+	Summary    string
+	Confidence string
+	// Injected lists steps this step added to the plan (inject_steps).
+	Injected []string
 	// Warnings are adapter-reported oddities for this step (folded into
 	// Result.Warnings by Run).
 	Warnings []string
@@ -53,13 +64,23 @@ type Opts struct {
 	Model    string // "" = backend default
 	MaxSteps int    // <=0 = 8
 	DryRun   bool
+	// Exec turns on the tool-bearing executor lane (exec.go): worker
+	// steps run with the backend agent's own tools bound to the run's
+	// project dir. Honored only when the backend reports
+	// SupportsAgentTools — otherwise the run stays on the tool-less v0
+	// path and says so in a warning (no silent mode change).
+	Exec bool
 }
 
 type Result struct {
-	Goal      string
-	LoopID    string
-	Status    string // "done" | "stuck"
-	Steps     []StepOutcome
+	Goal   string
+	LoopID string
+	Status string // "done" | "stuck"
+	// ProjectDir is the executor lane's working directory (empty on the
+	// tool-less path) — the path is part of the result, per the
+	// data-retention doctrine.
+	ProjectDir string
+	Steps      []StepOutcome
 	TokensIn  int
 	TokensOut int
 	Elapsed   time.Duration
@@ -130,17 +151,62 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		TokensIn: planUse.TokensIn, TokensOut: planUse.TokensOut,
 		Warnings: planUse.Warnings}
 
+	// Executor lane: requested AND structurally available. A backend
+	// that can't run agent tools degrades to the tool-less path with a
+	// warning — degrading silently would fabricate "tool-bearing" runs.
+	execMode := opts.Exec
+	if execMode && !agentToolCapable(a) {
+		execMode = false
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"exec mode requested but backend %q cannot run agent tools — using the tool-less step path",
+			a.Name()))
+	}
+	if execMode {
+		res.ProjectDir = filepath.Join(rec.WorkspaceDir, "projects", goalSlug(goal))
+		if err := os.MkdirAll(res.ProjectDir, 0o755); err != nil {
+			// Tool-bearing steps with no bound workspace would write to
+			// an arbitrary inherited cwd — refuse, don't drift.
+			return nil, fmt.Errorf("exec mode: cannot create project dir %s: %w",
+				res.ProjectDir, err)
+		}
+	}
+
 	if evErr := rec.Event("LOOP_STARTED", loopID,
 		fmt.Sprintf("Go loop started: %d steps for %s", len(steps), budget.Clip(goal, 200)),
-		map[string]any{"steps": len(steps), "backend": a.Name()}, loopID); evErr != nil {
+		map[string]any{"steps": len(steps), "backend": a.Name(),
+			"exec": execMode, "project_dir": res.ProjectDir}, loopID); evErr != nil {
 		// Event-log failure must not kill the run, but it must not vanish
 		// either — it rides the result so the caller can surface it.
 		res.Warnings = append(res.Warnings, "captain's log write failed: "+evErr.Error())
 	}
 	var failChain []string
 
-	for i, step := range steps {
-		out := executeStep(ctx, a, goal, step, res.Steps)
+	// Mutable step queue: inject_steps splice at the FRONT (Python
+	// remaining_steps[:0] = injected). Total executed is capped at 2x the
+	// planned count — an honest stand-in for Python's max_iterations
+	// machinery (adaptive bumping not ported); hitting it marks the run
+	// stuck with the remainder named in the failure chain.
+	queue := append([]string(nil), steps...)
+	capTotal := 2 * len(steps)
+	budgetExhausted := false
+	for len(queue) > 0 {
+		if len(res.Steps) >= capTotal {
+			budgetExhausted = true
+			failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining",
+				len(res.Steps), capTotal, len(queue))))
+			break
+		}
+		step := queue[0]
+		queue = queue[1:]
+		var out StepOutcome
+		var injected []string
+		if execMode {
+			out, injected = executeExecStep(ctx, a, goal, step,
+				len(res.Steps)+1, len(res.Steps)+1+len(queue), res.Steps, res.ProjectDir)
+		} else {
+			out = executeStep(ctx, a, goal, step, res.Steps)
+		}
 		res.Steps = append(res.Steps, out)
 		res.TokensIn += out.TokensIn
 		res.TokensOut += out.TokensOut
@@ -148,7 +214,10 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		if out.Status != "done" {
 			// The reason travels whole (marked breaker, not a truncator).
 			failChain = append(failChain, budget.FailureChainEntry.Clip(
-				fmt.Sprintf("step %d blocked: %s", i, out.Result)))
+				fmt.Sprintf("step %d blocked: %s", len(res.Steps)-1, out.Result)))
+		}
+		if len(injected) > 0 {
+			queue = append(append([]string(nil), injected...), queue...)
 		}
 	}
 
@@ -159,7 +228,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 	}
 	res.Status = "stuck"
-	if done == len(res.Steps) {
+	if done == len(res.Steps) && !budgetExhausted {
 		res.Status = "done"
 	}
 	res.Elapsed = time.Since(start)

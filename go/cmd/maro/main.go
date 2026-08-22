@@ -36,6 +36,8 @@ func run(args []string) error {
 	maxSteps := fs.Int("max-steps", 8, "maximum decomposed steps")
 	backend := fs.String("backend", "auto", "auto|subprocess|anthropic|dry")
 	model := fs.String("model", "", "model alias or id (backend default when empty)")
+	safe := fs.Bool("safe", false,
+		"force tool-less utility mode (worker steps get no agent tools)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -88,12 +90,20 @@ func run(args []string) error {
 		// exclude synthetic rows; a canned run recorded as real is a
 		// fabricated record (adversarial r2 2026-08-22, Expert QA).
 		DryRun: *backend == "dry",
+		// Tool-bearing worker steps are the default on a capable backend
+		// (real work is the point); -safe opts back into utility mode.
+		// The dry backend never requests exec — a canned run has no
+		// agent to bear tools, and the warning would be noise.
+		Exec: !*safe && *backend != "dry",
 	})
 	if err != nil {
 		return err
 	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "warn:", w)
+	}
+	if res.ProjectDir != "" {
+		fmt.Printf("project dir: %s\n", res.ProjectDir)
 	}
 
 	fmt.Printf("\n=== %s (%s, %d steps, %d in / %d out tokens, %s) ===\n",
@@ -120,6 +130,15 @@ func (w withModel) Complete(ctx context.Context, msgs []llm.Message, opts llm.Op
 		opts.Model = w.model
 	}
 	return w.Adapter.Complete(ctx, msgs, opts)
+}
+
+// SupportsAgentTools forwards the wrapped backend's capability — struct
+// embedding of an interface promotes only the interface's declared
+// methods, so without this the -model wrapper would silently strip the
+// executor lane from a capable backend.
+func (w withModel) SupportsAgentTools() bool {
+	c, ok := w.Adapter.(interface{ SupportsAgentTools() bool })
+	return ok && c.SupportsAgentTools()
 }
 
 func buildAdapter(kind string) (llm.Adapter, error) {

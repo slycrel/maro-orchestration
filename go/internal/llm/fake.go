@@ -12,19 +12,29 @@ import (
 // common "every step says done" case).
 type Fake struct {
 	Script []string
+	// AgentToolsOK lets tests exercise the loop's executor lane; the
+	// real dry-run Fake leaves it false so exec mode degrades to the
+	// tool-less path exactly as any non-subprocess backend does.
+	AgentToolsOK bool
 
 	mu    sync.Mutex
 	calls int
 	// Prompts records every flattened prompt for assertions.
 	Prompts []string
+	// Opts records each call's Options so tests can pin what the loop
+	// actually requested (tools, cwd, timeouts).
+	Opts []Options
 }
 
 func (f *Fake) Name() string { return "fake" }
 
+func (f *Fake) SupportsAgentTools() bool { return f.AgentToolsOK }
+
 func (f *Fake) Complete(_ context.Context, msgs []Message, opts Options) (*Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Prompts = append(f.Prompts, BuildPrompt(msgs))
+	f.Prompts = append(f.Prompts, BuildPrompt(msgs, opts.Tools...))
+	f.Opts = append(f.Opts, opts)
 	if len(f.Script) == 0 {
 		return nil, fmt.Errorf("fake adapter with empty script (purpose=%s)", opts.Purpose)
 	}

@@ -22,13 +22,22 @@ import (
 // incident-derived; see src/llm.py comments for the provenance):
 //
 //	-p --output-format stream-json --verbose
-//	--dangerously-skip-permissions --strict-mcp-config --tools ""
+//	--dangerously-skip-permissions --strict-mcp-config
 //
-// v0 scope: utility-style calls only (--tools "" always). The Python
-// runtime disables tools for routing/classification because an agentic
-// -p session can otherwise ACT on text it was asked to classify (BACKLOG
-// #16); this port's first slice runs its whole loop in that safer mode
-// and treats tool-bearing worker steps as the next port tranche.
+// Two lanes, matching the Python adapter's no_tools split:
+//
+//   - Utility (default): --tools "" — routing/classification/planning
+//     calls hold no tool access, because an agentic -p session can
+//     otherwise ACT on text it was asked to classify (BACKLOG #16).
+//     Output is ceilinged by CLAUDE_CODE_MAX_OUTPUT_TOKENS as a runaway
+//     brake (Python _NO_TOOLS_OUTPUT_CEILING).
+//   - Executor (Options.AgentTools): the CLI's own tools do the real
+//     work; WebFetch/WebSearch are disallowed (Python parity — web
+//     ingest goes through capped fetch paths, not raw page loads), the
+//     working dir binds to Options.Cwd, and per-tool-call Bash output is
+//     capped via BASH_MAX_OUTPUT_LENGTH (bashOutputCapEnv). Unported
+//     from Python's executor lane, named in PORT.md: container wrap,
+//     executor sessions, fork-master, token-runaway brake.
 //
 // Known gap vs Python's _run_subprocess_safe, deliberately deferred (see
 // PORT.md): no liveness/stall kill — a hung-but-silent CLI runs to the
@@ -83,6 +92,12 @@ func isExecutableFile(path string) bool {
 
 func (a *Subprocess) Name() string { return "subprocess" }
 
+// SupportsAgentTools marks this backend able to run tool-bearing worker
+// executor steps (the CLI carries its own tool set). The loop checks
+// this before enabling executor mode — a backend without it runs the
+// tool-less v0 step path instead, loudly, never a silent degrade.
+func (a *Subprocess) SupportsAgentTools() bool { return true }
+
 // resultEvent is the final {"type":"result"} stream-json event; its
 // payload is what the old --output-format json produced. Subtype rides
 // along because the CLI reports some failures as result events without
@@ -99,15 +114,31 @@ type resultEvent struct {
 	} `json:"usage"`
 }
 
-func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options) (*Response, error) {
-	prompt := BuildPrompt(msgs)
-
-	args := []string{"-p", "--output-format", "stream-json", "--verbose",
-		"--dangerously-skip-permissions", "--strict-mcp-config",
-		"--tools", ""}
+// buildArgsEnv derives the flag set and child-env overrides for one call
+// — split out so tests can pin the two lanes' contracts without spawning
+// anything.
+func buildArgsEnv(opts Options) (args []string, env []envOverride) {
+	args = []string{"-p", "--output-format", "stream-json", "--verbose",
+		"--dangerously-skip-permissions", "--strict-mcp-config"}
+	if opts.AgentTools {
+		args = append(args, "--disallowedTools", "WebFetch,WebSearch")
+		env = bashOutputCapEnv()
+	} else {
+		// "" disables the built-in tool set entirely, stronger than
+		// denying names (Python parity, BACKLOG #16).
+		args = append(args, "--tools", "")
+		env = []envOverride{{Key: "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+			Value: fmt.Sprintf("%d", noToolsOutputCeiling), Set: true}}
+	}
 	if m := opts.Model; m != "" {
 		args = append(args, "--model", m)
 	}
+	return args, env
+}
+
+func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options) (*Response, error) {
+	prompt := BuildPrompt(msgs, opts.Tools...)
+	args, envOv := buildArgsEnv(opts)
 
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -124,17 +155,37 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 	// split-file capture threw away chronology, so a stray stderr
 	// result-shaped line always beat the real stdout result (adversarial
 	// r2 2026-08-22, Expert QA).
-	capF, err := os.CreateTemp("", "maro-go-claude-*.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("create capture file: %w", err)
+	//
+	// With Options.TranscriptPath the capture is written there and KEPT —
+	// the caller's durable per-step record of what the inner agent's
+	// tools did (artifacts-over-streams). Data-retention doctrine: the
+	// kept file is never deleted here, success or failure.
+	var capF *os.File
+	var err error
+	if opts.TranscriptPath != "" {
+		capF, err = os.Create(opts.TranscriptPath)
+		if err != nil {
+			return nil, fmt.Errorf("create transcript file: %w", err)
+		}
+		defer capF.Close()
+	} else {
+		capF, err = os.CreateTemp("", "maro-go-claude-*.jsonl")
+		if err != nil {
+			return nil, fmt.Errorf("create capture file: %w", err)
+		}
+		defer os.Remove(capF.Name())
+		defer capF.Close()
 	}
-	defer os.Remove(capF.Name())
-	defer capF.Close()
 
 	cmd := exec.CommandContext(cctx, a.Bin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Stdout = capF
 	cmd.Stderr = capF
+	cmd.Env = childEnv(envOv)
+	// Bind the executor to the caller's project dir so relative writes
+	// land in-workspace (Python step_exec passes cwd=project_dir). The
+	// caller creates the directory; exec fails loudly on a missing one.
+	cmd.Dir = opts.Cwd
 
 	runErr := cmd.Run()
 
