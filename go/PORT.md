@@ -1,0 +1,88 @@
+# Maro Go Port — exploration branch
+
+Jeremy, 2026-08-21: *"Let's go nuts and pivot for a while. Let's make a
+branch and port maro to golang."* (Clarified same session: a
+long-considered exploration in its own right — *"Worst case we learn
+nothing and waste some tokens."*) The Python runtime at the repo root
+**remains production**; this directory is the experiment.
+
+## Doctrine — port the lessons, not just the code
+
+The Python codebase enforces its hard-won invariants with tripwires
+(AST scanners, registries, pin tests) because Python can't stop the bug
+class at the point of writing. The port's bet is that Go can make some
+of them **structural**:
+
+| Python lesson (how it's enforced there) | Go shape here |
+|---|---|
+| Caps are data-driven or they go; every override needs a written why (`test_budget_override_discipline.py` registry) | `budget.Budget{Name, Limit, Why}` — the rationale is a field; a package test fails on any empty `Why` |
+| No silent truncation — cuts must be marked (`context_budget.clip` + slice census) | `budget.Clip` is the only shortening idiom; marker byte-identical to Python's so records interoperate |
+| No swallowed errors (`except: pass` audits) | errors are returned or recorded; a failed step carries its real reason into the failure chain |
+| The resolved store is part of the result (2026-08-16 live-ledger incident) | `record.New(workspaceDir)` takes the store as an argument; `cmd/maro` prints the resolved workspace before any write |
+| Data retention: append-only, never auto-delete | `record` has no delete/rotate/compact verbs at all |
+| Named agentic seams (`purpose=` on every call) | `llm.Options.Purpose` is on every call site |
+
+## On-disk compatibility
+
+Same workspace resolution (`MARO_WORKSPACE` > `MARO_HOME`/workspace >
+`~/.maro/workspace`), same record files, same shapes:
+
+- `memory/outcomes.jsonl` — compatible key subset;
+  `measurement_class: "go-port"` fences Go rows in analyses.
+- `memory/captains_log.jsonl` — `{timestamp, event_type, subject,
+  summary, audience, context, loop_id}`.
+
+dev-recall, the viz server, and the learning pipeline read both
+runtimes' history through one lens.
+
+## What v0 is (and is not)
+
+**Ported and running (spine-first vertical slice):**
+
+- `internal/config` — two-tier YAML (user < workspace), one-level-deep
+  nested merge, env path overrides; parse failures are *reported*, never
+  swallowed.
+- `internal/budget` — the caps discipline (see doctrine).
+- `internal/llm` — adapter seam + `claude` CLI subprocess backend
+  (flag-for-flag with the Python adapter, stream-json result parsing)
+  and Anthropic Messages API backend; scripted `Fake` for tests/dry-run.
+- `internal/jsonx` — tolerant JSON extraction (fences, prose,
+  brackets-inside-strings), strict about content (non-string steps
+  error, never coerce).
+- `internal/planner` — decompose with operator docs
+  (GOALS/CONTEXT/SIGNALS.md) riding whole under the OperatorDoc budget.
+- `internal/loop` — decompose → execute → record, prior-step evidence
+  budgeted+marked, blocked reasons traveling whole.
+- `cmd/maro` — `maro run "goal" [-max-steps N] [-backend ...] [-model X]`.
+
+**Deliberately NOT ported yet (next tranches, in rough order of value):**
+
+1. Tool-bearing worker steps (v0 runs `--tools ""` — the safe utility
+   mode; real work needs the worker tool protocol).
+2. Retry/re-decompose ladder (`loop_blocked`'s decision algorithm).
+3. Memory recall + knowledge injection (lessons, playbook, edges).
+4. Closure verification / quality gate.
+5. Director, intent routing, NOW-vs-AGENDA lanes.
+6. Inspector/evolver self-improvement loop.
+7. Heartbeat, projects, escalation, notifications, viz.
+
+## Running
+
+```sh
+cd go
+go test ./...
+go build ./cmd/maro
+
+# Safe smoke against a scratch workspace:
+MARO_WORKSPACE=/tmp/maro-go-smoke ./maro run "say hi" -backend dry
+
+# Real run (claude CLI backend, writes to the resolved workspace —
+# the first output line SAYS which):
+./maro run "summarize the difference between a breaker and a truncator" -max-steps 3
+```
+
+## Branch mechanics
+
+Branch `go-port`, worktree `../maro-wt-goport`, pushed with plain
+`git push origin go-port` — `scripts/land.sh` is main-only and this
+branch does not land to main.
