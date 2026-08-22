@@ -36,7 +36,7 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 | task_ledger.jsonl | Per-step execution trace | record_step_trace() | evolver context |
 | verification_outcomes.jsonl | RETIRED 2026-08-08 — Phases 59-60 cluster removed (dead at both ends, decision 1addc859); file kept per data retention, frozen since 2026-04-12 | — | — |
 | knowledge_nodes.jsonl | Structured knowledge (K2) | import_link_farm, append_knowledge_node() (bridge mints CANDIDATE), promote_knowledge_candidates() (candidate → active flip) | query_knowledge(), inject_knowledge_for_goal() |
-| knowledge_edges.jsonl | Node relationships (K2) | import_link_farm, append_knowledge_edge() | load_knowledge_edges() |
+| knowledge_edges.jsonl | Node relationships (K2) | import_link_farm (lf- reference pairs); derive_coderivation_edges() (first-party `co_derived` edges from shared outcome provenance — skill-maintenance cadence + `python3 -m knowledge derive-edges`, edge-traversal arc 2026-08-21) | query_knowledge() one-hop expansion (`knowledge.edge_expansion`, OFF default — A/B-gated), load_knowledge_edges() |
 
 ## Write Flow (after each run)
 

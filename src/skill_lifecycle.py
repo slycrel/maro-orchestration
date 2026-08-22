@@ -662,6 +662,22 @@ def run_skill_maintenance(
     except Exception as e:
         log.debug("knowledge node promotion failed (non-fatal): %s", e)
 
+    # Edge-traversal arc (2026-08-21): keep co_derived edges current with
+    # outcome provenance on the same cadence. Deterministic local file work,
+    # no LLM; the sweep is idempotent so racing finalizes converge.
+    edges_derived = 0
+    try:
+        from knowledge_web import (derive_coderivation_edges,
+                                   _edge_derivation_enabled)
+        if _edge_derivation_enabled():
+            _edge_stats = derive_coderivation_edges(dry_run=dry_run)
+            edges_derived = _edge_stats.get("edges_appended", 0)
+            if edges_derived and verbose:
+                print(f"[evolver] derived {edges_derived} co_derived "
+                      f"knowledge edge(s)", file=sys.stderr)
+    except Exception as e:
+        log.debug("co-derivation edge sweep failed (non-fatal): %s", e)
+
     try:
         candidates = skills_needing_rewrite()
         rewrite_candidates = [s.id for s in candidates]
@@ -810,6 +826,7 @@ def run_skill_maintenance(
         "lessons_refought": lessons_refought,
         "contradictions_adjudicated": adjudicated,
         "nodes_promoted": nodes_promoted,
+        "knowledge_edges_derived": edges_derived,
     }
 
 

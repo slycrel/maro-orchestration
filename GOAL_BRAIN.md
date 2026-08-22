@@ -3797,3 +3797,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   done" RESOLVED — declined** (Jeremy: "we're past done means done" —
   the done≠achieved doctrine already encodes the sharper version; no
   prompt-rule codification).
+- **2026-08-21 — edge-traversal chunk SHIPPED (BACKLOG stack top; Jeremy's
+  (a) adjudication):** the measure-first checkbox reframed the build — all
+  2124 stored edges were the April lf- import (uniform relation/weight),
+  zero first-party edges ever, the sole first-party writer
+  (`record_skill_knowledge_edge`) had zero callers and targeted
+  untraversable `outcome:` pseudo-nodes, so one-hop expansion would have
+  changed structurally zero live recalls. Shipped both halves:
+  `derive_coderivation_edges` (deterministic co_derived edges from shared
+  `outcome:<id>` provenance already on node rows; maintenance cadence +
+  CLI; dead writer removed) and flag-gated one-hop expansion in
+  `query_knowledge` (`knowledge.edge_expansion` OFF-default per the A/B
+  gate, ON this box; damped `seed × weight × 0.5`, pool filters bind
+  neighbours, `KNOWLEDGE_EDGE_EXPANSION` event = A/B denominator,
+  `[linked]` marker). Live: 430 edges backfilled (485/572 fp nodes gained
+  ≥1; re-run appended 0 — idempotent on the real store); offline replay
+  over 120 recent goals: 4 recalls changed (3%) — conservative until the
+  490 candidates promote. 20 pins (tests/test_knowledge_edges.py); suite
+  green (10192 passed; one pre-existing-shaped centrality pin absorbed a
+  metric artifact — knowledge_web grew past the size normalizer, threshold
+  top-15%→18% with the instance recorded in the test). Basis: this
+  session's live probes + commit.

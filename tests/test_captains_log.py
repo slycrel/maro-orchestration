@@ -372,7 +372,11 @@ class TestEventTypes:
         # +1 (2026-08-15): REVISIT_CANDIDATE — §14h revisit mechanic: a
         # capability acquisition postdates a standing dead end whose reopen
         # condition it plausibly satisfies. A lead, never an auto-rerun.
-        assert len(EVENT_TYPES) == 89
+        # +2 (2026-08-21): KNOWLEDGE_EDGES_DERIVED + KNOWLEDGE_EDGE_EXPANSION
+        # — edge-traversal arc: co_derived edges minted from shared outcome
+        # provenance; one-hop expansion actually changed a recall injection
+        # (the A/B denominator for knowledge.edge_expansion).
+        assert len(EVENT_TYPES) == 91
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

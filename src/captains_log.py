@@ -110,6 +110,16 @@ HYPOTHESIS_PROMOTED = "HYPOTHESIS_PROMOTED"
 # skill-maintenance cadence; context.validation is passed/unjudged/skipped
 # (the SKILL_PROMOTED stamp contract).
 KNOWLEDGE_NODE_PROMOTED = "KNOWLEDGE_NODE_PROMOTED"
+# Edge-traversal arc (2026-08-21): co_derived edges minted between
+# first-party nodes sharing outcome provenance. Emitted by
+# knowledge_web.derive_coderivation_edges (skill-maintenance cadence +
+# `python3 -m knowledge derive-edges`) only when new edge rows landed.
+KNOWLEDGE_EDGES_DERIVED = "KNOWLEDGE_EDGES_DERIVED"
+# Edge-traversal arc (2026-08-21): one-hop edge expansion actually changed a
+# recall injection — a node reached goal context via a co-derivation edge
+# rather than its own lexical score. Emitted by inject_knowledge_for_goal;
+# the A/B denominator for knowledge.edge_expansion.
+KNOWLEDGE_EDGE_EXPANSION = "KNOWLEDGE_EDGE_EXPANSION"
 # World-facts slice 2: one event per run whose declared facts reached durable
 # stores (anecdotal → candidate nodes, hypotheses → observe_pattern).
 # Emitted by world_facts.land_facts at loop finalize; context carries counts.
@@ -364,7 +374,7 @@ EVENT_TYPES = {
     MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED, WORKER_REPORT_OMISSION,
     WORKER_DELEGATION_GAP,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
-    KNOWLEDGE_NODE_PROMOTED,
+    KNOWLEDGE_NODE_PROMOTED, KNOWLEDGE_EDGES_DERIVED, KNOWLEDGE_EDGE_EXPANSION,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
     CANON_PROMOTED,
     RULE_REFOUGHT, RULE_VERIFIED, LOG_ROTATED,

@@ -331,6 +331,13 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("rules", help="List active Stage 5 rules")
 
+    p_derive = sub.add_parser(
+        "derive-edges",
+        help="Derive co_derived edges between first-party knowledge nodes "
+             "sharing outcome provenance (deterministic, idempotent)")
+    p_derive.add_argument("--dry-run", action="store_true",
+                          help="Report what would be appended without writing")
+
     p_import = sub.add_parser("import-links", help="Import enriched posts from slycrel/link-farm")
     p_import.add_argument(
         "--url",
@@ -385,6 +392,13 @@ def main(argv: list[str] | None = None) -> None:
             for r in rules:
                 wa = f"  ⚠ {r.wrong_answer_count} wrong" if r.wrong_answer_count else ""
                 print(f"  {r.id}  {r.name}  ({r.use_count} uses){wa}")
+    elif args.cmd == "derive-edges":
+        from knowledge_web import derive_coderivation_edges
+        stats = derive_coderivation_edges(dry_run=args.dry_run)
+        verb = "would append" if args.dry_run else "appended"
+        print(f"{stats['pairs']} co-derivation pair(s) implied by sources; "
+              f"{verb} {stats['edges_appended']} edge row(s) "
+              f"({stats['edges_existing']} pair(s) already stored).")
     elif args.cmd == "import-links":
         import json as _json
         import urllib.request as _urllib

@@ -206,9 +206,7 @@ def upsert_knowledge_from_candidate(
     """
     from knowledge_web import (
         KnowledgeNode,
-        KnowledgeEdge,
         append_knowledge_node,
-        append_knowledge_edge,
         LINK_FARM_PREFIX,
         NODE_CANDIDATE,
         NODE_TYPES,
@@ -294,62 +292,19 @@ def upsert_knowledge_from_candidate(
 
 
 # ---------------------------------------------------------------------------
-# Skill knowledge edges
-# ---------------------------------------------------------------------------
-
-def record_skill_knowledge_edge(
-    skill_id: str,
-    skill_name: str,
-    outcome_id: str,
-    task_type: str,
-    success: bool,
-    *,
-    existing_nodes,
-) -> None:
-    """Record that a skill was used in an outcome (causal knowledge edge).
-
-    If there's a knowledge node for the skill, create an 'implements' edge
-    from the skill node to the outcome. This builds the skill effectiveness graph.
-    """
-    try:
-        from knowledge_web import KnowledgeEdge, append_knowledge_edge
-        from memory_ledger import _memory_dir
-
-        # Find an existing skill-related node by name similarity
-        skill_node = None
-        for node in existing_nodes:
-            if node.node_type in ("technique", "tool", "pattern"):
-                if _jaccard(skill_name, node.title) >= 0.5:
-                    skill_node = node
-                    break
-
-        if skill_node is None:
-            return  # No matching node — skip edge (don't create orphan edges)
-
-        relation = "supports" if success else "contradicts"
-        edge = KnowledgeEdge(
-            source_id=skill_node.node_id,
-            target_id=f"outcome:{outcome_id}",
-            relation=relation,
-            weight=0.8 if success else 0.4,
-        )
-        append_knowledge_edge(edge)
-        log.debug("knowledge_bridge: skill edge %s →[%s]→ outcome:%s",
-                  skill_node.node_id, relation, outcome_id)
-    except Exception as e:
-        log.debug("knowledge_bridge: skill edge failed (non-fatal): %s", e)
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+# (record_skill_knowledge_edge lived here until 2026-08-21 — removed as dead
+# code in the edge-traversal chunk: no caller ever passed skills_used, and
+# its edges targeted `outcome:<id>` pseudo-nodes no traversal could reach.
+# First-party edges are now derived from outcome provenance by
+# knowledge_web.derive_coderivation_edges.)
 
 def outcome_to_knowledge(
     outcome,
     *,
     adapter=None,
     dry_run: bool = False,
-    skills_used: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """K4 write path: extract and upsert knowledge from a completed outcome.
 
@@ -357,8 +312,6 @@ def outcome_to_knowledge(
         outcome:       Outcome dataclass from memory_ledger.
         adapter:       LLM adapter (optional — falls back to heuristic if None).
         dry_run:       If True, extract candidates but don't write.
-        skills_used:   Optional list of {"skill_id": ..., "skill_name": ..., "success": ...}
-                       dicts for recording skill effectiveness edges.
 
     Returns:
         Count of new knowledge nodes created (0 on error or dry_run).
@@ -441,21 +394,6 @@ def outcome_to_knowledge(
                     existing = load_knowledge_nodes(status=None)  # type: ignore[arg-type]
             except Exception as e:
                 log.debug("knowledge_bridge: upsert failed for %r: %s", title, e)
-
-        # Record skill knowledge edges
-        if skills_used:
-            for skill_info in skills_used:
-                try:
-                    record_skill_knowledge_edge(
-                        skill_id=skill_info.get("skill_id", ""),
-                        skill_name=skill_info.get("skill_name", ""),
-                        outcome_id=outcome_id,
-                        task_type=getattr(outcome, "task_type", "general"),
-                        success=skill_info.get("success", True),
-                        existing_nodes=existing,
-                    )
-                except Exception as e:
-                    log.debug("knowledge_bridge: skill edge failed: %s", e)
 
         if new_count:
             log.info("knowledge_bridge: +%d new knowledge nodes from outcome %s",

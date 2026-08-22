@@ -76,9 +76,50 @@ a natural first nominee for the subtraction audit (Vision/Deferred) if (b).
 **Direction adjudicated (Jeremy, 2026-08-21): (a)** — *"that's definitely
 something I'd like to see upgraded to use."* The A/B gate stands: traversal
 earns a default with recall evidence, not by decree.
-- [ ] Measure first: how many edges exist on the box, what relations, would
+- [x] Measure first: how many edges exist on the box, what relations, would
       any live recall have changed with one-hop expansion? Then wire
       relation-weighted expansion behind a flag and A/B against text-only.
+
+**Measured 2026-08-21, and the answer reframed the build.** All 2124 edges
+were lf-↔lf- from the one-time April link-farm import — relation uniformly
+`related`, weight uniformly 0.5, ZERO first-party edges, zero edges minted
+since April. The entry's "edges are WRITTEN" premise was formally true and
+practically false: `record_skill_knowledge_edge` (the only first-party
+writer) had zero callers — both `outcome_to_knowledge` call sites omitted
+`skills_used` — and its edges targeted `outcome:<id>` pseudo-nodes no
+traversal could reach anyway. Since the live recall lane excludes lf-
+nodes by decree, one-hop expansion would have changed **zero** recalls,
+structurally, forever. The read side needed a write side first.
+
+**SHIPPED 2026-08-21 (both halves + backfill):**
+- *Write:* `knowledge_web.derive_coderivation_edges` — deterministic,
+  zero-LLM, idempotent: `co_derived` edges between first-party nodes
+  sharing an `outcome:<id>` source (weight 0.5/0.7/0.9 by shared-outcome
+  count, max-wins per pair over the append-only store; lf- never
+  participates). Rides `run_skill_maintenance` beside candidate promotion
+  (`knowledge.edge_derivation_enabled`, ON default — no spend) + CLI
+  `python3 -m knowledge derive-edges`. Backfilled live: 430 edges from
+  provenance already on the node rows (485/572 first-party nodes gained
+  ≥1 edge; second run appended 0 — idempotency proven on the real store).
+  The dead `record_skill_knowledge_edge` + `skills_used` plumbing removed
+  (remove-don't-disable).
+- *Read:* one-hop expansion in `query_knowledge` behind
+  `knowledge.edge_expansion` (OFF default per the A/B gate; ON this box):
+  neighbours inherit `seed × weight × 0.5` when that beats their own
+  lexical score — surfaces lexically-distant siblings, never displaces a
+  stronger direct hit, never widens the eligible pool
+  (status/confidence/lf- filters bind neighbours too). Rendered
+  expansions stamp `KNOWLEDGE_EDGE_EXPANSION` (the A/B denominator) and
+  a `[linked]` marker.
+- *First offline readout* (120 recent real goals replayed, read-only,
+  both arms): expansion changed 4/120 recalls (3%), 4 distinct nodes
+  surfaced via edges — conservative as designed; coverage grows as the
+  490 candidate nodes promote (only 82 first-party nodes are ACTIVE
+  today). 20 pins in tests/test_knowledge_edges.py.
+- [ ] A/B against text-only recall on live traffic (the default-flip
+      gate): KNOWLEDGE_EDGE_EXPANSION events are the denominator; judge
+      whether edge-surfaced nodes correlate with better outcomes once
+      enough events accrue.
 
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 

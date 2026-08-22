@@ -4223,6 +4223,146 @@ def find_knowledge_node(node_id: str) -> Optional[KnowledgeNode]:
 
 
 # ---------------------------------------------------------------------------
+# Co-derivation edges — the first-party edge writer (edge-traversal arc,
+# 2026-08-21). Until this shipped, the only edges ever written were the
+# one-time lf- reference import: load_knowledge_edges had zero callers and
+# query_knowledge was pure TF-IDF, so the graph paid write cost and
+# collected list benefit. Edges are DERIVED deterministically from outcome
+# provenance already on the node rows (`sources: ["outcome:<id>"]`) — zero
+# LLM, idempotent, self-healing: re-running the sweep converges on the same
+# edge set the sources imply.
+# ---------------------------------------------------------------------------
+
+CODERIVATION_RELATION = "co_derived"
+_CODERIVATION_WEIGHT_BASE = 0.3
+_CODERIVATION_WEIGHT_STEP = 0.2
+_CODERIVATION_WEIGHT_CAP = 0.9
+# Damping for one-hop expansion: a neighbour inherits seed_score * weight *
+# damping, so it only outranks direct hits when lexical evidence is weak —
+# exactly the vocabulary-mismatch case the expansion exists for.
+EDGE_EXPANSION_DAMPING = 0.5
+
+
+def _coderivation_weight(shared_outcomes: int) -> float:
+    """Edge weight from co-observation count: 1 shared outcome = 0.5,
+    2 = 0.7, 3+ = 0.9. A pair repeatedly co-derived is stronger evidence."""
+    return min(_CODERIVATION_WEIGHT_CAP,
+               _CODERIVATION_WEIGHT_BASE
+               + _CODERIVATION_WEIGHT_STEP * max(1, shared_outcomes))
+
+
+def _edge_derivation_enabled() -> bool:
+    """Gate for the maintenance-cadence sweep (default ON — deterministic
+    local file work, no spend). Same quoted-"false" normalization as the
+    sibling killswitches (chunk-5a review F1)."""
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get("knowledge.edge_derivation_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
+    except Exception:
+        return True
+
+
+def _edge_expansion_enabled() -> bool:
+    """Gate for one-hop recall expansion (default OFF — behaviour-changing
+    for recall; earns a default via A/B evidence, decision 2026-08-21)."""
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get("knowledge.edge_expansion", False)
+        if isinstance(val, str):
+            return val.strip().lower() in ("true", "1", "yes", "on")
+        return val is True
+    except Exception:
+        return False
+
+
+def derive_coderivation_edges(*, dry_run: bool = False) -> Dict[str, int]:
+    """Mint ``co_derived`` edges between first-party nodes that share an
+    ``outcome:<id>`` source — nodes extracted from the same run are related
+    even when lexically distant.
+
+    Idempotent over the append-only store: an edge appends only when its
+    pair is new or its derived weight GREW (read side takes max per pair,
+    so superseding rows are additive, never rewrites). lf- reference nodes
+    never participate (decree 2026-08-02: reference data is not learned
+    knowledge).
+    """
+    nodes = load_knowledge_nodes(status="")  # all statuses — candidates too
+    fp = [n for n in nodes if not n.node_id.startswith(LINK_FARM_PREFIX)]
+
+    by_outcome: Dict[str, List[str]] = {}
+    for n in fp:
+        for src in n.sources or []:
+            if isinstance(src, str) and src.startswith("outcome:"):
+                by_outcome.setdefault(src, []).append(n.node_id)
+
+    pair_shared: Dict[tuple, int] = {}
+    for ids in by_outcome.values():
+        uniq = sorted(set(ids))
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                pair = (uniq[i], uniq[j])
+                pair_shared[pair] = pair_shared.get(pair, 0) + 1
+
+    # Existing co_derived weights, max-wins per unordered pair.
+    existing: Dict[tuple, float] = {}
+    for e in load_knowledge_edges():
+        if e.relation != CODERIVATION_RELATION:
+            continue
+        key = tuple(sorted((e.source_id, e.target_id)))
+        existing[key] = max(existing.get(key, 0.0), e.weight)
+
+    appended = 0
+    for pair, shared in sorted(pair_shared.items()):
+        weight = _coderivation_weight(shared)
+        if weight <= existing.get(pair, 0.0) + 1e-9:
+            continue
+        if not dry_run:
+            append_knowledge_edge(KnowledgeEdge(
+                source_id=pair[0], target_id=pair[1],
+                relation=CODERIVATION_RELATION, weight=weight))
+        appended += 1
+
+    stats = {
+        "pairs": len(pair_shared),
+        "edges_appended": appended,
+        "edges_existing": len(existing),
+    }
+    if appended and not dry_run:
+        try:
+            from captains_log import log_event, KNOWLEDGE_EDGES_DERIVED
+            log_event(
+                event_type=KNOWLEDGE_EDGES_DERIVED,
+                subject="co-derivation edge sweep",
+                summary=(f"Derived {appended} new co_derived edge(s) from "
+                         f"outcome provenance ({len(pair_shared)} pairs "
+                         f"implied by sources)."),
+                context=stats,
+            )
+        except Exception:
+            pass
+    return stats
+
+
+def _coderivation_adjacency() -> Dict[str, List[tuple]]:
+    """Adjacency map node_id -> [(neighbour_id, weight)], max weight per
+    unordered pair, co_derived edges only."""
+    best: Dict[tuple, float] = {}
+    for e in load_knowledge_edges():
+        if e.relation != CODERIVATION_RELATION:
+            continue
+        key = tuple(sorted((e.source_id, e.target_id)))
+        best[key] = max(best.get(key, 0.0), e.weight)
+    adj: Dict[str, List[tuple]] = {}
+    for (a, b), w in best.items():
+        adj.setdefault(a, []).append((b, w))
+        adj.setdefault(b, []).append((a, w))
+    return adj
+
+
+# ---------------------------------------------------------------------------
 # Query — TF-IDF ranked retrieval
 # ---------------------------------------------------------------------------
 
@@ -4234,6 +4374,7 @@ def query_knowledge(
     max_results: int = 5,
     min_confidence: float = 0.0,
     include_reference: bool = False,
+    expand_edges: Optional[bool] = None,
 ) -> List[KnowledgeNode]:
     """Query knowledge nodes by goal relevance (TF-IDF ranked).
 
@@ -4243,6 +4384,16 @@ def query_knowledge(
     unless ``include_reference=True``: they are third-party source material
     for research, not learned knowledge, and must not reach goal-context
     injection (decree 2026-08-02).
+
+    ``expand_edges`` (None = read `knowledge.edge_expansion`, default OFF):
+    one-hop co-derivation expansion — nodes linked by a co_derived edge to
+    a lexical hit inherit a damped share of its score
+    (seed * weight * EDGE_EXPANSION_DAMPING), so an edge can surface a
+    relevant-but-lexically-distant sibling without ever displacing a
+    stronger direct hit. Expansion never widens the eligible pool: a
+    neighbour still passes the same status/confidence/reference filters.
+    Nodes that entered or rose via an edge carry ``via_edge_from``
+    (seed node_id) for observability.
     """
     nodes = load_knowledge_nodes(domain=domain, node_type=node_type)
     if not include_reference:
@@ -4280,7 +4431,57 @@ def query_knowledge(
         scored.append((score, node))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    if expand_edges is None:
+        expand_edges = _edge_expansion_enabled()
+    if expand_edges:
+        scored = _expand_scored_via_edges(scored, max_results)
+
     return [node for _, node in scored[:max_results]]
+
+
+def _expand_scored_via_edges(scored: List[tuple],
+                             max_results: int) -> List[tuple]:
+    """One-hop co-derivation expansion over an already-scored, already-
+    filtered candidate list. Seeds = top-``max_results`` nodes with a
+    positive lexical score; a seed's neighbours (restricted to the same
+    eligible pool) inherit ``seed_score * edge_weight * damping`` when that
+    beats their own score. Boosted nodes get ``via_edge_from`` stamped."""
+    seeds = [(s, n) for s, n in scored[:max_results] if s > 0]
+    if not seeds:
+        return scored
+    try:
+        adjacency = _coderivation_adjacency()
+    except Exception:
+        return scored
+    if not adjacency:
+        return scored
+
+    own = {n.node_id: s for s, n in scored}
+    pool = {n.node_id: n for _, n in scored}
+    boosted: Dict[str, tuple] = {}  # node_id -> (score, seed_id)
+    for seed_score, seed in seeds:
+        for nb_id, weight in adjacency.get(seed.node_id, []):
+            if nb_id not in pool:
+                continue  # filtered out (status/confidence/lf-) — stays out
+            candidate = seed_score * weight * EDGE_EXPANSION_DAMPING
+            if (candidate > own.get(nb_id, 0.0)
+                    and candidate > boosted.get(nb_id, (0.0, ""))[0]):
+                boosted[nb_id] = (candidate, seed.node_id)
+
+    if not boosted:
+        return scored
+
+    merged: List[tuple] = []
+    for s, n in scored:
+        if n.node_id in boosted:
+            new_score, seed_id = boosted[n.node_id]
+            n.via_edge_from = seed_id  # instance attr, fresh per load
+            merged.append((new_score, n))
+        else:
+            merged.append((s, n))
+    merged.sort(key=lambda x: x[0], reverse=True)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -4306,9 +4507,13 @@ def inject_knowledge_for_goal(
     lines: List[str] = ["## Relevant Knowledge"]
     chars = 0
     applied_ids: List[str] = []
+    expanded_rendered: List[tuple] = []  # (node_id, seed_id)
     from mint_grounding import grounding_marker
     for node in nodes:
         entry = f"- [{node.node_type}] {node.title}: {node.description[:200]}"
+        _via = getattr(node, "via_edge_from", None)
+        if _via:
+            entry += " [linked]"  # reached context via a co-derivation edge
         # Slice-2a review r1 (QA lens): the lesson-injection surfaces render
         # the unsupported-claim marker; the NODE surface was the one
         # consumer that didn't — an advisory-promoted node with an
@@ -4322,9 +4527,31 @@ def inject_knowledge_for_goal(
         lines.append(entry)
         chars += len(entry)
         applied_ids.append(node.node_id)
+        if _via:
+            expanded_rendered.append((node.node_id, _via))
 
     if len(lines) <= 1:
         return ""
+    if expanded_rendered:
+        # The A/B denominator for knowledge.edge_expansion: this recall's
+        # injection actually differed from text-only ranking.
+        try:
+            from captains_log import log_event, KNOWLEDGE_EDGE_EXPANSION
+            log_event(
+                event_type=KNOWLEDGE_EDGE_EXPANSION,
+                subject=goal[:120],
+                summary=(f"{len(expanded_rendered)} node(s) reached goal "
+                         f"context via co-derivation edges."),
+                context={
+                    "expanded": [
+                        {"node_id": nid, "seed_id": sid}
+                        for nid, sid in expanded_rendered
+                    ],
+                    "rendered_ids": applied_ids,
+                },
+            )
+        except Exception:
+            pass
     # Track application — persisted (2026-07-29): the old in-place bump
     # mutated the deserialized copy and dropped it, so the receipt (and
     # the times_applied boost in query scoring) never accrued.
