@@ -286,8 +286,14 @@ func (s *Store) UnionVariantsIntoLesson(lessonText string, variants []string) er
 			lines := splitLines(raw)
 			changed := false
 			for i, line := range lines {
+				// UseNumber: this is a read-modify-WRITE of whole store rows —
+				// a plain Unmarshal would round every >2^53 numeric field
+				// through float64 on the rewrite (r4 2026-08-22, QA: the one
+				// trust-bearing decode that missed the r3 treatment).
+				dec := json.NewDecoder(strings.NewReader(line))
+				dec.UseNumber()
 				var row map[string]any
-				if json.Unmarshal([]byte(line), &row) != nil {
+				if dec.Decode(&row) != nil {
 					continue
 				}
 				canonical, _ := row["lesson"].(string)

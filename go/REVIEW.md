@@ -389,3 +389,41 @@ a third time: the round's HIGH lived in the previous round's fix.
    accepted: PORT.md now calls it a deliberate over-refusal.
 
 Full suite green, crossrt_smoke.sh (incl. tamper) PASS.
+
+## Round 4 — 2026-08-22, on the r3 fix layer (2ea5b2d2)
+
+1 lens (Expert QA), sonnet-medium fallback — the fixpoint-check round.
+The pattern held a FOURTH time: the round's one HIGH sat in r3's fix.
+
+### Verification Ledger
+
+1. **HIGH — the r3 switch to json.Decoder (for UseNumber) dropped
+   Unmarshal's full-consumption check** — VERIFIED (documented
+   Decoder.Decode semantics): a `{...}{...}` JSONL line imported its
+   first object silently in Go where Python's json.loads raises Extra
+   data and skips the line; decodeManifest carried the same defect from
+   birth on pack.json itself (unfixed sibling, correctly flagged).
+   **FIXED**: `decodeStrictJSONObject` — one value, UseNumber, then
+   dec.Token() must return io.EOF; scanRows skips such rows wholesale
+   (Python parity) and decodeManifest hard-refuses.
+   `TestImportRefusesTrailingDataRows` pins both, with a
+   trailing-whitespace negative control.
+2. **MEDIUM — UnionVariantsIntoLesson's read-modify-write decoded
+   without UseNumber** — VERIFIED: the rewrite re-marshals WHOLE store
+   rows, so any >2^53 numeric field on a row the union merely passed
+   through would round. **FIXED** (UseNumber decoder);
+   `TestUnionVariantsPreservesLargeIntegers` pins 2^53+1 surviving a
+   rewrite verbatim.
+3. QA confirmed sound, explicitly: the cappedReader ceiling (every byte
+   tar touches funnels through it; short-read/EOF passthrough correct;
+   only theoretical edge is an exactly-at-ceiling over-refusal — safe
+   direction), rowID's string report contract, and the file-order fix
+   (non-vacuous middle-position fixture).
+
+**FIXPOINT CALL (SAME-MODEL FALLBACK: sonnet-medium):** four rounds
+(4→2→2→1 lenses), every round's HIGH found in the previous round's fix
+and closed the same day with a must-detect pin; r4 surfaced no defect
+outside that one fix-regression class, and its fix (strict decode) is a
+mechanical tightening, not new surface. Residual risk is the named-
+divergence list in PORT.md, all refusal-direction. Full suite green,
+crossrt_smoke.sh (bidirectional tamper included) PASS.

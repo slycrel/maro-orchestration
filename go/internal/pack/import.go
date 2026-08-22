@@ -440,10 +440,8 @@ func scanRows(content string) []scannedRow {
 			out = append(out, scannedRow{err: err})
 			continue
 		}
-		dec := json.NewDecoder(strings.NewReader(line))
-		dec.UseNumber()
-		var row map[string]any
-		if dec.Decode(&row) != nil {
+		row, err := decodeStrictJSONObject(line)
+		if err != nil {
 			continue
 		}
 		out = append(out, scannedRow{row: row})

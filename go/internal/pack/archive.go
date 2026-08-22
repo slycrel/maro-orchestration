@@ -196,11 +196,28 @@ func decodeManifest(raw []byte) (map[string]any, error) {
 	if err := refuseLoneSurrogates(raw); err != nil {
 		return nil, fmt.Errorf("pack.json: %w", err)
 	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	m, err := decodeStrictJSONObject(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("pack.json: %w", err)
+	}
+	return m, nil
+}
+
+// decodeStrictJSONObject decodes exactly ONE JSON object with UseNumber
+// and refuses trailing data. Decoder.Decode alone reads one value and
+// ignores the rest — the r3 switch to it (for UseNumber) silently
+// dropped Unmarshal's full-consumption check, so `{...}{...}` rows
+// imported in Go where Python's json.loads raises Extra data (r4
+// 2026-08-22, QA HIGH; decodeManifest shared the defect from birth).
+func decodeStrictJSONObject(text string) (map[string]any, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
 	dec.UseNumber()
 	var m map[string]any
 	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("pack.json: %w", err)
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after JSON value")
 	}
 	return m, nil
 }

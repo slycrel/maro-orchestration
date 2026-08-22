@@ -76,3 +76,32 @@ func TestUnionVariantsRewritesOnlyTheTwin(t *testing.T) {
 		t.Fatalf("variant leaked into non-twin rows:\n%s", content)
 	}
 }
+
+// The variant-union rewrite re-marshals WHOLE store rows — a plain
+// float64 decode would silently round large integer fields on rows the
+// union merely passes through (r4 2026-08-22, QA).
+func TestUnionVariantsPreservesLargeIntegers(t *testing.T) {
+	ws := t.TempDir()
+	s := NewStore(ws)
+	path := s.TieredLessonsPath("medium")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	row := `{"lesson_id":"x","lesson":"the twin","times_applied":9007199254740993,"merged_variants":[]}`
+	if err := os.WriteFile(path, []byte(row+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UnionVariantsIntoLesson("the twin", []string{"a rationale"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "9007199254740993") {
+		t.Fatalf("large integer rounded on rewrite: %s", raw)
+	}
+	if !strings.Contains(string(raw), "a rationale") {
+		t.Fatalf("variant not unioned: %s", raw)
+	}
+}

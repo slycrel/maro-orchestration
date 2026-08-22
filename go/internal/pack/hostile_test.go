@@ -534,6 +534,37 @@ func TestImportReportPreservesFileOrder(t *testing.T) {
 	}
 }
 
+// Decoder.Decode reads one value and ignores the rest — a `{...}{...}`
+// row must be refused like Python's json.loads "Extra data", not import
+// its first half with no audit trail (r4 2026-08-22, QA HIGH).
+func TestImportRefusesTrailingDataRows(t *testing.T) {
+	rules := `{"rule_id":"a","rule":"clean rule","domain":"d"}` + "\n" +
+		`{"rule_id":"b","rule":"smuggler","domain":"d"}{"rule_id":"c","rule":"payload","domain":"d"}` + "\n"
+	packPath := craftPack(t, []map[string]any{
+		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 2},
+	}, map[string]string{"artifacts/memory/standing_rules.jsonl": rules})
+	rep, err := Import(ImportOpts{PackPath: packPath, Label: "h",
+		Target: t.TempDir(), AllowUnreviewed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The trailing-data line skips wholesale (Python parity: JSONDecodeError
+	// → continue, no report row) — neither "b" nor "c" may land.
+	if len(rep.RulesDemotedToHypotheses) != 1 ||
+		rep.RulesDemotedToHypotheses[0]["rule_id"] != "a" {
+		t.Fatalf("trailing-data row not refused wholesale: %v", rep.RulesDemotedToHypotheses)
+	}
+
+	// The manifest sibling: pack.json with trailing data is a hard refusal.
+	if _, err := decodeStrictJSONObject(`{"pack_format": 1}{}`); err == nil ||
+		!strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("manifest trailing data accepted: %v", err)
+	}
+	if _, err := decodeStrictJSONObject(`{"pack_format": 1}` + "\n \n"); err != nil {
+		t.Fatalf("trailing whitespace falsely refused: %v", err)
+	}
+}
+
 // Explicit `provenance_gate_enabled: null` — pinned divergence: Go's
 // config.Get[any] falls back to the default (the nil interface fails the
 // type assertion), so the gate stays ON; Python's config.get returns
