@@ -1,34 +1,50 @@
 {
-  "src/benchmark_isolation.py::_identity_part::max_chars=20": {
-    "count": 1,
-    "why": "Filesystem path-component length for the run-id part of a benchmark cell directory name \u2014 structural filename bound, not evidence truncation."
-  },
-  "src/benchmark_isolation.py::_identity_part::max_chars=40": {
-    "count": 2,
-    "why": "Filesystem path-component length for run/cell identity parts \u2014 structural filename bound, not evidence truncation."
-  },
-  "src/benchmark_isolation.py::_identity_part::max_chars=64": {
-    "count": 1,
-    "why": "Filesystem path-component length for the cell-id directory name \u2014 structural filename bound, not evidence truncation."
-  },
-  "src/web_fetch.py::_jina_fetch::max_chars=8000": {
-    "count": 1,
-    "why": "Tweet-thread fetch: a tweet plus replies is short-form by nature; the 20k page default is sized for articles. 8k is a generous breaker for this content class, and the X lane falls through to other fetch strategies rather than truncating silently."
-  },
-  "src/web_fetch.py::_html_to_text::max_chars=8000": {
-    "count": 1,
-    "why": "Same tweet lane as the _jina_fetch override one strategy up \u2014 direct-fetch fallback for short-form tweet content under the article-sized 20k default."
-  },
-  "src/backchain.py::safe_str::max_len=300": {
-    "count": 2,
-    "why": "Schema-shape bound on LLM-emitted JSON fields (condition/probe): the model is prompted for short fields and safe_str is unbounded by default \u2014 the cap enforces the asked-for shape against runaway output, it does not cut our own evidence."
-  },
-  "src/reanchor.py::safe_str::max_len=500": {
-    "count": 1,
-    "why": "Schema-shape bound on the LLM-emitted drift_summary field \u2014 same class as backchain's safe_str bounds: enforcing the prompted short-field shape on untrusted model output."
-  },
-  "src/reanchor.py::safe_str::max_len=800": {
-    "count": 1,
-    "why": "Schema-shape bound on the LLM-emitted anchor_note field, which is re-injected into ancestry context \u2014 bounds untrusted model output to its prompted shape."
-  }
+ "src/backchain.py::safe_str::max_len=300": {
+  "count": 2,
+  "why": "Schema-shape bound on LLM-emitted JSON fields (condition/probe): the model is prompted for short fields and safe_str is unbounded by default \u2014 the cap enforces the asked-for shape against runaway output, it does not cut our own evidence."
+ },
+ "src/benchmark_isolation.py::_identity_part::max_chars=20": {
+  "count": 1,
+  "why": "Filesystem path-component length for the run-id part of a benchmark cell directory name \u2014 structural filename bound, not evidence truncation."
+ },
+ "src/benchmark_isolation.py::_identity_part::max_chars=40": {
+  "count": 2,
+  "why": "Filesystem path-component length for run/cell identity parts \u2014 structural filename bound, not evidence truncation."
+ },
+ "src/benchmark_isolation.py::_identity_part::max_chars=64": {
+  "count": 1,
+  "why": "Filesystem path-component length for the cell-id directory name \u2014 structural filename bound, not evidence truncation."
+ },
+ "src/harness_optimizer.py::safe_str::max_len=200": {
+  "count": 1,
+  "why": "Schema-shape bound on an LLM-emitted harness-proposal JSON field \u2014 same class as backchain/reanchor safe_str bounds: enforces the prompted short-field shape against runaway model output. NOTE: these four calls were dead-on-arrival TypeErrors (max_length= vs safe_str's max_len=) until the 2026-08-21 review caught the misspelling."
+ },
+ "src/harness_optimizer.py::safe_str::max_len=300": {
+  "count": 1,
+  "why": "Schema-shape bound on an LLM-emitted harness-proposal JSON field \u2014 same class as backchain/reanchor safe_str bounds: enforces the prompted short-field shape against runaway model output. NOTE: these four calls were dead-on-arrival TypeErrors (max_length= vs safe_str's max_len=) until the 2026-08-21 review caught the misspelling."
+ },
+ "src/harness_optimizer.py::safe_str::max_len=50": {
+  "count": 1,
+  "why": "Schema-shape bound on an LLM-emitted harness-proposal JSON field \u2014 same class as backchain/reanchor safe_str bounds: enforces the prompted short-field shape against runaway model output. NOTE: these four calls were dead-on-arrival TypeErrors (max_length= vs safe_str's max_len=) until the 2026-08-21 review caught the misspelling."
+ },
+ "src/harness_optimizer.py::safe_str::max_len=500": {
+  "count": 1,
+  "why": "Schema-shape bound on an LLM-emitted harness-proposal JSON field \u2014 same class as backchain/reanchor safe_str bounds: enforces the prompted short-field shape against runaway model output. NOTE: these four calls were dead-on-arrival TypeErrors (max_length= vs safe_str's max_len=) until the 2026-08-21 review caught the misspelling."
+ },
+ "src/reanchor.py::safe_str::max_len=500": {
+  "count": 1,
+  "why": "Schema-shape bound on the LLM-emitted drift_summary field \u2014 same class as backchain's safe_str bounds: enforcing the prompted short-field shape on untrusted model output."
+ },
+ "src/reanchor.py::safe_str::max_len=800": {
+  "count": 1,
+  "why": "Schema-shape bound on the LLM-emitted anchor_note field, which is re-injected into ancestry context \u2014 bounds untrusted model output to its prompted shape."
+ },
+ "src/web_fetch.py::_html_to_text::max_chars=8000": {
+  "count": 1,
+  "why": "Same tweet lane as the _jina_fetch override one strategy up \u2014 direct-fetch fallback for short-form tweet content under the article-sized 20k default."
+ },
+ "src/web_fetch.py::_jina_fetch::max_chars=8000": {
+  "count": 1,
+  "why": "Tweet-thread fetch: a tweet plus replies is short-form by nature; the 20k page default is sized for articles. 8k is a generous breaker for this content class, and the X lane falls through to other fetch strategies rather than truncating silently."
+ }
 }

@@ -3885,15 +3885,39 @@ capture**, which is what makes the rung amortize instead of evaporate.
     bounds; lf- import excerpt = store decision, now commented).
   - NEW structural tripwire `tests/test_budget_override_discipline.py`
     + `tests/data/budget_override_registry.json`: AST-scans call-site
-    literal budget kwargs (max_chars/max_chars_per_entry/max_len);
-    every override needs a registered non-empty "why" — the recall-600
-    class (unregistered override silently starving a consumer) can't
-    land unnoticed again. Redundant overrides removed (director 1200,
-    recall playbook 800, team 1000 — each restated the callee's
-    default). Count caps (max_results/max_entries) = named v1 upgrade
-    edge, deliberately out of scope.
+    literal budget kwargs (max_chars/max_chars_per_entry/max_len/
+    max_length); every override needs a registered non-empty "why" —
+    the recall-600 class (unregistered override silently starving a
+    consumer) can't land unnoticed again. Redundant overrides removed
+    (director 1200, recall playbook 800, team 1000 — each restated the
+    callee's default). Count caps (max_results/max_entries) = named v1
+    upgrade edge, deliberately out of scope.
+  - **Review round same day (4 lenses, sonnet-medium fallback —
+    `docs/history/2026-08-21-caps-sweep-review.md`):** all-real round.
+    Fixed: negative control now drives the REAL `_scan()` (temp tree +
+    subpackage, rglob); `probe_command` re-bounded (marked clip 2000 —
+    unbounded LLM field into a forever-log was the opposite failure);
+    harness_optimizer's `max_length=` kwargs were latent **TypeErrors**
+    (safe_str takes `max_len`) — fixed + registered; navigator signals
+    lost their [:80]-starved duplicate block_reason; inspector comment
+    re-traced to the real upstream bound (VERDICT_PROSE_CAP);
+    `tests/test_caps_sweep.py` boundary pins added (behavioral for
+    planner docs / retry hint / probe receipts, source pins for buried
+    sites); goal previews now marked clips.
 
   **Still open (the live remainder):**
+  - **Positional-clip-value tranche (review 2026-08-21):** the override
+    tripwire polices budget KWARGS; the value handed positionally to
+    `clip(text, N)` is unpoliced (~150 sites) — a future `clip(x, 50)`
+    lands unflagged, and `max_chars=_CAP` name-binding is the same
+    one-assignment evasion. Wants its own adjudication pass extending
+    the registry to clip literals (or a named-constant convention).
+  - **Single-owner defaults still unmeasured (review 2026-08-21):**
+    `memory_bridge.format_worker_memory_block` (1200) and
+    `playbook.inject_playbook` (800 — seed alone overflowed it per V6;
+    live playbook ~2.6k chars, ranked selection so top entries survive).
+    Both now carry budget notes pointing here; each wants a distribution
+    pass before the number moves.
   - **STORE retention decision (Jeremy's):**
     `memory_ledger.compress_old_outcomes` (120/600) is now
     load-bearing — outcome rows carry real evidence and

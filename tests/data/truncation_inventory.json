@@ -46,7 +46,6 @@
  "src/loop_blocked.py::block_reason::60": 2,
  "src/loop_blocked.py::reason::200": 1,
  "src/loop_blocked.py::stuck_reason::200": 1,
- "src/loop_blocked.py::stuck_reason::80": 1,
  "src/loop_parallel.py::stuck_reason::80": 1,
  "src/loop_parallel.py::summary::80": 3,
  "src/loop_post_step.py::_d_why::160": 1,

@@ -3901,3 +3901,18 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   production budget. Records:
   `docs/history/2026-08-21-edge-review-r3.md`. Basis: verified against
   live-store censuses before landing the guards.
+- **2026-08-21 — caps sweep SHIPPED (`e484f5e4`) + review round fixed to
+  green:** Jeremy's fragility decree executed — truncation-audit tranche
+  2 burned down (inventory 110 → 100, every fix distribution-backed:
+  probe receipts self-censored at 13%, retry hints cut 93% of real block
+  reasons, operator docs majority-invisible to decompose) + NEW
+  budget-override tripwire (registry with mandatory written "why" per
+  call-site literal). Same-day 4-lens review (sonnet-medium fallback):
+  all-real round — flagship catch was harness_optimizer's `max_length=`
+  kwargs being latent TypeErrors; also re-bounded `probe_command`
+  (unbounded LLM field into a forever-log), gave the negative control
+  the REAL scanner, added `tests/test_caps_sweep.py` boundary pins.
+  Named upgrade edges: positional `clip(x, N)` values unpoliced (~150
+  sites), memory_bridge/playbook single-owner defaults unmeasured.
+  Records: `docs/history/2026-08-21-caps-sweep-review.md`. Basis:
+  distributions measured from this box's live workspace before each fix.

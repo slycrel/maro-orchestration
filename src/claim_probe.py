@@ -29,6 +29,7 @@ import shlex
 import textwrap
 from typing import List
 
+from context_budget import clip
 from llm_parse import safe_str
 
 log = logging.getLogger("maro.claim_probe")
@@ -268,13 +269,13 @@ def probe_contested_claims(claims: list) -> list:
             )
             probe_exit = result.returncode
             combined = (result.stdout or "") + (result.stderr or "")
-            # The receipt behind a DISMISSED_BY_PROBE verdict flip. The old
-            # [:400] censored 13% of live receipts at the cap (caps sweep
-            # 2026-08-21: n=447, median 30, 57 at cap — true tail unknowable
-            # because the cap destroyed it). clip() marks any cut; the
-            # verdict itself rides the exit code, not this text.
-            from context_budget import clip as _clip
-            probe_out = _clip(combined, 2000)
+            # The receipt behind a DISMISSED_BY_PROBE verdict flip. Live
+            # receipts (measured at the OLD tighter 300 emit re-cut, caps
+            # sweep 2026-08-21: n=447, median 30, 57 saturated) had a
+            # cap-censored tail — the true over-400 rate is unknowable
+            # because the cap destroyed the metric. clip() marks any cut;
+            # the verdict itself rides the exit code, not this text.
+            probe_out = clip(combined, 2000)
             if result.returncode == 0:
                 _why_insufficient = probe_insufficient_for_numbers(
                     safe_str(claim.get("claim", "")), cmd)
@@ -332,13 +333,19 @@ def _emit_claim_probed(claim: dict, cmd: str, probe_status: str,
                 "reviewer_verdict": safe_str(claim.get("original_verdict")
                                               or claim.get("verdict", "")),
                 "final_verdict": safe_str(claim.get("verdict", "")),
-                # Whole command — it is the replay handle for re-running the
-                # probe; a cut command is un-runnable (caps sweep 2026-08-21).
-                "probe_command": cmd,
+                # The replay handle for re-running the probe — a cut command
+                # is un-runnable, but cmd is LLM-emitted (prompted to be a
+                # single line, unenforced) and this log is append-forever, so
+                # it gets a generous marked breaker, not no bound (review
+                # 2026-08-21: unbounded was the opposite failure mode).
+                "probe_command": clip(cmd, 2000),
                 "probe_status": probe_status,
                 "probe_exit_code": probe_exit,
-                # Already bounded (marked clip) at capture — a second cut here
-                # was eating 13% of receipts on the calibration surface.
+                # Already bounded (marked clip) at capture — the old [:300]
+                # re-cut here saturated 57/447 live receipts (13%) on the
+                # calibration surface. Written-only as of 2026-08-21: no
+                # consumer reads this field back into a prompt (verdicts ride
+                # probe_status); re-check budgets before wiring one that does.
                 "probe_output_preview": probe_out,
             },
         )

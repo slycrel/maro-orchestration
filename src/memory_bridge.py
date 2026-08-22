@@ -422,6 +422,12 @@ def format_worker_memory_block(
     """Format recalled items + optional parent goal_brain summary as an
     injectable prompt block for workers, capped at max_chars total.
 
+    Budget note (caps sweep review 2026-08-21): with director.py's redundant
+    override removed, this default is the SINGLE owner of the worker-memory
+    window — and 1200 is unmeasured. It wants a distribution pass of its own
+    (BACKLOG'd under the truncation-audit arc); re-measure HERE rather than
+    re-adding call-site literals.
+
     Uses memory_port.format_block for the lessons portion, then prepends the
     goal_brain summary (if any) and re-truncates the combined block so the
     total never exceeds max_chars — same truncate-on-newline behavior as

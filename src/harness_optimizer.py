@@ -273,14 +273,14 @@ def _llm_analyze_harness(
 
     proposals: List[HarnessProposal] = []
     for p in raw_proposals[:6]:
-        target = safe_str(p.get("target", ""), max_length=50)
+        target = safe_str(p.get("target", ""), max_len=50)
         if target not in harness_texts:
             continue
         proposals.append(HarnessProposal(
             target=target,
-            original_clause=safe_str(p.get("original_clause", ""), max_length=300),
-            proposed_change=safe_str(p.get("proposed_change", ""), max_length=500),
-            failure_pattern=safe_str(p.get("failure_pattern", ""), max_length=200),
+            original_clause=safe_str(p.get("original_clause", ""), max_len=300),
+            proposed_change=safe_str(p.get("proposed_change", ""), max_len=500),
+            failure_pattern=safe_str(p.get("failure_pattern", ""), max_len=200),
             confidence=float(max(0.0, min(1.0, p.get("confidence", 0.5)))),
         ))
     return proposals

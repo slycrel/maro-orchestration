@@ -182,7 +182,10 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     "converging": _is_converging(_fps),
                     "sibling_fail_rate": round(_sibling_failure_rate(step_outcomes), 2)
                     if step_outcomes else 0.0,
-                    "block_reason": outcome.get("stuck_reason", "blocked")[:80],
+                    # No block_reason here: the full value already rides the
+                    # block_reason= parameter above — the old [:80] duplicate
+                    # fed the navigator a second, starved copy of the same
+                    # failure (review 2026-08-21, caps sweep).
                 },
                 turn_index=iteration,
             )

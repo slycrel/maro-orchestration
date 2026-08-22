@@ -347,6 +347,14 @@ def parse_entries(text: str) -> List[dict]:
 def inject_playbook(*, max_chars: int = 800) -> str:
     """Ranked playbook selection for context injection.
 
+    Budget note (caps sweep review 2026-08-21): with recall.py's redundant
+    override removed, this default is the SINGLE owner of the playbook
+    window — and 800 is unmeasured (the V6 battery showed the seed alone
+    overflowed it; the live playbook runs ~2.6k chars). Selection is ranked,
+    so 800 keeps the top entries rather than silently cutting mid-entry,
+    but the value wants its own distribution pass — BACKLOG'd under the
+    truncation-audit arc. Do not re-add call-site literals; re-measure HERE.
+
     Priority: learned entries first (newest first — file position is
     append order), then seed entries in file order; exact duplicates
     (normalized core) dropped. Fills the budget greedily and renders

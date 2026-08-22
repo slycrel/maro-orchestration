@@ -471,6 +471,12 @@ def run_llm_council(
 # Kept bounded rather than removed: a pathological step that dumps megabytes
 # should not blow up the call. 4000 moves the truncation from 85% of
 # payloads to 5%, and those 5% are still marked honestly below.
+#
+# Shares its value AND its provenance (the step-result distribution) with
+# context_budget.DEFAULT_ENTRY_CAP. Deliberately separate names — this one
+# is the gate's evidence window, that one is the generic per-entry budget —
+# but if a re-measurement moves one, re-derive the other in the same commit
+# (caps sweep review 2026-08-21: two owners of one number is how caps drift).
 _REVIEW_STEP_CUT = 4000
 
 

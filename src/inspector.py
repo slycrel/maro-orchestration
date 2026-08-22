@@ -579,14 +579,17 @@ def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> Optio
         return None
 
     try:
-        # The judge scores goal-match on this text; step results run median
-        # 1,180 / p99 4,671 chars, so the old [:400] graded a third of a
-        # typical result (caps sweep 2026-08-21). Ride the gate's measured
-        # evidence window; clip() marks any cut.
+        # The judge scores goal-match on this text. The production caller
+        # (inspect_session) passes outcome["summary"], which closure_verify
+        # already bounds at VERDICT_PROSE_CAP (2000, marked) — so the real
+        # governing bound is upstream; _REVIEW_STEP_CUT (4000) is a generous
+        # ceiling above it, not a fresh measurement of this field (review
+        # 2026-08-21). The old [:400] cut even the upstream-bounded text in
+        # half. Goal is clipped (marked) at an identity-preview width.
         from context_budget import clip as _clip
         from quality_gate import _REVIEW_STEP_CUT
         prompt = (
-            f"Goal: {goal[:200]}\n"
+            f"Goal: {_clip(goal, 200)}\n"
             f"Result: {_clip(result_summary, _REVIEW_STEP_CUT)}\n\n"
             "On a scale of 0.0 to 1.0, how well does this result match the stated goal? "
             "Reply ONLY with a number."
@@ -695,10 +698,10 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
                 + ("" if achieved is None else
                    (" (goal verified achieved)" if achieved else " (goal judged NOT achieved)"))
                 + "\n"
-                # Same measured window as the alignment judge above — the
-                # old [:200] showed the notes model a sixth of a typical
-                # result (caps sweep 2026-08-21).
-                f"Goal (truncated): {goal[:100]}\n"
+                # Same window rationale as the alignment judge above (the
+                # field is upstream-bounded at VERDICT_PROSE_CAP; this is a
+                # generous marked ceiling, and the old [:200] cut it 10x).
+                f"Goal: {_clip(goal, 100)}\n"
                 f"Result: {_clip(summary, _REVIEW_STEP_CUT)}\n"
                 f"Friction signals: {[s.signal_type for s in friction_signals]}\n"
                 f"Alignment score: {alignment_score:.2f}"
