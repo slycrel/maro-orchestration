@@ -386,14 +386,37 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	if target < 0 {
 		return fmt.Errorf("stamp outcome verdict: no row for loop %s", loopID)
 	}
+	// Re-stamp honesty (Jeremy decree 2026-08-10: corrections may flip
+	// a verdict "but be honest about it and note they were failures at
+	// run time"): overwriting an existing judged verdict preserves the
+	// superseded one on the row itself. Only fires on a real re-stamp
+	// of a judged row — the first verdict landing writes no history.
 	if achieved != nil {
+		if prior, judged := row["goal_achieved"]; judged {
+			hist, _ := row["verdict_history"].([]any)
+			row["verdict_history"] = append(hist, map[string]any{
+				"goal_achieved":           prior,
+				"goal_verdict_source":     row["goal_verdict_source"],
+				"goal_verdict_at":         row["goal_verdict_at"],
+				"goal_verdict_confidence": row["goal_verdict_confidence"],
+				"superseded_at":           nowISO(),
+				"superseded_by":           source,
+			})
+		}
 		row["goal_achieved"] = *achieved
 	}
 	row["goal_verdict_source"] = source
+	// When the verdict landed: the row's own ts is record time; without
+	// this the framing→verdict delay — the flow number the learning
+	// pipeline divides by — is unmeasurable (Python chunk B 2026-07-31;
+	// adversarial routing r3). Unjudged stamps get it too.
+	row["goal_verdict_at"] = nowISO()
+	// nil confidence LEAVES an existing key untouched — row-stamp
+	// semantics (Python: only writes when provided), deliberately
+	// DIFFERENT from runs.StampVerdict's metadata stamp where nil POPS:
+	// that one is a full-replacement verdict tuple, this one is a merge.
 	if confidence != nil {
 		row["goal_verdict_confidence"] = *confidence
-	} else {
-		delete(row, "goal_verdict_confidence")
 	}
 	patched, err := json.Marshal(row)
 	if err != nil {
@@ -404,5 +427,9 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp) // don't strand the temp beside the intact ledger
+		return err
+	}
+	return nil
 }

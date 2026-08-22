@@ -184,8 +184,10 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 		t.Fatalf("loopB row must be untouched: %v", rows[1])
 	}
 
-	// Unjudged stamp (nil, nil): source updates, prior verdict survives,
-	// confidence key REMOVED, not zeroed.
+	// Unjudged stamp (nil, nil): source + goal_verdict_at update, prior
+	// verdict AND its confidence survive untouched (row-stamp merge
+	// semantics — Python parity; runs.StampVerdict's metadata stamp is
+	// the full-replacement one where nil pops).
 	if err := r.StampOutcomeVerdict("loopA", nil, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -197,10 +199,77 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 	if first["goal_achieved"] != true {
 		t.Fatalf("nil achieved must not erase a prior verdict: %v", first)
 	}
-	if _, has := first["goal_verdict_confidence"]; has {
-		t.Fatalf("nil confidence must remove the key: %v", first)
+	if first["goal_verdict_confidence"] != 0.85 {
+		t.Fatalf("nil confidence must leave the prior value untouched: %v", first)
+	}
+	if s, _ := first["goal_verdict_at"].(string); s == "" {
+		t.Fatalf("every stamp records WHEN the verdict landed: %v", first)
+	}
+	// An unjudged re-stamp writes NO history (nothing was superseded).
+	if _, has := first["verdict_history"]; has {
+		t.Fatalf("unjudged re-stamp must not write history: %v", first)
 	}
 	if err := r.StampOutcomeVerdict("missing", &yes, SourceClosure, nil); err == nil {
 		t.Fatalf("missing row must error, not silently no-op")
+	}
+}
+
+// TestStampOutcomeVerdictNewestDuplicateAndHistory: two rows SHARING a
+// loop_id — the stamp must land on the newest only (a flipped scan
+// direction or dropped break would pass every distinct-id fixture, r3
+// Skeptic); and a judged-over-judged re-stamp preserves the superseded
+// verdict in verdict_history (Jeremy decree 2026-08-10).
+func TestStampOutcomeVerdictNewestDuplicateAndHistory(t *testing.T) {
+	ws := t.TempDir()
+	r := New(ws)
+	for _, status := range []string{"stuck", "done"} {
+		if _, err := r.WriteOutcome(Outcome{Goal: "g", Status: status, LoopID: "dup"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	no := false
+	if err := r.StampOutcomeVerdict("dup", &no, SourceClosure, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var oldRow, newRow map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &oldRow); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &newRow); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := oldRow["goal_achieved"]; has {
+		t.Fatalf("stamp landed on the OLDER duplicate: %v", oldRow)
+	}
+	if newRow["goal_achieved"] != false {
+		t.Fatalf("newest duplicate must carry the verdict: %v", newRow)
+	}
+	// Judged-over-judged re-stamp (a correction): history preserves the
+	// superseded verdict, honestly.
+	yes := true
+	conf := 0.7
+	if err := r.StampOutcomeVerdict("dup", &yes, SourceNowVerify, &conf); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	lines = strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if err := json.Unmarshal([]byte(lines[1]), &newRow); err != nil {
+		t.Fatal(err)
+	}
+	if newRow["goal_achieved"] != true {
+		t.Fatalf("re-stamp must apply the correction: %v", newRow)
+	}
+	hist, _ := newRow["verdict_history"].([]any)
+	if len(hist) != 1 {
+		t.Fatalf("superseded verdict must be preserved in history: %v", newRow)
+	}
+	entry, _ := hist[0].(map[string]any)
+	if entry["goal_achieved"] != false || entry["superseded_by"] != SourceNowVerify {
+		t.Fatalf("history entry must carry the old verdict + superseder: %v", entry)
 	}
 }

@@ -512,13 +512,29 @@ direction).
   sources are shared record.Source* constants; and the CLI's routing
   block is extracted (routeLane) so classify-usage extraction is
   pinned with a real nonzero value.
+  Adversarial r3 (same day): StampOutcomeVerdict gained the two
+  Python behaviors the first port dropped — goal_verdict_at on every
+  stamp (the framing→verdict delay the learning pipeline divides by)
+  and verdict_history on judged-over-judged re-stamps (2026-08-10
+  re-stamp-honesty decree: corrections preserve the superseded verdict
+  on the row); nil confidence now LEAVES an existing row value
+  untouched (Python merge semantics — deliberately different from
+  runs.StampVerdict's full-replacement stamp where nil pops, both
+  matching their Python owners); a failed row stamp writes a durable
+  "outcome_row_stamp_failed" run-dir row beside the terminal warning
+  (a silent failure recreates the headline bug behind a rarer
+  trigger); verdictRationale strips <think> traces before recovery
+  (jsonx.StripThink — Go-stricter, the Python sibling shares the gap);
+  the ledger rewrite removes its temp file on a failed rename.
   Named residuals: the answer summary on the row is clipped but
   unscrubbed (Python parity — same residual as the loop's row, named
   there too); a crash between WriteOutcome and Finalize leaves a
   terminal row beside a "running" metadata.json (same window the loop
   has; recall's InterruptStatuses softens it); prose-BEFORE-JSON in a
   judge reply returns the whole text from verdictRationale, JSON
-  included (Python parity, named in the function doc); the
+  included (Python parity, named in the function doc); the row stamp
+  does not retry transient I/O errors (Python's max_attempts DEFAULTS
+  to 1 too — its retry knob is unported until a caller needs it); the
   memory-provenance advisory marker (_mark_memory_provenance) is
   unported with its stores — returns with the memory tranche. Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard

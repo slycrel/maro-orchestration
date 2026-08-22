@@ -1572,3 +1572,43 @@ Verification ledger:
 Mutations M23-M27 all DETECTED first try. Flagship 16-for-16: the
 headline HIGH (row never verdict-stamped for the loop lane) sits in the
 newest layer — the row schema this tranche extended.
+
+## Routing tranche — adversarial r3 (2026-08-22, 1 lens, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff c6fc3137..45079a5b (the r2 fix layer). Verdict: CONTESTED — 1
+verified HIGH in the newest code (the ledger-rewrite port), fixed same
+round.
+
+Verification ledger:
+- VERIFIED (HIGH): StampOutcomeVerdict dropped goal_verdict_at (the
+  timestamp Python's own comment calls load-bearing for the learning
+  pipeline's framing→verdict delay) and the verdict_history re-stamp
+  honesty block (2026-08-10 decree), with neither named as a residual.
+  Fixed: both ported; verify-before-fix also caught a THIRD parity bug
+  the reviewer missed — my delete-on-nil confidence was wrong (Python's
+  row stamp MERGES: nil leaves an existing key; only runs.StampVerdict's
+  full-replacement stamp pops) — fixed and the distinction documented
+  on both functions. Pins: TestStampOutcomeVerdictNewestDuplicateAndHistory
+  + extended nil-semantics pin; mutations M28 (history), M31
+  (verdict_at) DETECTED.
+- VERIFIED (MED, half): a failed row stamp left only a terminal
+  warning — the headline bug behind a rarer trigger. Fixed: durable
+  "outcome_row_stamp_failed" run-dir row. The retry half of the finding
+  OVER-CLAIMED: Python's max_attempts defaults to 1 (no retry by
+  default) — retry knob named as residual instead, not ported.
+- VERIFIED (MED): no duplicate-loop_id fixture — a flipped scan
+  direction passed every distinct-id test. Fixed: two-rows-one-loop_id
+  pin; mutation M29 (oldest-wins flip) DETECTED.
+- VERIFIED (LOW): verdictRationale walked raw content while its
+  sibling jsonx.Object strips <think> traces — a trace could become the
+  durable verdict summary. Fixed: jsonx.StripThink exported + wired
+  (Go-stricter, Python sibling shares the gap, named); M30 DETECTED.
+- VERIFIED (LOW): orphaned .tmp on rename failure. Fixed: removed on
+  the error path.
+- NOTE (verified-safe by the reviewer, quoted): torn-tail framing,
+  unparseable-line preservation, lock coverage, and Split/Join framing
+  round-trip all traced clean — the rewrite composes with
+  AppendRawLine's tail check correctly.
+
+Mutations M28-M31 all DETECTED first try. Flagship 17-for-17 (the HIGH
+sits in StampOutcomeVerdict — the newest function in the port).

@@ -419,3 +419,15 @@ func TestVerifyNowScrubBeforeClip(t *testing.T) {
 		t.Fatalf("secret survived the scrub: res=%q row=%q", res.VerdictSummary, sum)
 	}
 }
+
+// TestVerdictRationaleStripsThinkTrace: a reasoning trace before the
+// JSON must not become the recovered rationale (r3; jsonx.Object
+// strips it for the verdict — the prose recovery walks the same raw
+// content and needs the same strip).
+func TestVerdictRationaleStripsThinkTrace(t *testing.T) {
+	got := verdictRationale("<think>maybe it failed? let me check</think>\n" +
+		`{"fulfilled": false} the file was never written`)
+	if got != "the file was never written" {
+		t.Fatalf("think trace must be stripped before recovery: %q", got)
+	}
+}

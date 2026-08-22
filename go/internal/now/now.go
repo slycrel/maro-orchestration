@@ -237,7 +237,11 @@ func verifyPayload(goal, answer string) string {
 // the judge is instructed JSON-first, and a garbled recovery on a
 // disobedient judge still beats the false "gave no rationale".
 func verdictRationale(raw string) string {
-	text := strings.TrimSpace(raw)
+	// Same pre-strip jsonx.Object applies: a reasoning trace before the
+	// JSON would otherwise flow through the no-prefix fallthrough and
+	// become the recovered "rationale" verbatim (r3; Go-stricter, the
+	// Python sibling shares the gap).
+	text := strings.TrimSpace(jsonx.StripThink(raw))
 	if strings.HasPrefix(text, "```") {
 		// ```json { ... } ``` preamble: prose is after the closing fence.
 		parts := strings.Split(text, "```")

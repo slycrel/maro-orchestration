@@ -129,3 +129,11 @@ func carve(text string, open, close byte) (string, error) {
 	}
 	return "", fmt.Errorf("unbalanced %q...%q in output", string(open), string(close))
 }
+
+// StripThink exposes the <think>-trace strip for callers that recover
+// PROSE (not JSON) from a model reply — internal/now's rationale
+// recovery walks the same raw content Object does, and an un-stripped
+// trace would otherwise become a durable verdict summary (adversarial
+// routing r3; Go-stricter than Python's _now_verdict_rationale, which
+// shares the gap).
+func StripThink(text string) string { return stripThinkBlocks(text) }

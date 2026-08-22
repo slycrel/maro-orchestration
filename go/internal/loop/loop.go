@@ -736,6 +736,13 @@ stepLoop:
 				record.SourceClosure, confPtr); soErr != nil {
 				res.Warnings = append(res.Warnings,
 					"outcome-row verdict stamp failed: "+soErr.Error())
+				// Durable marker beside the warning: a failed row stamp
+				// recreates the round's headline bug (row reads unjudged
+				// forever) behind a rarer trigger — it must be
+				// discoverable off-terminal (adversarial routing r3).
+				_ = runs.AppendVerdictRow(runDir, map[string]any{
+					"skipped":     "outcome_row_stamp_failed",
+					"skip_detail": budget.Clip(soErr.Error(), 300)})
 			}
 			if evErr := rec.Event("CLOSURE_VERDICT", "closure_verdict",
 				budget.Clip(v.Summary, 200),
