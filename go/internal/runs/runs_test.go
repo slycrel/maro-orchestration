@@ -185,3 +185,25 @@ func TestAppendVerdictRowScrubsSecrets(t *testing.T) {
 		t.Fatalf("scrub should redact the secret, not the whole field: %s", raw)
 	}
 }
+
+// TestAppendVerdictRowPreservesLargeIntegers: the scrub round-trip must
+// not widen numerics through float64 — an int64 past 2^53 written by a
+// future caller would silently corrupt (r2 Architect; UseNumber keeps
+// json.Number through scrub.Walk untouched).
+func TestAppendVerdictRowPreservesLargeIntegers(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	big := int64(9007199254740993) // 2^53 + 1 — not representable in float64
+	if err := AppendVerdictRow(dir, map[string]any{"big": big}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "build", "closure_verdicts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "9007199254740993") {
+		t.Fatalf("large integer corrupted through the round-trip: %s", raw)
+	}
+}

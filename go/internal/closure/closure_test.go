@@ -603,3 +603,80 @@ func TestRunCheckKillsProcessGroupOnTimeout(t *testing.T) {
 	syscall.Kill(pid, syscall.SIGKILL)
 	t.Fatalf("backgrounded child %d survived the timeout kill", pid)
 }
+
+// --- closure r2 fix-layer pins (adversarial round 2, 2026-08-22) ---
+
+// TestRunCheckWaitDelayBackstopsEscapedProcess: a probe that DETACHES
+// (setsid) escapes the group kill AND holds the output pipes — without
+// WaitDelay, Run() blocks for the escapee's whole lifetime and the loop
+// hangs on an LLM-authored one-liner (r2 Skeptic HIGH).
+func TestRunCheckWaitDelayBackstopsEscapedProcess(t *testing.T) {
+	dir := t.TempDir()
+	cmd := `setsid sleep 30 & echo started; exit 0`
+	started := time.Now()
+	code, stdout, stderr := runCheck(context.Background(), cmd, dir, 10*time.Second)
+	elapsed := time.Since(started)
+	if elapsed > 6*time.Second {
+		t.Fatalf("runCheck blocked %s on an escaped descendant", elapsed)
+	}
+	if code != 0 {
+		t.Fatalf("probe itself exited 0; its real code must survive: %d (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "started") {
+		t.Fatalf("stdout lost: %q", stdout)
+	}
+	if !strings.Contains(stderr, "descendant process outlived the probe") {
+		t.Fatalf("held-pipes note missing: %q", stderr)
+	}
+}
+
+// TestVerifyScrubsJudgeProseAtBoundary: the verdict prompt carries raw
+// probe output, and Summary/Gaps flow to FOUR consumers (row, metadata
+// stamp, event, CLI) — the scrub happens once at Verify's return
+// boundary so no consumer can forget it (r2 Architect HIGH: the CLI
+// line was a second, unscrubbed egress).
+func TestVerifyScrubsJudgeProseAtBoundary(t *testing.T) {
+	secret := "sk-ant-api03-" + strings.Repeat("b", 40)
+	fake := &llm.Fake{Script: []string{
+		planJSON("true"),
+		`{"complete":true,"confidence":0.9,"gaps":["leaked ` + secret + ` in output"],"summary":"Goal achieved. Saw ` + secret + ` in logs."}`,
+	}}
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir()})
+	if strings.Contains(v.Summary, "sk-ant-api03-") {
+		t.Fatalf("summary left Verify unscrubbed: %q", v.Summary)
+	}
+	if len(v.Gaps) != 1 || strings.Contains(v.Gaps[0], "sk-ant-api03-") {
+		t.Fatalf("gaps left Verify unscrubbed: %+v", v.Gaps)
+	}
+	if !strings.HasPrefix(v.Summary, "Achieved:") {
+		t.Fatalf("verdict-first shape must survive the scrub: %q", v.Summary)
+	}
+}
+
+// TestVerifyPanicInPersistDoesNotCrash: if the ORIGINAL panic came from
+// the persist path, the recovery's own persist re-enters it — recover()
+// does not re-arm, so without the inner guard the loop dies after all
+// (r2 Skeptic). A dropped row beats a dead loop.
+func TestVerifyPanicInPersistDoesNotCrash(t *testing.T) {
+	fake := &llm.Fake{Script: []string{planJSON("true"),
+		`{"complete":true,"confidence":0.9,"gaps":[],"summary":"ok"}`}}
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir(),
+			PersistRow: func(map[string]any) { panic("write path is broken") }})
+	if v.SkipReason != "exception" || v.Judged {
+		t.Fatalf("persist-path panic must degrade to the exception skip: %+v", v)
+	}
+}
+
+// TestVerifyDryRunSkipNamed: the dry_run skip reason itself, pinned —
+// r2 flagged that only the a==nil half of the guard was ever exercised.
+// NOTE the composed loop path gates on !opts.DryRun BEFORE Verify, so
+// this field is honest only for direct callers; named in PORT.md.
+func TestVerifyDryRunSkipNamed(t *testing.T) {
+	v := Verify(context.Background(), &llm.Fake{}, "goal", nil,
+		Options{WorkspacePath: t.TempDir(), DryRun: true})
+	if v.SkipReason != "dry_run" || v.Judged {
+		t.Fatalf("dry-run skip: %+v", v)
+	}
+}

@@ -38,6 +38,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os/exec"
@@ -52,6 +53,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
 // Verdict mirrors Python ClosureVerdict — the evidence record.
@@ -414,6 +416,13 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 		}
 		return nil
 	}
+	// The group kill can't reach a probe that detached (setsid / double
+	// fork) — and that escapee still holds the stdout/stderr pipe write
+	// ends, so without a backstop Wait() blocks for the escapee's whole
+	// lifetime and the LOOP hangs on an LLM-authored one-liner
+	// (adversarial closure r2 2026-08-22, Skeptic HIGH). WaitDelay
+	// force-closes the pipes and returns ErrWaitDelay after the grace.
+	c.WaitDelay = 2 * time.Second
 	var out, errb strings.Builder
 	c.Stdout = &out
 	c.Stderr = &errb
@@ -422,6 +431,13 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 		return -1, out.String(), "timed out"
 	}
 	if err != nil {
+		// ErrWaitDelay with a ProcessState means the probe ITSELF exited
+		// and only an escaped descendant held the pipes — the probe's
+		// real exit code is the honest outcome; the held pipes are noted.
+		if errors.Is(err, exec.ErrWaitDelay) && c.ProcessState != nil {
+			return c.ProcessState.ExitCode(), out.String(),
+				errb.String() + "\n[closure: a descendant process outlived the probe and held its output pipes]"
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			return ee.ExitCode(), out.String(), errb.String()
 		}
@@ -450,12 +466,20 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// outcome the verdict was meant to annotate.
 	defer func() {
 		if r := recover(); r != nil {
-			persist(map[string]any{
-				"skipped": "exception",
-				"skip_detail": budget.PanicTrace.Clip(
-					budget.PanicValue.Clip(fmt.Sprintf("%v", r)) +
-						"\n" + string(debug.Stack())),
-			})
+			// The recovery's own persist is best-effort behind a second
+			// recover: if the ORIGINAL panic came from the write path,
+			// re-entering it here would crash after all — recover()
+			// does not re-arm (adversarial closure r2 2026-08-22,
+			// Skeptic). A dropped row beats a dead loop.
+			func() {
+				defer func() { _ = recover() }()
+				persist(map[string]any{
+					"skipped": "exception",
+					"skip_detail": budget.PanicTrace.Clip(
+						budget.PanicValue.Clip(fmt.Sprintf("%v", r)) +
+							"\n" + string(debug.Stack())),
+				})
+			}()
 			v = nullVerdict("exception")
 		}
 	}()
@@ -703,6 +727,20 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// Judged tri-state: false when the verdict hinges entirely on
 	// inconclusive probes — no check ran cleanly.
 	judged := checksRun > inconclusive
+
+	// Scrub the judge prose ONCE at the return boundary so every
+	// consumer — durable row, metadata stamp, captain's-log event, CLI
+	// print — gets the same scrubbed text: the verdict prompt carries
+	// raw probe stdout/stderr, and the CLI line added for r1 was a
+	// second, unscrubbed egress for the same prose (adversarial closure
+	// r2 2026-08-22, Architect HIGH). FailedChecks stay raw on purpose:
+	// the fingerprint is computed from them and must match a fingerprint
+	// computed anywhere else in the run's lifetime (Python computes on
+	// unscrubbed signatures too).
+	summary = scrub.Secrets(summary)
+	for i := range gaps {
+		gaps[i] = scrub.Secrets(gaps[i])
+	}
 
 	v = Verdict{
 		Complete: complete, Confidence: confidence, Gaps: gaps,

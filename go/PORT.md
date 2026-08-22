@@ -333,7 +333,11 @@ direction).
   plan prompt's own scaffolding examples use bash idioms, so Go runs
   the shell the prompt teaches; per-check timeout with a PROCESS-GROUP
   kill — Setpgid + kill(-pgid), closing the orphaned-background-server
-  leak Python shares; per-check stdout/stderr stored at 500/300 RUNE
+  leak Python shares — plus a 2s WaitDelay backstop: a probe that
+  DETACHES (setsid/double-fork) escapes the group AND holds the output
+  pipes, and without WaitDelay Wait() blocks for the escapee's whole
+  lifetime (r2); probe output is buffered unbounded in memory before
+  truncation — Python capture_output parity, named not silent; per-check stdout/stderr stored at 500/300 RUNE
   cuts, with outcome classified on the FULL stderr first — the
   inconclusive phrases sit at the end of verbose diagnostics; cwd =
   the exec lane's project dir; cwd unresolved → checks
@@ -389,8 +393,20 @@ direction).
   AFTER the work succeeded); the durable row carries the Python-parity
   check_results array (per-check description/command/exit/outcome/
   stdout/stderr) and is SCRUBBED at the single write owner
-  (runs.AppendVerdictRow, via a JSON round-trip because scrub.Walk
-  descends only decoded shapes); the verdict line reaches the CLI
+  (runs.AppendVerdictRow, via a UseNumber JSON round-trip because
+  scrub.Walk descends only decoded shapes and a plain decode would
+  widen int64s through float64); judge PROSE (summary/gaps) is scrubbed
+  once more at Verify's return boundary because it flows to four
+  consumers — row, metadata stamp, event, CLI (r2: the CLI line was a
+  second unscrubbed egress). Residual, Python-parity, named: stored
+  stdout/stderr are truncated BEFORE the row scrub, so a secret
+  straddling the 500/300 cut can leave an unmatchable fragment;
+  FailedChecks stay raw on purpose (the fingerprint must be computable
+  identically anywhere in the run's lifetime — Python fingerprints
+  unscrubbed signatures too). closure.Options.DryRun is exercised only
+  by direct unit callers — the composed loop path gates on !DryRun
+  before Verify, so the field is honest for library callers, inert on
+  the CLI path (r2, named not logged-as-wired); the verdict line reaches the CLI
   beside the DONE/STUCK banner — done ≠ successful is operator-visible,
   not write-only;
   goal_achieved tri-state stamps only judged verdicts and feeds the

@@ -15,6 +15,7 @@
 package runs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -171,8 +172,15 @@ func AppendVerdictRow(runDir string, row map[string]any) error {
 	if err != nil {
 		return err
 	}
+	// UseNumber keeps numerics as json.Number through the round-trip —
+	// a plain decode widens every number to float64, silently corrupting
+	// int64s past 2^53 for every future caller of this seam
+	// (adversarial closure r2 2026-08-22, Architect). json.Number is not
+	// `string` to scrub.Walk's type switch, so it passes through intact.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var norm any
-	if err := json.Unmarshal(raw, &norm); err != nil {
+	if err := dec.Decode(&norm); err != nil {
 		return err
 	}
 	out, err := json.Marshal(scrub.Walk(norm, scrub.Secrets))

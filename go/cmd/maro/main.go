@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/closure"
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/loop"
@@ -132,10 +133,8 @@ func run(args []string) error {
 	// the DONE banner says the steps drained; only this line says whether
 	// the GOAL was judged achieved (adversarial closure r1 2026-08-22,
 	// Skeptic — the tranche's headline guarantee was write-only).
-	if res.Closure != nil {
-		fmt.Printf("goal: %s (confidence %.2f, %d/%d checks passed)\n",
-			res.Closure.Summary, res.Closure.Confidence,
-			res.Closure.ChecksPassed, res.Closure.ChecksRun)
+	if line := closureLine(res.Closure); line != "" {
+		fmt.Println(line)
 	}
 	for i, s := range res.Steps {
 		// Deliberately unclipped: the terminal is the delivery surface and
@@ -211,4 +210,22 @@ func buildAdapter(kind string) (llm.Adapter, error) {
 	default:
 		return nil, fmt.Errorf("unknown backend %q", kind)
 	}
+}
+
+// closureLine renders the goal-verdict line for the terminal. Every
+// skip path names its reason — "closure crashed" must not print
+// identically to "closure ran clean" (adversarial closure r2
+// 2026-08-22, Architect: nullVerdict's constant summary made the
+// recovered-panic path indistinguishable from a legitimate no-checks
+// run). Summary/gaps arrive already scrubbed at closure.Verify's
+// return boundary.
+func closureLine(v *closure.Verdict) string {
+	if v == nil {
+		return ""
+	}
+	if v.SkipReason != "" {
+		return fmt.Sprintf("goal: %s [skipped: %s]", v.Summary, v.SkipReason)
+	}
+	return fmt.Sprintf("goal: %s (confidence %.2f, %d/%d checks passed)",
+		v.Summary, v.Confidence, v.ChecksPassed, v.ChecksRun)
 }

@@ -1282,3 +1282,78 @@ Mutation M3 (classify on truncated): DETECTED.
 escape itself was a finding about the pin, recorded above). Zero fabricated
 probes or quotes this round — the streak holds. Verdict: CONTESTED → fixes
 applied; r2 on the fix layer next.
+
+## Closure tranche — adversarial round 2 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+**Scope:** the r1 fix layer, 754ef935..ade8930e. Two lenses (Skeptic,
+Architect), REVIEWER_MODEL=sonnet REVIEWER_EFFORT=medium. 11 findings.
+The flagship pattern holds a 13th time: both HIGHs live in the newest
+layer of change (the r1 fixes themselves).
+
+### Verification Ledger
+
+**H1 — Group kill defeated by detached probes; escaped descendant holds
+the pipes and hangs the loop (Skeptic 1): VERIFIED.** exec.Cmd.Wait
+blocks on the pipe-copy goroutines until every write-end closes;
+kill(-pgid) reaches only the group, and setsid is an ordinary shell
+idiom an LLM probe can emit. Root context is Background() — no upstream
+deadline saves it. Fixed: c.WaitDelay = 2s; ErrWaitDelay with a
+ProcessState maps to the probe's REAL exit code with a held-pipes note
+appended to stderr. Pin: TestRunCheckWaitDelayBackstopsEscapedProcess
+(setsid escapee; asserts prompt return, real exit code, and the note).
+Mutation M6 (WaitDelay dropped): DETECTED.
+
+**H2 — CLI verdict line bypassed the scrub the same diff installed
+(Architect 1): VERIFIED.** res.Closure is the pre-scrub in-memory
+struct; the only scrub sat on the row-file path, and the judge prompt
+carries raw probe stdout/stderr. Fixed at the ROOT: summary/gaps are
+scrubbed once at Verify's return boundary, so all four consumers (row,
+metadata stamp, captain's-log event, CLI) get the same scrubbed text.
+FailedChecks deliberately stay raw — fingerprint parity (Python also
+fingerprints unscrubbed signatures); named in PORT.md. Pin:
+TestVerifyScrubsJudgeProseAtBoundary. Mutation M7 (boundary scrub
+dropped): DETECTED.
+
+### Mediums/lows
+
+- Second-panic in the recovery's own persist (Skeptic 3): VERIFIED
+  latent — recover() does not re-arm; a persist-path panic would crash
+  after all. Fixed: inner best-effort recover around the recovery's
+  persist (dropped row beats dead loop). Pin:
+  TestVerifyPanicInPersistDoesNotCrash. Mutation M8: DETECTED.
+- JSON round-trip widens int64 → float64 silently for future callers
+  (Architect 3): VERIFIED mechanically. Fixed: UseNumber through the
+  decode — json.Number is not `string` to scrub.Walk's type switch, so
+  it passes through intact. Pin:
+  TestAppendVerdictRowPreservesLargeIntegers (2^53+1). Mutation M9:
+  DETECTED.
+- Skip paths printed identically on the CLI (Architect 2): fixed —
+  closureLine names the SkipReason ("[skipped: exception]") and skips
+  the fake 0/0 counts; extracted so it could be pinned.
+- CLI line untested (Skeptic 5): fixed by the same extraction. Pin:
+  TestClosureLine (cmd/maro's first test file).
+- DryRun threading is dead code on the composed path (Skeptic 2 +
+  Architect 4): CONFIRMED — the r1 ledger overstated it as wired. The
+  field is real for direct/library callers of Verify and its unit
+  tests; the loop path gates on !DryRun before the call by design
+  (dry runs must leave no closure row, Python parity). Recorded
+  honestly in PORT.md; the previously-unexercised "dry_run" reason
+  string got its pin (TestVerifyDryRunSkipNamed). The r1 entry stands
+  corrected here rather than edited in place.
+- Unbounded probe-output buffering (Skeptic 6): Python
+  capture_output parity — named in PORT.md rather than carried
+  silently.
+- Truncate-before-scrub straddle on stored stdout/stderr (Architect
+  5): VERIFIED Python-parity; scrubbing pre-cut would break
+  fingerprint cross-runtime comparability for secret-bearing output,
+  so the residual is NAMED in PORT.md next to the scrub claim.
+- closurePanicHook unsynchronized-by-convention (Skeptic 4): accepted
+  — deliberate parity with the recall seam's identical pattern; the
+  no-t.Parallel constraint is stated on both.
+
+### Verdict derivation
+
+2 HIGHs, both VERIFIED and fixed at the root with pinned tests;
+mutations M6-M9 all DETECTED. One r1 ledger entry (DryRun "threaded")
+corrected as overstated — the honest disposition is named-in-PORT.md,
+not wired. Verdict: CONTESTED → fixes applied; r3 fixpoint check next.
