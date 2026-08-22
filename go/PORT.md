@@ -674,7 +674,11 @@ direction).
   unreachable — tighter cuts land before the old marker; corrected
   here, Python wording flagged for backport-correction), plus
   pass-through-zone honesty-bit coverage and a 7→6 term-count slip.
-  Mutation M70 DETECTED.
+  Mutation M70 DETECTED. Adversarial r9 (same day,
+  skeptic+qa): zero HIGH/MED from both lenses — second consecutive
+  clean round, FIXPOINT DECLARED (r1-r9, mutations M37-M70 all
+  DETECTED; sole new item a pre-existing dead-guard LOW,
+  accepted-named). Director tranche CLOSED.
 
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows

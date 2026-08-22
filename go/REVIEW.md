@@ -2072,3 +2072,31 @@ shared MEDIUM was a ledger-honesty catch:
 
 Mutation M70 DETECTED. Full suite green. r9 follows on this
 tests+docs diff — a second clean round declares fixpoint.
+
+## Director tranche — adversarial r9 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa) — FIXPOINT DECLARED
+
+Round on the r8 fix layer (docs+tests only). **Zero HIGH, zero MEDIUM
+from both lenses — second consecutive clean round; the tranche's
+fixpoint condition is satisfied.** Both lenses independently
+re-derived the r8 claims rather than trusting them: the
+structurally-unreachable-nesting proof, the tighter-reclip
+assertions' arithmetic (markerStart=4000 vs limits 200/4020, the wide
+case exercising the markerStart guard rather than the trivial early
+return), and the 6-vs-7 term distinction between the two marker pins.
+
+- **LOW (qa, pre-existing, accepted-named): Clip's second guard
+  (`len(r)-markerStart <= markerMax`) is provably dead** — markerRe's
+  own bounds cap a match at 55 runes, under markerMax=64, so the
+  condition never rejects; the "two guards" comment implies both are
+  load-bearing when one is redundant defense. Harmless; recorded, not
+  fixed at fixpoint.
+
+**Tranche summary (r1–r9):** 5 rounds carried HIGHs, every one living
+in the previous round's fix layer (flagship pattern, runs 18–22);
+r7's HIGH was an instrument gap verified by running the regression
+before fixing; r8–r9 clean. Mutations M37–M70 all DETECTED (two
+initially NOT DETECTED — M53, M69 — each converted by writing the pin
+the failure demanded). The marker sub-arc (r3 grammar → r4 line
+anchor → r5 end anchor → r6 provenance bit → r7 wiring pin → r8
+honest docs) is the tranche's teaching arc: position and shape are
+never provenance; only the producer's own bit is.
