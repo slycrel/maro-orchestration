@@ -632,7 +632,15 @@ direction).
   would alter prompt inputs; sink census: writeLog + captains_log +
   CLI, all scrubbed). Mutations M49-M55 all DETECTED (M53's echo
   marker-vocab pin added only after its first run came back NOT
-  DETECTED).
+  DETECTED). Adversarial r3 (same day, skeptic+qa): the r2 fixes were
+  again the HIGHs' home — the mid-loop guard fired on the sole
+  iteration (double warning; "unreachable" comment false) and now
+  warns only when rounds actually remain; the malformed counter
+  covers non-object entries and a non-list tickets field warns with
+  its type; CLI warnings scrubbed (sink census now actually closed);
+  echo judge strips the whole clip marker (both budget wordings,
+  offsets included) before term extraction instead of deleting two
+  words after. Mutations M56-M60 all DETECTED.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):

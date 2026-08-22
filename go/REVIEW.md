@@ -1852,3 +1852,44 @@ lenses' shared HIGH sat inside r1's own TicketID-correlation fix.
 
 Mutations M49–M55 all DETECTED. Full suite green. Fix-layer round r3
 follows on this diff.
+
+## Director tranche — adversarial r3 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r2 fix layer. The flagship pattern held a 19th time — this
+round's HIGHs sat inside r2's own fixes (the mid-loop guard and the
+bounded-warning counter).
+
+- **HIGH (skeptic): the r2 mid-loop empty-revision guard was NOT
+  unreachable** — with MaxReviewRounds=2 the sole loop iteration is
+  both first and last round, so a revision review rejecting with no
+  guidance fired the "stopping revisions" warning AND the exhaustion
+  warning for one incident, while the comment claimed the branch was
+  dead. FIXED: warn only when the break cuts remaining rounds short
+  (genuinely unreachable at the current constant), break regardless;
+  the terminal round is the exhaustion warning's job (M56).
+- **HIGH (qa) + MED (skeptic): the r2 malformed-entry counter had
+  holes for the two most LLM-plausible shapes** — non-object array
+  entries (strings/numbers/null) evaded the counter entirely, and a
+  present-but-non-list `tickets` field discarded the model's whole
+  plan with zero durable trace. FIXED: non-object entries count into
+  the same summary (wording now shape-agnostic), and a non-list
+  tickets field warns with its type before the single-ticket fallback
+  (M57, M58). Python parity note: Python silently drops both shapes —
+  the counter is a Go-invented net, now without holes.
+- **MED (qa): CLI printed `res.Warnings` unscrubbed** while writeLog
+  scrubs the same slice — the r2 sink-census claim ("CLI, all
+  scrubbed") was false for this one field. FIXED: scrubbed at the
+  print site; static text today, the invariant is now structural at
+  every sink. The r2 census claim is corrected by this entry.
+- **LOW (skeptic + qa ×2): the r2 echo marker-vocab deletes were
+  unconditional, missed 5+ digit clip offsets, and missed the
+  Accumulator's "entry truncated" variant.** FIXED: the whole marker
+  (both budget wordings) is stripped by regex BEFORE term extraction —
+  offsets and "entry" go with it, and genuine content that merely
+  discusses truncation keeps its vocabulary (M59, M60).
+- **LOW (skeptic): the revision-correlation pin was single-ticket.**
+  FIXED: multi-ticket pin asserts revision_of resolves to the correct
+  sibling and untouched tickets carry none.
+
+Mutations M56–M60 all DETECTED (M58 confirmed compiling, behavioral).
+Full suite green. r4 follows on this diff.

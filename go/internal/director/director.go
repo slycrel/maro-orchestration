@@ -377,12 +377,19 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 					break
 				}
 				if review.RevisionRequest == "" {
-					// Unreachable while MaxReviewRounds==2, guarded for a
-					// constant bump: a mid-loop rejection with no guidance
-					// must not buy another vacuous round (r2, QA).
-					res.Warnings = append(res.Warnings, fmt.Sprintf(
-						"ticket %s revision round %d rejected with no revision request — stopping revisions",
-						revised.TicketID, round+1))
+					// No guidance left — a further round would be vacuous,
+					// so break regardless. The TERMINAL round is already
+					// covered by the exhaustion warning below; warn here
+					// only when the break cuts remaining rounds short, so
+					// one incident never writes two warnings (adversarial
+					// director r3, Skeptic HIGH: the r2 guard fired on the
+					// sole iteration and doubled up — its "unreachable"
+					// comment was false).
+					if round+1 < MaxReviewRounds-1 {
+						res.Warnings = append(res.Warnings, fmt.Sprintf(
+							"ticket %s revision round %d rejected with no revision request — stopping revisions",
+							revised.TicketID, round+1))
+					}
 					break
 				}
 			}
@@ -504,8 +511,13 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 					if len(tickets) >= maxTickets {
 						break
 					}
-					t, ok := item.(map[string]any)
-					if !ok {
+					t, tok := item.(map[string]any)
+					if !tok {
+						// Non-object entries (strings, numbers, null) are
+						// the most LLM-plausible schema confusion and were
+						// evading the malformed counter entirely
+						// (adversarial director r3, both lenses).
+						malformed++
 						continue
 					}
 					// A forged/malformed shape must not silently become an
@@ -525,6 +537,13 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 					}
 					tickets = append(tickets, Ticket{TicketID: newID(), WorkerType: wtype, Task: task})
 				}
+			} else if v, present := data["tickets"]; present {
+				// A present-but-non-list tickets field means the model's
+				// whole plan is being discarded — that must reach the
+				// record, not silently fall through to the single-ticket
+				// fallback (adversarial director r3, QA HIGH).
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"spec tickets field was %T, not a list — single-ticket fallback", v))
 			}
 			if malformed > 0 {
 				// ONE summary warning, not one per entry — a hostile
@@ -533,7 +552,7 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 				// (adversarial director r2, Skeptic: the good path was
 				// capped at maxTickets, the reject path wasn't).
 				res.Warnings = append(res.Warnings, fmt.Sprintf(
-					"%d spec ticket entries with missing or non-string task skipped", malformed))
+					"%d malformed spec ticket entries (non-object, or missing/non-string task) skipped", malformed))
 			}
 			if len(tickets) == 0 {
 				tickets = []Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: directive}}
@@ -721,6 +740,11 @@ var echoStopwords = map[string]bool{
 	"first": true, "second": true, "rather": true, "about": true,
 }
 
+// clipMarkerRe matches both marker formats in the budget package:
+// budget.Clip's " … [truncated: first N of M characters]" and the
+// Accumulator's "… [entry truncated: first N of M characters]".
+var clipMarkerRe = regexp.MustCompile(`(?:… )?\[(?:entry )?truncated: first \d+ of \d+ characters\]`)
+
 func distinctiveTerms(text string) map[string]bool {
 	terms := map[string]bool{}
 	for _, w := range echoTermRe.FindAllString(strings.ToLower(text), -1) {
@@ -739,14 +763,15 @@ func reportEcho(resultText, reportText string) *bool {
 	if strings.TrimSpace(resultText) == "" || strings.TrimSpace(reportText) == "" {
 		return nil
 	}
-	terms := distinctiveTerms(resultText)
-	// Clip-marker vocabulary is framework text, not worker content — a
-	// clipped window would otherwise count "truncated"/"characters" as
-	// distinctive terms of the WORKER's output (adversarial director r2,
-	// Skeptic). Removed here, not from the shared stopword table, which
-	// stays byte-identical to Python's.
-	delete(terms, "truncated")
-	delete(terms, "characters")
+	// Clip markers are framework text, not worker content — strip the
+	// whole marker (both budget.Clip's and the Accumulator's wording)
+	// before term extraction, so neither the marker words nor 5+ digit
+	// offsets count as worker-distinctive terms, while GENUINE content
+	// that merely discusses truncation keeps its vocabulary
+	// (adversarial director r2 Skeptic; r3 both lenses: the r2
+	// word-deletes were unconditional, missed numeric offsets, and
+	// missed the Accumulator's "entry truncated" variant).
+	terms := distinctiveTerms(clipMarkerRe.ReplaceAllString(resultText, ""))
 	if len(terms) < echoMinTerms {
 		return nil
 	}

@@ -470,9 +470,9 @@ func TestSpecMalformedWarningsBounded(t *testing.T) {
 	}, "build the things")
 	count := 0
 	for _, w := range res.Warnings {
-		if strings.Contains(w, "non-string task skipped") {
+		if strings.Contains(w, "task) skipped") {
 			count++
-			if !strings.Contains(w, "3 spec ticket entries") {
+			if !strings.Contains(w, "3 malformed spec ticket entries") {
 				t.Fatalf("summary must carry the count: %q", w)
 			}
 		}
@@ -537,7 +537,7 @@ func TestRunMalformedTicketEntriesSkipped(t *testing.T) {
 	}
 	warned := false
 	for _, w := range res.Warnings {
-		if strings.Contains(w, "non-string task skipped") {
+		if strings.Contains(w, "task) skipped") {
 			warned = true
 		}
 	}
@@ -605,5 +605,157 @@ func TestReportEchoIgnoresClipMarkerVocab(t *testing.T) {
 	report := "report mentions alphaterm and was truncated to fewer characters"
 	if got := reportEcho(window, report); got != nil {
 		t.Fatalf("marker vocab must not make a 4-term window judgeable: got %v", *got)
+	}
+}
+
+// TestRunRevisionRejectedNoGuidanceSingleWarning: a revision round that
+// rejects WITHOUT new guidance is the terminal round — it gets the
+// exhaustion warning and ONLY that (adversarial director r3, Skeptic
+// HIGH: the r2 mid-loop guard fired on the sole iteration and doubled
+// up with the exhaustion warning, while its comment claimed the branch
+// was unreachable).
+func TestRunRevisionRejectedNoGuidanceSingleWarning(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": "write the widget"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "half a widget only, needs more work clearly", "summary": "s"}`,
+		`{"accepted": false, "reason": "incomplete", "revision_request": "finish the other half"}`,
+		`{"tool": "deliver_result", "result": "still only half a widget after the revision", "summary": "s"}`,
+		`{"accepted": false, "reason": "still incomplete"}`,
+		"Report: best effort widget.",
+	}, "make a widget")
+	exhausted, stopping := 0, 0
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "review exhausted") {
+			exhausted++
+		}
+		if strings.Contains(w, "stopping revisions") {
+			stopping++
+		}
+	}
+	if exhausted != 1 || stopping != 0 {
+		t.Fatalf("one incident must write one warning (exhausted=%d stopping=%d): %+v",
+			exhausted, stopping, res.Warnings)
+	}
+}
+
+// TestSpecNonObjectEntriesCounted: non-object ticket entries (strings,
+// numbers, null) are the most LLM-plausible schema confusion and must
+// hit the malformed counter like bad-task objects do (adversarial
+// director r3, both lenses: they were evading it entirely).
+func TestSpecNonObjectEntriesCounted(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [null, 7, "do the api", {"task": 1}, {"worker_type": "build", "task": "the real task to build"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "built the real task completely as asked", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: built the real task completely as asked, done.",
+	}, "build the things")
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "4 malformed spec ticket entries") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("non-object entries must be counted alongside bad-task objects: %+v", res.Warnings)
+	}
+	if len(res.Tickets) != 1 || res.Tickets[0].Task != "the real task to build" {
+		t.Fatalf("the one valid ticket must survive: %+v", res.Tickets)
+	}
+}
+
+// TestSpecTicketsFieldNotAListWarns: a present-but-non-list tickets
+// field discards the model's whole plan — the single-ticket fallback
+// must fire ON THE RECORD (adversarial director r3, QA HIGH: it fell
+// through with zero durable trace).
+func TestSpecTicketsFieldNotAListWarns(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": "build it then test it"}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "did the directive end to end as requested", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: did the directive end to end as requested.",
+	}, "build the things")
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "not a list") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("non-list tickets field must warn: %+v", res.Warnings)
+	}
+	if len(res.Tickets) != 1 || res.Tickets[0].Task != "build the things" {
+		t.Fatalf("single-ticket fallback must carry the directive: %+v", res.Tickets)
+	}
+}
+
+// TestReportEchoMarkerStripScoped: the whole clip marker is stripped —
+// including 5+ digit offsets and the Accumulator's "entry" variant —
+// while GENUINE content that merely discusses truncation keeps its
+// vocabulary (adversarial director r3, both lenses: the r2
+// word-deletes were unconditional and partial).
+func TestReportEchoMarkerStripScoped(t *testing.T) {
+	// (a) big offsets: digits must not become distinctive terms.
+	window := "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 50000 of 123456 characters]"
+	if got := reportEcho(window, "report echoing alphaterm 50000 123456 truncated"); got != nil {
+		t.Fatalf("marker offsets must not make a 4-term window judgeable: %v", *got)
+	}
+	// (b) Accumulator variant: "entry" is marker text too.
+	window = "alphaterm betaterm gammaterm deltaterm\n… [entry truncated: first 10 of 20 characters]"
+	if got := reportEcho(window, "report"); got != nil {
+		t.Fatalf("accumulator marker must strip whole, incl 'entry': %v", *got)
+	}
+	// (c) genuine unclipped content KEEPS its truncation vocabulary.
+	window = "payload truncated deliberately characters exceeded limits"
+	report := "the payload was truncated as characters exceeded the cap"
+	got := reportEcho(window, report)
+	if got == nil || !*got {
+		t.Fatalf("genuine truncation vocabulary must stay judgeable: %v", got)
+	}
+}
+
+// TestRunRevisionCorrelationMultiTicket: with two tickets where only
+// the FIRST is revised, revision_of must resolve to the correct
+// sibling and the untouched ticket's row must carry no revision_of
+// (adversarial director r3, Skeptic: the single-ticket pin could not
+// distinguish ordering bugs across the shared res.Tickets slice).
+func TestRunRevisionCorrelationMultiTicket(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "two passes", "tickets": [{"worker_type": "build", "task": "write the widget"}, {"worker_type": "research", "task": "survey the widget market"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "half a widget only, needs more work clearly", "summary": "s"}`,
+		`{"accepted": false, "reason": "incomplete", "revision_request": "finish the other half"}`,
+		`{"tool": "deliver_result", "result": "the complete widget with both halves attached", "summary": "s"}`,
+		`{"accepted": true, "reason": "complete now"}`,
+		`{"tool": "deliver_result", "result": "the widget market survey covers all vendors", "summary": "s"}`,
+		`{"accepted": true, "reason": "thorough"}`,
+		"Report: widget complete and market surveyed across all vendors.",
+	}, "widget program")
+	logRow := readLog(t, res.LogPath)
+	rows := logRow["tickets"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("two originals + one revision must persist: %v", rows)
+	}
+	var originalIDs []string
+	for _, ti := range rows {
+		row := ti.(map[string]any)
+		if _, revised := row["revision_of"]; !revised {
+			originalIDs = append(originalIDs, row["ticket_id"].(string))
+		}
+	}
+	if len(originalIDs) != 2 {
+		t.Fatalf("exactly the two originals must lack revision_of: %v", rows)
+	}
+	for _, ti := range rows {
+		row := ti.(map[string]any)
+		if v, ok := row["revision_of"].(string); ok && v != originalIDs[0] {
+			t.Fatalf("revision_of must point at the FIRST original %q, got %q", originalIDs[0], v)
+		}
 	}
 }

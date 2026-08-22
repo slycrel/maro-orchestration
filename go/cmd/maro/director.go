@@ -68,7 +68,11 @@ func runDirector(args []string) error {
 		return err
 	}
 	for _, w := range res.Warnings {
-		fmt.Fprintln(os.Stderr, "warn:", w)
+		// Static text today, but the sibling writeLog scrubs this same
+		// slice — the sinks must not disagree (adversarial director r3,
+		// QA: the r2 sink census claimed the CLI scrubbed; warnings
+		// didn't).
+		fmt.Fprintln(os.Stderr, "warn:", scrub.Secrets(w))
 	}
 
 	fmt.Printf("\n=== %s (director %s, %d tickets, %d in / %d out tokens, %s) ===\n",
