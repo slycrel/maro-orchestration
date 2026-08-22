@@ -993,3 +993,78 @@ not code": both refuted claims cited real lines but drew wrong
 conclusions about reachability — still zero fabricated probes/quotes
 across the arc. Post-fix: 13 packages green, vet clean, race clean on
 touched packages, 6 new mutation-verified pins.
+
+## Memory RECALL tranche — adversarial round 2 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Scope: the r1 fix layer (d355b394). 2 lenses (Skeptic + Expert QA) per
+the fix-layer sizing rule. Artifacts:
+`$SP/adv-review-recall-r2.JhE7I9/` (skeptic.md, qa.md + full
+transcripts). Every code claim verified before fixing
+(verify-before-fix).
+
+### Verification Ledger
+
+1. **HIGH (Skeptic S1 + QA QA1, independent) — the r1 citedness fix
+   has an unfixed WRITER sibling.** VERIFIED: pack import.go:738 held
+   `evidence, _ := row["evidence_sources"].([]any)` — a shape-only
+   assertion that persists truthy drifted evidence as `[]`, so the
+   read-side one-element carrier never sees the original value again.
+   The round's joint top finding, sitting inside the previous round's
+   fix — flagship pattern instance #11. **FIXED**: coercion extracted
+   to `knowledge.CoerceEvidenceSources` (one owner), importer rewired,
+   round-trip pin TestImportPreservesCitednessThroughTypeDrift
+   (mutation: reverting the importer to the shape-only assertion →
+   FAIL).
+2. **MED (Skeptic S2) — Limit<=0-as-unlimited leaves no way to request
+   zero rows.** VERIFIED as a real API consequence; ACCEPTED-NAMED: no
+   caller wants an empty read from a retrieval API. Comment on
+   LoadOptions + PORT.md.
+3. **MED (Skeptic S3) — the recover swallows the panic's stack; the
+   instrument was also never proven to fire.** VERIFIED. **FIXED**:
+   recover captures `debug.Stack()` clipped under a new PanicTrace
+   budget (4000, registered with Why); `panicHook` test seam between
+   substrates; TestRecallRecoversFromPanicKeepingPartialResults
+   asserts the named panic, a stack frame, AND pre-panic partial
+   results (mutations: recover disabled → FAIL; stack dropped from
+   the trace, compiling → FAIL).
+4. **MED (QA QA2) — FindPriorAttempts hides malformed metadata.**
+   VERIFIED: nil-meta / unparseable started_at / empty prompt were
+   silently continue'd — short read indistinguishable from short
+   store, the exact honesty rule the lesson loader already enforces.
+   **FIXED**: `(attempts, skipped, err)` with three counted skip
+   sites, surfaced as Sources["prior_attempts_skipped"];
+   TestFindPriorAttemptsSkipsMalformedMetadata asserts skipped==4
+   (mutation: one skipped++ removed → FAIL).
+5. **MED (QA QA3) — window/no-match/exclude must NOT count as skips.**
+   VERIFIED against the fix in flight; healthy-fixture tests assert
+   skipped==0 so a future over-eager counter fails.
+6. **MED (QA QA4) — happy-path event-failure warning unexercised.**
+   VERIFIED: only the decompose-failure path had a test. **FIXED**:
+   TestRecallEventFailureSurfacesAsWarningOnHealthyRun (captain's log
+   as directory + healthy decompose → Result.Warnings carries
+   RECALL_PERFORMED) (mutation: recallWarns dropped from the happy
+   path Result → FAIL).
+7. **LOW (Skeptic S4) — truthy(json.Number) err arm asserted, not
+   proven.** **FIXED**: TestTruthyNumberParseErrorFailsOpen pins
+   fail-open-to-truthy (mutation: err arm flipped to fail-closed →
+   FAIL).
+8. **LOW (Skeptic S5) — ContextBlock degenerate floor prose-only.**
+   **FIXED**: TestContextBlockDegenerateBudgetStaysBounded overrides
+   budget.RecallContext.Limit (save/restore) at 64/100/128 (bare cut,
+   no marker) and 129 (Clip path, bounded) (mutation: floor branch
+   disabled → FAIL, Clip(limit-64)≤0 goes unbounded exactly as the
+   comment warns).
+9. **LOW (QA QA5) — the r1 masked-mutation note is itself a finding.**
+   ACKNOWLEDGED: already recorded honestly in the r1 ledger (entry 5);
+   no further action — the pin was re-verified against the failure
+   class it guards.
+
+### Verdict derivation
+
+9 findings: 1 joint HIGH fixed with a shared-owner helper + round-trip
+pin, 4 MED fixed with executing tests, 1 MED accepted-named, 2 LOW
+fixed, 1 LOW acknowledged. Zero refuted this round — both lenses drew
+correct conclusions from correct reads. All 7 r2 mutations DETECTED
+(recover, stack, skip counter, floor, truthy arm, warnings wiring,
+importer coercion). Post-fix: 13 packages green, vet clean, race clean
+on the 4 touched packages, binary rebuilt.

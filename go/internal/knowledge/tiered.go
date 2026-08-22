@@ -91,9 +91,13 @@ func IsContested(tl TieredLesson) bool { return len(tl.Contested) > 0 }
 // result set indistinguishable from an empty store (adversarial recall
 // r1 2026-08-22, Skeptic HIGH — the zero-value footgun sat one field
 // away from every caller). Same idiom as budget.Clip's "a breaker that
-// is off is off". Raw skips the decay derivation AND the MinScore
-// filter — exactly Python's ordering, where the min_score check sits
-// behind `not raw`.
+// is off is off". Named consequence (r2, Skeptic — accepted, not
+// fixed): unlike Python's Optional[int], there is NO way to request
+// literally zero rows, and a computed limit of 0 means unlimited.
+// Deliberate — zero-value safety outranks an unused capability; a
+// future caller needing "exactly zero" is asking the wrong function.
+// Raw skips the decay derivation AND the MinScore filter — exactly
+// Python's ordering, where the min_score check sits behind `not raw`.
 type LoadOptions struct {
 	TaskType   string
 	LessonType string
@@ -255,20 +259,7 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 	if cm, isMap := m["canon"].(map[string]any); isMap {
 		tl.Canon = cm
 	}
-	// evidence_sources feeds the ranker's citation-penalty check, so its
-	// coercion must preserve Python TRUTHINESS, not just shape: Python's
-	// duck-typed row carries a drifted non-list value as-is and
-	// bool(evidence_sources) still reads a non-empty string as CITED. A
-	// shape-only assertion here silently flipped exactly that row to
-	// "uncited" — a ranking change with no skipped-count trace
-	// (adversarial recall r1 2026-08-22, Skeptic + Expert QA
-	// independently). A truthy non-list lands as a one-element carrier;
-	// citedness survives and the drift stays visible on the struct.
-	if ev, isList := m["evidence_sources"].([]any); isList {
-		tl.EvidenceSources = ev
-	} else if truthy(m["evidence_sources"]) {
-		tl.EvidenceSources = []any{m["evidence_sources"]}
-	}
+	tl.EvidenceSources = CoerceEvidenceSources(m["evidence_sources"])
 	tl.MergedVariants = stringList(m["merged_variants"])
 	if gr, isList := m["grounding"].([]any); isList {
 		for _, g := range gr {
@@ -278,6 +269,28 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 		}
 	}
 	return tl, ok
+}
+
+// CoerceEvidenceSources is the ONE owner of evidence_sources coercion.
+// The field feeds the ranker's citation-penalty check, so coercion must
+// preserve Python TRUTHINESS, not just shape: Python's duck-typed row
+// carries a drifted non-list value as-is and bool(evidence_sources)
+// still reads a non-empty string as CITED. A shape-only assertion
+// silently flipped exactly that row to "uncited" (adversarial recall
+// r1 2026-08-22, Skeptic + Expert QA independently) — and the pack
+// IMPORT lane had the same assertion as a WRITER, durably baking [] into
+// the store for a drifted incoming row (r2, both lenses again): the
+// class census of the r1 fix missed its writer sibling. A truthy
+// non-list lands as a one-element carrier; citedness survives and the
+// drift stays visible. Falsy (absent/null/empty) returns nil.
+func CoerceEvidenceSources(v any) []any {
+	if ev, isList := v.([]any); isList {
+		return ev
+	}
+	if truthy(v) {
+		return []any{v}
+	}
+	return nil
 }
 
 // coerceFloat matches Python float() — numbers and numeric strings

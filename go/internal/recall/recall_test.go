@@ -74,7 +74,10 @@ func TestFindPriorAttemptsMatchLanes(t *testing.T) {
 		"prompt": "completely unrelated polling work", "status": "done",
 	})
 
-	got, err := FindPriorAttempts(ws, goal, 24.0, "widgets", "")
+	got, skipped, err := FindPriorAttempts(ws, goal, 24.0, "widgets", "")
+	if skipped != 0 {
+		t.Fatalf("healthy fixtures counted as skipped: %d", skipped)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +117,10 @@ func TestFindPriorAttemptsWindowExcludeAndFallbacks(t *testing.T) {
 		"prompt": goal, "status": "done", "goal_achieved": false,
 		"stop_verdict": "thesis-refuted",
 	})
-	got, err := FindPriorAttempts(ws, goal, 24.0, "", "me")
+	got, skipped, err := FindPriorAttempts(ws, goal, 24.0, "", "me")
+	if skipped != 0 {
+		t.Fatalf("healthy fixtures counted as skipped: %d", skipped)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +324,10 @@ func TestFindPriorAttemptsSkipsMalformedMetadata(t *testing.T) {
 		"handle_id": "nw", "started_at": 42,
 		"prompt": goal, "status": "done",
 	})
-	got, err := FindPriorAttempts(ws, goal, 24.0, "", "")
+	got, skipped, err := FindPriorAttempts(ws, goal, 24.0, "", "")
+	if skipped != 4 {
+		t.Fatalf("malformed neighbours must be COUNTED, not silently dropped: skipped=%d", skipped)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,5 +347,62 @@ func TestTextSimilarityMatchesPython(t *testing.T) {
 	}
 	if got := textSimilarity("", "anything"); got != 0.0 {
 		t.Errorf("empty side: %v", got)
+	}
+}
+
+// TestRecallRecoversFromPanicKeepingPartialResults: the recover
+// contract executed, not just asserted (r2 Skeptic — an instrument
+// nothing proves can fire is untrusted). The panicHook seam sits
+// between the substrates, so prior attempts gathered BEFORE the panic
+// must survive on the returned Result alongside the named panic.
+func TestRecallRecoversFromPanicKeepingPartialResults(t *testing.T) {
+	ws := t.TempDir()
+	goal := "rebuild the index"
+	writeRunMeta(t, ws, "p1-x", map[string]any{
+		"handle_id": "p1", "started_at": isoAgo(time.Hour),
+		"prompt": goal, "status": "done",
+	})
+	panicHook = func() { panic("synthetic recall bug") }
+	defer func() { panicHook = nil }()
+	rr := Recall(ws, goal, "")
+	trace, _ := rr.Sources["error_recall_panic"].(string)
+	if !strings.Contains(trace, "synthetic recall bug") {
+		t.Fatalf("panic not named in Sources: %v", rr.Sources)
+	}
+	if !strings.Contains(trace, "recall_test.go") && !strings.Contains(trace, "goroutine") {
+		t.Fatalf("panic trace carries no stack: %q", trace)
+	}
+	if len(rr.PriorAttempts) != 1 || rr.PriorAttempts[0].HandleID != "p1" {
+		t.Fatalf("partial results lost on panic: %+v", rr.PriorAttempts)
+	}
+	if rr.Lessons != "" {
+		t.Fatalf("substrate after the panic should not have run")
+	}
+}
+
+// TestContextBlockDegenerateBudgetStaysBounded: at limits <= 128 the
+// bound WINS with a bare cut (no marker) instead of Clip(limit-64),
+// whose <=0 case disables the bound entirely (Python's 2026-08-14
+// fixpoint guard, r1 Expert QA / r2 Skeptic: prose-only until now).
+func TestContextBlockDegenerateBudgetStaysBounded(t *testing.T) {
+	saved := budget.RecallContext.Limit
+	defer func() { budget.RecallContext.Limit = saved }()
+	r := Result{PriorAttempts: []PriorAttempt{
+		{Status: "stuck", When: "2026-08-22T10:00:00"},
+	}}
+	for _, limit := range []int{64, 100, 128} {
+		budget.RecallContext.Limit = limit
+		got := r.ContextBlock()
+		if n := len([]rune(got)); n > limit {
+			t.Fatalf("limit %d: block ran %d runes — the degenerate floor lost to the bound", limit, n)
+		}
+		if strings.Contains(got, "truncated") {
+			t.Fatalf("limit %d: degenerate budget has no room for a marker:\n%s", limit, got)
+		}
+	}
+	budget.RecallContext.Limit = 129
+	got := r.ContextBlock()
+	if n := len([]rune(got)); n > 129+64 {
+		t.Fatalf("limit 129: clip path unbounded: %d runes", n)
 	}
 }

@@ -446,6 +446,31 @@ direction).
   are Python-parity surface with no production Go caller yet
   (unit-tested only; the project lane is dead on the CLI path until
   project threading lands pre-decompose).
+  Recall r2 fix layer (adversarial, 2 lenses, sonnet-medium
+  fallback): the r1 citedness fix had an unfixed WRITER sibling —
+  pack import's shape-only `.([]any)` assertion PERSISTED drifted
+  truthy evidence as `[]`, making the row permanently uncited (the
+  read-side fix could never help a row the write side already
+  flattened; both lenses found it independently, and it is the
+  flagship pattern's 11th instance — the round's top finding sat
+  inside the previous round's fix). One owner now:
+  knowledge.CoerceEvidenceSources is the single truthiness-preserving
+  coercion, called by the tiered reader AND the pack importer, with a
+  round-trip pin (TestImportPreservesCitednessThroughTypeDrift).
+  Also from r2: the recover now captures debug.Stack() under a new
+  PanicTrace budget (a bare panic value with no trace is
+  un-actionable; a panicHook test seam proves the recover fires and
+  that pre-panic partial results survive); FindPriorAttempts returns
+  a skipped count surfaced as Sources["prior_attempts_skipped"]
+  (malformed run metadata was silently invisible — same
+  short-read-vs-short-store honesty rule as the lesson loader);
+  truthy(json.Number) parse-failure fails OPEN to truthy (the
+  conservative direction for provisional/contested gates — pinned);
+  the ContextBlock degenerate floor and the happy-path event-failure
+  warning each gained the executing test their prose claimed.
+  Named accepted (r2): with Limit<=0 as unlimited there is no way to
+  request literally zero rows — acceptable because no caller wants an
+  empty read from a retrieval API (comment on LoadOptions).
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a

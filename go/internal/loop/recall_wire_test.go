@@ -124,3 +124,33 @@ func TestRunRecallDegradesWithoutStore(t *testing.T) {
 		t.Fatalf("phantom recall block on empty store:\n%s", fake.Prompts[0])
 	}
 }
+
+// TestRecallEventFailureSurfacesAsWarningOnHealthyRun: the OTHER half
+// of the held-warning contract — decompose succeeds, so the recall
+// event-write failure must ride Result.Warnings instead of a failure
+// chain (adversarial recall r2, QA: only the failure path had a test,
+// so the happy-path surfacing was an unexecuted claim).
+func TestRecallEventFailureSurfacesAsWarningOnHealthyRun(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	if err := os.MkdirAll(filepath.Join(ws, "memory", "captains_log.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &llm.Fake{Script: []string{`["do the thing"]`, "done it"}}
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "a goal that succeeds despite a dead event log",
+		MaxSteps: 1, DryRun: true})
+	if err != nil || res.Status != "done" {
+		t.Fatalf("healthy run broke: %v %+v", err, res)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "RECALL_PERFORMED") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recall event-write failure silent on happy path; warnings: %v", res.Warnings)
+	}
+}

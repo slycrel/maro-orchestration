@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -291,5 +292,18 @@ func TestQueryLessonsScoredUnreadableTierDegrades(t *testing.T) {
 	}
 	if len(errs) != 1 {
 		t.Fatalf("unreadable tier not reported: %v", errs)
+	}
+}
+
+// TestTruthyNumberParseErrorFailsOpen: a json.Number whose Float64
+// errors (out-of-range exponent) reads as TRUTHY — the conservative
+// direction for the provisional/contested gates (r2 Skeptic: the safe
+// direction was asserted, never proven).
+func TestTruthyNumberParseErrorFailsOpen(t *testing.T) {
+	if !truthy(json.Number("1e999999999")) {
+		t.Fatal("unparseable number must fail open to truthy")
+	}
+	if truthy(json.Number("0")) || !truthy(json.Number("0.5")) {
+		t.Fatal("plain number truthiness broken")
 	}
 }

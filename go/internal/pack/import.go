@@ -735,7 +735,12 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	if lt, ok := row["lesson_type"].(string); ok && knowledge.LessonTypes[lt] {
 		lessonType = lt
 	}
-	evidence, _ := row["evidence_sources"].([]any)
+	// Truthiness-preserving coercion, shared with the tiered loader —
+	// the shape-only assertion here was the r1 citedness fix's unfixed
+	// WRITER sibling: a drifted truthy value imported as [] and was
+	// PERSISTED that way, so every future read saw a genuinely-uncited
+	// row forever (adversarial recall r2 2026-08-22, both lenses).
+	evidence := knowledge.CoerceEvidenceSources(row["evidence_sources"])
 	if evidence == nil {
 		evidence = []any{}
 	}

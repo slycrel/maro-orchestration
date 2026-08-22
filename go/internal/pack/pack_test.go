@@ -560,3 +560,33 @@ func TestUnknownClassQuarantines(t *testing.T) {
 		t.Fatalf("quarantined file not on disk: %v", err)
 	}
 }
+
+// TestImportPreservesCitednessThroughTypeDrift: the WRITER sibling of
+// the tiered loader's citedness rule (adversarial recall r2 2026-08-22,
+// both lenses). A truthy-but-not-list evidence_sources arriving in a
+// pack must persist as a non-empty list — an import that flattens it to
+// [] makes the row permanently uncited, and the 0.90 ranking penalty
+// then fires on every future read. Falsy drift still persists as [].
+func TestImportPreservesCitednessThroughTypeDrift(t *testing.T) {
+	ws := fixtureWorkspace(t)
+	if err := os.WriteFile(filepath.Join(ws, "memory", "long", "lessons.jsonl"),
+		[]byte(`{"lesson_id":"cited","lesson":"cited lesson with drifted receipts","source_goal":"g","confidence":0.9,"tier":"long","score":1.0,"minted_from":"outcome","evidence_sources":"run:abc123"}`+"\n"+
+			`{"lesson_id":"uncited","lesson":"uncited lesson with falsy drift","source_goal":"g","confidence":0.9,"tier":"long","score":1.0,"minted_from":"outcome","evidence_sources":""}`+"\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	importInto(t, exportSealed(t, ws), target)
+	rows := readLines(t, filepath.Join(target, "memory", "medium", "lessons.jsonl"))
+	byLesson := map[string][]any{}
+	for _, r := range rows {
+		ev, _ := r["evidence_sources"].([]any)
+		byLesson[r["lesson"].(string)] = ev
+	}
+	if len(byLesson["cited lesson with drifted receipts"]) == 0 {
+		t.Fatalf("truthy drifted evidence flattened to uncited on WRITE: %v", rows)
+	}
+	if len(byLesson["uncited lesson with falsy drift"]) != 0 {
+		t.Fatalf("falsy evidence should persist as []: %v", rows)
+	}
+}

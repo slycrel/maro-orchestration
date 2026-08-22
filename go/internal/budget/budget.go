@@ -128,6 +128,17 @@ var (
 			"substrates Python folds under this number (see PORT.md)",
 	}
 
+	// PanicTrace bounds a recovered panic's value+stack riding an
+	// instrumentation row (recall's error_recall_panic).
+	PanicTrace = Budget{
+		Name:  "panic-trace",
+		Limit: 4000,
+		Why: "debug.Stack() for a shallow call tree runs 1-3k chars; 4000 " +
+			"keeps the frames that locate the bug while bounding a " +
+			"captain's-log event row (adversarial recall r2 2026-08-22: a " +
+			"bare panic VALUE with no trace is un-actionable)",
+	}
+
 	// InjectedStep bounds one worker-injected step's text before it
 	// becomes the next prompt's step line.
 	InjectedStep = Budget{
@@ -155,6 +166,7 @@ var Registry = []Budget{
 	VerdictProse,
 	LessonInject,
 	RecallContext,
+	PanicTrace,
 	InjectedStep,
 }
 

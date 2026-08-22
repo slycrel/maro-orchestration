@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -105,7 +106,14 @@ func Recall(workspaceDir, goal, project string) (res Result) {
 	res = Result{Sources: sources}
 	defer func() {
 		if r := recover(); r != nil {
-			sources["error_recall_panic"] = fmt.Sprint(r)
+			// Value AND stack: the guard exists for UNANTICIPATED bugs,
+			// and "index out of range [3]" without a trace is
+			// un-actionable across ~900 lines of corrupted-data
+			// handling (adversarial recall r2 2026-08-22, Expert QA).
+			// Bounded under the PanicTrace budget — the string rides a
+			// captain's-log event row.
+			sources["error_recall_panic"] = budget.PanicTrace.Clip(
+				fmt.Sprintf("%v\n%s", r, debug.Stack()))
 			sources["elapsed_ms"] = time.Since(t0).Milliseconds()
 			// Partial substrate results assembled before the panic
 			// stay on res — same degradation direction as Python,
@@ -113,18 +121,38 @@ func Recall(workspaceDir, goal, project string) (res Result) {
 		}
 	}()
 
-	prior, scanErr := FindPriorAttempts(workspaceDir, goal, 24.0, project, "")
+	prior, priorSkipped, scanErr := FindPriorAttempts(workspaceDir, goal, 24.0, project, "")
 	if scanErr != nil {
 		sources["error_prior_attempts"] = scanErr.Error()
 	}
 	res.PriorAttempts = prior
 	sources["prior_attempts"] = len(prior)
+	if priorSkipped > 0 {
+		// A short scan must be distinguishable from a short history —
+		// the same doctrine the tiered loader's skipped count carries
+		// (adversarial recall r2 2026-08-22, Expert QA: every malformed
+		// metadata continue vanished untraced while the package doc
+		// promised degradations are named).
+		sources["prior_attempts_skipped"] = priorSkipped
+	}
+
+	if panicHook != nil {
+		panicHook()
+	}
 
 	res.Lessons = lessonsBlock(workspaceDir, goal, sources)
 
 	sources["elapsed_ms"] = time.Since(t0).Milliseconds()
 	return res
 }
+
+// panicHook is a test seam: the recover contract ("an unanticipated
+// panic degrades to knows-nothing with partial results kept") needs an
+// executing test, and no honest fixture can force a panic through the
+// guarded parse paths (adversarial recall r2 2026-08-22, Skeptic — an
+// instrument nothing proves can fire is untrusted). Nil in production;
+// the test points it at panic() between the substrates.
+var panicHook func()
 
 // lessonsBlock runs the ranked selection (agenda-typed first, untyped
 // top-up to 3, dedup by lesson_id — recall.py's chunk-6 rewire) and the
@@ -224,14 +252,22 @@ func lessonsBlock(workspaceDir, goal string, sources map[string]any) string {
 // Python applies at the matching boundary is unported (the Go CLI has
 // no prefix grammar); a Python run recorded under a prefixed prompt may
 // therefore miss the near-match here — named divergence.
-func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, excludeHandleID string) ([]PriorAttempt, error) {
+//
+// skipped counts run dirs whose metadata was unreadable, unparseable,
+// or type-drifted (no readable prompt / started_at) — a short scan must
+// be distinguishable from a short history, the same doctrine as the
+// tiered loader's skipped count. Python's sibling drops these silently;
+// the counter is a Go-side addition, not a divergence in what loads
+// (adversarial recall r2 2026-08-22, Expert QA). Dirs that read fine
+// but simply don't match, or fall outside the window, are NOT skips.
+func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, excludeHandleID string) (attempts []PriorAttempt, skipped int, err error) {
 	root := filepath.Join(workspaceDir, "runs")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return nil, err
+		return nil, 0, err
 	}
 	type dirM struct {
 		name  string
@@ -257,10 +293,10 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 
 	cutoff := time.Now().UTC().Add(-time.Duration(windowHours * float64(time.Hour)))
 	goalNorm := normalize(goal)
-	var attempts []PriorAttempt
 	for _, d := range dirs {
 		meta := readRunMetadata(filepath.Join(root, d.name, "metadata.json"))
 		if meta == nil {
+			skipped++
 			continue
 		}
 		handleID, _ := meta["handle_id"].(string)
@@ -273,6 +309,7 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 		started, _ := meta["started_at"].(string)
 		when, perr := parseISO(started)
 		if perr != nil {
+			skipped++ // unreadable timestamp = broken row, not old row
 			continue
 		}
 		if when.Before(cutoff) {
@@ -280,6 +317,7 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 		}
 		prompt, _ := meta["prompt"].(string)
 		if prompt == "" {
+			skipped++ // a run with no readable prompt cannot match anything
 			continue
 		}
 		var match string
@@ -324,7 +362,7 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 	sort.SliceStable(attempts, func(i, j int) bool {
 		return attempts[i].When > attempts[j].When
 	})
-	return attempts, nil
+	return attempts, skipped, nil
 }
 
 func readRunMetadata(path string) map[string]any {
