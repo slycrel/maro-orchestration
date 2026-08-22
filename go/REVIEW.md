@@ -2510,3 +2510,45 @@ two required consecutive zero-HIGH rounds.
 Fix-layer mutations M107/M108 DETECTED with compiling mutants. Full suite
 green, gofmt/vet clean. r7's HIGH fix RESETS the fixpoint clock — r8 is the
 first of two required consecutive zero-HIGH rounds.
+
+## Round 8 (2026-08-22, skeptic + qa, SAME-MODEL FALLBACK: sonnet-medium)
+
+### Verdict: REJECT → FIXED (two HIGHs, both closed). Verification Ledger:
+
+- **HIGH (skeptic) — mid-host tab/CR/LF pad past the 512 cap.** VERIFIED
+  live: `https://evil` + 600 tabs (or CR, or LF) + `collector.com/leak-
+  secret-data` → `IsClean=true` (the r7 leading-run skip stops at `evil`, so
+  the cap truncates the tabs+TLD before the per-candidate strip runs). WHATWG
+  strips tab/CR/LF whole-string, so a real client fetches evilcollector.com —
+  the r3 tab-in-host class at a scale past the cap. FIXED by stripping
+  tab/CR/LF ONCE globally over a URL-only copy before per-scheme slicing
+  (skip loop simplified to slashes). Mutation M110 (revert to per-candidate
+  strip) COMPILES and FAILS the mid-host pin.
+
+- **HIGH (qa) — outer 50k `scanMaxChars` content clip starvation.** VERIFIED
+  live: `https:` + 60k slashes (or tabs) + `evil-collector.com/leak` →
+  `IsClean=true` (clipped to 50k of pure padding before the URL loop runs).
+  Same starvation class at the outer boundary; shared fork-point gap (Python's
+  `content[:max_chars]` identical). FIXED by running the URL scan over the
+  FULL control-stripped `content`, not the 50k-clipped keyword target — adds
+  no DoS class (keyword clip already does `[]rune(content)` = O(content); RE2
+  linear; inner skip+512 cap bounds per-candidate work). Mutation M109
+  (content->target) COMPILES and FAILS the outer-clip pin, isolated (mid-host
+  pin still passes under it).
+
+- **MEDIUM (qa) — r7 pins didn't isolate \r/\n at cap scale.** Real
+  coverage gap. CLOSED: added \r-only and \n-only 600-repeat pads to the
+  cap-starvation mustFlag set.
+
+- **CONFIRMED CLEAN (both lenses) — r7 cap pins load-bearing, Revert
+  fault-injection test asserts-the-flow (not the object), the three
+  goal_achieved readers byte-aligned with genuine malformed-value pins, and
+  urlHostAllowed's slash-strip in lockstep with exfilURLShape's `[/\\]*`.**
+
+Fix-layer mutations M109/M110 DETECTED with compiling mutants, each isolated
+to its own pin. Full suite green, gofmt/vet clean. r8's HIGHs RESET the
+fixpoint clock — r9 is the first of two required consecutive zero-HIGH
+rounds. STANDING NOTE: 7 straight rounds each found a real defect in this
+hand-rolled URL parser; if convergence doesn't come by r9/r10, a
+spec-grounded parse (net/url + WHATWG normalization) is the candidate end
+state over continued regex hardening.

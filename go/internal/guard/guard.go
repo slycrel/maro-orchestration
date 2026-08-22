@@ -91,8 +91,11 @@ var schemeRe = regexp.MustCompile(`(?i)https?:`)
 
 var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 
-// urlControlStripper removes ASCII tab/CR/LF from a URL candidate (the
-// WHATWG normalization step) so they can't hide inside a hostname.
+// urlControlStripper removes ASCII tab/CR/LF (the WHATWG normalization
+// step) so they can't hide inside a hostname. Applied ONCE over a URL-only
+// copy of the scanned text before per-scheme slicing — WHATWG removes them
+// whole-string, and doing it per-candidate after the byte cap left a
+// starvation hole (r8; see the scan loop).
 var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
 
 // urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
@@ -204,54 +207,67 @@ func ScanContent(content, source string) ScanReport {
 	// scheme to the next whitespace; if it matches the exfil URL shape
 	// and its host is NOT allowlisted, it fires. An allowlisted outer
 	// host never launders a non-allowlisted inner one.
-	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
-		cand := target[loc[0]:]
-		// Skip the scheme + the WHATWG "ignore slashes" run BEFORE capping.
-		// The ignorable prefix is scheme + any run of `/`, `\`, tab, CR, or
-		// LF (special-scheme slash leniency + the tab/CR/LF-strip step), and
-		// r6 made that slash run UNBOUNDED. If the byte cap were applied from
-		// the scheme position (as it was through r6), a long slash- or
-		// tab-pad — `https:` + 600×`/` + `evil.com/leak` — would fill the
-		// whole 512-byte window with ignorable prefix and truncate the host
-		// away, so the shape never matched and the URL scanned clean while a
-		// real client still fetches it (r7 review; both Go and Python missed
-		// this — Python's own `{3,50}` host bound has the same blind spot, so
-		// closing it here makes Go MORE correct than Python — backport
-		// candidate #11). Capping AFTER the prefix guarantees the window
-		// holds the authority. The prefix scan is O(run) and each run belongs
-		// to exactly one scheme, so total work stays linear in the (already
-		// 50k-capped) content.
+	//
+	// WHATWG removes ASCII tab/CR/LF from a URL as a WHOLE-STRING
+	// preprocessing step, not a per-URL one — a real client deletes them
+	// wherever they sit, including in the MIDDLE of a host. So strip them
+	// ONCE, over a URL-only copy, BEFORE per-scheme slicing and the byte
+	// cap. Doing it per-candidate AFTER the cap (as r7 did) left a
+	// starvation hole: `https://evil` + 600 tabs + `collector.com/leak`
+	// stops the leading-run skip at `evil`, so the cap truncates the tabs
+	// and the TLD away before the strip could collapse them, and the URL
+	// scanned clean while a real client fetches `evilcollector.com` (r8
+	// review — the r3 tab-in-host evasion class at a scale past the cap).
+	//
+	// The URL scan reads the FULL `content`, NOT the scanMaxChars-clipped
+	// `target` the keyword passes use: the 50k rune clip is itself a
+	// starvable prefix budget — `https:` + 60k slashes/tabs + `evil.com/x`
+	// clips to 50k of pure padding and loses the host, while a real client
+	// fetches straight through it (r8 QA review; shared fork-point gap —
+	// Python's content[:max_chars] has the same blind spot — backport
+	// candidate #11). Scanning the full content adds no DoS class: the
+	// keyword clip already does `[]rune(content)` (O(content) alloc), this
+	// strip is the same order, RE2 is linear, and the inner skip+512 cap
+	// bounds per-candidate work, so total URL-scan work is linear in
+	// content. It is a SEPARATE copy so the override/tool-call/keyword loops
+	// above keep reading `target` with original offsets and evidence.
+	urlTarget := urlControlStripper.Replace(content)
+	for _, loc := range schemeRe.FindAllStringIndex(urlTarget, -1) {
+		cand := urlTarget[loc[0]:]
+		// Skip the scheme + the WHATWG "special authority ignore slashes"
+		// run BEFORE capping. That run (`/` and `\`, UNBOUNDED since r6) is
+		// position-dependent and is NOT globally removed, so a long slash-
+		// pad — `https:` + 600×`/` + `evil.com/leak` — could still fill the
+		// whole 512-byte window and truncate the host away if the cap were
+		// applied from the scheme (r6/r7; both Go and Python missed this —
+		// Python's `{3,50}` host bound has the same blind spot, so closing
+		// it makes Go MORE correct than Python — backport candidate #11).
+		// Capping AFTER the run guarantees the window holds the authority.
+		// tab/CR/LF are already gone (global strip above), so the run is
+		// just slashes now. The skip is O(run) and each run belongs to one
+		// scheme, so total work stays linear in the 50k-capped content.
 		skip := len("http:")
 		if strings.HasPrefix(strings.ToLower(cand), "https:") {
 			skip = len("https:")
 		}
-		for skip < len(cand) {
-			if c := cand[skip]; c == '/' || c == '\\' || c == '\t' || c == '\r' || c == '\n' {
-				skip++
-				continue
-			}
-			break
+		for skip < len(cand) && (cand[skip] == '/' || cand[skip] == '\\') {
+			skip++
 		}
 		// Bound the AUTHORITY window (in BYTES). Without this, a blob of
 		// `https://` repeated with no whitespace is O(schemes × tail) per
 		// ScanContent — each candidate would be the whole remaining target
 		// (r4 review DoS). The exfil shape needs only a scheme, a ≤50-rune
 		// host, a TLD, and a short path, so a few hundred bytes past the
-		// prefix is always enough to decide a match.
+		// slash run is always enough to decide a match.
 		if len(cand) > skip+urlCandidateMax {
 			cand = cand[:skip+urlCandidateMax]
 		}
-		// Candidate ends at the next SPACE. ASCII tab/CR/LF are then
-		// REMOVED from within it, mirroring the WHATWG URL "remove all
-		// ASCII tab or newline" step — a real client fetches
-		// `https://evil<TAB>collector.com/x` as `evilcollector.com`, so a
-		// detector that let the tab terminate the host would miss it
-		// (r3 review). The exfil shape requires a `.tld/path`, so gluing
-		// a bare line-end host to the next line cannot forge a match.
+		// Candidate ends at the next SPACE (tab/CR/LF already stripped, so a
+		// bare line-end host has been glued to whatever followed — matching
+		// how a real client normalizes it).
 		if i := strings.IndexByte(cand, ' '); i >= 0 {
 			cand = cand[:i]
 		}
-		cand = urlControlStripper.Replace(cand)
 		if !exfilURLShape.MatchString(cand) || urlHostAllowed(cand) {
 			continue
 		}

@@ -1040,11 +1040,14 @@ requires `://`, missing ONLY the WHATWG slash-LIGHT forms (0 or 1 slash:
 `https:host/x`, `https:/host/x`) a real client fetches — Python's `[^\s]+`
 after `://` still absorbs the slash-HEAVY forms (`https:///host`), so
 those are a Go-r5-regression, not a Python gap (see r6); (11) exfil URL
-scan window can be STARVED by a long ignorable prefix — Python's `{3,50}`
-host-length bound and Go's (pre-r7) 512-byte candidate cap both miss
-`https:` + 600×`/` (or tab) + `evil.com/leak`, which a real client fetches
-by skipping the ignore-slashes/control run; Go r7 fixes this (cap applied
-AFTER the prefix) and is now MORE correct than Python here.
+scan windows can be STARVED by ignorable padding at THREE nested levels,
+all sharing the fork-point (Python has each blind spot too): the inner
+512-byte candidate cap (leading slash/tab pad — r7), a mid-host tab/CR/LF
+pad past that cap since WHATWG strips control chars whole-string not
+per-URL (r8 skeptic), and the outer 50k `max_chars`/`scanMaxChars` content
+clip (60k pad clips to pure padding, losing the host — r8 QA). Go now
+closes all three (skip-before-cap, global control-strip, full-content URL
+scan) and is MORE correct than Python at each.
 
 **r5 CONFIRMATION round (2026-08-22, skeptic+qa) — first zero-HIGH round.**
 Both lenses traced the full WHATWG authority-shape checklist and VERIFIED
@@ -1104,6 +1107,37 @@ unconditional) COMPILES and FAILS it. The r4-named "needs cross-file txn"
 residual stands (the ordering is unchanged — Python parity), but its honesty
 contract is now test-covered. Full suite green, gofmt/vet clean. r7's HIGH
 fix resets the clock again — r8 is the first of two required clean rounds.
+
+**r8 round (2026-08-22, skeptic+qa) — NOT zero-HIGH; TWO distinct HIGHs,
+each a different level of the SAME starvation class.** The saga's lesson
+sharpens: this hand-rolled parser keeps yielding one nested window at a
+time. (a) skeptic HIGH — the r7 fix only skipped the LEADING ignorable run,
+but WHATWG strips tab/CR/LF whole-string; `https://evil` + 600 tabs +
+`collector.com/leak` stops the skip at `evil`, so the 512 cap truncates the
+tabs+TLD before the per-candidate strip could collapse them, scanning clean
+while a real client fetches evilcollector.com (the r3 tab-in-host class past
+the cap). Fixed by stripping tab/CR/LF ONCE globally over a URL-only copy
+before per-scheme slicing. (b) QA HIGH — the OUTER 50k `scanMaxChars`
+content clip is itself a starvable prefix budget: `https:` + 60k slashes/
+tabs + `evil.com/x` clips to 50k of pure padding, losing the host. Fixed by
+running the URL scan over the FULL (control-stripped) `content`, not the
+50k-clipped keyword target — no new DoS class (the keyword clip already does
+`[]rune(content)` = O(content); RE2 linear; inner skip+512 cap bounds
+per-candidate work). Both verify-before-fix'd live; both are shared
+fork-point gaps (Python misses them too — candidate #11 now spans all three
+window levels). must-detect pins added (mid-host tab/CR/LF, \r-only/\n-only
+at cap scale per QA's MEDIUM, 60k outer-clip) + allowlisted negative
+controls at each scale; mutations M109 (outer-clip: content->target) and
+M110 (mid-host: revert to per-candidate strip) both COMPILE and FAIL their
+pins, isolated. QA's other findings (r7 pins load-bearing, Revert
+fault-injection test asserts-the-flow, three goal_achieved readers aligned,
+urlHostAllowed in lockstep with the shape) all traced clean. r8's HIGHs
+reset the clock — r9 is the first of two required clean rounds. NOTE: 7
+straight rounds have each found a real, mutation-verified defect in this
+hand-rolled URL/authority parser (grammar -> window -> nested windows). If
+r9/r10 don't converge, the honest end state may be a spec-grounded URL parse
+(net/url + explicit WHATWG normalization) rather than continued regex
+hardening — flagged for a decision at convergence.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
