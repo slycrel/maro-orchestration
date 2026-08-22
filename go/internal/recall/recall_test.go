@@ -421,7 +421,11 @@ func TestPanicTraceKeepsStackUnderOversizedValue(t *testing.T) {
 	if !strings.Contains(trace, "corrupted-row-payload") {
 		t.Fatalf("panic value missing entirely: %q", trace)
 	}
-	if !strings.Contains(trace, "goroutine") && !strings.Contains(trace, "recall") {
-		t.Fatalf("oversized panic value crowded the stack out of the budget:\n%s", trace)
+	// A deep frame, not the "goroutine 1 [running]:" header — the header
+	// survives a stack truncated to ~30 chars, a Recall frame does not
+	// (adversarial recall r4 2026-08-22: assert survival of a USEFUL
+	// stack, not presence of its first line).
+	if !strings.Contains(trace, "recall.Recall") {
+		t.Fatalf("oversized panic value crowded the useful stack out of the budget:\n%s", trace)
 	}
 }

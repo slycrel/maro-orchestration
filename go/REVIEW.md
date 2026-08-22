@@ -1120,3 +1120,57 @@ pins, 1 LOW fixed comment-grade. Zero refuted. Both r3 mutations
 DETECTED. Post-fix: full suite green, vet clean, race clean on the 3
 touched packages, binary rebuilt. Not yet lows-only — round 4 runs on
 this fix layer.
+
+## Memory RECALL tranche — adversarial round 4 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Scope: the r3 fix layer (51377350). 1 lens (Skeptic — rotated from
+r3's QA). Artifacts: `$SP/adv-review-recall-r4.oJTQiS/skeptic.md`.
+
+### Verification Ledger
+
+1. **MED (Skeptic) — the r3 fix protects future imports only;
+   pre-fix rows sit on disk as durable trusted rows with no repair
+   path.** VERIFIED as a consequence; the original string was
+   overwritten with a bool, so a repair scan is impossible.
+   **FIXED (doc-grade, the finding's own fix shape)**: PORT.md now
+   carries the operational note — re-import packs imported by
+   pre-51377350 builds — plus the honest scoping that no deployment
+   is affected (the Go port is pre-production by decree; no pre-fix
+   importer ran outside this branch's tests).
+2. **LOW (Skeptic, verified-safe) — human_reviewed at import.go:156
+   is the same shape-only .(bool) class and was not touched.**
+   VERIFIED and ACCEPTED-NAMED as the negative control the r3
+   sibling census should have recorded: both writers (seal.go:100,
+   export.go:294) emit native booleans, and the failure direction is
+   SAFE — a forged string fails the assertion and the pack is
+   REFUSED (fail-closed is correct for a review gate; Truthy here
+   would let a forged "true" string pass — a step backward).
+3. **LOW (Skeptic) — the oversized-value stack pin asserted the
+   stack's HEADER, not a useful stack.** VERIFIED: the OR-assertion
+   passed on "goroutine 1 [running]:" alone. **FIXED**: the pin now
+   requires the deep `recall.Recall` frame (mutation: PanicTrace
+   shrunk to 590 so only value+header fit → FAIL).
+4. **LOW (Skeptic, correctly-scoped) — panicHook's constraint is a
+   comment, not enforcement.** ACCEPTED-NAMED: proportional for a
+   single-caller test-only seam; promote to a guarded setter if the
+   seam grows callers (recorded in PORT.md).
+5. **Negative controls (recorded)**: the round-trip provisional pin
+   exercises the REAL export→seal→import path (export copies lesson
+   files as raw bytes, so drift survives to the importer — verified
+   at export.go:263); the PanicValue split is arithmetically sound
+   (≤564-rune value+marker guarantees ~3.4k of stack, matching the
+   budget's Why); Truthy has exactly one import-side call site — no
+   accidental fan-out.
+
+### Verdict derivation — FIXPOINT
+
+**Verdict: NO BLOCKERS FOUND (SAME-MODEL FALLBACK: sonnet-medium).**
+4 findings: 1 MED fixed doc-grade, 1 LOW fixed with a
+mutation-verified tightened pin, 2 LOW accepted-named with the safe
+direction argued. No HIGH, no production-code defect — the round
+reviewed a fix layer whose changes were one exported helper, one
+budget, and pins, and found only doc/test-grade residue. The recall
+tranche converges at r4: r1 20v/2r → r2 9 findings (joint HIGH) →
+r3 3 findings (1 HIGH) → r4 lows-only. Flagship pattern finished
+12-for-12 across the arc: every round's top finding sat inside the
+newest layer of change.

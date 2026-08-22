@@ -488,6 +488,23 @@ direction).
   crowd the stack — the actionable half — out of the budget; the
   panicHook seam carries a no-t.Parallel() comment (unsynchronized
   by design, single production caller).
+  Recall r4 (adversarial, 1 Skeptic lens, sonnet-medium fallback —
+  the CONVERGENCE round: no HIGH, no production-code defect).
+  Operational note (r4 MED): any pack imported by a pre-51377350 Go
+  build persisted drifted provisional flags as a durable
+  `"provisional": false` — indistinguishable on disk from a
+  legitimately trusted row, and not repairable after the fact
+  (the original string was overwritten). Re-import such packs with a
+  current build. No deployment is affected today: the Go port is
+  pre-production by decree and no pre-fix Go importer ran outside
+  this branch's own tests. Accepted-named (r4): pack import's
+  human_reviewed read stays a shape-only .(bool) — BOTH writers emit
+  native booleans and the failure direction is the safe one (a
+  forged string fails the assertion and the pack is REFUSED, not
+  trusted; fail-closed is correct for a review gate, so routing it
+  through Truthy would be a step backward); the panicHook
+  no-t.Parallel() constraint stays comment-grade until the seam
+  grows a second caller.
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a
