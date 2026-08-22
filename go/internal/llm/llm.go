@@ -99,6 +99,18 @@ type ResultError struct {
 
 func (e *ResultError) Error() string { return e.Msg }
 
+// AgentToolsCapable is the OPTIONAL capability a backend asserts to run
+// tool-bearing executor steps. One named type, asserted by every reader
+// (the loop's gate, the CLI's -model wrapper) — two hand-maintained
+// anonymous interface literals drifted apart is a silent-degrade waiting
+// to happen (adversarial exec review 2026-08-22, two lenses). A backend
+// claiming this MUST consume Options.Tools/AgentTools/Cwd/TranscriptPath
+// — asserting it while dropping those fields fabricates "tool-bearing"
+// runs.
+type AgentToolsCapable interface {
+	SupportsAgentTools() bool
+}
+
 // Adapter is the backend seam.
 type Adapter interface {
 	// Complete returns the model's reply or an error. Errors are returned,

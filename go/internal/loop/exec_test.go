@@ -169,9 +169,11 @@ func TestExecLaneInjectCapAndBlankFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Blank filtered, then capped at 3 (Python [:3] parity — note the
-	// Python cap slices BEFORE the emptiness filter; this port filters
-	// first, which can only keep MORE real steps, never fewer).
+	// Blank filtered, then capped at 3 — SAME order as Python
+	// (loop_post_step.py: the `if str(s).strip()` filter runs inside the
+	// comprehension, before the [:3] slice). No divergence. This comment
+	// previously claimed the opposite; three review lenses refuted it
+	// against the Python source (adversarial exec review 2026-08-22).
 	if len(res.Steps[0].Injected) != 3 ||
 		res.Steps[0].Injected[0] != "a" || res.Steps[0].Injected[2] != "c" {
 		t.Fatalf("inject cap: %+v", res.Steps[0].Injected)
@@ -309,5 +311,253 @@ func TestClassifyStepTimeout(t *testing.T) {
 	}
 	if d := classifyStepTimeout("run the full test suite"); d != 1800*time.Second {
 		t.Errorf("full suite 2x override: %v", d)
+	}
+}
+
+func TestResolveProjectSlugDisambiguation(t *testing.T) {
+	root := t.TempDir()
+	goalA := "tell me about the book Systemantics"
+	goalB := "tell me about the book Alexander"
+
+	// First goal: fresh dir, base slug.
+	slugA := resolveProjectSlug(root, goalA)
+	if slugA != "tell-me-about-the-book" {
+		t.Fatalf("slugA = %q", slugA)
+	}
+	dirA := filepath.Join(root, slugA)
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordProjectMission(dirA, goalA); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unrelated goal, same generic phrasing: must NOT inherit A's dir.
+	slugB := resolveProjectSlug(root, goalB)
+	if slugB != "tell-me-about-the-book-2" {
+		t.Fatalf("collision not disambiguated: slugB = %q", slugB)
+	}
+
+	// Same goal re-entered: continuity — same dir, mission unchanged.
+	if again := resolveProjectSlug(root, goalA); again != slugA {
+		t.Fatalf("continuity broken: %q", again)
+	}
+	if err := recordProjectMission(dirA, "some other goal"); err != nil {
+		t.Fatal(err)
+	}
+	if got := recordedMission(dirA); got != goalA {
+		t.Fatalf("mission rewritten by second writer: %q", got)
+	}
+
+	// A slug with two subject words is specific: collision means SAME
+	// project, reuse without any mission check.
+	spec := "research the chlorination of water"
+	slugS := resolveProjectSlug(root, spec)
+	if err := os.MkdirAll(filepath.Join(root, slugS), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if again := resolveProjectSlug(root, spec); again != slugS {
+		t.Fatalf("specific slug should reuse: %q vs %q", again, slugS)
+	}
+}
+
+func TestExecLaneCollidingGoalsGetDistinctProjectDirs(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	rec := record.New(ws)
+	runOne := func(goal string) *Result {
+		fake := execFake(`["one step"]`,
+			`{"tool": "complete_step", "result": "r", "summary": "s"}`)
+		res, err := Run(context.Background(), fake, rec, Opts{
+			Goal: goal, MaxSteps: 2, DryRun: true, Exec: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	a := runOne("summarize the report about glaciers")
+	b := runOne("summarize the report about volcanoes")
+	if a.ProjectDir == b.ProjectDir {
+		t.Fatalf("unrelated goals share a live project dir: %s", a.ProjectDir)
+	}
+	if got := recordedMission(a.ProjectDir); got != "summarize the report about glaciers" {
+		t.Fatalf("mission not recorded: %q", got)
+	}
+}
+
+func TestExecLaneHaltsOnBlockedStepBeforeLaterSteps(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["clone the repo", "modify the code", "push the branch"]`,
+		`{"tool": "flag_stuck", "reason": "repo not found"}`,
+		`{"tool": "complete_step", "result": "MUST NOT RUN", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "halt on block", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" || len(res.Steps) != 1 {
+		t.Fatalf("exec mode must halt on the first blocked step: status=%s executed=%d",
+			res.Status, len(res.Steps))
+	}
+	// Only planner + one step call reached the adapter.
+	if len(fake.Opts) != 2 {
+		t.Fatalf("later steps still executed: %d adapter calls", len(fake.Opts))
+	}
+	// The remainder is NAMED — contents, not just a count.
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	joined := ""
+	for _, c := range chain {
+		joined += c.(string) + "\n"
+	}
+	for _, want := range []string{"repo not found", "halted after blocked step",
+		"modify the code", "push the branch"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("failure chain missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestToollessLaneKeepsRunThroughOnBlocked(t *testing.T) {
+	// The v0 tool-less lane deliberately keeps run-through (steps hold no
+	// tools; partial completion still yields the summary) — pin the
+	// asymmetry so a future edit changes it on purpose, not by accident.
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{
+		`["s1", "s2"]`,
+		"", // empty content -> blocked
+		"second step still ran",
+	}}
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "toolless runthrough", MaxSteps: 2, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Steps) != 2 || res.Steps[1].Result != "second step still ran" {
+		t.Fatalf("tool-less lane should run through: %+v", res.Steps)
+	}
+}
+
+func TestExecLaneProjectDirFailureStillRecordsOutcome(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	// A stray FILE where the project dir must go makes MkdirAll fail.
+	if err := os.MkdirAll(filepath.Join(ws, "projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(ws, "projects", goalSlug("blocked dirsetup goalcase"))
+	if err := os.WriteFile(blocker, []byte("in the way"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := execFake(`["one step"]`, "unused")
+	rec := record.New(ws)
+	_, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "blocked dirsetup goalcase", MaxSteps: 2, DryRun: true, Exec: true})
+	if err == nil {
+		t.Fatal("expected setup error")
+	}
+	// The failed run still left a stuck outcome carrying the planning
+	// spend — a run that leaves no record did not happen.
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	last := rows[len(rows)-1]
+	if last["status"] != "stuck" {
+		t.Fatalf("no stuck outcome recorded: %+v", last)
+	}
+	if !strings.Contains(fmt.Sprint(last["summary"]), "project dir setup failed") {
+		t.Fatalf("summary: %+v", last["summary"])
+	}
+	if last["tokens_in"].(float64) <= 0 {
+		t.Fatalf("planning spend lost: %+v", last["tokens_in"])
+	}
+}
+
+func TestExecLaneStepTimeoutsReachTheAdapter(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["run pytest tests/test_foo.py", "write the summary"]`,
+		`{"tool": "complete_step", "result": "tests pass", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "done", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	if _, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "timeout wiring", MaxSteps: 2, DryRun: true, Exec: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Opts[1].Timeout; got != 1800*time.Second {
+		t.Fatalf("long-running step timeout not wired: %v", got)
+	}
+	if got := fake.Opts[2].Timeout; got != 600*time.Second {
+		t.Fatalf("default step timeout not wired: %v", got)
+	}
+}
+
+func TestExecLaneWrongTypeInjectStepsWarnsLoudly(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["one step"]`,
+		`{"tool": "complete_step", "result": "r", "summary": "s", "inject_steps": "install foo"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "bad inject type", MaxSteps: 2, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "inject_steps present but not an array") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dropped inject_steps must warn: %+v", res.Warnings)
+	}
+}
+
+func TestExecLaneInjectBlanksInterleaved(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["one step"]`,
+		`{"tool": "complete_step", "result": "r", "summary": "s",
+		  "inject_steps": ["a", "  ", "b", "", "c", "d"]}`,
+		`{"tool": "complete_step", "result": "r", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "interleaved blanks", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Steps[0].Injected
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Fatalf("interleaved blanks mishandled: %+v", got)
+	}
+}
+
+func TestExecLaneInjectedStepsAreTagged(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["main step"]`,
+		`{"tool": "complete_step", "result": "r", "summary": "s", "inject_steps": ["extra"]}`,
+		`{"tool": "complete_step", "result": "r2", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "tag injected", MaxSteps: 2, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Steps[0].WasInjected || !res.Steps[1].WasInjected {
+		t.Fatalf("injected tagging wrong: %+v", res.Steps)
 	}
 }

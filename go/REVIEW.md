@@ -427,3 +427,97 @@ outside that one fix-regression class, and its fix (strict decode) is a
 mechanical tightening, not new surface. Residual risk is the named-
 divergence list in PORT.md, all refusal-direction. Full suite green,
 crossrt_smoke.sh (bidirectional tamper included) PASS.
+
+# Executor tranche — tool-bearing worker steps (11f0808f)
+
+## Round 1 — 2026-08-22, on the executor tranche
+
+4 lenses (Skeptic, Architect, Minimalist, Expert QA), SAME-MODEL
+FALLBACK: sonnet-medium (codex capped until 08-27). Every claim below
+was verified against the Python/Go sources before any fix — zero
+hallucinated claims this round (the streak holds).
+
+### Verification Ledger
+
+1. **HIGH (Skeptic) — exec mode continued past a blocked step with live
+   tools** — VERIFIED (loop.go ran the whole queue regardless of
+   status; Python loop_execute.py:1985 breaks on a terminal stuck
+   verdict via loop_blocked's ladder, which Go lacks entirely — so the
+   port's run-through had NO ladder softening it: a live Bash-bearing
+   worker kept acting on a failed premise). **FIXED**: exec mode halts
+   on the first non-done step, failchain names the unexecuted remainder
+   (contents, not counts); tool-less lane keeps v0 run-through as a
+   pinned deliberate asymmetry.
+   Pins: `TestExecLaneHaltsOnBlockedStepBeforeLaterSteps`,
+   `TestToollessLaneKeepsRunThroughOnBlocked`.
+2. **HIGH (all four lenses) — naive goalSlug collides live project
+   dirs** — VERIFIED (goalSlug = first 5 words; Python production runs
+   resolve_project_slug, loop_init.py:400, precisely because "tell me
+   about the…" openers collide; two unrelated runs would share a dir
+   and cwd-bound workers would act on each other's files). **FIXED**:
+   full resolve_project_slug port in loop/project.go (_GENERIC_WORDS
+   verbatim, generic-slug + different-mission → -2…-20 then goal-hash;
+   same-mission continuity; specific slugs reuse). Named divergence:
+   Python reads the mission from NEXT.md; Go records a `.mission` file
+   O_EXCL at creation (first-writer-wins).
+   Pins: `TestResolveProjectSlugDisambiguation`,
+   `TestExecLaneCollidingGoalsGetDistinctProjectDirs`.
+3. **HIGH (Architect) — project-dir mkdir failure lost the run record**
+   — VERIFIED (the error return skipped the outcome write; a run that
+   leaves no record did not happen, and the planning spend vanished).
+   **FIXED**: setup failure writes a stuck outcome carrying the
+   planning tokens before returning the error (mirrors the decompose-
+   failure branch). Pin:
+   `TestExecLaneProjectDirFailureStillRecordsOutcome`.
+4. **HIGH (QA) — transcript-file creation failure would have failed the
+   step**, fabricating a "blocked" record blaming the model for an OS
+   error — VERIFIED (os.Create error propagated as the step error).
+   **FIXED**: soft degrade to the deleted-temp capture + warning riding
+   Response.Warnings AND ResultError.Warnings; artifacts-dir mkdir
+   failure degrades the same way at the loop layer.
+5. **MEDIUM (Skeptic) — `--disallowedTools WebFetch,WebSearch` framed
+   as an egress control** — VERIFIED over-claim (Bash open; Python's
+   real boundary is the container lane, unported). **FIXED**: honest
+   comments + PORT.md qualification; no code change pretends otherwise.
+6. **MEDIUM (two lenses) — duplicated anonymous capability-interface
+   literals** (loop gate vs CLI wrapper) — VERIFIED drift hazard.
+   **FIXED**: one named `llm.AgentToolsCapable`; anthropic.go documents
+   why it deliberately does NOT implement it.
+7. **MEDIUM (Architect) — exec decision derived from a backend-name
+   string in the CLI** — VERIFIED (could drift from the adapter's
+   actual capability under wrapping). **FIXED**: decided once from the
+   constructed adapter via the named interface; three-way "exec mode:"
+   print makes the entered mode visible on stdout alone.
+8. **MEDIUM (QA) — budget-cap failchain reported a remainder COUNT,
+   not contents** — VERIFIED vs Python's named remainder. **FIXED**:
+   nameRemainder() joins the queued step texts (clipped); pinned in
+   the budget-cap and halt tests.
+9. **MEDIUM (QA) — injected steps invisible in delivered output** —
+   VERIFIED (records only). **FIXED**: WasInjected travels to the CLI
+   step printout as ` (worker-injected)`; pin
+   `TestExecLaneInjectedStepsAreTagged`.
+10. **MEDIUM (Skeptic) — injected step text unclipped into the queue**
+    — VERIFIED (a hostile/runaway worker could stuff pages into a
+    "step"). **FIXED**: registered `injected-step` budget (500, marked
+    clip). Interleaved-blank + cap order pinned
+    (`TestExecLaneInjectBlanksInterleaved`; filter-then-cap comment
+    corrected — my own test comment claimed a Python divergence that
+    three lenses REFUTED against loop_post_step.py:1010).
+11. **MEDIUM (QA) — no test exercised step Timeout wiring or the sad
+    paths** — VERIFIED. **FIXED**: `TestExecLaneStepTimeoutsReachTheAdapter`
+    (long-running 1800s + default 600s through real Opts), plus the
+    sad-path pins above and
+    `TestExecLaneWrongTypeInjectStepsWarnsLoudly`.
+12. REFUTED (Minimalist): claim that exec.go's WORKSPACE block
+    duplicated the planner's — the planner block is goal-decompose
+    framing, the exec block is Python EXECUTE_SYSTEM's workspace
+    paragraph; different consumers, kept.
+13. OUT-OF-SCOPE (Architect): per-step model routing/trajectory
+    escalation absent — real, named in PORT.md's unported list; its
+    tranche brings it.
+
+Verdict on r1: CONTESTED → all four HIGHs fixed same-day with
+must-detect pins (SAME-MODEL FALLBACK: sonnet-medium). Full suite
+green (12 packages), live smoke re-run PASS (real claude CLI created
+and verified greeting.txt via its own tools; .mission recorded;
+per-step transcripts kept).

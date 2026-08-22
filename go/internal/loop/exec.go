@@ -156,7 +156,7 @@ func stepTools() []llm.Tool {
 // executor steps (the subprocess CLI can; API/fake backends say so
 // themselves). Structural gate, not a name check.
 func agentToolCapable(a llm.Adapter) bool {
-	c, ok := a.(interface{ SupportsAgentTools() bool })
+	c, ok := a.(llm.AgentToolsCapable)
 	return ok && c.SupportsAgentTools()
 }
 
@@ -241,6 +241,11 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step string,
 
 	tools := stepTools()
 	opts := llm.Options{
+		// Advisory on the subprocess backend (it enforces no output cap
+		// for agentic calls — Python parity, where max_tokens is likewise
+		// advisory there and the runaway brake is unported, named in
+		// PORT.md); enforced by the Anthropic backend if this lane ever
+		// runs there.
 		MaxTokens:   4096,
 		Temperature: 0.3,
 		Timeout:     classifyStepTimeout(step),
@@ -315,14 +320,30 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step string,
 		}
 		out.Status, out.Result = "done", result
 		out.Summary = budget.Clip(argString(tc.Arguments, "summary"), 300)
+		// Confidence is stored raw, unvalidated against the schema enum —
+		// Python parity (step_exec reads outcome.get("confidence","")
+		// unchecked). Nothing branches on it yet; a consumer that does
+		// must validate at ITS boundary.
 		out.Confidence = argString(tc.Arguments, "confidence")
-		if raw, ok := tc.Arguments["inject_steps"].([]any); ok {
+		if rawInject, present := tc.Arguments["inject_steps"]; present && rawInject != nil {
+			raw, ok := rawInject.([]any)
+			if !ok {
+				// A present-but-wrong-type inject_steps means the worker
+				// TRIED to add steps and nothing happened — that must not
+				// be silent (Python shares this silent drop; diverging in
+				// the loud direction).
+				out.Warnings = append(out.Warnings, fmt.Sprintf(
+					"inject_steps present but not an array (%T) — ignored", rawInject))
+			}
 			for _, s := range raw {
 				if len(injected) >= maxInjectPerStep {
 					break
 				}
 				if t := strings.TrimSpace(argToString(s)); t != "" {
-					injected = append(injected, t)
+					// Model-authored text headed for later prompt headers
+					// rides a marked runaway bound, like every other
+					// prompt input.
+					injected = append(injected, budget.InjectedStep.Clip(t))
 				}
 			}
 		}

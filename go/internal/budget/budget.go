@@ -100,6 +100,18 @@ var (
 		Why: "matches Python VERDICT_PROSE_CAP (measured over 156 metadata " +
 			"stamps + 50 closure rows, 2026-08-13) so rows interoperate",
 	}
+
+	// InjectedStep bounds one worker-injected step's text before it
+	// becomes the next prompt's step line.
+	InjectedStep = Budget{
+		Name:  "injected-step",
+		Limit: 500,
+		Why: "inject_steps is model-authored text spliced into later prompt " +
+			"headers unreviewed; the schema asks for <20 words, so 500 chars " +
+			"is a runaway bound, not a working cap (adversarial exec-tranche " +
+			"review 2026-08-22, Architect: uncapped injected text was the one " +
+			"unclipped prompt input)",
+	}
 )
 
 // Registry enumerates every registered budget for the rationale test and
@@ -114,6 +126,7 @@ var Registry = []Budget{
 	OperatorDoc,
 	StepContextTotal,
 	VerdictProse,
+	InjectedStep,
 }
 
 // markerRe recognizes a clip marker at end-of-string. Format is

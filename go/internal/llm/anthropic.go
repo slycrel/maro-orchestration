@@ -15,6 +15,14 @@ import (
 
 // Anthropic is the direct Messages-API backend. Second in the box's
 // backend order after subprocess; needs ANTHROPIC_API_KEY.
+//
+// It deliberately does NOT implement llm.AgentToolsCapable, and its
+// Complete ignores Options.Tools/AgentTools/Cwd/TranscriptPath — it has
+// no agent, no subprocess, and no native tool_use wiring yet. Do not add
+// SupportsAgentTools here without consuming those fields (native tools,
+// or the simulated protocol via BuildPrompt): claiming the capability
+// while dropping them would fabricate "tool-bearing" runs silently
+// (adversarial exec review 2026-08-22, Skeptic).
 type Anthropic struct {
 	APIKey         string
 	Model          string // default model id when Options.Model is empty

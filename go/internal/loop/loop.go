@@ -49,6 +49,10 @@ type StepOutcome struct {
 	Confidence string
 	// Injected lists steps this step added to the plan (inject_steps).
 	Injected []string
+	// WasInjected marks a step the WORKER added mid-run (vs planner-
+	// authored) — the audit trail an operator needs to spot scope creep
+	// (adversarial exec review 2026-08-22, Expert QA).
+	WasInjected bool
 	// Warnings are adapter-reported oddities for this step (folded into
 	// Result.Warnings by Run).
 	Warnings []string
@@ -162,12 +166,39 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			a.Name()))
 	}
 	if execMode {
-		res.ProjectDir = filepath.Join(rec.WorkspaceDir, "projects", goalSlug(goal))
-		if err := os.MkdirAll(res.ProjectDir, 0o755); err != nil {
+		// Disambiguated resolution (project.go): a generic-opening goal
+		// must not inherit an unrelated prior run's directory — with live
+		// tools the second run would read and overwrite the first's files
+		// (adversarial exec review 2026-08-22, all four lenses).
+		projectsRoot := filepath.Join(rec.WorkspaceDir, "projects")
+		res.ProjectDir = filepath.Join(projectsRoot, resolveProjectSlug(projectsRoot, goal))
+		err := os.MkdirAll(res.ProjectDir, 0o755)
+		if err == nil {
+			err = recordProjectMission(res.ProjectDir, goal)
+		}
+		if err != nil {
 			// Tool-bearing steps with no bound workspace would write to
-			// an arbitrary inherited cwd — refuse, don't drift.
-			return nil, fmt.Errorf("exec mode: cannot create project dir %s: %w",
+			// an arbitrary inherited cwd — refuse, don't drift. But the
+			// refusal itself is an outcome: planning already spent real
+			// tokens, and a run that leaves no record did not happen
+			// (adversarial exec review 2026-08-22, Expert QA — the
+			// decompose branch above records, this path didn't).
+			setupErr := fmt.Errorf("exec mode: cannot set up project dir %s: %w",
 				res.ProjectDir, err)
+			if _, recErr := rec.WriteOutcome(record.Outcome{
+				Goal: goal, Status: "stuck", LoopID: loopID,
+				Summary:   budget.FailureChainEntry.Clip("project dir setup failed: " + err.Error()),
+				TaskType:  "loop",
+				Model:     recModel,
+				DryRun:    opts.DryRun,
+				TokensIn:  res.TokensIn,
+				TokensOut: res.TokensOut,
+				ElapsedMS: time.Since(start).Milliseconds(),
+				FailChain: []string{budget.FailureChainEntry.Clip(setupErr.Error())},
+			}); recErr != nil {
+				return nil, fmt.Errorf("%v AND recording failed: %w", setupErr, recErr)
+			}
+			return nil, setupErr
 		}
 	}
 
@@ -185,16 +216,31 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	// remaining_steps[:0] = injected). Total executed is capped at 2x the
 	// planned count — an honest stand-in for Python's max_iterations
 	// machinery (adaptive bumping not ported); hitting it marks the run
-	// stuck with the remainder named in the failure chain.
-	queue := append([]string(nil), steps...)
+	// stuck with the remainder NAMED (contents, not just a count) in the
+	// failure chain.
+	type queuedStep struct {
+		text     string
+		injected bool // worker-added via inject_steps, not planner-authored
+	}
+	queue := make([]queuedStep, 0, len(steps))
+	for _, s := range steps {
+		queue = append(queue, queuedStep{text: s})
+	}
+	nameRemainder := func() string {
+		texts := make([]string, len(queue))
+		for i, q := range queue {
+			texts[i] = q.text
+		}
+		return budget.FailureChainEntry.Clip(strings.Join(texts, "; "))
+	}
 	capTotal := 2 * len(steps)
-	budgetExhausted := false
+	haltedEarly := false
 	for len(queue) > 0 {
 		if len(res.Steps) >= capTotal {
-			budgetExhausted = true
+			haltedEarly = true
 			failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
-				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining",
-				len(res.Steps), capTotal, len(queue))))
+				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining: ",
+				len(res.Steps), capTotal, len(queue)))+nameRemainder())
 			break
 		}
 		step := queue[0]
@@ -202,11 +248,12 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		var out StepOutcome
 		var injected []string
 		if execMode {
-			out, injected = executeExecStep(ctx, a, goal, step,
+			out, injected = executeExecStep(ctx, a, goal, step.text,
 				len(res.Steps)+1, len(res.Steps)+1+len(queue), res.Steps, res.ProjectDir)
 		} else {
-			out = executeStep(ctx, a, goal, step, res.Steps)
+			out = executeStep(ctx, a, goal, step.text, res.Steps)
 		}
+		out.WasInjected = step.injected
 		res.Steps = append(res.Steps, out)
 		res.TokensIn += out.TokensIn
 		res.TokensOut += out.TokensOut
@@ -215,9 +262,33 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			// The reason travels whole (marked breaker, not a truncator).
 			failChain = append(failChain, budget.FailureChainEntry.Clip(
 				fmt.Sprintf("step %d blocked: %s", len(res.Steps)-1, out.Result)))
+			if execMode {
+				// EXEC MODE HALTS on the first non-done step. Python routes
+				// a blocked step through loop_blocked's retry/re-decompose
+				// ladder and breaks on its terminal verdict; none of that
+				// ladder is ported, and "no retry ladder" must not silently
+				// become "no stop conditions" — later steps hold a live
+				// Bash-capable agent that would keep acting on a plan whose
+				// premise just failed (adversarial exec review 2026-08-22,
+				// Skeptic HIGH). The tool-less lane keeps v0's run-through:
+				// its steps are single LLM calls whose prior-evidence
+				// filter already excludes blocked results, and partial
+				// completion still yields a useful summary.
+				if len(queue) > 0 {
+					haltedEarly = true
+					failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
+						"halted after blocked step: %d step(s) not executed: ",
+						len(queue)))+nameRemainder())
+					break
+				}
+			}
 		}
 		if len(injected) > 0 {
-			queue = append(append([]string(nil), injected...), queue...)
+			add := make([]queuedStep, len(injected))
+			for i, s := range injected {
+				add[i] = queuedStep{text: s, injected: true}
+			}
+			queue = append(add, queue...)
 		}
 	}
 
@@ -228,7 +299,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 	}
 	res.Status = "stuck"
-	if done == len(res.Steps) && !budgetExhausted {
+	if done == len(res.Steps) && !haltedEarly {
 		res.Status = "done"
 	}
 	res.Elapsed = time.Since(start)

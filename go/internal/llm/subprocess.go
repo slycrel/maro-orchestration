@@ -121,6 +121,14 @@ func buildArgsEnv(opts Options) (args []string, env []envOverride) {
 	args = []string{"-p", "--output-format", "stream-json", "--verbose",
 		"--dangerously-skip-permissions", "--strict-mcp-config"}
 	if opts.AgentTools {
+		// Honest scope: this deny-list stops the CLI's NATIVE fetch tools
+		// only — Bash stays enabled, so it is NOT an egress boundary (a
+		// curl runs fine); the prompt's URL-fetching discipline plus the
+		// Bash output cap are containment, not prevention. Python is
+		// identical at this line, but there the container lane can be the
+		// real boundary; that lane is unported here (PORT.md), so nothing
+		// stronger stands behind this flag yet (adversarial exec review
+		// 2026-08-22, Architect).
 		args = append(args, "--disallowedTools", "WebFetch,WebSearch")
 		env = bashOutputCapEnv()
 	} else {
@@ -159,16 +167,27 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 	// With Options.TranscriptPath the capture is written there and KEPT —
 	// the caller's durable per-step record of what the inner agent's
 	// tools did (artifacts-over-streams). Data-retention doctrine: the
-	// kept file is never deleted here, success or failure.
+	// kept file is never deleted here, success or failure. A transcript
+	// that cannot be created degrades to a temp capture WITH a warning —
+	// hard-failing here would block the step over an artifact and leave a
+	// record blaming the model for an OS-path error (adversarial exec
+	// review 2026-08-22, Expert QA: the mkdir sibling in the loop already
+	// degrades softly; the twins must agree).
 	var capF *os.File
 	var err error
+	var transcriptWarn string
 	if opts.TranscriptPath != "" {
 		capF, err = os.Create(opts.TranscriptPath)
 		if err != nil {
-			return nil, fmt.Errorf("create transcript file: %w", err)
+			transcriptWarn = fmt.Sprintf(
+				"transcript file %s could not be created (%v) — step ran with a temp capture only",
+				opts.TranscriptPath, err)
+			capF = nil
+		} else {
+			defer capF.Close()
 		}
-		defer capF.Close()
-	} else {
+	}
+	if capF == nil {
 		capF, err = os.CreateTemp("", "maro-go-claude-*.jsonl")
 		if err != nil {
 			return nil, fmt.Errorf("create capture file: %w", err)
@@ -193,6 +212,12 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 	// the Python adapter scans merged output because the CLI has emitted
 	// valid results alongside nonzero exits.
 	res, suspects, parseErr := scanForResult(capF.Name())
+	if transcriptWarn != "" {
+		// Rides every exit path's warning surface (Response.Warnings on
+		// success, ResultError.Warnings on error results) — degraded
+		// retention must reach the operator, never die here.
+		suspects = append([]string{transcriptWarn}, suspects...)
+	}
 	if res != nil {
 		if res.IsError {
 			// The whole diagnostic travels; the record boundary applies

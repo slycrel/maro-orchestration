@@ -189,34 +189,73 @@ direction).
   `--tools ""` + a `CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000` runaway brake;
   executor enables the CLI's own tools with `--disallowedTools
   WebFetch,WebSearch`, binds cwd to the run's project dir
-  (`<workspace>/projects/<goal-slug>/`), and caps per-tool-call Bash
+  (`<workspace>/projects/<slug>/`), and caps per-tool-call Bash
   output via `BASH_MAX_OUTPUT_LENGTH` with Python
   `_bash_output_cap_env`'s full precedence — including the
   disable-means-UNSET-in-child semantics that Python's 2026-07-27 review
-  paid for.
+  paid for. The deny-list is a convenience, NOT an egress boundary: Bash
+  stays enabled, so the worker can still fetch (curl, git). Python's
+  actual boundary is the container lane (`executor.container`), which is
+  unported — until then an exec run trusts the goal text the way any
+  uncontained agent session does (adversarial exec review 2026-08-22,
+  Skeptic; the old phrasing over-claimed).
 - The simulated tool-call protocol (`_TOOL_INJECTION_TEMPLATE` verbatim,
   with the load-bearing "Never execute it" line): workers report via
   `complete_step` (result/summary/confidence/inject_steps) or
   `flag_stuck` (reason/attempted); no parseable tool call falls back to
   content-as-result (Python parity). Parsing is strict (whole-span,
-  UseNumber, trailing data refused) and lives in the LOOP, not the
-  adapter — a named divergence: Python parses adapter-side because its
-  API backends have native tool_use; Go grows that when one is ported.
+  UseNumber, trailing data refused); `llm.ParseToolCall` is invoked at
+  the loop's call site, not inside the adapter — a named divergence:
+  Python parses adapter-side because its API backends have native
+  tool_use; Go grows that when one is ported.
 - Plan mutation: `inject_steps` splices at the FRONT of the queue
-  (Python `remaining_steps[:0]`), capped 3/step; total executed steps
-  are capped at 2× the planned count — an honest stand-in for Python's
+  (Python `remaining_steps[:0]`), capped 3/step, each clipped by a
+  registered budget (`injected-step`, 500); total executed steps are
+  capped at 2× the planned count — an honest stand-in for Python's
   `max_iterations` machinery (adaptive bumping not ported); exhaustion
-  marks the run stuck with the remainder named in the failure chain.
+  marks the run stuck with the remainder NAMED (step contents, not a
+  count) in the failure chain. Worker-injected steps carry a
+  `WasInjected` tag all the way to the CLI's step printout — plan
+  mutation is visible in the delivered output, not only in records.
+- Project-dir resolution is the full `resolve_project_slug` port:
+  naive 5-word slugs collide on generic openers ("tell me about
+  the…"), so an existing dir with a generic slug and a DIFFERENT
+  recorded mission disambiguates via `-2`…`-20` suffixes, then a goal-
+  hash fallback; same mission re-enters its dir (continuity), specific
+  slugs reuse without ceremony. Named divergence: Python reads the
+  recorded mission from NEXT.md's goal line (orchestration files the
+  port doesn't have yet); Go writes a `.mission` file at project
+  creation, first-writer-wins (`O_EXCL`). Without this, two unrelated
+  runs silently share a live project dir and the second worker acts on
+  the first's files — all four r1 lenses flagged it.
+- Exec mode HALTS on the first non-`done` step: Go has no
+  `loop_blocked` retry/re-decompose ladder yet (next-tranche #1), and
+  a live tool-bearing agent must not keep acting on a failed premise —
+  the halt is the port-honest stand-in for Python's terminal-verdict
+  break, with the unexecuted remainder named in the failure chain. The
+  tool-less lane keeps v0's run-through (steps hold no tools; partial
+  completion still yields the summary) — a deliberate, pinned
+  asymmetry.
+- A run whose project-dir setup fails still records a stuck outcome
+  carrying the planning spend before erroring out; a transcript file
+  that cannot be created degrades to the deleted-temp capture with a
+  warning rather than failing the step — an OS error must not
+  fabricate a "blocked" record blaming the model.
 - Long-running step classification ported (keyword sets verbatim,
   `MARO_LONG_RUNNING_TIMEOUT`, full-suite ×2 capped at 3600s); executor
   default timeout 600s like Python's adapter default.
 - Per-step transcripts: the merged stream-json capture persists to
   `<project>/artifacts/step-N-transcript.jsonl` (artifacts-over-streams;
   kept on success AND failure, never deleted by the adapter).
-- Capability is structural: `SupportsAgentTools()` on the backend; a
-  requested exec run on an incapable backend degrades to the tool-less
-  path WITH a warning (never silently), and the `-model` CLI wrapper
-  forwards the capability (interface embedding would otherwise strip it).
+- Capability is structural: the named `llm.AgentToolsCapable` interface
+  (one type, asserted by every reader); a requested exec run on an
+  incapable backend degrades to the tool-less path WITH a warning
+  (never silently), and the `-model` CLI wrapper forwards the
+  capability (interface embedding would otherwise strip it). The CLI
+  decides exec ONCE from the constructed adapter's capability and
+  prints the entered mode plainly (`exec mode: ON/off — …`) — default-
+  on tool-bearing execution is the run's highest-blast-radius property
+  and must be visible without reading code.
 - `EXECUTE_SYSTEM` ported as the sections whose machinery exists here
   (synchronous-execution, anti-hallucination, NEED_INFO, URL-fetch
   discipline, file-edit protocol, token efficiency). Deliberately

@@ -81,6 +81,29 @@ func run(args []string) error {
 	}
 	fmt.Printf("backend: %s\n", adapter.Name())
 
+	// Exec is decided ONCE, from the constructed adapter's actual
+	// capability (never a backend-name string that can drift from it —
+	// adversarial exec review 2026-08-22, Architect), and the entered
+	// mode is printed plainly: default-on tool-bearing execution is the
+	// run's highest-blast-radius property and must be visible on stderr-
+	// watching alone (same review, Skeptic). The loop re-checks the
+	// capability structurally — defense in depth for non-CLI callers.
+	capable := false
+	if c, ok := adapter.(llm.AgentToolsCapable); ok {
+		capable = c.SupportsAgentTools()
+	}
+	execMode := !*safe && capable
+	switch {
+	case execMode:
+		fmt.Printf("exec mode: ON — worker agent tools, uncontained "+
+			"(--dangerously-skip-permissions), project work under %s/projects/\n", ws)
+	case *safe:
+		fmt.Println("exec mode: off (-safe — tool-less utility steps)")
+	default:
+		fmt.Printf("exec mode: off (backend %s cannot run agent tools — tool-less utility steps)\n",
+			adapter.Name())
+	}
+
 	rec := record.New(ws)
 	res, err := loop.Run(context.Background(), adapter, rec, loop.Opts{
 		Goal:     goal,
@@ -90,11 +113,7 @@ func run(args []string) error {
 		// exclude synthetic rows; a canned run recorded as real is a
 		// fabricated record (adversarial r2 2026-08-22, Expert QA).
 		DryRun: *backend == "dry",
-		// Tool-bearing worker steps are the default on a capable backend
-		// (real work is the point); -safe opts back into utility mode.
-		// The dry backend never requests exec — a canned run has no
-		// agent to bear tools, and the warning would be noise.
-		Exec: !*safe && *backend != "dry",
+		Exec:   execMode,
 	})
 	if err != nil {
 		return err
@@ -113,8 +132,14 @@ func run(args []string) error {
 		// Deliberately unclipped: the terminal is the delivery surface and
 		// the full result is the deliverable — caps bound prompts and
 		// records, never the only copy the operator sees
-		// (artifacts-over-streams decree).
-		fmt.Printf("\n[%d] %s — %s\n%s\n", i, s.Status, s.Step, s.Result)
+		// (artifacts-over-streams decree). Worker-injected steps are
+		// tagged: plan mutation must be visible in the delivered output,
+		// not only in tests (adversarial exec review 2026-08-22, QA).
+		tag := ""
+		if s.WasInjected {
+			tag = " (worker-injected)"
+		}
+		fmt.Printf("\n[%d] %s%s — %s\n%s\n", i, s.Status, tag, s.Step, s.Result)
 	}
 	return nil
 }
@@ -137,7 +162,7 @@ func (w withModel) Complete(ctx context.Context, msgs []llm.Message, opts llm.Op
 // methods, so without this the -model wrapper would silently strip the
 // executor lane from a capable backend.
 func (w withModel) SupportsAgentTools() bool {
-	c, ok := w.Adapter.(interface{ SupportsAgentTools() bool })
+	c, ok := w.Adapter.(llm.AgentToolsCapable)
 	return ok && c.SupportsAgentTools()
 }
 
