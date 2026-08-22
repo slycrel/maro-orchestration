@@ -712,12 +712,30 @@ stepLoop:
 			// demotes the run everywhere the stamp is read (recall's
 			// prior-attempt icons included).
 			var achieved *bool
+			var confPtr *float64
 			if v.Judged {
 				achieved = &v.Complete
+				// Confidence gated with the verdict: an unjudged closure
+				// measured nothing, and nil POPS the key — writing its
+				// zero-valued Confidence would fabricate "verified with
+				// zero confidence" (adversarial routing r2, Architect;
+				// Go-stricter than Python, which writes 0.0 there).
+				confPtr = &v.Confidence
 			}
-			if serr := runs.StampVerdict(runDir, achieved, "go_closure_v1",
-				v.Summary, &v.Confidence, v.DowngradeReason, v.Gaps); serr != nil {
+			if serr := runs.StampVerdict(runDir, achieved, record.SourceClosure,
+				v.Summary, confPtr, v.DowngradeReason, v.Gaps); serr != nil {
 				res.Warnings = append(res.Warnings, "verdict stamp failed: "+serr.Error())
+			}
+			// The outcome ROW was written before closure judged (the loop
+			// records at finalization; closure runs after) — land the
+			// verdict on the row post-hoc, or every closure-judged loop
+			// run reads as permanently unjudged on the one ledger the NOW
+			// lane made verdict-bearing (Python memory_ledger.
+			// stamp_outcome_verdict; adversarial routing r2, both lenses).
+			if soErr := rec.StampOutcomeVerdict(loopID, achieved,
+				record.SourceClosure, confPtr); soErr != nil {
+				res.Warnings = append(res.Warnings,
+					"outcome-row verdict stamp failed: "+soErr.Error())
 			}
 			if evErr := rec.Event("CLOSURE_VERDICT", "closure_verdict",
 				budget.Clip(v.Summary, 200),

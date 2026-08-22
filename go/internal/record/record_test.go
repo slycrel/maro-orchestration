@@ -142,3 +142,65 @@ func TestConcurrentAppendsDoNotCorrupt(t *testing.T) {
 		t.Fatalf("want %d distinct payloads, got %d", workers*rows, len(uniq))
 	}
 }
+
+// TestStampOutcomeVerdictPatchesNewestRow: the post-hoc row stamp
+// (Python memory_ledger.stamp_outcome_verdict) patches the NEWEST
+// matching row, sets/leaves goal_achieved per tri-state, and never
+// fabricates a confidence (adversarial routing r2, both lenses).
+func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
+	ws := t.TempDir()
+	r := New(ws)
+	if _, err := r.WriteOutcome(Outcome{Goal: "g", Status: "done", LoopID: "loopA"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WriteOutcome(Outcome{Goal: "g2", Status: "done", LoopID: "loopB"}); err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	conf := 0.85
+	if err := r.StampOutcomeVerdict("loopA", &yes, SourceClosure, &conf); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("row unreadable after rewrite: %v", err)
+		}
+		rows = append(rows, m)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rewrite must not add/drop rows: %d", len(rows))
+	}
+	if rows[0]["goal_achieved"] != true || rows[0]["goal_verdict_source"] != SourceClosure ||
+		rows[0]["goal_verdict_confidence"] != 0.85 {
+		t.Fatalf("loopA row not stamped: %v", rows[0])
+	}
+	if _, has := rows[1]["goal_achieved"]; has {
+		t.Fatalf("loopB row must be untouched: %v", rows[1])
+	}
+
+	// Unjudged stamp (nil, nil): source updates, prior verdict survives,
+	// confidence key REMOVED, not zeroed.
+	if err := r.StampOutcomeVerdict("loopA", nil, SourceClosure, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	var first map[string]any
+	if err := json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first["goal_achieved"] != true {
+		t.Fatalf("nil achieved must not erase a prior verdict: %v", first)
+	}
+	if _, has := first["goal_verdict_confidence"]; has {
+		t.Fatalf("nil confidence must remove the key: %v", first)
+	}
+	if err := r.StampOutcomeVerdict("missing", &yes, SourceClosure, nil); err == nil {
+		t.Fatalf("missing row must error, not silently no-op")
+	}
+}

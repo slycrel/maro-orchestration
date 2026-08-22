@@ -154,9 +154,9 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	verdictSource := ""
 	switch {
 	case res.GoalAchieved != nil:
-		verdictSource = "go_now_verify_v1"
+		verdictSource = record.SourceNowVerify
 	case res.NowVerifyError != "":
-		verdictSource = "go_now_verify_error"
+		verdictSource = record.SourceNowVerifyError
 	}
 	// res.VerdictSummary arrives already scrubbed at verifyNow's
 	// boundary (closure doctrine: scrub where the field is SET, so
@@ -186,7 +186,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 			// the key — a fabricated 0 on a judged-true run would read
 			// as "verified with zero confidence" (Python parity:
 			// confidence=None). Summary pre-scrubbed at verifyNow.
-			if serr := runs.StampVerdict(runDir, res.GoalAchieved, "go_now_verify_v1",
+			if serr := runs.StampVerdict(runDir, res.GoalAchieved, record.SourceNowVerify,
 				res.VerdictSummary, nil, "", nil); serr != nil {
 				res.Warnings = append(res.Warnings, "verdict stamp failed: "+serr.Error())
 			}
@@ -210,10 +210,16 @@ const nowVerifyCut = 2000
 // it is not seeing.
 func verifyPayload(goal, answer string) string {
 	seg := func(label, text string) string {
-		if len(text) > nowVerifyCut {
+		// Rune counts and rune cuts — Python str slicing is codepoint-
+		// based, and a byte cut can split UTF-8 mid-rune (corrupting the
+		// judge's window) while the marker lies about how much was cut
+		// (adversarial routing r2, Skeptic; same class closure.go's
+		// cutRunes fixed).
+		r := []rune(text)
+		if len(r) > nowVerifyCut {
 			return fmt.Sprintf("%s [TRUNCATED — first %d of %d characters; "+
 				"the rest was NOT shown to you]:\n%s",
-				label, nowVerifyCut, len(text), text[:nowVerifyCut])
+				label, nowVerifyCut, len(r), string(r[:nowVerifyCut]))
 		}
 		return label + ":\n" + text
 	}
@@ -226,6 +232,10 @@ func verifyPayload(goal, answer string) string {
 // followed by a specific, genuinely useful rationale, and only the
 // boolean was ever read — the run presented as failed for no stated
 // reason. The 160-token budget is HALF the fix; this is the other half.
+// Prose-BEFORE-JSON falls through both branches and returns the whole
+// text, JSON included — Python-parity residual, named (r2 Architect):
+// the judge is instructed JSON-first, and a garbled recovery on a
+// disobedient judge still beats the false "gave no rationale".
 func verdictRationale(raw string) string {
 	text := strings.TrimSpace(raw)
 	if strings.HasPrefix(text, "```") {
@@ -237,21 +247,43 @@ func verdictRationale(raw string) string {
 			text = ""
 		}
 	} else if strings.HasPrefix(text, "{") {
-		// Bare JSON, then prose: skip past the balanced object.
-		depth := 0
+		// Bare JSON, then prose: skip past the balanced object. The scan
+		// is STRING-AWARE (Go-stricter than Python's naive count): a
+		// brace inside a JSON string value must not close the object
+		// early, and an object that never balances (truncated mid-JSON)
+		// recovers NOTHING rather than returning the raw JSON blob as a
+		// "rationale" (adversarial routing r2, Skeptic + Architect).
+		depth, inString, escaped, closed := 0, false, false, false
 		for i, ch := range text {
-			if ch == '{' {
+			switch {
+			case escaped:
+				escaped = false
+			case inString && ch == '\\':
+				escaped = true
+			case ch == '"':
+				inString = !inString
+			case inString:
+			case ch == '{':
 				depth++
-			} else if ch == '}' {
+			case ch == '}':
 				depth--
 				if depth == 0 {
 					text = strings.TrimSpace(text[i+1:])
-					break
+					closed = true
 				}
 			}
+			if closed {
+				break
+			}
+		}
+		if !closed {
+			return ""
 		}
 	}
-	return budget.VerdictProse.Clip(strings.Join(strings.Fields(text), " "))
+	// No clip here: the caller scrubs FIRST, then the sinks clip — a
+	// clip-before-scrub could truncate a credential mid-string and slip
+	// it past the fixed-length secret patterns (r2 Skeptic).
+	return strings.Join(strings.Fields(text), " ")
 }
 
 // verifyNow runs the text judge and applies the tri-state verdict.

@@ -114,22 +114,9 @@ func run(args []string) error {
 	// Routing (director tranche slice 1): NOW vs AGENDA, decided before
 	// the loop and PRINTED — the lane is a run-shaping decision the
 	// operator must see, same doctrine as the exec-mode line above.
-	lane := *laneFlag
-	// Classify spend is real cost on the goal's behalf — seeded into
-	// whichever lane runs so the outcome row carries the FULL number
-	// (adversarial routing r1 2026-08-22: it vanished from every record).
-	clsIn, clsOut := 0, 0
-	switch lane {
-	case "now", "agenda":
-		fmt.Printf("lane: %s (forced by -lane)\n", strings.ToUpper(lane))
-	case "auto":
-		cls := intent.Classify(context.Background(), adapter, goal, *backend == "dry")
-		lane = cls.Lane
-		clsIn, clsOut = cls.TokensIn, cls.TokensOut
-		fmt.Printf("lane: %s (%.2f) — %s\n", strings.ToUpper(cls.Lane),
-			cls.Confidence, cls.Reason)
-	default:
-		return fmt.Errorf("unknown -lane %q (auto|now|agenda)", *laneFlag)
+	lane, clsIn, clsOut, laneErr := routeLane(adapter, *laneFlag, goal, *backend == "dry")
+	if laneErr != nil {
+		return laneErr
 	}
 	if lane == "now" {
 		nres, nerr := now.Run(context.Background(), adapter, rec, goal,
@@ -200,6 +187,32 @@ func run(args []string) error {
 		fmt.Printf("\n[%d] %s%s — %s\n%s\n", i, s.Status, tag, s.Step, s.Result)
 	}
 	return nil
+}
+
+// routeLane resolves the goal's lane and PRINTS the routing decision —
+// a run-shaping choice the operator must see, same doctrine as the
+// exec-mode line. Extracted so the classify-usage extraction (clsIn/
+// clsOut) is unit-testable with a token-bearing adapter: the CLI-level
+// dry test can never distinguish correct wiring from dropped wiring,
+// because dry classify is heuristic-only and 0 == 0 either way
+// (adversarial routing r2, Architect). Classify spend is real cost on
+// the goal's behalf — the caller seeds it into whichever lane runs so
+// the outcome row carries the FULL number (r1, all four lenses).
+func routeLane(adapter llm.Adapter, laneFlag, goal string, dry bool) (lane string, clsIn, clsOut int, err error) {
+	lane = laneFlag
+	switch lane {
+	case "now", "agenda":
+		fmt.Printf("lane: %s (forced by -lane)\n", strings.ToUpper(lane))
+	case "auto":
+		cls := intent.Classify(context.Background(), adapter, goal, dry)
+		lane = cls.Lane
+		clsIn, clsOut = cls.TokensIn, cls.TokensOut
+		fmt.Printf("lane: %s (%.2f) — %s\n", strings.ToUpper(cls.Lane),
+			cls.Confidence, cls.Reason)
+	default:
+		return "", 0, 0, fmt.Errorf("unknown -lane %q (auto|now|agenda)", laneFlag)
+	}
+	return lane, clsIn, clsOut, nil
 }
 
 // withModel forces a default model onto every call that doesn't name one.

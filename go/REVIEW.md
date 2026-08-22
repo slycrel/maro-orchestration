@@ -1517,3 +1517,58 @@ Verification ledger (verify-before-fix, every claim traced):
 Mutations M16-M22 all DETECTED (M21 on a strengthened pin — escape
 recorded above). Flagship pattern: 15-for-15 — this round's HIGHs sit
 squarely in the newest layer (the NOW lane's verify/stamp path).
+
+## Routing tranche — adversarial r2 (2026-08-22, 2 lenses, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff f8c6aac7..c6fc3137 (the r1 fix layer). Verdict: CONTESTED — 2
+verified HIGHs (one shared by both lenses), all fixed same round.
+
+Verification ledger:
+- VERIFIED (Skeptic + Architect, independently — the round's headline):
+  the loop lane's outcome row NEVER carried the verdict fields — the
+  row is written at loop finalization, closure judges afterwards, and
+  Python solves exactly this with memory_ledger.stamp_outcome_verdict
+  (post-hoc locked row rewrite) which Go never ported. r1's "the row is
+  the cross-runtime ledger surface" REFUTED-defense was true only for
+  the NOW lane. Fixed: record.StampOutcomeVerdict (newest-matching-row
+  merge under the shared flock; nil achieved leaves prior verdicts, nil
+  confidence removes the key), called from loop.Run after StampVerdict;
+  pins extended in closure_wire_test (judged row + unjudged row);
+  mutation M25 DETECTED.
+- VERIFIED (Skeptic HIGH): verifyPayload truncated by BYTES with a
+  marker claiming characters — mid-rune UTF-8 splits + miscounts, the
+  exact class closure's cutRunes fixed. Fixed: rune slice/count; pin
+  TestVerifyPayloadRuneSafe (2-byte-rune fixture); M23 DETECTED.
+- VERIFIED (Architect MED): &v.Confidence passed unconditionally — an
+  unjudged closure stamped goal_verdict_confidence: 0 into metadata,
+  the fabrication the *float64 change exists to prevent. Fixed: gated
+  on v.Judged (Go-stricter divergence named — Python writes 0.0);
+  unjudged pin extended; M26 DETECTED.
+- VERIFIED (Skeptic MED): verdictRationale's brace scan counted braces
+  inside JSON strings, and an unbalanced object fell through to
+  returning the raw JSON blob as the "rationale". Fixed: string-aware
+  scan (inString/escaped) + closed-guard returning "" (Go-stricter than
+  Python's identical naive scan, divergence named); pin
+  TestVerdictRationaleStringAwareBraces; M24 DETECTED.
+- VERIFIED (Skeptic LOW): clip-before-scrub in the rationale path —
+  VerdictProse.Clip inside verdictRationale ran before the caller's
+  scrub, able to cut a credential mid-string past fixed-length
+  patterns. Fixed: no internal clip (sinks clip; scrub at boundary sees
+  full text); pin TestVerifyNowScrubBeforeClip (secret past the cap).
+- VERIFIED (Architect MED): main.go's classify-usage extraction had
+  zero coverage with a nonzero value (dry classify is heuristic-only —
+  0 == 0 either way). Fixed: routeLane extraction + pin
+  TestRouteLaneExtractsClassifyUsage (42/17 fixture); M27 DETECTED.
+- VERIFIED (Architect LOW): bare source-string literals across two
+  lanes. Fixed: record.SourceNowVerify/SourceNowVerifyError/
+  SourceClosure constants, both writers switched.
+- ACCEPTED (Architect LOW, Python parity, named in code): prose-before-
+  JSON returns the whole text from verdictRationale, JSON included.
+- ACCEPTED (Architect LOW): judge MaxTokens stays 160 while the
+  recovery path rewards longer replies — Python shares the same budget;
+  the unbalanced-object guard now makes mid-JSON truncation recover
+  nothing rather than garbage. Revisit if unjudged rates rise.
+
+Mutations M23-M27 all DETECTED first try. Flagship 16-for-16: the
+headline HIGH (row never verdict-stamped for the loop lane) sits in the
+newest layer — the row schema this tranche extended.

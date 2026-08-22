@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/closure"
+	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
 
 // The literal composition point where user input becomes loop.Opts —
@@ -135,4 +137,41 @@ func readOutcomeRows(t *testing.T, ws string) []map[string]any {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// tokenClassifier answers the routing classify call with a
+// token-bearing verdict — the dry CLI path is heuristic-only (0
+// tokens), so only a unit fake can prove routeLane actually EXTRACTS
+// classify usage rather than dropping it (adversarial routing r2,
+// Architect: 0 == 0 either way at the CLI level).
+type tokenClassifier struct{}
+
+func (tokenClassifier) Name() string { return "tokenClassifier" }
+func (tokenClassifier) Complete(_ context.Context, _ []llm.Message, _ llm.Options) (*llm.Response, error) {
+	return &llm.Response{
+		Content:   `{"lane": "now", "confidence": 0.9, "reason": "quick", "needs_live_data": false, "introspects_self": false}`,
+		TokensIn:  42,
+		TokensOut: 17,
+	}, nil
+}
+
+// TestRouteLaneExtractsClassifyUsage: the auto lane's classify spend
+// reaches the caller's seed variables with a real nonzero value.
+func TestRouteLaneExtractsClassifyUsage(t *testing.T) {
+	t.Setenv("MARO_WORKSPACE", t.TempDir())
+	lane, in, out, err := routeLane(tokenClassifier{}, "auto", "what time is it?", false)
+	if err != nil || lane != "now" {
+		t.Fatalf("route: %v %s", err, lane)
+	}
+	if in != 42 || out != 17 {
+		t.Fatalf("classify usage must be extracted, got in=%d out=%d", in, out)
+	}
+	// Forced lanes make no classify call — seeds stay zero.
+	lane, in, out, err = routeLane(tokenClassifier{}, "agenda", "goal", false)
+	if err != nil || lane != "agenda" || in != 0 || out != 0 {
+		t.Fatalf("forced lane must not classify: %s in=%d out=%d err=%v", lane, in, out, err)
+	}
+	if _, _, _, err := routeLane(tokenClassifier{}, "bogus", "goal", false); err == nil {
+		t.Fatalf("unknown lane must refuse")
+	}
 }

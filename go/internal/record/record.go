@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -318,4 +319,90 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// Verdict-source taxonomy — one spelling per judge, shared by every
+// writer (adversarial routing r2: two lanes writing bare literals is
+// how a taxonomy drifts).
+const (
+	SourceNowVerify      = "go_now_verify_v1"
+	SourceNowVerifyError = "go_now_verify_error"
+	SourceClosure        = "go_closure_v1"
+)
+
+// StampOutcomeVerdict merges a closure verdict onto the NEWEST
+// outcomes.jsonl row whose loop_id matches — the agenda lane records
+// its outcome at loop finalization but the closure verdict is judged
+// AFTERWARDS, so the verdict lands on the row post-hoc (Python
+// memory_ledger.stamp_outcome_verdict; adversarial routing r2, both
+// lenses: without this, every closure-judged loop run reads as
+// permanently unjudged on the one ledger the NOW lane just made
+// verdict-bearing). Semantics ported:
+//   - achieved true/false sets goal_achieved; nil leaves any existing
+//     key untouched (an unjudged closure must never erase a prior
+//     verdict on the row).
+//   - source and confidence are always updated (nil confidence
+//     REMOVES the key — no fabricated zeros).
+//
+// The read→patch→rename runs under the same flock every appender takes
+// (Python parity: locked_write inside the same critical section), so a
+// concurrent append cannot be lost to the rewrite.
+func (r *Recorder) StampOutcomeVerdict(loopID string, achieved *bool,
+	source string, confidence *float64) error {
+	if loopID == "" {
+		return fmt.Errorf("stamp outcome verdict: empty loop id")
+	}
+	path := filepath.Join(r.WorkspaceDir, "memory", "outcomes.jsonl")
+	return Locked(path, func() error {
+		return stampOutcomeVerdictLocked(path, loopID, achieved, source, confidence)
+	})
+}
+
+func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
+	source string, confidence *float64) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(raw), "\n")
+	target := -1
+	var row map[string]any
+	// Newest matching row wins — a restarted goal appends a fresh row
+	// per loop.
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if jerr := json.Unmarshal([]byte(line), &m); jerr != nil {
+			continue
+		}
+		if m["loop_id"] == loopID {
+			target, row = i, m
+			break
+		}
+	}
+	if target < 0 {
+		return fmt.Errorf("stamp outcome verdict: no row for loop %s", loopID)
+	}
+	if achieved != nil {
+		row["goal_achieved"] = *achieved
+	}
+	row["goal_verdict_source"] = source
+	if confidence != nil {
+		row["goal_verdict_confidence"] = *confidence
+	} else {
+		delete(row, "goal_verdict_confidence")
+	}
+	patched, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	lines[target] = string(patched)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

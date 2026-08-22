@@ -359,3 +359,63 @@ func TestRunNowSeedTokensReachRow(t *testing.T) {
 		t.Fatalf("seed spend must reach the row: %v", row)
 	}
 }
+
+// --- routing r2 pins (adversarial 2026-08-22) --------------------------
+
+// TestVerifyPayloadRuneSafe: the judge-window cut is rune-based —
+// Python str slicing is codepoint slicing, a byte cut splits UTF-8
+// mid-rune and the marker lies about the count (r2 Skeptic).
+func TestVerifyPayloadRuneSafe(t *testing.T) {
+	long := strings.Repeat("é", 2100) // 2 bytes per rune: byte cut would split + miscount
+	p := verifyPayload("q", long)
+	if !strings.Contains(p, "[TRUNCATED — first 2000 of 2100 characters") {
+		t.Fatalf("marker must count RUNES, not bytes: %.160s", p)
+	}
+	if strings.Count(p, "é") != 2000 {
+		t.Fatalf("cut must keep exactly 2000 runes, kept %d", strings.Count(p, "é"))
+	}
+	for _, r := range p {
+		if r == '�' {
+			t.Fatalf("cut split a rune — invalid UTF-8 in judge window")
+		}
+	}
+}
+
+// TestVerdictRationaleStringAwareBraces: a brace inside a JSON string
+// value must not close the object early, and an unbalanced (truncated)
+// object recovers NOTHING rather than the raw JSON blob (r2 Skeptic +
+// Architect).
+func TestVerdictRationaleStringAwareBraces(t *testing.T) {
+	got := verdictRationale(`{"fulfilled": false, "note": "stray } inside"} the real reason`)
+	if got != "the real reason" {
+		t.Fatalf("string-aware scan must skip the whole object: %q", got)
+	}
+	if got := verdictRationale(`{"fulfilled": false, "why": "truncated mid-obj`); got != "" {
+		t.Fatalf("unbalanced JSON must recover nothing, got %q", got)
+	}
+	if got := verdictRationale(`{"a": "esc \" }", "b": 1} after escape`); got != "after escape" {
+		t.Fatalf("escaped quote handling: %q", got)
+	}
+}
+
+// TestVerifyNowScrubBeforeClip: the rationale path scrubs BEFORE any
+// clip — a clip-first order can cut a credential mid-string and slip
+// the fragment past fixed-length secret patterns (r2 Skeptic). The
+// secret sits past the VerdictProse cap to prove order.
+func TestVerifyNowScrubBeforeClip(t *testing.T) {
+	ws := t.TempDir()
+	pad := strings.Repeat("x ", 1200) // > VerdictProse cap once collapsed
+	fake := &llm.Fake{Script: []string{
+		"did it",
+		`{"fulfilled": false} ` + pad + "key AKIAIOSFODNN7EXAMPLE never rotated",
+	}}
+	res, err := Run(context.Background(), fake, record.New(ws), "rotate", false, "", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	sum, _ := rows[len(rows)-1]["goal_verdict_summary"].(string)
+	if strings.Contains(res.VerdictSummary, "AKIA") || strings.Contains(sum, "AKIA") {
+		t.Fatalf("secret survived the scrub: res=%q row=%q", res.VerdictSummary, sum)
+	}
+}

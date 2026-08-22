@@ -493,13 +493,34 @@ direction).
   answer, judge); and the routing classify call's spend is SEEDED into
   whichever lane runs (now.Run seedIn/seedOut, loop.Opts
   SeedTokens*) so outcome rows report the goal's full real cost.
+  Adversarial r2 hardening (same day): the judge window's cut is
+  RUNE-based (byte cuts split UTF-8 mid-rune and the marker miscounts —
+  the closure tranche's cutRunes class); verdictRationale's brace scan
+  is STRING-AWARE with an unbalanced-object guard (Go-stricter than
+  Python's naive count: a brace inside a JSON string no longer closes
+  the object early, and a truncated object recovers nothing instead of
+  the raw JSON blob) and no longer clips internally (scrub-before-clip
+  — a clip-first order could cut a credential mid-string past the
+  fixed-length secret patterns); record.StampOutcomeVerdict ports
+  memory_ledger.stamp_outcome_verdict — the loop lane's outcome row is
+  written at finalization BEFORE closure judges, so the verdict lands
+  on the row post-hoc under the same flock every appender takes
+  (without it every closure-judged loop run read as permanently
+  unjudged on the cross-runtime ledger); the closure stamp's
+  confidence is gated WITH the verdict (unjudged closure stamps no
+  confidence — Go-stricter than Python, which writes 0.0); verdict
+  sources are shared record.Source* constants; and the CLI's routing
+  block is extracted (routeLane) so classify-usage extraction is
+  pinned with a real nonzero value.
   Named residuals: the answer summary on the row is clipped but
   unscrubbed (Python parity — same residual as the loop's row, named
   there too); a crash between WriteOutcome and Finalize leaves a
   terminal row beside a "running" metadata.json (same window the loop
-  has; recall's InterruptStatuses softens it); the memory-provenance
-  advisory marker (_mark_memory_provenance) is unported with its
-  stores — returns with the memory tranche. Deliberately unported with their
+  has; recall's InterruptStatuses softens it); prose-BEFORE-JSON in a
+  judge reply returns the whole text from verdictRationale, JSON
+  included (Python parity, named in the function doc); the
+  memory-provenance advisory marker (_mark_memory_provenance) is
+  unported with its stores — returns with the memory tranche. Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard
   (claimed inputs/outputs on disk), check_goal_clarity + imperative
   rewrite (needs the ask-the-user surface), introspects_self's consumer

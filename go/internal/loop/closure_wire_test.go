@@ -110,6 +110,24 @@ func TestRunClosureStampsGoalAchieved(t *testing.T) {
 		!*rr.PriorAttempts[0].GoalAchieved {
 		t.Fatalf("stamped tri-state not visible to recall: %+v", rr.PriorAttempts)
 	}
+	// The OUTCOME ROW carries the verdict too — it is written at loop
+	// finalization, BEFORE closure judges, so it needs the post-hoc
+	// stamp (Python stamp_outcome_verdict; adversarial routing r2, both
+	// lenses: without it every closure-judged loop run read as
+	// permanently unjudged on the cross-runtime ledger).
+	oraw, oerr := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(oraw)), "\n")
+	var row map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["goal_achieved"] != true || row["goal_verdict_source"] != "go_closure_v1" ||
+		row["goal_verdict_confidence"] != 0.9 {
+		t.Fatalf("closure verdict must land on the outcome row post-hoc: %v", row)
+	}
 }
 
 // TestRunClosureUnjudgedStampsNothing: every closure probe inconclusive
@@ -143,6 +161,30 @@ func TestRunClosureUnjudgedStampsNothing(t *testing.T) {
 	}
 	if meta["goal_verdict_summary"] == nil {
 		t.Fatalf("verdict prose should still be recorded beside the absent stamp: %v", meta)
+	}
+	// Confidence is gated WITH the verdict: an unjudged closure measured
+	// nothing — writing its zero Confidence would fabricate "verified
+	// with zero confidence" (adversarial routing r2, Architect;
+	// Go-stricter than Python, which writes 0.0 here).
+	if _, present := meta["goal_verdict_confidence"]; present {
+		t.Fatalf("unjudged closure must not stamp a confidence: %v", meta)
+	}
+	// The outcome row mirrors the tri-state: source lands (closure RAN),
+	// goal_achieved stays absent, confidence stays absent.
+	oraw, _ := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	lines := strings.Split(strings.TrimSpace(string(oraw)), "\n")
+	var row map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["goal_verdict_source"] != "go_closure_v1" {
+		t.Fatalf("unjudged closure still names its source on the row: %v", row)
+	}
+	if _, has := row["goal_achieved"]; has {
+		t.Fatalf("unjudged closure must not stamp the row's tri-state: %v", row)
+	}
+	if _, has := row["goal_verdict_confidence"]; has {
+		t.Fatalf("unjudged closure must not fabricate row confidence: %v", row)
 	}
 }
 
