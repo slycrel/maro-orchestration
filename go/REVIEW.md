@@ -1893,3 +1893,40 @@ bounded-warning counter).
 
 Mutations M56–M60 all DETECTED (M58 confirmed compiling, behavioral).
 Full suite green. r4 follows on this diff.
+
+## Director tranche — adversarial r4 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r3 fix layer. Flagship pattern, 20th time: the HIGH sat
+inside r3's own guard fix.
+
+- **HIGH (qa): r3's one-warning invariant was true only at
+  MaxReviewRounds=2** — the exhaustion warning was unconditional, so a
+  mid-loop no-guidance stop at N=3 would warn twice (the identical bug
+  class r3 took credit for fixing, one constant bump away). FIXED
+  structurally: `stoppedEarly` flag suppresses the exhaustion warning
+  when the mid-loop guard already recorded the incident;
+  MaxReviewRounds became a var (Python module-attr parity) so the N=3
+  invariant is PINNED, not asserted by comment (M61).
+- **MED (skeptic): malformed entries trailing the maxTickets cap were
+  uncounted** — the cap break ran before the shape check. FIXED: full
+  scan counts shapes; the cap now bounds valid appends only (still one
+  summary warning, no inflation) (M62).
+- **MED (skeptic) + LOW (qa): clipMarkerRe stripped forged
+  marker-shaped text anywhere in worker content**, contradicting the
+  accum doctrine (forged markers are content, rendered verbatim) and
+  letting a hostile worker erase vocabulary to suppress the
+  echo-omission signal. FIXED: anchored at line end (`(?m)…$`) and
+  digit-bounded (`\d{1,9}`) mirroring budget.markerRe — real markers
+  only ever terminate a line; mid-line forgeries keep their vocabulary
+  (M64, negative fixture).
+- **LOW (qa): an explicitly empty tickets list fell back with zero
+  trace.** FIXED: warns before the single-ticket fallback (M63).
+- **LOW (skeptic): %T warning tested only for string.** FIXED: pin
+  parametrized over string/number/bool/object.
+- **LOW (skeptic, informational): CLI Report/Summary are unscrubbed by
+  long-standing design** ("the terminal is the delivery surface",
+  pre-r3). Scope note accepted: the sink-census claim covers
+  res.Warnings and LLM-authored review/blocked text, not the report
+  body — which IS the deliverable. No change.
+
+Mutations M61–M64 all DETECTED. Full suite green. r5 follows.

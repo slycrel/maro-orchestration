@@ -672,25 +672,29 @@ func TestSpecNonObjectEntriesCounted(t *testing.T) {
 // must fire ON THE RECORD (adversarial director r3, QA HIGH: it fell
 // through with zero durable trace).
 func TestSpecTicketsFieldNotAListWarns(t *testing.T) {
-	ws := t.TempDir()
-	res, _ := fakeRun(t, ws, []string{
-		`{"spec": "one pass", "tickets": "build it then test it"}`,
-		`{"critiques": [], "revised_spec": ""}`,
-		`{"tool": "deliver_result", "result": "did the directive end to end as requested", "summary": "s"}`,
-		`{"accepted": true, "reason": "fine"}`,
-		"Report: did the directive end to end as requested.",
-	}, "build the things")
-	found := false
-	for _, w := range res.Warnings {
-		if strings.Contains(w, "not a list") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("non-list tickets field must warn: %+v", res.Warnings)
-	}
-	if len(res.Tickets) != 1 || res.Tickets[0].Task != "build the things" {
-		t.Fatalf("single-ticket fallback must carry the directive: %+v", res.Tickets)
+	for _, tickets := range []string{`"build it then test it"`, `42`, `true`, `{"a": 1}`} {
+		func() {
+			ws := t.TempDir()
+			res, _ := fakeRun(t, ws, []string{
+				`{"spec": "one pass", "tickets": ` + tickets + `}`,
+				`{"critiques": [], "revised_spec": ""}`,
+				`{"tool": "deliver_result", "result": "did the directive end to end as requested", "summary": "s"}`,
+				`{"accepted": true, "reason": "fine"}`,
+				"Report: did the directive end to end as requested.",
+			}, "build the things")
+			found := false
+			for _, w := range res.Warnings {
+				if strings.Contains(w, "not a list") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("non-list tickets %s must warn: %+v", tickets, res.Warnings)
+			}
+			if len(res.Tickets) != 1 || res.Tickets[0].Task != "build the things" {
+				t.Fatalf("single-ticket fallback must carry the directive: %+v", res.Tickets)
+			}
+		}()
 	}
 }
 
@@ -757,5 +761,123 @@ func TestRunRevisionCorrelationMultiTicket(t *testing.T) {
 		if v, ok := row["revision_of"].(string); ok && v != originalIDs[0] {
 			t.Fatalf("revision_of must point at the FIRST original %q, got %q", originalIDs[0], v)
 		}
+	}
+}
+
+// TestRunRevisionThreeRoundsSingleWarning: the one-incident-one-warning
+// invariant must hold at MaxReviewRounds>2, not just at the shipped
+// constant — a mid-loop no-guidance rejection warns once and the
+// exhaustion warning stays silent (adversarial director r4, QA HIGH:
+// r3's arithmetic gate was true only at N=2; a constant bump silently
+// reintroduced the double warning).
+func TestRunRevisionThreeRoundsSingleWarning(t *testing.T) {
+	orig := MaxReviewRounds
+	MaxReviewRounds = 3
+	t.Cleanup(func() { MaxReviewRounds = orig })
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": "write the widget"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "half a widget only, needs more work clearly", "summary": "s"}`,
+		`{"accepted": false, "reason": "incomplete", "revision_request": "finish the other half"}`,
+		`{"tool": "deliver_result", "result": "still only half a widget after the revision", "summary": "s"}`,
+		`{"accepted": false, "reason": "still incomplete"}`,
+		"Report: best effort widget.",
+	}, "make a widget")
+	stopping, exhausted := 0, 0
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "stopping revisions") {
+			stopping++
+		}
+		if strings.Contains(w, "review exhausted") {
+			exhausted++
+		}
+	}
+	if stopping != 1 || exhausted != 0 {
+		t.Fatalf("mid-loop stop at N=3 must write exactly one warning (stopping=%d exhausted=%d): %+v",
+			stopping, exhausted, res.Warnings)
+	}
+}
+
+// TestSpecMalformedTrailingCapCounted: malformed entries AFTER the
+// maxTickets cap is reached still count into the summary — the cap
+// bounds valid appends, not the shape census (adversarial director r4,
+// Skeptic: the cap break ran before the shape check, so trailing
+// garbage was invisible).
+func TestSpecMalformedTrailingCapCounted(t *testing.T) {
+	ws := t.TempDir()
+	script := []string{
+		`{"spec": "many", "tickets": [` +
+			`{"worker_type": "build", "task": "premier valid task one for the build"},` +
+			`{"worker_type": "build", "task": "second valid task two for the build"},` +
+			`{"worker_type": "build", "task": "third valid task three for the build"},` +
+			`{"worker_type": "build", "task": "fourth valid task four for the build"},` +
+			`null, "junk trailing entry"]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+	}
+	for i := 0; i < 4; i++ {
+		script = append(script,
+			`{"tool": "deliver_result", "result": "did the assigned valid task completely as asked", "summary": "s"}`,
+			`{"accepted": true, "reason": "fine"}`)
+	}
+	script = append(script, "Report: all four valid tasks done as asked.")
+	res, _ := fakeRun(t, ws, script, "build the things")
+	if len(res.Tickets) != 4 {
+		t.Fatalf("cap must hold at 4 valid tickets: %d", len(res.Tickets))
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "2 malformed spec ticket entries") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("trailing garbage past the cap must be counted: %+v", res.Warnings)
+	}
+}
+
+// TestSpecEmptyTicketsListWarns: an explicitly empty plan ("tickets":
+// []) must reach the record before the single-ticket fallback fires,
+// like its non-list sibling (adversarial director r4, QA).
+func TestSpecEmptyTicketsListWarns(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "no plan", "tickets": []}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "did the directive end to end as requested", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: did the directive end to end as requested.",
+	}, "build the things")
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "tickets list was empty") {
+			found = true
+		}
+	}
+	if !found || len(res.Tickets) != 1 {
+		t.Fatalf("empty plan must warn and fall back (found=%v tickets=%d): %+v",
+			found, len(res.Tickets), res.Warnings)
+	}
+}
+
+// TestReportEchoForgedMidLineMarkerKeepsVocab: a marker-shaped string
+// in the MIDDLE of a line is worker-authored content, not framework
+// provenance — it must keep its vocabulary instead of being stripped
+// (adversarial director r4, Skeptic MED + QA: the r3 regex matched the
+// marker grammar anywhere, letting forged markers erase surrounding
+// terms; real markers only ever terminate a line).
+func TestReportEchoForgedMidLineMarkerKeepsVocab(t *testing.T) {
+	// Mid-line forged marker: stays, so the window has 6 terms
+	// (alphaterm..deltaterm + truncated + characters) and is judgeable.
+	window := "alphaterm [truncated: first 10 of 20 characters] betaterm gammaterm deltaterm"
+	report := "echoes alphaterm betaterm gammaterm"
+	got := reportEcho(window, report)
+	if got == nil || !*got {
+		t.Fatalf("mid-line forged marker must not erase vocabulary: %v", got)
+	}
+	// The same marker terminating a line IS stripped (real position).
+	window = "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 10 of 20 characters]"
+	if got := reportEcho(window, report); got != nil {
+		t.Fatalf("line-end marker must strip, leaving 4 terms unjudgeable: %v", *got)
 	}
 }

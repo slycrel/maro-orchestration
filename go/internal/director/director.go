@@ -53,7 +53,10 @@ import (
 
 // MaxReviewRounds: the Director reviews each worker output up to this
 // many times (Python MAX_REVIEW_ROUNDS).
-const MaxReviewRounds = 2
+// A var, not a const: Python's MAX_REVIEW_ROUNDS is a mutable module
+// attribute, and the one-warning-per-incident invariant below must be
+// testable at N>2 (adversarial director r4, QA HIGH).
+var MaxReviewRounds = 2
 
 // Ticket is one unit of work dispatched to a worker.
 type Ticket struct {
@@ -352,6 +355,7 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 		}
 		if !review.Accepted && review.RevisionRequest != "" && !dry {
 			accepted := false
+			stoppedEarly := false
 			for round := 0; round < MaxReviewRounds-1; round++ {
 				revised := Ticket{
 					TicketID:   newID(),
@@ -378,24 +382,26 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 				}
 				if review.RevisionRequest == "" {
 					// No guidance left — a further round would be vacuous,
-					// so break regardless. The TERMINAL round is already
-					// covered by the exhaustion warning below; warn here
-					// only when the break cuts remaining rounds short, so
-					// one incident never writes two warnings (adversarial
-					// director r3, Skeptic HIGH: the r2 guard fired on the
-					// sole iteration and doubled up — its "unreachable"
-					// comment was false).
+					// so break regardless. One incident writes ONE warning:
+					// mid-loop when the break cuts remaining rounds short
+					// (stoppedEarly then suppresses the exhaustion warning
+					// below — r4, QA HIGH: gating only this side made the
+					// invariant true solely at MaxReviewRounds=2), the
+					// exhaustion warning alone on the terminal round
+					// (r3, Skeptic HIGH: the r2 guard double-warned).
 					if round+1 < MaxReviewRounds-1 {
+						stoppedEarly = true
 						res.Warnings = append(res.Warnings, fmt.Sprintf(
-							"ticket %s revision round %d rejected with no revision request — stopping revisions",
+							"ticket %s revision round %d rejected with no revision request — stopping revisions, result kept best-effort",
 							revised.TicketID, round+1))
 					}
 					break
 				}
 			}
-			if !accepted {
+			if !accepted && !stoppedEarly {
 				// Exhausted rounds: proceed best-effort with the last
-				// revision rather than blocking (Python parity).
+				// revision rather than blocking (Python parity). Skipped
+				// when the mid-loop guard already recorded the incident.
 				res.Warnings = append(res.Warnings, fmt.Sprintf(
 					"review exhausted %d rounds for ticket %s — best-effort result kept",
 					MaxReviewRounds, ticket.TicketID))
@@ -508,9 +514,6 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 			malformed := 0
 			if raw, ok := data["tickets"].([]any); ok {
 				for _, item := range raw {
-					if len(tickets) >= maxTickets {
-						break
-					}
 					t, tok := item.(map[string]any)
 					if !tok {
 						// Non-object entries (strings, numbers, null) are
@@ -531,11 +534,28 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 						malformed++
 						continue
 					}
+					if len(tickets) >= maxTickets {
+						// Enough valid tickets — further VALID entries drop
+						// silently (Python-parity cap), but the scan
+						// continues so trailing malformed entries still
+						// count (adversarial director r4, Skeptic: a cap
+						// break before the shape check left trailing
+						// garbage uncounted). Warning stays one summary —
+						// no inflation regardless of raw length.
+						continue
+					}
 					wtype, _ := t["worker_type"].(string)
 					if !typeValid(wtype) {
 						wtype = workers.InferType(task)
 					}
 					tickets = append(tickets, Ticket{TicketID: newID(), WorkerType: wtype, Task: task})
+				}
+				if len(raw) == 0 {
+					// An explicitly empty plan discards the model's spec as
+					// silently as the non-list shape used to (adversarial
+					// director r4, QA).
+					res.Warnings = append(res.Warnings,
+						"spec tickets list was empty — single-ticket fallback")
 				}
 			} else if v, present := data["tickets"]; present {
 				// A present-but-non-list tickets field means the model's
@@ -743,7 +763,14 @@ var echoStopwords = map[string]bool{
 // clipMarkerRe matches both marker formats in the budget package:
 // budget.Clip's " … [truncated: first N of M characters]" and the
 // Accumulator's "… [entry truncated: first N of M characters]".
-var clipMarkerRe = regexp.MustCompile(`(?:… )?\[(?:entry )?truncated: first \d+ of \d+ characters\]`)
+// Anchored at line end and digit-bounded like budget.markerRe: real
+// markers only ever terminate a line (budget.Clip appends at the end,
+// the Accumulator before its entry separator), so a forged mid-line
+// marker in worker-authored text is CONTENT and keeps its vocabulary —
+// the sibling accum doctrine (forged markers render verbatim, never
+// mechanically stripped) applies here too (adversarial director r4,
+// Skeptic MED + QA).
+var clipMarkerRe = regexp.MustCompile(`(?m)(?:… )?\[(?:entry )?truncated: first \d{1,9} of \d{1,9} characters\]$`)
 
 func distinctiveTerms(text string) map[string]bool {
 	terms := map[string]bool{}

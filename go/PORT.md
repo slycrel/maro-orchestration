@@ -640,7 +640,15 @@ direction).
   its type; CLI warnings scrubbed (sink census now actually closed);
   echo judge strips the whole clip marker (both budget wordings,
   offsets included) before term extraction instead of deleting two
-  words after. Mutations M56-M60 all DETECTED.
+  words after. Mutations M56-M60 all DETECTED. Adversarial r4 (same
+  day, skeptic+qa): r3's guard was the HIGH again — its one-warning
+  invariant held only at the shipped constant; now structural via
+  stoppedEarly + MaxReviewRounds as a var (Python module-attr parity)
+  with the N=3 case pinned; malformed census scans past the cap;
+  empty tickets list warns; marker strip anchored at line end and
+  digit-bounded like budget.markerRe (forged mid-line markers are
+  content and keep their vocabulary — accum doctrine). Mutations
+  M61-M64 all DETECTED.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):
