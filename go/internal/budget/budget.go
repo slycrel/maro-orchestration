@@ -101,6 +101,31 @@ var (
 			"stamps + 50 closure rows, 2026-08-13) so rows interoperate",
 	}
 
+	// LessonInject bounds the TOTAL rendered lesson block reaching the
+	// decompose prompt. It is a line BREAKER, never a truncator: the
+	// render stops adding whole lines at the bound (and only rendered
+	// lines are cited), it never cuts mid-line — recall caps are
+	// circuit-breakers, not truncators (caps decree 2026-08-21, the
+	// day the arbitrary 600-char recall cap died).
+	LessonInject = Budget{
+		Name:  "lesson-inject",
+		Limit: 1200,
+		Why: "matches Python memory._MAX_LESSON_INJECT_CHARS — bounds token " +
+			"spikes as lessons accumulate; enforced as a whole-line breaker " +
+			"with cited-only-if-rendered, never a mid-line cut",
+	}
+
+	// RecallContext bounds the assembled recall context block riding a
+	// planning prompt.
+	RecallContext = Budget{
+		Name:  "recall-context",
+		Limit: 4000,
+		Why: "matches Python RecallResult.as_context_block max_chars=4000 " +
+			"(widened from 1200 in the 2026-08-13 STORE review: briefs were " +
+			"severed mid-instruction); clip reserves 64 marker chars, same " +
+			"as the Python site",
+	}
+
 	// InjectedStep bounds one worker-injected step's text before it
 	// becomes the next prompt's step line.
 	InjectedStep = Budget{
@@ -126,6 +151,8 @@ var Registry = []Budget{
 	OperatorDoc,
 	StepContextTotal,
 	VerdictProse,
+	LessonInject,
+	RecallContext,
 	InjectedStep,
 }
 

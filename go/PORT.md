@@ -321,6 +321,87 @@ direction).
   stepRetries/stepFingerprints key by literal step text, so two plan
   positions with byte-identical text (e.g. two splits both falling back
   to the generic analysis clause) share retry/fingerprint state.
+- Memory RECALL (`internal/recall` + the retrieval half of
+  `internal/knowledge`) — the loop reads what the system already knows
+  before it plans. `recall.Recall` is the seam (recall.py's contract):
+  read-only — STRICTER than Python here: even the times_applied
+  receipt write-back is unported, so the Go seam writes nothing —
+  and every failure degrades to "knows nothing", with degradations
+  NAMED in the instrumentation sources (`error_*`,
+  `lessons_skipped_rows`) instead of swallowed. Two substrates ported:
+  - **Ranked tiered lessons**: `LoadTieredLessons` reads
+    `memory/<tier>/lessons.jsonl` with Python's read-time decay
+    derivation (effective = stored × 0.85^days since last_reinforced,
+    MEDIUM only — LONG is promoted-permanent; stored scores never
+    rewritten, which would compound decay), the per-row parse guard
+    (one malformed/byte-torn/type-drifted row skips THAT row and
+    counts it — never the tier; numeric fields coerced inside the
+    guard exactly where Python's r3/r4 of the store-hardening arc put
+    them), and min_score compared AFTER decay, skipped entirely on
+    raw loads (Python's `not raw` ordering). `QueryLessonsScored`
+    pools LONG+MEDIUM over the FULL store (limit=None — relevance is
+    the ranker's job), drops provisional / quarantined
+    (minted_from=="prompt", the db37d525 provenance gate) / contested
+    rows, and ranks with the TF-IDF cosine ranker
+    (`TFIDFRankScored`) — tokenizer, log-IDF, norm-or-1.0 cosine, and
+    the 0.90 citation penalty pinned against CPython-computed fixtures
+    to 1e-9, ties keeping input order (Python's stable sort). Parity
+    quirk kept deliberately: a no-signal query returns ALL lessons in
+    input order at 0.0, topK ignored — only the caller bounds it.
+    Selection mirrors recall.py's chunk-6 rewire: agenda-typed top 3
+    from a 10-wide scored window, untyped tiered top-up deduped by
+    lesson_id. The render is the receipts block ("## Lessons from
+    Prior Runs", ✓/✗ by outcome, "reinforced Nx / N sessions /
+    applied Nx" or the honest "(observed once)") under the
+    1200-char LessonInject budget as a whole-line BREAKER — never a
+    mid-line truncation (caps decree 2026-08-21) — with
+    cited-only-if-rendered (a dropped line's id never enters
+    lesson_ids_cited; the contradiction join must not contest lessons
+    the run never saw).
+  - **Prior attempts**: `FindPriorAttempts` scans
+    `runs/<dir>/metadata.json` newest-first (mtime, cap 200 —
+    O(recent activity)), matching exact / near (word-overlap Jaccard
+    ≥ 0.9, `_text_similarity` parity) / project, with SF-2 tri-state
+    goal_achieved and the §13b status-derived external-interrupt
+    fallback (interrupted/stranded/refused_busy/clarification_needed
+    carry no goal evidence). The as_context_block summary paragraph
+    (status breakdown, verdict counts, interrupted count,
+    do-not-repeat instruction) rides under the RecallContext budget
+    with Python's 64-char marker reserve.
+  Both blocks reach the INITIAL `planner.Decompose` as system-prompt
+  extras in Python's extras order (ancestry before lessons,
+  planner.py:962) — the same two channels Python feeds decompose
+  (lessons_context via loop_planning, the attempts summary via
+  handle.py's as_context_block → ancestry_context). Redecompose/split
+  calls deliberately get no recall block, like Python. The read is
+  instrumented as a RECALL_PERFORMED captain's-log event before
+  LOOP_STARTED; emission lives at the loop call site because the Go
+  seam keeps no recorder handle (named divergence — Python emits from
+  inside recall()); an event-write failure is held and lands in
+  Result.Warnings or, when decompose also dies, the failure chain.
+  Unported recall substrates, named (recall.py carries eight):
+  standing rules, decision journal, graveyard resurrection (the one
+  Python side effect — resurrect=True un-decays), failure notes,
+  learning activity, playbook, knowledge nodes, thread identity
+  (origin walk + ancestry.json), prior-decision briefs (run_card
+  curation), project_artifacts inventory, dispatch_signals,
+  portability re-weighting (§14a), camera frames, age stamps, the
+  legacy flat-store top-up + fallback injector, magic-prefix stripping
+  at the match boundary (a Python run recorded under a prefixed
+  prompt can miss the near-match here), hybrid BM25/RRF ranking
+  (`_USE_HYBRID`, optional rank-bm25 dep — TF-IDF is Python's own
+  always-available fallback, so both runtimes share this floor), and
+  max-age pruning at the query layer. The Go runtime also does not
+  WRITE `runs/<dir>/metadata.json` yet, so prior attempts surface only
+  in a workspace shared with Python — a pure-Go workspace honestly
+  degrades to zero priors. Go-stricter divergences, refusal-direction:
+  type-drifted STRING fields skip the row (Python's duck-typed
+  dataclass carries them until they explode inside the ranker);
+  byte-invalid rows are refused before decode (Go's encoding/json
+  would otherwise launder invalid UTF-8 into U+FFFD — the corruption
+  signal loads_clean exists to preserve); Python-truthiness is kept
+  where it is load-bearing (`provisional: "false"` is truthy and
+  stays filtered).
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a
@@ -359,7 +440,9 @@ routing/trajectory escalation.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
-1. Memory recall + knowledge injection (lessons, playbook, edges).
+1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
+   prior-attempt slice DONE (recall tranche above); playbook, edges,
+   and the other named substrates return with their consumers.
 2. Closure verification / quality gate.
 3. Director, intent routing, NOW-vs-AGENDA lanes.
 4. Inspector/evolver self-improvement loop.

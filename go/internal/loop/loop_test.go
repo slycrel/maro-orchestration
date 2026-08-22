@@ -65,11 +65,14 @@ func TestRunEndToEndRecordsCompatibleRows(t *testing.T) {
 	}
 
 	events := readJSONL(t, filepath.Join(ws, "memory", "captains_log.jsonl"))
-	if len(events) != 2 {
-		t.Fatalf("want LOOP_STARTED+LOOP_FINISHED, got %d rows", len(events))
+	if len(events) != 3 {
+		t.Fatalf("want RECALL_PERFORMED+LOOP_STARTED+LOOP_FINISHED, got %d rows", len(events))
 	}
-	if events[0]["event_type"] != "LOOP_STARTED" || events[1]["event_type"] != "LOOP_FINISHED" {
-		t.Fatalf("event types: %v / %v", events[0]["event_type"], events[1]["event_type"])
+	if events[0]["event_type"] != "RECALL_PERFORMED" ||
+		events[1]["event_type"] != "LOOP_STARTED" ||
+		events[2]["event_type"] != "LOOP_FINISHED" {
+		t.Fatalf("event types: %v / %v / %v",
+			events[0]["event_type"], events[1]["event_type"], events[2]["event_type"])
 	}
 	for _, ev := range events {
 		if ev["audience"] != "system" {

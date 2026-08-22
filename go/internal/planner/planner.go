@@ -43,7 +43,12 @@ type Usage struct {
 // re-derived, so the workspace cmd/maro prints is provably the one the
 // operator docs are read from (adversarial r3, QA: two independent
 // env re-derivations only happen to agree).
-func Decompose(ctx context.Context, a llm.Adapter, workspaceDir, goal string, maxSteps int) ([]string, Usage, error) {
+// extras are pre-assembled context blocks (recall's prior-attempt
+// summary + ranked lessons) appended to the SYSTEM message, mirroring
+// Python planner.decompose's extras join (planner.py:1196 — extras ride
+// the system prompt, operator docs ride the user message). Empty
+// strings are dropped, matching Python's `if x` filter.
+func Decompose(ctx context.Context, a llm.Adapter, workspaceDir, goal string, maxSteps int, extras ...string) ([]string, Usage, error) {
 	if strings.TrimSpace(goal) == "" {
 		return nil, Usage{}, fmt.Errorf("empty goal")
 	}
@@ -57,8 +62,15 @@ func Decompose(ctx context.Context, a llm.Adapter, workspaceDir, goal string, ma
 		fmt.Fprintf(&sb, "\n\nUSER CONTEXT (%s):\n%s", doc.name, doc.body)
 	}
 
+	system := decomposeSystem
+	for _, x := range extras {
+		if x != "" {
+			system += "\n\n" + x
+		}
+	}
+
 	resp, err := a.Complete(ctx, []llm.Message{
-		{Role: "system", Content: decomposeSystem},
+		{Role: "system", Content: system},
 		{Role: "user", Content: sb.String()},
 	}, llm.Options{MaxTokens: 1024, Temperature: 0.2, Purpose: "decompose"})
 	if err != nil {

@@ -29,6 +29,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/planner"
+	"github.com/slycrel/maro-orchestration/go/internal/recall"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -138,7 +139,34 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		recModel = a.Name() + "-default"
 	}
 
-	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps)
+	// Memory recall before planning (recall tranche): ranked tiered
+	// lessons + prior-attempt context ride the decompose prompt, the
+	// same two extras channels Python's loop feeds decompose
+	// (lessons_context via loop_planning, ancestry_context via
+	// handle.py's as_context_block). The seam is read-only and every
+	// failure degrades to "knows nothing" — a broken memory store must
+	// never block a run. project is "" until the loop threads a project
+	// concept pre-decompose (the exec lane resolves its slug later).
+	rr := recall.Recall(rec.WorkspaceDir, goal, "")
+	// Instrumented from day one, like Python's RECALL_PERFORMED — the
+	// emission lives at this call site rather than inside the seam
+	// (recall keeps no recorder handle by design; named in PORT.md).
+	recallCtx := map[string]any{"goal_preview": budget.Clip(goal, 200)}
+	for k, v := range rr.Sources {
+		recallCtx[k] = v
+	}
+	var recallWarns []string
+	if evErr := rec.Event("RECALL_PERFORMED", "recall",
+		fmt.Sprintf("recall slice=loop: %d prior attempts.", len(rr.PriorAttempts)),
+		recallCtx, loopID); evErr != nil {
+		// Event-log failure must not kill the run, but it must not
+		// vanish either — held here until a carrier exists (Result on
+		// the happy path, the failure chain when decompose dies).
+		recallWarns = append(recallWarns,
+			"captain's log write failed (RECALL_PERFORMED): "+evErr.Error())
+	}
+
+	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps, rr.DecomposeExtras()...)
 	if err != nil {
 		// Decompose failing IS an outcome; record it before returning —
 		// including whatever the failed planning turn still spent. The
@@ -148,6 +176,9 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		chain := []string{budget.FailureChainEntry.Clip("decompose: " + err.Error())}
 		for _, w := range planUse.Warnings {
 			chain = append(chain, budget.FailureChainEntry.Clip("decompose warning: "+w))
+		}
+		for _, w := range recallWarns {
+			chain = append(chain, budget.FailureChainEntry.Clip(w))
 		}
 		_, recErr := rec.WriteOutcome(record.Outcome{
 			Goal: goal, Status: "stuck", LoopID: loopID,
@@ -171,7 +202,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		// and the planning turn's warnings are diagnostics like any
 		// step's (adversarial r4: they were dropped on both paths).
 		TokensIn: planUse.TokensIn, TokensOut: planUse.TokensOut,
-		Warnings: planUse.Warnings}
+		Warnings: append(recallWarns, planUse.Warnings...)}
 
 	// Executor lane: requested AND structurally available. A backend
 	// that can't run agent tools degrades to the tool-less path with a
