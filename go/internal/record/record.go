@@ -394,7 +394,11 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	// superseded one on the row itself. Only fires on a real re-stamp
 	// of a judged row — the first verdict landing writes no history.
 	if achieved != nil {
-		if prior, judged := row["goal_achieved"]; judged {
+		// Key-presence gate ≈ Python's `is not None` ONLY because every
+		// writer (WriteOutcome here, Python's _scrub_for_write) pops a
+		// null before writing. Normalize anyway: a foreign row with an
+		// explicit JSON null counts as unjudged, matching Python (r5).
+		if prior, judged := row["goal_achieved"]; judged && prior != nil {
 			hist, _ := row["verdict_history"].([]any)
 			// String fields default to "" like Python's .get(key, "") —
 			// a row judged by another writer (a Python row, a direct

@@ -740,9 +740,15 @@ stepLoop:
 				// recreates the round's headline bug (row reads unjudged
 				// forever) behind a rarer trigger — it must be
 				// discoverable off-terminal (adversarial routing r3).
-				_ = runs.AppendVerdictRow(runDir, map[string]any{
+				if merr := runs.AppendVerdictRow(runDir, map[string]any{
 					"skipped":     "outcome_row_stamp_failed",
-					"skip_detail": budget.Clip(soErr.Error(), 300)})
+					"skip_detail": budget.Clip(soErr.Error(), 300)}); merr != nil {
+					// The fallback channel failing too must be NAMED —
+					// otherwise the doubly-failed case silently degrades
+					// to pre-marker behavior (adversarial routing r5).
+					res.Warnings = append(res.Warnings,
+						"outcome-row stamp marker write also failed: "+merr.Error())
+				}
 			}
 			if evErr := rec.Event("CLOSURE_VERDICT", "closure_verdict",
 				budget.Clip(v.Summary, 200),

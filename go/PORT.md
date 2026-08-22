@@ -547,7 +547,17 @@ direction).
   ledger's .tmp path), goal_verdict_at advancing on UNJUDGED re-stamps,
   and foreign-judged-row history. One operational note carried:
   nothing consumes closure_verdicts.jsonl operationally yet — the
-  durable marker's discoverability is manual until a reader lands. Deliberately unported with their
+  durable marker's discoverability is manual until a reader lands.
+  Adversarial r5 (same day, near-fixpoint round — 0 HIGHs): the
+  failure-marker's OWN write failure was discarded (`_ =`) — the
+  doubly-failed case now appends a named warning ("outcome-row stamp
+  marker write also failed"), covered at the AppendVerdictRow seam
+  (M35 DETECTED) because loop-level double injection is
+  non-deterministic by construction (the run's own verdict row creates
+  the file before the marker fires — comment on the pin names this);
+  the verdict_history key-presence gate got the explicit
+  `prior != nil` normalization plus a comment naming the
+  presence≈is-not-None invariant it leans on. Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard
   (claimed inputs/outputs on disk), check_goal_clarity + imperative
   rewrite (needs the ask-the-user surface), introspects_self's consumer

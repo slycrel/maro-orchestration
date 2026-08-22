@@ -10,6 +10,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
+	"github.com/slycrel/maro-orchestration/go/internal/runs"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -319,5 +320,24 @@ func TestRunClosureRowStampFailureWritesDurableMarker(t *testing.T) {
 	if !strings.Contains(string(meta), `"goal_achieved": true`) &&
 		!strings.Contains(string(meta), `"goal_achieved":true`) {
 		t.Fatalf("metadata stamp must survive a row-stamp failure: %s", meta)
+	}
+}
+
+// TestAppendVerdictRowFailsOnPoisonedPath: negative control for the
+// stamp-failure marker (adversarial routing r5): the loop's new
+// "marker write also failed" warning branch is reachable only if
+// AppendVerdictRow actually ERRORS on a broken store rather than
+// silently succeeding — proven here with a directory squatting on the
+// verdicts file. Loop-level double-failure injection is named
+// non-deterministic (run ids are random; the run's own earlier verdict
+// row creates the file before the marker fires), so the branch's
+// warning text is covered at this seam, not through loop.Run.
+func TestAppendVerdictRowFailsOnPoisonedPath(t *testing.T) {
+	badRun := filepath.Join(t.TempDir(), "poisoned")
+	if err := os.MkdirAll(filepath.Join(badRun, "build", "closure_verdicts.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runs.AppendVerdictRow(badRun, map[string]any{"skipped": "outcome_row_stamp_failed"}); err == nil {
+		t.Fatalf("poisoned verdicts path must error — the loop's marker-failure warning depends on it")
 	}
 }

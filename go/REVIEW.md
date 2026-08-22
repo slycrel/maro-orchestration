@@ -1646,3 +1646,41 @@ Verification ledger:
 Mutations M32-M34 all DETECTED (M34 on a strengthened pin — escape
 recorded). Round yield: doc + test hardening only, no behavior HIGHs —
 NEXT ROUND IS THE FIXPOINT CHECK.
+
+## Routing tranche — adversarial r5 (2026-08-22, 1 lens, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff 50a34672..336741d1 (the r4 fix layer + doc amendment). Verdict:
+0 HIGHs — 1 MED and 2 LOWs, all in the marker/history seam this round
+existed to check.
+
+Verification ledger:
+- VERIFIED (MED): loop.go's outcome_row_stamp_failed marker discarded
+  its OWN write failure (`_ = runs.AppendVerdictRow(...)`) — a doubly-
+  failed stamp degraded silently to pre-marker behavior. Fixed: the
+  error now appends a named warning ("outcome-row stamp marker write
+  also failed: ..."). Coverage is at the AppendVerdictRow seam
+  (TestAppendVerdictRowFailsOnPoisonedPath: a directory squatting on
+  build/closure_verdicts.jsonl must error); loop-level double
+  injection is non-deterministic by construction — the run's own
+  closure verdict row (loop.go:703) creates the file as a real file
+  before the marker (loop.go:743) fires, so no external squat can
+  reach the marker alone. Named on the pin. M35 (AppendVerdictRow
+  swallows its open error) DETECTED. Residual, named: the warning-
+  append line itself is proven reachable but its text is not pinned
+  end-to-end through loop.Run.
+- VERIFIED (LOW): verdict_history's key-presence gate
+  (`row["goal_achieved"]` exists ⇒ judged) leaned on an unstated
+  invariant — every writer pops nulls before writing, so presence ≈
+  Python's `is not None`. Normalized to `judged && prior != nil` with
+  a comment naming the invariant; a foreign row carrying an explicit
+  JSON null now counts unjudged, matching Python.
+- NOTED (LOW, no action): the strict goal_verdict_at advancement pin
+  depends on µs timestamp granularity — two stamps inside the same
+  microsecond would flake. Accepted: nowISO carries µs and the pin
+  does two full flock'd rewrites between captures; if it ever flakes,
+  insert a monotonic tiebreak, don't loosen the assert.
+
+Mutation M35 DETECTED. Reviewer's closing line: "Finding 1 is the one
+item I'd want addressed before calling this a true fixpoint" — it is
+addressed. NEXT ROUND IS FIXPOINT CONFIRMATION (expect NO BLOCKERS
+FOUND).
