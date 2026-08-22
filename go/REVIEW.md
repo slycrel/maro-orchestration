@@ -589,3 +589,55 @@ hallucinated claims — every citation verified against the sources.
 Verdict on r2: CONTESTED → both HIGHs fixed same-day with must-detect
 pins (SAME-MODEL FALLBACK: sonnet-medium). Full suite green, concurrent
 live smoke PASS.
+
+## Round 3 — 2026-08-22, on the r2 fix layer (a4b2a6b5)
+
+1 lens (Expert QA), SAME-MODEL FALLBACK: sonnet-medium — the
+fixpoint-check round. The pattern held a SIXTH time: the round's HIGH
+sat inside r2's own fix, and undermined r2's headline fix.
+
+### Verification Ledger
+
+1. **HIGH — the r2 empty-dir cleanup raced the r2 flock**: a
+   busy-refused loser that raced the winner past MkdirAll (both Stat'd
+   before either created; MkdirAll is idempotent-success) hit
+   `!dirExisted → os.Remove` on the still-empty dir the winner had just
+   won — deleting it before the winner's .mission write, failing BOTH
+   runs with a stuck record blaming "dir setup". VERIFIED (the exact
+   window exists; Python's loop_init never deletes on LoopBusy — the
+   cleanup was a Go-only addition with no parity model). **FIXED**:
+   cleanup now requires `holdingSlot` — a busy-refused run never
+   removes anything; removal only happens while holding the flock,
+   when no sibling can be inside. Pins: dir-survival assert in
+   `TestExecLaneBusyProjectRefusesAndRecordsStuck` (the reviewer named
+   this exact test as the one that should catch it and didn't), plus
+   `TestConcurrentRunsSameSlugWinnerSurvivesLoser` — a gated-adapter
+   integration test holding a real Run mid-step while a second Run is
+   refused, asserting the winner's dir/mission intact and the winner
+   completing done; race-detector clean.
+2. **Finding 2 (test gap)** — no automated test exercised two
+   concurrent Runs; the "live-fired" PORT.md claim was manual-only.
+   ACCEPTED and closed by the gated concurrent test above; PORT.md now
+   says live-fired AND pinned.
+3. **LOW — stale holder metadata in refusal diagnostics** (write-after-
+   flock window; release never truncates) — VERIFIED as faithful
+   Python parity (interrupt.py does the same). Flagged not fixed;
+   comment added in slot.go naming the inherited imprecision.
+4. **LOW — no-result error path printed the scan suspects twice**
+   (parseErr already embeds them; the r2 warnSuffix re-appended the
+   same slice) — VERIFIED. **FIXED**: the no-result path appends only
+   the transcript warning; timeout/exit paths keep the full suffix.
+5. **No-issue (confirmed parity)**: recordedMission's
+   `TrimLeft(line, "> ")` over-strip matches Python's
+   `line.lstrip("> ")` byte-for-byte — correctly not "fixed".
+
+**FIXPOINT CALL (SAME-MODEL FALLBACK: sonnet-medium):** three rounds
+(4→2→1 lenses), every round's HIGH found in the previous round's fix
+and closed same-day with a must-detect pin; r3's remaining findings
+were one interaction defect in r2's own addition (fixed + double-
+pinned), one inherited-parity LOW (flagged), one message-shape LOW
+(fixed). No defect outside the fix-regression class for two rounds.
+Residuals: the named-divergence lists in PORT.md/slot.go (all
+refusal-direction or diagnostics-only). Full suite green across 12
+packages, race detector clean on the concurrency pins, live smoke
+(single + concurrent) PASS.

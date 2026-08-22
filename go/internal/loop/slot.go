@@ -60,6 +60,12 @@ func acquireProjectSlot(memoryDir, slug, loopID, goal string) (release func(), w
 	}
 	// Holder metadata is best-effort diagnostics for the NEXT contender's
 	// refusal message; a failed write must not fail the acquired slot.
+	// Known parity quirk (Python interrupt.py does the same seek/
+	// truncate/write after flock, and neither runtime clears the file at
+	// release): a contender reading in the write window can see empty
+	// ("unknown holder") or a PREVIOUS holder's stale metadata. Inherited
+	// diagnostics-only imprecision, flagged not fixed (adversarial exec
+	// r3 2026-08-22, Expert QA LOW — fixing would diverge from parity).
 	meta, _ := json.Marshal(map[string]any{
 		"loop_id": loopID, "pid": os.Getpid(), "goal": goal,
 		"started": time.Now().UTC().Format(time.RFC3339),

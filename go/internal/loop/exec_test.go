@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -630,6 +631,76 @@ func TestExecLaneBusyProjectRefusesAndRecordsStuck(t *testing.T) {
 	last := rows[len(rows)-1]
 	if last["status"] != "stuck" {
 		t.Fatalf("busy refusal must record stuck: %+v", last)
+	}
+	// The refused run created this dir on the way in (its Stat saw
+	// nothing), but the slot holder may be a racing winner that just
+	// MkdirAll'd the same path and hasn't written .mission yet — a
+	// busy-refused loser must NEVER remove it (adversarial exec r3
+	// 2026-08-22, Expert QA HIGH: the r2 cleanup rmdir'd the winner's
+	// still-empty dir, failing both runs).
+	dir := filepath.Join(ws, "projects", goalSlug("contended goalslot case"))
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("busy-refused run removed the slot holder's dir: %v", err)
+	}
+}
+
+// gatedAdapter holds the first executor step in flight until released,
+// so a test can act while a Run provably holds its project slot.
+type gatedAdapter struct {
+	*llm.Fake
+	proceed chan struct{}
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedAdapter) Complete(ctx context.Context, msgs []llm.Message, opts llm.Options) (*llm.Response, error) {
+	if opts.Purpose == "step-execute" {
+		g.once.Do(func() { close(g.entered) })
+		<-g.proceed
+	}
+	return g.Fake.Complete(ctx, msgs, opts)
+}
+
+func TestConcurrentRunsSameSlugWinnerSurvivesLoser(t *testing.T) {
+	// Two Run invocations contending for one fresh slug — the gate/
+	// cleanup INTERACTION the unit tests cannot see (adversarial exec
+	// r3 2026-08-22, Expert QA finding 2).
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	goal := "concurrent winner keeps dir"
+	gated := &gatedAdapter{
+		Fake: execFake(`["one step"]`,
+			`{"tool": "complete_step", "result": "winner result", "summary": "s"}`),
+		proceed: make(chan struct{}),
+		entered: make(chan struct{}),
+	}
+	type runOut struct {
+		res *Result
+		err error
+	}
+	winner := make(chan runOut, 1)
+	go func() {
+		r, e := Run(context.Background(), gated, record.New(ws), Opts{
+			Goal: goal, MaxSteps: 2, DryRun: true, Exec: true})
+		winner <- runOut{r, e}
+	}()
+	<-gated.entered // winner now holds the slot with a step in flight
+
+	loser := execFake(`["one step"]`, "MUST NOT RUN")
+	_, lerr := Run(context.Background(), loser, record.New(ws), Opts{
+		Goal: goal, MaxSteps: 2, DryRun: true, Exec: true})
+	if lerr == nil || !strings.Contains(lerr.Error(), "busy") {
+		t.Fatalf("loser must be refused busy, got %v", lerr)
+	}
+	dir := filepath.Join(ws, "projects", goalSlug(goal))
+	if got := recordedMission(dir); got != goal {
+		t.Fatalf("loser damaged the winner's project state: mission=%q", got)
+	}
+
+	close(gated.proceed)
+	w := <-winner
+	if w.err != nil || w.res.Status != "done" {
+		t.Fatalf("winner must complete untouched: err=%v res=%+v", w.err, w.res)
 	}
 }
 

@@ -241,8 +241,13 @@ direction).
   `<workspace>/memory/loop-<slug>.lock`, claimed before the first
   project write, held for the run, refuse-immediately on busy (the
   refusal records a stuck outcome naming the holder), and fs errors
-  degrade to UNGATED with a warning. Live-fired: two concurrent
-  same-goal runs → one completed, one refused with holder metadata.
+  degrade to UNGATED with a warning. A busy-refused run NEVER removes
+  the project dir — the slot holder may be a racing winner that just
+  created it and hasn't written .mission yet (Python never deletes on
+  LoopBusy; the r3 review caught the r2 cleanup rmdir'ing the winner's
+  still-empty dir). Live-fired (two concurrent same-goal real-CLI runs
+  → one completed, one refused with holder metadata) AND pinned by an
+  automated race-detector-clean concurrent-Run test.
   Unported, named in slot.go: `--wait` polling, in-process sibling
   slot sharing, the unlink/reacquire inode guard, busy_policy=worktree.
 - Exec mode HALTS on the first non-`done` step: Go has no

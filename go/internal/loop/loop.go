@@ -181,6 +181,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			dirExisted = true
 		}
 		err := os.MkdirAll(res.ProjectDir, 0o755)
+		holdingSlot := false
 		if err == nil {
 			// Admission gate BEFORE the first project write: two runs
 			// racing the same slug both pass resolveProjectSlug (its Stat
@@ -195,6 +196,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			if gateErr != nil {
 				err = gateErr
 			} else if release != nil {
+				holdingSlot = true
 				defer release()
 			}
 		}
@@ -207,8 +209,14 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			// structurally safe — data-retention doctrine): a persistently
 			// failing setup would otherwise accumulate mission-less
 			// project dirs that read as work that never happened
-			// (adversarial exec r2 2026-08-22, Expert QA).
-			if !dirExisted {
+			// (adversarial exec r2 2026-08-22, Expert QA). ONLY while
+			// holding the slot: a busy-refused loser that raced the
+			// winner past MkdirAll would otherwise rmdir the still-empty
+			// dir the winner just won the right to use, failing BOTH runs
+			// with a record that blames dir setup (adversarial exec r3
+			// 2026-08-22, Expert QA HIGH — the r2 cleanup undermined the
+			// r2 flock; Python never deletes on LoopBusy).
+			if !dirExisted && holdingSlot {
 				_ = os.Remove(res.ProjectDir)
 			}
 			// Tool-bearing steps with no bound workspace would write to

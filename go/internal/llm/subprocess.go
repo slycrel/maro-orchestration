@@ -271,8 +271,16 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 		return nil, fmt.Errorf("claude CLI failed: %w — output: %s%s",
 			runErr, fileText(capF.Name()), warnSuffix)
 	}
+	// parseErr already embeds the scan suspects (scanForResult's own
+	// message); append only the transcript warning here, or the same
+	// suspect text prints twice in one error (adversarial exec r3
+	// 2026-08-22, Expert QA).
+	trSuffix := ""
+	if transcriptWarn != "" {
+		trSuffix = " [warning: " + transcriptWarn + "]"
+	}
 	return nil, fmt.Errorf("no result event in claude CLI output (purpose=%s): %v%s",
-		opts.Purpose, parseErr, warnSuffix)
+		opts.Purpose, parseErr, trSuffix)
 }
 
 // scanForResult walks the single merged capture line-wise for the
