@@ -1,0 +1,369 @@
+// Package knowledge is the minimal Python-schema-compatible surface the
+// pack importer needs: append hypotheses (knowledge_lens.Hypothesis) and
+// medium-tier lessons (knowledge_web.TieredLesson) as rows the Python
+// readers load unchanged, plus the dedup-snapshot loaders those imports
+// gate on.
+//
+// This is NOT the recall/knowledge tranche — no decay, no promotion, no
+// retrieval. It exists so an import lands data where BOTH runtimes read
+// it; the Python field sets are the contract (asdict() emits every field,
+// so we emit every field too — a Go-written row and a Python-written row
+// must be indistinguishable to a reader).
+package knowledge
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
+)
+
+// Vocabulary constants shared with knowledge_web.py.
+var LessonTypes = map[string]bool{
+	"execution": true, "planning": true, "recovery": true,
+	"verification": true, "cost": true,
+}
+var LessonScopes = map[string]bool{"method": true, "world": true}
+
+// Variant-union bounds shared with memory_ledger.py.
+const (
+	MergedVariantsCap = 5
+	VariantMaxChars   = 500
+)
+
+// CoerceScope ports knowledge_web.coerce_scope: any decoded-JSON value →
+// (scope, bad). bad distinguishes "honestly unstamped" (absent/""/null)
+// from "carries something no write path can produce" so corruption gets
+// reported rather than absorbed. Type check before vocabulary check —
+// scope can hold any decodable type.
+func CoerceScope(raw any) (string, bool) {
+	if s, ok := raw.(string); ok && LessonScopes[s] {
+		return s, false
+	}
+	if raw == nil || raw == "" {
+		return "", false
+	}
+	return "", true
+}
+
+// Hypothesis mirrors knowledge_lens.Hypothesis.to_dict exactly.
+type Hypothesis struct {
+	HypID           string         `json:"hyp_id"`
+	Lesson          string         `json:"lesson"`
+	Domain          string         `json:"domain"`
+	Confirmations   int            `json:"confirmations"`
+	Contradictions  int            `json:"contradictions"`
+	SourceLessonIDs []string       `json:"source_lesson_ids"`
+	FirstSeen       string         `json:"first_seen"`
+	LastSeen        string         `json:"last_seen"`
+	Imported        map[string]any `json:"imported"`
+}
+
+// TieredLesson mirrors knowledge_web.TieredLesson via asdict() — every
+// declared field ships, matching what the Python append writes. Field
+// additions on the Python side deserialize-to-default there, but keep
+// this in sync when porting later tranches.
+type TieredLesson struct {
+	LessonID          string           `json:"lesson_id"`
+	TaskType          string           `json:"task_type"`
+	Outcome           string           `json:"outcome"`
+	Lesson            string           `json:"lesson"`
+	SourceGoal        string           `json:"source_goal"`
+	Confidence        float64          `json:"confidence"`
+	Tier              string           `json:"tier"`
+	Score             float64          `json:"score"`
+	LastReinforced    string           `json:"last_reinforced"`
+	SessionsValidated int              `json:"sessions_validated"`
+	TimesApplied      int              `json:"times_applied"`
+	TimesReinforced   int              `json:"times_reinforced"`
+	RecordedAt        string           `json:"recorded_at"`
+	AcquiredFor       *string          `json:"acquired_for"`
+	EvidenceSources   []any            `json:"evidence_sources"`
+	LessonType        string           `json:"lesson_type"`
+	Imported          map[string]any   `json:"imported"`
+	Novelty           float64          `json:"novelty"`
+	Provisional       bool             `json:"provisional"`
+	MintedFrom        string           `json:"minted_from"`
+	MintedBy          string           `json:"minted_by"`
+	Scope             string           `json:"scope"`
+	Contested         map[string]any   `json:"contested"`
+	MergedVariants    []string         `json:"merged_variants"`
+	DeltaEvidence     map[string]any   `json:"delta_evidence"`
+	Grounding         []map[string]any `json:"grounding"`
+	Canon             map[string]any   `json:"canon"`
+}
+
+// Store reads and appends the knowledge files of one workspace.
+type Store struct{ WorkspaceDir string }
+
+func NewStore(ws string) *Store { return &Store{WorkspaceDir: ws} }
+
+func (s *Store) memory() string { return filepath.Join(s.WorkspaceDir, "memory") }
+
+func (s *Store) HypothesesPath() string {
+	return filepath.Join(s.memory(), "hypotheses.jsonl")
+}
+func (s *Store) StandingRulesPath() string {
+	return filepath.Join(s.memory(), "standing_rules.jsonl")
+}
+func (s *Store) TieredLessonsPath(tier string) string {
+	return filepath.Join(s.memory(), tier, "lessons.jsonl")
+}
+
+// readRows loads every decodable JSON-object row of a JSONL file,
+// tolerating a missing file and skipping undecodable lines — the same
+// posture as the Python loaders (nothing validates JSONL on read).
+func readRows(path string) ([]map[string]any, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var rows []map[string]any
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			continue
+		}
+		rows = append(rows, m)
+	}
+	return rows, sc.Err()
+}
+
+// DedupSnapshot is the identity state an import checks against: ids and
+// texts already present. Taken once, before any appends (fixpoint review
+// 2026-08-11: duplicate rows inside one artifact must not both import —
+// the caller adds to it as it writes).
+type DedupSnapshot struct {
+	IDs   map[string]bool
+	Texts map[string]bool
+}
+
+// HypothesisSnapshot gathers existing hypothesis ids plus hypothesis AND
+// standing-rule texts (a rule that already exists locally must not
+// re-enter as a hypothesis — same union the Python importer takes).
+func (s *Store) HypothesisSnapshot() (*DedupSnapshot, error) {
+	snap := &DedupSnapshot{IDs: map[string]bool{}, Texts: map[string]bool{}}
+	hyps, err := readRows(s.HypothesesPath())
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hyps {
+		if id, ok := h["hyp_id"].(string); ok {
+			snap.IDs[id] = true
+		}
+		if t, ok := h["lesson"].(string); ok && t != "" {
+			snap.Texts[t] = true
+		}
+	}
+	rules, err := readRows(s.StandingRulesPath())
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rules {
+		if t, ok := r["rule"].(string); ok && t != "" {
+			snap.Texts[t] = true
+		}
+	}
+	return snap, nil
+}
+
+// LessonSnapshot gathers existing lesson ids and texts across MEDIUM and
+// LONG tiers (an import never writes LONG, but an identical text there
+// must still dedup).
+func (s *Store) LessonSnapshot() (*DedupSnapshot, error) {
+	snap := &DedupSnapshot{IDs: map[string]bool{}, Texts: map[string]bool{}}
+	for _, tier := range []string{"medium", "long"} {
+		rows, err := readRows(s.TieredLessonsPath(tier))
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			if id, ok := r["lesson_id"].(string); ok {
+				snap.IDs[id] = true
+			}
+			if t, ok := r["lesson"].(string); ok && t != "" {
+				snap.Texts[t] = true
+			}
+		}
+	}
+	return snap, nil
+}
+
+func (s *Store) AppendHypothesis(h Hypothesis) error {
+	raw, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.memory(), 0o755); err != nil {
+		return err
+	}
+	return record.AppendRawLine(s.HypothesesPath(), raw)
+}
+
+func (s *Store) AppendMediumLesson(tl TieredLesson) error {
+	tl.Tier = "medium"
+	raw, err := json.Marshal(tl)
+	if err != nil {
+		return err
+	}
+	path := s.TieredLessonsPath("medium")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return record.AppendRawLine(path, raw)
+}
+
+// AbsorbVariant ports memory_ledger._absorb_variant — the ONE owner of
+// the variant-union rule: skip empties, the canonical text itself,
+// already-present texts, and everything past the cap; identity judged
+// BEFORE clipping.
+func AbsorbVariant(variants []string, text, canonical string) []string {
+	trimmed := text
+	for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\n' || trimmed[0] == '\t') {
+		trimmed = trimmed[1:]
+	}
+	for len(trimmed) > 0 {
+		last := trimmed[len(trimmed)-1]
+		if last != ' ' && last != '\n' && last != '\t' {
+			break
+		}
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	if trimmed == "" || trimmed == canonical {
+		return variants
+	}
+	clipped := budget.Clip(trimmed, VariantMaxChars)
+	for _, v := range variants {
+		if v == clipped {
+			return variants
+		}
+	}
+	if len(variants) >= MergedVariantsCap {
+		return variants
+	}
+	return append(variants, clipped)
+}
+
+// UnionVariantsIntoLesson rewrites the tiered-lessons file for each tier,
+// absorbing variants into the row whose canonical text is byte-identical
+// — the transport-order-dependence fix from the 2026-08-11 fixpoint
+// (identity collision skips the ROW, not its rationale). Whole-file
+// read-modify-write under the store lock, like Python's
+// _mutate_tiered_lessons. A miss is a no-op.
+func (s *Store) UnionVariantsIntoLesson(lessonText string, variants []string) error {
+	for _, tier := range []string{"medium", "long"} {
+		path := s.TieredLessonsPath(tier)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue // a tier with no store cannot hold the twin; no lock dir to create
+		}
+		err := record.Locked(path, func() error {
+			raw, err := os.ReadFile(path)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			lines := splitLines(raw)
+			changed := false
+			for i, line := range lines {
+				var row map[string]any
+				if json.Unmarshal([]byte(line), &row) != nil {
+					continue
+				}
+				canonical, _ := row["lesson"].(string)
+				if canonical != lessonText {
+					continue
+				}
+				existing := stringList(row["merged_variants"])
+				merged := existing
+				for _, v := range variants {
+					merged = AbsorbVariant(merged, v, canonical)
+				}
+				if len(merged) == len(existing) {
+					continue
+				}
+				row["merged_variants"] = merged
+				out, err := json.Marshal(row)
+				if err != nil {
+					return err
+				}
+				lines[i] = string(out)
+				changed = true
+			}
+			if !changed {
+				return nil
+			}
+			return atomicRewrite(path, lines)
+		})
+		if err != nil {
+			return fmt.Errorf("variant union (%s): %w", tier, err)
+		}
+	}
+	return nil
+}
+
+func splitLines(raw []byte) []string {
+	var lines []string
+	start := 0
+	for i, b := range raw {
+		if b == '\n' {
+			if i > start {
+				lines = append(lines, string(raw[start:i]))
+			}
+			start = i + 1
+		}
+	}
+	if start < len(raw) {
+		lines = append(lines, string(raw[start:]))
+	}
+	return lines
+}
+
+func stringList(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, e := range arr {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// atomicRewrite replaces path via temp-file + rename (crash-safe; the
+// caller holds the flock, so no other locked writer interleaves).
+func atomicRewrite(path string, lines []string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".rewrite-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	for _, ln := range lines {
+		if _, err := tmp.WriteString(ln + "\n"); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}

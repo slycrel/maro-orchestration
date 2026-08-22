@@ -154,7 +154,15 @@ func (r *Recorder) appendJSONL(path string, row any) error {
 	if err != nil {
 		return fmt.Errorf("marshal row for %s: %w", filepath.Base(path), err)
 	}
+	return AppendRawLine(path, raw)
+}
 
+// Locked runs fn while holding the Python-compatible advisory flock for
+// path ("<path>.lock" sibling, bounded wait, fail-closed). Exported for
+// the pack importer's read-modify-write surfaces (quarantine files,
+// CONFLICTS.md, tiered-lesson rewrites) so every cross-runtime writer
+// shares the one lock protocol.
+func Locked(path string, fn func() error) error {
 	lockPath := path + ".lock"
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -165,31 +173,38 @@ func (r *Recorder) appendJSONL(path string, row any) error {
 		return fmt.Errorf("lock %s: %w", lockPath, err)
 	}
 	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	return fn()
+}
 
-	needsFrame := false
-	if st, err := os.Stat(path); err == nil && st.Size() > 0 {
-		tail, err := readLastByte(path)
-		if err != nil {
-			// Fail closed: if the tail cannot be known framed, appending
-			// may fuse onto a torn fragment (Python r17 lesson).
-			return fmt.Errorf("append %s: cannot inspect existing tail: %w", path, err)
+// AppendRawLine appends one pre-serialized row under the flock protocol,
+// with the torn-tail framing appendJSONL documents.
+func AppendRawLine(path string, raw []byte) error {
+	return Locked(path, func() error {
+		needsFrame := false
+		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
+			tail, err := readLastByte(path)
+			if err != nil {
+				// Fail closed: if the tail cannot be known framed, appending
+				// may fuse onto a torn fragment (Python r17 lesson).
+				return fmt.Errorf("append %s: cannot inspect existing tail: %w", path, err)
+			}
+			needsFrame = tail != '\n'
 		}
-		needsFrame = tail != '\n'
-	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-	buf := raw
-	if needsFrame {
-		buf = append([]byte{'\n'}, raw...)
-	}
-	if _, err := f.Write(append(buf, '\n')); err != nil {
-		return fmt.Errorf("append %s: %w", path, err)
-	}
-	return nil
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		defer f.Close()
+		buf := raw
+		if needsFrame {
+			buf = append([]byte{'\n'}, raw...)
+		}
+		if _, err := f.Write(append(buf, '\n')); err != nil {
+			return fmt.Errorf("append %s: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // flockWithDeadline mirrors Python locked_write's acquisition loop:

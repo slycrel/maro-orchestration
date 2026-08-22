@@ -64,6 +64,54 @@ runtimes' history through one lens.
   budgeted+marked, blocked reasons traveling whole.
 - `cmd/maro` — `maro run "goal" [-max-steps N] [-backend ...] [-model X]`.
 
+**Pack tranche (2026-08-22, "export then import success"):**
+
+- `internal/pack` — the full maro-pack lifecycle: `export` (gather +
+  scrub + REVIEW.md), `seal` (review-hash + payload-digest stamps),
+  `import` (trust demotion per PORTABLE_LEARNING_DESIGN §3), `adopt`
+  (quarantine → live with provenance frontmatter). CLI:
+  `maro pack export|seal|import|adopt`.
+- `internal/scrub` — secret_scrub.py port (secret shapes + known-local
+  identifiers; the human review gate remains the real backstop).
+- `internal/provenance` — the Tier-0 lesson-provenance classifier,
+  re-applied at import so transport cannot launder a prompt-derived
+  lesson into an injectable one (db37d525 class).
+- `internal/knowledge` — the MINIMAL Python-schema store surface the
+  importer lands in: hypotheses + medium-tier lessons, full asdict()
+  field parity, plus the variant-union rewrite (identity collision
+  skips the row, not its rationale).
+
+**Cross-runtime proof** (`crossrt_smoke.sh`, run live 2026-08-22): the
+full circle Python export → Go import → Go export → Python import
+passes — each seal verified by the RECEIVING runtime's independent
+recomputation of the canonical payload digest
+(`json.dumps(sort_keys, separators=(",",":"), ensure_ascii=False)`
+reproduced byte-for-byte in `canonical.go`, pinned against
+CPython-generated fixtures), trust demoted at every hop
+(contested-by-birth compounds: `imported-xrt-go-imported-xrt-py-…`),
+and Python's own loaders (`load_hypotheses`, `load_tiered_lessons`)
+parse every Go-written row. The two runtimes also share the flock
+protocol on `memory/.pack-import.lock`, so concurrent imports from
+either runtime into one workspace serialize.
+
+**Pack-tranche residuals, named:**
+
+- `skill_records` quarantine to `imports/<label>/` instead of importing
+  natively (outcome string `quarantined_no_native_skill_store_v1`) —
+  this runtime has no skills store until the tools tranche; the rows
+  are preserved verbatim, nothing is half-imported.
+- `--include-runs` (Class E opt-in) and `--include-playbook`'s Python
+  interactive-confirm shim are not ported; playbook export works via
+  the flag, runs export does not exist yet.
+- Rules/hypotheses lanes share Python's intra-artifact behavior of
+  deduping by id but not adding each imported TEXT to the identity
+  snapshot mid-artifact (lessons do; the asymmetry is upstream's —
+  kept bug-for-bug so transport semantics stay identical, worth fixing
+  in BOTH runtimes together).
+- The import-side classifier gets (lesson, source_goal) only, like
+  Python's import call site — the evidence leg is a mint-time-only
+  signal in both runtimes.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. Tool-bearing worker steps (v0 runs `--tools ""` — the safe utility
