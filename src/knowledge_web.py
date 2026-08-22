@@ -4201,15 +4201,25 @@ def load_knowledge_edges(*, node_id: Optional[str] = None) -> List[KnowledgeEdge
     for d in _read_store(p, "load_knowledge_edges"):
         if node_id and d.get("source_id") != node_id and d.get("target_id") != node_id:
             continue
-        # Coerce weight at the loader boundary (edge-review r1, QA lens):
-        # rows are untrusted JSON, and a single string-typed weight would
-        # otherwise construct fine and then TypeError inside every max()
-        # consumer — the exact class that wedged the lessons store
-        # 2026-08-16. Non-numeric / NaN weights are drift, skip-and-count.
+        # Validate at the loader boundary (edge-review r1 QA + r2): rows are
+        # untrusted JSON. A string-typed weight would construct fine and then
+        # TypeError inside every max() consumer (the class that wedged the
+        # lessons store 2026-08-16); a null/non-string endpoint id would
+        # TypeError inside sorted() in the writer's snapshot; and inf /
+        # out-of-range weights parse "successfully" and then permanently
+        # dominate max-wins and boost math. All of it is drift:
+        # skip-and-count.
         try:
-            w = float(d.get("weight", 1.0))
-            if w != w:  # NaN
-                raise ValueError("NaN weight")
+            sid, tid = d.get("source_id"), d.get("target_id")
+            if not (isinstance(sid, str) and sid
+                    and isinstance(tid, str) and tid):
+                raise ValueError("bad endpoint id")
+            wraw = d.get("weight", 1.0)
+            if isinstance(wraw, bool):  # no legit writer emits bools
+                raise ValueError("bool weight")
+            w = float(wraw)
+            if not 0.0 <= w <= 1.0:  # False for NaN and ±inf too
+                raise ValueError("weight out of range")
             d = dict(d, weight=w)
             edges.append(KnowledgeEdge(**{
                 k: v for k, v in d.items()
@@ -4337,6 +4347,9 @@ def derive_coderivation_edges(*, dry_run: bool = False) -> Dict[str, int]:
     edges_path = _knowledge_edges_path()
     edges_path.parent.mkdir(parents=True, exist_ok=True)
     appended = 0
+    # dry_run holds the lock too, deliberately: the preview reads a
+    # consistent snapshot and the block is short — a lock-free "fast path"
+    # would reintroduce the read/decide race this lock closes (r2 note).
     with locked_write(edges_path):
         # Existing co_derived weights, max-wins per unordered pair.
         existing: Dict[tuple, float] = {}
@@ -4356,11 +4369,11 @@ def derive_coderivation_edges(*, dry_run: bool = False) -> Dict[str, int]:
                     relation=CODERIVATION_RELATION, weight=weight))
             appended += 1
 
-    stats = {
-        "pairs": len(pair_shared),
-        "edges_appended": appended,
-        "edges_existing": len(existing),
-    }
+        stats = {
+            "pairs": len(pair_shared),
+            "edges_appended": appended,
+            "edges_existing": len(existing),
+        }
     if appended and not dry_run:
         try:
             from captains_log import log_event, KNOWLEDGE_EDGES_DERIVED
@@ -4545,22 +4558,19 @@ def _expand_scored_via_edges(scored: List[tuple],
 # Injection — format knowledge for context injection
 # ---------------------------------------------------------------------------
 
-def inject_knowledge_for_goal(
-    goal: str,
-    *,
-    domain: Optional[str] = None,
-    max_chars: int = 1200,
-    max_nodes: int = 5,
-) -> str:
-    """Build a knowledge injection string for a goal.
+def _render_knowledge_entries(
+        nodes: List[KnowledgeNode],
+        max_chars: int) -> tuple:
+    """Pure render decision for the knowledge block: which nodes actually
+    render under the char budget, with markers. Returns
+    ``(lines, applied_ids, expanded_rendered)``.
 
-    Returns a formatted block of the most relevant knowledge nodes,
-    suitable for prepending to decompose/evolver context.
-    """
-    nodes = query_knowledge(goal, domain=domain, max_results=max_nodes, min_confidence=0.3)
-    if not nodes:
-        return ""
-
+    Shared by ``inject_knowledge_for_goal`` and the offline replay receipt
+    (``scripts/replay_edge_expansion.py``) so the receipt measures the
+    LITERAL render layer that decides whether KNOWLEDGE_EDGE_EXPANSION
+    fires — not the laxer raw-query surface (edge-review r2, consensus
+    HIGH: the r1 receipt compared query-level sets at min_confidence=0.0
+    with no char budget)."""
     lines: List[str] = ["## Relevant Knowledge"]
     chars = 0
     applied_ids: List[str] = []
@@ -4586,6 +4596,27 @@ def inject_knowledge_for_goal(
         applied_ids.append(node.node_id)
         if _via:
             expanded_rendered.append((node.node_id, _via))
+    return lines, applied_ids, expanded_rendered
+
+
+def inject_knowledge_for_goal(
+    goal: str,
+    *,
+    domain: Optional[str] = None,
+    max_chars: int = 1200,
+    max_nodes: int = 5,
+) -> str:
+    """Build a knowledge injection string for a goal.
+
+    Returns a formatted block of the most relevant knowledge nodes,
+    suitable for prepending to decompose/evolver context.
+    """
+    nodes = query_knowledge(goal, domain=domain, max_results=max_nodes, min_confidence=0.3)
+    if not nodes:
+        return ""
+
+    lines, applied_ids, expanded_rendered = _render_knowledge_entries(
+        nodes, max_chars)
 
     if len(lines) <= 1:
         return ""

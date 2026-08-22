@@ -126,20 +126,39 @@ structurally, forever. The read side needed a write side first.
   path is ever built), centrality size-normalizer (metric revisit — the
   percentile fix was measured worse; threshold widening recorded in
   test_codebase_graph.py).
-- *Offline readout, corrected* (120 recent real goals, read-only, both
-  arms, SET comparison — `scripts/replay_edge_expansion.py`, receipts in
-  the review record): expansion changed membership on **2/120 recalls
-  (1.7%)** — the pre-review 4/120 figure compared ordered lists and
-  counted two pure reorderings. Conservative as designed; coverage grows
-  as the 490 candidate nodes promote (only 82 first-party nodes are
-  ACTIVE today). ~45 pins in tests/test_knowledge_edges.py.
+- *Adversarial r2* (same 4-lens fallback, on the r1 fix commit): REJECT
+  again → fixed same session. The r1 "corrected" 2/120 receipt measured
+  the wrong layer (raw query sets at min_confidence=0.0, no char
+  budget); and the loader validated `weight` but not endpoint ids (a
+  null id TypeError'd the writer's `sorted()` snapshot with the drift
+  warning never firing). Loader now validates the whole row (ids
+  non-empty strings; weight numeric, non-bool, in [0,1] — bound check
+  covers NaN/±inf); `_render_knowledge_entries` extracted so the replay
+  measures the literal render layer. Ledger + rationale:
+  `docs/history/2026-08-21-edge-review-r2.md`.
+- *Offline readout at the PRODUCTION layer* (500 recent real goals,
+  rendered-set comparison at min_confidence=0.3 + max_chars=600,
+  read-only — `scripts/replay_edge_expansion.py`): **0/500 recalls
+  changed.** Query-level membership changes on 29/500 (5.8%), but the
+  600-char render budget truncates every entrant before render (damped
+  boost ≤ 0.45×seed sorts entrants to the back of the top-5; 600 chars
+  renders ~2–4 entries). **Expansion is live but rendered-inert on
+  current traffic** — the earlier 4/120 and 2/120 figures were
+  artifacts of laxer measurement layers. ~55 pins in
+  tests/test_knowledge_edges.py incl. a known-gap pin on the truncation
+  undercount.
 - [ ] A/B against text-only recall on live traffic (the default-flip
       gate): KNOWLEDGE_EDGE_EXPANSION events are the denominator; judge
       whether edge-surfaced nodes correlate with better outcomes once
-      enough events accrue. Interpretation caveat (r1 Skeptic):
-      edge-surfaced renders bump `times_applied`, which feeds base
-      lexical ranking — a node's later lexical rise may be expansion
-      feedback, not lexical merit.
+      enough events accrue. Measured baseline 2026-08-21: the
+      denominator will read ~0 until candidate promotion improves the
+      seed/neighbour pool or the recall render budget
+      (`inject_knowledge_for_goal` `max_chars=600` at recall.py:865)
+      grows — budget change is a recall-wide scope decision, not made
+      unilaterally. Interpretation caveat (r1 Skeptic): edge-surfaced
+      renders bump `times_applied`, which feeds base lexical ranking —
+      a node's later lexical rise may be expansion feedback, not
+      lexical merit.
 
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 

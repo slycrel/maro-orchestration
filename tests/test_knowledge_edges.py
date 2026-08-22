@@ -333,6 +333,35 @@ class TestInjectExpansion:
         assert not [e for e in events
                     if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
 
+    def test_char_budget_truncated_entrant_known_gap(self, tmp_workspace,
+                                                     monkeypatch):
+        """KNOWN GAP pin (edge-review r2, Expert QA): a boosted entrant can
+        change query-level membership yet be truncated away by the char
+        budget — no event fires and no [linked] renders, even though the
+        entrant may have evicted a baseline node from the query slice. The
+        undercount is the safe direction for the A/B denominator (events
+        only claim renders that actually happened); this pin documents the
+        accepted residual rather than closing it."""
+        import captains_log
+        import config
+        from knowledge_web import inject_knowledge_for_goal
+        _seed_graph(tmp_workspace)
+        monkeypatch.setattr(
+            config, "get",
+            lambda key, default=None: (True if key == "knowledge.edge_expansion"
+                                       else default))
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda **k: events.append(k))
+        # max_chars small enough that only the first (seed) entry renders;
+        # the boosted sibling enters the query top-2 but never the render.
+        block = inject_knowledge_for_goal("frobnicate the widget",
+                                          max_nodes=2, max_chars=120)
+        assert "widget frobnication" in block
+        assert "[linked]" not in block
+        assert not [e for e in events
+                    if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
+
 
 # ---------------------------------------------------------------------------
 # Set-semantics — expansion counts only when rendered MEMBERSHIP changes
@@ -463,6 +492,47 @@ class TestForgedWeightRows:
                                   expand_edges=True, max_results=2)
         # The real derived edge still surfaces the sibling.
         assert "sib1" in [n.node_id for n in results]
+
+    def test_loader_rejects_nonfinite_and_out_of_range_weight(
+            self, tmp_workspace):
+        # edge-review r2 (three lenses): inf parses "successfully" past a
+        # NaN-only guard, then permanently freezes max-wins idempotency and
+        # dominates every boost comparison. Range is the contract (0-1).
+        from knowledge_web import load_knowledge_edges
+        for w in (float("inf"), float("-inf"), 1e9, -50, 1.5, True, False):
+            _forge_edge_row(tmp_workspace, w)
+        assert load_knowledge_edges() == []
+
+    def test_loader_rejects_malformed_endpoint_ids(self, tmp_workspace):
+        # edge-review r2 (Expert QA HIGH): a null/non-string endpoint id
+        # constructs fine and then TypeErrors inside sorted() in the
+        # writer's snapshot — same wedge class as the weight bug.
+        from knowledge_web import load_knowledge_edges
+        p = tmp_workspace / "memory" / "knowledge_edges.jsonl"
+        rows = [
+            {"source_id": "a", "target_id": None,
+             "relation": "co_derived", "weight": 0.5},
+            {"source_id": ["a", "b"], "target_id": "c",
+             "relation": "co_derived", "weight": 0.5},
+            {"source_id": "", "target_id": "c",
+             "relation": "co_derived", "weight": 0.5},
+        ]
+        with open(p, "a") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        assert load_knowledge_edges() == []
+
+    def test_writer_survives_null_endpoint_row(self, tmp_workspace):
+        from knowledge_web import derive_coderivation_edges
+        p = tmp_workspace / "memory" / "knowledge_edges.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
+            f.write(json.dumps({"source_id": "x", "target_id": None,
+                                "relation": "co_derived",
+                                "weight": 0.5}) + "\n")
+        _mk_node("aaa", "alpha", "a", sources=["outcome:o1"])
+        _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
+        assert derive_coderivation_edges()["edges_appended"] == 1
 
 
 # ---------------------------------------------------------------------------

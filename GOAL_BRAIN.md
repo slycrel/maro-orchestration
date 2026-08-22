@@ -3838,3 +3838,20 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   deleted. Full ledger + rejected-findings rationale in the review
   record. Basis: verified-before-fix against the repo, all findings'
   code claims held this round.
+- **2026-08-21 — edge-review r2 REJECT → fixed; the honest readout is
+  0/500:** r2 caught the r1 fix layer twice — the "corrected" 2/120
+  receipt still measured raw query sets (min_confidence=0.0, no char
+  budget) instead of the production surface, and the loader validated
+  weight but not endpoint ids (null id → TypeError in the writer's
+  sorted() snapshot, drift warning never firing). Fixed: full-row
+  loader validation (ids non-empty strings; weight numeric non-bool in
+  [0,1], covering NaN/±inf), `_render_knowledge_entries` extracted and
+  shared with the replay so the receipt measures the literal render
+  layer. **Corrected production-layer readout: 0/500 recalls changed**
+  (query-level 29/500 = 5.8%; the 600-char budget truncates every
+  entrant) — edge expansion is live but rendered-inert on current
+  traffic; the denominator stays ~0 until candidates promote or the
+  recall render budget grows (budget = Jeremy's scope call, flagged in
+  BACKLOG, not changed). Records:
+  `docs/history/2026-08-21-edge-review-r2.md`. Basis: live replay +
+  isolation probe this session.

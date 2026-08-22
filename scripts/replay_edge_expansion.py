@@ -4,10 +4,16 @@ default-flip decision (edge-review r1, Minimalist/Skeptic: the 4/120 figure
 shipped unreceipted; Architect: the original run compared ordered id LISTS,
 so pure reorderings counted as "changed").
 
+Measures the LITERAL production layer (edge-review r2, consensus HIGH: the
+r1 rewrite still compared raw query_knowledge sets at min_confidence=0.0
+with no char budget — a laxer surface than the one that fires the
+KNOWLEDGE_EDGE_EXPANSION event). Each arm now replays
+recall.py's exact call shape — query_knowledge(max_results=5,
+min_confidence=0.3) followed by the shared _render_knowledge_entries char
+budget at max_chars=600 — and compares the RENDERED id sets.
+
 Read-only over the live store: replays the N most recent real goals from
-memory/outcomes.jsonl through query_knowledge with expansion OFF and ON and
-compares the rendered id SETS (membership — matching the post-r1 semantics
-where expansion only acts when membership changes).
+memory/outcomes.jsonl; no times_applied bumps, no events.
 
 Usage:
     PYTHONPATH=src python3 scripts/replay_edge_expansion.py [N]
@@ -30,7 +36,16 @@ def main() -> None:
     if not outcomes.exists():
         sys.exit(f"no outcomes store at {outcomes}")
 
-    from knowledge_web import query_knowledge
+    from knowledge_web import query_knowledge, _render_knowledge_entries
+
+    # recall.py:865 calls inject_knowledge_for_goal(goal, max_chars=600),
+    # which queries with max_results=5, min_confidence=0.3 then applies the
+    # char budget. Mirror that exactly, per arm.
+    def rendered_ids(goal: str, expand: bool) -> set:
+        nodes = query_knowledge(goal, max_results=5, min_confidence=0.3,
+                                expand_edges=expand)
+        _, applied_ids, _ = _render_knowledge_entries(nodes, 600)
+        return set(applied_ids)
 
     goals: list[str] = []
     for line in outcomes.read_text().splitlines():
@@ -46,13 +61,16 @@ def main() -> None:
 
     changed = []
     for goal in goals:
-        off = {nd.node_id for nd in query_knowledge(goal, expand_edges=False)}
-        on = {nd.node_id for nd in query_knowledge(goal, expand_edges=True)}
+        off = rendered_ids(goal, False)
+        on = rendered_ids(goal, True)
         if on != off:
             changed.append((goal, sorted(on - off), sorted(off - on)))
 
-    print(f"replayed {len(goals)} recent goals (set comparison, read-only)")
-    print(f"expansion changed membership on {len(changed)}/{len(goals)} "
+    print(f"replayed {len(goals)} recent goals (rendered-set comparison at "
+          f"the production layer: min_confidence=0.3, max_chars=600; "
+          f"read-only)")
+    print(f"expansion changed rendered membership on "
+          f"{len(changed)}/{len(goals)} "
           f"recalls ({100.0 * len(changed) / max(1, len(goals)):.1f}%)")
     for goal, added, dropped in changed:
         print(f"  ~ {goal[:90]!r}")
