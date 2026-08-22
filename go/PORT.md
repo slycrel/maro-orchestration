@@ -221,13 +221,30 @@ direction).
   naive 5-word slugs collide on generic openers ("tell me about
   the…"), so an existing dir with a generic slug and a DIFFERENT
   recorded mission disambiguates via `-2`…`-20` suffixes, then a goal-
-  hash fallback; same mission re-enters its dir (continuity), specific
-  slugs reuse without ceremony. Named divergence: Python reads the
-  recorded mission from NEXT.md's goal line (orchestration files the
-  port doesn't have yet); Go writes a `.mission` file at project
-  creation, first-writer-wins (`O_EXCL`). Without this, two unrelated
-  runs silently share a live project dir and the second worker acts on
-  the first's files — all four r1 lenses flagged it.
+  hash fallback (returned unchecked — Python parity); same mission
+  re-enters its dir (continuity), specific slugs reuse without
+  ceremony, and a reuse decided on WEAK evidence (no recorded mission,
+  phrasing-only tails) is warned, never silent. Named divergence:
+  Python reads the recorded mission from NEXT.md's goal line; Go
+  records a `.mission` file at project creation — written
+  full-content-then-`link(2)` so first-writer-wins holds atomically
+  WITH its content (a crash mid-write must not leave an empty file
+  that reads as "no evidence" forever) — and FALLS BACK to parsing a
+  Python-written NEXT.md `> goal` line, because the runtimes share one
+  workspace format and the guard must not be blind on the interop side
+  (adversarial exec r2, Skeptic). Without all this, two unrelated runs
+  silently share a live project dir and the second worker acts on the
+  first's files — all four r1 lenses flagged it.
+- Disambiguation only settles SEQUENTIAL collisions; the CONCURRENT
+  case is closed by the ported admission gate (`loop/slot.go`, Python
+  `acquire_project_slot`): a per-project flock at
+  `<workspace>/memory/loop-<slug>.lock`, claimed before the first
+  project write, held for the run, refuse-immediately on busy (the
+  refusal records a stuck outcome naming the holder), and fs errors
+  degrade to UNGATED with a warning. Live-fired: two concurrent
+  same-goal runs → one completed, one refused with holder metadata.
+  Unported, named in slot.go: `--wait` polling, in-process sibling
+  slot sharing, the unlink/reacquire inode guard, busy_policy=worktree.
 - Exec mode HALTS on the first non-`done` step: Go has no
   `loop_blocked` retry/re-decompose ladder yet (next-tranche #1), and
   a live tool-bearing agent must not keep acting on a failed premise —

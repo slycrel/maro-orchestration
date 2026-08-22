@@ -253,16 +253,26 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 			Warnings: suspects,
 		}, nil
 	}
+	// The no-result exit paths carry the accumulated warnings IN the
+	// message: these are plain errors with no Warnings field, and the
+	// timeout/crash + unwritable-transcript double failure is exactly
+	// when the operator most needs to know retention degraded
+	// (adversarial exec r2 2026-08-22, Expert QA — transcriptWarn was
+	// computed then dropped on all three of these paths).
+	warnSuffix := ""
+	if len(suspects) > 0 {
+		warnSuffix = " [warnings: " + strings.Join(suspects, "; ") + "]"
+	}
 	if cctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("claude CLI timed out after %s (purpose=%s)",
-			timeout, opts.Purpose)
+		return nil, fmt.Errorf("claude CLI timed out after %s (purpose=%s)%s",
+			timeout, opts.Purpose, warnSuffix)
 	}
 	if runErr != nil {
-		return nil, fmt.Errorf("claude CLI failed: %w — output: %s",
-			runErr, fileText(capF.Name()))
+		return nil, fmt.Errorf("claude CLI failed: %w — output: %s%s",
+			runErr, fileText(capF.Name()), warnSuffix)
 	}
-	return nil, fmt.Errorf("no result event in claude CLI output (purpose=%s): %v",
-		opts.Purpose, parseErr)
+	return nil, fmt.Errorf("no result event in claude CLI output (purpose=%s): %v%s",
+		opts.Purpose, parseErr, warnSuffix)
 }
 
 // scanForResult walks the single merged capture line-wise for the

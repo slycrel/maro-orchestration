@@ -171,12 +171,46 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		// tools the second run would read and overwrite the first's files
 		// (adversarial exec review 2026-08-22, all four lenses).
 		projectsRoot := filepath.Join(rec.WorkspaceDir, "projects")
-		res.ProjectDir = filepath.Join(projectsRoot, resolveProjectSlug(projectsRoot, goal))
+		slug, slugWarn := resolveProjectSlug(projectsRoot, goal)
+		if slugWarn != "" {
+			res.Warnings = append(res.Warnings, slugWarn)
+		}
+		res.ProjectDir = filepath.Join(projectsRoot, slug)
+		dirExisted := false
+		if _, statErr := os.Stat(res.ProjectDir); statErr == nil {
+			dirExisted = true
+		}
 		err := os.MkdirAll(res.ProjectDir, 0o755)
+		if err == nil {
+			// Admission gate BEFORE the first project write: two runs
+			// racing the same slug both pass resolveProjectSlug (its Stat
+			// is check-then-act); the flock is what makes exactly one of
+			// them proceed (adversarial exec r2 2026-08-22, Skeptic HIGH —
+			// Python acquire_project_slot, refuse-immediately parity).
+			release, gateWarn, gateErr := acquireProjectSlot(
+				filepath.Join(rec.WorkspaceDir, "memory"), slug, loopID, goal)
+			if gateWarn != "" {
+				res.Warnings = append(res.Warnings, gateWarn)
+			}
+			if gateErr != nil {
+				err = gateErr
+			} else if release != nil {
+				defer release()
+			}
+		}
 		if err == nil {
 			err = recordProjectMission(res.ProjectDir, goal)
 		}
 		if err != nil {
+			// A dir THIS run created and never wrote into is removed
+			// (os.Remove refuses non-empty dirs, so pre-existing work is
+			// structurally safe — data-retention doctrine): a persistently
+			// failing setup would otherwise accumulate mission-less
+			// project dirs that read as work that never happened
+			// (adversarial exec r2 2026-08-22, Expert QA).
+			if !dirExisted {
+				_ = os.Remove(res.ProjectDir)
+			}
 			// Tool-bearing steps with no bound workspace would write to
 			// an arbitrary inherited cwd — refuse, don't drift. But the
 			// refusal itself is an outcome: planning already spent real
@@ -226,12 +260,17 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	for _, s := range steps {
 		queue = append(queue, queuedStep{text: s})
 	}
+	// Returns the RAW join — the caller clips the fully-assembled entry
+	// exactly once. Clip(prefix)+Clip(remainder) concatenated after
+	// clipping produced single failure_chain entries up to ~2× the
+	// documented per-entry budget (adversarial exec r2 2026-08-22,
+	// Expert QA — the budget doctrine is "bounds ONE entry").
 	nameRemainder := func() string {
 		texts := make([]string, len(queue))
 		for i, q := range queue {
 			texts[i] = q.text
 		}
-		return budget.FailureChainEntry.Clip(strings.Join(texts, "; "))
+		return strings.Join(texts, "; ")
 	}
 	capTotal := 2 * len(steps)
 	haltedEarly := false
@@ -240,7 +279,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			haltedEarly = true
 			failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 				"step budget exhausted: %d executed (cap %d) with %d step(s) remaining: ",
-				len(res.Steps), capTotal, len(queue)))+nameRemainder())
+				len(res.Steps), capTotal, len(queue))+nameRemainder()))
 			break
 		}
 		step := queue[0]
@@ -278,7 +317,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 					haltedEarly = true
 					failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 						"halted after blocked step: %d step(s) not executed: ",
-						len(queue)))+nameRemainder())
+						len(queue))+nameRemainder()))
 					break
 				}
 			}

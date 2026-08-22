@@ -229,3 +229,28 @@ func TestCompleteUtilityLaneCeilingReachesChild(t *testing.T) {
 		t.Fatalf("utility output ceiling missing: %q", resp.Content)
 	}
 }
+
+func TestCompleteTranscriptWarnSurvivesNoResultAndErrorPaths(t *testing.T) {
+	// The double failure: an unwritable TranscriptPath AND a run that
+	// yields no result event. Degraded retention must still reach the
+	// operator through the plain-error exit paths — it used to be
+	// computed and then dropped there (adversarial exec r2, Expert QA).
+	a := fixtureBin(t, `echo "no result events here"`)
+	_, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}},
+		Options{TranscriptPath: filepath.Join(t.TempDir(), "missing-dir", "t.jsonl")})
+	if err == nil {
+		t.Fatal("expected no-result error")
+	}
+	if !strings.Contains(err.Error(), "no result event") ||
+		!strings.Contains(err.Error(), "transcript file") {
+		t.Fatalf("no-result error must carry the transcript warning: %v", err)
+	}
+
+	// Same double failure on the nonzero-exit path.
+	b := fixtureBin(t, `echo "fatal: exploded" 1>&2; exit 3`)
+	_, err = b.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}},
+		Options{TranscriptPath: filepath.Join(t.TempDir(), "missing-dir", "t.jsonl")})
+	if err == nil || !strings.Contains(err.Error(), "transcript file") {
+		t.Fatalf("run-error path must carry the transcript warning: %v", err)
+	}
+}

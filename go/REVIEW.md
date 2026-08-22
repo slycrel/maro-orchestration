@@ -521,3 +521,71 @@ must-detect pins (SAME-MODEL FALLBACK: sonnet-medium). Full suite
 green (12 packages), live smoke re-run PASS (real claude CLI created
 and verified greeting.txt via its own tools; .mission recorded;
 per-step transcripts kept).
+
+## Round 2 — 2026-08-22, on the r1 fix layer (4348a139)
+
+2 lenses (Skeptic, Expert QA), SAME-MODEL FALLBACK: sonnet-medium. The
+flagship pattern held AGAIN: both HIGHs sat inside r1's fixes. Zero
+hallucinated claims — every citation verified against the sources.
+
+### Verification Ledger
+
+1. **HIGH (Skeptic) — the slug fix closed only the SEQUENTIAL collision;
+   the concurrent check-then-act race remained, and Python's actual
+   concurrency guard (`acquire_project_slot`, interrupt.py:1008 — flock
+   held for process lifetime, LoopBusy refusal) was never ported nor
+   named** — VERIFIED (Stat→MkdirAll→O_EXCL is non-atomic as a unit;
+   MkdirAll is idempotent-success; recordProjectMission returned nil on
+   IsExist unconditionally, so a raced second run silently adopted the
+   first's dir). **FIXED**: minimal admission-gate port (loop/slot.go)
+   — per-project flock at memory/loop-<slug>.lock claimed before the
+   first project write, refuse-immediately with holder metadata, fs
+   errors degrade UNGATED with a warning (Python parity); busy refusal
+   records a stuck outcome. Unported pieces named in the file. Pins:
+   `TestAcquireProjectSlotRefusesSecondHolder`,
+   `TestExecLaneBusyProjectRefusesAndRecordsStuck`; live-fired with two
+   concurrent real-CLI runs (one done, one refused naming the holder).
+2. **HIGH (QA) — transcriptWarn was computed then DROPPED on the
+   timeout / crash / no-result exit paths** (plain fmt.Errorf, no
+   Warnings field; only the res!=nil branch carried suspects) —
+   VERIFIED. **FIXED**: those three paths append the accumulated
+   warnings into the error message itself. Pin added in llm tests
+   (unwritable TranscriptPath + no result event → error text names the
+   degraded transcript).
+3. **MEDIUM (QA) — failure-chain entries were Clip(prefix)+
+   Clip(remainder) concatenated AFTER clipping**, up to ~2× the
+   documented per-entry budget — VERIFIED against budget.go's "bounds
+   ONE entry" doctrine. **FIXED**: nameRemainder returns the raw join;
+   each call site clips the assembled entry once. Pin:
+   `TestFailureChainEntriesRespectBudget` (long-step fixture, asserts
+   every entry ≤ limit + marker allowance).
+4. **MEDIUM (Skeptic + QA, independently) — `.mission` blindness /
+   corruption defeats disambiguation**: (a) a Python-created project
+   has NEXT.md, no .mission → recordedMission "" → sameSubject true →
+   silent cross-runtime merge; (b) O_EXCL-then-write leaves an
+   existing-but-EMPTY .mission on crash, permanently reading as "no
+   evidence" — BOTH VERIFIED. **FIXED**: recordedMission falls back to
+   parsing NEXT.md's "> goal" line (mirroring Python
+   _recorded_mission); the write is now temp-then-link(2), so
+   first-writer-wins holds atomically with content. Pins:
+   `TestRecordedMissionFallsBackToPythonNextMD`, temp-cleanup assert in
+   the disambiguation test.
+5. **LOW (Skeptic) — evidence-free generic reuse was the one silent
+   degrade path** — VERIFIED inconsistency. **FIXED**: sameSubject
+   reports the evidence gap; resolveProjectSlug returns a reuse warning
+   ("no recorded mission" / "no distinguishing subject words") that
+   rides Result.Warnings. Pin: `TestGenericReuseWithoutEvidenceWarns`.
+6. **LOW (QA) — hash-fallback slug returned without the existence/
+   mission check every other branch performs** — VERIFIED, but Python
+   parity (loop_artifacts.py returns it unconditionally too): comment
+   added naming the parity, no behavior change.
+7. **LOW (QA) — mission-write failure orphaned an empty project dir**
+   — VERIFIED. **FIXED**: a dir THIS run created and never wrote into
+   is os.Remove'd on setup failure (Remove refuses non-empty dirs, so
+   pre-existing work is structurally safe under the data-retention
+   doctrine). No pin (fs-failure injection is disproportionate for an
+   empty-only Remove); noted honestly.
+
+Verdict on r2: CONTESTED → both HIGHs fixed same-day with must-detect
+pins (SAME-MODEL FALLBACK: sonnet-medium). Full suite green, concurrent
+live smoke PASS.

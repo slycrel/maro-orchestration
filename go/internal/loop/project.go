@@ -11,8 +11,17 @@
 // Divergence, named: Python reads the colliding project's recorded
 // mission from its NEXT.md ledger; this runtime has no project ledger
 // yet, so the creating goal is recorded in a `.mission` file inside the
-// project dir at creation time and read back from there. Same decision
-// procedure, different storage.
+// project dir at creation time and read back from there — with a
+// fallback read of a Python-written NEXT.md "> goal" line, because the
+// two runtimes share one workspace format and a Python-created project
+// has no .mission file: without the fallback the guard is blind on the
+// interop side of the boundary (adversarial exec r2 2026-08-22,
+// Skeptic). Same decision procedure, different primary storage.
+//
+// Disambiguation alone only protects against SEQUENTIAL collisions —
+// the concurrent case (two runs racing Stat→MkdirAll on the same slug)
+// is closed by the run-lifetime admission flock in slot.go, the port of
+// Python acquire_project_slot (same review, Skeptic HIGH).
 package loop
 
 import (
@@ -80,13 +89,29 @@ func slugIsGeneric(slug string) bool {
 }
 
 // recordedMission reads the goal a project recorded when it was created,
-// "" if unreadable (matching Python's except → "").
+// "" if unreadable (matching Python's except → ""). Primary store is
+// this runtime's .mission file; a project created by the PYTHON runtime
+// has none, so fall back to its NEXT.md mission line (ensure_project
+// writes "Mission:\n\n> <goal>\n" — the parse mirrors Python
+// _recorded_mission: first ">"-prefixed line wins).
 func recordedMission(projectDir string) string {
 	raw, err := os.ReadFile(filepath.Join(projectDir, missionFileName))
+	if err == nil {
+		if m := strings.TrimSpace(string(raw)); m != "" {
+			return m
+		}
+	}
+	next, err := os.ReadFile(filepath.Join(projectDir, "NEXT.md"))
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(raw))
+	for _, line := range strings.Split(string(next), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, ">") {
+			return strings.TrimSpace(strings.TrimLeft(line, "> "))
+		}
+	}
+	return ""
 }
 
 // sameSubject ports _same_subject: do two goals sharing a generic slug
@@ -94,9 +119,13 @@ func recordedMission(projectDir string) string {
 // words outside the slug both share by construction. Missing evidence
 // (no mission recorded, no tail on either side) reads as same — today's
 // behavior, biasing toward continuity.
-func sameSubject(goal, mission, slug string) bool {
+// The weak return names the evidence gap when the yes rests on missing
+// evidence rather than a matched tail — the caller surfaces it as a
+// warning so a silent merge is at least a VISIBLE merge (adversarial
+// exec r2 2026-08-22, Skeptic: every other degrade path here is loud).
+func sameSubject(goal, mission, slug string) (same bool, weak string) {
 	if mission == "" {
-		return true
+		return true, "no recorded mission to compare against"
 	}
 	slugWords := map[string]bool{}
 	for _, w := range strings.Split(slug, "-") {
@@ -113,14 +142,14 @@ func sameSubject(goal, mission, slug string) bool {
 	}
 	tailA, tailB := tail(goal), tail(mission)
 	if len(tailA) == 0 || len(tailB) == 0 {
-		return true
+		return true, "no distinguishing subject words on one side"
 	}
 	for w := range tailA {
 		if tailB[w] {
-			return true
+			return true, ""
 		}
 	}
-	return false
+	return false, ""
 }
 
 // resolveProjectSlug ports Python resolve_project_slug: the naive slug,
@@ -128,48 +157,73 @@ func sameSubject(goal, mission, slug string) bool {
 // generic opening would otherwise merge the goal into an unrelated
 // project. Same-mission collisions — the continuity mechanism — are
 // deliberately untouched.
-func resolveProjectSlug(projectsRoot, goal string) string {
+// The warn return is non-empty when an EXISTING generic-slug dir was
+// reused on weak evidence (no mission, phrasing-only tails) — the
+// operator's chance to catch a bad merge before the worker writes.
+func resolveProjectSlug(projectsRoot, goal string) (slug, warn string) {
 	base := goalSlug(goal)
 	dir := func(slug string) string { return filepath.Join(projectsRoot, slug) }
+	reuseWarn := func(slug, weak string) string {
+		if weak == "" {
+			return ""
+		}
+		return fmt.Sprintf("reusing existing project dir %q on weak evidence (%s) — "+
+			"verify it is the same mission", slug, weak)
+	}
 	if _, err := os.Stat(dir(base)); err != nil {
-		return base
+		return base, ""
 	}
 	if !slugIsGeneric(base) {
-		return base
+		return base, ""
 	}
-	if sameSubject(goal, recordedMission(dir(base)), base) {
-		return base
+	if same, weak := sameSubject(goal, recordedMission(dir(base)), base); same {
+		return base, reuseWarn(base, weak)
 	}
 	for n := 2; n <= slugDisambiguationCap; n++ {
 		cand := fmt.Sprintf("%s-%d", base, n)
 		if _, err := os.Stat(dir(cand)); err != nil {
-			return cand
+			return cand, ""
 		}
-		if sameSubject(goal, recordedMission(dir(cand)), base) {
-			return cand
+		if same, weak := sameSubject(goal, recordedMission(dir(cand)), base); same {
+			return cand, reuseWarn(cand, weak)
 		}
 	}
 	// Cap reached: a hash still beats silently merging unrelated work.
+	// Returned unclaimed and unchecked — PYTHON PARITY (loop_artifacts.py
+	// returns the hash slug unconditionally too); a 32-bit collision here
+	// merges, same as there.
 	sum := sha256.Sum256([]byte(goal))
-	return fmt.Sprintf("%s-%x", base, sum[:4])
+	return fmt.Sprintf("%s-%x", base, sum[:4]), ""
 }
 
 // recordProjectMission writes the creating goal into the project dir so
 // later resolveProjectSlug calls can tell continuity from collision.
 // First writer wins — the recorded mission describes the project's
-// ORIGIN, and a same-mission re-entry must not rewrite it.
+// ORIGIN, and a same-mission re-entry must not rewrite it. The write is
+// full-content-then-link, never open-then-write: a crash mid-write with
+// O_EXCL left an existing-but-EMPTY .mission, which reads as "no
+// evidence" and permanently defeats disambiguation for that dir
+// (adversarial exec r2 2026-08-22, Expert QA). link(2) fails with
+// EEXIST, preserving first-writer-wins atomically WITH its content.
 func recordProjectMission(projectDir, goal string) error {
 	path := filepath.Join(projectDir, missionFileName)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	tmp, err := os.CreateTemp(projectDir, missionFileName+".tmp-*")
 	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(goal + "\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tmp.Name(), path); err != nil {
 		if os.IsExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer f.Close()
-	if _, err := f.WriteString(goal + "\n"); err != nil {
-		return err
-	}
-	return f.Close()
+	return nil
 }
