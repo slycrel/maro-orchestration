@@ -425,6 +425,115 @@ func TestReadArchiveRefusesNonRegularAndDuplicateEntries(t *testing.T) {
 	}
 }
 
+// PAX/GNU meta records are consumed INSIDE tr.Next() and never surface
+// as headers, so the entry cap can't see them (r3 2026-08-22, Skeptic
+// HIGH). The decompressor-level ceiling must refuse a run of them.
+func TestReadArchiveRefusesPaxHeaderBomb(t *testing.T) {
+	// Hand-rolled tar block: the stdlib writer won't emit consecutive
+	// raw 'x' records, so build them byte-by-byte (with valid checksum).
+	rawBlock := func(name string, typeflag byte, size int) []byte {
+		b := make([]byte, 512)
+		copy(b, name)
+		copy(b[100:], "0000644\x00")
+		copy(b[108:], "0000000\x00")
+		copy(b[116:], "0000000\x00")
+		copy(b[124:], fmt.Sprintf("%011o\x00", size))
+		copy(b[136:], "00000000000\x00")
+		for i := 148; i < 156; i++ {
+			b[i] = ' '
+		}
+		b[156] = typeflag
+		copy(b[257:], "ustar\x0000")
+		sum := 0
+		for _, c := range b {
+			sum += int(c)
+		}
+		copy(b[148:], fmt.Sprintf("%06o\x00 ", sum))
+		return b
+	}
+	path := filepath.Join(t.TempDir(), "pax"+ArchiveSuffix)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	// A run of PAX extended-header records (typeflag 'x'), each 512-byte
+	// header + 512-byte payload, never followed by a real member.
+	for i := 0; i < 8; i++ {
+		if _, err := gz.Write(rawBlock("paxhdr", tar.TypeXHeader, 512)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gz.Write(make([]byte, 512)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldTotal, oldHeader := maxArchiveTotalBytes, maxArchiveHeaderBytes
+	t.Cleanup(func() { maxArchiveTotalBytes, maxArchiveHeaderBytes = oldTotal, oldHeader })
+	maxArchiveTotalBytes, maxArchiveHeaderBytes = 256, 512
+	if _, err := readArchive(path); err == nil ||
+		!strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("PAX header run not stopped by the decompressed-bytes ceiling: %v", err)
+	}
+}
+
+// Numeric ids must survive exactly — a plain float64 decode rounded
+// >2^53 ids, silently changing the imported identity and letting two
+// distinct large ids collide (r3, both lenses).
+func TestImportKeepsLargeIntegerIDExact(t *testing.T) {
+	rules := `{"rule_id":9007199254740993,"rule":"large id rule","domain":"d"}` + "\n" +
+		`{"rule_id":9007199254740995,"rule":"neighbor id rule","domain":"d"}` + "\n"
+	packPath := craftPack(t, []map[string]any{
+		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 2},
+	}, map[string]string{"artifacts/memory/standing_rules.jsonl": rules})
+	rep, err := Import(ImportOpts{PackPath: packPath, Label: "h",
+		Target: t.TempDir(), AllowUnreviewed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range rep.RulesDemotedToHypotheses {
+		if r["outcome"] != "demoted_to_hypothesis" {
+			t.Fatalf("large-int id row mishandled: %v", r)
+		}
+		got[r["hyp_id"].(string)] = true
+	}
+	if !got["imported-hostile-9007199254740993"] || !got["imported-hostile-9007199254740995"] {
+		t.Fatalf("large integer ids not exact/distinct: %v", got)
+	}
+}
+
+// Report rows come out in FILE order — the r2 callback shape emitted
+// every malformed row before any successful one (r3, Skeptic).
+func TestImportReportPreservesFileOrder(t *testing.T) {
+	rules := `{"rule_id":"first","rule":"a clean rule","domain":"d"}` + "\n" +
+		`{"rule_id":"s","rule":"bad \udc00 rule","domain":"d"}` + "\n" +
+		`{"rule_id":"third","rule":"another clean rule","domain":"d"}` + "\n"
+	packPath := craftPack(t, []map[string]any{
+		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 3},
+	}, map[string]string{"artifacts/memory/standing_rules.jsonl": rules})
+	rep, err := Import(ImportOpts{PackPath: packPath, Label: "h",
+		Target: t.TempDir(), AllowUnreviewed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.RulesDemotedToHypotheses) != 3 {
+		t.Fatalf("want 3 report rows: %v", rep.RulesDemotedToHypotheses)
+	}
+	wantOutcomes := []string{"demoted_to_hypothesis", "malformed_skipped", "demoted_to_hypothesis"}
+	for i, want := range wantOutcomes {
+		if rep.RulesDemotedToHypotheses[i]["outcome"] != want {
+			t.Fatalf("report order broken at %d: %v", i, rep.RulesDemotedToHypotheses)
+		}
+	}
+}
+
 // Explicit `provenance_gate_enabled: null` — pinned divergence: Go's
 // config.Get[any] falls back to the default (the nil interface fails the
 // type assertion), so the gate stays ON; Python's config.get returns

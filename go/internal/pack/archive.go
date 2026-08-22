@@ -30,10 +30,42 @@ const (
 // Vars, not consts, so tests can exercise the refusal without allocating
 // the real ceiling.
 var (
-	maxArchiveMemberBytes int64 = 64 << 20  // one member, decompressed
-	maxArchiveTotalBytes  int64 = 256 << 20 // whole archive, decompressed
+	maxArchiveMemberBytes int64 = 64 << 20  // one member's content, decompressed
+	maxArchiveTotalBytes  int64 = 256 << 20 // all member content, decompressed
 	maxArchiveMembers           = 4096
+	// Allowance for everything that is NOT member content: tar headers,
+	// padding, and PAX/GNU meta records the stdlib consumes INSIDE
+	// tr.Next() without ever returning them (r3 2026-08-22, Skeptic HIGH:
+	// each meta record is 1MiB-capped by archive/tar, but a run of
+	// consecutive records is unbounded in count — invisible to the entry
+	// cap). The decompressor-level cap below bounds them categorically.
+	maxArchiveHeaderBytes int64 = 16 << 20
 )
+
+var errDecompressionCeiling = errors.New(
+	"archive exceeds the decompressed-bytes ceiling — refused")
+
+// cappedReader hard-bounds bytes drawn from the decompressor. It sits
+// BETWEEN gzip and tar, so every byte tar touches — headers, PAX/GNU
+// meta records, padding, file content — counts, regardless of how the
+// stdlib attributes it internally. The per-member/total checks in
+// readArchive give precise errors; this is the categorical backstop.
+type cappedReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, errDecompressionCeiling
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
 
 // tarEntry keeps insertion order — the archive lists artifacts in the
 // order the exporter gathered them, same as Python's ordered dict.
@@ -92,7 +124,8 @@ func readArchive(path string) (map[string][]byte, error) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(&cappedReader{
+		r: gz, remaining: maxArchiveTotalBytes + maxArchiveHeaderBytes})
 	members := map[string][]byte{}
 	var total int64
 	entries := 0

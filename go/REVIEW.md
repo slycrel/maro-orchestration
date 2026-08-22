@@ -338,3 +338,54 @@ itself, the historically likeliest home:
 
 Full suite green (12 packages), crossrt_smoke.sh (incl. bidirectional
 tamper step): PASS.
+
+## Round 3 — 2026-08-22, on the r2 fix layer (aef23174)
+
+2 lenses (Skeptic + Expert QA), sonnet-medium fallback. The pattern held
+a third time: the round's HIGH lived in the previous round's fix.
+
+### Verification Ledger
+
+1. **HIGH (Skeptic; QA filed the same vector as LOW/worth-verifying) —
+   the r2 entry cap cannot see PAX/GNU meta records** — VERIFIED
+   against the installed go1.24.2 stdlib source: archive/tar caps each
+   special record at 1MiB (`readSpecialFile`, CVE-2022-2879 fix) but
+   `TypeXHeader`/`TypeGNULongName` hit `continue` INSIDE `next()`'s
+   internal loop, so an unbounded run of consecutive meta records is
+   consumed without `Next()` ever returning — invisible to `entries++`.
+   (Global PAX headers ARE returned and the typeflag refusal catches
+   them; the per-file variants were the hole.) **FIXED** with both
+   lenses' shared fix shape: a `cappedReader` between gzip and tar
+   bounds every byte tar touches, categorically, regardless of stdlib
+   internals (`maxArchiveTotalBytes + maxArchiveHeaderBytes`).
+   `TestReadArchiveRefusesPaxHeaderBomb` hand-rolls raw consecutive 'x'
+   records (checksummed 512-byte blocks) and pins the refusal.
+2. **MEDIUM (both lenses) — scanRows decoded without UseNumber**, so
+   rowID's json.Number branch was dead code and numeric ids round-
+   tripped through float64: `42.0` → "42" (Python: "42.0"), >2^53 ids
+   rounded — divergent identities cross-runtime and a craftable
+   same-float64 id collision (second row silently eaten as
+   already_imported). The same package's canonical.go documents this
+   exact hazard. **FIXED**: scanRows decodes with UseNumber (like
+   decodeManifest); `TestImportKeepsLargeIntegerIDExact` pins 2^53+1
+   and a same-float64 neighbor as exact and distinct.
+3. **MEDIUM (Skeptic) — the r2 onMalformed callback emitted every
+   malformed row before any successful one**, breaking report order vs
+   Python's single loop; the r2 test's fixture put the malformed row
+   first, masking it. **FIXED**: scanRows returns tagged rows in file
+   order, single pass; `TestImportReportPreservesFileOrder` puts the
+   malformed row in the middle.
+4. **LOW (QA) — a composite id's malformed report row carried a JSON
+   array under a field every other outcome emits as string** — FIXED:
+   rowID's report value is always a string.
+5. **LOW (both) — archive.go's "REFUSES (never OOMs)" and the r2 ledger
+   overclaimed** — the comment and PORT.md now attribute the guarantee
+   to the decompressor-level ceiling, not to per-shape refusals.
+6. QA's "verified as sound" list: r2's entry-cap reordering, dup-name
+   refusal, per-lane scanRows uniformity, reserved-member refusal,
+   GateEnabled int64/uint64, and the explicit-null pin all confirmed
+   correct (the null divergence independently re-derived from the Go
+   spec). QA note #5 (null/composite over-refusal framed as parity) —
+   accepted: PORT.md now calls it a deliberate over-refusal.
+
+Full suite green, crossrt_smoke.sh (incl. tamper) PASS.

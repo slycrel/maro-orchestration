@@ -158,6 +158,18 @@ CLI drift: Go uses flags (`-pack`, `-name`) where Python's `maro-pack`
 uses positionals, and Go has no `export --seal` one-shot and no
 interactive confirm (missing `-yes` refuses rather than prompts).
 
+Round 3 (fix-layer review, 2 lenses) additions: a decompressor-level
+byte ceiling now sits BETWEEN gzip and tar, so PAX/GNU meta records the
+stdlib consumes inside `tr.Next()` (1MiB each, unbounded in count,
+invisible to the entry cap) are bounded categorically; JSONL rows decode
+with UseNumber so numeric ids keep their source literal exactly (a
+float64 round-trip diverged >2^53 ids from Python's arbitrary-precision
+str() and let crafted neighbors collide); report rows come out in file
+order (the r2 callback emitted malformed rows first); a malformed id's
+report value is always a string. Note on null/composite ids: Python's
+f-string stringifies those into junk ids and imports them — Go's
+refusal is a deliberate over-refusal (safe direction), not parity.
+
 Round 2 (fix-layer review, 2 lenses) additions: non-regular tar entries
 (dirs/symlinks/devices) and duplicate member names are refused outright
 and EVERY header counts against the entry cap (the r1 bounds skipped

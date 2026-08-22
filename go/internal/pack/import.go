@@ -387,48 +387,68 @@ type importer struct {
 // still has the collapse for absent/empty and stringifies composites,
 // named in PORT.md). The second return is the raw value for the report
 // row, so the audit trail keeps what the row actually carried.
-func rowID(row map[string]any, field string) (string, any, error) {
+// The second return is the offending value rendered as a string for the
+// report row (always a string — the report field's type contract holds
+// across every outcome; r3 2026-08-22, QA).
+func rowID(row map[string]any, field string) (string, string, error) {
 	v, present := row[field]
 	if !present {
 		return "", "", fmt.Errorf("%s missing", field)
 	}
 	switch v.(type) {
-	case string, float64, bool, json.Number:
+	case nil:
+		return "", "", fmt.Errorf("%s is null", field)
+	case string, json.Number, float64, bool:
 		if s := asString(v); s != "" {
-			return s, v, nil
+			return s, s, nil
 		}
-		return "", v, fmt.Errorf("%s is empty", field)
+		return "", "", fmt.Errorf("%s is empty", field)
 	default:
-		return "", v, fmt.Errorf("%s is not a scalar: %v", field, v)
+		return "", fmt.Sprintf("%v", v), fmt.Errorf("%s is not a scalar: %v", field, v)
 	}
 }
 
-// scanRows splits one JSONL artifact into decodable rows, refusing rows
-// whose raw text carries lone-surrogate \u escapes BEFORE decoding —
-// Go's json.Unmarshal would silently rewrite them to U+FFFD inside the
-// exact trust-bearing text the provenance classifier reads, where Python
-// keeps (and later chokes loudly on) the lone surrogate (r2 2026-08-22,
-// Skeptic HIGH). A refused or undecodable row costs that row, not the
-// import (per-row fault isolation); undecodable rows are skipped
+// scannedRow is one JSONL line in FILE ORDER: either a decoded row or
+// the reason it was refused before decoding. Single-pass so the report
+// order matches the artifact's line order, like Python's one loop
+// (r3 2026-08-22, Skeptic: the r2 callback shape emitted every
+// malformed row before any successful one).
+type scannedRow struct {
+	row map[string]any
+	err error
+}
+
+// scanRows splits one JSONL artifact into rows, refusing rows whose raw
+// text carries lone-surrogate \u escapes BEFORE decoding — Go's decoder
+// would silently rewrite them to U+FFFD inside the exact trust-bearing
+// text the provenance classifier reads, where Python keeps (and later
+// chokes loudly on) the lone surrogate (r2 2026-08-22, Skeptic HIGH).
+// Decoding uses UseNumber, like decodeManifest, so numeric ids keep
+// their source literal exactly (r3, both lenses: a plain Unmarshal made
+// rowID's json.Number branch dead code and rounded >2^53 ids through
+// float64 — divergent identities and a craftable id collision).
+// A refused row costs that row, not the import; undecodable rows skip
 // silently to match Python's json.JSONDecodeError → continue.
-func scanRows(content string, onMalformed func(err error)) []map[string]any {
-	var rows []map[string]any
+func scanRows(content string) []scannedRow {
+	var out []scannedRow
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		if err := refuseLoneSurrogates([]byte(line)); err != nil {
-			onMalformed(err)
+			out = append(out, scannedRow{err: err})
 			continue
 		}
+		dec := json.NewDecoder(strings.NewReader(line))
+		dec.UseNumber()
 		var row map[string]any
-		if json.Unmarshal([]byte(line), &row) != nil {
+		if dec.Decode(&row) != nil {
 			continue
 		}
-		rows = append(rows, row)
+		out = append(out, scannedRow{row: row})
 	}
-	return rows
+	return out
 }
 
 func (im *importer) provenanceStamp(originalID, originalClass string, row map[string]any) map[string]any {
@@ -452,11 +472,13 @@ func (im *importer) importRulesAsHypotheses(content string) ([]map[string]any, e
 		return nil, err
 	}
 	var results []map[string]any
-	rows := scanRows(content, func(err error) {
-		results = append(results, map[string]any{
-			"rule_id": "", "outcome": "malformed_skipped", "error": err.Error()})
-	})
-	for _, row := range rows {
+	for _, sr := range scanRows(content) {
+		if sr.err != nil {
+			results = append(results, map[string]any{
+				"rule_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			continue
+		}
+		row := sr.row
 		originalID, rawID, err := rowID(row, "rule_id")
 		if err != nil {
 			results = append(results, map[string]any{
@@ -502,11 +524,13 @@ func (im *importer) importHypotheses(content string) ([]map[string]any, error) {
 		return nil, err
 	}
 	var results []map[string]any
-	rows := scanRows(content, func(err error) {
-		results = append(results, map[string]any{
-			"hyp_id": "", "outcome": "malformed_skipped", "error": err.Error()})
-	})
-	for _, row := range rows {
+	for _, sr := range scanRows(content) {
+		if sr.err != nil {
+			results = append(results, map[string]any{
+				"hyp_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			continue
+		}
+		row := sr.row
 		originalID, rawID, err := rowID(row, "hyp_id")
 		if err != nil {
 			results = append(results, map[string]any{
@@ -618,11 +642,13 @@ func (im *importer) importLessons(content string) ([]map[string]any, error) {
 		return nil, err
 	}
 	var results []map[string]any
-	rows := scanRows(content, func(err error) {
-		results = append(results, map[string]any{
-			"lesson_id": "", "outcome": "malformed_skipped", "error": err.Error()})
-	})
-	for _, row := range rows {
+	for _, sr := range scanRows(content) {
+		if sr.err != nil {
+			results = append(results, map[string]any{
+				"lesson_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			continue
+		}
+		row := sr.row
 		originalID, rawID, err := rowID(row, "lesson_id")
 		if err != nil {
 			results = append(results, map[string]any{
