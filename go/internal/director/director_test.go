@@ -962,7 +962,7 @@ func TestRunForgedTrailingMarkerStillJudged(t *testing.T) {
 // WorkerJudgeWindow — a >4000-rune result whose distinctive terms
 // (4 of them) all live inside the window must judge as nil after the
 // real marker is stripped; if the wiring drops the bit (clipped[i]
-// stuck false), the marker's own vocabulary pads the window to 7
+// stuck false), the marker's own vocabulary pads the window to 6
 // terms and judges it (adversarial director r7, Skeptic HIGH: every
 // prior pin hard-coded wasClipped or used sub-5-char filler, so
 // reverting compileReport to plain Clip passed the full suite —

@@ -2041,3 +2041,34 @@ Skeptic's HIGH was an instrument gap, and it was TRUE:
   is the correction.
 
 Mutation M69 DETECTED (post-fix). Full suite green. r8 follows.
+
+## Director tranche — adversarial r8 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r7 fix layer (tests+docs only). **Zero HIGHs — first
+clean round of the tranche.** Both lenses independently confirmed the
+r7 e2e pin is a real detector for the M69 wiring regression. The
+shared MEDIUM was a ledger-honesty catch:
+
+- **MED (both lenses): TestClipInfoTighterReclip's docstring (and
+  Clip's own, and Python's) described structurally unreachable
+  behavior** — "the old marker nests inside the new payload." A
+  genuine tighter cut lands strictly BEFORE the old marker
+  (pass-through owns every limit ≥ markerStart), so the old marker's
+  text is wholly discarded; only the new marker's count carries its
+  weight. FIXED: test re-scoped with real assertions (new marker
+  counts "first 200 of", old "first 4000 of" gone; StripMarker leaves
+  pure payload), Clip's docstring corrected, Python's wording
+  (src/context_budget.py) flagged as a backport-correction candidate
+  (M70: dropping the markerStart guard is DETECTED).
+- **LOW (qa): dead tautological assertion in the r7 test.** FIXED:
+  replaced by the count assertions above.
+- **LOW (qa): the pass-through zone (limit at or past markerStart)
+  had zero honesty-bit coverage.** FIXED: asserted cut=false in the
+  same pin.
+- **LOW (both, arithmetic): the r7 pin's "7 terms" is 6** (digits
+  4000/4239 sit under the 5-char term floor; the r6 pin's 7 stands —
+  its 999999999 is 9 chars). FIXED in the test comment; this entry
+  corrects the r7 ledger text.
+
+Mutation M70 DETECTED. Full suite green. r9 follows on this
+tests+docs diff — a second clean round declares fixpoint.

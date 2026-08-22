@@ -191,11 +191,15 @@ func TestClipInfoHonestBit(t *testing.T) {
 }
 
 // TestClipInfoTighterReclip: re-clipping already-clipped text at a
-// strictly tighter limit is a REAL cut — the bit flips back to true,
-// and the surviving prefix keeps a fragment of the old marker as
-// content while only the new true-end marker is StripMarker's to
-// remove (adversarial director r7, QA: the honesty bit's third
-// real-cut shape was uncovered).
+// strictly tighter limit is a REAL cut (the bit flips back to true),
+// the cut lands strictly BEFORE the old marker so its text is wholly
+// discarded (genuine nesting is unreachable — the pass-through guard
+// owns every limit at or past markerStart), and the new marker's
+// count is the only trace of the old one's length. A limit in the
+// pass-through zone (at or past markerStart) reports NO cut.
+// (adversarial director r7, QA; re-scoped r8, both lenses: the r7
+// comment claimed an old-marker fragment survives as content — a
+// scenario the guard makes structurally impossible.)
 func TestClipInfoTighterReclip(t *testing.T) {
 	first, cut := WorkerJudgeWindow.ClipInfo(strings.Repeat("x", WorkerJudgeWindow.Limit+50))
 	if !cut {
@@ -206,11 +210,20 @@ func TestClipInfoTighterReclip(t *testing.T) {
 	if !cut2 {
 		t.Fatalf("tighter re-clip must report a real cut")
 	}
-	stripped := StripMarker(second)
-	if strings.Contains(stripped, "characters]") == false && strings.Contains(second, "characters]") == false {
-		t.Fatalf("setup: expected marker text present somewhere")
+	// The new marker counts 200 of the re-clipped input; the old
+	// marker's own count text ("first 4000 of") must be wholly gone.
+	if !strings.Contains(second, "first 200 of") || strings.Contains(second, "first 4000 of") {
+		t.Fatalf("old marker must be discarded entirely, new marker honest: %q", second[len(second)-80:])
 	}
-	if !strings.HasPrefix(stripped, "xxxx") || strings.HasSuffix(stripped, "characters]") {
-		t.Fatalf("StripMarker must remove only the new true-end marker: %q", stripped)
+	stripped := StripMarker(second)
+	if !strings.HasPrefix(stripped, "xxxx") || strings.Contains(stripped, "[truncated:") {
+		t.Fatalf("StripMarker must remove the new true-end marker, leaving pure payload: %q", stripped)
+	}
+	// Same-or-wider zone (limit at or past markerStart): pass-through,
+	// honestly reported as no cut (adversarial director r8, QA LOW:
+	// the one corner of the honesty-bit contract with zero coverage).
+	wide := Budget{Name: "test-wide", Limit: WorkerJudgeWindow.Limit + 20}
+	if same, cut3 := wide.ClipInfo(first); cut3 || same != first {
+		t.Fatalf("pass-through zone must report no cut: %v", cut3)
 	}
 }

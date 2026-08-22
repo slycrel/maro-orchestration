@@ -667,7 +667,14 @@ direction).
   ClipInfo wiring had no clipped-side e2e pin — the wiring revert
   passed the whole suite, verified by running it), now pinned through
   Run (M69) plus a tighter-re-clip honesty-bit case; marker vocabulary
-  as false-positive padding accepted-named. Mutation M69 DETECTED.
+  as false-positive padding accepted-named. Mutation M69 DETECTED. Adversarial r8 (same day,
+  skeptic+qa): ZERO HIGHs — first clean round; shared MED was
+  ledger-honesty (the "old marker nests in the new payload" claim in
+  the r7 test + Clip docstring + Python's docstring is structurally
+  unreachable — tighter cuts land before the old marker; corrected
+  here, Python wording flagged for backport-correction), plus
+  pass-through-zone honesty-bit coverage and a 7→6 term-count slip.
+  Mutation M70 DETECTED.
 
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows

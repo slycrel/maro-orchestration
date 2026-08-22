@@ -244,9 +244,15 @@ const markerMax = 64
 // through unchanged, so re-clipping on a read path cannot eat the marker
 // or double-cut (the stacked-cut failure the Python audit kept finding).
 // A strictly TIGHTER re-clip still cuts — the payload genuinely doesn't
-// fit — nesting the old marker inside the new payload, exactly as the
-// Python docstring specifies. limit <= 0 disables the bound (a breaker
-// that is off is off — never a silent zero-width cut).
+// fit. The cut lands strictly BEFORE the old marker (the pass-through
+// guard already covers every limit at or past markerStart), so the old
+// marker's text is wholly discarded and only the new marker's total
+// count reflects its length — genuine "nesting" is unreachable by
+// construction (adversarial director r8, both lenses: this comment and
+// Python's docstring previously claimed the old marker nests inside
+// the new payload; Python's wording — src/context_budget.py — is a
+// backport-correction candidate). limit <= 0 disables the bound (a
+// breaker that is off is off — never a silent zero-width cut).
 //
 // The two guards on the marker match keep the invariant honest even
 // against marker-SHAPED payload text: the result is never longer than
