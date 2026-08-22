@@ -2598,3 +2598,38 @@ gofmt/vet clean. r9's HIGH RESETS the fixpoint clock — r10 is the first of two
 required consecutive zero-HIGH rounds. The 8-round real-defect streak in this
 hand-rolled parser stands; spec-grounded-rewrite decision is live if r10
 doesn't converge.
+
+## Round 10 (2026-08-22, skeptic + qa, SAME-MODEL FALLBACK: sonnet-medium)
+
+### Verdict: NO BLOCKERS FOUND — ZERO HIGH (first clean round). Verification Ledger:
+
+No HIGH or MEDIUM. Both lenses independently traced the URL/authority parser,
+the r9 O(1) scheme-length skip, the linearity, and the evolver honesty surface
+and found the class sound — the FIRST round the parser itself yielded no HIGH
+on both lenses (r9's lone HIGH was scaffolding, now fixed). LOW notes:
+
+- **LOW (skeptic) — IPv6-bracket port-strip mis-parse, trailing-dot FQDN
+  false-positive, NaN confidence.** All confirmed NON-issues for the current
+  allowlist/inputs: no IPv6 allowlist entry (refusal-direction only), the
+  trailing-dot form is unreachable via the exfil shape (r3-confirmed), and
+  encoding/json REJECTS `NaN` (verified: "invalid character 'N'") so a
+  NaN-confidence row can't arise from the JSONL store — and if it did, the
+  `< 0.8` gate is false for NaN so it never auto-applies (safe direction).
+  Noted, not fixed.
+
+- **LOW (qa) — coverage gaps.** (1) No `http:` (5-char) fixture exercised the
+  r9 `loc[1]-loc[0]` skip for the shorter scheme — CLOSED: added `http://` and
+  `http:///` must-flag cases (verified both flag). (2) The #12 fail-open had no
+  regression pin — CLOSED with a KNOWN-GAP visibility pin: verify-before-fix
+  confirmed a non-string suggestion applies AND writes an empty-text
+  (`"lesson":""`) medium lesson to disk (QA's characterization was accurate;
+  my transient "0 lessons" reading was a snapshot-Texts filtering artifact).
+  (3) linear pin is a wall-clock ceiling not a scaling-ratio — NOTED, kept as-is
+  (deterministic and M111-verified; a ratio pin risks CI flakiness). (4)
+  mid-host allowlisted negative controls don't independently prove the strip
+  mechanism (the paired positive fixtures carry that) — NOTED, not a gap.
+
+Test-only hardening added this round (http: fixtures + #12 known-gap pin); no
+production code changed, so r10 stands as a genuine zero-HIGH round. Full suite
+green, gofmt/vet clean. This is the FIRST of the two consecutive clean rounds —
+r11 must also be zero-HIGH to reach the fixpoint.

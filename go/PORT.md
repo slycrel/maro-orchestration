@@ -1171,6 +1171,22 @@ r10 is the first of two required clean rounds. The 8-round streak of real
 defects in this hand-rolled parser stands; the spec-grounded-rewrite decision
 is live if r10 doesn't converge.
 
+**r10 round (2026-08-22, skeptic+qa) — ZERO HIGH; the streak breaks, the
+parser converges.** First round BOTH lenses traced the URL/authority parser,
+the r9 O(1) scheme-length skip, and the linearity clean with no HIGH or
+MEDIUM — the class is genuinely sound (r9's lone HIGH was scaffolding, now
+fixed). So the spec-grounded-rewrite question is answered in the negative for
+now: 9 rounds of explicit WHATWG-normalization hardening reached a defensible
+fixpoint; a net/url rewrite (RFC-3986, not WHATWG) would trade this for a
+different divergence set, so it's NOT pursued. LOW notes all confirmed
+non-issues or test-only: IPv6 port-strip / trailing-dot / NaN-confidence all
+safe-direction and (NaN) unreachable since encoding/json rejects it; added the
+missing `http:` (5-char scheme) must-flag fixtures and a KNOWN-GAP visibility
+pin for the #12 non-string-suggestion fail-open (verify-before-fix confirmed
+it writes an empty-text lesson + applies — accurate, named, pinned). Test-only
+changes this round. r10 is the FIRST of two consecutive clean rounds — r11
+must also be zero-HIGH to close the fixpoint.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

@@ -623,6 +623,46 @@ func TestRevertStoreWriteFailureReportsUnpersisted(t *testing.T) {
 	}
 }
 
+// TestApplyNonStringSuggestionIsKnownGap pins backport candidate #12 (r9/r10
+// review): a non-string/absent `suggestion` field is coerced to "" by
+// stringOr BEFORE the fail-closed guard, so a prompt_tweak row applies
+// "successfully" and mints an EMPTY-text medium lesson — a fail-open in the
+// wrong direction (everywhere else malformed → held/judged-false). This is
+// SHARED with Python (`d.get("suggestion","")`, no type/non-empty check) and
+// NOT an injection bypass (the empty string is what gets scanned AND stored).
+// This is a KNOWN-GAP pin: it documents the current (accepted, named)
+// behavior so a change in EITHER direction is visible. When #12 is closed
+// (validate-then-scan-then-apply), this test should flip to asserting the row
+// is held/blocked, not applied.
+func TestApplyNonStringSuggestionIsKnownGap(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	if err := os.MkdirAll(filepath.Join(ws, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A numeric `suggestion` (schema drift / corrupt write / coerced LLM output).
+	row := `{"suggestion_id":"nonstr-1","category":"prompt_tweak","target":"all","suggestion":12345,"confidence":0.9}` + "\n"
+	if err := os.WriteFile(suggestionsPath(ws), []byte(row), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(ws, rec, nil, "nonstr-1", true); err != nil {
+		t.Fatal(err)
+	}
+	// CURRENT behavior (the gap): the row applies rather than being held.
+	if !IsApplied(ws, "nonstr-1") {
+		t.Fatal("known-gap #12 changed: non-string suggestion no longer applies " +
+			"(if it is now held/blocked, that's the FIX — update this pin to assert it)")
+	}
+	// CURRENT behavior (the gap): an empty-text medium lesson is written.
+	raw, err := os.ReadFile(filepath.Join(ws, "memory", "medium", "lessons.jsonl"))
+	if err != nil {
+		t.Fatalf("expected an (empty-text) medium lesson to be minted: %v", err)
+	}
+	if !strings.Contains(string(raw), `"lesson":""`) {
+		t.Fatalf("known-gap #12 changed: expected an empty-text lesson, got %q", strings.TrimSpace(string(raw)))
+	}
+}
+
 // The keyed merge replaces only the target's line — concurrent rows and
 // torn lines survive (Python's lost-update fix).
 func TestApplyKeyedMergePreservesNeighbors(t *testing.T) {
