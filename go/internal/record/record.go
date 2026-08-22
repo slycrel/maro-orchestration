@@ -84,6 +84,13 @@ type Outcome struct {
 	// judged", never failed. VerdictSummary rides only when non-empty.
 	GoalAchieved   *bool
 	VerdictSummary string
+	// GoalVerdictSource names WHO judged (or tried to): a judged row
+	// carries the judge's version tag; an errored judge carries an
+	// error-family tag with goal_achieved absent — a broken verdict
+	// pipe must be distinguishable from a deliberately unjudged run in
+	// the DURABLE row, not just on a watched terminal (Python review
+	// F7; handle.py stamps now_self_verdict_error the same way).
+	GoalVerdictSource string
 }
 
 // WriteOutcome appends one outcome row. Field names match the Python
@@ -129,6 +136,9 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 	}
 	if o.VerdictSummary != "" {
 		row["goal_verdict_summary"] = o.VerdictSummary
+	}
+	if o.GoalVerdictSource != "" {
+		row["goal_verdict_source"] = o.GoalVerdictSource
 	}
 	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row); err != nil {
 		return "", err

@@ -28,7 +28,7 @@ func TestHeuristicClassifyMatchesCPython(t *testing.T) {
 		{"hello", "now", 0.65},
 	}
 	for _, c := range cases {
-		lane, conf, _ := heuristicClassify(c.msg)
+		lane, conf, _ := heuristicClassify(c.msg, nil)
 		if lane != c.lane || conf < c.conf-0.001 || conf > c.conf+0.001 {
 			t.Errorf("heuristicClassify(%q) = (%s, %.2f), want CPython (%s, %.2f)",
 				c.msg, lane, conf, c.lane, c.conf)
@@ -117,5 +117,28 @@ func TestClassifyLLMFailureFallsBackToHeuristic(t *testing.T) {
 	r2 := Classify(context.Background(), nil, "research polymarket strategies", false)
 	if r2.Lane != "agenda" {
 		t.Fatalf("nil adapter must classify heuristically: %+v", r2)
+	}
+}
+
+// resultErrAdapter refuses every call with a token-carrying
+// llm.ResultError — the refused-but-billed shape.
+type resultErrAdapter struct{}
+
+func (resultErrAdapter) Complete(ctx context.Context, msgs []llm.Message, opts llm.Options) (*llm.Response, error) {
+	return nil, &llm.ResultError{Msg: "refused", TokensIn: 13, TokensOut: 5}
+}
+func (resultErrAdapter) Name() string { return "resultErr" }
+
+// TestClassifyRefusedCallSalvagesUsage: a refused-but-billed classify
+// call still reports its spend on the heuristic-fallback Result
+// (llm.ResultError doctrine; adversarial routing r1 2026-08-22, QA —
+// intent was the unfixed half of a 3-vs-3 call-site split).
+func TestClassifyRefusedCallSalvagesUsage(t *testing.T) {
+	r := Classify(context.Background(), resultErrAdapter{}, "what time is it?", false)
+	if r.Lane != "now" {
+		t.Fatalf("refused call must fall back to heuristic: %+v", r)
+	}
+	if r.TokensIn != 13 || r.TokensOut != 5 {
+		t.Fatalf("refused call's spend must be salvaged: %+v", r)
 	}
 }

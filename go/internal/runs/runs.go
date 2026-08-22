@@ -113,12 +113,22 @@ func Finalize(runDir, status string) error {
 // stamps nothing, because absence means "not judged" and a false here
 // demotes the run everywhere the stamp is read.
 func StampVerdict(runDir string, goalAchieved *bool, source, summary string,
-	confidence float64, downgradeReason string, gaps []string) error {
+	confidence *float64, downgradeReason string, gaps []string) error {
 	fields := map[string]any{
 		"goal_verdict_source":  source,
 		"goal_verdict_summary": budget.VerdictProse.Clip(summary),
 	}
-	fields["goal_verdict_confidence"] = confidence
+	// confidence == nil pops the key (Python _apply_verdict_tuple:
+	// "confidence=None pops the key — the NOW lane records no
+	// confidence"). A fabricated 0 on a judged-true NOW verdict would
+	// read as "verified with zero confidence" to any confidence-weighted
+	// consumer — the opposite of what happened (adversarial routing r1
+	// 2026-08-22, Expert QA).
+	if confidence == nil {
+		fields["goal_verdict_confidence"] = nil
+	} else {
+		fields["goal_verdict_confidence"] = *confidence
+	}
 	if downgradeReason != "" {
 		fields["goal_verdict_downgrade_reason"] = budget.VerdictProse.Clip(downgradeReason)
 	} else {

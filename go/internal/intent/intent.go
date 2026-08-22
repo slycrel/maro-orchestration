@@ -36,6 +36,7 @@ package intent
 
 import (
 	"context"
+	"errors"
 	"math"
 	"regexp"
 	"strconv"
@@ -116,16 +117,19 @@ func RequiresFileOutput(message string) bool {
 // Classify routes one message. A nil adapter (or dryRun) uses the
 // heuristic path only, Python parity.
 func Classify(ctx context.Context, a llm.Adapter, message string, dryRun bool) Result {
+	// Loaded ONCE and threaded down — warnings already surfaced by the
+	// CLI's own boundary Load; a second read inside the heuristic could
+	// disagree with this one mid-classification.
 	cfg, _ := config.Load()
 	var r Result
 	if dryRun || a == nil {
-		lane, conf, reason := heuristicClassify(message)
+		lane, conf, reason := heuristicClassify(message, cfg)
 		r = Result{Lane: lane, Confidence: conf, Reason: reason}
 	} else {
 		var ok bool
 		r, ok = llmClassify(ctx, a, message)
 		if !ok {
-			lane, conf, reason := heuristicClassify(message)
+			lane, conf, reason := heuristicClassify(message, cfg)
 			// Usage from the failed/unparseable call still counts.
 			r = Result{Lane: lane, Confidence: conf, Reason: reason,
 				TokensIn: r.TokensIn, TokensOut: r.TokensOut}
@@ -171,6 +175,14 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 		{Role: "user", Content: "Request: " + message},
 	}, llm.Options{MaxTokens: 128, Temperature: 0.1, Purpose: "routing"})
 	if err != nil || resp == nil {
+		// A refused-but-billed classify call still spent tokens —
+		// salvage them so the heuristic-fallback Result carries the
+		// real cost (llm.ResultError doctrine; exec.go/loop.go do the
+		// same on their error branches).
+		var re *llm.ResultError
+		if errors.As(err, &re) {
+			return Result{TokensIn: re.TokensIn, TokensOut: re.TokensOut}, false
+		}
 		return Result{}, false
 	}
 	r := Result{TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
@@ -237,7 +249,7 @@ var liveDataRe = regexp.MustCompile(`(?i)\b(what('s| is) (the |a |an )?(current|
 
 const shortThreshold = 8 // words — very short messages tend to be NOW
 
-func heuristicClassify(message string) (lane string, confidence float64, reason string) {
+func heuristicClassify(message string, cfg map[string]any) (lane string, confidence float64, reason string) {
 	msg := strings.ToLower(strings.TrimSpace(message))
 	wordCount := len(strings.Fields(msg))
 
@@ -253,7 +265,6 @@ func heuristicClassify(message string) (lane string, confidence float64, reason 
 		}
 	}
 	if liveDataRe.MatchString(msg) {
-		cfg, _ := config.Load()
 		if config.Get(cfg, "now_lane.live_data_routing", true) {
 			agendaScore++
 		} else {

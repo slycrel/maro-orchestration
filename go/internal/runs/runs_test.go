@@ -99,14 +99,18 @@ func TestStampVerdictTriStateAndReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	no := false
+	conf := 0.9
 	gaps := []string{"g1", "g2", "g3", "g4", "g5", "g6", "g7"}
 	if err := StampVerdict(rd, &no, "go_closure_v1", "Not achieved: x",
-		0.9, "behavioral gap", gaps); err != nil {
+		&conf, "behavioral gap", gaps); err != nil {
 		t.Fatal(err)
 	}
 	m := readMeta(t, rd)
 	if m["goal_achieved"] != false || m["goal_verdict_downgrade_reason"] != "behavioral gap" {
 		t.Fatalf("stamp: %v", m)
+	}
+	if m["goal_verdict_confidence"] != 0.9 {
+		t.Fatalf("judged confidence must be written: %v", m)
 	}
 	stamped, _ := m["goal_verdict_gaps"].([]any)
 	if len(stamped) != 6 || !strings.Contains(stamped[5].(string), "(+2 more gap(s)") {
@@ -114,12 +118,17 @@ func TestStampVerdictTriStateAndReplacement(t *testing.T) {
 	}
 	// Replacement by an unjudged clean verdict: booleans/downgrade/gaps
 	// must all clear, not linger from the judged predecessor.
-	if err := StampVerdict(rd, nil, "go_closure_v1", "Not judged.", 0.0, "", nil); err != nil {
+	if err := StampVerdict(rd, nil, "go_closure_v1", "Not judged.", nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	m = readMeta(t, rd)
 	if _, present := m["goal_achieved"]; present {
 		t.Fatalf("unjudged stamp left goal_achieved standing: %v", m)
+	}
+	// nil confidence POPS the key — a fabricated 0 would read as
+	// "verified with zero confidence" (Python: confidence=None pops).
+	if _, present := m["goal_verdict_confidence"]; present {
+		t.Fatalf("nil confidence must pop the key, not write 0: %v", m)
 	}
 	if _, present := m["goal_verdict_downgrade_reason"]; present {
 		t.Fatalf("stale downgrade reason survived replacement: %v", m)

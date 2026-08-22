@@ -1450,3 +1450,70 @@ newest layer of change, including two in this reviewer lineage's own
 prior fixes. Mutations M1-M12 all DETECTED (two on strengthened pins,
 both escapes recorded). Zero fabricated probes or quotes across all
 four rounds.
+
+## Routing tranche slice 1 — adversarial r1 (2026-08-22, 4 lenses, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff b2aded18..f8c6aac7 (intent classifier + NOW lane + -lane CLI).
+Verdict: CONTESTED — 6 verified HIGHs, all fixed same round.
+
+Verification ledger (verify-before-fix, every claim traced):
+- VERIFIED (Skeptic/Architect/Minimalist, independently): VerdictSummary
+  scrubbed per-sink (row, stamp) but NOT at the boundary — main.go
+  printed the raw judge why to the terminal. Fixed: scrub where the
+  field is SET in verifyNow (closure doctrine); pin
+  TestVerifyNowScrubsWhyAtBoundary; mutation M18 DETECTED.
+- VERIFIED (Skeptic): only the 160-token half of the 2113a608/ed7cf400
+  fix was ported — Python's _now_verdict_rationale (trailing-prose
+  recovery) was missing, and the static fallback FALSELY said "judge
+  gave no rationale". Fixed: verdictRationale port; pin
+  TestVerifyNowRecoversTrailingRationale; M19 DETECTED.
+- VERIFIED (Expert QA): StampVerdict's confidence float64 wrote a
+  fabricated 0 on every NOW verdict (Python confidence=None pops).
+  Fixed at the ROOT: signature → *float64, nil pops; loop passes
+  &v.Confidence; pins in runs_test + TestRunNowStampsNoConfidenceKey;
+  M16 DETECTED.
+- VERIFIED (Expert QA + Skeptic): F7 marking was terminal-only — a
+  judge-error row and an unparseable-verdict row were byte-identical on
+  disk. Fixed: record.Outcome.GoalVerdictSource; go_now_verify_v1 /
+  go_now_verify_error / absent taxonomy; pin
+  TestRunNowRowCarriesVerdictSource; M17 DETECTED.
+- VERIFIED (Expert QA + Architect): three new Complete call sites
+  dropped llm.ResultError usage (3-vs-3 split against exec.go/loop.go).
+  Fixed: salvage in llmClassify + now.Run + verifyNow; pins
+  TestClassifyRefusedCallSalvagesUsage +
+  TestRunNowSalvagesResultErrorUsage.
+- VERIFIED (all four lenses): classify-call tokens discarded — every
+  -lane auto row under-reported real spend. Fixed: seed threading
+  (now.Run seedIn/seedOut, loop.Opts SeedTokens*, main.go folds); pins
+  TestRunNowSeedTokensReachRow + TestRunSeedTokensReachOutcomeRow; M21
+  ESCAPED on the first pin (small seed vacuous against organic Fake
+  usage — pin strengthened to a seed no natural count reaches), then
+  DETECTED; M22 (now-side seed init) DETECTED.
+- VERIFIED (Minimalist + Architect): judge window unbounded, marked
+  truncation (_now_verify_payload) silently dropped. Fixed:
+  verifyPayload port, 2000-char cut, visible marker; pin
+  TestVerifyNowPayloadTruncationMarked; M20 DETECTED.
+- VERIFIED (Architect, doc gap): _mark_memory_provenance advisory not
+  in the unported-named list. Fixed: named in now.go doc + PORT.md.
+- VERIFIED (Architect + Minimalist, LOW): config.Load ×3 per classify,
+  warnings swallowed, split-brain risk between override gate and
+  heuristic. Fixed: single Load in Classify, cfg threaded into
+  heuristicClassify.
+- VERIFIED (Skeptic, MED): TestRunLaneRoutingEndToEnd asserted only
+  task_type. Fixed: dry_run fence, summary, unjudged assertions added.
+- REFUTED (Skeptic HIGH, "now.Run must gate on dryRun"): Python parity
+  — handle() swaps in _DryRunAdapter at the same boundary; neither
+  runtime gates calls inside the lane. Contract documented on the
+  package instead.
+- REFUTED (Minimalist MED, "row verdict fields have no reader —
+  delete"): Python's NOW row carries goal_achieved /
+  goal_verdict_summary / goal_verdict_source (handle.py ~1540); the row
+  is the cross-runtime ledger surface — parity is the reader.
+- ACCEPTED (QA LOW): three hand-written safe_float coercions — extract
+  when a third JSON-verdict parser appears.
+- ACCEPTED (Skeptic LOW): row answer-summary unscrubbed — Python
+  parity, named residual in PORT.md beside the loop's identical one.
+
+Mutations M16-M22 all DETECTED (M21 on a strengthened pin — escape
+recorded above). Flagship pattern: 15-for-15 — this round's HIGHs sit
+squarely in the newest layer (the NOW lane's verify/stamp path).

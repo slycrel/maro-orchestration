@@ -471,7 +471,35 @@ direction).
   conversational-compute decree), and Go's NOW lane fetches nothing, so
   honoring them would route unanswerable asks to a lane that cannot
   answer; the classifier prompt's link-read EXCEPTION paragraph is
-  omitted for the same reason. Deliberately unported with their
+  omitted for the same reason. Adversarial r1 hardening (2026-08-22):
+  the judge's why is scrubbed AT THE BOUNDARY where it is set (closure
+  doctrine — per-sink scrubbing missed the terminal, the one surface an
+  operator reads); the trailing-rationale recovery is ported
+  (verdictRationale — `{"fulfilled": false}` + prose after the JSON was
+  the ed7cf400 shape; 160 tokens was only HALF that fix); the judge
+  window is capped at 2000 chars with the VISIBLE truncation marker
+  (_now_verify_payload parity — an unmarked window makes a judge report
+  what it cannot see as not delivered); runs.StampVerdict confidence is
+  now *float64 and nil POPS the key (Python confidence=None — the old
+  signature fabricated `goal_verdict_confidence: 0` on every judged
+  NOW verdict, "verified with zero confidence"); the outcome ROW
+  carries goal_verdict_source (judged → go_now_verify_v1, errored
+  judge → go_now_verify_error with goal_achieved absent, unparseable →
+  no source) so F7's broken-pipe/unjudged distinction survives an
+  unwatched run — go_-prefixed names, DIVERGING from Python's
+  now_self_verdict* taxonomy on purpose (the Go judge is a different
+  instrument; the fence is the point); refused-but-billed calls
+  salvage llm.ResultError usage at all three new call sites (classify,
+  answer, judge); and the routing classify call's spend is SEEDED into
+  whichever lane runs (now.Run seedIn/seedOut, loop.Opts
+  SeedTokens*) so outcome rows report the goal's full real cost.
+  Named residuals: the answer summary on the row is clipped but
+  unscrubbed (Python parity — same residual as the loop's row, named
+  there too); a crash between WriteOutcome and Finalize leaves a
+  terminal row beside a "running" metadata.json (same window the loop
+  has; recall's InterruptStatuses softens it); the memory-provenance
+  advisory marker (_mark_memory_provenance) is unported with its
+  stores — returns with the memory tranche. Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard
   (claimed inputs/outputs on disk), check_goal_clarity + imperative
   rewrite (needs the ask-the-user surface), introspects_self's consumer

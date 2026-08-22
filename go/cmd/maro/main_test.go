@@ -94,8 +94,22 @@ func TestRunLaneRoutingEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := readOutcomeRows(t, ws)
-	if rows[len(rows)-1]["task_type"] != "now" {
-		t.Fatalf("NOW-shaped goal must route now: %v", rows[len(rows)-1])
+	nowRow := rows[len(rows)-1]
+	if nowRow["task_type"] != "now" {
+		t.Fatalf("NOW-shaped goal must route now: %v", nowRow)
+	}
+	// Flow assertions, not just the routing tag (r1 Skeptic: the one
+	// CLI-level NOW test asserted only task_type). The dry Fake's
+	// loop-shaped script means the judge sees non-JSON prose — an
+	// honest dry row is dry_run:true, non-empty summary, UNJUDGED.
+	if nowRow["dry_run"] != true {
+		t.Fatalf("dry NOW row must be fenced dry_run: %v", nowRow)
+	}
+	if s, _ := nowRow["summary"].(string); s == "" {
+		t.Fatalf("NOW row must carry the answer summary: %v", nowRow)
+	}
+	if _, has := nowRow["goal_achieved"]; has {
+		t.Fatalf("dry judge prose is unparseable — row must stay unjudged: %v", nowRow)
 	}
 	if err := run([]string{"run", "-backend", "dry", "-lane", "agenda", "what time is it?"}); err != nil {
 		t.Fatal(err)

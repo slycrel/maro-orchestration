@@ -30,10 +30,20 @@
 //     goals are routed AGENDA by intent's capability override.
 //   - The interactive-lane variants (adapter=None judge-skip, NOW
 //     artifact write, navigator dispatch, deferred learning).
+//   - The memory-provenance advisory marker (_mark_memory_provenance:
+//     an answer claiming "saved to memory" gets checked against the
+//     actual stores; run 9c8d0a43 lost a convention silently) — its
+//     stores don't exist here yet; it returns with the memory tranche.
+//
+// dryRun stamps the row only; the CALLER supplies the canned adapter —
+// Python parity: handle() swaps in _DryRunAdapter at the same boundary,
+// so neither runtime gates individual calls inside the NOW lane.
 package now
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -83,11 +93,16 @@ type Result struct {
 }
 
 // Run executes one NOW-lane goal end-to-end: run dir, single call,
-// verify judge, outcome row, verdict stamp, finalize.
-func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, dryRun bool, model string) (Result, error) {
+// verify judge, outcome row, verdict stamp, finalize. seedIn/seedOut
+// carry spend the caller made BEFORE this run (the routing classify
+// call) so the outcome row reports the goal's full real cost, not just
+// the lane's share (adversarial routing r1 2026-08-22: classify usage
+// vanished from every record).
+func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, dryRun bool, model string, seedIn, seedOut int) (Result, error) {
 	start := time.Now()
 	loopID := record.NewID()
-	res := Result{Status: "done", LoopID: loopID}
+	res := Result{Status: "done", LoopID: loopID,
+		TokensIn: seedIn, TokensOut: seedOut}
 
 	runDir, rerr := runs.Create(rec.WorkspaceDir, loopID, goal)
 	if rerr != nil {
@@ -99,9 +114,20 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 		{Role: "system", Content: nowSystem},
 		{Role: "user", Content: goal},
 	}, llm.Options{MaxTokens: 2048, Temperature: 0.4, Purpose: "now"})
+	if err == nil && resp == nil {
+		err = errors.New("adapter returned nil response with nil error")
+	}
 	if err != nil {
 		res.Status = "error"
 		res.Answer = "NOW lane error: " + err.Error()
+		// A refused-but-billed call still spent tokens — salvage them
+		// (llm.ResultError doctrine; exec.go/loop.go do the same).
+		var re *llm.ResultError
+		if errors.As(err, &re) {
+			res.TokensIn += re.TokensIn
+			res.TokensOut += re.TokensOut
+			res.Warnings = append(res.Warnings, re.Warnings...)
+		}
 	} else {
 		res.TokensIn += resp.TokensIn
 		res.TokensOut += resp.TokensOut
@@ -119,15 +145,31 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	}
 	res.Elapsed = time.Since(start)
 
+	// Verdict-source taxonomy on the DURABLE row (Python handle.py
+	// parity, go_-prefixed): judged → the judge's version tag; errored
+	// judge → the error family with goal_achieved absent — review F7's
+	// broken-pipe/unjudged distinction must survive an unwatched run.
+	// An unparseable verdict carries NO source: that is Python's
+	// "failed open, no clear verdict" state, honestly unjudged.
+	verdictSource := ""
+	switch {
+	case res.GoalAchieved != nil:
+		verdictSource = "go_now_verify_v1"
+	case res.NowVerifyError != "":
+		verdictSource = "go_now_verify_error"
+	}
+	// res.VerdictSummary arrives already scrubbed at verifyNow's
+	// boundary (closure doctrine: scrub where the field is SET, so
+	// every consumer — row, stamp, terminal — inherits clean text).
 	summary := budget.StepResult.Clip(res.Answer)
 	if _, werr := rec.WriteOutcome(record.Outcome{
 		Goal: goal, Status: res.Status, Summary: summary,
 		TaskType: "now", Model: model, LoopID: loopID, DryRun: dryRun,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
-		ElapsedMS:    res.Elapsed.Milliseconds(),
-		GoalAchieved: res.GoalAchieved,
-		VerdictSummary: budget.VerdictProse.Clip(
-			scrub.Secrets(res.VerdictSummary)),
+		ElapsedMS:         res.Elapsed.Milliseconds(),
+		GoalAchieved:      res.GoalAchieved,
+		GoalVerdictSource: verdictSource,
+		VerdictSummary:    budget.VerdictProse.Clip(res.VerdictSummary),
 	}); werr != nil {
 		res.Warnings = append(res.Warnings, "outcome recording failed: "+werr.Error())
 	}
@@ -140,8 +182,12 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	}
 	if runDir != "" {
 		if res.GoalAchieved != nil || res.VerdictSummary != "" {
+			// confidence nil: the NOW judge measures none, and nil POPS
+			// the key — a fabricated 0 on a judged-true run would read
+			// as "verified with zero confidence" (Python parity:
+			// confidence=None). Summary pre-scrubbed at verifyNow.
 			if serr := runs.StampVerdict(runDir, res.GoalAchieved, "go_now_verify_v1",
-				scrub.Secrets(res.VerdictSummary), 0, "", nil); serr != nil {
+				res.VerdictSummary, nil, "", nil); serr != nil {
 				res.Warnings = append(res.Warnings, "verdict stamp failed: "+serr.Error())
 			}
 		}
@@ -152,18 +198,84 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	return res, nil
 }
 
+// nowVerifyCut is Python's _NOW_VERIFY_CUT: the judge window's cap,
+// with the cut VISIBLE — a judge shown `Response:` cannot tell a whole
+// answer from its first 2000 characters, and reports what it cannot
+// see as not delivered (the last unmarked judge window in the Python
+// codebase, fixed 2026-08-03 alongside three siblings).
+const nowVerifyCut = 2000
+
+// verifyPayload ports _now_verify_payload: request + response, each
+// truncated at the cut with a marker that tells the judge exactly what
+// it is not seeing.
+func verifyPayload(goal, answer string) string {
+	seg := func(label, text string) string {
+		if len(text) > nowVerifyCut {
+			return fmt.Sprintf("%s [TRUNCATED — first %d of %d characters; "+
+				"the rest was NOT shown to you]:\n%s",
+				label, nowVerifyCut, len(text), text[:nowVerifyCut])
+		}
+		return label + ":\n" + text
+	}
+	return seg("Request", goal) + "\n\n" + seg("Response", answer)
+}
+
+// verdictRationale ports _now_verdict_rationale: the judge's prose
+// reason, minus the JSON verdict it leads with. Found by run ea4ebe4a
+// diagnosing ed7cf400: the judge replied `{"fulfilled": false}`
+// followed by a specific, genuinely useful rationale, and only the
+// boolean was ever read — the run presented as failed for no stated
+// reason. The 160-token budget is HALF the fix; this is the other half.
+func verdictRationale(raw string) string {
+	text := strings.TrimSpace(raw)
+	if strings.HasPrefix(text, "```") {
+		// ```json { ... } ``` preamble: prose is after the closing fence.
+		parts := strings.Split(text, "```")
+		if len(parts) > 2 {
+			text = strings.TrimSpace(strings.Join(parts[2:], ""))
+		} else {
+			text = ""
+		}
+	} else if strings.HasPrefix(text, "{") {
+		// Bare JSON, then prose: skip past the balanced object.
+		depth := 0
+		for i, ch := range text {
+			if ch == '{' {
+				depth++
+			} else if ch == '}' {
+				depth--
+				if depth == 0 {
+					text = strings.TrimSpace(text[i+1:])
+					break
+				}
+			}
+		}
+	}
+	return budget.VerdictProse.Clip(strings.Join(strings.Fields(text), " "))
+}
+
 // verifyNow runs the text judge and applies the tri-state verdict.
+// res.VerdictSummary is scrubbed HERE, where it is set — the boundary
+// discipline closure.Verify pinned: every consumer (outcome row,
+// verdict stamp, the CLI's terminal print) inherits clean text, and a
+// per-sink scrub that misses one sink ships the judge's quoted-back
+// secrets to exactly the surface an operator reads (adversarial
+// routing r1 2026-08-22, all three lenses independently).
 func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
-	payload := "Request: " + goal + "\n\nResponse: " + res.Answer
 	resp, err := a.Complete(ctx, []llm.Message{
 		{Role: "system", Content: nowVerifySystem},
-		{Role: "user", Content: payload},
+		{Role: "user", Content: verifyPayload(goal, res.Answer)},
 	}, llm.Options{MaxTokens: 160, Temperature: 0, Purpose: "now-verify"})
 	if err != nil || resp == nil {
 		// Fail-open stays fail-open, but MARKED (Python review F7: a
 		// keyed provider outage used to look identical to no-keys).
 		if err != nil {
 			res.NowVerifyError = budget.Clip(err.Error(), 120)
+			var re *llm.ResultError
+			if errors.As(err, &re) {
+				res.TokensIn += re.TokensIn
+				res.TokensOut += re.TokensOut
+			}
 		} else {
 			res.NowVerifyError = "nil response"
 		}
@@ -184,7 +296,14 @@ func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
 		if !v {
 			res.Status = "incomplete"
 			why, _ := obj["why"].(string)
-			res.VerdictSummary = strings.TrimSpace(why)
+			res.VerdictSummary = scrub.Secrets(strings.TrimSpace(why))
+			if res.VerdictSummary == "" {
+				// The rationale often trails the JSON instead of riding
+				// the why key — recover it before falling back to a
+				// static placeholder that would falsely claim the judge
+				// gave no reason.
+				res.VerdictSummary = scrub.Secrets(verdictRationale(resp.Content))
+			}
 			if res.VerdictSummary == "" {
 				res.VerdictSummary = "response reports non-fulfillment (judge gave no rationale)"
 			}

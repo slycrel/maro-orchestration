@@ -115,12 +115,17 @@ func run(args []string) error {
 	// the loop and PRINTED — the lane is a run-shaping decision the
 	// operator must see, same doctrine as the exec-mode line above.
 	lane := *laneFlag
+	// Classify spend is real cost on the goal's behalf — seeded into
+	// whichever lane runs so the outcome row carries the FULL number
+	// (adversarial routing r1 2026-08-22: it vanished from every record).
+	clsIn, clsOut := 0, 0
 	switch lane {
 	case "now", "agenda":
 		fmt.Printf("lane: %s (forced by -lane)\n", strings.ToUpper(lane))
 	case "auto":
 		cls := intent.Classify(context.Background(), adapter, goal, *backend == "dry")
 		lane = cls.Lane
+		clsIn, clsOut = cls.TokensIn, cls.TokensOut
 		fmt.Printf("lane: %s (%.2f) — %s\n", strings.ToUpper(cls.Lane),
 			cls.Confidence, cls.Reason)
 	default:
@@ -128,7 +133,7 @@ func run(args []string) error {
 	}
 	if lane == "now" {
 		nres, nerr := now.Run(context.Background(), adapter, rec, goal,
-			*backend == "dry", *model)
+			*backend == "dry", *model, clsIn, clsOut)
 		if nerr != nil {
 			return nerr
 		}
@@ -156,8 +161,10 @@ func run(args []string) error {
 		// dry_run is the field Python's learning funnel keys on to
 		// exclude synthetic rows; a canned run recorded as real is a
 		// fabricated record (adversarial r2 2026-08-22, Expert QA).
-		DryRun: *backend == "dry",
-		Exec:   execMode,
+		DryRun:        *backend == "dry",
+		Exec:          execMode,
+		SeedTokensIn:  clsIn,
+		SeedTokensOut: clsOut,
 	})
 	if err != nil {
 		return err

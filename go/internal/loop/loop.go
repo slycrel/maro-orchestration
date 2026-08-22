@@ -87,6 +87,11 @@ type Opts struct {
 	// SupportsAgentTools — otherwise the run stays on the tool-less v0
 	// path and says so in a warning (no silent mode change).
 	Exec bool
+	// SeedTokensIn/Out carry spend the caller made BEFORE the loop on
+	// this goal's behalf (the routing classify call) so the outcome row
+	// reports full real cost, not just the loop's share.
+	SeedTokensIn  int
+	SeedTokensOut int
 }
 
 type Result struct {
@@ -187,6 +192,12 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	}
 
 	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps, rr.DecomposeExtras()...)
+	// Seed spend (the routing classify call) is real cost this run
+	// caused — fold it in HERE so both exits (decompose-failed row and
+	// the normal totals) report it (adversarial routing r1 2026-08-22:
+	// classify usage vanished from every record).
+	planUse.TokensIn += opts.SeedTokensIn
+	planUse.TokensOut += opts.SeedTokensOut
 	if err != nil {
 		// Decompose failing IS an outcome; record it before returning —
 		// including whatever the failed planning turn still spent. The
@@ -705,7 +716,7 @@ stepLoop:
 				achieved = &v.Complete
 			}
 			if serr := runs.StampVerdict(runDir, achieved, "go_closure_v1",
-				v.Summary, v.Confidence, v.DowngradeReason, v.Gaps); serr != nil {
+				v.Summary, &v.Confidence, v.DowngradeReason, v.Gaps); serr != nil {
 				res.Warnings = append(res.Warnings, "verdict stamp failed: "+serr.Error())
 			}
 			if evErr := rec.Event("CLOSURE_VERDICT", "closure_verdict",

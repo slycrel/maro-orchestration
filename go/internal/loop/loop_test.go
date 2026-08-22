@@ -401,3 +401,32 @@ func TestMixedBlockedListEvictsAndFiltersTogether(t *testing.T) {
 		t.Fatal("oldest done entry survived a budget that must evict it")
 	}
 }
+
+// TestRunSeedTokensReachOutcomeRow: classify spend seeded via Opts
+// lands in the loop's totals and on the outcome row — the routing
+// call's cost must not vanish from the ledger (adversarial routing r1
+// 2026-08-22, all four lenses).
+func TestRunSeedTokensReachOutcomeRow(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{
+		`["do the thing"]`,
+		"did the thing",
+	}}
+	// Seeds far above any natural Fake usage — a vacuous >= against
+	// organic token counts detected nothing (mutation M21 escape).
+	res, err := Run(context.Background(), fake, record.New(ws), Opts{
+		Goal: "g", MaxSteps: 4, SeedTokensIn: 1000003, SeedTokensOut: 500001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TokensIn < 1000003 || res.TokensOut < 500001 {
+		t.Fatalf("seed spend must reach the totals: in=%d out=%d",
+			res.TokensIn, res.TokensOut)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	row := rows[len(rows)-1]
+	if row["tokens_in"].(float64) < 1000003 || row["tokens_out"].(float64) < 500001 {
+		t.Fatalf("seed spend must reach the row: %v", row)
+	}
+}
