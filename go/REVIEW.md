@@ -1930,3 +1930,42 @@ inside r3's own guard fix.
   body — which IS the deliverable. No change.
 
 Mutations M61–M64 all DETECTED. Full suite green. r5 follows.
+
+## Director tranche — adversarial r5 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r4 fix layer. Flagship pattern, 21st time: both lenses'
+HIGH sat inside r4's own marker-anchor fix.
+
+- **HIGH (both lenses): the r4 `(?m)` line-end anchor was trivially
+  bypassed** — a forged marker followed by a newline (the natural
+  shape of generated text) still stripped, and QA traced the deeper
+  error: reportEcho only ever sees budget.Clip output, where a genuine
+  marker exists ONLY at true end-of-string — the "Accumulator variant"
+  justification described a code path that never reaches reportEcho.
+  FIXED at the root: `budget.StripMarker` now owns the grammar
+  (markerRe verbatim, no multiline, true-end only, Clip's exact " … "
+  wording); the director's local regex is deleted; the entry-variant
+  and every non-final-line marker are worker CONTENT and keep their
+  vocabulary. Fixtures re-shaped to Clip's real marker; the
+  non-final-line must-detect Skeptic demanded is pinned in both
+  packages (M65).
+- **MED (both lenses): MaxReviewRounds as an EXPORTED mutable global**
+  — any importer could race a concurrent Run. FIXED: unexported
+  (`maxReviewRounds`); in-package tests still override serially with
+  Cleanup restore (Python module-attr parity kept). Options-struct
+  threading deferred until Run has a second real caller — named, not
+  silent.
+- **MED (skeptic): an ABSENT tickets key evaded the whole
+  discarded-plan census** (explicit [], null, and non-list all warned;
+  omission didn't). FIXED: absent key warns before the fallback (M66).
+- **LOW (qa): the 4-shape non-list pin used a bare IIFE** — first
+  failure masked the rest. FIXED: t.Run subtests; `null` added as a
+  5th shape.
+- **LOW (qa, tripwire note): "review exhausted 0/1 rounds" wording at
+  degenerate maxReviewRounds** — accepted-named as the first
+  observable symptom of test pollution, not a fix target.
+- **LOW (skeptic, meta): "M64 DETECTED" proved the fixture, not the
+  class.** Correct — this round's M65 pins the class (non-final-line
+  forgery) in both director and budget packages.
+
+Mutations M65–M66 DETECTED. Full suite green. r6 follows.

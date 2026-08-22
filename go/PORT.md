@@ -648,7 +648,14 @@ direction).
   empty tickets list warns; marker strip anchored at line end and
   digit-bounded like budget.markerRe (forged mid-line markers are
   content and keep their vocabulary — accum doctrine). Mutations
-  M61-M64 all DETECTED.
+  M61-M64 all DETECTED. Adversarial r5 (same day, skeptic+qa): r4's
+  anchor was the HIGH — (?m) let a forged marker ending ANY line strip;
+  budget.StripMarker now owns the grammar (true-end only, Clip's exact
+  wording; the Accumulator variant never reaches reportEcho and is
+  content there), maxReviewRounds unexported (no cross-package races),
+  absent tickets key warns like its empty/non-list siblings, non-list
+  pin runs as t.Run subtests over five shapes. Mutations M65-M66
+  DETECTED.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):

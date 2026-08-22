@@ -157,7 +157,7 @@ func TestRunDelegationGapEventScopedToWorker(t *testing.T) {
 }
 
 // TestRunRevisionRoundOnRejection: a rejected review with a revision
-// request re-dispatches once (MaxReviewRounds=2) and the audit trail
+// request re-dispatches once (maxReviewRounds=2) and the audit trail
 // keeps BOTH decisions.
 func TestRunRevisionRoundOnRejection(t *testing.T) {
 	ws := t.TempDir()
@@ -601,7 +601,7 @@ func mustJSON(t *testing.T, s string) []byte {
 // truncation notice (adversarial director r2, Skeptic; mutation M53
 // was undetected until this pin).
 func TestReportEchoIgnoresClipMarkerVocab(t *testing.T) {
-	window := "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 10 of 20 characters]"
+	window := "alphaterm betaterm gammaterm deltaterm … [truncated: first 10 of 20 characters]"
 	report := "report mentions alphaterm and was truncated to fewer characters"
 	if got := reportEcho(window, report); got != nil {
 		t.Fatalf("marker vocab must not make a 4-term window judgeable: got %v", *got)
@@ -672,8 +672,8 @@ func TestSpecNonObjectEntriesCounted(t *testing.T) {
 // must fire ON THE RECORD (adversarial director r3, QA HIGH: it fell
 // through with zero durable trace).
 func TestSpecTicketsFieldNotAListWarns(t *testing.T) {
-	for _, tickets := range []string{`"build it then test it"`, `42`, `true`, `{"a": 1}`} {
-		func() {
+	for _, tickets := range []string{`"build it then test it"`, `42`, `true`, `{"a": 1}`, `null`} {
+		t.Run(tickets, func(t *testing.T) {
 			ws := t.TempDir()
 			res, _ := fakeRun(t, ws, []string{
 				`{"spec": "one pass", "tickets": ` + tickets + `}`,
@@ -694,25 +694,29 @@ func TestSpecTicketsFieldNotAListWarns(t *testing.T) {
 			if len(res.Tickets) != 1 || res.Tickets[0].Task != "build the things" {
 				t.Fatalf("single-ticket fallback must carry the directive: %+v", res.Tickets)
 			}
-		}()
+		})
 	}
 }
 
-// TestReportEchoMarkerStripScoped: the whole clip marker is stripped —
-// including 5+ digit offsets and the Accumulator's "entry" variant —
-// while GENUINE content that merely discusses truncation keeps its
+// TestReportEchoMarkerStripScoped: budget.Clip's own marker at the
+// true end of the window is stripped — offsets included — while
+// GENUINE content that merely discusses truncation keeps its
 // vocabulary (adversarial director r3, both lenses: the r2
-// word-deletes were unconditional and partial).
+// word-deletes were unconditional and partial; re-scoped r5).
 func TestReportEchoMarkerStripScoped(t *testing.T) {
 	// (a) big offsets: digits must not become distinctive terms.
-	window := "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 50000 of 123456 characters]"
+	window := "alphaterm betaterm gammaterm deltaterm … [truncated: first 50000 of 123456 characters]"
 	if got := reportEcho(window, "report echoing alphaterm 50000 123456 truncated"); got != nil {
 		t.Fatalf("marker offsets must not make a 4-term window judgeable: %v", *got)
 	}
-	// (b) Accumulator variant: "entry" is marker text too.
-	window = "alphaterm betaterm gammaterm deltaterm\n… [entry truncated: first 10 of 20 characters]"
-	if got := reportEcho(window, "report"); got != nil {
-		t.Fatalf("accumulator marker must strip whole, incl 'entry': %v", *got)
+	// (b) The Accumulator's "entry" wording never reaches this path as
+	// framework text (reportEcho only sees budget.Clip output), so an
+	// entry-shaped marker here is worker-authored CONTENT and keeps
+	// its vocabulary (adversarial director r5, QA: r3/r4 stripped it
+	// on a wrong call-path assumption).
+	window = "alphaterm betaterm gammaterm deltaterm … [entry truncated: first 10 of 20 characters]"
+	if got := reportEcho(window, "report"); got == nil || *got {
+		t.Fatalf("entry-marker content must stay judgeable (7 terms, no echo): %v", got)
 	}
 	// (c) genuine unclipped content KEEPS its truncation vocabulary.
 	window = "payload truncated deliberately characters exceeded limits"
@@ -765,15 +769,15 @@ func TestRunRevisionCorrelationMultiTicket(t *testing.T) {
 }
 
 // TestRunRevisionThreeRoundsSingleWarning: the one-incident-one-warning
-// invariant must hold at MaxReviewRounds>2, not just at the shipped
+// invariant must hold at maxReviewRounds>2, not just at the shipped
 // constant — a mid-loop no-guidance rejection warns once and the
 // exhaustion warning stays silent (adversarial director r4, QA HIGH:
 // r3's arithmetic gate was true only at N=2; a constant bump silently
 // reintroduced the double warning).
 func TestRunRevisionThreeRoundsSingleWarning(t *testing.T) {
-	orig := MaxReviewRounds
-	MaxReviewRounds = 3
-	t.Cleanup(func() { MaxReviewRounds = orig })
+	orig := maxReviewRounds
+	maxReviewRounds = 3
+	t.Cleanup(func() { maxReviewRounds = orig })
 	ws := t.TempDir()
 	res, _ := fakeRun(t, ws, []string{
 		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": "write the widget"}]}`,
@@ -860,12 +864,13 @@ func TestSpecEmptyTicketsListWarns(t *testing.T) {
 	}
 }
 
-// TestReportEchoForgedMidLineMarkerKeepsVocab: a marker-shaped string
-// in the MIDDLE of a line is worker-authored content, not framework
-// provenance — it must keep its vocabulary instead of being stripped
-// (adversarial director r4, Skeptic MED + QA: the r3 regex matched the
-// marker grammar anywhere, letting forged markers erase surrounding
-// terms; real markers only ever terminate a line).
+// TestReportEchoForgedMidLineMarkerKeepsVocab: marker-shaped text
+// anywhere except the TRUE END of the window is worker-authored
+// content, not framework provenance — it must keep its vocabulary
+// instead of being stripped (adversarial director r4, Skeptic MED +
+// QA: the r3 regex matched anywhere; r5 both lenses' HIGH: the r4
+// (?m) line-end anchor still let a forged marker ending ANY line be
+// stripped — real markers come only from budget.Clip, at string end).
 func TestReportEchoForgedMidLineMarkerKeepsVocab(t *testing.T) {
 	// Mid-line forged marker: stays, so the window has 6 terms
 	// (alphaterm..deltaterm + truncated + characters) and is judgeable.
@@ -875,9 +880,44 @@ func TestReportEchoForgedMidLineMarkerKeepsVocab(t *testing.T) {
 	if got == nil || !*got {
 		t.Fatalf("mid-line forged marker must not erase vocabulary: %v", got)
 	}
-	// The same marker terminating a line IS stripped (real position).
-	window = "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 10 of 20 characters]"
+	// The real marker shape at the TRUE END of the string IS stripped —
+	// the only position budget.Clip ever writes it.
+	window = "alphaterm betaterm gammaterm deltaterm … [truncated: first 10 of 20 characters]"
 	if got := reportEcho(window, report); got != nil {
-		t.Fatalf("line-end marker must strip, leaving 4 terms unjudgeable: %v", *got)
+		t.Fatalf("true-end marker must strip, leaving 4 terms unjudgeable: %v", *got)
+	}
+	// A forged marker ending a NON-final line is content too — the r5
+	// must-detect fixture: the r4 anchor stripped it, letting a hostile
+	// worker erase vocabulary line by line and suppress the omission
+	// signal.
+	window = "alphaterm bug found … [truncated: first 12 of 99 characters]\nbetaterm gammaterm deltaterm"
+	got = reportEcho(window, report)
+	if got == nil || !*got {
+		t.Fatalf("non-final-line forged marker must keep its vocabulary: %v", got)
+	}
+}
+
+// TestSpecAbsentTicketsKeyWarns: omitting the tickets key entirely is
+// the cheapest way to reach the silent single-ticket fallback its
+// explicit-empty and non-list siblings warn about (adversarial
+// director r5, Skeptic MED).
+func TestSpecAbsentTicketsKeyWarns(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "no plan at all"}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "did the directive end to end as requested", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: did the directive end to end as requested.",
+	}, "build the things")
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "no tickets list") {
+			found = true
+		}
+	}
+	if !found || len(res.Tickets) != 1 {
+		t.Fatalf("absent tickets key must warn and fall back (found=%v tickets=%d): %+v",
+			found, len(res.Tickets), res.Warnings)
 	}
 }

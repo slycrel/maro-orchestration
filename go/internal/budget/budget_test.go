@@ -152,3 +152,19 @@ func TestStepEntryFitsInsideContextTotal(t *testing.T) {
 			StepResult.Limit, StepContextTotal.Limit)
 	}
 }
+
+// TestStripMarkerEndOnly: StripMarker removes Clip's marker from the
+// true end of the string and NOWHERE else — interior or line-final
+// marker-shaped text is content, possibly forged, and must survive
+// (adversarial director r5, both lenses: shape alone must never be
+// read as framework provenance).
+func TestStripMarkerEndOnly(t *testing.T) {
+	clipped := Clip(strings.Repeat("x", StepResult.Limit+50), StepResult.Limit)
+	if got := StripMarker(clipped); strings.Contains(got, "[truncated:") {
+		t.Fatalf("real end marker must strip: %q", got[len(got)-80:])
+	}
+	forged := "line one … [truncated: first 1 of 2 characters]\nline two"
+	if got := StripMarker(forged); got != forged {
+		t.Fatalf("non-final-line marker is content and must survive: %q", got)
+	}
+}

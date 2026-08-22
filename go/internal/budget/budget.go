@@ -209,6 +209,18 @@ var Registry = []Budget{
 // (adversarial round on this port, all four lenses, 2026-08-22).
 var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]$`)
 
+// StripMarker removes Clip's own marker from the true END of s — the
+// only position Clip ever writes it. Interior or line-final
+// marker-shaped text is CONTENT (possibly forged by whatever authored
+// s) and passes through untouched; callers judging text (e.g. the
+// director's report-echo check) use this so framework provenance never
+// has to be inferred from attacker-controllable shape (adversarial
+// director r5, both lenses: a multiline anchor let any line ending in
+// a forged marker be stripped).
+func StripMarker(s string) string {
+	return markerRe.ReplaceAllString(s, "")
+}
+
 // markerMax is the longest legitimate marker: fixed text plus two
 // 9-digit counts (Python _CLIP_MARKER_MAX).
 const markerMax = 64

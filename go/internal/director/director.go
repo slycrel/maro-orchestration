@@ -2,7 +2,7 @@
 // src/director.py — the Director produces a SPEC + worker tickets from
 // a directive, dispatches each ticket to a persona-framed worker,
 // reviews every output (rejecting on parse failure — auto-accepting
-// hides bad output), requests up to MaxReviewRounds revisions, and
+// hides bad output), requests up to maxReviewRounds revisions, and
 // compiles the accepted results into one report.
 //
 // Ported lessons: bounded completed-context accumulator (worker results
@@ -51,12 +51,15 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/workers"
 )
 
-// MaxReviewRounds: the Director reviews each worker output up to this
+// maxReviewRounds: the Director reviews each worker output up to this
 // many times (Python MAX_REVIEW_ROUNDS).
-// A var, not a const: Python's MAX_REVIEW_ROUNDS is a mutable module
-// attribute, and the one-warning-per-incident invariant below must be
-// testable at N>2 (adversarial director r4, QA HIGH).
-var MaxReviewRounds = 2
+// A package-PRIVATE var, not a const: Python's MAX_REVIEW_ROUNDS is a
+// mutable module attribute, and the one-warning-per-incident invariant
+// below must be testable at N>2 (adversarial director r4, QA HIGH).
+// Unexported so no importer can mutate it under a concurrent Run
+// (adversarial director r5, both lenses); in-package tests override it
+// serially with a Cleanup restore.
+var maxReviewRounds = 2
 
 // Ticket is one unit of work dispatched to a worker.
 type Ticket struct {
@@ -356,7 +359,7 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 		if !review.Accepted && review.RevisionRequest != "" && !dry {
 			accepted := false
 			stoppedEarly := false
-			for round := 0; round < MaxReviewRounds-1; round++ {
+			for round := 0; round < maxReviewRounds-1; round++ {
 				revised := Ticket{
 					TicketID:   newID(),
 					WorkerType: ticket.WorkerType,
@@ -386,10 +389,10 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 					// mid-loop when the break cuts remaining rounds short
 					// (stoppedEarly then suppresses the exhaustion warning
 					// below — r4, QA HIGH: gating only this side made the
-					// invariant true solely at MaxReviewRounds=2), the
+					// invariant true solely at maxReviewRounds=2), the
 					// exhaustion warning alone on the terminal round
 					// (r3, Skeptic HIGH: the r2 guard double-warned).
-					if round+1 < MaxReviewRounds-1 {
+					if round+1 < maxReviewRounds-1 {
 						stoppedEarly = true
 						res.Warnings = append(res.Warnings, fmt.Sprintf(
 							"ticket %s revision round %d rejected with no revision request — stopping revisions, result kept best-effort",
@@ -404,7 +407,7 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 				// when the mid-loop guard already recorded the incident.
 				res.Warnings = append(res.Warnings, fmt.Sprintf(
 					"review exhausted %d rounds for ticket %s — best-effort result kept",
-					MaxReviewRounds, ticket.TicketID))
+					maxReviewRounds, ticket.TicketID))
 			}
 		}
 
@@ -564,6 +567,13 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 				// fallback (adversarial director r3, QA HIGH).
 				res.Warnings = append(res.Warnings, fmt.Sprintf(
 					"spec tickets field was %T, not a list — single-ticket fallback", v))
+			} else {
+				// An ABSENT key is the cheapest way to reach the same
+				// silent fallback its explicit-empty and non-list
+				// siblings now warn about (adversarial director r5,
+				// Skeptic MED).
+				res.Warnings = append(res.Warnings,
+					"spec had no tickets list — single-ticket fallback")
 			}
 			if malformed > 0 {
 				// ONE summary warning, not one per entry — a hostile
@@ -760,18 +770,6 @@ var echoStopwords = map[string]bool{
 	"first": true, "second": true, "rather": true, "about": true,
 }
 
-// clipMarkerRe matches both marker formats in the budget package:
-// budget.Clip's " … [truncated: first N of M characters]" and the
-// Accumulator's "… [entry truncated: first N of M characters]".
-// Anchored at line end and digit-bounded like budget.markerRe: real
-// markers only ever terminate a line (budget.Clip appends at the end,
-// the Accumulator before its entry separator), so a forged mid-line
-// marker in worker-authored text is CONTENT and keeps its vocabulary —
-// the sibling accum doctrine (forged markers render verbatim, never
-// mechanically stripped) applies here too (adversarial director r4,
-// Skeptic MED + QA).
-var clipMarkerRe = regexp.MustCompile(`(?m)(?:… )?\[(?:entry )?truncated: first \d{1,9} of \d{1,9} characters\]$`)
-
 func distinctiveTerms(text string) map[string]bool {
 	terms := map[string]bool{}
 	for _, w := range echoTermRe.FindAllString(strings.ToLower(text), -1) {
@@ -790,15 +788,17 @@ func reportEcho(resultText, reportText string) *bool {
 	if strings.TrimSpace(resultText) == "" || strings.TrimSpace(reportText) == "" {
 		return nil
 	}
-	// Clip markers are framework text, not worker content — strip the
-	// whole marker (both budget.Clip's and the Accumulator's wording)
-	// before term extraction, so neither the marker words nor 5+ digit
-	// offsets count as worker-distinctive terms, while GENUINE content
-	// that merely discusses truncation keeps its vocabulary
-	// (adversarial director r2 Skeptic; r3 both lenses: the r2
-	// word-deletes were unconditional, missed numeric offsets, and
-	// missed the Accumulator's "entry truncated" variant).
-	terms := distinctiveTerms(clipMarkerRe.ReplaceAllString(resultText, ""))
+	// resultText is always budget.Clip output (the worker-judge
+	// window), so the only framework-authored marker is Clip's own, at
+	// the true END of the string — budget.StripMarker owns that grammar
+	// and strips exactly there. Everything else marker-shaped
+	// (mid-text, line-final, or the Accumulator's "entry" wording,
+	// which never reaches this path) is worker-authored CONTENT and
+	// keeps its vocabulary, mirroring the accum forged-marker doctrine
+	// (r2 Skeptic; r3 both lenses; r4 anchored per-line; r5 both
+	// lenses' HIGH: the (?m) anchor let a forged marker ending ANY
+	// line erase surrounding terms and suppress the omission signal).
+	terms := distinctiveTerms(budget.StripMarker(resultText))
 	if len(terms) < echoMinTerms {
 		return nil
 	}
