@@ -3928,3 +3928,26 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   tranches. Records: `docs/history/2026-08-21-caps-sweep-review.md`
   (r2 section). Basis: both HIGH traces re-verified against the tree
   before fixing.
+- **2026-08-21 — scaling-agent-systems audit (dev Mac): link-farm lead #2
+  DONE, the 751e2dea loop closed, fan-out doctrine recorded:** the
+  DeepMind/MIT paper (arXiv:2512.08296, Nature MI 8:1157) extracted —
+  ~45% single-agent-baseline saturation threshold; +80.8% (decomposable)
+  to −70.0% (sequential planning); SWE-bench Verified all four MAS
+  variants under solo; error amplification centralized 4.4× → independent
+  17.2×; turns T=2.72(n+0.5)^1.724; comm overhead 58–515%. Box-log audit:
+  **the multi-agent arm is empty** — all 4,919 step-cost records are the
+  solo loop, 0 director/worker/review events in 7,120 captains_log rows,
+  the Director path is code-live but production-dormant (every "director"
+  event mention is a goal ABOUT the code). Measurable instead: the verify
+  lane = 12.4% of spend buying the error-containment mechanism the paper
+  prices at +285% comm / 3.9× efficiency in centralized MAS — maro's
+  solo+verification topology sits at the paper's empirical optimum for
+  SWE-shaped work, now written down as the topology rationale 751e2dea
+  found missing (`research/2026-08-21-scaling-agent-systems-audit.md`).
+  Doctrine landed at the decision sites, not as a code hook: evidence
+  gate on "Concurrent milestone-area agents" (probes pay only where
+  areas are independent or solo baseline is weak; A/B before default),
+  urgency note on the dormant director worker-review entry, lead #3
+  topology search priority DOWN. Queued for Jeremy's read
+  (READING_QUEUE). Basis: paper full text + read-only census of the
+  box's live workspace this session.
