@@ -4005,3 +4005,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   done) — diff the Python sibling's fix history, not just its
   signature, before porting. Basis: reviewer artifacts + test/smoke
   output this session.
+- **2026-08-22 — scaling-agent-systems audit CORRECTED after Jeremy's
+  pushback ("sounds like you took the paper at face value… I'm not sure
+  why we are avoiding that"):** both his points held. The paper's
+  penalties (4.4–17.2× amplification, super-linear turn overhead) gate
+  SAME-task fan-out — multiple agents on one milestone — not
+  cross-milestone parallelism, which is distinct work items with
+  near-zero agent chatter, the paper's winning decomposable regime. And
+  the audit's "multi-agent arm is empty" was a design artifact dressed
+  as evidence: verified in code, `Milestone` has no dependency field
+  (schema cannot express independence), `run_mission` is hard-serialized
+  behind a drain lock, and `run_parallel_loops` (max 3, phase-1
+  isolation complete) has zero callers — sequential was a default nobody
+  challenged, so the logs never could contain the comparison. Records
+  corrected in place (research doc correction block, BACKLOG
+  "Concurrent milestone-area agents" rewritten with mechanics + the
+  concrete build shape: decompose_mission emits depends_on → DAG →
+  ready milestones run via run_parallel_loops, one agent per milestone,
+  A/B vs sequential before default), READING_QUEUE row rewritten with
+  the actual question: promote milestone-DAG parallelism into the
+  stack? Basis: Jeremy's 2026-08-22 message + code verification this
+  session.

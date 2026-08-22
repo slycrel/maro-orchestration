@@ -2390,18 +2390,47 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
   expect to throw away) and expensive as BUILD-OUT. Decide which one
   this is, per area, and the scheduler follows. Pairs with the
   thread-architecture arc and with "Open-thread structure".
-- [ ] **Evidence gate (added 2026-08-21, from the DeepMind/MIT
-  scaling-agent-systems audit —
-  `research/2026-08-21-scaling-agent-systems-audit.md`):** the paper's
-  260-config result maps exactly onto this entry's pathfinding-vs-build-out
-  distinction. Concurrent probes are predicted to pay only where the areas
-  are genuinely independent (decomposable regime, up to +80.8%) or the
-  solo baseline is weak (sub-~45%-shaped: the run is stuck); concurrent
-  build-out of DEPENDENT areas is its −70% sequential-planning case, with
-  super-linear turn overhead (T∝n^1.7) and 4.4–17.2× error amplification
-  by architecture. Any build here must A/B against the sequential baseline
-  before earning a default — same gate discipline as
-  `knowledge.edge_expansion`.
+- [ ] **Evidence note, CORRECTED 2026-08-22 (Jeremy pushed back on the
+  2026-08-21 version — "sounds like you took the paper at face value" —
+  and he was right):** the DeepMind/MIT paper
+  (`research/2026-08-21-scaling-agent-systems-audit.md`) measures N
+  agents coordinating on ONE bounded task — same prompt, one answer.
+  That regime gates **same-milestone fan-out** (never point multiple
+  agents at one milestone: 4.4–17.2× error amplification, super-linear
+  turn overhead). It does NOT gate what this entry actually asks for —
+  **cross-milestone parallelism**, distinct work items with near-zero
+  inter-agent communication, which is the paper's *winning* decomposable
+  regime (+80.8% column). The first version of this note conflated the
+  two; likewise "our logs show only solo runs" is a design artifact, not
+  evidence solo is optimal — the system was built sequential, so the
+  comparison never could exist.
+- [ ] **Why maro is sequential — mechanics, not doctrine (verified in
+  code 2026-08-22):** (1) `Milestone` (`src/mission.py:53`) has NO
+  dependency field — the schema literally cannot express "B is
+  independent of A"; ordering is a flat list from `decompose_mission`,
+  so sequential execution is a structural default, never a considered
+  per-mission decision. (2) `run_mission` walks milestones strictly
+  serially with a validation gate between each (linear-pipeline
+  assumption baked in); features within a milestone already parallelize
+  (max 2). (3) `drain_next_mission` holds a one-mission-at-a-time lock.
+  (4) `run_parallel_loops` (`src/agent_loop.py:838`, goal-level
+  concurrency, max 3) has **zero callers** — concurrency phase 1
+  (`c8ec0af`) even fixed its ContextVar/run-dir isolation, then nothing
+  ever wired it. Same shape as the knowledge-edges find: capability
+  minted, never traversed.
+- [ ] **The concrete build shape, when taken up:** teach
+  `decompose_mission` to emit `depends_on` edges (it already structures
+  milestones with an LLM call — the flat list becomes a DAG for free);
+  run ready milestones (deps met) concurrently via the existing
+  `run_parallel_loops` + phase-1 isolation, one agent per milestone,
+  validation gates unchanged; keep the honest costs on the table —
+  shared-store write contention (largely addressed by the 2026-08 lock
+  hardening, verify), and learning-transfer loss during overlap
+  (parallel milestone B can't recall A's fresh lessons for the overlap
+  window — bounded by run length, and the pathfinding case explicitly
+  doesn't want that coupling anyway). A/B against the sequential
+  baseline stays the bar for making it a default, per house gate
+  discipline — but the *question* is now open, not avoided.
 
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
