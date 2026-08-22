@@ -160,4 +160,31 @@ func TestFindClaudeBinRejectsBrokenCLAUDE_BIN(t *testing.T) {
 	if _, err := FindClaudeBin(); err == nil {
 		t.Fatal("nonexistent CLAUDE_BIN accepted — auto would commit to a dead backend")
 	}
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_BIN", dir)
+	if _, err := FindClaudeBin(); err == nil {
+		t.Fatal("directory CLAUDE_BIN accepted")
+	}
+	plain := filepath.Join(dir, "not-exec")
+	if err := os.WriteFile(plain, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_BIN", plain)
+	if _, err := FindClaudeBin(); err == nil {
+		t.Fatal("non-executable CLAUDE_BIN accepted")
+	}
+}
+
+// Suspects must survive the ERROR branches too, not just success
+// (adversarial r3, QA — the r2 fix was one-sided).
+func TestCompleteCarriesSuspectsOnErrorResult(t *testing.T) {
+	a := fixtureBin(t, `printf '{"type":"result","usage":{"input_tokens":"bad"}}\n{"type":"result","subtype":"success","result":"real failure text","is_error":true}\n'`)
+	_, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}}, Options{Purpose: "test"})
+	var re *ResultError
+	if !errors.As(err, &re) {
+		t.Fatalf("want ResultError, got %v", err)
+	}
+	if len(re.Warnings) != 1 || !strings.Contains(re.Warnings[0], "failed to parse") {
+		t.Fatalf("suspect dropped on error branch: %v", re.Warnings)
+	}
 }

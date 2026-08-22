@@ -139,3 +139,15 @@ func TestClipResultNeverExceedsLimitPlusMarker(t *testing.T) {
 		}
 	}
 }
+
+// The composition invariant renderPrior's "newest entry always rides"
+// relies on: a single clipped step-result entry (plus marker) must fit
+// inside the total context budget (adversarial r3, both lenses — the
+// relationship was unstated and independently editable).
+func TestStepEntryFitsInsideContextTotal(t *testing.T) {
+	if StepResult.Limit+markerMax >= StepContextTotal.Limit {
+		t.Fatalf("StepResult (%d) + marker no longer fits StepContextTotal (%d) — "+
+			"renderPrior's newest-entry guarantee just silently broke",
+			StepResult.Limit, StepContextTotal.Limit)
+	}
+}

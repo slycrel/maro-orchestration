@@ -278,3 +278,27 @@ func TestPriorEvidenceTotalBudgetEvictsOldestMarked(t *testing.T) {
 		t.Fatal("eviction unmarked — silent truncation reborn")
 	}
 }
+
+// A blocked step's diagnostics are records, not evidence: they must not
+// be served to the next worker as "results from earlier steps"
+// (adversarial r3, Skeptic; Python director gates on status=="done").
+func TestBlockedStepDiagnosticsDoNotReachLaterPrompts(t *testing.T) {
+	ws := t.TempDir()
+	ad := &erroringAdapter{
+		Fake:     llm.Fake{Script: []string{`["one", "two", "three"]`, "good result A", "good result C"}},
+		failCall: 3, // decompose ok, step1 ok, step2 FAILS, step3 ok
+	}
+	if _, err := Run(context.Background(), ad, record.New(ws), Opts{Goal: "goal", MaxSteps: 8}); err != nil {
+		t.Fatal(err)
+	}
+	step3Prompt := ad.Prompts[len(ad.Prompts)-1]
+	if strings.Contains(step3Prompt, "model refused") {
+		t.Fatalf("blocked step's diagnostics served as prior evidence:\n%s", step3Prompt)
+	}
+	if !strings.Contains(step3Prompt, "good result A") {
+		t.Fatalf("done step's result missing from prior evidence:\n%s", step3Prompt)
+	}
+	if strings.Contains(step3Prompt, "--- step 1 ") {
+		t.Fatalf("blocked step index rendered:\n%s", step3Prompt)
+	}
+}

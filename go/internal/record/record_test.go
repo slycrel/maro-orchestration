@@ -1,6 +1,8 @@
 package record
 
 import (
+	"fmt"
+	"sync"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -80,5 +82,49 @@ func TestNewIDShape(t *testing.T) {
 	a, b := NewID(), NewID()
 	if len(a) != 8 || a == b {
 		t.Fatalf("ids: %q %q", a, b)
+	}
+}
+
+// The lock's actual job, contended: concurrent appenders must produce
+// exactly N*M valid rows, no torn/fused lines (adversarial r3, QA:
+// "lock file exists" is not "lock serializes").
+func TestConcurrentAppendsDoNotCorrupt(t *testing.T) {
+	ws := t.TempDir()
+	rec := New(ws)
+	const workers, rows = 8, 25
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < rows; i++ {
+				if err := rec.Event("E", "s",
+					strings.Repeat("payload-", 100)+fmt.Sprintf("w%d-i%d", w, i),
+					nil, "lp"); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != workers*rows {
+		t.Fatalf("want %d rows, got %d — rows lost or fused", workers*rows, len(lines))
+	}
+	for n, line := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("line %d torn/fused: %v", n, err)
+		}
 	}
 }

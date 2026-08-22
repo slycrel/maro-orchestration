@@ -151,6 +151,7 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 				Msg:       "claude CLI result marked is_error: " + strings.TrimSpace(res.Result),
 				TokensIn:  res.Usage.InputTokens,
 				TokensOut: res.Usage.OutputTokens,
+				Warnings:  suspects,
 			}
 		}
 		if res.Subtype != "success" {
@@ -163,6 +164,7 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 					res.Subtype, strings.TrimSpace(res.Result)),
 				TokensIn:  res.Usage.InputTokens,
 				TokensOut: res.Usage.OutputTokens,
+				Warnings:  suspects,
 			}
 		}
 		return &Response{

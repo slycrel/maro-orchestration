@@ -121,3 +121,54 @@ flag threading, timeout branch, nonzero-exit branch). The backend-order
 comment was VERIFIED CORRECT for this box (`~/.maro/config.yml` lists
 subprocess first) but unsourced — now cites the config file and names
 Python's shipped anthropic-first default.
+
+## Round 3 — 2026-08-22, on the r2 fixes (ffa08096)
+
+2 lenses (Skeptic, Expert QA), same sonnet-medium fallback, aimed at
+the r2 fix layer. QA reported **no fresh HIGHs** ("the r2 fixes hold
+up under direct re-reading and their own pinned tests; nothing was
+papered over one layer up"). Skeptic reported 2. Zero hallucinated
+claims for the third straight round.
+
+### Verification Ledger (HIGHs)
+
+1. **`renderPrior` forwards blocked-step diagnostics as prior
+   evidence** (Skeptic) — VERIFIED: `res.Steps` accumulated every
+   outcome and `renderPrior` rendered all of them, but the Python
+   sibling (`director.py:589-590`) gates forwarded context on
+   `result.status == "done" and result.result`. A failed subprocess
+   turn's error string — which embeds the whole merged capture via
+   `fileText` — would have been served to the next step's live LLM
+   call as "results from earlier steps": both worker confusion and an
+   untrusted-content funnel. **FIXED**: done-only + non-empty filter
+   (original step indices kept for labels); fixture test pins a
+   blocked entry sandwiched between done entries out of the next
+   prompt.
+2. **Warnings still die on a scrolled terminal** (Skeptic) — VERIFIED
+   as an over-claim, RESOLVED as honest-claim rather than a durable
+   sink: the warning's dominant cause is a failing workspace write,
+   and a durable sink would live in the same failing workspace —
+   "durably record that the store is broken, in the store" is not a
+   guarantee we can make. Comment rewritten to claim exactly what the
+   code does (caller-visible, stderr at the CLI); named residual added
+   to PORT.md.
+
+### Mediums/Lows — fixed
+
+`ResultError` grew a `Warnings` field so parse-suspect diagnostics
+survive the is_error/bad-subtype branches too, not just success
+(QA — r2's fix was one-sided; fixture pins a suspect beside an
+is_error result). `cmd/maro` gained `main_test.go` on the literal
+entry point (both lenses): `-backend dry` → honest `dry_run:true` row
+end-to-end, out-of-range `-max-steps` refused before any write,
+flag-after-goal refused. Flock now has a contention fixture (8
+goroutines × 25 appends → exactly 200 valid JSON lines, no torn/fused
+rows) — "the lock file exists" was the only prior assertion (QA).
+Budget composition invariant pinned (`StepResult + marker <
+StepContextTotal`) so renderPrior's "newest entry always rides"
+guarantee can't silently break under a future budget edit (both
+lenses). `isExecutableFile` tested against a directory and a 0644
+file (Skeptic). `planner.Decompose` now takes the caller's resolved
+workspace instead of independently re-deriving it from env — one
+value threaded through, matching the resolved-once-asserted-then-used
+discipline `main.go` prints (QA).

@@ -86,6 +86,14 @@ fixed or parked here honestly):
 - `config.Get` type mismatches beyond int↔float fall back to the
   default silently (same as Python); a warnings channel like `Load`'s
   is deferred until a caller needs it.
+- `Result.Warnings` (record-write failures, unparseable result-shaped
+  lines) reach the operator via the CLI's stderr print only — there is
+  no durable warnings sink. Deliberate, not deferred laziness: the
+  warning's usual cause is a failing store write, and any durable sink
+  would live in that same workspace, so "durably record that the store
+  is failing, in the store" cannot be honest. A headless supervisor
+  should capture stderr; the code comments now claim exactly this much
+  and no more (adversarial r3 2026-08-22, Skeptic).
 - `jsonx` with NO fence present still takes the first balanced bracket
   in prose — shared verbatim with Python `_find_json_bounds`; fixing it
   is a cross-runtime change, not a Go patch.

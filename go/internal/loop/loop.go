@@ -63,9 +63,13 @@ type Result struct {
 	TokensIn  int
 	TokensOut int
 	Elapsed   time.Duration
-	// Warnings carries non-fatal record failures (a captain's-log write
-	// that failed) to the caller — a stdout print alone is swallowed the
-	// moment the terminal scrolls (adversarial round 2026-08-22, Skeptic).
+	// Warnings carries non-fatal oddities (a captain's-log write that
+	// failed, adapter parse suspects) to the CALLER instead of dying in a
+	// print inside the loop. Honest scope (adversarial r3): the CLI
+	// relays them to stderr; there is no durable sink, because the only
+	// durable stores available live in the same workspace whose write
+	// just failed — a store-write failure cannot be reliably recorded in
+	// that store. Surfacing to the caller is the v0 ceiling; see PORT.md.
 	Warnings []string
 }
 
@@ -91,7 +95,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		recModel = a.Name() + "-default"
 	}
 
-	steps, planUse, err := planner.Decompose(ctx, a, goal, maxSteps)
+	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps)
 	if err != nil {
 		// Decompose failing IS an outcome; record it before returning —
 		// including whatever the failed planning turn still spent.
@@ -189,6 +193,7 @@ func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []
 		var re *llm.ResultError
 		if errors.As(err, &re) {
 			out.TokensIn, out.TokensOut = re.TokensIn, re.TokensOut
+			out.Warnings = re.Warnings
 		}
 		return out
 	}
@@ -201,21 +206,35 @@ func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []
 		Warnings: resp.Warnings}
 }
 
-// renderPrior renders earlier step results for the next prompt: each
-// entry rides the per-entry StepResult window, and the WHOLE block is
-// bounded by StepContextTotal with oldest-first eviction — the Python
-// ContextBudget discipline, both axes (adversarial r2 2026-08-22,
-// Skeptic: the per-entry clip alone leaves the growing dimension
-// unbounded). Evictions are marked in the prompt, never silent.
+// renderPrior renders earlier step results for the next prompt: DONE
+// steps only — a blocked step's Result is process diagnostics (CLI
+// crash text, whatever a failing subprocess echoed), and serving that
+// as "results from earlier steps" both confuses the worker and funnels
+// untrusted failure output into a live LLM call (adversarial r3
+// 2026-08-22, Skeptic; Python's director gates identically:
+// `result.status == "done" and result.result`). Failure information
+// still reaches the failure chain and the outcome row — records, not
+// worker prompts. Each kept entry rides the per-entry StepResult
+// window, and the WHOLE block is bounded by StepContextTotal with
+// oldest-first eviction, marked, never silent (r2).
 func renderPrior(prior []StepOutcome) string {
-	if len(prior) == 0 {
+	var done []StepOutcome
+	doneIdx := make([]int, 0, len(prior))
+	for i, p := range prior {
+		if p.Status == "done" && strings.TrimSpace(p.Result) != "" {
+			done = append(done, p)
+			doneIdx = append(doneIdx, i)
+		}
+	}
+	if len(done) == 0 {
 		return ""
 	}
+	prior = done
 	blocks := make([]string, len(prior))
 	total := 0
 	keepFrom := len(prior)
 	for i := len(prior) - 1; i >= 0; i-- {
-		b := fmt.Sprintf("--- step %d [%s] ---\n%s\n", i, prior[i].Status,
+		b := fmt.Sprintf("--- step %d [%s] ---\n%s\n", doneIdx[i], prior[i].Status,
 			budget.StepResult.Clip(prior[i].Result))
 		n := len([]rune(b))
 		// The newest entry always rides (a clipped entry fits by

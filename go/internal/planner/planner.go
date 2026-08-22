@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
-	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
@@ -34,7 +33,11 @@ type Usage struct{ TokensIn, TokensOut int }
 // overlay) rides the prompt whole under the OperatorDoc budget — the
 // port inherits the caps-sweep fix, not the [:500] starvation it
 // replaced.
-func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([]string, Usage, error) {
+// workspaceDir is the caller's already-resolved store — threaded, not
+// re-derived, so the workspace cmd/maro prints is provably the one the
+// operator docs are read from (adversarial r3, QA: two independent
+// env re-derivations only happen to agree).
+func Decompose(ctx context.Context, a llm.Adapter, workspaceDir, goal string, maxSteps int) ([]string, Usage, error) {
 	if strings.TrimSpace(goal) == "" {
 		return nil, Usage{}, fmt.Errorf("empty goal")
 	}
@@ -44,7 +47,7 @@ func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Goal: %s\n\nBreak this into at most %d steps.", goal, maxSteps)
-	for _, doc := range operatorDocs() {
+	for _, doc := range operatorDocs(workspaceDir) {
 		fmt.Fprintf(&sb, "\n\nUSER CONTEXT (%s):\n%s", doc.name, doc.body)
 	}
 
@@ -87,9 +90,9 @@ type opDoc struct{ name, body string }
 // fallback the Python planner has is deliberately absent here until the
 // port ships install templates of its own (a fresh Go checkout has no
 // repo user/ dir to fall back to).
-func operatorDocs() []opDoc {
+func operatorDocs(workspaceDir string) []opDoc {
 	var out []opDoc
-	userDir := filepath.Join(config.Workspace(), "user")
+	userDir := filepath.Join(workspaceDir, "user")
 	for _, name := range []string{"GOALS.md", "CONTEXT.md", "SIGNALS.md"} {
 		raw, err := os.ReadFile(filepath.Join(userDir, name))
 		if err != nil {

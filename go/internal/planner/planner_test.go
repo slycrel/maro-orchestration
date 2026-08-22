@@ -11,29 +11,27 @@ import (
 )
 
 func TestDecomposeParsesFencedReply(t *testing.T) {
-	t.Setenv("MARO_WORKSPACE", t.TempDir())
 	fake := &llm.Fake{Script: []string{"```json\n[\"a\", \"b\", \"c\"]\n```"}}
-	steps, _, err := Decompose(context.Background(), fake, "do the thing", 8)
+	steps, _, err := Decompose(context.Background(), fake, t.TempDir(), "do the thing", 8)
 	if err != nil || len(steps) != 3 {
 		t.Fatalf("steps=%v err=%v", steps, err)
 	}
 }
 
 func TestDecomposeCapsAtMaxSteps(t *testing.T) {
-	t.Setenv("MARO_WORKSPACE", t.TempDir())
 	fake := &llm.Fake{Script: []string{`["1","2","3","4","5"]`}}
-	steps, _, err := Decompose(context.Background(), fake, "goal", 2)
+	steps, _, err := Decompose(context.Background(), fake, t.TempDir(), "goal", 2)
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("steps=%v err=%v", steps, err)
 	}
 }
 
 func TestDecomposeErrorsOnEmptyAndGarbage(t *testing.T) {
-	t.Setenv("MARO_WORKSPACE", t.TempDir())
-	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{"x"}}, "  ", 8); err == nil {
+	ws := t.TempDir()
+	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{"x"}}, ws, "  ", 8); err == nil {
 		t.Fatal("empty goal must error")
 	}
-	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{`["  ", ""]`}}, "goal", 8); err == nil {
+	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{`["  ", ""]`}}, ws, "goal", 8); err == nil {
 		t.Fatal("all-blank steps must error")
 	}
 }
@@ -42,7 +40,6 @@ func TestDecomposeErrorsOnEmptyAndGarbage(t *testing.T) {
 // the decompose prompt whole; a runaway one is bounded WITH the marker.
 func TestOperatorDocsRideWholeWithMarkedRunawayBound(t *testing.T) {
 	ws := t.TempDir()
-	t.Setenv("MARO_WORKSPACE", ws)
 	userDir := filepath.Join(ws, "user")
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -57,7 +54,7 @@ func TestOperatorDocsRideWholeWithMarkedRunawayBound(t *testing.T) {
 	}
 
 	fake := &llm.Fake{Script: []string{`["one"]`}}
-	if _, _, err := Decompose(context.Background(), fake, "goal", 4); err != nil {
+	if _, _, err := Decompose(context.Background(), fake, ws, "goal", 4); err != nil {
 		t.Fatal(err)
 	}
 	prompt := fake.Prompts[0]

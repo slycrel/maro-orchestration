@@ -49,6 +49,10 @@ type ResultError struct {
 	Msg       string
 	TokensIn  int
 	TokensOut int
+	// Warnings mirrors Response.Warnings for the error branches — a
+	// garbled second result-shaped line beside a genuine error event is
+	// diagnostic the operator loses otherwise (adversarial r3, QA).
+	Warnings []string
 }
 
 func (e *ResultError) Error() string { return e.Msg }
