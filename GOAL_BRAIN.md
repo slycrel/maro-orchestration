@@ -3970,3 +3970,23 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   topology search priority DOWN. Queued for Jeremy's read
   (READING_QUEUE). Basis: paper full text + read-only census of the
   box's live workspace this session.
+- **2026-08-21 — Go port v0 SHIPPED to branch `go-port` (9b684131):**
+  spine-first vertical slice per the pivot decision — 19 files /
+  ~1,840 lines: two-tier YAML config, adapter seam (claude-CLI
+  subprocess backend flag-for-flag with the Python adapter + Anthropic
+  Messages + scripted Fake), tolerant JSON extraction, decompose with
+  operator docs riding whole under a budget, execute loop, outcomes +
+  captain's-log records in Python-compatible shapes
+  (`measurement_class: "go-port"` fences rows). Doctrine = lessons as
+  structure: `budget.Budget{Name, Limit, Why}` makes a rationale-less
+  cap a compile-target test failure; clip marker byte-identical to
+  `context_budget.clip`; no swallowed errors; record layer has no
+  delete verbs. Receipts: `go vet` clean, 26 tests green, real
+  claude-CLI smoke (2 steps, 21s, done), and cross-runtime parity —
+  Python `memory_ledger.load_outcomes` parsed the Go-written row into
+  its `Outcome` dataclass. v0 non-goals + next tranches named in
+  `go/PORT.md` (tools, retry ladder, recall, closure, director,
+  inspector, heartbeat). Adversarial round (sonnet-medium fallback,
+  4 lenses) run same session on the branch. Branch does not land to
+  main; `land.sh` untouched. Basis: test/smoke/parity output this
+  session.
