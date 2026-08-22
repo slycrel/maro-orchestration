@@ -536,7 +536,18 @@ direction).
   does not retry transient I/O errors (Python's max_attempts DEFAULTS
   to 1 too — its retry knob is unported until a caller needs it); the
   memory-provenance advisory marker (_mark_memory_provenance) is
-  unported with its stores — returns with the memory tranche. Deliberately unported with their
+  unported with its stores — returns with the memory tranche.
+  Adversarial r4 (same day, convergence round): the exported
+  StampOutcomeVerdict doc was corrected to the merge semantics the
+  code implements (a doc lying about nil-handling is how zero-
+  confidence-class bugs return); verdict_history string fields default
+  to "" for rows judged by another writer (Python .get(k,"") parity —
+  no JSON nulls where Python writes empty strings); pins added for the
+  failure-marker path (fault injection: a directory squatting on the
+  ledger's .tmp path), goal_verdict_at advancing on UNJUDGED re-stamps,
+  and foreign-judged-row history. One operational note carried:
+  nothing consumes closure_verdicts.jsonl operationally yet — the
+  durable marker's discoverability is manual until a reader lands. Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard
   (claimed inputs/outputs on disk), check_goal_clarity + imperative
   rewrite (needs the ask-the-user surface), introspects_self's consumer
