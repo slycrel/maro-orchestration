@@ -328,3 +328,36 @@ func TestStampOutcomeVerdictHistoryOnForeignJudgedRow(t *testing.T) {
 		t.Fatalf("missing prior at must be \"\", not null: %v", entry)
 	}
 }
+
+// TestStampOutcomeVerdictNullGoalAchievedIsUnjudged: a row carrying an
+// EXPLICIT JSON null goal_achieved (no Go/Python writer produces one —
+// both pop nulls — but foreign tooling can) counts as UNJUDGED: the
+// stamp must NOT push verdict_history, matching Python's
+// `row.get("goal_achieved") is not None` gate (r6 Skeptic — the r5
+// `prior != nil` normalization shipped unpinned).
+func TestStampOutcomeVerdictNullGoalAchievedIsUnjudged(t *testing.T) {
+	ws := t.TempDir()
+	mem := filepath.Join(ws, "memory")
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"loop_id":"nulljudge","goal":"g","status":"done","goal_achieved":null}` + "\n"
+	if err := os.WriteFile(filepath.Join(mem, "outcomes.jsonl"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	if err := New(ws).StampOutcomeVerdict("nulljudge", &yes, SourceClosure, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(mem, "outcomes.jsonl"))
+	var row map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(b))), &row); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := row["verdict_history"]; has {
+		t.Fatalf("explicit-null prior is unjudged — no history entry belongs here: %v", row)
+	}
+	if v, _ := row["goal_achieved"].(bool); !v {
+		t.Fatalf("stamp must still land the new verdict: %v", row)
+	}
+}

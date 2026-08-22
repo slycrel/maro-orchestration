@@ -395,7 +395,7 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	// of a judged row — the first verdict landing writes no history.
 	if achieved != nil {
 		// Key-presence gate ≈ Python's `is not None` ONLY because every
-		// writer (WriteOutcome here, Python's _scrub_for_write) pops a
+		// writer (WriteOutcome here, Python's _verdict_row) pops a
 		// null before writing. Normalize anyway: a foreign row with an
 		// explicit JSON null counts as unjudged, matching Python (r5).
 		if prior, judged := row["goal_achieved"]; judged && prior != nil {
