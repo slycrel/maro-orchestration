@@ -1720,3 +1720,81 @@ test-only). The r6 fix layer is a test + a comment citation — no
 production code changed — and is mutation-verified (M36), so no r7 is
 spawned. Mutations M13–M36 all DETECTED (M21, M34 after pin
 strengthening — escapes recorded above).
+
+## Director tranche — adversarial r1 (2026-08-22, 4 lenses, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff 8ba0daa7..31584be4 (plan/delegate/review + workers + accumulator).
+Verdict: CONTESTED — 4 deduplicated verified HIGHs, 5 MEDs, several
+LOWs; all fixed or accepted-named same round (fix commit eee6a641).
+Zero fabricated probes/quotes across all four lenses (arc streak
+intact).
+
+Verification ledger:
+- VERIFIED (HIGH, Skeptic+Architect+Minimalist independently): the
+  WORKER_DELEGATION_GAP event wrote raw ticket/stuck-reason prose into
+  captains_log.jsonl unscrubbed while writeLog scrubbed the SAME
+  string one function later — the "single write boundary" doc claim
+  was false. Fixed: scrub.Secrets before the Clip on both previews;
+  pin TestRunGapEventScrubbed (AKIA fixture through flag_blocked);
+  M43 DETECTED. Python's log_event doesn't scrub either — Go-stricter,
+  backport candidate.
+- VERIFIED (HIGH, Architect+Minimalist+QA independently): a parseable
+  review verdict whose "accepted" was missing/null/mistyped silently
+  ACCEPTED (type-assert fell through to the true default) — and QA
+  showed Go DIVERGED from Python on explicit null (bool(None)=False
+  rejects there). Fixed: field-level gate — non-bool "accepted"
+  rejects with a named reason; deliberately stricter than Python's
+  absent-key accept and truthy-"false" coercion (both named). Pin
+  TestReviewVerdictFieldGate (4 forged shapes + well-formed false);
+  M44 DETECTED.
+- VERIFIED (HIGH, QA): a rejection with no revision_request was a
+  silent no-op — same report, same DONE, zero durable trace; and
+  res.Warnings lived only on stderr. Fixed: named warning on
+  rejected-no-revision; writeLog now persists review_decisions
+  (ticket-correlated via new ReviewDecision.TicketID, scrubbed) and
+  warnings (scrubbed). Python persists neither — Go-stricter, backport
+  candidate. Control flow unchanged (rejected results still ship —
+  Python parity, documented on the type: review is a revision trigger
+  and audit trail, not a report-inclusion gate). Pin
+  TestRunPersistsDecisionsAndWarnings; M45 DETECTED.
+- VERIFIED (MED, Skeptic+Architect+QA): a non-string/null spec ticket
+  task silently became an EMPTY dispatched ticket (and blocked the
+  no-tickets fallback from firing). Fixed: malformed entries skipped
+  with a warning; all-malformed falls back to the whole-directive
+  ticket. Pin TestRunMalformedTicketEntriesSkipped; M46 DETECTED.
+- VERIFIED (MED, Skeptic): report-echo judged the FULL result against
+  a report compiled from the first 4000 chars — false DROPPED
+  verdicts for long outputs. Fixed: one window per worker shared by
+  the compile prompt and the echo check (named divergence: Python
+  still compares unclipped — honesty-direction). Pin
+  TestCompileEchoJudgesClippedWindow; M47 DETECTED.
+- VERIFIED (MED, QA): workers' >20-char bare-content bar counted
+  BYTES (lenient direction on a refusal gate; Python counts chars).
+  Fixed: rune count; pin TestDispatchBareContentGateCountsRunes; M48
+  DETECTED.
+- VERIFIED (MED, QA): challengeSpec swallowed call/parse failures with
+  no record (less visible than Python's debug log). Fixed: named
+  warnings on both failure paths.
+- VERIFIED (MED, Minimalist+QA+Architect): the 4000 literals at the
+  review/compile windows bypassed the budget registry. Fixed:
+  WorkerJudgeWindow registered with rationale, used at both sites.
+- ACCEPTED-NAMED (Architect/QA MED): Accumulator.Add's bespoke marker
+  is deliberate — byte-compatible with Python ContextBudget.add's
+  SECOND marker format, so mixed-runtime renders parse with one
+  reader; entries are cut exactly once. Comment now says so.
+- VERIFIED (LOW, QA): gap-scoping rule duplicated at two sites —
+  extracted isDelegationGap, both callers converted.
+- Fixed (LOWs): clipRunes reuse in the dry spec path; echoStopwords
+  comment de-aspirationalized (only Go consumer today).
+- ACCEPTED-NAMED (LOWs): acceptance warning is print-only (no approval
+  surface — already named in the CLI); Python's worker_type/ticket
+  spot-check unported (cannot diverge in Go by construction);
+  challenger critiques not itemized (log layer unported); spec-prompt
+  duplication kept (verbatim Python parity beats DRY for ported
+  prompt text); per-event flock stacking under contention (bounded
+  30s each, low event count) noted, no action.
+
+Mutations M43-M48 all DETECTED. Fix layer: scrub + field gate +
+durable audit trail + malformed-ticket skip + shared echo window +
+rune gate + challenger warnings + registry budget. NEXT ROUND REVIEWS
+THE FIX LAYER.

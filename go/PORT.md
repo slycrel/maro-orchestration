@@ -599,6 +599,18 @@ direction).
   flags-after-goal refusal from `maro run`; RequiresExplicitAcceptance
   PRINTED as a warning (the approval surface is unported — a silent
   "inferred" on a deploy-shaped directive would fake consent).
+  Adversarial r1 (same day, 4 lenses): 4 verified HIGHs fixed —
+  gap-event prose now scrubbed before captains_log (Python's log_event
+  doesn't scrub; backport candidate), review verdicts with
+  missing/null/mistyped "accepted" now REJECT (Go-stricter than
+  Python's absent-key accept, named), rejected-no-revision runs warn
+  and the director log now persists review_decisions
+  (ticket-correlated) + warnings (Python persists neither; backport
+  candidate); plus malformed spec-ticket entries skip with a warning,
+  the report-echo check judges the SAME clipped window the compiler
+  saw (Python compares unclipped — named honesty divergence), the
+  bare-content bar counts runes, challenger failures are named, and
+  the judge windows ride the registered WorkerJudgeWindow budget.
   Deliberately unported, named: worker_slice memory injection +
   slice_echo (sqlite store), PersonaRegistry + persona files (inline
   personas only — Python's own fallback tier), lat.md graph injection,
