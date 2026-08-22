@@ -421,8 +421,14 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 	// ends, so without a backstop Wait() blocks for the escapee's whole
 	// lifetime and the LOOP hangs on an LLM-authored one-liner
 	// (adversarial closure r2 2026-08-22, Skeptic HIGH). WaitDelay
-	// force-closes the pipes and returns ErrWaitDelay after the grace.
-	c.WaitDelay = 2 * time.Second
+	// force-closes the pipes and returns ErrWaitDelay after the grace,
+	// scaled down for short-timeout callers so the grace never
+	// dominates the configured budget (r3).
+	wd := 2 * time.Second
+	if timeout < 4*wd {
+		wd = timeout / 4
+	}
+	c.WaitDelay = wd
 	var out, errb strings.Builder
 	c.Stdout = &out
 	c.Stderr = &errb
@@ -432,9 +438,20 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 	}
 	if err != nil {
 		// ErrWaitDelay with a ProcessState means the probe ITSELF exited
-		// and only an escaped descendant held the pipes — the probe's
-		// real exit code is the honest outcome; the held pipes are noted.
+		// and only a descendant held the pipes — the probe's real exit
+		// code is the honest outcome; the held pipes are noted. Reap the
+		// group EXPLICITLY here: Cancel (the ctx-watchdog group kill)
+		// stands down once Wait returns, so without this kill the
+		// WaitDelay early return would LEAK a merely-backgrounded child
+		// (same group, no setsid) that the pre-r2 code eventually reaped
+		// at the ctx deadline — the r2 fix would have reintroduced the
+		// exact orphan leak r1 closed (adversarial closure r3 2026-08-22,
+		// Skeptic HIGH). Kills the GROUP, so a setsid escapee still
+		// outlives this — that residual was always out of reach.
 		if errors.Is(err, exec.ErrWaitDelay) && c.ProcessState != nil {
+			if c.Process != nil {
+				_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+			}
 			return c.ProcessState.ExitCode(), out.String(),
 				errb.String() + "\n[closure: a descendant process outlived the probe and held its output pipes]"
 		}
@@ -741,6 +758,12 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	for i := range gaps {
 		gaps[i] = scrub.Secrets(gaps[i])
 	}
+	// downgradeReason quotes a raw-summary substring (the admission
+	// match) and flows to the metadata stamp and the captain's-log
+	// event — the r2 boundary scrub missed it (adversarial closure r3
+	// 2026-08-22, Skeptic: \w+-only secret shapes fit the admission
+	// regex's captured words intact).
+	downgradeReason = scrub.Secrets(downgradeReason)
 
 	v = Verdict{
 		Complete: complete, Confidence: confidence, Gaps: gaps,

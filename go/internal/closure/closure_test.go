@@ -680,3 +680,68 @@ func TestVerifyDryRunSkipNamed(t *testing.T) {
 		t.Fatalf("dry-run skip: %+v", v)
 	}
 }
+
+// --- closure r3 fix-layer pins (adversarial round 3, 2026-08-22) ---
+
+// TestRunCheckReapsBackgroundedChildAfterWaitDelay: the r2 WaitDelay
+// early-return stood down the ctx-watchdog group kill, so a MERELY
+// backgrounded child (same group, no setsid) — which pre-r2 was reaped
+// at the ctx deadline — would have leaked for its natural lifetime
+// (r3 Skeptic HIGH). The ErrWaitDelay path must reap the group itself.
+func TestRunCheckReapsBackgroundedChildAfterWaitDelay(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	cmd := `sleep 30 & echo $! > child.pid; exit 0`
+	started := time.Now()
+	code, _, stderr := runCheck(context.Background(), cmd, dir, 10*time.Second)
+	if e := time.Since(started); e > 6*time.Second {
+		t.Fatalf("runCheck blocked %s — WaitDelay backstop gone", e)
+	}
+	if code != 0 {
+		t.Fatalf("probe exited 0; got %d (stderr %q)", code, stderr)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return // reaped — the explicit group kill fired
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("backgrounded same-group child %d leaked past the WaitDelay return", pid)
+}
+
+// TestVerifyScrubsDowngradeReason: the admission regex quotes raw
+// summary words into DowngradeReason, which reaches the metadata stamp
+// and the captain's-log event — the r2 boundary scrub missed it (r3
+// Skeptic: \w+-only secret shapes ride the captured words intact).
+func TestVerifyScrubsDowngradeReason(t *testing.T) {
+	// AKIA-shaped: pure \w, so the admission regex's captured words
+	// carry it INTO DowngradeReason verbatim (an sk-ant- secret's
+	// hyphens break the \w+ capture and made the first fixture
+	// vacuous — mutation M11 escaped until this shape).
+	secret := "AKIAIOSFODNN7EXAMPLE"
+	fake := &llm.Fake{Script: []string{
+		planJSON("true"),
+		`{"complete":true,"confidence":0.9,"gaps":[],"summary":"Achieved. No ` + secret + ` rotation was tested."}`,
+	}}
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir()})
+	if v.DowngradeReason == "" {
+		t.Fatalf("fixture must trip the behavioral-gap downgrade: %+v", v)
+	}
+	if strings.Contains(v.DowngradeReason, "AKIAIOSFODNN7") {
+		t.Fatalf("DowngradeReason left Verify unscrubbed: %q", v.DowngradeReason)
+	}
+	if strings.Contains(v.Summary, "AKIAIOSFODNN7") {
+		t.Fatalf("summary unscrubbed: %q", v.Summary)
+	}
+}

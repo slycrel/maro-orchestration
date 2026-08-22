@@ -333,10 +333,15 @@ direction).
   plan prompt's own scaffolding examples use bash idioms, so Go runs
   the shell the prompt teaches; per-check timeout with a PROCESS-GROUP
   kill — Setpgid + kill(-pgid), closing the orphaned-background-server
-  leak Python shares — plus a 2s WaitDelay backstop: a probe that
-  DETACHES (setsid/double-fork) escapes the group AND holds the output
-  pipes, and without WaitDelay Wait() blocks for the escapee's whole
-  lifetime (r2); probe output is buffered unbounded in memory before
+  leak Python shares — plus a WaitDelay backstop (2s, scaled to
+  timeout/4 for short budgets): a probe that DETACHES (setsid/double-
+  fork) escapes the group AND holds the output pipes, and without
+  WaitDelay Wait() blocks for the escapee's whole lifetime (r2); the
+  ErrWaitDelay return REAPS the group itself — the ctx-watchdog kill
+  stands down once Wait returns, so the early return would otherwise
+  leak the merely-backgrounded child the pre-r2 code reaped at the
+  deadline (r3; a setsid escapee still outlives both, as it always
+  did); probe output is buffered unbounded in memory before
   truncation — Python capture_output parity, named not silent; per-check stdout/stderr stored at 500/300 RUNE
   cuts, with outcome classified on the FULL stderr first — the
   inconclusive phrases sit at the end of verbose diagnostics; cwd =

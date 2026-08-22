@@ -1357,3 +1357,57 @@ dropped): DETECTED.
 mutations M6-M9 all DETECTED. One r1 ledger entry (DryRun "threaded")
 corrected as overstated — the honest disposition is named-in-PORT.md,
 not wired. Verdict: CONTESTED → fixes applied; r3 fixpoint check next.
+
+## Closure tranche — adversarial round 3 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+**Scope:** the r2 fix layer, ade8930e..81bd780f. One lens (Skeptic —
+fixpoint-check sizing). 4 findings. The flagship pattern holds a 14th
+time — the HIGH is inside r2's own WaitDelay fix.
+
+### Verification Ledger
+
+**H1 — WaitDelay early-return reintroduces the orphan leak r1 closed
+(Skeptic 1): VERIFIED.** Cancel (the group kill) fires only on ctx-Done
+and stands down once Wait returns; pre-r2, a merely-backgrounded child
+(same group, no setsid) held the pipes until the ctx deadline, where the
+watchdog reaped it. r2's WaitDelay returned at 2s with nobody left to
+kill — the common-case leak came back while fixing the detached-case
+hang. Fixed: the ErrWaitDelay branch reaps the group explicitly
+(kill(-pgid)) before returning; the setsid escapee residual is named as
+always-out-of-reach. Pin: TestRunCheckReapsBackgroundedChildAfterWaitDelay.
+Mutation M10 (kill dropped): DETECTED.
+
+**H2/M — DowngradeReason missed by the r2 boundary scrub (Skeptic 2):
+VERIFIED.** The admission regex quotes raw-summary words verbatim into
+DowngradeReason, which flows unscrubbed to the metadata stamp and the
+CLOSURE_VERDICT event; pure-\w secret shapes (AKIA…) ride the captured
+words intact. Fixed at the same boundary block. Pin:
+TestVerifyScrubsDowngradeReason — whose FIRST fixture was vacuous (an
+sk-ant- secret's hyphens break the \w+ capture, so the secret never
+entered DowngradeReason and mutation M11 escaped); rewritten to the
+AKIA shape, M11 then DETECTED. The escape is the mutation discipline
+working — recorded, not hidden.
+
+**M — main_test.go overwrite deleted four live regression tests
+(Skeptic 3): VERIFIED, my own error.** The r2 closureLine edit used
+cat-over instead of append, silently deleting
+TestRunDryBackendWritesHonestDryRunRow,
+TestRunRefusesOutOfRangeMaxStepsBeforeAnyWrite,
+TestRunRefusesFlagsAfterGoal, and TestRunPackLifecycleThroughCLI
+(present since b87da153; the reviewer counted three — it was four).
+Compounded by trusting r2-Skeptic's incorrect "no test files under
+cmd/maro" claim without checking git. All four restored from ade8930e
+with TestClosureLine appended; the file carries the lesson in a
+comment. Ops lesson: a test file is append-to, never cat-over, and
+reviewer claims about ABSENCE need the same verify-before-fix as
+claims about presence.
+
+**L — WaitDelay unscaled to short timeouts (Skeptic 4): fixed** —
+min(2s, timeout/4), noted in PORT.md.
+
+### Verdict derivation
+
+1 HIGH, VERIFIED and fixed at the root; the round also caught a
+self-inflicted test deletion and a vacuous pin fixture. Mutations
+M10-M11 DETECTED (M11 on the second fixture). Not yet a fixpoint —
+r4 checks this layer. Verdict: CONTESTED → fixes applied.
