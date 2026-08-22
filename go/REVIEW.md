@@ -2425,3 +2425,44 @@ Fix-layer mutations M104/M105 DETECTED with compiling mutants. Full suite
 green, gofmt/vet clean. This is the first zero-HIGH round; r6 (second
 confirmation) must also be zero-HIGH to reach the two-consecutive-clean
 fixpoint.
+
+## Round 6 (2026-08-22, skeptic + qa, SAME-MODEL FALLBACK: sonnet-medium — codex capped til 08-27)
+
+### Verdict: REJECT → FIXED (one HIGH, verified + closed). Verification Ledger:
+
+- **HIGH (both lenses, convergent) — 3+ leading slashes bypass the exfil
+  scanner; r5's `/{0,2}` cap is a parity regression.** VERIFIED live:
+  `ScanContent("... https:///evil-collector.com/collect-here ...", "internal")`
+  → `IsClean=true, risk=low, findings=[]` (bypass), while 0/1/2-slash forms
+  all flag and Python flags the 3-slash form (`injection_guard.scan_content`
+  → risk=high). WHATWG's "special authority ignore slashes state" consumes
+  an UNBOUNDED run of `/` and `\`, so a real client fetches all these to
+  `evil-collector.com`; r5's fixed cap silently un-matched 3+ and made Go
+  WEAKER than Python (whose `[^\s]+` after `://` absorbs the extra slashes).
+  Root cause was in r5's own fix layer — the flagship pattern, 5th round
+  running. Fixed by widening to `[/\\]*` in `exfilURLShape` (host-first-char
+  → `[^/\\\s]`) and dropping the `n < 2` bound in `urlHostAllowed`'s strip
+  loop; both sites kept in sync. Live re-probe: all 3+-slash / mix forms now
+  flag, all allowlisted forms (incl. slash-heavy `https:///api.anthropic.com`)
+  stay clean. Mutation M106 (revert to `/{0,2}`) COMPILES and FAILS the new
+  pin on `https:///evil-collector.com/...` — the pin is load-bearing, not
+  vacuous. Backport candidate #10 reworded (heavy forms were never a Python
+  gap).
+
+- **CONFIRMED CLEAN (both lenses) — the r2–r4 authority parser**
+  (last-`@` userinfo split, `/\?#`+`\` terminator, tab/CR/LF strip, nested
+  per-scheme-position scan) re-derived against WHATWG independently; no
+  bypass found outside the slash-count flaw above.
+
+- **CONFIRMED HONEST (both lenses) — `Revert` ordering residual and the
+  fail-closed `guard.ScanContent(...,"internal")` gate in `Apply`.** Named
+  accurately in PORT.md; not new. The fault-injection sad-path test for the
+  Revert residual remains the one named test gap (deferred).
+
+- **CONFIRMED CONSISTENT (both lenses) — the three `goal_achieved` tri-state
+  readers** (evolver/inspector/recall) all judge non-bool as false, each
+  pinned with a malformed-value seed; no fourth reader exists.
+
+Fix-layer mutation M106 DETECTED with a compiling mutant. Full suite green,
+gofmt/vet clean. r6's fix RESETS the fixpoint clock — r7 is now the first of
+two required consecutive zero-HIGH rounds.

@@ -1036,8 +1036,10 @@ check applied-state; (7) EVOLVER_REVERTED logged even when not persisted;
 Go holds it; (9) malformed `goal_achieved` graded as unjudged rather than
 judged-false at FOUR sites — inspector.py, evolver.py (~155), metrics.py
 (~576, feeds goal_achieved_rate), recall.py (~464); (10) exfil URL scan
-requires `://`, missing the WHATWG slash-light forms (`https:host/x`,
-`https:/host/x`) a real client fetches.
+requires `://`, missing ONLY the WHATWG slash-LIGHT forms (0 or 1 slash:
+`https:host/x`, `https:/host/x`) a real client fetches — Python's `[^\s]+`
+after `://` still absorbs the slash-HEAVY forms (`https:///host`), so
+those are a Go-r5-regression, not a Python gap (see r6).
 
 **r5 CONFIRMATION round (2026-08-22, skeptic+qa) — first zero-HIGH round.**
 Both lenses traced the full WHATWG authority-shape checklist and VERIFIED
@@ -1048,6 +1050,29 @@ consumes the slashes, keeping the legit nested-proxy shape clean), and the
 `urlCandidateMax` doc corrected (byte bound, intentional). The Revert
 ordering residual was re-confirmed honest. Mutations M104/M105 DETECTED.
 r6 must also be zero-HIGH for the two-consecutive-clean fixpoint.
+
+**r6 CONFIRMATION round (2026-08-22, skeptic+qa) — NOT zero-HIGH; flagship
+a 5th time, again inside the prior round's fix.** Both lenses independently
+found the SAME HIGH: r5's `/{0,2}` slash cap was too narrow. WHATWG's
+"special authority ignore slashes state" consumes an UNBOUNDED run of `/`
+and `\` before the authority, so `https:///evil.com/x`, `https:////…`, and
+slash/backslash mixes all fetch to `evil.com` — but r5's cap silently
+un-matched them (no finding at all). Verify-before-fix confirmed the live
+bypass AND that this made Go WEAKER than Python (Python's `[^\s]+` after
+`://` absorbs the extra slashes and still flags them; the negative control
+stays clean on both) — a parity regression, exactly the fix-layer the
+watch-list said to attack. Fixed by widening the slash run to `[/\\]*` in
+both `exfilURLShape` (host-first-char now `[^/\\\s]` so the run is fully
+consumed, not absorbed into the host) and `urlHostAllowed`'s strip loop
+(dropped the `n < 2` bound), restoring the unbounded grammar and Python
+parity. 512-byte cap + RE2 linearity keep the unbounded `*` DoS-free.
+must-detect pins added for 3+-slash and slash/backslash-mix forms plus a
+slash-heavy allowlisted negative control; mutation M106 (revert to r5's
+`/{0,2}`) COMPILES and FAILS the new pin — load-bearing. The two clean
+confirmations from r5 (userinfo/backslash/tab parser, Revert honesty) held.
+Candidate #10 reworded: the slash-heavy forms were never a Python gap.
+r6's fix resets the fixpoint clock — r7 is now the first of two required
+zero-HIGH rounds.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 

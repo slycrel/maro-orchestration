@@ -60,17 +60,25 @@ var exfilPatterns = []*regexp.Regexp{
 // exfilURLShape is the URL half without Python's lookahead, ANCHORED so
 // it can be tested at each scheme occurrence (see the scan loop). Matches
 // are re-checked against allowedURLHosts before they count as findings.
-// The scheme tolerates 0-2 slashes (`https:host/x`, `https:/host/x`,
-// `https://host/x`) because WHATWG special schemes do — a real client
-// fetches all three identically, so a detector that required `//` missed
-// the slash-light forms (r5 review; Python requires `//` too — backport
-// candidate #10).
-// The host group's first char is [^/\s] so the `/{0,2}` scheme slashes
-// are consumed by the scheme, never absorbed into the host — otherwise a
-// nested `https://x.com/...` would match with the slashes as host chars,
-// defeating the short-inner-host exclusion that keeps the legit r.jina.ai
-// proxy shape clean (r5 regression guard).
-var exfilURLShape = regexp.MustCompile(`(?i)^https?:/{0,2}[^/\s][^\s]{2,49}\.(com|io|net)/[^\s]{5,}`)
+// The scheme tolerates ANY run of leading slashes/backslashes
+// (`https:host/x`, `https:/host/x`, `https://host/x`, `https:///host/x`,
+// `https:/\host/x`, …) because WHATWG special schemes do: after the colon
+// the parser enters the "special authority ignore slashes state", which
+// consumes an UNBOUNDED run of `/` and `\` before the authority. A real
+// client fetches all of them identically, so the run must be `[/\\]*`, not
+// a fixed count. r5 capped it at `/{0,2}`, which SILENTLY un-matched the
+// 3+-slash forms — a parity regression that made Go WEAKER than Python
+// (whose `://`-anchored regex absorbs the extra slashes into its host
+// group and still flags them). r6 restores the unbounded grammar and the
+// Python parity. (Python still misses the 0/1-slash forms — backport
+// candidate #10 stands.) The candidate is 512-byte-bounded before matching
+// and RE2 is linear-time, so the unbounded `*` carries no DoS risk.
+// The host group's first char is [^/\\\s] so the `[/\\]*` prefix consumes
+// the whole slash/backslash run, never leaving one absorbed into the host
+// — otherwise a nested `https://x.com/...` would match with a slash as a
+// host char, defeating the short-inner-host exclusion that keeps the legit
+// r.jina.ai proxy shape clean (r5 regression guard, kept in r6).
+var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,49}\.(com|io|net)/[^\s]{5,}`)
 
 // schemeRe locates every URL scheme occurrence (slash count irrelevant —
 // the shape and host parser handle the slashes). Python's re.search scans
@@ -266,9 +274,12 @@ func urlHostAllowed(url string) bool {
 			break
 		}
 	}
-	// Strip up to two leading slashes/backslashes — WHATWG special-scheme
-	// slash leniency (0, 1, or 2 before the authority).
-	for n := 0; n < 2 && len(rest) > 0 && (rest[0] == '/' || rest[0] == '\\'); n++ {
+	// Strip the entire leading run of slashes/backslashes — WHATWG's
+	// "special authority ignore slashes state" consumes an UNBOUNDED run of
+	// `/` and `\` before the authority, so this loop must match exfilURLShape's
+	// `[/\\]*` prefix exactly (r6: an `n < 2` cap here would mis-read the host
+	// of a 3+-slash URL that the widened shape now lets through).
+	for len(rest) > 0 && (rest[0] == '/' || rest[0] == '\\') {
 		rest = rest[1:]
 	}
 	// Authority ends at the first '/', '\', '?', or '#'. Backslash is an
