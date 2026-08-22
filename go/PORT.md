@@ -557,7 +557,11 @@ direction).
   the file before the marker fires — comment on the pin names this);
   the verdict_history key-presence gate got the explicit
   `prior != nil` normalization plus a comment naming the
-  presence≈is-not-None invariant it leans on. Deliberately unported with their
+  presence≈is-not-None invariant it leans on. Adversarial r6 (same
+  day) confirmed FIXPOINT: 0 HIGHs; the null-gate got its explicit
+  JSON-null pin (M36) and a dead Python citation was corrected to
+  _verdict_row — test/doc only, tranche closed at six rounds.
+  Deliberately unported with their
   subsystems: web_fetch enrichment, the deterministic provenance guard
   (claimed inputs/outputs on disk), check_goal_clarity + imperative
   rewrite (needs the ask-the-user surface), introspects_self's consumer

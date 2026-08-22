@@ -1684,3 +1684,39 @@ Mutation M35 DETECTED. Reviewer's closing line: "Finding 1 is the one
 item I'd want addressed before calling this a true fixpoint" — it is
 addressed. NEXT ROUND IS FIXPOINT CONFIRMATION (expect NO BLOCKERS
 FOUND).
+
+## Routing tranche — adversarial r6 (2026-08-22, 1 lens, SAME-MODEL FALLBACK: sonnet-medium) — FIXPOINT
+
+Diff 336741d1..da136658 (the r5 fix layer + gofmt sweep). Verdict:
+NO BLOCKERS FOUND (SAME-MODEL FALLBACK: sonnet-medium) — 0 HIGHs,
+1 MED (test-coverage) + 1 LOW (dead doc citation), both fixed same
+round; 2 informational LOWs verified-no-action.
+
+Verification ledger:
+- VERIFIED (MED): the r5 `judged && prior != nil` gate shipped with no
+  explicit-JSON-null fixture — a revert to bare presence would regress
+  silently. Fixed: TestStampOutcomeVerdictNullGoalAchievedIsUnjudged
+  (hand-written row with `"goal_achieved":null`; stamp must land the
+  verdict WITHOUT a history push — Python `is not None` parity, which
+  the reviewer independently re-verified at memory_ledger.py:819).
+  Mutation M36 (gate reverted to bare presence) DETECTED — and the
+  mutant's failure output shows the exact bug: a history entry
+  carrying goal_achieved:null.
+- VERIFIED (LOW): record.go's invariant comment cited a nonexistent
+  Python function (`_scrub_for_write`); the real pop-null owner is
+  `_verdict_row` (memory_ledger.py:462). Citation fixed.
+- VERIFIED-NO-ACTION (LOW): the reviewer independently confirmed the
+  loop-level double-injection non-determinism claim (random loopID at
+  loop.go:146 makes pre-squatting the run's verdicts file impossible)
+  — recorded so it is not re-litigated without new evidence.
+- NOTED (LOW, no action): the doubly-failed warning's literal text is
+  proven reachable (seam pin + main.go prints res.Warnings) but not
+  string-asserted end-to-end; the named residual stands. A helper
+  extraction would close it — not worth the seam churn at fixpoint.
+
+FIXPOINT DECLARED (SAME-MODEL FALLBACK: sonnet-medium). Six rounds:
+6→2→1→1(doc)→0-HIGH(1 MED)→0-HIGH(coverage MED on the prior fix,
+test-only). The r6 fix layer is a test + a comment citation — no
+production code changed — and is mutation-verified (M36), so no r7 is
+spawned. Mutations M13–M36 all DETECTED (M21, M34 after pin
+strengthening — escapes recorded above).
