@@ -859,10 +859,14 @@ def recall(
         except Exception:
             pass
 
-        # 8. Knowledge nodes (K2 imports).
+        # 8. Knowledge nodes (K2 imports). No max_chars override (Jeremy
+        # 2026-08-21, unblocking the edge-expansion A/B gate: "600 chars is
+        # kind of silly low" — the value was an unrationalized April-era cap,
+        # 9e3d46e7). The function's own default budget applies; the cap is a
+        # circuit-breaker, not a truncator (2026-07-29 decree).
         try:
             from knowledge_web import inject_knowledge_for_goal
-            result.knowledge = inject_knowledge_for_goal(goal, max_chars=600)
+            result.knowledge = inject_knowledge_for_goal(goal)
         except Exception:
             pass
 

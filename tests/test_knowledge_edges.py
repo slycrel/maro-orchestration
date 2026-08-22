@@ -636,47 +636,56 @@ class TestSweepScope:
 # max_chars=600" diagnosis must be an executable pin, not prose)
 # ---------------------------------------------------------------------------
 
+def _budget_graph(tmp_workspace):
+    """Ordinary-length (~200-char-description) entries: one lexical seed,
+    two strong lexical siblings, two noise rows, and an edge sibling
+    appended last so it can only reach the top-5 via the boost."""
+    from knowledge_web import derive_coderivation_edges
+    long_desc = ("how to frobnicate widgets safely and calibrate the "
+                 "frobnication of each widget under load ") * 4  # >200
+    _mk_node("seed1", "widget frobnication procedure", long_desc,
+             sources=["outcome:o1"], confidence=0.8)
+    _mk_node("med1", "widget frobnication field notes", long_desc,
+             confidence=0.8)
+    _mk_node("med2", "widget frobnication checklist", long_desc,
+             confidence=0.8)
+    _mk_node("noise", "unrelated cooking recipe", "bake bread " * 30,
+             confidence=0.8)
+    _mk_node("noise2", "unrelated gardening tips", "prune roses " * 30,
+             confidence=0.8)
+    _mk_node("sib1", "gadget calibration baseline",
+             "calibration numbers observed on the bench " * 6,
+             sources=["outcome:o1"], confidence=0.8)
+    derive_coderivation_edges()
+
+
 class TestProductionBudget:
-    def test_boosted_entrant_truncated_at_production_budget(
-            self, tmp_workspace, monkeypatch):
-        """At recall.py's literal shape (max_nodes=5, max_chars=600) with
-        ordinary-length entries (~200-char descriptions), only the first
-        couple of entries render — a boosted entrant that genuinely changes
-        query-level membership still lands behind the cutoff. This is the
-        mechanism behind the 2026-08-21 0/500 readout."""
-        import captains_log
+    def _expansion_on(self, monkeypatch):
         import config
-        from knowledge_web import (derive_coderivation_edges,
-                                   inject_knowledge_for_goal,
-                                   query_knowledge)
-        long_desc = ("how to frobnicate widgets safely and calibrate the "
-                     "frobnication of each widget under load ") * 4  # >200
-        _mk_node("seed1", "widget frobnication procedure", long_desc,
-                 sources=["outcome:o1"], confidence=0.8)
-        _mk_node("med1", "widget frobnication field notes", long_desc,
-                 confidence=0.8)
-        _mk_node("med2", "widget frobnication checklist", long_desc,
-                 confidence=0.8)
-        _mk_node("noise", "unrelated cooking recipe", "bake bread " * 30,
-                 confidence=0.8)
-        _mk_node("noise2", "unrelated gardening tips", "prune roses " * 30,
-                 confidence=0.8)
-        # Appended last: can only reach the top-5 via the edge boost.
-        _mk_node("sib1", "gadget calibration baseline",
-                 "calibration numbers observed on the bench " * 6,
-                 sources=["outcome:o1"], confidence=0.8)
-        derive_coderivation_edges()
         monkeypatch.setattr(
             config, "get",
             lambda key, default=None: (True if key == "knowledge.edge_expansion"
                                        else default))
+
+    def test_starved_budget_truncates_boosted_entrant(self, tmp_workspace,
+                                                      monkeypatch):
+        """The mechanism behind the 2026-08-21 0/500 readout: under the
+        old 600-char override (an unrationalized April-era cap recall.py
+        carried until Jeremy killed it 2026-08-21), a boosted entrant that
+        genuinely changed query-level membership landed behind the render
+        cutoff — no [linked], no event. Kept as the executable record of
+        why a starved budget silently closes the A/B gate."""
+        import captains_log
+        from knowledge_web import inject_knowledge_for_goal, query_knowledge
+        _budget_graph(tmp_workspace)
+        self._expansion_on(monkeypatch)
         # The boost is computed: sib1 enters the query-level top-5.
         q = query_knowledge("frobnicate the widget", max_results=5,
                             min_confidence=0.3, expand_edges=True)
         qids = [n.node_id for n in q]
         assert "sib1" in qids
         assert getattr(q[qids.index("sib1")], "via_edge_from", None) == "seed1"
-        # ...but at the production budget it never renders, so no event.
+        # ...but at a starved budget it never renders, so no event.
         events = []
         monkeypatch.setattr(captains_log, "log_event",
                             lambda **k: events.append(k))
@@ -688,6 +697,37 @@ class TestProductionBudget:
         assert "[linked]" not in block
         assert not [e for e in events
                     if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
+
+    def test_default_budget_renders_boosted_entrant(self, tmp_workspace,
+                                                    monkeypatch):
+        """At the CURRENT production shape — recall.py passes no override,
+        so inject's own default budget applies — the same boosted entrant
+        renders with its marker and the A/B denominator event fires. This
+        is the pin that the gate can accrue evidence again."""
+        import captains_log
+        from knowledge_web import inject_knowledge_for_goal
+        _budget_graph(tmp_workspace)
+        self._expansion_on(monkeypatch)
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda **k: events.append(k))
+        block = inject_knowledge_for_goal("frobnicate the widget")
+        assert "gadget calibration baseline" in block
+        assert "[linked]" in block
+        exp = [e for e in events
+               if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
+        assert len(exp) == 1
+        assert {"node_id": "sib1", "seed_id": "seed1"} in exp[0]["context"]["expanded"]
+
+    def test_recall_passes_no_budget_override(self):
+        """recall.py's call site is the single production consumer — pin
+        that it no longer overrides max_chars (the 600 regression shape),
+        so inject's default is the one budget in play."""
+        import inspect
+        import recall
+        src = inspect.getsource(recall)
+        assert "inject_knowledge_for_goal(goal)" in src
+        assert "inject_knowledge_for_goal(goal, max_chars" not in src
 
 
 # ---------------------------------------------------------------------------

@@ -8,9 +8,11 @@ Measures the LITERAL production layer (edge-review r2, consensus HIGH: the
 r1 rewrite still compared raw query_knowledge sets at min_confidence=0.0
 with no char budget — a laxer surface than the one that fires the
 KNOWLEDGE_EDGE_EXPANSION event). Each arm now replays
-recall.py's exact call shape — query_knowledge(max_results=5,
-min_confidence=0.3) followed by the shared _render_knowledge_entries char
-budget at max_chars=600 — and compares the RENDERED id sets.
+recall.py's exact call shape — query_knowledge at inject's max_nodes /
+min_confidence=0.3, followed by the shared _render_knowledge_entries char
+budget at inject_knowledge_for_goal's own default (read from its
+signature; recall.py stopped overriding it 2026-08-21) — and compares
+the RENDERED id sets.
 
 Read-only over the live store: replays the N most recent real goals from
 memory/outcomes.jsonl; no times_applied bumps, no events.
@@ -43,17 +45,26 @@ def main() -> None:
     if not outcomes.exists():
         sys.exit(f"no outcomes store at {outcomes}")
 
-    from knowledge_web import query_knowledge, _render_knowledge_entries
+    import inspect
 
-    # recall.py:865 calls inject_knowledge_for_goal(goal, max_chars=600),
-    # which queries with max_results=5, min_confidence=0.3 then applies the
-    # char budget. Mirror that exactly, per arm.
+    from knowledge_web import (query_knowledge, _render_knowledge_entries,
+                               inject_knowledge_for_goal)
+
+    # recall.py calls inject_knowledge_for_goal(goal) with NO max_chars
+    # override (Jeremy 2026-08-21 — the old 600 was an unrationalized cap),
+    # so the production budget IS the function default. Read it from the
+    # signature so this receipt can never drift from the real call shape.
+    prod_budget = inspect.signature(
+        inject_knowledge_for_goal).parameters["max_chars"].default
+    prod_nodes = inspect.signature(
+        inject_knowledge_for_goal).parameters["max_nodes"].default
+
     def rendered_ids(goal: str, expand: bool) -> set:
-        nodes = query_knowledge(goal, max_results=5, min_confidence=0.3,
-                                expand_edges=expand)
+        nodes = query_knowledge(goal, max_results=prod_nodes,
+                                min_confidence=0.3, expand_edges=expand)
         if query_level:
             return {nd.node_id for nd in nodes}
-        _, applied_ids, _ = _render_knowledge_entries(nodes, 600)
+        _, applied_ids, _ = _render_knowledge_entries(nodes, prod_budget)
         return set(applied_ids)
 
     goals: list[str] = []
@@ -77,7 +88,8 @@ def main() -> None:
 
     layer = ("query-level (min_confidence=0.3, NO char budget)"
              if query_level else
-             "production layer (min_confidence=0.3, max_chars=600)")
+             f"production layer (min_confidence=0.3, "
+             f"max_chars={prod_budget})")
     print(f"replayed {len(goals)} recent goals — {layer}; read-only")
     print(f"expansion changed membership on "
           f"{len(changed)}/{len(goals)} "

@@ -773,6 +773,19 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 *Entries 2026-04-23 → 2026-07-14 rotated to `docs/history/goal-brain-decisions-2026-04-to-07.md` (2026-08-16). The archive is part of this append-only log — rotation, not deletion; dev-recall ingests it.*
 
+- **2026-08-21 (recall knowledge budget — arbitrary cap killed — Jeremy):**
+  *"by now you know my position on arbitrary character limits; Unless there
+  is very good reason, 600 chars is kind of silly low."* Provenance check
+  found no reason — the 600 dated to April's 9e3d46e7 (Workspace
+  separation) with zero rationale, carried through two relocations.
+  Applied same day: recall.py's `max_chars=600` override REMOVED (inject's
+  own 1200 default is the one budget in play; pinned by
+  `test_recall_passes_no_budget_override`, replay script reads the budget
+  from the signature). Effect: the edge-expansion A/B gate UNBLOCKED —
+  22/500 rendered recalls now change (was 0/500 at the starved budget).
+  Standing shape of the decree, consistent with 2026-07-29: caps are
+  circuit-breakers, not up-front truncators — an unrationalized cap that
+  silently starves a measurement surface is a bug, not a budget.
 - **2026-08-20 (cheap-tier step execution DEFERRED; and dev-recall missed a
   decree — Jeremy):** two calls in one message. (1) **Deferral:** *"let's revisit
   during an optimization pass in the future… no need to keep that bookmark front
