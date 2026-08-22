@@ -4080,3 +4080,25 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   10240 green on the Mac. Step-level concurrency recorded as deferred
   planner work at the step-skeleton entry. Basis: this session's build +
   Jeremy's in-session decrees (Decisions).
+- **2026-08-22 — milestone-DAG adversarial round (4× sonnet-medium
+  fallback): REJECT → fixed to green same session:** every HIGH
+  verified real before fixing
+  (`docs/history/2026-08-22-milestone-dag-adversarial-review.md`).
+  Flagship: the revert lever itself broke on a quoted YAML `"false"`
+  (`bool("false") is True`, config.get returns raw YAML) — the one flag
+  whose purpose is "flip me back under pressure" was the one input with
+  no validation, erring toward staying ON. Fixed with a shared
+  `config.get_bool` (string normalization, unrecognized → default +
+  warning). Also fixed: stall-lane crash backstop parity, crash
+  evidence now durable (log.warning + immediate persist — verbose-gated
+  log_fn alone left zero trace), chain-shaped missions BYPASS the DAG
+  (`_is_chain_shaped` — undecorated missions take the literal pre-DAG
+  path, making the flip honestly inert), all-invalid deps chain instead
+  of ungating, mission-status CLI shows deps, save-lock claim scoped
+  in-process + finally has a failing test. Filed, not deferred:
+  worktree-per-sibling isolation (concurrent milestones share one
+  checkout — v1 relies on the decompose contract), drain-lane DAG
+  wiring (reconcile its divergent loop first), the real-adapter
+  interleaving UNSETTLED with its burn-in probe, and the
+  `bool(get(...))` sweep edge. Suite 10264 green. Basis: this session's
+  probes + fix commits.

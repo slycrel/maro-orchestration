@@ -153,8 +153,10 @@ def test_decompose_malformed_depends_on_falls_back_to_chain(monkeypatch, tmp_pat
     assert b.depends_on == [a.id]
 
 
-def test_decompose_ref_to_dropped_milestone_discarded(monkeypatch, tmp_path):
-    """A feature-less milestone is dropped; refs to it resolve to nothing."""
+def test_decompose_ref_to_dropped_milestone_chains(monkeypatch, tmp_path):
+    """A feature-less milestone is dropped; a milestone whose ONLY declared
+    dep pointed at it falls back to the chain (dependency was signaled, so
+    never silently ungate — 2026-08-22 review fix)."""
     _setup_workspace(monkeypatch, tmp_path)
     adapter = _adapter_for([
         {"title": "A", "features": ["fa"], "validation_criteria": []},
@@ -163,7 +165,7 @@ def test_decompose_ref_to_dropped_milestone_discarded(monkeypatch, tmp_path):
     ])
     mission = decompose_mission("goal", adapter)
     assert [ms.title for ms in mission.milestones] == ["A", "C"]
-    assert mission.milestones[1].depends_on == []
+    assert mission.milestones[1].depends_on == [mission.milestones[0].id]
 
 
 def test_heuristic_fallback_chains(monkeypatch, tmp_path):
@@ -247,21 +249,26 @@ def test_independent_milestones_run_concurrently(monkeypatch, tmp_path):
 
 
 def test_dependent_milestone_waits_for_dependency(monkeypatch, tmp_path):
+    """Fan-in: C depends on independent A and B — C starts only after both
+    finish. (A/B/C is deliberately NOT chain-shaped, so the DAG runs.)"""
     _setup_workspace(monkeypatch, tmp_path)
     _cfg(monkeypatch, {"mission.parallel_milestones": True, "mission.milestone_workers": 2})
     record = []
     monkeypatch.setattr(agent_loop, "run_agent_loop", _stub_loop(record=record))
     adapter = _adapter_for([
         {"title": "A", "features": ["fa"], "validation_criteria": [], "depends_on": []},
-        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": [0]},
+        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": []},
+        {"title": "C", "features": ["fc"], "validation_criteria": [], "depends_on": [0, 1]},
     ])
     result = run_mission("dag order goal", project="order-proj", adapter=adapter)
     assert result.status == "done"
-    assert record.index("end:fa") < record.index("start:fb")
+    assert record.index("end:fa") < record.index("start:fc")
+    assert record.index("end:fb") < record.index("start:fc")
 
 
 def test_failed_dependency_does_not_gate_dependent(monkeypatch, tmp_path):
-    """Ordering, not gating: B still runs after A fails (sequential parity)."""
+    """Ordering, not gating: C still runs after its dep A fails.
+    (A/B independent + C->A: not chain-shaped, so the DAG runs.)"""
     _setup_workspace(monkeypatch, tmp_path)
     _cfg(monkeypatch, {"mission.parallel_milestones": True, "mission.milestone_workers": 2})
     record = []
@@ -269,17 +276,19 @@ def test_failed_dependency_does_not_gate_dependent(monkeypatch, tmp_path):
                         _stub_loop(record=record, fail_titles=("fa",)))
     adapter = _adapter_for([
         {"title": "A", "features": ["fa"], "validation_criteria": ["must pass"], "depends_on": []},
-        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": [0]},
+        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": []},
+        {"title": "C", "features": ["fc"], "validation_criteria": [], "depends_on": [0]},
     ], validation_passed=False)
     result = run_mission("failure parity goal", project="fail-proj", adapter=adapter)
-    assert "start:fb" in record
-    assert record.index("end:fa") < record.index("start:fb")
+    assert "start:fc" in record
+    assert record.index("end:fa") < record.index("start:fc")
     loaded = load_mission("fail-proj")
     assert loaded.milestones[0].status == "failed"
-    # B has no validation criteria -> validates trivially -> done
+    # B and C have no validation criteria -> validate trivially -> done
     assert loaded.milestones[1].status == "done"
+    assert loaded.milestones[2].status == "done"
     assert result.status == "partial"
-    assert result.milestones_done == 1
+    assert result.milestones_done == 2
 
 
 def test_flag_off_runs_sequentially(monkeypatch, tmp_path):
@@ -336,3 +345,140 @@ def test_dag_thread_exception_marks_milestone_failed(monkeypatch, tmp_path):
     assert a.status == "failed"
     assert "boom" in (a.validation_result or "")
     assert b.status == "done"
+
+
+# ---------------------------------------------------------------------------
+# Review-round fixes (2026-08-22 adversarial round)
+# ---------------------------------------------------------------------------
+
+def test_chain_shaped_mission_bypasses_dag(monkeypatch, tmp_path):
+    """Undecorated (chain) decompositions take the literal sequential code
+    path — the DAG scheduler must not run at all."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import mission as mission_mod
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_run_milestone_dag must not run for a chain-shaped mission")
+
+    monkeypatch.setattr(mission_mod, "_run_milestone_dag", _boom)
+    monkeypatch.setattr(agent_loop, "run_agent_loop", _stub_loop())
+    adapter = _adapter_for([
+        {"title": "A", "features": ["fa"], "validation_criteria": []},
+        {"title": "B", "features": ["fb"], "validation_criteria": []},
+    ])
+    result = run_mission("chain bypass goal", project="chain-proj", adapter=adapter)
+    assert result.status == "done"
+    assert result.milestones_done == 2
+
+
+def test_string_false_flag_actually_reverts(monkeypatch, tmp_path):
+    """The revert lever must revert on a quoted YAML \"false\" — the
+    bool(\"false\") is True footgun (review round HIGH)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _cfg(monkeypatch, {"mission.parallel_milestones": "false"})
+    record = []
+    monkeypatch.setattr(agent_loop, "run_agent_loop", _stub_loop(record=record))
+    adapter = _adapter_for([
+        {"title": "A", "features": ["fa"], "validation_criteria": [], "depends_on": []},
+        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": []},
+    ])
+    result = run_mission("string false goal", project="strfalse-proj", adapter=adapter)
+    assert result.status == "done"
+    assert record == ["start:fa", "end:fa", "start:fb", "end:fb"]
+
+
+def test_decompose_all_invalid_deps_chain_not_ungated(monkeypatch, tmp_path):
+    """An explicitly-signaled dependency whose every ref is invalid falls
+    back to the chain — never to silently ungated []."""
+    _setup_workspace(monkeypatch, tmp_path)
+    adapter = _adapter_for([
+        {"title": "A", "features": ["fa"], "validation_criteria": []},
+        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": [1, 99]},
+    ])
+    mission = decompose_mission("goal", adapter)
+    a, b = mission.milestones
+    assert b.depends_on == [a.id]
+
+
+def test_stall_fallback_contains_crash(monkeypatch, tmp_path):
+    """The stall-fallback lane has the same crash backstop as the pool lane:
+    one milestone raising fails that milestone, the rest still run."""
+    _setup_workspace(monkeypatch, tmp_path)
+    ran = []
+
+    def _run_one(idx, ms):
+        if ms.id == "ms-a":
+            raise RuntimeError("stall-lane boom")
+        ran.append(ms.id)
+        ms.status = "done"
+
+    a = Milestone(id="ms-a", title="A", features=[], validation_criteria=[],
+                  status="pending", depends_on=["ms-b"])
+    b = Milestone(id="ms-b", title="B", features=[], validation_criteria=[],
+                  status="pending", depends_on=["ms-a"])
+    mission = Mission(id="m1", goal="g", project="p", milestones=[a, b],
+                      status="running", created_at="2026-08-22T00:00:00Z")
+    _run_milestone_dag(mission, _run_one, lambda msg: None, max_workers=2)
+    assert a.status == "failed"
+    assert "stall-lane boom" in (a.validation_result or "")
+    assert ran == ["ms-b"]
+    assert b.status == "done"
+
+
+def test_dag_crash_persists_and_logs(monkeypatch, tmp_path, caplog):
+    """A milestone-thread crash leaves durable evidence: persist_fn fires
+    and log.warning records it even when verbose logging is off."""
+    import logging
+    _setup_workspace(monkeypatch, tmp_path)
+    persists = []
+
+    def _run_one(idx, ms):
+        if ms.id == "ms-a":
+            raise RuntimeError("crash evidence boom")
+        ms.status = "done"
+
+    a = Milestone(id="ms-a", title="A", features=[], validation_criteria=[],
+                  status="pending", depends_on=[])
+    b = Milestone(id="ms-b", title="B", features=[], validation_criteria=[],
+                  status="pending", depends_on=[])
+    mission = Mission(id="m1", goal="g", project="p", milestones=[a, b],
+                      status="running", created_at="2026-08-22T00:00:00Z")
+    with caplog.at_level(logging.WARNING, logger="maro.mission"):
+        _run_milestone_dag(mission, _run_one, lambda msg: None, max_workers=2,
+                           persist_fn=lambda: persists.append(1))
+    assert a.status == "failed"
+    assert persists, "crash must persist, not wait for end-of-mission save"
+    assert any("mission_dag_thread_crash" in rec.message for rec in caplog.records)
+
+
+def test_save_lock_serializes_concurrent_persists(monkeypatch, tmp_path):
+    """Guarantee-with-capture: concurrent milestones' whole-mission saves
+    never overlap. Deleting _save_lock makes this fail."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _cfg(monkeypatch, {"mission.parallel_milestones": True, "mission.milestone_workers": 2})
+    import mission as mission_mod
+    in_critical = threading.Event()
+    violations = []
+    calls = []
+
+    def _slow_save(mission, project):
+        if in_critical.is_set():
+            violations.append("overlap")
+        in_critical.set()
+        time.sleep(0.05)
+        in_critical.clear()
+        calls.append(project)
+
+    import time
+    monkeypatch.setattr(mission_mod, "save_mission", _slow_save)
+    barrier = threading.Barrier(2, timeout=30)
+    gates = {"fa": barrier.wait, "fb": barrier.wait}
+    monkeypatch.setattr(agent_loop, "run_agent_loop", _stub_loop(gates=gates))
+    adapter = _adapter_for([
+        {"title": "A", "features": ["fa"], "validation_criteria": [], "depends_on": []},
+        {"title": "B", "features": ["fb"], "validation_criteria": [], "depends_on": []},
+    ])
+    result = run_mission("save lock goal", project="savelock-proj", adapter=adapter)
+    assert result.status == "done"
+    assert not violations
+    assert len(calls) >= 2

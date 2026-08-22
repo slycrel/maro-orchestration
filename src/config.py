@@ -309,3 +309,34 @@ def deploy_dir() -> Path:
     systemd/launchd file anyway).
     """
     return workspace_root() / "deploy"
+
+
+_TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSY_STRINGS = frozenset({"false", "0", "no", "off", ""})
+
+
+def get_bool(key: str, default: bool) -> bool:
+    """Boolean config read with string-form normalization.
+
+    A quoted YAML value ("false", "0") arrives as a *string*, and
+    bool("false") is True — for flags that gate behavior (revert levers
+    especially) that error direction silently defeats the operator's
+    intent. Strings normalize by content; an unrecognized value falls
+    back to the default with a warning rather than to truthiness.
+    """
+    val = get(key, default)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int) or isinstance(val, float):
+        return bool(val)
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in _TRUTHY_STRINGS:
+            return True
+        if s in _FALSY_STRINGS:
+            return False
+    import logging
+    logging.getLogger("maro.config").warning(
+        "config.get_bool: unrecognized value for %s: %r — using default %s",
+        key, val, default)
+    return default

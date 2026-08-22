@@ -2385,6 +2385,46 @@ step-skeleton entry). Remaining below: the schedule-which-areas
 question, merge story for out-of-order findings, budget model — v1 runs
 what decompose declares independent and nothing more.
 
+**Adversarial round same session (4× sonnet-medium fallback, codex
+capped til 08-27): REJECT → fixed to green**
+(`docs/history/2026-08-22-milestone-dag-adversarial-review.md`). The
+standouts, all VERIFIED then fixed: the revert lever broke on a quoted
+YAML `"false"` (`bool("false") is True` — new `config.get_bool`, string
+normalization); the stall-fallback lane lacked the crash backstop its
+docstring claimed; a milestone-thread crash left zero durable evidence
+at default verbosity (now log.warning + immediate persist);
+chain-shaped missions now BYPASS the DAG entirely (`_is_chain_shaped`)
+so the flip is literally inert until independence is declared. Two
+follow-ups filed here, not silently deferred:
+- [ ] **Worktree-per-sibling isolation:** in-process sibling loops
+      (concurrent milestones AND the pre-existing feature fan-out) share
+      one project checkout — phase-3b worktree isolation only covers the
+      LoopBusy path siblings never take (interrupt.py comment corrected;
+      it over-claimed). v1 mitigation is the decompose contract ("do not
+      declare independent if they'd edit the same files; when in doubt,
+      keep the dependency"). The build: provision a worktree per
+      top-level sibling loop unconditionally, reusing
+      `loop_parallel._run_in_step_worktree`'s pattern + merge-back.
+      Evidence gate: first burn-in mission with declared independence
+      shows file-level contention (or doesn't).
+- [ ] **Wire drain_next_mission into the DAG:** the heartbeat resume
+      lane is DAG-naive v1 (list order stays topologically valid, so
+      correct but never concurrent). Prerequisite named in its
+      docstring: its loop diverged from run_mission long ago (no
+      validation gate, no hooks, own status vocabulary) — reconcile
+      that divergence first, don't just swap the scheduler in.
+- [ ] **UNSETTLED from the round, with its probe:** real-adapter
+      interleaving under the new width (all tests stub the adapter).
+      Probe: first box burn-in mission with declared independence —
+      watch `subprocess_fork_masters.json` churn + per-call latency
+      during overlap. Premise expires if fork-master keying or
+      session-reuse config changes.
+- [ ] **Named upgrade edge:** the `bool(get(...))` coercion pattern
+      exists at other config call sites (this round fixed only the
+      revert lever + added the shared `config.get_bool`); sweeping the
+      rest is caps-sweep-shaped work — measure which flags are
+      operator-touched before bulk-converting.
+
 - [ ] **Jeremy, verbatim:** *"why aren't we running concurrent agent
   processes (i.e. multiple map location build-outs) to speed up the
   general run? i.e… if we think we should go A → B → C, we can probably

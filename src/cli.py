@@ -1691,6 +1691,7 @@ def _cmd_mission_status(args: argparse.Namespace) -> int:
                         "id": ms.id,
                         "title": ms.title,
                         "status": ms.status,
+                        "depends_on": ms.depends_on,
                         "features": [
                             {"id": f.id, "title": f.title, "status": f.status}
                             for f in ms.features
@@ -1705,7 +1706,8 @@ def _cmd_mission_status(args: argparse.Namespace) -> int:
             print(f"goal={m.goal!r}")
             for ms in m.milestones:
                 done_count = sum(1 for f in ms.features if f.status == "done")
-                print(f"  milestone [{ms.status:10s}] {ms.title!r} features={done_count}/{len(ms.features)}")
+                deps = f" deps={ms.depends_on}" if ms.depends_on else ""
+                print(f"  milestone [{ms.status:10s}] {ms.title!r} features={done_count}/{len(ms.features)}{deps}")
                 for f in ms.features:
                     print(f"    feature  [{f.status:8s}] {f.title!r}")
     else:

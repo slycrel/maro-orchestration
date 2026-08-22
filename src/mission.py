@@ -129,7 +129,10 @@ _DECOMPOSE_SYSTEM = textwrap.dedent("""\
     pipeline (each milestone follows the previous one). Use [] for a milestone
     that can start immediately. Declare independence ([] or a partial list) only
     when the work genuinely does not build on the skipped milestones' output —
-    independent milestones may execute concurrently.
+    independent milestones may execute concurrently, IN THE SAME project
+    working directory. Do not declare milestones independent if they would
+    edit the same files or contend over the same resources; when in doubt,
+    keep the dependency.
 """).strip()
 
 _VALIDATE_SYSTEM = textwrap.dedent("""\
@@ -227,6 +230,13 @@ def decompose_mission(
                         dep_id = kept_by_raw[j].id
                         if dep_id not in resolved:
                             resolved.append(dep_id)
+                if deps_raw and not resolved and pos > 0:
+                    # The model explicitly signaled a dependency and every
+                    # ref was invalid (forward/self/dropped) — chain to the
+                    # predecessor rather than silently ungating a milestone
+                    # the model meant to order. Only a literal [] means
+                    # "independent root".
+                    resolved = [kept[pos - 1][2].id]
                 ms.depends_on = resolved
     except ImportError:
         pass  # fall through to heuristic
@@ -327,7 +337,26 @@ def _validate_milestone(
 # Core: milestone DAG scheduler
 # ---------------------------------------------------------------------------
 
-def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2) -> None:
+def _is_chain_shaped(mission: Mission) -> bool:
+    """True when depends_on encodes exactly the old sequential walk —
+    every milestone depends on precisely its predecessor (first on
+    nothing). Chain-shaped missions take the literal sequential code
+    path: main-thread execution, unchanged exception propagation. The
+    DAG scheduler buys them zero concurrency, and its thread hop would
+    change failure/context semantics for nothing in return — this check
+    is what makes the flip genuinely inert until a decomposition
+    declares independence."""
+    prev_id = None
+    for ms in mission.milestones:
+        expected = [] if prev_id is None else [prev_id]
+        if list(ms.depends_on) != expected:
+            return False
+        prev_id = ms.id
+    return True
+
+
+def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2,
+                       persist_fn=None) -> None:
     """Execute mission milestones as a dependency DAG, `max_workers` at a time.
 
     `depends_on` is ORDERING only, deliberately matching the sequential
@@ -338,10 +367,13 @@ def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2) 
     change what a mission produces. Dependency ids that don't name a
     milestone in this mission are ignored (nothing to wait for).
 
-    Decompose-produced deps are cycle-free by construction (earlier-index
-    refs only); a malformed set from the load path can't deadlock — when
-    no milestone is ready and none is running, the remainder executes in
-    list order with a logged warning.
+    Cycle-freedom is a property of the DECOMPOSE writer (earlier-index
+    refs only), not of the field: load_mission accepts any string ids, so
+    a hand-edited mission.json can encode a genuine cycle. That can't
+    deadlock — when no milestone is ready and none is running, the
+    remainder executes in list order with a logged warning — and both the
+    stall lane and the pool lane share the same crash backstop
+    (mark-failed + log.warning + persist, never propagate).
     """
     known = {ms.id for ms in mission.milestones}
     terminal: set = set()
@@ -350,6 +382,18 @@ def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2) 
 
     def _ready(ms: Milestone) -> bool:
         return all(d in terminal for d in ms.depends_on if d in known)
+
+    def _mark_crashed(ms: Milestone, exc: BaseException) -> None:
+        # Backstop for anything the milestone body's own guards miss:
+        # fail the one milestone, leave durable evidence, keep the
+        # mission going. verbose-gated log_fn alone is not evidence.
+        ms.status = "failed"
+        ms.validation_result = f"error: {exc}"
+        log_fn(f"  milestone thread error: {ms.title!r}: {exc}")
+        log.warning("mission_dag_thread_crash id=%s milestone=%s exc=%s",
+                    mission.id, ms.id, exc)
+        if persist_fn is not None:
+            persist_fn()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures: dict = {}
@@ -369,7 +413,10 @@ def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2) 
                     log_fn(f"milestone DAG stall (malformed depends_on) — running {ms.title!r} in list order")
                     log.warning("mission_dag_stall id=%s milestone=%s deps=%s",
                                 mission.id, ms.id, ms.depends_on)
-                    run_one(idx, ms)
+                    try:
+                        run_one(idx, ms)
+                    except Exception as exc:
+                        _mark_crashed(ms, exc)
                     submitted.add(ms.id)
                     terminal.add(ms.id)
                 return
@@ -379,11 +426,7 @@ def _run_milestone_dag(mission: Mission, run_one, log_fn, max_workers: int = 2) 
                 try:
                     fut.result()
                 except Exception as exc:
-                    # Parity note: the sequential body catches its own
-                    # exceptions; this is the backstop for anything new.
-                    ms.status = "failed"
-                    ms.validation_result = f"error: {exc}"
-                    log_fn(f"  milestone thread error: {ms.title!r}: {exc}")
+                    _mark_crashed(ms, exc)
                 terminal.add(ms.id)
 
 
@@ -506,10 +549,13 @@ def run_mission(
     _save_lock = threading.Lock()
 
     def _persist() -> None:
-        # Single in-process writer discipline: concurrent milestone threads
-        # serialize their whole-mission snapshots so a slow writer can't
-        # interleave with a fresher one (atomic_write handles crash-safety,
-        # not write ordering).
+        # IN-PROCESS serialization only: concurrent milestone threads in
+        # this run serialize their whole-mission snapshots so a slow
+        # writer can't interleave with a fresher one. atomic_write handles
+        # crash-safety, not write ordering, and nothing here excludes a
+        # SECOND process (drain heartbeat, admin CLI) — same as pre-DAG
+        # save_mission. Snapshots may also capture a sibling milestone's
+        # fields mid-mutation (self-healing at the next persist).
         try:
             with _save_lock:
                 save_mission(mission, project)
@@ -738,15 +784,20 @@ def run_mission(
         # Persist after each milestone
         _persist()
 
-    from config import get as _cfg_get
-    _parallel = bool(_cfg_get("mission.parallel_milestones", True))
+    from config import get as _cfg_get, get_bool as _cfg_get_bool
+    # get_bool, not bool(get(...)): this flag is THE revert lever, and a
+    # quoted "false" in YAML must actually revert (bool("false") is True).
+    _parallel = _cfg_get_bool("mission.parallel_milestones", True)
     try:
         _ms_workers = max(1, int(_cfg_get("mission.milestone_workers", 2)))
     except (TypeError, ValueError):
         _ms_workers = 2
-    if _parallel and len(mission.milestones) > 1:
-        _run_milestone_dag(mission, _run_milestone, _log, max_workers=_ms_workers)
+    if _parallel and len(mission.milestones) > 1 and not _is_chain_shaped(mission):
+        _run_milestone_dag(mission, _run_milestone, _log,
+                           max_workers=_ms_workers, persist_fn=_persist)
     else:
+        # Chain-shaped (or flag off, or single milestone): the literal
+        # pre-DAG path — main thread, unchanged exception propagation.
         for ms_idx, milestone in enumerate(mission.milestones):
             _run_milestone(ms_idx, milestone)
 
@@ -1262,6 +1313,15 @@ def drain_next_mission(
 
     Acquires a lock file to prevent concurrent drains.
     Sends per-milestone Telegram notifications (when notify=True).
+
+    DAG-NAIVE BY DESIGN (v1, 2026-08-22): this lane walks milestones in
+    list order and ignores `depends_on` — decompose only emits
+    earlier-index refs, so list order is always a valid topological
+    order, and this loop long ago diverged from run_mission's (no
+    validation gate, no hooks, its own status vocabulary). Wiring the
+    DAG scheduler in here means reconciling that divergence first —
+    tracked in BACKLOG under the concurrent-milestone entry, not done
+    silently in the flip commit.
     """
     if is_drain_running():
         if verbose:
