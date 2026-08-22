@@ -24,13 +24,22 @@ of them **structural**:
 
 ## On-disk compatibility
 
-Same workspace resolution (`MARO_WORKSPACE` > `MARO_HOME`/workspace >
-`~/.maro/workspace`), same record files, same shapes:
+Same workspace resolution as Python `config.workspace_root`, name for
+name and in the same order (`MARO_WORKSPACE` > `OPENCLAW_WORKSPACE` >
+`WORKSPACE_ROOT` > `~/.maro/workspace`; `MARO_USER_DIR` moves only the
+user-config tier, and **there is no MARO_HOME** — the 2026-08-16
+live-ledger incident variable stays unread). Same record files, same
+shapes:
 
 - `memory/outcomes.jsonl` — compatible key subset;
-  `measurement_class: "go-port"` fences Go rows in analyses.
+  `measurement_class: "go-port"` fences Go rows in analyses. `cost_usd`
+  is deliberately absent (no estimator ported; missing ≠ zero).
 - `memory/captains_log.jsonl` — `{timestamp, event_type, subject,
   summary, audience, context, loop_id}`.
+- Appends take the same advisory flock on the same sibling
+  `<file>.lock` files as Python `file_lock.locked_append` (fail-closed,
+  torn-tail framing), so both runtimes can write one workspace without
+  corrupting each other's rows.
 
 dev-recall, the viz server, and the learning pipeline read both
 runtimes' history through one lens.
@@ -65,6 +74,21 @@ runtimes' history through one lens.
 5. Director, intent routing, NOW-vs-AGENDA lanes.
 6. Inspector/evolver self-improvement loop.
 7. Heartbeat, projects, escalation, notifications, viz.
+
+**Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
+4 lenses, sonnet-medium fallback; each of these was flagged and either
+fixed or parked here honestly):
+
+- Subprocess liveness/stall kill: only the wall-clock timeout exists;
+  Python `_run_subprocess_safe`'s mtime/CPU-stall detection is not
+  ported. Output capture is disk-backed, so memory stays bounded.
+- `cost_usd` estimation: rows omit the field rather than lie `0.0`.
+- `config.Get` type mismatches beyond int↔float fall back to the
+  default silently (same as Python); a warnings channel like `Load`'s
+  is deferred until a caller needs it.
+- `jsonx` with NO fence present still takes the first balanced bracket
+  in prose — shared verbatim with Python `_find_json_bounds`; fixing it
+  is a cross-runtime change, not a Go patch.
 
 ## Running
 

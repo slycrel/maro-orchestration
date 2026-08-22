@@ -37,7 +37,7 @@ func TestRunEndToEndRecordsCompatibleRows(t *testing.T) {
 		"facts: A and B",
 		"final answer using A and B",
 	}}
-	res, err := Run(context.Background(), fake, record.New(ws), "answer the question", 8)
+	res, err := Run(context.Background(), fake, record.New(ws), "answer the question", "", 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestBlockedStepReasonTravelsWholeToFailureChain(t *testing.T) {
 		"fine result",
 		"   ",
 	}}
-	res, err := Run(context.Background(), fake, record.New(ws), "goal", 8)
+	res, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestPriorEvidenceRidesMarkedBudgetNotBareSlice(t *testing.T) {
 		long,
 		"consumed",
 	}}
-	if _, err := Run(context.Background(), fake, record.New(ws), "goal", 8); err != nil {
+	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8); err != nil {
 		t.Fatal(err)
 	}
 	// The step-2 prompt (Prompts[2]: decompose, step1, step2) must carry
@@ -133,11 +133,107 @@ func TestDecomposeFailureIsRecordedNotSilent(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws)
 	fake := &llm.Fake{Script: []string{"no json array here at all"}}
-	if _, err := Run(context.Background(), fake, record.New(ws), "goal", 8); err == nil {
+	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8); err == nil {
 		t.Fatal("decompose failure must surface as an error")
 	}
 	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
 	if len(rows) != 1 || rows[0]["status"] != "stuck" {
 		t.Fatalf("decompose failure left no stuck outcome: %v", rows)
+	}
+}
+
+// erroringAdapter fails a chosen call with a typed ResultError carrying
+// usage, exactly as the subprocess backend does on an is_error result.
+type erroringAdapter struct {
+	llm.Fake
+	failCall int
+	calls    int
+}
+
+func (e *erroringAdapter) Complete(ctx context.Context, msgs []llm.Message, opts llm.Options) (*llm.Response, error) {
+	e.calls++
+	if e.calls == e.failCall {
+		return nil, &llm.ResultError{Msg: "model refused: policy detail line 1\nline 2", TokensIn: 7, TokensOut: 3}
+	}
+	return e.Fake.Complete(ctx, msgs, opts)
+}
+
+// A blocked step still spent tokens; the outcome row must carry them
+// (adversarial round 2026-08-22, Expert QA — the error branch dropped
+// usage the CLI reports).
+func TestBlockedStepSalvagesUsageFromTypedError(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	ad := &erroringAdapter{
+		Fake:     llm.Fake{Script: []string{`["one", "two"]`, "ok"}},
+		failCall: 3, // decompose, step1 ok, step2 fails
+	}
+	res, err := Run(context.Background(), ad, record.New(ws), "goal", "", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" {
+		t.Fatalf("status=%s", res.Status)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	// Fake spends 10/5 per successful call; the failed turn adds 7/3.
+	if got := rows[0]["tokens_in"].(float64); got != 10+10+7 {
+		t.Fatalf("blocked step's tokens_in dropped: %v", got)
+	}
+	if got := rows[0]["tokens_out"].(float64); got != 5+5+3 {
+		t.Fatalf("blocked step's tokens_out dropped: %v", got)
+	}
+	// The multi-line reason travels whole (no first-line amputation).
+	chain := rows[0]["failure_chain"].([]any)
+	if !strings.Contains(chain[0].(string), "line 2") {
+		t.Fatalf("diagnostic beyond the first line lost: %v", chain[0])
+	}
+}
+
+// The row's model field records what the operator asked for — or says
+// the backend defaulted — never just the backend name (adversarial
+// round 2026-08-22, Expert QA: "subprocess" as a model misattributes
+// spend in cross-runtime analyses).
+func TestOutcomeRowRecordsRequestedModel(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
+	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "sonnet", 8); err != nil {
+		t.Fatal(err)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if rows[0]["model"] != "sonnet" {
+		t.Fatalf("model=%v, want the requested model", rows[0]["model"])
+	}
+
+	ws2 := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws2)
+	fake2 := &llm.Fake{Script: []string{`["one"]`, "done"}}
+	if _, err := Run(context.Background(), fake2, record.New(ws2), "goal", "", 8); err != nil {
+		t.Fatal(err)
+	}
+	rows2 := readJSONL(t, filepath.Join(ws2, "memory", "outcomes.jsonl"))
+	if rows2[0]["model"] != "fake-default" {
+		t.Fatalf("model=%v, want backend-default marker", rows2[0]["model"])
+	}
+}
+
+// loop_id must be a random join key, not a wall-clock derivative
+// (adversarial round 2026-08-22, Architect: a 0.1s-modulus id collides
+// across scripted runs and merges unrelated runs' events downstream).
+func TestLoopIDsAreDistinctAcrossRuns(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	seen := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
+		res, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[res.LoopID] {
+			t.Fatalf("loop_id %q repeated", res.LoopID)
+		}
+		seen[res.LoopID] = true
 	}
 }

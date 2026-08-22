@@ -28,6 +28,7 @@ package budget
 import (
 	"fmt"
 	"regexp"
+	"unicode/utf8"
 )
 
 // Budget is a named cap with its written reason attached. The Why is not
@@ -103,25 +104,45 @@ var Registry = []Budget{
 
 // markerRe recognizes a clip marker at end-of-string. Format is
 // byte-identical to Python context_budget.clip so mixed-runtime records
-// stay parseable by one tool.
-var markerRe = regexp.MustCompile(`… \[truncated: first \d+ of \d+ characters\]$`)
+// stay parseable by one tool. Digit runs are bounded and the match is
+// position-guarded below, mirroring Python's 2026-08-14 fixpoint fix:
+// with an unbounded \d+ and a bare suffix match, any text merely ENDING
+// in a marker-shaped string passed through every cap unbounded
+// (adversarial round on this port, all four lenses, 2026-08-22).
+var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]$`)
+
+// markerMax is the longest legitimate marker: fixed text plus two
+// 9-digit counts (Python _CLIP_MARKER_MAX).
+const markerMax = 64
 
 // Clip bounds s at limit characters (runes, matching Python's len()
-// semantics), appending an honest marker when it cuts. Idempotent: text
-// already carrying a clip marker passes through unchanged, so re-clipping
-// on a read path cannot eat the marker or double-cut (the stacked-cut
-// failure the Python audit kept finding). limit <= 0 disables the bound
-// (a breaker that is off is off — never a silent zero-width cut).
+// semantics), appending an honest marker when it cuts. Idempotent at the
+// same or a wider limit: text already carrying a clip marker passes
+// through unchanged, so re-clipping on a read path cannot eat the marker
+// or double-cut (the stacked-cut failure the Python audit kept finding).
+// A strictly TIGHTER re-clip still cuts — the payload genuinely doesn't
+// fit — nesting the old marker inside the new payload, exactly as the
+// Python docstring specifies. limit <= 0 disables the bound (a breaker
+// that is off is off — never a silent zero-width cut).
+//
+// The two guards on the marker match keep the invariant honest even
+// against marker-SHAPED payload text: the result is never longer than
+// limit + markerMax runes. (The counts themselves are advisory prose — a
+// payload that fakes them fakes only its own provenance note, never the
+// bound.)
 func Clip(s string, limit int) string {
 	if limit <= 0 {
-		return s
-	}
-	if markerRe.MatchString(s) {
 		return s
 	}
 	r := []rune(s)
 	if len(r) <= limit {
 		return s
+	}
+	if loc := markerRe.FindStringIndex(s); loc != nil {
+		markerStart := utf8.RuneCountInString(s[:loc[0]])
+		if markerStart <= limit && len(r)-markerStart <= markerMax {
+			return s
+		}
 	}
 	return fmt.Sprintf("%s … [truncated: first %d of %d characters]",
 		string(r[:limit]), limit, len(r))

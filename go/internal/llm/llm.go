@@ -35,6 +35,19 @@ type Options struct {
 	Model       string // "", alias (sonnet/haiku/opus), or a full model id
 }
 
+// ResultError reports a backend result that was itself an error, while
+// keeping the token usage the failed turn still spent — real spend on a
+// blocked step must reach the records (adversarial round 2026-08-22,
+// Expert QA: the error branch silently dropped usage the CLI reports).
+// Callers salvage it with errors.As.
+type ResultError struct {
+	Msg       string
+	TokensIn  int
+	TokensOut int
+}
+
+func (e *ResultError) Error() string { return e.Msg }
+
 // Adapter is the backend seam.
 type Adapter interface {
 	// Complete returns the model's reply or an error. Errors are returned,
@@ -60,8 +73,12 @@ func BuildPrompt(msgs []Message) string {
 	}
 	if len(system) > 0 {
 		parts = append(parts, "[SYSTEM INSTRUCTIONS]\n"+strings.Join(system, "\n\n"))
-		parts = append(parts, "[END SYSTEM INSTRUCTIONS]\n")
 	}
+	// Unconditional, matching Python _build_prompt exactly: it emits the
+	// END marker even with no system block (adversarial round 2026-08-22
+	// caught this port emitting it conditionally — a silently different
+	// prompt shape for system-less calls).
+	parts = append(parts, "[END SYSTEM INSTRUCTIONS]\n")
 	for _, m := range rest {
 		switch m.Role {
 		case "user":

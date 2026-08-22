@@ -16,6 +16,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -47,25 +48,44 @@ type Result struct {
 	TokensIn  int
 	TokensOut int
 	Elapsed   time.Duration
+	// Warnings carries non-fatal record failures (a captain's-log write
+	// that failed) to the caller — a stdout print alone is swallowed the
+	// moment the terminal scrolls (adversarial round 2026-08-22, Skeptic).
+	Warnings []string
 }
 
 // Run executes goal end-to-end and records the run. rec may not be nil —
 // a run that leaves no record did not happen, per the delivery doctrine.
-func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, maxSteps int) (*Result, error) {
+// model is what the operator asked for ("" = backend default); it lands
+// in the outcome row so cross-runtime analyses don't misattribute spend
+// to a backend name (adversarial round 2026-08-22, Expert QA).
+func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model string, maxSteps int) (*Result, error) {
 	if rec == nil {
 		return nil, fmt.Errorf("nil recorder — runs must leave records")
 	}
 	start := time.Now()
-	loopID := fmt.Sprintf("go-%d", start.UnixNano()%1_000_000_00)
+	// Random join key, same generator as outcome ids — a wall-clock
+	// modulus collides across runs at sub-second cadence and loop_id is
+	// the outcomes↔captains-log join key (adversarial round 2026-08-22).
+	loopID := "go-" + record.NewID()
+	recModel := model
+	if recModel == "" {
+		// The backend picks its own default; say so rather than passing
+		// the backend name off as a model.
+		recModel = a.Name() + "-default"
+	}
 
-	steps, err := planner.Decompose(ctx, a, goal, maxSteps)
+	steps, planUse, err := planner.Decompose(ctx, a, goal, maxSteps)
 	if err != nil {
-		// Decompose failing IS an outcome; record it before returning.
+		// Decompose failing IS an outcome; record it before returning —
+		// including whatever the failed planning turn still spent.
 		_, recErr := rec.WriteOutcome(record.Outcome{
 			Goal: goal, Status: "stuck", LoopID: loopID,
 			Summary:   budget.FailureChainEntry.Clip("decompose failed: " + err.Error()),
 			TaskType:  "loop",
-			Model:     a.Name(),
+			Model:     recModel,
+			TokensIn:  planUse.TokensIn,
+			TokensOut: planUse.TokensOut,
 			ElapsedMS: time.Since(start).Milliseconds(),
 			FailChain: []string{budget.FailureChainEntry.Clip("decompose: " + err.Error())},
 		})
@@ -75,15 +95,17 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 		return nil, err
 	}
 
+	res := &Result{Goal: goal, LoopID: loopID,
+		// Planning tokens are real spend; start the totals with them.
+		TokensIn: planUse.TokensIn, TokensOut: planUse.TokensOut}
+
 	if evErr := rec.Event("LOOP_STARTED", loopID,
 		fmt.Sprintf("Go loop started: %d steps for %s", len(steps), budget.Clip(goal, 200)),
 		map[string]any{"steps": len(steps), "backend": a.Name()}, loopID); evErr != nil {
 		// Event-log failure must not kill the run, but it must not vanish
 		// either — it rides the result so the caller can surface it.
-		fmt.Printf("warn: captain's log write failed: %v\n", evErr)
+		res.Warnings = append(res.Warnings, "captain's log write failed: "+evErr.Error())
 	}
-
-	res := &Result{Goal: goal, LoopID: loopID}
 	var failChain []string
 
 	for i, step := range steps {
@@ -116,7 +138,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	}
 	if _, err := rec.WriteOutcome(record.Outcome{
 		Goal: goal, Status: res.Status, Summary: summary,
-		TaskType: "loop", Model: a.Name(), LoopID: loopID,
+		TaskType: "loop", Model: recModel, LoopID: loopID,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		ElapsedMS: res.Elapsed.Milliseconds(), FailChain: failChain,
 	}); err != nil {
@@ -127,7 +149,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 		fmt.Sprintf("Go loop %s: %d/%d steps done", res.Status, done, len(res.Steps)),
 		map[string]any{"status": res.Status, "tokens_in": res.TokensIn,
 			"tokens_out": res.TokensOut}, loopID); err != nil {
-		fmt.Printf("warn: captain's log write failed: %v\n", err)
+		res.Warnings = append(res.Warnings, "captain's log write failed: "+err.Error())
 	}
 	return res, nil
 }
@@ -149,7 +171,15 @@ func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []
 		{Role: "user", Content: sb.String()},
 	}, llm.Options{MaxTokens: 2048, Temperature: 0.3, Purpose: "execute-step"})
 	if err != nil {
-		return StepOutcome{Step: step, Status: "blocked", Result: err.Error()}
+		out := StepOutcome{Step: step, Status: "blocked", Result: err.Error()}
+		// A failed turn still spent tokens; salvage the usage the adapter
+		// carried on the typed error so blocked steps don't under-report
+		// spend (adversarial round 2026-08-22, Expert QA).
+		var re *llm.ResultError
+		if errors.As(err, &re) {
+			out.TokensIn, out.TokensOut = re.TokensIn, re.TokensOut
+		}
+		return out
 	}
 	if strings.TrimSpace(resp.Content) == "" {
 		return StepOutcome{Step: step, Status: "blocked",

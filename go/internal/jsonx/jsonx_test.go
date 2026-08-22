@@ -58,3 +58,35 @@ func TestObjectFenced(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A stray bracket in prose ahead of the fenced answer must not misdirect
+// the carve (adversarial round 2026-08-22; the Python sibling shares the
+// no-fence weakness, so the fence path is where Go can be strictly better).
+func TestStringArrayStrayBracketBeforeFence(t *testing.T) {
+	text := "See the docs [here](url) for context.\n```json\n[\"step one\", \"step two\"]\n```"
+	got, err := StringArray(text)
+	if err != nil || len(got) != 2 || got[0] != "step one" {
+		t.Fatalf("got %v err %v", got, err)
+	}
+}
+
+// Ported llm_parse.strip_think_blocks behavior: hypothetical JSON inside
+// a reasoning trace must not be mistaken for the answer.
+func TestObjectIgnoresJSONInsideThinkBlock(t *testing.T) {
+	text := "<think>maybe {\"passed\": true}? no...</think>\n{\"passed\": false}"
+	got, err := Object(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["passed"] != false {
+		t.Fatalf("carved the think-block's hypothetical JSON: %v", got)
+	}
+}
+
+// An unclosed think trace (token budget cut it off) has no answer to
+// keep — the extraction must error, not scavenge from the trace.
+func TestObjectUnclosedThinkBlockErrors(t *testing.T) {
+	if _, err := Object("<think>drafting {\"passed\": true} but"); err == nil {
+		t.Fatal("unclosed think block must yield no payload")
+	}
+}

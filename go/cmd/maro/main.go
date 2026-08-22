@@ -71,15 +71,22 @@ func run(args []string) error {
 	fmt.Printf("backend: %s\n", adapter.Name())
 
 	rec := record.New(ws)
-	res, err := loop.Run(context.Background(), adapter, rec, goal, *maxSteps)
+	res, err := loop.Run(context.Background(), adapter, rec, goal, *model, *maxSteps)
 	if err != nil {
 		return err
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, "warn:", w)
 	}
 
 	fmt.Printf("\n=== %s (%s, %d steps, %d in / %d out tokens, %s) ===\n",
 		strings.ToUpper(res.Status), res.LoopID, len(res.Steps),
 		res.TokensIn, res.TokensOut, res.Elapsed.Round(1e8))
 	for i, s := range res.Steps {
+		// Deliberately unclipped: the terminal is the delivery surface and
+		// the full result is the deliverable — caps bound prompts and
+		// records, never the only copy the operator sees
+		// (artifacts-over-streams decree).
 		fmt.Printf("\n[%d] %s — %s\n%s\n", i, s.Status, s.Step, s.Result)
 	}
 	return nil

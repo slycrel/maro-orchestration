@@ -3,6 +3,7 @@ package planner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,14 +24,19 @@ ones.
 Respond ONLY with a JSON array of step strings — no prose, no markdown
 fence, no numbering inside the strings.`
 
+// Usage reports what the decompose call spent — the caller must fold it
+// into the run's totals; planning tokens are real spend too (adversarial
+// round 2026-08-22 flagged the class: usage dropped on non-happy paths).
+type Usage struct{ TokensIn, TokensOut int }
+
 // Decompose asks the adapter to break goal into at most maxSteps steps.
 // Operator context (GOALS/CONTEXT/SIGNALS.md from the workspace user
 // overlay) rides the prompt whole under the OperatorDoc budget — the
 // port inherits the caps-sweep fix, not the [:500] starvation it
 // replaced.
-func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([]string, error) {
+func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([]string, Usage, error) {
 	if strings.TrimSpace(goal) == "" {
-		return nil, fmt.Errorf("empty goal")
+		return nil, Usage{}, fmt.Errorf("empty goal")
 	}
 	if maxSteps <= 0 {
 		maxSteps = 8
@@ -47,12 +53,18 @@ func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([
 		{Role: "user", Content: sb.String()},
 	}, llm.Options{MaxTokens: 1024, Temperature: 0.2, Purpose: "decompose"})
 	if err != nil {
-		return nil, fmt.Errorf("decompose: %w", err)
+		use := Usage{}
+		var re *llm.ResultError
+		if errors.As(err, &re) {
+			use = Usage{TokensIn: re.TokensIn, TokensOut: re.TokensOut}
+		}
+		return nil, use, fmt.Errorf("decompose: %w", err)
 	}
+	use := Usage{TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
 
 	steps, err := jsonx.StringArray(resp.Content)
 	if err != nil {
-		return nil, fmt.Errorf("decompose reply: %w", err)
+		return nil, use, fmt.Errorf("decompose reply: %w", err)
 	}
 	var out []string
 	for _, s := range steps {
@@ -61,12 +73,12 @@ func Decompose(ctx context.Context, a llm.Adapter, goal string, maxSteps int) ([
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("decompose produced no usable steps")
+		return nil, use, fmt.Errorf("decompose produced no usable steps")
 	}
 	if len(out) > maxSteps {
 		out = out[:maxSteps]
 	}
-	return out, nil
+	return out, use, nil
 }
 
 type opDoc struct{ name, body string }

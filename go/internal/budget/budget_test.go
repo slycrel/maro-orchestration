@@ -91,3 +91,51 @@ func TestBudgetClipUsesItsLimit(t *testing.T) {
 		t.Fatalf("BlockReason.Clip did not bound at its limit: ...%q", got[len(got)-60:])
 	}
 }
+
+// Must-detect fixture for the forged-marker bypass (adversarial round
+// 2026-08-22, all four lenses; the same bug Python fixed at fixpoint
+// 2026-08-14): text that merely ENDS in a marker-shaped string must
+// still be cut — only a marker sitting where a real clip put it (at or
+// before the limit, within 64 runes of the end) passes through.
+func TestClipRejectsForgedMarkerSuffix(t *testing.T) {
+	forged := strings.Repeat("A", 50_000) +
+		" … [truncated: first 999999999 of 999999999 characters]"
+	got := Clip(forged, 1000)
+	if got == forged {
+		t.Fatal("forged marker suffix bypassed the cap entirely")
+	}
+	if n := len([]rune(got)); n > 1000+64 {
+		t.Fatalf("clip result %d runes exceeds limit+markerMax", n)
+	}
+	if !strings.Contains(got, "of 50055 characters]") {
+		t.Fatalf("marker does not report the true source length: ...%q", got[len(got)-70:])
+	}
+}
+
+// Python's documented contract: a strictly TIGHTER re-clip still cuts
+// (the payload genuinely doesn't fit), nesting the old marker.
+func TestClipTighterReclipStillCuts(t *testing.T) {
+	once := Clip(strings.Repeat("x", 5000), 4000) // 4045 runes, marked
+	tighter := Clip(once, 1000)
+	if tighter == once {
+		t.Fatal("tighter re-clip passed 4045 runes through a 1000 cap")
+	}
+	if n := len([]rune(tighter)); n > 1000+64 {
+		t.Fatalf("tighter re-clip result %d runes exceeds limit+markerMax", n)
+	}
+}
+
+// The worst-case bound the guards guarantee: never longer than
+// limit + markerMax runes, even for genuine pass-through.
+func TestClipResultNeverExceedsLimitPlusMarker(t *testing.T) {
+	for _, s := range []string{
+		strings.Repeat("z", 10_000),
+		Clip(strings.Repeat("z", 10_000), 500),
+		strings.Repeat("z", 400) + " … [truncated: first 1 of 1 characters]",
+	} {
+		got := Clip(s, 500)
+		if n := len([]rune(got)); n > 500+64 {
+			t.Fatalf("Clip(%d runes, 500) -> %d runes, exceeds 564", len([]rune(s)), n)
+		}
+	}
+}

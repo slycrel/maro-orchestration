@@ -13,7 +13,7 @@ import (
 func TestDecomposeParsesFencedReply(t *testing.T) {
 	t.Setenv("MARO_WORKSPACE", t.TempDir())
 	fake := &llm.Fake{Script: []string{"```json\n[\"a\", \"b\", \"c\"]\n```"}}
-	steps, err := Decompose(context.Background(), fake, "do the thing", 8)
+	steps, _, err := Decompose(context.Background(), fake, "do the thing", 8)
 	if err != nil || len(steps) != 3 {
 		t.Fatalf("steps=%v err=%v", steps, err)
 	}
@@ -22,7 +22,7 @@ func TestDecomposeParsesFencedReply(t *testing.T) {
 func TestDecomposeCapsAtMaxSteps(t *testing.T) {
 	t.Setenv("MARO_WORKSPACE", t.TempDir())
 	fake := &llm.Fake{Script: []string{`["1","2","3","4","5"]`}}
-	steps, err := Decompose(context.Background(), fake, "goal", 2)
+	steps, _, err := Decompose(context.Background(), fake, "goal", 2)
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("steps=%v err=%v", steps, err)
 	}
@@ -30,10 +30,10 @@ func TestDecomposeCapsAtMaxSteps(t *testing.T) {
 
 func TestDecomposeErrorsOnEmptyAndGarbage(t *testing.T) {
 	t.Setenv("MARO_WORKSPACE", t.TempDir())
-	if _, err := Decompose(context.Background(), &llm.Fake{Script: []string{"x"}}, "  ", 8); err == nil {
+	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{"x"}}, "  ", 8); err == nil {
 		t.Fatal("empty goal must error")
 	}
-	if _, err := Decompose(context.Background(), &llm.Fake{Script: []string{`["  ", ""]`}}, "goal", 8); err == nil {
+	if _, _, err := Decompose(context.Background(), &llm.Fake{Script: []string{`["  ", ""]`}}, "goal", 8); err == nil {
 		t.Fatal("all-blank steps must error")
 	}
 }
@@ -57,7 +57,7 @@ func TestOperatorDocsRideWholeWithMarkedRunawayBound(t *testing.T) {
 	}
 
 	fake := &llm.Fake{Script: []string{`["one"]`}}
-	if _, err := Decompose(context.Background(), fake, "goal", 4); err != nil {
+	if _, _, err := Decompose(context.Background(), fake, "goal", 4); err != nil {
 		t.Fatal(err)
 	}
 	prompt := fake.Prompts[0]

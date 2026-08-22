@@ -3,8 +3,8 @@
 // Same contract as the Python src/config.py: user-level ~/.maro/config.yml
 // provides defaults, workspace-level <workspace>/config.yml overrides it,
 // nested maps merge one level deep, and environment variables win over
-// both for the paths (MARO_HOME, MARO_WORKSPACE — the same names the
-// Python runtime honors, so both runtimes resolve the same stores).
+// both for the paths — the SAME names, in the SAME order, that the Python
+// runtime honors, so both runtimes resolve the same stores.
 package config
 
 import (
@@ -15,9 +15,15 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// Home resolves the maro home directory (default ~/.maro).
+// Home resolves the user-level maro directory (default ~/.maro), which
+// holds the user config tier ONLY. It mirrors Python config._maro_dir:
+// MARO_USER_DIR overrides (tests point it at tmp), and — critically — it
+// has NO influence on Workspace below. The 2026-08-16 live-ledger
+// incident happened because an operator set MARO_HOME expecting it to
+// move the store; Python reads no such variable, and after this port's
+// adversarial round (Architect, 2026-08-22) neither does Go.
 func Home() string {
-	if v := os.Getenv("MARO_HOME"); v != "" {
+	if v := os.Getenv("MARO_USER_DIR"); v != "" {
 		return v
 	}
 	h, err := os.UserHomeDir()
@@ -27,17 +33,24 @@ func Home() string {
 	return filepath.Join(h, ".maro")
 }
 
-// Workspace resolves the runtime workspace (default <home>/workspace).
-// MARO_WORKSPACE is the override the Python runtime honors — NOT
-// MARO_HOME/MARO_USER_DIR (feedback_live_store_probes, 2026-08-16: a
-// session assumed the wrong env var and overwrote a live ledger; the
-// resolved path must be asserted before any write, which cmd/maro does
-// by printing it first).
+// Workspace resolves the runtime workspace, matching Python
+// config.workspace_root exactly: MARO_WORKSPACE, then the legacy compat
+// names OPENCLAW_WORKSPACE and WORKSPACE_ROOT, then ~/.maro/workspace
+// unconditionally — never derived from Home()
+// (feedback_live_store_probes, 2026-08-16: a session assumed the wrong
+// env var and overwrote a live ledger; the resolved path must be
+// asserted before any write, which cmd/maro does by printing it first).
 func Workspace() string {
-	if v := os.Getenv("MARO_WORKSPACE"); v != "" {
-		return v
+	for _, name := range []string{"MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"} {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
 	}
-	return filepath.Join(Home(), "workspace")
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".maro", "workspace")
+	}
+	return filepath.Join(h, ".maro", "workspace")
 }
 
 // Load reads and merges the two config tiers. A missing or unparseable
@@ -93,8 +106,15 @@ func Merge(base, over map[string]any) map[string]any {
 }
 
 // Get resolves a dotted path ("inspector.breach_threshold") with a typed
-// default. YAML integers arrive as int and floats as float64; Get matches
-// the requested type and falls back to def on any mismatch.
+// default. YAML integers arrive as int and floats as float64; Get
+// tolerates the mismatch in BOTH directions (an operator writing
+// `max_steps: 8.0` still gets their 8 — adversarial round 2026-08-22
+// caught the one-directional version silently discarding it).
+//
+// Honest residual: any OTHER type mismatch (a quoted "4000", a
+// string-typed "false") silently falls back to def, same as Python's
+// config.get. Making that loud needs a warnings channel like Load's —
+// deferred until a caller needs it, noted in PORT.md.
 func Get[T any](cfg map[string]any, path string, def T) T {
 	var cur any = cfg
 	for _, part := range strings.Split(path, ".") {
@@ -110,11 +130,16 @@ func Get[T any](cfg map[string]any, path string, def T) T {
 	if v, ok := cur.(T); ok {
 		return v
 	}
-	// int-vs-float64 tolerance for numeric lookups.
-	if want, isFloat := any(def).(float64); isFloat {
-		_ = want
+	switch any(def).(type) {
+	case float64: // stored as YAML int, requested as float64
 		if iv, ok := cur.(int); ok {
 			if out, ok2 := any(float64(iv)).(T); ok2 {
+				return out
+			}
+		}
+	case int: // stored as YAML float, requested as int (integral only)
+		if fv, ok := cur.(float64); ok && fv == float64(int(fv)) {
+			if out, ok2 := any(int(fv)).(T); ok2 {
 				return out
 			}
 		}

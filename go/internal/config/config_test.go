@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,10 +51,68 @@ func TestGetIntTolerantFloatLookup(t *testing.T) {
 	}
 }
 
+func TestGetFloatTolerantIntLookup(t *testing.T) {
+	// The reverse direction (adversarial round 2026-08-22): an operator
+	// writing `max_steps: 8.0` must still get their 8, not the default.
+	m := map[string]any{"n": 8.0, "frac": 8.5}
+	if got := Get(m, "n", 3); got != 8 {
+		t.Fatalf("float-to-int lookup discarded the override: %v", got)
+	}
+	if got := Get(m, "frac", 3); got != 3 {
+		t.Fatalf("non-integral float must fall back, not round: %v", got)
+	}
+}
+
 func TestWorkspaceHonorsMaroWorkspaceEnv(t *testing.T) {
 	t.Setenv("MARO_WORKSPACE", "/tmp/x-ws")
 	if got := Workspace(); got != "/tmp/x-ws" {
 		t.Fatalf("MARO_WORKSPACE ignored: %v", got)
+	}
+}
+
+// The 2026-08-16 live-ledger incident, pinned: MARO_HOME is NOT a
+// variable this system reads — Python config.workspace_root never did,
+// and the Go port must not either (adversarial round 2026-08-22,
+// Architect: v0 shipped with MARO_HOME steering the workspace).
+func TestWorkspaceIgnoresMaroHome(t *testing.T) {
+	t.Setenv("MARO_WORKSPACE", "")
+	t.Setenv("OPENCLAW_WORKSPACE", "")
+	t.Setenv("WORKSPACE_ROOT", "")
+	t.Setenv("MARO_HOME", "/tmp/should-not-matter")
+	got := Workspace()
+	if strings.HasPrefix(got, "/tmp/should-not-matter") {
+		t.Fatalf("MARO_HOME moved the workspace: %v", got)
+	}
+	home, _ := os.UserHomeDir()
+	if got != filepath.Join(home, ".maro", "workspace") {
+		t.Fatalf("default workspace is not ~/.maro/workspace: %v", got)
+	}
+}
+
+// Legacy compat names, in Python's exact priority order.
+func TestWorkspaceCompatVarsInPythonOrder(t *testing.T) {
+	t.Setenv("MARO_WORKSPACE", "")
+	t.Setenv("OPENCLAW_WORKSPACE", "/tmp/openclaw-ws")
+	t.Setenv("WORKSPACE_ROOT", "/tmp/root-ws")
+	if got := Workspace(); got != "/tmp/openclaw-ws" {
+		t.Fatalf("OPENCLAW_WORKSPACE should win over WORKSPACE_ROOT: %v", got)
+	}
+	t.Setenv("OPENCLAW_WORKSPACE", "")
+	if got := Workspace(); got != "/tmp/root-ws" {
+		t.Fatalf("WORKSPACE_ROOT fallback ignored: %v", got)
+	}
+	t.Setenv("MARO_WORKSPACE", "/tmp/primary-ws")
+	if got := Workspace(); got != "/tmp/primary-ws" {
+		t.Fatalf("MARO_WORKSPACE must outrank compat names: %v", got)
+	}
+}
+
+// The user-config tier moves with MARO_USER_DIR (Python _maro_dir),
+// keeping the box's real ~/.maro/config.yml out of tests.
+func TestHomeHonorsMaroUserDir(t *testing.T) {
+	t.Setenv("MARO_USER_DIR", "/tmp/user-tier")
+	if got := Home(); got != "/tmp/user-tier" {
+		t.Fatalf("MARO_USER_DIR ignored: %v", got)
 	}
 }
 
@@ -63,7 +122,7 @@ func TestLoadReportsUnparseableFileInsteadOfSwallowing(t *testing.T) {
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MARO_HOME", home)
+	t.Setenv("MARO_USER_DIR", home) // isolate the user tier from the box's real ~/.maro
 	t.Setenv("MARO_WORKSPACE", ws)
 	if err := os.WriteFile(filepath.Join(ws, "config.yml"),
 		[]byte(":\tnot yaml ["), 0o644); err != nil {

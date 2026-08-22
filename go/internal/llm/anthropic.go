@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"os"
 	"time"
 )
@@ -103,8 +104,10 @@ func (a *Anthropic) Complete(ctx context.Context, msgs []Message, opts Options) 
 		return nil, fmt.Errorf("read anthropic response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// The whole API error body travels (it is JSON, small, and the
+		// diagnostic); the record boundary applies the marked clip.
 		return nil, fmt.Errorf("anthropic HTTP %d: %s", resp.StatusCode,
-			firstLine(string(raw)))
+			strings.TrimSpace(string(raw)))
 	}
 
 	var parsed struct {
