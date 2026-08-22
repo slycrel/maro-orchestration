@@ -382,7 +382,22 @@ func changeLogAppend(workspaceDir string, d map[string]any, beforeState map[stri
 // (Python _apply_suggestion_action, Go-slice categories only). Returns
 // true only when the category's primary action completed; callers must
 // not stamp durable applied state on false.
-func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bool {
+// actionOutcome is applyAction's tri-state result. Python collapsed
+// these two non-success cases differently: a guidance-only guardrail was
+// still "applied" because its prose landed in playbook.md (the injected
+// director surface). The Go slice does NOT port playbook.md, so a
+// guidance-only guardrail has NO durable home here — stamping it
+// "applied" would be a record that lies (r1 review Finding B). It is
+// held instead, distinct from a genuine action failure.
+type actionOutcome int
+
+const (
+	actionApplied actionOutcome = iota
+	actionFailed
+	actionGuidanceOnly
+)
+
+func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) actionOutcome {
 	category, _ := d["category"].(string)
 	if category == "" {
 		category = "observation"
@@ -404,7 +419,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 	}
 	changeLogAppend(workspaceDir, d, beforeState)
 
-	ok := true
+	outcome := actionApplied
 	switch category {
 	case "prompt_tweak":
 		// Record as a medium tiered lesson so it gets injected into
@@ -417,8 +432,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 		snap, err := store.LessonSnapshot()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] prompt_tweak apply failed (lesson snapshot): %v\n", err)
-			ok = false
-			break
+			return actionFailed
 		}
 		if snap.Texts[text] {
 			fmt.Fprintf(os.Stderr, "[evolver] prompt_tweak %s: identical lesson already live — "+
@@ -460,7 +474,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 		}
 		if err := store.AppendMediumLesson(tl); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] prompt_tweak apply failed (lesson write): %v\n", err)
-			ok = false
+			return actionFailed
 		}
 
 	case "new_guardrail":
@@ -476,12 +490,21 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 		pattern := strings.TrimSpace(stringOr(d["pattern"]))
 		if pattern == "" {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s has no matchable pattern — "+
-				"guidance only, no constraint row\n", suggestionID)
-			break
+				"guidance only, no durable home in the Go slice (playbook unported)\n", suggestionID)
+			return actionGuidanceOnly
 		}
 		if _, err := regexp.Compile("(?i)" + pattern); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s pattern is not a valid regex (%v) — "+
-				"guidance only, no constraint row\n", suggestionID, err)
+				"guidance only, no durable home in the Go slice (playbook unported)\n", suggestionID, err)
+			return actionGuidanceOnly
+		}
+		// Idempotent by source==id: a retry after a partial apply (the
+		// row's `applied` stamp failed to persist) must not append a
+		// second identical constraint row (r1 review QA #1). Python has
+		// no such dedup — a named hardening divergence.
+		if constraintRowExists(workspaceDir, suggestionID) {
+			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s constraint row already present — "+
+				"apply is an idempotent no-op\n", suggestionID)
 			break
 		}
 		entry := map[string]any{
@@ -500,12 +523,11 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 		dcPath := dynamicConstraintsPath(workspaceDir)
 		if err := os.MkdirAll(filepath.Dir(dcPath), 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail apply failed: %v\n", err)
-			ok = false
-			break
+			return actionFailed
 		}
 		if err := record.AppendRawLine(dcPath, raw); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail apply failed: %v\n", err)
-			ok = false
+			return actionFailed
 		}
 
 	case "observation":
@@ -514,10 +536,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 		// Unreachable from Apply (unported categories are held before
 		// reaching here), kept as a guard against a future caller.
 		fmt.Fprintf(os.Stderr, "[evolver] applyAction: category %q has no Go handler\n", category)
-		ok = false
-	}
-	if !ok {
-		return false
+		return actionFailed
 	}
 
 	// Captain's log: evolver applied a suggestion.
@@ -533,13 +552,40 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) bo
 
 	// Python also appends prompt_tweak/new_guardrail/observation text
 	// (confidence >= 0.7) to the director's playbook.md — the playbook
-	// surface is unported; named in the package doc.
-	return true
+	// surface is unported; named in the package doc. (This is why a
+	// guidance-only guardrail returns actionGuidanceOnly above rather
+	// than actionApplied: Python's stamp was honest because the prose
+	// landed in the playbook; Go has no such durable home yet.)
+	return outcome
 }
 
 func stringOr(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// constraintRowExists reports whether dynamic-constraints.jsonl already
+// carries a row whose source is this suggestion id — the apply/revert
+// key. Tolerant read (torn line skipped); missing file = false.
+func constraintRowExists(workspaceDir, suggestionID string) bool {
+	raw, err := os.ReadFile(dynamicConstraintsPath(workspaceDir))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		var row map[string]any
+		if json.Unmarshal([]byte(s), &row) != nil {
+			continue
+		}
+		if src, _ := row["source"].(string); src == suggestionID {
+			return true
+		}
+	}
+	return false
 }
 
 // Apply marks a suggestion applied by executing its action and
@@ -608,6 +654,17 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			d["status"] = "held_for_review"
 			d["block_reason"] = "sub_mission enqueue is not ported in the Go slice — " +
 				"run it via the Python CLI (shared store)"
+		case "inspection_finding":
+			// Inspector-authored rows land in the SHARED suggestions
+			// store (inspector.saveSuggestions), so a human running
+			// `maro evolve -apply <id>` on one reaches here. They are
+			// informational (confidence 0.7, no action to run) — held,
+			// not action_failed (r1 review QA #4: the old default arm's
+			// "unreachable" claim was false for these rows).
+			d["applied"] = false
+			d["status"] = "held_for_review"
+			d["block_reason"] = "inspection_finding is informational — nothing to apply; " +
+				"it surfaces friction for a human to act on"
 		case "new_guardrail":
 			// Guardrails can permanently block execution paths, so the
 			// gate is an explicit opt-in: manual apply → the review is
@@ -684,12 +741,22 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 }
 
 // stampAction runs applyAction and stamps the row's applied/status
-// fields from the result (the repeated Python arm).
+// fields from its tri-state result. actionGuidanceOnly is NOT "applied":
+// the Go slice has no playbook surface to carry guidance-only guardrails,
+// so the row is HELD (visible, retryable) rather than stamped with a
+// success it never earned (r1 review Finding B).
 func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
-	if applyAction(workspaceDir, rec, d) {
+	switch applyAction(workspaceDir, rec, d) {
+	case actionApplied:
 		d["applied"] = true
 		delete(d, "status")
-	} else {
+		delete(d, "block_reason")
+	case actionGuidanceOnly:
+		d["applied"] = false
+		d["status"] = "held_for_review"
+		d["block_reason"] = "new_guardrail has no matchable regex pattern — guidance only; " +
+			"the Go slice has no playbook surface, so apply the prose via the Python CLI (shared store)"
+	default: // actionFailed
 		d["applied"] = false
 		d["status"] = "action_failed"
 	}

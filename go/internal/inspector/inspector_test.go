@@ -204,6 +204,29 @@ func TestInspectSessionVerdictPendingCapsAtFair(t *testing.T) {
 	}
 }
 
+// A malformed goal_achieved (string "false", a number — a corrupt or
+// foreign-writer row on the shared store) must NOT slip past the caps as
+// unjudged and read "good" with an adapter present. It is treated as
+// judged-NOT-achieved, the safe direction for a quality gate (r1 review
+// Architect #4; a hardening divergence from Python's `is False`).
+func TestInspectSessionMalformedGoalAchievedCapsAtFair(t *testing.T) {
+	fake := &llm.Fake{Script: []string{"0.95", "reads great. VERDICT: **PROCEED**"}}
+	for _, bad := range []any{"false", "true", 0.0, "1"} {
+		sq := InspectSession(context.Background(), map[string]any{
+			"outcome_id": "m1", "goal": "do it", "status": "done",
+			"summary": "narrative says perfect", "goal_achieved": bad,
+		}, fake, defaultThresholds())
+		if sq.OverallQuality == "good" {
+			t.Fatalf("malformed goal_achieved %#v graded good — escaped the cap", bad)
+		}
+		for _, d := range sq.DelightSignals {
+			if d == "task_completed_successfully" || d == "goal_verified_achieved" {
+				t.Fatalf("malformed goal_achieved %#v earned delight %s", bad, d)
+			}
+		}
+	}
+}
+
 func TestInspectSessionJudgedAchievedEarnsGood(t *testing.T) {
 	fake := &llm.Fake{Script: []string{"0.9", "solid. VERDICT: **PROCEED**"}}
 	sq := InspectSession(context.Background(), map[string]any{

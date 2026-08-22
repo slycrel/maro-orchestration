@@ -187,20 +187,33 @@ func ScanContent(content, source string) ScanReport {
 	}
 }
 
-// urlHostAllowed reports whether the URL's host part starts with an
-// allowlisted host — the semantics Python's inline lookahead enforced
-// (the exclusion sat immediately after the scheme).
+// urlHostAllowed reports whether the URL's host is an allowlisted host —
+// matched at a real host BOUNDARY, not a raw string prefix. Python's
+// inline lookahead `(?!r\.jina\.ai|api\.anthropic\.com)` was a literal-
+// prefix check, so `https://r.jina.ai.evil.com/leak` defeated it (the
+// host merely STARTS WITH the allowlisted string but is attacker-owned).
+// This is a DELIBERATE HARDENING DIVERGENCE from the fork-point: the Go
+// port anchors the check to the host's end (exact host, or a true
+// subdomain `<sub>.r.jina.ai`), closing the lookalike-domain bypass. The
+// Python guard carries the same hole — flagged as a backport-correction
+// candidate in PORT.md (r1 review, 2026-08-22).
 func urlHostAllowed(url string) bool {
 	rest := url
-	for _, p := range []string{"https://", "http://", "HTTPS://", "HTTP://"} {
-		if strings.HasPrefix(strings.ToLower(rest), strings.ToLower(p)) {
+	for _, p := range []string{"https://", "http://"} {
+		if strings.HasPrefix(strings.ToLower(rest), p) {
 			rest = rest[len(p):]
 			break
 		}
 	}
-	lower := strings.ToLower(rest)
+	// Host is everything up to the first '/', '?', '#', or ':' (port).
+	host := strings.ToLower(rest)
+	if i := strings.IndexAny(host, "/?#:"); i >= 0 {
+		host = host[:i]
+	}
 	for _, h := range allowedURLHosts {
-		if strings.HasPrefix(lower, h) {
+		// Exact host, or a genuine subdomain of the allowlisted host —
+		// never a domain that merely embeds it as a prefix.
+		if host == h || strings.HasSuffix(host, "."+h) {
 			return true
 		}
 	}

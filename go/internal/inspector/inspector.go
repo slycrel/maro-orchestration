@@ -441,6 +441,14 @@ func isVerdictPending(outcome map[string]any) bool {
 // goalAchieved returns the row's tri-state verdict: (value, judged).
 // Key-presence ≈ Python's `is not None` because every writer pops nulls;
 // an explicit JSON null still normalizes to unjudged (record.go r5).
+//
+// A present-but-non-bool value (a corrupt or foreign-writer row carrying
+// a string "false", a number, etc.) is treated as judged-NOT-achieved,
+// NOT as unjudged. This is the safe direction for a quality gate: a
+// malformed verdict must not let a run clear the fair-caps and read
+// "good" (r1 review Architect #4). Python's `achieved is False` identity
+// check lets such a value slip to unjudged — a HARDENING DIVERGENCE here,
+// flagged as a backport-correction candidate in PORT.md.
 func goalAchieved(outcome map[string]any) (bool, bool) {
 	v, present := outcome["goal_achieved"]
 	if !present || v == nil {
@@ -448,7 +456,7 @@ func goalAchieved(outcome map[string]any) (bool, bool) {
 	}
 	b, ok := v.(bool)
 	if !ok {
-		return false, false
+		return false, true // malformed verdict → judged-false (conservative)
 	}
 	return b, true
 }

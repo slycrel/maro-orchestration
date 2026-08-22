@@ -962,6 +962,22 @@ and sub_mission engines (both HELD with reasons naming the Python
 CLI). Mutations M71–M84 all DETECTED (compiling mutants verified —
 M71's first form didn't compile and was rebuilt semantic).
 
+**r1 adversarial review (2026-08-22, 4 lenses, sonnet-medium fallback) —
+two HIGHs fixed, both faithful-port traps.** (a) The exfil-URL allowlist
+was a raw string prefix, so a lookalike domain (`r.jina.ai.evil.com`)
+scanned clean; `urlHostAllowed` now matches at a host boundary (exact or
+`.`-suffix subdomain). (b) A guidance-only `new_guardrail` (no/invalid
+pattern) stamped `applied=true` with no durable effect once playbook.md
+was dropped — `applyAction` is now tri-state and HOLDS it. Also: guardrail
+append is idempotent by `source==id` (no double-write on retry);
+`inspection_finding` rows HELD not `action_failed`; malformed
+`goal_achieved` treated as judged-NOT-achieved (safe cap direction);
+tool-call detector fixtured. NEW backport-correction candidates for the
+Python fork-point: (5) `injection_guard._EXFIL_PATTERNS` URL lookahead is
+prefix-only — same lookalike-domain bypass; (6) `inspector` grades a
+malformed `goal_achieved` as unjudged (`is False`), letting it read good.
+Fix-layer mutations M85–M90 all DETECTED (compiling mutants).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

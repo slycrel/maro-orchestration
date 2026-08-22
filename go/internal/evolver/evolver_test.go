@@ -58,6 +58,37 @@ func mustSave(t *testing.T, ws string, s ...Suggestion) {
 	}
 }
 
+// forceUnapply clears a row's applied/applied_at stamps on disk,
+// simulating a partial apply where the durable stamp write failed but the
+// action's side effect (a constraint row) already landed.
+func forceUnapply(t *testing.T, ws, id string) {
+	t.Helper()
+	p := suggestionsPath(ws)
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		var row map[string]any
+		if json.Unmarshal([]byte(s), &row) == nil && row["suggestion_id"] == id {
+			row["applied"] = false
+			delete(row, "applied_at")
+			b, _ := json.Marshal(row)
+			out = append(out, string(b))
+			continue
+		}
+		out = append(out, s)
+	}
+	if err := os.WriteFile(p, []byte(strings.Join(out, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func baseSuggestion(id, category, target, text string, conf float64) Suggestion {
 	return Suggestion{
 		SuggestionID: id, Category: category, Target: target,
@@ -308,7 +339,12 @@ func TestApplyGuardrailHeldThenManual(t *testing.T) {
 
 // A guardrail with no pattern (or an invalid one) applies as guidance
 // only — NO constraint row is written, never a rule that can't fire.
-func TestApplyGuardrailWithoutPatternIsGuidanceOnly(t *testing.T) {
+// A guidance-only guardrail (no/invalid pattern) has NO durable home in
+// the Go slice — Python's honest "applied" stamp relied on the prose
+// landing in playbook.md, which is unported. So it must be HELD, never
+// stamped applied (r1 review Finding B — the old assertion pinned the
+// lie). No constraint row, no lesson, and NO EVOLVER_APPLIED event.
+func TestApplyGuardrailWithoutPatternIsHeld(t *testing.T) {
 	ws := t.TempDir()
 	rec := record.New(ws)
 	empty := baseSuggestion("g-2", "new_guardrail", "all", "avoid destructive deletes generally", 0.9)
@@ -319,12 +355,75 @@ func TestApplyGuardrailWithoutPatternIsGuidanceOnly(t *testing.T) {
 		if _, err := Apply(ws, rec, nil, id, true); err != nil {
 			t.Fatal(err)
 		}
-		if !IsApplied(ws, id) {
-			t.Fatalf("%s: guidance-only apply must still succeed", id)
+		if IsApplied(ws, id) {
+			t.Fatalf("%s: guidance-only guardrail claimed applied with no durable effect", id)
+		}
+		s := GetSuggestion(ws, id)
+		if s.Status != "held_for_review" || !strings.Contains(s.BlockReason, "guidance only") {
+			t.Fatalf("%s: guidance-only must be held with a reason: %+v", id, s)
 		}
 	}
 	if rows := readAllRows(t, dynamicConstraintsPath(ws)); len(rows) != 0 {
 		t.Fatalf("pattern-less/invalid guardrails wrote constraint rows: %v", rows)
+	}
+	// No EVOLVER_APPLIED event for a guardrail that did nothing durable.
+	logRaw, _ := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
+	if strings.Contains(string(logRaw), "EVOLVER_APPLIED") {
+		t.Fatal("guidance-only guardrail fired a false EVOLVER_APPLIED event")
+	}
+}
+
+// A guardrail apply that landed the constraint row but whose `applied`
+// stamp failed to persist must, on retry, NOT append a second identical
+// row (r1 review QA #1 — the record-that-lies double-write). Idempotent
+// by source==id. Simulate the retry by pre-seeding the row this
+// suggestion would write, then applying: exactly one row remains.
+func TestApplyGuardrailIsIdempotentOnRetry(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	g := baseSuggestion("g-idem", "new_guardrail", "all", "block rm -rf", 0.9)
+	g.Pattern = `rm\s+-rf`
+	mustSave(t, ws, g)
+	// First apply writes the row and stamps applied.
+	if _, err := Apply(ws, rec, nil, "g-idem", true); err != nil {
+		t.Fatal(err)
+	}
+	if !IsApplied(ws, "g-idem") {
+		t.Fatal("first guardrail apply did not stamp applied")
+	}
+	rows := readAllRows(t, dynamicConstraintsPath(ws))
+	if len(rows) != 1 {
+		t.Fatalf("want 1 constraint row after first apply, got %d", len(rows))
+	}
+	// Force the retry path: clear the applied stamp on disk, re-apply.
+	forceUnapply(t, ws, "g-idem")
+	if _, err := Apply(ws, rec, nil, "g-idem", true); err != nil {
+		t.Fatal(err)
+	}
+	if rows := readAllRows(t, dynamicConstraintsPath(ws)); len(rows) != 1 {
+		t.Fatalf("retry double-wrote the constraint row: got %d rows", len(rows))
+	}
+	if !IsApplied(ws, "g-idem") {
+		t.Fatal("retry did not re-stamp applied after the idempotent no-op")
+	}
+}
+
+// Inspector-authored rows share the suggestions store; a human applying
+// one gets HELD (informational), not action_failed (r1 review QA #4).
+func TestApplyInspectionFindingHeld(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	mustSave(t, ws, baseSuggestion("insp-ab12cd-00", "inspection_finding", "all",
+		"repeated backtracking observed across 3 sessions", 0.7))
+	if _, err := Apply(ws, rec, nil, "insp-ab12cd-00", true); err != nil {
+		t.Fatal(err)
+	}
+	if IsApplied(ws, "insp-ab12cd-00") {
+		t.Fatal("inspection_finding claimed applied")
+	}
+	if s := GetSuggestion(ws, "insp-ab12cd-00"); s.Status != "held_for_review" ||
+		!strings.Contains(s.BlockReason, "informational") {
+		t.Fatalf("inspection_finding must be held as informational: %+v", s)
 	}
 }
 

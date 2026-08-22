@@ -2100,3 +2100,86 @@ the failure demanded). The marker sub-arc (r3 grammar → r4 line
 anchor → r5 end anchor → r6 provenance bit → r7 wiring pin → r8
 honest docs) is the tranche's teaching arc: position and shape are
 never provenance; only the producer's own bit is.
+
+---
+
+## Self-improvement slice 1 (inspector/evolver/guard) — commit 2bba7c09
+
+### Round 1 (4 lenses: Skeptic, Architect, Minimalist, Expert QA — Large; sonnet-medium SAME-MODEL FALLBACK, codex capped til 08-27)
+
+**Verdict: CONTESTED → fixed.** Two HIGHs, both VERIFIED and both a
+faithful-port trap (the fork-point behaves the same, but the ported
+lesson was the thing to carry, not the line). All four lenses
+independently raised the exfil-allowlist bypass — the round's consensus
+top finding.
+
+**Verification Ledger (every HIGH + the acted MEDIUM/LOWs):**
+
+- **VERIFIED HIGH — exfil-URL allowlist was a raw string prefix
+  (`urlHostAllowed`, guard.go).** Live-reproduced: `https://r.jina.ai.evil-collector.com/exfil`
+  and `https://api.anthropic.com.evil.io/steal` both scanned CLEAN
+  (probe test, both `IsClean=true risk=low`), and the Python twin
+  `scan_content` returned clean too. Reachable through `evolver.Apply`
+  (scans `source="internal"` → `SafeToAutoApply` collapses to `IsClean`)
+  → auto-applies a lookalike-exfil suggestion at conf≥0.8. **Fixed:**
+  host-boundary match (exact host or `.`-suffix subdomain), scheme
+  stripped, host clipped at `/?#:`. Pins: `TestURLExfilLookalikeDomainFlagged`
+  (3 evasion shapes, all must be HIGH). M85 DETECTED. Python carries the
+  identical hole → backport-correction candidate (PORT.md).
+
+- **VERIFIED HIGH — guidance-only `new_guardrail` stamped `applied=true`
+  with zero durable effect (`applyAction`, store.go).** Python's stamp
+  was honest because pattern-less/invalid guardrail prose landed in
+  `playbook.md` (the injected director surface); the Go slice does NOT
+  port playbook, so the guidance-only path left NO lesson, NO constraint
+  row, NO playbook entry — yet marked applied and fired `EVOLVER_APPLIED`.
+  The old test `...IsGuidanceOnly` asserted `IsApplied==true` — a pin
+  encoding the lie. **Fixed:** `applyAction` now returns a tri-state
+  `actionOutcome`; guidance-only → `actionGuidanceOnly` → HELD (visible,
+  retryable), no false event. Pin rewritten as `TestApplyGuardrailWithoutPatternIsHeld`
+  (held + reason + no EVOLVER_APPLIED). M86 DETECTED.
+
+- **VERIFIED MEDIUM (QA #1) — `new_guardrail` append had no dedup, so a
+  retry after a partial apply (constraint row landed, `applied` stamp
+  write failed) double-wrote the row — a record that lies.** **Fixed:**
+  `constraintRowExists` idempotency by `source==id` (a hardening
+  divergence — Python lacks it). Pin: `TestApplyGuardrailIsIdempotentOnRetry`.
+  M87 DETECTED.
+
+- **VERIFIED MEDIUM (Architect #4) — malformed `goal_achieved` (string
+  `"false"`, a number) slipped past the fair-caps as *unjudged* and,
+  with an adapter present, read `good`.** Confirmed the escape by trace.
+  **Fixed:** `goalAchieved` treats a present-but-non-bool value as
+  judged-NOT-achieved (safe direction for a quality gate) — divergence
+  from Python's `is False`, backport candidate. Pin:
+  `TestInspectSessionMalformedGoalAchievedCapsAtFair` (4 malformed shapes).
+  M88 DETECTED.
+
+- **VERIFIED LOW (QA #4) — inspector-authored `inspection_finding` rows
+  share the store, so `maro evolve -apply <id>` on one hit the `default`
+  arm → `action_failed`, contradicting the "unreachable" comment.**
+  **Fixed:** explicit `inspection_finding` HELD case ("informational —
+  nothing to apply"). Pin: `TestApplyInspectionFindingHeld`. M89 DETECTED.
+
+- **VERIFIED LOW (instrument, QA #3) — the tool-call-injection detector
+  class had no fixture ("found 0" unproven).** **Fixed:** added
+  `TestScanToolCallInjectionPatterns` (all four patterns fire). M90
+  DETECTED.
+
+- **REFUTED / accepted-named (Skeptic #5) — the widened guardrail-revert
+  source match is a strict superset of Python's, anchored to the same
+  `suggestionID`; cannot spuriously remove another suggestion's row.**
+  Confirmed by reading both branches; no action (already the intended
+  fix, M82-pinned).
+
+- **OUT-OF-SCOPE / backlog (Architect #6) — an RE2-valid guardrail
+  pattern can still be a backtracking ReDoS in Python's `re` matcher
+  (`constraint.py`).** Cross-runtime hardening owned by the Python side;
+  not this slice's code. Noted, not fixed.
+
+- **OUT-OF-SCOPE (Architect #5) — no cross-language pattern-list parity
+  pin.** A Go unit test can't import the Python module; deferred (the
+  lists are small verbatim ports, low drift risk).
+
+All fix-layer mutations M85–M90 DETECTED with COMPILING mutants. Full
+suite green, gofmt/vet clean. r2 (fix-layer re-review) follows.
