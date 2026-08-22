@@ -2633,3 +2633,66 @@ Test-only hardening added this round (http: fixtures + #12 known-gap pin); no
 production code changed, so r10 stands as a genuine zero-HIGH round. Full suite
 green, gofmt/vet clean. This is the FIRST of the two consecutive clean rounds —
 r11 must also be zero-HIGH to reach the fixpoint.
+
+---
+
+## r11 review (2026-08-22, skeptic+qa)
+
+### Verdict: NO BLOCKERS FOUND — ZERO HIGH (SAME-MODEL FALLBACK: sonnet-medium). Verification Ledger:
+
+Second confirmation pass over the r10 test-only tree. Both lenses re-traced the
+full parser (fresh-bypass sweep, DoS linearity, Python parity, evolver honesty)
+and found no HIGH/MEDIUM. Three LOWs logged and held, all verify-confirmed as
+non-blocking: (a) `strings.ToLower` vs pure-ASCII allowlist — flagged as
+defense-in-depth, skeptic could not construct a live collision; (b) URL scan
+loop `break` after first flagged URL — observability only (`hasExfil` forces
+high regardless); (c) the r10 `http:` fixtures never combine with padding.
+r10+r11 provisionally reached the two-consecutive-clean fixpoint.
+
+---
+
+## r12 review (2026-08-22, skeptic+qa) — TIER ESCALATION
+
+### Verdict: REJECT — TWO HIGH (SAME-MODEL FALLBACK: opus-5 medium). Verification Ledger:
+
+Jeremy escalated the reviewer tier (opus-5 medium) instead of continuing
+sonnet-medium fallback. The higher tier found two real HIGHs in one round —
+both verify-before-fix CONFIRMED live, both fixed and mutation-verified this
+round; the fixpoint count resets.
+
+- **HIGH #1 — VERIFIED — exfil-shape window starvation (userinfo/subdomain).**
+  Trace: `ScanContent("…https://r.jina.ai:tok"+23×"A"+"@evil-collector.com/leak…","internal").IsClean == true`
+  and the 60-char-subdomain variant likewise clean, while the short-userinfo pin
+  correctly flags. Root cause: shape `{2,49}` host-span < the real authority
+  once userinfo/subdomain padding is added, and the `||` short-circuit skips
+  `urlHostAllowed`. Fix: host-span max → urlCandidateMax (512), min kept at {2}.
+  Mutation M113 (revert to {2,49}) fails the new pins. Reachable on the literal
+  evolver-suggestion path (source `"internal"`, `SafeToAutoApply` true). Shared
+  with Python ({3,50}) — candidate #11 extended. Residual >512-userinfo pinned
+  as `TestURLExfilUserinfoWindowKnownGap` (closing needs unbounded authority
+  scan = the O(n²) the cap prevents).
+
+- **HIGH #2 — VERIFIED (bypass) / severity-contested — Unicode case-fold.**
+  Trace: `strings.ToLower("İ")=="i"` (true) and
+  `ScanContent("…https://api.anthropİc.com/…","internal").IsClean == true`.
+  Detector bypass confirmed. Real-world reach contested BETWEEN the two opus
+  lenses: skeptic HIGH; qa observed IDNA disallows U+0130 so no client resolves
+  `api.anthropİc.com` (bypass without a working channel). Fixed regardless
+  (fail-toward-flag is cheap and correct): `asciiLower` byte-wise fold at host +
+  scheme-prefix in urlHostAllowed and in sourceIsAllowed. Mutation M114 (revert
+  to strings.ToLower) fails the U+0130 pin. Ranked below HIGH #1 on reach.
+
+- **MEDIUM — VERIFIED — `new_guardrail` `pattern` field unscanned.** Confirmed:
+  guard scans `d["suggestion"]` only (store.go:637); `pattern` (store.go:490)
+  is RE2-compile-validated but not guard-scanned, and Python executes it as a
+  regex — RE2 accepts ReDoS shapes Python's backtracking engine does not.
+  Default-HELD (opt-in auto-apply) → MEDIUM not HIGH. HELD this round; guard
+  package-doc corrected to name the scan scope; `pattern` length-bound + ReDoS-
+  shape rejection is candidate #13 (a scoped follow-up).
+
+- **LOWs** (b break, c http:-padding, non-ASCII whitespace not terminators):
+  all confirmed non-blocking/safe-direction, held.
+
+Full suite green (22 packages), gofmt/vet clean. Fix commit is scoped to the
+guard parser (guard.go + guard_test.go pins). **The fixpoint clock RESETS — r13
+is the first of two new consecutive clean rounds, to run at the escalated tier.**

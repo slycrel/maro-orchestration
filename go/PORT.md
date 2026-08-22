@@ -1187,6 +1187,61 @@ it writes an empty-text lesson + applies — accurate, named, pinned). Test-only
 changes this round. r10 is the FIRST of two consecutive clean rounds — r11
 must also be zero-HIGH to close the fixpoint.
 
+**r11 round (2026-08-22, skeptic+qa, sonnet-medium fallback) — ZERO HIGH.**
+Second confirmation pass over the r10 test-only tree. Both lenses re-traced the
+full parser (fresh-bypass sweep of urlHostAllowed/exfilURLShape, DoS linearity,
+Python parity, evolver honesty surface) and found no HIGH/MEDIUM. Three LOWs
+logged and held: (a) urlHostAllowed uses Unicode strings.ToLower against a
+pure-ASCII allowlist; (b) the URL scan loop breaks after the first flagged URL
+(observability, not a bypass — hasExfil already forces high); (c) the r10
+`http:` fixtures never combine with cap/starvation padding, so they don't pin
+the O(1) skip. r10+r11 were provisionally the two-consecutive-clean fixpoint —
+until r12 raised the tier and reopened it.
+
+**r12 round (2026-08-22, skeptic+qa, opus-5 MEDIUM — tier escalation) — TWO
+HIGH; fixpoint REOPENS.** Jeremy's call: escalate the reviewer tier instead of
+grinding same-model fallback (rounds r6–r11 were sonnet-medium; codex capped
+til 08-27). The higher tier found in ONE round two real defects six weaker
+rounds missed — the flagship pattern again, both one layer UNDER every prior
+fix:
+  - **HIGH #1 (window-starvation of the exfil shape).** The shape's `{2,49}`
+    host-span required the TLD within ~50 chars of the authority start, but
+    that span also covers USERINFO (`user@`, client-discarded) and long
+    SUBDOMAIN labels. Free padding pushed the real registrable host past the
+    window, so the shape missed it and `urlHostAllowed` (which parses userinfo)
+    was never consulted (the `||` short-circuit). Live bypasses, verify-before-
+    fix confirmed: `https://r.jina.ai:tok<23×A>@evil-collector.com/leak` and
+    `https://<60×a>.evil-collector.com/leak` both scanned CLEAN. FIX: bind the
+    shape's host-span MAX to the candidate window (urlCandidateMax=512); the MIN
+    stays {2} so the short-inner-host exclusion is untouched. Shared fork-point
+    gap — Python's {3,50} has the same blind spot (candidate #11 now spans the
+    userinfo/subdomain instance too). Residual: userinfo LONGER than the 512
+    window still evades (host past the DoS cap) — accepted known-gap, pinned by
+    `TestURLExfilUserinfoWindowKnownGap`, since closing it needs an unbounded
+    authority scan = the O(n²) the cap prevents.
+  - **HIGH #2 (Unicode case-fold bypass).** `strings.ToLower` applies Unicode
+    simple folding: U+0130 'İ' → ASCII 'i', so `api.anthropİc.com` read as the
+    allowlisted `api.anthropic.com` and scanned clean. FIX: `asciiLower` (byte-
+    wise A-Z only) at both host and scheme-prefix in urlHostAllowed, and in
+    sourceIsAllowed — a non-ASCII byte can never collapse into a pure-ASCII
+    allowlist entry (safe direction). The two opus lenses DISAGREED on real-
+    world reach (skeptic HIGH; qa noted IDNA disallows U+0130 so no client
+    resolves it) — the fix is warranted regardless as fail-toward-flag, but the
+    channel is nil today; ranked below HIGH #1.
+
+Both fixes mutation-verified (M113 revert `{2,512}`→`{2,49}` fails the
+userinfo/subdomain pins; M114 revert asciiLower→ToLower fails the U+0130 pin).
+Also from r12, HELD/documented: MEDIUM — `new_guardrail`'s `pattern` field is
+attacker-influenced, reaches `dynamic-constraints.jsonl`, and is executed as a
+regex by Python but is NOT guard-scanned (only `suggestion` is); default-HELD
+mitigates it (opt-in auto-apply only). Guard package-doc corrected to name the
+scan scope; `pattern`-safety (length bound + ReDoS-shape rejection for Python's
+backtracking engine) is a named follow-up (candidate #13). LOWs (b)/(c)/non-
+ASCII-whitespace remain held. **The fixpoint COUNT RESETS: r13 must be the
+first of two new consecutive clean rounds.** Standing lesson recorded: on
+same-model fallback, escalate the tier after round 1 (feedback_reviewer_tier_
+escalation) — r12 is the datapoint (one opus round > six sonnet rounds).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

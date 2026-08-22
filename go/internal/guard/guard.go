@@ -6,9 +6,13 @@
 // findings and blocks, never exploit tooling.
 //
 // The evolver's apply gate is the consumer this tranche ports it for:
-// Python apply_suggestion scans suggestion text FAIL-CLOSED before any
-// category action runs (a guard that throws blocks the apply rather
-// than silently passing content through).
+// Python apply_suggestion scans the SUGGESTION-TEXT field FAIL-CLOSED
+// before any category action runs (a guard that throws blocks the apply
+// rather than silently passing content through). Note the scope: the
+// gate scans the `suggestion` text, NOT every action-specific field — a
+// new_guardrail action's `pattern` field is validated separately (RE2
+// compile) but is not guard-scanned, and reaches a durable rule Python
+// executes only under opt-in auto-apply (backport candidate; r12).
 //
 // Pattern lists and the allowlist are verbatim ports. The Python
 // module's scan_persona_yaml wrapper has no Go consumer yet and is not
@@ -78,7 +82,23 @@ var exfilPatterns = []*regexp.Regexp{
 // — otherwise a nested `https://x.com/...` would match with a slash as a
 // host char, defeating the short-inner-host exclusion that keeps the legit
 // r.jina.ai proxy shape clean (r5 regression guard, kept in r6).
-var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,49}\.(com|io|net)/[^\s]{5,}`)
+// The host-span upper bound is urlCandidateMax (512), NOT a short ~50 (r12):
+// the span between the first host char and the TLD also covers USERINFO
+// (`user@`, discarded by every client) and long subdomain labels. A ~50 cap
+// let an attacker starve the real registrable host out of the shape's window
+// with free padding — `https://r.jina.ai:tok<23×A>@evil-collector.com/leak`
+// (userinfo) or `https://<60×a>.evil-collector.com/leak` (subdomain) — so the
+// shape missed it and `urlHostAllowed` (which DOES parse userinfo, via the
+// last `@`) was never consulted because of the `||` short-circuit. Widening
+// the MAX to the candidate window lets the shape match the padded span and
+// hand off to urlHostAllowed for the authoritative allowlist decision; the
+// MIN stays {2} so the short-inner-host exclusion (`https://x.com/...` clean)
+// is untouched. RE2's bounded repeat is still linear, and the cand is already
+// capped to skip+512, so the shape can never scan past the window. (r12 opus
+// review; Python's {3,50} bound has the SAME blind spot — backport #11. The
+// residual >512-byte-userinfo case is a documented known-gap, since resolving
+// it needs an unbounded authority scan = the O(n²) the cap exists to prevent.)
+var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)/[^\s]{5,}`)
 
 // schemeRe locates every URL scheme occurrence (slash count irrelevant —
 // the shape and host parser handle the slashes). Python's re.search scans
@@ -144,7 +164,8 @@ func sourceIsAllowed(source string) bool {
 	if source == "" {
 		return false
 	}
-	lower := strings.ToLower(source)
+	lower := asciiLower(source) // ASCII-only fold; a Unicode fold would let an
+	// IDN homoglyph source (e.g. "skİlls") collapse into the allowlist.
 	if allowedSourceDirs[lower] {
 		return true
 	}
@@ -261,9 +282,11 @@ func ScanContent(content, source string) ScanReport {
 		// Bound the AUTHORITY window (in BYTES). Without this, a blob of
 		// `https://` repeated with no whitespace is O(schemes × tail) per
 		// ScanContent — each candidate would be the whole remaining target
-		// (r4 review DoS). The exfil shape needs only a scheme, a ≤50-rune
-		// host, a TLD, and a short path, so a few hundred bytes past the
-		// slash run is always enough to decide a match.
+		// (r4 review DoS). The exfil shape needs a scheme, an authority that
+		// fits the window (host plus any userinfo/subdomain padding, up to
+		// urlCandidateMax — r12), a TLD, and a short path, so the window past
+		// the slash run is enough to decide a match. Userinfo padding beyond
+		// the window is the documented known-gap (see exfilURLShape).
 		if len(cand) > skip+urlCandidateMax {
 			cand = cand[:skip+urlCandidateMax]
 		}
@@ -316,10 +339,37 @@ func ScanContent(content, source string) ScanReport {
 // Exact-match (no subdomain acceptance) is deliberate: it keeps the
 // accept set aligned with Python (whose lookahead also flags subdomains
 // of an allowlisted apex) and still closes the lookalike bypass.
+// asciiLower lowercases ASCII A-Z byte-wise and leaves every other byte
+// (including all bytes >= 0x80) untouched. It deliberately does NOT use
+// strings.ToLower, whose Unicode simple case-folding maps non-ASCII runes
+// onto ASCII letters — e.g. U+0130 'İ' folds to 'i', so `strings.ToLower`
+// turned `api.anthropİc.com` into the allowlisted `api.anthropic.com` and
+// waved an attacker host through (r12 opus review). A byte-wise ASCII fold
+// can never collapse a non-ASCII byte into a pure-ASCII allowlist entry, so
+// any IDN/homoglyph host fails the exact match and is flagged (safe
+// direction). Python's str.lower folds U+0130 to two codepoints, so it never
+// had this bypass — this keeps Go at parity.
+func asciiLower(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			if b == nil {
+				b = []byte(s)
+			}
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	if b == nil {
+		return s
+	}
+	return string(b)
+}
+
 func urlHostAllowed(url string) bool {
 	rest := url
 	for _, p := range []string{"https:", "http:"} {
-		if strings.HasPrefix(strings.ToLower(rest), p) {
+		if strings.HasPrefix(asciiLower(rest), p) {
 			rest = rest[len(p):]
 			break
 		}
@@ -347,8 +397,9 @@ func urlHostAllowed(url string) bool {
 	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
 		authority = authority[at+1:]
 	}
-	// Strip an optional :port.
-	host := strings.ToLower(authority)
+	// Strip an optional :port. ASCII-only fold (see asciiLower) — a Unicode
+	// fold here would let an IDN homoglyph collapse into the allowlist.
+	host := asciiLower(authority)
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
