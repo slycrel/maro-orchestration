@@ -58,3 +58,4 @@ src/memory/
 .run-workspace/
 .claude/worktrees/
 build/
+go/maro
