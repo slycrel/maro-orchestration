@@ -567,6 +567,13 @@ func stringOr(v any) string {
 // constraintRowExists reports whether dynamic-constraints.jsonl already
 // carries a row whose source is this suggestion id — the apply/revert
 // key. Tolerant read (torn line skipped); missing file = false.
+//
+// Scope is PRESENCE-ONLY, by design: it covers the crash/partial-apply
+// window (row written, `applied` stamp not yet persisted → retry). It
+// does NOT check the row's pattern or its 30-day TTL (constraint.py load
+// filter), so it is not meant for re-applying an old expired id — an
+// edge that requires `applied` to stay false for weeks (r2 review LOW,
+// accepted-named).
 func constraintRowExists(workspaceDir, suggestionID string) bool {
 	raw, err := os.ReadFile(dynamicConstraintsPath(workspaceDir))
 	if err != nil {
@@ -665,6 +672,21 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			d["status"] = "held_for_review"
 			d["block_reason"] = "inspection_finding is informational — nothing to apply; " +
 				"it surfaces friction for a human to act on"
+		case "cost_optimization":
+			// KNOWN Python category (evolver_store.py holds it
+			// pending_human_review). No Go auto-apply engine — HELD, not
+			// action_failed (r2 review: the inspection_finding fix was
+			// narrow; these two known Python categories share the store
+			// and deserve the same honest hold).
+			d["applied"] = false
+			d["status"] = "held_for_review"
+			d["block_reason"] = "cost_optimization has no auto-apply handler — review manually " +
+				"(or apply via the Python CLI, shared store)"
+		case "crystallization":
+			d["applied"] = false
+			d["status"] = "held_for_review"
+			d["block_reason"] = "crystallization requires human review — run " +
+				"`maro-memory canon-candidates` via the Python CLI (shared store)"
 		case "new_guardrail":
 			// Guardrails can permanently block execution paths, so the
 			// gate is an explicit opt-in: manual apply → the review is
@@ -780,6 +802,17 @@ type RevertResult struct {
 // removes the constraint row; skill categories refuse — engine
 // unported).
 func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) RevertResult {
+	// Only an APPLIED suggestion can be reverted. changeLogAppend writes
+	// an audit row at the TOP of applyAction — before the outcome is
+	// known — so a guidance-only/held or action_failed suggestion still
+	// has a change_log entry with a mutation before_state it never
+	// performed. Reverting off that entry would stamp status="reverted"
+	// over an honest held_for_review/action_failed status (r2 review: a
+	// record that lies). Guard on the durable applied flag instead.
+	if !IsApplied(workspaceDir, suggestionID) {
+		return RevertResult{Category: "",
+			Detail: fmt.Sprintf("suggestion_id %s is not applied — nothing to revert", suggestionID)}
+	}
 	entries := readRows(changeLogPath(workspaceDir))
 	var match map[string]any
 	for i := len(entries) - 1; i >= 0; i-- {

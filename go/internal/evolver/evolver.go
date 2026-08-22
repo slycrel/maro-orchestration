@@ -158,14 +158,22 @@ func BuildOutcomesSummary(outcomes []map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
-// triState reads the row's goal verdict: (value, judged).
+// triState reads the row's goal verdict: (value, judged). A present-but-
+// non-bool value (corrupt or foreign-writer row) is judged-NOT-achieved,
+// NOT unjudged — the same conservative direction as
+// inspector.goalAchieved (r2 review: the sibling reader must not diverge,
+// or the proposer never sees a failure signal the quality gate would cap
+// at fair). Backport-correction candidate, like its inspector twin.
 func triState(o map[string]any) (bool, bool) {
 	v, present := o["goal_achieved"]
 	if !present || v == nil {
 		return false, false
 	}
 	b, ok := v.(bool)
-	return b, ok
+	if !ok {
+		return false, true // malformed verdict → judged-false (conservative)
+	}
+	return b, true
 }
 
 // llmAnalyze asks the model for patterns + raw suggestions. Empty on

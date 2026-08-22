@@ -2183,3 +2183,74 @@ top finding.
 
 All fix-layer mutations M85–M90 DETECTED with COMPILING mutants. Full
 suite green, gofmt/vet clean. r2 (fix-layer re-review) follows.
+
+### Round 2 (fix-layer re-review: Skeptic + Expert QA — sonnet-medium fallback; commit 0ac098d6)
+
+**Verdict: CONTESTED → fixed.** The flagship pattern held: both HIGHs
+lived inside r1's own `urlHostAllowed` fix. Verify-before-fix
+live-reproduced every acted finding, and a Python cross-check reshaped
+the guard fix toward true parity rather than the reviewers' first
+proposal.
+
+**Verification Ledger:**
+
+- **VERIFIED HIGH (QA #1) — userinfo authority bypass.**
+  `https://r.jina.ai:tok@evil-collector.com/leak` scanned CLEAN: the host
+  parser cut at the first `:`, reading `r.jina.ai` (exact allowlist match)
+  instead of the real host `evil-collector.com` (after the last `@`).
+  Live-reproduced. Python shares the hole (also clean) → backport
+  candidate. **Fixed:** authority parsed RFC-3986-correctly (cut path at
+  `/?#`, strip userinfo at the last `@`, then strip `:port`).
+
+- **VERIFIED HIGH (Skeptic #1) — nested-URL laundering.**
+  `https://r.jina.ai/https://evil-collector.com/leak` scanned CLEAN in
+  Go: one greedy `FindAllString` match, host read as the outer
+  `r.jina.ai` → allowlisted → whole payload skipped. Python cross-check
+  was decisive: Python's `re.search` FLAGS this (it independently matches
+  the inner host), while keeping the legit `r.jina.ai/https://x.com/page`
+  proxy pattern clean (inner `x.com` host too short for the shape).
+  **Fixed toward Python parity:** the URL scan now tests EVERY scheme
+  occurrence independently (`schemeRe` + anchored `exfilURLShape`), so an
+  allowlisted outer host never launders a non-allowlisted inner one, and
+  the legit proxy shape stays clean.
+
+- **VERIFIED MEDIUM (Skeptic #2) — cost_optimization/crystallization
+  mislabeled action_failed.** Confirmed both are KNOWN held categories in
+  Python (`evolver_store.py`, `pending_human_review`); Go's r1
+  inspection_finding fix was narrow and left these two falling to
+  `action_failed`. **Fixed:** explicit `held_for_review` cases. Pin
+  `TestApplyKnownPythonCategoriesHeld` (M94, M95).
+
+- **VERIFIED MEDIUM (QA #2) — sibling reader `evolver.triState` not
+  hardened.** The r1 fix hardened `inspector.goalAchieved` for a
+  malformed `goal_achieved` but left its twin `evolver.triState` treating
+  a non-bool as unjudged — so the proposer never saw a failure signal the
+  quality gate would cap at fair. **Fixed:** `triState` now matches
+  (non-bool → judged-false). Pin
+  `TestBuildOutcomesSummaryMalformedGoalAchievedIsFailure` (M93).
+
+- **VERIFIED MEDIUM (Skeptic #3 / QA #3) — Revert overwrote honest
+  status.** `changeLogAppend` writes an audit row before the outcome is
+  known, and `Revert` didn't check `applied`, so reverting a held/failed
+  suggestion stamped `status="reverted"` over the honest
+  `held_for_review`/`action_failed`. r1's tri-state fix made held a real
+  outcome, so this became reachable. **Fixed:** `Revert` guards on
+  `IsApplied` and refuses honestly. Pin `TestRevertUnappliedRefuses`
+  (M96). Python parity gap → backport candidate.
+
+- **REFUTED direction (Skeptic #5) — the r1 `.`-suffix subdomain
+  widening.** Python's lookahead FLAGS a subdomain of an allowlisted apex
+  (`data.api.anthropic.com`); r1's suffix-accept diverged and was
+  gratuitous (exact-match alone closes the lookalike). **Corrected to
+  exact-match**, realigning the accept set with Python; pinned as a
+  flagged case in `TestURLExfilAuthorityBypassesFlagged`.
+
+- **ACCEPTED-NAMED LOW (Skeptic #4 / QA #4) — constraintRowExists is
+  presence-only.** It intentionally does not check pattern-equality or the
+  30-day TTL; the narrow re-apply-of-an-expired-id edge requires `applied`
+  false for weeks. Comment tightened to name the scope; not coupling
+  evolver to constraint.py's TTL.
+
+Fix-layer mutations M91–M96 all DETECTED with COMPILING mutants. Full
+suite green, gofmt/vet clean. r3 (confirmation round) follows — needs two
+consecutive zero-HIGH rounds for fixpoint.

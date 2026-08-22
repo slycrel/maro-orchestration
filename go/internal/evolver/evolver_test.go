@@ -487,6 +487,56 @@ func TestApplyUnportedCategoriesHeld(t *testing.T) {
 	}
 }
 
+// r2 review: known Python categories that share the store (cost_
+// optimization, crystallization) must be HELD like the other unported
+// engines, not action_failed — the inspection_finding fix was narrow.
+func TestApplyKnownPythonCategoriesHeld(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	mustSave(t, ws,
+		baseSuggestion("c-1", "cost_optimization", "all", "batch the cheap calls", 0.9),
+		baseSuggestion("c-2", "crystallization", "all", "promote this canon candidate", 0.9),
+	)
+	for _, id := range []string{"c-1", "c-2"} {
+		if _, err := Apply(ws, rec, nil, id, true); err != nil {
+			t.Fatal(err)
+		}
+		if IsApplied(ws, id) {
+			t.Fatalf("%s: known Python category claimed applied", id)
+		}
+		if s := GetSuggestion(ws, id); s.Status != "held_for_review" || s.BlockReason == "" {
+			t.Fatalf("%s: must be held with a reason, got %+v", id, s)
+		}
+	}
+}
+
+// r2 review: reverting a suggestion that was never applied (held /
+// action_failed) must refuse, NOT overwrite its honest status with
+// "reverted". Guards on the durable applied flag.
+func TestRevertUnappliedRefuses(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	// A guidance-only guardrail: held, never applied, but changeLogAppend
+	// still wrote an audit row at the top of applyAction.
+	held := baseSuggestion("r-held", "new_guardrail", "all", "avoid destructive deletes", 0.9)
+	mustSave(t, ws, held)
+	if _, err := Apply(ws, rec, nil, "r-held", true); err != nil {
+		t.Fatal(err)
+	}
+	before := GetSuggestion(ws, "r-held")
+	if before.Applied || before.Status != "held_for_review" {
+		t.Fatalf("precondition: want held+not-applied, got %+v", before)
+	}
+	res := Revert(ws, rec, "r-held")
+	if res.Reverted || !strings.Contains(res.Detail, "not applied") {
+		t.Fatalf("revert of an unapplied row should refuse: %+v", res)
+	}
+	after := GetSuggestion(ws, "r-held")
+	if after.Status != "held_for_review" {
+		t.Fatalf("honest status overwritten by revert: %q", after.Status)
+	}
+}
+
 // The keyed merge replaces only the target's line — concurrent rows and
 // torn lines survive (Python's lost-update fix).
 func TestApplyKeyedMergePreservesNeighbors(t *testing.T) {
@@ -586,6 +636,28 @@ func TestBuildOutcomesSummaryTriState(t *testing.T) {
 	}
 	if BuildOutcomesSummary(nil) != "(no outcomes to analyze)" {
 		t.Fatal("empty summary drifted")
+	}
+}
+
+// r2 review: the triState reader must match inspector.goalAchieved's
+// hardening — a malformed goal_achieved (string "false", a number) is
+// judged-NOT-achieved, surfaced as a failure, NOT silently dropped as
+// unjudged. Otherwise the proposer never sees the failure signal.
+func TestBuildOutcomesSummaryMalformedGoalAchievedIsFailure(t *testing.T) {
+	for _, bad := range []any{"false", "true", 0.0} {
+		outcomes := []map[string]any{
+			{"status": "done", "task_type": "build", "goal": "b",
+				"summary": "finished but corrupt verdict", "goal_achieved": bad},
+		}
+		s := BuildOutcomesSummary(outcomes)
+		if !strings.Contains(s, "goal-NOT-achieved") ||
+			!strings.Contains(s, "treat as failures") ||
+			!strings.Contains(s, "finished but corrupt verdict") {
+			t.Fatalf("malformed goal_achieved %#v not treated as failure:\n%s", bad, s)
+		}
+		if strings.Contains(s, "unjudged]") && !strings.Contains(s, "0 unjudged") {
+			t.Fatalf("malformed goal_achieved %#v counted as unjudged:\n%s", bad, s)
+		}
 	}
 }
 

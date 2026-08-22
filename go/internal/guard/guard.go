@@ -57,9 +57,18 @@ var exfilPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bleak\s+(the\s+)?(credentials?|api\s*keys?|tokens?)\b`),
 }
 
-// exfilURLRe is the URL half without Python's lookahead; matches are
-// re-checked against allowedURLHosts before they count as findings.
-var exfilURLRe = regexp.MustCompile(`(?i)\bhttps?://[^\s]{3,50}\.(com|io|net)/[^\s]{5,}`)
+// exfilURLShape is the URL half without Python's lookahead, ANCHORED so
+// it can be tested at each scheme occurrence (see the scan loop). Matches
+// are re-checked against allowedURLHosts before they count as findings.
+var exfilURLShape = regexp.MustCompile(`(?i)^https?://[^\s]{3,50}\.(com|io|net)/[^\s]{5,}`)
+
+// schemeRe locates every URL scheme occurrence. Python's re.search scans
+// ALL start positions, so a nested URL like
+// `https://r.jina.ai/https://evil.com/leak` is flagged on its INNER host
+// even though the outer host is allowlisted; Go's FindAllString returns
+// one leftmost-longest match and would allowlist on the outer host (the
+// r2-review bypass). Testing each scheme position restores the parity.
+var schemeRe = regexp.MustCompile(`(?i)https?://`)
 
 var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 
@@ -157,15 +166,21 @@ func ScanContent(content, source string) ScanReport {
 			hasExfil = true
 		}
 	}
-	// URL half: every match is checked against the allowlist (the RE2
-	// lookahead substitution) — ANY non-allowlisted match fires, even
-	// when an allowlisted URL appears earlier in the text.
-	for _, m := range exfilURLRe.FindAllString(target, -1) {
-		if urlHostAllowed(m) {
+	// URL half: evaluate EVERY scheme occurrence independently (Python
+	// re.search parity — see schemeRe). Each candidate runs from its
+	// scheme to the next whitespace; if it matches the exfil URL shape
+	// and its host is NOT allowlisted, it fires. An allowlisted outer
+	// host never launders a non-allowlisted inner one.
+	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
+		cand := target[loc[0]:]
+		if i := strings.IndexAny(cand, " \t\r\n"); i >= 0 {
+			cand = cand[:i]
+		}
+		if !exfilURLShape.MatchString(cand) || urlHostAllowed(cand) {
 			continue
 		}
-		findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(m)))
-		blocked = append(blocked, exfilURLRe.String())
+		findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
+		blocked = append(blocked, exfilURLShape.String())
 		hasExfil = true
 		break
 	}
@@ -187,16 +202,23 @@ func ScanContent(content, source string) ScanReport {
 	}
 }
 
-// urlHostAllowed reports whether the URL's host is an allowlisted host —
-// matched at a real host BOUNDARY, not a raw string prefix. Python's
-// inline lookahead `(?!r\.jina\.ai|api\.anthropic\.com)` was a literal-
-// prefix check, so `https://r.jina.ai.evil.com/leak` defeated it (the
-// host merely STARTS WITH the allowlisted string but is attacker-owned).
-// This is a DELIBERATE HARDENING DIVERGENCE from the fork-point: the Go
-// port anchors the check to the host's end (exact host, or a true
-// subdomain `<sub>.r.jina.ai`), closing the lookalike-domain bypass. The
-// Python guard carries the same hole — flagged as a backport-correction
-// candidate in PORT.md (r1 review, 2026-08-22).
+// urlHostAllowed reports whether the URL's true host is EXACTLY an
+// allowlisted host. It parses the RFC-3986 authority correctly, which
+// closes two bypasses of Python's literal-prefix lookahead
+// `(?!r\.jina\.ai|api\.anthropic\.com)` — both DELIBERATE HARDENING
+// DIVERGENCES, flagged as backport-correction candidates in PORT.md:
+//
+//   - Lookalike domain: `https://r.jina.ai.evil.com/leak` — host merely
+//     STARTS WITH the allowlisted string but is attacker-owned. Exact
+//     match rejects it.
+//   - Userinfo confusion: `https://r.jina.ai:tok@evil.com/leak` — the
+//     real host is `evil.com` (everything before the last '@' in the
+//     authority is userinfo, discarded by every HTTP client). Splitting
+//     on '@' before reading the host rejects it.
+//
+// Exact-match (no subdomain acceptance) is deliberate: it keeps the
+// accept set aligned with Python (whose lookahead also flags subdomains
+// of an allowlisted apex) and still closes the lookalike bypass.
 func urlHostAllowed(url string) bool {
 	rest := url
 	for _, p := range []string{"https://", "http://"} {
@@ -205,15 +227,22 @@ func urlHostAllowed(url string) bool {
 			break
 		}
 	}
-	// Host is everything up to the first '/', '?', '#', or ':' (port).
-	host := strings.ToLower(rest)
-	if i := strings.IndexAny(host, "/?#:"); i >= 0 {
+	// Authority ends at the first '/', '?', or '#'.
+	authority := rest
+	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+		authority = authority[:i]
+	}
+	// Strip userinfo: everything up to and including the LAST '@'.
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		authority = authority[at+1:]
+	}
+	// Strip an optional :port.
+	host := strings.ToLower(authority)
+	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
 	for _, h := range allowedURLHosts {
-		// Exact host, or a genuine subdomain of the allowlisted host —
-		// never a domain that merely embeds it as a prefix.
-		if host == h || strings.HasSuffix(host, "."+h) {
+		if host == h {
 			return true
 		}
 	}

@@ -978,6 +978,24 @@ prefix-only — same lookalike-domain bypass; (6) `inspector` grades a
 malformed `goal_achieved` as unjudged (`is False`), letting it read good.
 Fix-layer mutations M85–M90 all DETECTED (compiling mutants).
 
+**r2 fix-layer re-review (2026-08-22, skeptic+qa) — flagship pattern:
+both HIGHs lived inside r1's own `urlHostAllowed` fix.** (a) Userinfo
+authority bypass (`https://r.jina.ai:tok@evil.com/leak` read the host as
+`r.jina.ai`); now parses the RFC-3986 authority (userinfo split on the
+last `@`, then `:port`). (b) Nested-URL laundering — Go's single greedy
+match allowlisted on the OUTER host while Python's `re.search` flags the
+inner; the scan now tests every scheme occurrence independently, matching
+Python (and keeping the legit r.jina.ai proxy shape clean). The r1
+`.`-suffix subdomain widening was corrected to EXACT-match (Python flags
+subdomains too — the widening diverged and was unneeded). Also: cost_
+optimization/crystallization now HELD not action_failed (parity with
+Python's known held categories); `evolver.triState` hardened to match its
+inspector twin; `Revert` guards on `IsApplied` so it can't stamp
+"reverted" over an honest held/failed status. NEW backport candidates:
+(7) Python's exfil lookahead shares the userinfo bypass; (8) Python
+`revert_suggestion` doesn't check applied-state. Fix-layer mutations
+M91–M96 all DETECTED (compiling mutants).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
