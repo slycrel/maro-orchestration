@@ -567,8 +567,48 @@ direction).
   rewrite (needs the ask-the-user surface), introspects_self's consumer
   (container-isolation routing — the field is carried, its consumer
   named), NOW artifact write, navigator dispatch, deferred learning,
-  personas/workers, and director.py's plan/delegate/review layer (the
-  tranche's second half).
+  personas/workers (workers shipped in the director slice below), and
+  director.py's plan/delegate/review layer (shipped as the director
+  slice below).
+- DIRECTOR plan/delegate/review (`internal/director` +
+  `internal/workers`, `maro director "directive"`) — the routing
+  tranche's second half: SPEC + tickets from one Director call
+  (large-scope directives get the staged 4-6-ticket prompt, gated on
+  the ported estimate_goal_scope zero-LLM heuristics), a non-fatal
+  pre-plan challenger, per-ticket dispatch to persona-framed workers
+  speaking the simulated tool protocol (deliver_result/flag_blocked),
+  Director review of every output with reject-on-parse-failure (auto-
+  accepting hides bad output), up to MAX_REVIEW_ROUNDS=2 revision
+  rounds proceeding best-effort on exhaustion, and one compiled report.
+  Ported lessons: bounded completed-context accumulator
+  (budget.Accumulator — worker results re-sent to later workers grow
+  quadratically in ticket count; eviction is ANNOUNCED, oldest-first,
+  newest kept whole even over budget); report-echo tri-state on the
+  LLM-compile path only (MH #6 — false means the worker's content was
+  DROPPED on the way to the parent; the verbatim-concat fallbacks stay
+  nil because a check that cannot fail proves nothing);
+  WORKER_REPORT_OMISSION + WORKER_DELEGATION_GAP candidate events into
+  captains_log.jsonl, the gap event scoped to worker-AUTHORED reasons
+  only (adapter failures pattern-match the provision keywords and
+  would contaminate the corpus — negative-control pinned); blocked-
+  origin taxonomy (worker/adapter/empty); ResultError usage salvage
+  (4th site); judge-window Clip(4000) before the review verdict;
+  spec-parse fallback = one inferred ticket for the whole directive;
+  director log JSON scrubbed at its single write boundary, atomic
+  temp+rename, report_echoed kept nullable (nil ≠ false); the
+  flags-after-goal refusal from `maro run`; RequiresExplicitAcceptance
+  PRINTED as a warning (the approval surface is unported — a silent
+  "inferred" on a deploy-shaped directive would fake consent).
+  Deliberately unported, named: worker_slice memory injection +
+  slice_echo (sqlite store), PersonaRegistry + persona files (inline
+  personas only — Python's own fallback tier), lat.md graph injection,
+  the skip-if-simple direct route (the Go CLI's intent lane owns that
+  decision), container-exec backend contract, check-in/escalation +
+  evaluate_closure (return with restart machinery), the MODEL_CHEAP
+  challenger adapter (challenger runs on the run's adapter). CLI dry
+  smoke green; mutations M37-M42 all DETECTED (review-safety flip,
+  gap-event descoping, echo-asymmetry removal, silent eviction,
+  unscrubbed log, dropped salvage).
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):
@@ -798,8 +838,9 @@ routing/trajectory escalation.
    (closure tranche above); the quality-gate half (step-level review)
    and the restart consumers return with their subsystems.
 3. ~~Intent routing + NOW-vs-AGENDA lanes~~ — DONE (routing tranche
-   slice above); director.py's plan/delegate/review + evaluate_closure
-   decision layer remain (they return with restart machinery).
+   slice above); ~~director's plan/delegate/review~~ DONE (director
+   slice above); the evaluate_closure decision layer + check-in/
+   escalation machinery remain (they return with restart machinery).
 4. Inspector/evolver self-improvement loop.
 5. Heartbeat, projects, escalation, notifications, viz.
 
