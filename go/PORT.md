@@ -620,7 +620,19 @@ direction).
   challenger adapter (challenger runs on the run's adapter). CLI dry
   smoke green; mutations M37-M42 all DETECTED (review-safety flip,
   gap-event descoping, echo-asymmetry removal, silent eviction,
-  unscrubbed log, dropped salvage).
+  unscrubbed log, dropped salvage). Adversarial r2 (2026-08-22,
+  skeptic+qa): the r1 TicketID fix itself was the round's HIGH —
+  revised tickets are now persisted with revision_of so every decision
+  key resolves in the log; the accepted-field gate keeps the model's
+  own reason/revision_request (a malformed-but-informative verdict
+  still drives a revision round); malformed-entry warnings are bounded
+  to one summary; whitespace-only guidance trims to empty; the CLI
+  scrubs StuckReason/Reason and prints TicketID; scrub-at-set-point
+  ACCEPTED-NAMED (sink-side is the boundary — set-point scrubbing
+  would alter prompt inputs; sink census: writeLog + captains_log +
+  CLI, all scrubbed). Mutations M49-M55 all DETECTED (M53's echo
+  marker-vocab pin added only after its first run came back NOT
+  DETECTED).
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):

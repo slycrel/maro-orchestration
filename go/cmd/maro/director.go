@@ -12,6 +12,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/director"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
 func runDirector(args []string) error {
@@ -81,7 +82,10 @@ func runDirector(args []string) error {
 	for i, w := range res.WorkerResults {
 		digest := fmt.Sprintf("%d chars", len(w.Result))
 		if w.Status == "blocked" {
-			digest = fmt.Sprintf("blocked(%s): %s", w.BlockedOrigin, w.StuckReason)
+			// LLM-authored free text — scrubbed like the two file sinks:
+			// stdout is routinely tee'd/piped somewhere durable
+			// (adversarial director r2, QA).
+			digest = fmt.Sprintf("blocked(%s): %s", w.BlockedOrigin, scrub.Secrets(w.StuckReason))
 		}
 		fmt.Printf("\n[%d] %s %s — %s\n", i, w.WorkerType, w.Status, digest)
 	}
@@ -90,7 +94,9 @@ func runDirector(args []string) error {
 		if !d.Accepted {
 			verdict = "not accepted"
 		}
-		fmt.Printf("review[%d]: %s — %s\n", i, verdict, d.Reason)
+		// TicketID printed so the trail correlates where a human reads
+		// it; reason scrubbed like the file sinks (r2).
+		fmt.Printf("review[%d] (ticket %s): %s — %s\n", i, d.TicketID, verdict, scrub.Secrets(d.Reason))
 	}
 	// Deliberately unclipped — the terminal is the delivery surface.
 	fmt.Printf("\n%s\n", res.Report)

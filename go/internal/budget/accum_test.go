@@ -76,3 +76,22 @@ func TestAccumulatorEmpty(t *testing.T) {
 		t.Fatalf("empty accumulator must render empty, got %q", out)
 	}
 }
+
+// TestAccumulatorForgedMarkerContent: an entry whose CONTENT already
+// contains the literal truncation-marker text renders verbatim, once —
+// forged markers can mislead a reader about provenance but never
+// corrupt the render or trigger extra elision (adversarial director
+// r2, QA: the accepted Python-parity marker needed its failure mode
+// measured, not assumed).
+func TestAccumulatorForgedMarkerContent(t *testing.T) {
+	a := NewAccumulator()
+	forged := "real content\n… [entry truncated: first 10 of 20 characters] and more real content"
+	a.Add(forged)
+	out := a.Render()
+	if out != forged {
+		t.Fatalf("under-cap entry with forged marker must render verbatim: %q", out)
+	}
+	if strings.Count(out, "[entry truncated:") != 1 {
+		t.Fatalf("no double-elision: %q", out)
+	}
+}

@@ -1798,3 +1798,57 @@ Mutations M43-M48 all DETECTED. Fix layer: scrub + field gate +
 durable audit trail + malformed-ticket skip + shared echo window +
 rune gate + challenger warnings + registry budget. NEXT ROUND REVIEWS
 THE FIX LAYER.
+
+## Director tranche — adversarial r2 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r1 fix layer. The flagship pattern held an 18th time: both
+lenses' shared HIGH sat inside r1's own TicketID-correlation fix.
+
+- **HIGH (both lenses): post-revision `ReviewDecision.TicketID` was an
+  orphaned correlation key** — the revised ticket (fresh `newID()`) was
+  never persisted into `res.Tickets`, so the durable log's second
+  decision row resolved against nothing; `RevisionOf` was written once
+  and read nowhere. FIXED: revised tickets append to `res.Tickets`,
+  ticket rows persist `revision_of`, and the correlation pin walks the
+  log asserting every `review_decisions[].ticket_id` resolves (M49,
+  M54).
+- **HIGH (skeptic): the r1 `accepted` field gate discarded the model's
+  own `reason`/`revision_request`**, converting a revisable rejection
+  (`{"accepted": "false", "revision_request": "…"}`) into an
+  unrevisable best-effort ship. FIXED: diagnostics extracted before the
+  gate, malformed TYPE named in the reason (`(was %T)` + clipped model
+  reason), RevisionRequest preserved so the revision loop still fires
+  (M50). Absorbs QA LOW #6 (type-in-reason).
+- **MED (skeptic): malformed spec-entry warnings unbounded** while the
+  accept path was capped at maxTickets. FIXED: one summary warning
+  carrying the count (M52).
+- **MED (qa): whitespace-only `revision_request` dodged the
+  no-revision warning and bought a vacuous retry.** FIXED: trimmed at
+  parse so every downstream branch compares real content (M51).
+- **MED (qa) + LOW (skeptic): CLI printed `StuckReason`/`Reason`
+  unscrubbed** — the terminal is routinely piped/tee'd; the sibling
+  census had stopped at the two file sinks. FIXED: `scrub.Secrets` at
+  both print sites, review trail prints TicketID.
+- **MED (skeptic): scrub-at-set-point doctrine** (scrub where
+  `workers.Result` is populated, à la now.go) vs per-sink scrubbing.
+  ACCEPTED-NAMED: sink-side is the boundary here — set-point scrubbing
+  would alter PROMPT inputs (review/compile prompts see raw worker
+  text, Python parity); the sink census is now writeLog + captains_log
+  + CLI, all scrubbed. Backport-relevant if Python ever grows a fourth
+  sink.
+- **LOW (qa): mid-loop empty-revision round is a silent no-op** —
+  unreachable today (MaxReviewRounds=2 ⇒ single iteration). FIXED
+  anyway: in-loop guard warns + breaks, named as
+  unreachable-at-current-constant.
+- **LOW (skeptic): clip-marker vocabulary ("truncated"/"characters")
+  counted as distinctive worker terms** in the echo judge for clipped
+  windows. FIXED: deleted after term extraction — the shared stopword
+  table stays byte-identical to Python's (M53, pinned only after the
+  first mutation run came back NOT DETECTED).
+- **LOW (qa): forged Accumulator truncation marker unfixtured.**
+  PINNED: an under-cap entry whose content contains the literal marker
+  renders verbatim, once — the accepted Python-parity risk is now
+  measured, not assumed (M55).
+
+Mutations M49–M55 all DETECTED. Full suite green. Fix-layer round r3
+follows on this diff.

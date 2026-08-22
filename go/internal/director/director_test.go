@@ -184,6 +184,33 @@ func TestRunRevisionRoundOnRejection(t *testing.T) {
 	if !strings.Contains(joined, "Revision request: finish the other half") {
 		t.Fatalf("revision request must reach the re-dispatched worker")
 	}
+	// Correlation must RESOLVE in the persisted log (adversarial
+	// director r2, both lenses' HIGH: the revised decision's TicketID
+	// was an orphaned key — present in review_decisions, absent from
+	// tickets). Every decision's ticket_id must match a persisted
+	// ticket row, and the revised row must carry revision_of.
+	logRow := readLog(t, res.LogPath)
+	known := map[string]bool{}
+	revisionOf := ""
+	for _, ti := range logRow["tickets"].([]any) {
+		row := ti.(map[string]any)
+		known[row["ticket_id"].(string)] = true
+		if v, ok := row["revision_of"].(string); ok {
+			revisionOf = v
+		}
+	}
+	if len(known) != 2 {
+		t.Fatalf("revised ticket must be persisted beside the original: %v", logRow["tickets"])
+	}
+	if revisionOf != res.Tickets[0].TicketID {
+		t.Fatalf("revision chain must resolve to the original ticket: %q", revisionOf)
+	}
+	for _, di := range logRow["review_decisions"].([]any) {
+		row := di.(map[string]any)
+		if !known[row["ticket_id"].(string)] {
+			t.Fatalf("orphaned review-decision key %v not in tickets[]", row["ticket_id"])
+		}
+	}
 }
 
 // TestReviewParseFailureRejects: an unparseable review verdict REJECTS
@@ -390,6 +417,71 @@ func TestReviewVerdictFieldGate(t *testing.T) {
 	}
 }
 
+// TestReviewVerdictGateKeepsDiagnostics: a mistyped "accepted" beside a
+// REAL reason and revision_request rejects WITHOUT discarding either —
+// the guidance still drives a revision round and the audit trail names
+// the malformed type (adversarial director r2, Skeptic HIGH: the r1
+// gate converted a revisable rejection into an unrevisable best-effort
+// ship).
+func TestReviewVerdictGateKeepsDiagnostics(t *testing.T) {
+	fake := &llm.Fake{Script: []string{
+		`{"accepted": "false", "reason": "missing the config section", "revision_request": "add the config section"}`,
+	}}
+	d, _, _ := reviewWorkerOutput(context.Background(), fake, "dir",
+		Ticket{TicketID: "tk3", WorkerType: "build", Task: "t"},
+		workers.Result{Status: "done", Result: "some output"}, false)
+	if d.Accepted {
+		t.Fatalf("mistyped accepted must reject: %+v", d)
+	}
+	if d.RevisionRequest != "add the config section" {
+		t.Fatalf("model's revision guidance must survive the gate: %+v", d)
+	}
+	if !strings.Contains(d.Reason, "string") || !strings.Contains(d.Reason, "missing the config section") {
+		t.Fatalf("reason must name the malformed type AND keep the model's diagnostics: %q", d.Reason)
+	}
+}
+
+// TestReviewWhitespaceRevisionTrimmed: a whitespace-only
+// revision_request is EMPTY guidance — it must not dodge the
+// no-revision warning or buy a vacuous retry (adversarial director r2,
+// QA).
+func TestReviewWhitespaceRevisionTrimmed(t *testing.T) {
+	fake := &llm.Fake{Script: []string{`{"accepted": false, "reason": "bad", "revision_request": "   "}`}}
+	d, _, _ := reviewWorkerOutput(context.Background(), fake, "dir",
+		Ticket{TicketID: "tk4", WorkerType: "build", Task: "t"},
+		workers.Result{Status: "done", Result: "some output"}, false)
+	if d.RevisionRequest != "" {
+		t.Fatalf("whitespace guidance must trim to empty: %q", d.RevisionRequest)
+	}
+}
+
+// TestSpecMalformedWarningsBounded: N malformed spec-ticket entries
+// produce ONE summary warning naming the count, not N warnings — the
+// reject path is bounded like the accept path (adversarial director
+// r2, Skeptic MED).
+func TestSpecMalformedWarningsBounded(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"task": 1}, {"task": 2}, {"task": 3}, {"worker_type": "build", "task": "the real task to build"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "built the real task completely as asked", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: built the real task completely as asked, done.",
+	}, "build the things")
+	count := 0
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "non-string task skipped") {
+			count++
+			if !strings.Contains(w, "3 spec ticket entries") {
+				t.Fatalf("summary must carry the count: %q", w)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("exactly one summary warning, got %d: %+v", count, res.Warnings)
+	}
+}
+
 // TestRunPersistsDecisionsAndWarnings: the durable log carries the
 // review audit trail (ticket-correlated) and the run's warnings — a
 // rejected-no-revision run must not read as an unqualified success
@@ -500,4 +592,18 @@ func mustJSON(t *testing.T, s string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestReportEchoIgnoresClipMarkerVocab: clip-marker vocabulary is
+// framework text, not worker content — a clipped 4-term window must
+// stay below the judgeable floor instead of borrowing "truncated"/
+// "characters" to cross it and then matching the report's own
+// truncation notice (adversarial director r2, Skeptic; mutation M53
+// was undetected until this pin).
+func TestReportEchoIgnoresClipMarkerVocab(t *testing.T) {
+	window := "alphaterm betaterm gammaterm deltaterm\n… [truncated: first 10 of 20 characters]"
+	report := "report mentions alphaterm and was truncated to fewer characters"
+	if got := reportEcho(window, report); got != nil {
+		t.Fatalf("marker vocab must not make a 4-term window judgeable: got %v", *got)
+	}
 }

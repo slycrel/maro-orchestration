@@ -359,6 +359,12 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 					Task:       ticket.Task + "\n\nRevision request: " + review.RevisionRequest,
 					RevisionOf: ticket.TicketID,
 				}
+				// The revised ticket is PART OF THE RECORD — without it
+				// the revision decision's TicketID resolves to nothing
+				// in the persisted log, an orphaned correlation key on
+				// exactly the multi-round case the key exists for
+				// (adversarial director r2, both lenses' HIGH).
+				res.Tickets = append(res.Tickets, revised)
 				wres = workers.Dispatch(ctx, adapter, revised.WorkerType, revised.Task, extra, dry)
 				res.TokensIn += wres.TokensIn
 				res.TokensOut += wres.TokensOut
@@ -368,6 +374,15 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 				res.ReviewDecisions = append(res.ReviewDecisions, review)
 				if review.Accepted {
 					accepted = true
+					break
+				}
+				if review.RevisionRequest == "" {
+					// Unreachable while MaxReviewRounds==2, guarded for a
+					// constant bump: a mid-loop rejection with no guidance
+					// must not buy another vacuous round (r2, QA).
+					res.Warnings = append(res.Warnings, fmt.Sprintf(
+						"ticket %s revision round %d rejected with no revision request — stopping revisions",
+						revised.TicketID, round+1))
 					break
 				}
 			}
@@ -483,6 +498,7 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 		if data, jerr := jsonx.Object(resp.Content); jerr == nil {
 			spec, _ := data["spec"].(string)
 			var tickets []Ticket
+			malformed := 0
 			if raw, ok := data["tickets"].([]any); ok {
 				for _, item := range raw {
 					if len(tickets) >= maxTickets {
@@ -500,8 +516,7 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 					// (t.get("task","") keeps non-strings).
 					task, taskOK := t["task"].(string)
 					if !taskOK || strings.TrimSpace(task) == "" {
-						res.Warnings = append(res.Warnings,
-							"spec ticket entry with missing or non-string task skipped")
+						malformed++
 						continue
 					}
 					wtype, _ := t["worker_type"].(string)
@@ -510,6 +525,15 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 					}
 					tickets = append(tickets, Ticket{TicketID: newID(), WorkerType: wtype, Task: task})
 				}
+			}
+			if malformed > 0 {
+				// ONE summary warning, not one per entry — a hostile
+				// spec reply with thousands of garbage entries must not
+				// inflate the warning slice and the durable log
+				// (adversarial director r2, Skeptic: the good path was
+				// capped at maxTickets, the reject path wasn't).
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%d spec ticket entries with missing or non-string task skipped", malformed))
 			}
 			if len(tickets) == 0 {
 				tickets = []Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: directive}}
@@ -583,19 +607,32 @@ func reviewWorkerOutput(ctx context.Context, adapter llm.Adapter, directive stri
 	in, out := usage(resp, err)
 	if err == nil && resp != nil {
 		if data, jerr := jsonx.Object(resp.Content); jerr == nil {
+			// Trimmed at parse so every downstream branch compares real
+			// content — a whitespace-only revision_request otherwise
+			// dodges the no-revision warning AND buys a vacuous retry
+			// (adversarial director r2, QA).
+			reason := strings.TrimSpace(stringField(data, "reason"))
+			revision := strings.TrimSpace(stringField(data, "revision_request"))
 			// The safety direction applies to the FIELD, not just the
 			// envelope: a verdict whose "accepted" is missing, null, or
 			// mistyped rejects. Deliberately STRICTER than Python
 			// (bool(data.get("accepted", True)) accepts an absent key
 			// and coerces "false" truthy) — adversarial director r1,
-			// three lenses independently.
+			// three lenses independently. The model's own diagnostics
+			// still travel (r2, Skeptic: the gate was discarding exactly
+			// the revision_request that made the rejection recoverable),
+			// and the malformed value's TYPE is named so distinct
+			// failure shapes stay distinguishable in the audit trail.
 			accepted, isBool := data["accepted"].(bool)
 			if !isBool {
+				why := fmt.Sprintf(
+					"review verdict missing boolean accepted (was %T) — rejecting for safety", data["accepted"])
+				if reason != "" {
+					why += "; model reason: " + budget.Clip(reason, 300)
+				}
 				return ReviewDecision{TicketID: ticket.TicketID, Accepted: false,
-					Reason: "review verdict missing boolean accepted — rejecting for safety"}, in, out
+					Reason: why, RevisionRequest: revision}, in, out
 			}
-			reason, _ := data["reason"].(string)
-			revision, _ := data["revision_request"].(string)
 			return ReviewDecision{TicketID: ticket.TicketID, Accepted: accepted,
 				Reason: reason, RevisionRequest: revision}, in, out
 		}
@@ -703,6 +740,13 @@ func reportEcho(resultText, reportText string) *bool {
 		return nil
 	}
 	terms := distinctiveTerms(resultText)
+	// Clip-marker vocabulary is framework text, not worker content — a
+	// clipped window would otherwise count "truncated"/"characters" as
+	// distinctive terms of the WORKER's output (adversarial director r2,
+	// Skeptic). Removed here, not from the shared stopword table, which
+	// stays byte-identical to Python's.
+	delete(terms, "truncated")
+	delete(terms, "characters")
 	if len(terms) < echoMinTerms {
 		return nil
 	}
@@ -739,10 +783,15 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 	}
 	tickets := make([]map[string]any, 0, len(res.Tickets))
 	for _, t := range res.Tickets {
-		tickets = append(tickets, map[string]any{
+		row := map[string]any{
 			"ticket_id": t.TicketID, "worker_type": t.WorkerType,
 			"task": scrub.Secrets(t.Task),
-		})
+		}
+		// The revision chain resolves in the log itself (r2).
+		if t.RevisionOf != "" {
+			row["revision_of"] = t.RevisionOf
+		}
+		tickets = append(tickets, row)
 	}
 	wrows := make([]map[string]any, 0, len(res.WorkerResults))
 	for _, r := range res.WorkerResults {
@@ -825,6 +874,12 @@ func usage(resp *llm.Response, err error) (int, int) {
 func isDelegationGap(w workers.Result) bool {
 	return w.Status == "blocked" && w.BlockedOrigin == "worker" &&
 		workers.DelegationGap(w.StuckReason)
+}
+
+// stringField reads a string JSON field, "" for absent or non-string.
+func stringField(data map[string]any, key string) string {
+	v, _ := data[key].(string)
+	return v
 }
 
 func typeValid(t string) bool {
