@@ -3,7 +3,27 @@ package guard
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestURLScanStaysLinear pins r9: the per-scheme URL loop must not do
+// O(suffix) work per candidate. A whitespace-free blob of repeated `https:`
+// tokens yields one candidate per scheme; the pre-r9 code lowercased the
+// whole remaining suffix (strings.ToLower(cand)) before the 512 cap, which —
+// once r8 scanned the full unbounded content — made ScanContent O(n²)
+// (~150s on this ~1.2MB input). The fix takes the scheme length from
+// schemeRe's own match bounds (O(1)). Run in a goroutine so a quadratic
+// regression fails at the 10s ceiling instead of hanging the suite.
+func TestURLScanStaysLinear(t *testing.T) {
+	blob := strings.Repeat("https:", 200000) // ~1.2MB, no whitespace
+	done := make(chan struct{})
+	go func() { ScanContent(blob, "internal"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("URL scan didn't finish in 10s on a %d-byte repeated-scheme blob — quadratic regression", len(blob))
+	}
+}
 
 func TestScanCleanContent(t *testing.T) {
 	r := ScanContent("Prefer verifying file paths before writing; retries usually help on timeouts.", "internal")
@@ -236,6 +256,11 @@ func TestURLExfilCapStarvationFlagged(t *testing.T) {
 	// false-positive a long-but-benign allowlisted URL).
 	for _, s := range []string{
 		"fetch https:" + strings.Repeat("/", 600) + "api.anthropic.com/v1/messages please",
+		// r9 QA: the SAME mid-host tab/CR/LF split, but inside an ALLOWLISTED
+		// host — the whole-string strip must reassemble r.jina.ai and keep it
+		// clean (negative control for the exact mechanism the r8 fix adds).
+		"fetch https://r.jina" + strings.Repeat("\t", 600) + ".ai/https://x.com/page please",
+		"fetch https://api.anthropic" + strings.Repeat("\r", 600) + ".com/v1/messages please",
 	} {
 		if r := ScanContent(s, "internal"); !r.IsClean {
 			t.Fatalf("padded allowlisted URL flagged: (len=%d) -> %v", len(s), r.Findings)
@@ -259,9 +284,16 @@ func TestURLExfilOuterClipStarvationFlagged(t *testing.T) {
 			t.Fatalf("outer-clip starvation scanned clean: (len=%d) -> %+v", len(s), r)
 		}
 	}
-	// Negative control: an oversized pad in front of an ALLOWLISTED host stays
-	// clean (the full-content scan must not false-positive a benign long URL).
-	if r := ScanContent("https:"+strings.Repeat("/", 60000)+"api.anthropic.com/v1/messages", "internal"); !r.IsClean {
-		t.Fatalf("padded allowlisted URL flagged past the clip: %v", r.Findings)
+	// Negative controls: oversized pads in front of / inside an ALLOWLISTED
+	// host stay clean (the full-content scan must not false-positive a benign
+	// long URL — leading-slash AND mid-host tab/CR/LF split, r9 QA).
+	for _, s := range []string{
+		"https:" + strings.Repeat("/", 60000) + "api.anthropic.com/v1/messages",
+		"https://api.anthropic" + strings.Repeat("\r", 60000) + ".com/v1/messages",
+		"https://r.ji" + strings.Repeat("\t", 60000) + "na.ai/https://x.com/page",
+	} {
+		if r := ScanContent(s, "internal"); !r.IsClean {
+			t.Fatalf("padded allowlisted URL flagged past the clip: (len=%d) -> %v", len(s), r.Findings)
+		}
 	}
 }

@@ -1047,7 +1047,13 @@ pad past that cap since WHATWG strips control chars whole-string not
 per-URL (r8 skeptic), and the outer 50k `max_chars`/`scanMaxChars` content
 clip (60k pad clips to pure padding, losing the host — r8 QA). Go now
 closes all three (skip-before-cap, global control-strip, full-content URL
-scan) and is MORE correct than Python at each.
+scan) and is MORE correct than Python at each. (12) evolver Apply coerces a
+non-string / absent `suggestion` field to `""` before the guard and can
+stamp a spurious empty lesson `applied=true` — a fail-open in the wrong
+direction for the module's doctrine; SHARED with Python
+(`d.get("suggestion","")`, no type/non-empty check), confirmed NOT an
+injection bypass (the empty string is both scanned and stored), so named
+here rather than fixed mid-convergence.
 
 **r5 CONFIRMATION round (2026-08-22, skeptic+qa) — first zero-HIGH round.**
 Both lenses traced the full WHATWG authority-shape checklist and VERIFIED
@@ -1138,6 +1144,32 @@ hand-rolled URL/authority parser (grammar -> window -> nested windows). If
 r9/r10 don't converge, the honest end state may be a spec-grounded URL parse
 (net/url + explicit WHATWG normalization) rather than continued regex
 hardening — flagged for a decision at convergence.
+
+**r9 round (2026-08-22, skeptic+qa) — NOT zero-HIGH; the r8 fix's OWN safety
+claim was false.** skeptic HIGH — the per-scheme loop did
+`strings.ToLower(cand)` on the FULL unbounded suffix (a scheme-length guess)
+BEFORE the 512 cap. Harmless while `target` was 50k-clipped, but r8's switch
+to full-content scanning turned `https:`×N (no whitespace) into O(N) matches
+× O(len) each = O(n²): measured 1.7s->6.5s->25.5s as the input doubled
+(120k->240k->480k bytes), a real CPU/alloc DoS on the untrusted evolver-
+suggestion path — and a direct FALSIFICATION of r8's "no new DoS class" note
+(the cost sat BEFORE the cap, not after). Go-only (Python does per-pattern
+search over a fixed 50k slice, no per-candidate ToLower). Fixed by taking the
+scheme length from schemeRe's own match bounds (`loc[1]-loc[0]`, O(1)) — the
+480KB case dropped 25.5s->0.21s, scaling linear. Pinned with a goroutine+10s-
+ceiling regression test (fails fast on quadratic); mutation M111 (restore
+ToLower) COMPILES and FAILS it at the ceiling. QA found NO parser HIGH
+(traced the r8 fixes load-bearing via M109/M110 replays) and raised: a MEDIUM
+coverage gap (no mid-host-pad negative control on an ALLOWLISTED host — ADDED
+at both cap and outer-clip scale), the #12 fail-open (named above), and a LOW
+absolute-byte-ceiling suggestion — DECLINED with reasoning: with the
+quadratic closed the work is linear, and a finite ceiling would RE-INTRODUCE
+the starvable-prefix class the r8 QA finding was about, just at a higher
+threshold (the pre-existing unconditional `[]rune(content)` alloc is the
+caller's size concern, not a new r9 regression). r9's HIGH resets the clock —
+r10 is the first of two required clean rounds. The 8-round streak of real
+defects in this hand-rolled parser stands; the spec-grounded-rewrite decision
+is live if r10 doesn't converge.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 

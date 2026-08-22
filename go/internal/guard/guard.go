@@ -245,11 +245,16 @@ func ScanContent(content, source string) ScanReport {
 		// Capping AFTER the run guarantees the window holds the authority.
 		// tab/CR/LF are already gone (global strip above), so the run is
 		// just slashes now. The skip is O(run) and each run belongs to one
-		// scheme, so total work stays linear in the 50k-capped content.
-		skip := len("http:")
-		if strings.HasPrefix(strings.ToLower(cand), "https:") {
-			skip = len("https:")
-		}
+		// scheme, so total work stays linear in the content.
+		//
+		// The scheme length comes from schemeRe's OWN match bounds
+		// (loc[1]-loc[0], i.e. len("http:")|len("https:")), NOT a
+		// strings.ToLower(cand)+HasPrefix — that lowercased the WHOLE
+		// unbounded suffix before the cap, so `https:`×N with no whitespace
+		// was O(N) matches × O(len) each = O(n²) CPU+alloc once r8 scanned
+		// the full content (r9 review; this falsified r8's "no new DoS
+		// class" note). loc[1]-loc[0] is O(1) and exact.
+		skip := loc[1] - loc[0]
 		for skip < len(cand) && (cand[skip] == '/' || cand[skip] == '\\') {
 			skip++
 		}

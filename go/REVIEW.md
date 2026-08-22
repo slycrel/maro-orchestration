@@ -2552,3 +2552,49 @@ rounds. STANDING NOTE: 7 straight rounds each found a real defect in this
 hand-rolled URL parser; if convergence doesn't come by r9/r10, a
 spec-grounded parse (net/url + WHATWG normalization) is the candidate end
 state over continued regex hardening.
+
+## Round 9 (2026-08-22, skeptic + qa, SAME-MODEL FALLBACK: sonnet-medium)
+
+### Verdict: REJECT → FIXED (one HIGH; parser itself traced CLEAN). Verification Ledger:
+
+- **HIGH (skeptic) — quadratic-time DoS from `strings.ToLower(cand)` on the
+  full unbounded suffix, before the 512 cap.** VERIFIED live: `https:`×N with
+  no whitespace → N scheme matches, each ToLower over O(suffix) → O(n²).
+  Measured 1.7s / 6.5s / 25.5s at 120k / 240k / 480k bytes (4× per doubling).
+  Reachable from untrusted evolver suggestion text via `guard.ScanContent` in
+  `Apply`. Directly FALSIFIES r8's "no new DoS class" note — the cost sat
+  BEFORE the cap, which r8's own reasoning overlooked; r8's switch to
+  full-content scanning removed the 50k bound that had masked it. Go-only
+  (Python has no per-candidate ToLower). FIXED: scheme length now comes from
+  schemeRe's match bounds (`loc[1]-loc[0]`, O(1)); 480KB case 25.5s->0.21s,
+  linear. Pinned with a goroutine+10s-ceiling test (fails fast on quadratic).
+  Mutation M111 (restore ToLower) COMPILES and FAILS at the ceiling.
+
+- **NO PARSER HIGH (qa, confirmed).** QA replayed M109/M110 and re-derived
+  urlHostAllowed against every mustFlag/mustPass case — the r8 global-strip
+  and full-content fixes are load-bearing and the parser traces clean. First
+  round the URL/authority parser itself yielded no HIGH.
+
+- **MEDIUM (qa) — no negative control for a mid-host tab/CR/LF pad on an
+  ALLOWLISTED host** (the exact mechanism r8 introduced). CLOSED: added
+  allowlisted mid-host-pad mustPass cases to both cap-scale and outer-clip
+  tests.
+
+- **LOW/MEDIUM (qa) — non-string/absent `suggestion` coerced to "" before the
+  guard, stamping a spurious empty applied lesson.** Real fail-open in the
+  wrong direction, but SHARED with Python (`d.get("suggestion","")`) and NOT
+  an injection bypass (empty string is both scanned and stored). NAMED as
+  backport candidate #12, not fixed mid-convergence.
+
+- **LOW (qa) — no absolute byte ceiling on content. DECLINED with reasoning.**
+  With the quadratic closed the work is linear; a finite ceiling would
+  re-introduce the starvable-prefix class the r8 QA finding was about, at a
+  higher threshold. Verify-before-fix cuts both ways — the proposed fix
+  contradicts the saga's own lesson. The pre-existing unconditional
+  `[]rune(content)` alloc is the caller's size concern, not an r9 regression.
+
+Fix-layer mutation M111 DETECTED with a compiling mutant. Full suite green,
+gofmt/vet clean. r9's HIGH RESETS the fixpoint clock — r10 is the first of two
+required consecutive zero-HIGH rounds. The 8-round real-defect streak in this
+hand-rolled parser stands; spec-grounded-rewrite decision is live if r10
+doesn't converge.
