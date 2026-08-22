@@ -42,6 +42,12 @@ func (a *Accumulator) Add(entry string) {
 	if entry == "" {
 		return
 	}
+	// Deliberately NOT budget.Clip: the entry marker is byte-compatible
+	// with Python ContextBudget.add's SECOND marker format ("[entry
+	// truncated: …]"), so mixed-runtime renders stay parseable by one
+	// reader. Clip's forged-marker idempotency guard doesn't transfer —
+	// entries are cut exactly once at Add and never re-clipped
+	// (adversarial director r1: named, accepted).
 	if r := []rune(entry); len(r) > a.EntryCap {
 		entry = fmt.Sprintf("%s\n… [entry truncated: first %d of %d characters]",
 			string(r[:a.EntryCap]), a.EntryCap, len(r))

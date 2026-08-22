@@ -327,3 +327,177 @@ func TestRunDelegationGapNotEmittedForAdapterBlocks(t *testing.T) {
 		t.Fatalf("log row must scope delegation_gap to worker-authored blocks: %v", wr)
 	}
 }
+
+// TestRunGapEventScrubbed: the delegation-gap event's ticket/reason
+// previews land in captains_log.jsonl SCRUBBED — the sibling director
+// log already scrubbed this exact string and the event sink didn't
+// (adversarial director r1, three lenses; Python's log_event doesn't
+// scrub — Go-stricter, backport candidate).
+func TestRunGapEventScrubbed(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "ops", "task": "rotate key AKIAIOSFODNN7EXAMPLE now"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "flag_blocked", "reason": "the key AKIAIOSFODNN7EXAMPLE rotation target was not provided"}`,
+		`{"accepted": false, "reason": "blocked", "revision_request": null}`,
+		"Report: nothing completed.",
+	}, "rotate the key")
+	if res.Status != "stuck" {
+		t.Fatalf("fixture must block: %+v", res.Status)
+	}
+	events, err := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(events), "WORKER_DELEGATION_GAP") {
+		t.Fatalf("gap event must still fire: %s", events)
+	}
+	if strings.Contains(string(events), "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("secret survived into captains_log: %s", events)
+	}
+}
+
+// TestReviewVerdictFieldGate: a parseable verdict whose "accepted" is
+// missing, null, or mistyped REJECTS — the safety direction applies to
+// the field, not just the envelope (adversarial director r1, three
+// lenses; deliberately stricter than Python's data.get("accepted",
+// True) which accepts an absent key and coerces "false" truthy).
+func TestReviewVerdictFieldGate(t *testing.T) {
+	for _, reply := range []string{
+		`{"reason": "looks fine"}`,
+		`{"accepted": null, "reason": "cannot decide"}`,
+		`{"accepted": "false", "reason": "string-typed"}`,
+		`{"accepted": 1, "reason": "number-typed"}`,
+	} {
+		fake := &llm.Fake{Script: []string{reply}}
+		d, _, _ := reviewWorkerOutput(context.Background(), fake, "dir",
+			Ticket{TicketID: "tk1", WorkerType: "build", Task: "t"},
+			workers.Result{Status: "done", Result: "some output"}, false)
+		if d.Accepted {
+			t.Fatalf("verdict %q must reject, got accept", reply)
+		}
+		if d.TicketID != "tk1" {
+			t.Fatalf("decision must carry its ticket id: %+v", d)
+		}
+	}
+	// A well-formed false still parses as an ordinary rejection.
+	fake := &llm.Fake{Script: []string{`{"accepted": false, "reason": "incomplete"}`}}
+	d, _, _ := reviewWorkerOutput(context.Background(), fake, "dir",
+		Ticket{TicketID: "tk2", WorkerType: "build", Task: "t"},
+		workers.Result{Status: "done", Result: "some output"}, false)
+	if d.Accepted || d.Reason != "incomplete" {
+		t.Fatalf("well-formed false must reject with its own reason: %+v", d)
+	}
+}
+
+// TestRunPersistsDecisionsAndWarnings: the durable log carries the
+// review audit trail (ticket-correlated) and the run's warnings — a
+// rejected-no-revision run must not read as an unqualified success
+// once stderr is gone (adversarial director r1, QA HIGHs).
+func TestRunPersistsDecisionsAndWarnings(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": "write the widget"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "half a widget only, not finished at all", "summary": "s"}`,
+		`{"accepted": false, "reason": "incomplete", "revision_request": null}`,
+		"Report: half a widget only.",
+	}, "make a widget")
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "rejected with no revision request") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("silent-rejection warning must fire: %+v", res.Warnings)
+	}
+	logRow := readLog(t, res.LogPath)
+	drows, ok := logRow["review_decisions"].([]any)
+	if !ok || len(drows) != 1 {
+		t.Fatalf("review audit trail must be durable: %v", logRow["review_decisions"])
+	}
+	d0 := drows[0].(map[string]any)
+	if d0["accepted"] != false || d0["ticket_id"] != res.Tickets[0].TicketID {
+		t.Fatalf("decision row must be ticket-correlated and honest: %v", d0)
+	}
+	warns, ok := logRow["warnings"].([]any)
+	if !ok || len(warns) == 0 {
+		t.Fatalf("warnings must be durable: %v", logRow["warnings"])
+	}
+}
+
+// TestRunMalformedTicketEntriesSkipped: a forged/malformed ticket
+// entry (non-string task) is skipped with a warning, never dispatched
+// as an EMPTY ticket; all-malformed falls back to the single whole-
+// directive ticket (adversarial director r1, three lenses).
+func TestRunMalformedTicketEntriesSkipped(t *testing.T) {
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": 42}, {"worker_type": "build", "task": "the real task to build"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "built the real task completely as asked", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: built the real task completely as asked, done.",
+	}, "build the things")
+	if len(res.Tickets) != 1 || res.Tickets[0].Task != "the real task to build" {
+		t.Fatalf("malformed entry must be skipped, real one kept: %+v", res.Tickets)
+	}
+	warned := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "non-string task skipped") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("skip must be named: %+v", res.Warnings)
+	}
+
+	ws2 := t.TempDir()
+	res2, _ := fakeRun(t, ws2, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "build", "task": null}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "did the whole directive in one pass anyway", "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: did the whole directive in one pass anyway, complete.",
+	}, "build the flurbo assembly")
+	if len(res2.Tickets) != 1 || res2.Tickets[0].Task != "build the flurbo assembly" {
+		t.Fatalf("all-malformed must fall back to the whole directive: %+v", res2.Tickets)
+	}
+}
+
+// TestCompileEchoJudgesClippedWindow: the echo check judges against
+// the SAME clipped window the compiler saw — distinctive terms living
+// past the cut must not produce a false DROPPED verdict (adversarial
+// director r1, Skeptic MED; Python compares the unclipped text — named
+// divergence, honesty-direction). Here the visible window has too few
+// distinctive terms to judge, so the stamp is nil, not false.
+func TestCompileEchoJudgesClippedWindow(t *testing.T) {
+	filler := strings.Repeat("ab ", 1400) // >4000 chars, zero distinctive terms
+	tail := "zephyrquark phlogiston zymurgy bottling procedures thoroughly"
+	ws := t.TempDir()
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "research", "task": "inspect the archive"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": ` + string(mustJSON(t, filler+tail)) + `, "summary": "s"}`,
+		`{"accepted": true, "reason": "fine"}`,
+		"Report: nothing relevant surfaced.",
+	}, "check the archive")
+	w := res.WorkerResults[0]
+	if w.ReportEchoed != nil {
+		t.Fatalf("terms past the compile window must not judge (nil, not %v)", *w.ReportEchoed)
+	}
+	events, rerr := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
+	if rerr == nil && strings.Contains(string(events), "WORKER_REPORT_OMISSION") {
+		t.Fatalf("no false DROPPED accusation for unseen content: %s", events)
+	}
+}
+
+func mustJSON(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

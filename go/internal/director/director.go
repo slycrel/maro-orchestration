@@ -64,7 +64,14 @@ type Ticket struct {
 }
 
 // ReviewDecision is the Director's verdict on one worker output.
+// ReviewDecisions is an append-shaped AUDIT TRAIL (revision rounds add
+// entries) — TicketID is the correlation key; positional pairing with
+// WorkerResults misattributes verdicts after any revision. Review is a
+// revision TRIGGER and audit record, not a report-inclusion gate: a
+// rejected result still reaches the report and downstream context
+// (Python parity), it just does so on the record.
 type ReviewDecision struct {
+	TicketID        string
 	Accepted        bool
 	Reason          string
 	RevisionRequest string
@@ -311,7 +318,7 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 	// Phase 1b: pre-plan challenger — one skeptic critique before
 	// locking. Non-fatal by contract.
 	if !dry && adapter != nil {
-		spec2, cin, cout := challengeSpec(ctx, adapter, directive, spec, tickets)
+		spec2, cin, cout := challengeSpec(ctx, adapter, directive, spec, tickets, &res)
 		res.TokensIn += cin
 		res.TokensOut += cout
 		spec = spec2
@@ -334,6 +341,15 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 		res.TokensOut += rout
 		res.ReviewDecisions = append(res.ReviewDecisions, review)
 
+		if !review.Accepted && review.RevisionRequest == "" && !dry {
+			// A rejection with no revision request is otherwise a silent
+			// no-op — the result still ships (Python parity) but must do
+			// so ON THE RECORD (adversarial director r1, QA HIGH: same
+			// report, same DONE, zero durable trace).
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"ticket %s review rejected with no revision request — result kept best-effort",
+				ticket.TicketID))
+		}
 		if !review.Accepted && review.RevisionRequest != "" && !dry {
 			accepted := false
 			for round := 0; round < MaxReviewRounds-1; round++ {
@@ -397,14 +413,21 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 			// Worker-authored reasons ONLY (2026-08-11): adapter failures
 			// pattern-match the provision keywords and would contaminate
 			// the candidate corpus.
-			if w.Status == "blocked" && w.BlockedOrigin == "worker" && workers.DelegationGap(w.StuckReason) {
+			if isDelegationGap(*w) {
 				if err := rec.Event("WORKER_DELEGATION_GAP", "director_dispatch",
 					fmt.Sprintf("%s worker blocked on a provision-shaped reason — the ticket may have under-specified the work", w.WorkerType),
 					map[string]any{
-						"director_id":    res.DirectorID,
-						"worker_type":    w.WorkerType,
-						"ticket_preview": budget.Clip(w.Ticket, 120),
-						"reason_preview": budget.Clip(w.StuckReason, 200),
+						"director_id": res.DirectorID,
+						"worker_type": w.WorkerType,
+						// Scrubbed BEFORE the clip: captains_log.jsonl is a
+						// durable sink read by dev-recall/viz/learning and
+						// record.Event never rescrubs (adversarial director
+						// r1, three lenses: the sibling writeLog scrubbed
+						// this exact string, this sink didn't). Python's
+						// log_event doesn't scrub either — Go-stricter,
+						// backport candidate.
+						"ticket_preview": budget.Clip(scrub.Secrets(w.Ticket), 120),
+						"reason_preview": budget.Clip(scrub.Secrets(w.StuckReason), 200),
 						"mh_edge":        "subagent",
 						"mh_class":       "delegation_failure_candidate",
 					}, ""); err != nil {
@@ -439,12 +462,8 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 // for the whole directive.
 func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry bool, res *Result) (string, []Ticket, int, int) {
 	if dry || adapter == nil {
-		task := directive
-		if r := []rune(task); len(r) > 60 {
-			task = string(r[:60])
-		}
 		return "[dry-run spec] Plan for: " + clipRunes(directive, 80),
-			[]Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: "[dry-run] " + task}},
+			[]Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: "[dry-run] " + clipRunes(directive, 60)}},
 			0, 0
 	}
 
@@ -473,7 +492,18 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 					if !ok {
 						continue
 					}
-					task, _ := t["task"].(string)
+					// A forged/malformed shape must not silently become an
+					// EMPTY ticket dispatched to a real worker (adversarial
+					// director r1, three lenses): skip it with a warning;
+					// if every entry is malformed the single-ticket
+					// fallback below fires. Go-stricter than Python
+					// (t.get("task","") keeps non-strings).
+					task, taskOK := t["task"].(string)
+					if !taskOK || strings.TrimSpace(task) == "" {
+						res.Warnings = append(res.Warnings,
+							"spec ticket entry with missing or non-string task skipped")
+						continue
+					}
 					wtype, _ := t["worker_type"].(string)
 					if !typeValid(wtype) {
 						wtype = workers.InferType(task)
@@ -499,7 +529,7 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 // failure returns the original spec (non-fatal quality gate). Runs on
 // the same adapter — Python's MODEL_CHEAP build is unported (package
 // doc).
-func challengeSpec(ctx context.Context, adapter llm.Adapter, directive, spec string, tickets []Ticket) (string, int, int) {
+func challengeSpec(ctx context.Context, adapter llm.Adapter, directive, spec string, tickets []Ticket, res *Result) (string, int, int) {
 	var lines []string
 	for _, t := range tickets {
 		lines = append(lines, fmt.Sprintf("  [%s] %s", t.WorkerType, t.Task))
@@ -514,10 +544,15 @@ func challengeSpec(ctx context.Context, adapter llm.Adapter, directive, spec str
 	}, llm.Options{MaxTokens: 512, Temperature: 0.3, Purpose: "spec challenge"})
 	in, out := usage(resp, err)
 	if err != nil || resp == nil {
+		// Non-fatal by contract, but NAMED — a swallowed challenger
+		// failure was strictly less visible than Python's debug log
+		// (adversarial director r1, QA MED).
+		res.Warnings = append(res.Warnings, "pre-plan challenger call failed — spec unchallenged")
 		return spec, in, out
 	}
 	data, jerr := jsonx.Object(resp.Content)
 	if jerr != nil {
+		res.Warnings = append(res.Warnings, "pre-plan challenger reply unparseable — spec unchallenged")
 		return spec, in, out
 	}
 	if revised, _ := data["revised_spec"].(string); strings.TrimSpace(revised) != "" {
@@ -530,13 +565,13 @@ func challengeSpec(ctx context.Context, adapter llm.Adapter, directive, spec str
 // — auto-accepting hides bad output (Python's explicit default).
 func reviewWorkerOutput(ctx context.Context, adapter llm.Adapter, directive string, ticket Ticket, wres workers.Result, dry bool) (ReviewDecision, int, int) {
 	if dry || adapter == nil {
-		return ReviewDecision{Accepted: true, Reason: "[dry-run] auto-accepted"}, 0, 0
+		return ReviewDecision{TicketID: ticket.TicketID, Accepted: true, Reason: "[dry-run] auto-accepted"}, 0, 0
 	}
 	// Accept/reject is a verdict — judge-window rules apply: 4000 keeps
 	// ~99% of worker outputs whole and Clip marks the remainder so the
 	// reviewer knows its view is partial.
 	userMsg := fmt.Sprintf("Directive: %s\n\nTicket (%s): %s\n\nWorker output:\n%s\n\nWorker status: %s",
-		directive, ticket.WorkerType, ticket.Task, budget.Clip(wres.Result, 4000), wres.Status)
+		directive, ticket.WorkerType, ticket.Task, budget.WorkerJudgeWindow.Clip(wres.Result), wres.Status)
 	if wres.StuckReason != "" {
 		userMsg += "\nStuck reason: " + wres.StuckReason
 	}
@@ -548,16 +583,24 @@ func reviewWorkerOutput(ctx context.Context, adapter llm.Adapter, directive stri
 	in, out := usage(resp, err)
 	if err == nil && resp != nil {
 		if data, jerr := jsonx.Object(resp.Content); jerr == nil {
-			accepted := true
-			if v, ok := data["accepted"].(bool); ok {
-				accepted = v
+			// The safety direction applies to the FIELD, not just the
+			// envelope: a verdict whose "accepted" is missing, null, or
+			// mistyped rejects. Deliberately STRICTER than Python
+			// (bool(data.get("accepted", True)) accepts an absent key
+			// and coerces "false" truthy) — adversarial director r1,
+			// three lenses independently.
+			accepted, isBool := data["accepted"].(bool)
+			if !isBool {
+				return ReviewDecision{TicketID: ticket.TicketID, Accepted: false,
+					Reason: "review verdict missing boolean accepted — rejecting for safety"}, in, out
 			}
 			reason, _ := data["reason"].(string)
 			revision, _ := data["revision_request"].(string)
-			return ReviewDecision{Accepted: accepted, Reason: reason, RevisionRequest: revision}, in, out
+			return ReviewDecision{TicketID: ticket.TicketID, Accepted: accepted,
+				Reason: reason, RevisionRequest: revision}, in, out
 		}
 	}
-	return ReviewDecision{Accepted: false, Reason: "review parse failed, rejecting for safety"}, in, out
+	return ReviewDecision{TicketID: ticket.TicketID, Accepted: false, Reason: "review parse failed, rejecting for safety"}, in, out
 }
 
 // compileReport ports _compile_report. Side effect on the LLM path
@@ -580,10 +623,18 @@ func compileReport(ctx context.Context, adapter llm.Adapter, directive, spec str
 		return concat(), 0, 0
 	}
 
+	// One window per worker, used for BOTH the compile prompt and the
+	// echo check below — echoing the full result against a report
+	// compiled from a clipped view produced false DROPPED verdicts for
+	// long outputs whose distinctive terms lived past the cut
+	// (adversarial director r1, Skeptic MED; Python still compares
+	// against the unclipped text — named divergence, honesty-direction).
+	windows := make([]string, len(wresults))
 	var b strings.Builder
 	for i, r := range wresults {
+		windows[i] = budget.WorkerJudgeWindow.Clip(r.Result)
 		fmt.Fprintf(&b, "\n\n### Worker %d (%s)\nStatus: %s\n%s",
-			i+1, r.WorkerType, r.Status, budget.Clip(r.Result, 4000))
+			i+1, r.WorkerType, r.Status, windows[i])
 	}
 	userMsg := fmt.Sprintf("Directive: %s\n\nSpec: %s\n\nWorker outputs:%s\n\nCompile a final report.",
 		directive, spec, b.String())
@@ -598,8 +649,7 @@ func compileReport(ctx context.Context, adapter llm.Adapter, directive, spec str
 	}
 	report := strings.TrimSpace(resp.Content)
 	for i := range wresults {
-		echoed := reportEcho(wresults[i].Result, report)
-		wresults[i].ReportEchoed = echoed
+		wresults[i].ReportEchoed = reportEcho(windows[i], report)
 	}
 	return report, in, out
 }
@@ -618,8 +668,9 @@ const (
 var echoTermRe = regexp.MustCompile(fmt.Sprintf(`[a-z0-9_\-./]{%d,}`, echoMinTermLen))
 
 // echoStopwords — memory_bridge._ECHO_STOPWORDS verbatim: frequent
-// boilerplate whose match proves nothing. One extraction rule shared
-// with the (unported) memory-slice echo so the checks can't drift.
+// boilerplate whose match proves nothing. Kept byte-identical to
+// Python's table so a future memory-slice port doesn't reconcile two
+// vocabularies — today this file is the only Go consumer.
 var echoStopwords = map[string]bool{
 	"before": true, "after": true, "should": true, "always": true, "never": true,
 	"when": true, "instead": true, "prefer": true, "avoid": true, "check": true,
@@ -696,13 +747,12 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 	wrows := make([]map[string]any, 0, len(res.WorkerResults))
 	for _, r := range res.WorkerResults {
 		row := map[string]any{
-			"worker_type":   r.WorkerType,
-			"status":        r.Status,
-			"result_length": len(r.Result),
-			"delegation_gap": r.Status == "blocked" && r.BlockedOrigin == "worker" &&
-				workers.DelegationGap(r.StuckReason),
-			"tokens_in":  r.TokensIn,
-			"tokens_out": r.TokensOut,
+			"worker_type":    r.WorkerType,
+			"status":         r.Status,
+			"result_length":  len(r.Result),
+			"delegation_gap": isDelegationGap(r),
+			"tokens_in":      r.TokensIn,
+			"tokens_out":     r.TokensOut,
 		}
 		// nil stays a JSON null — "not judged" is a third state, not false.
 		if r.ReportEchoed != nil {
@@ -712,14 +762,34 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 		}
 		wrows = append(wrows, row)
 	}
+	// Review decisions and warnings are part of the durable record —
+	// without them a run whose review loop was exhausted or whose
+	// events failed to write reads as an unqualified success once
+	// stderr is gone (adversarial director r1, QA HIGHs ×2). Python
+	// persists neither — Go-stricter, backport candidate.
+	drows := make([]map[string]any, 0, len(res.ReviewDecisions))
+	for _, d := range res.ReviewDecisions {
+		drows = append(drows, map[string]any{
+			"ticket_id":        d.TicketID,
+			"accepted":         d.Accepted,
+			"reason":           scrub.Secrets(d.Reason),
+			"revision_request": scrub.Secrets(d.RevisionRequest),
+		})
+	}
+	warns := make([]string, 0, len(res.Warnings))
+	for _, w := range res.Warnings {
+		warns = append(warns, scrub.Secrets(w))
+	}
 	payload := map[string]any{
-		"director_id":    res.DirectorID,
-		"directive":      scrub.Secrets(res.Directive),
-		"spec":           scrub.Secrets(res.Spec),
-		"status":         res.Status,
-		"elapsed_ms":     res.Elapsed.Milliseconds(),
-		"tickets":        tickets,
-		"worker_results": wrows,
+		"director_id":      res.DirectorID,
+		"directive":        scrub.Secrets(res.Directive),
+		"spec":             scrub.Secrets(res.Spec),
+		"status":           res.Status,
+		"elapsed_ms":       res.Elapsed.Milliseconds(),
+		"tickets":          tickets,
+		"worker_results":   wrows,
+		"review_decisions": drows,
+		"warnings":         warns,
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -746,6 +816,15 @@ func usage(resp *llm.Response, err error) (int, int) {
 		return re.TokensIn, re.TokensOut
 	}
 	return 0, 0
+}
+
+// isDelegationGap is the ONE owner of the gap-candidate scoping rule —
+// the event emission and the log row must never disagree about the same
+// worker (adversarial director r1, QA: the rule was duplicated
+// verbatim at both sites).
+func isDelegationGap(w workers.Result) bool {
+	return w.Status == "blocked" && w.BlockedOrigin == "worker" &&
+		workers.DelegationGap(w.StuckReason)
 }
 
 func typeValid(t string) bool {

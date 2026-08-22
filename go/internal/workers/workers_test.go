@@ -143,3 +143,15 @@ func TestDelegationGapScopes(t *testing.T) {
 		t.Fatalf("provision-shaped reason must classify")
 	}
 }
+
+// TestDispatchBareContentGateCountsRunes: the >20 bar counts runes
+// (Python len parity) — 8 CJK characters are 24 bytes but 8 runes and
+// must be refused as thin content (adversarial director r1, QA:
+// byte-counting was lenient on a refusal gate).
+func TestDispatchBareContentGateCountsRunes(t *testing.T) {
+	fake := &llm.Fake{Script: []string{"日本語出力八文字"}}
+	res := Dispatch(context.Background(), fake, General, "t", "", false)
+	if res.Status != "blocked" || res.BlockedOrigin != "empty" {
+		t.Fatalf("8-rune content must be blocked(empty): %+v", res)
+	}
+}

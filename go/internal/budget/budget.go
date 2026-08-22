@@ -151,6 +151,22 @@ var (
 			"remains for the stack — the actionable half of the record",
 	}
 
+	// WorkerJudgeWindow bounds one worker result inside the director's
+	// review and compile prompts — a judge window, so the cut is MARKED
+	// and the echo check judges against the same window the compiler
+	// actually saw (adversarial director r1: echoing the full result
+	// against a report compiled from the first 4000 chars produced
+	// false DROPPED verdicts). Python uses a bare 4000 literal at both
+	// sites (_review_worker_output, _compile_report); registering it
+	// here is the caps-live-in-the-registry decree.
+	WorkerJudgeWindow = Budget{
+		Name:  "worker-judge-window",
+		Limit: 4000,
+		Why: "Python's truncation audit picked 4000 as keeping ~99% of " +
+			"worker outputs whole for the review verdict; the compile " +
+			"window shares it so echo checks compare like against like",
+	}
+
 	// InjectedStep bounds one worker-injected step's text before it
 	// becomes the next prompt's step line.
 	InjectedStep = Budget{
@@ -181,6 +197,7 @@ var Registry = []Budget{
 	PanicTrace,
 	PanicValue,
 	InjectedStep,
+	WorkerJudgeWindow,
 }
 
 // markerRe recognizes a clip marker at end-of-string. Format is

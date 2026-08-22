@@ -214,8 +214,12 @@ func Dispatch(ctx context.Context, adapter llm.Adapter, workerType, ticket, extr
 		}
 	}
 
-	// Fallback: treat bare content as the result — Python's >20-char bar.
-	if content := resp.Content; len(content) > 20 {
+	// Fallback: treat bare content as the result — Python's >20-char
+	// bar, counted in RUNES (Python len() semantics): byte counting
+	// passed 8 CJK characters as "useful output" where Python refuses
+	// (adversarial director r1, QA — lenient-direction divergence on a
+	// refusal gate).
+	if content := resp.Content; len([]rune(content)) > 20 {
 		return Result{WorkerType: workerType, Ticket: ticket, Status: "done",
 			Result: content, TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
 	}
