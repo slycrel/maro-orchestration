@@ -661,7 +661,14 @@ direction).
   did-this-call-cut bit and reportEcho strips only when it's true; an
   un-cut window's forged tail is content, pinned end-to-end through
   Run (forged tail can no longer flip the omission stamp to nil).
-  Mutations M67-M68 DETECTED.
+  Mutations M67-M68 DETECTED. Adversarial r7 (same day,
+  skeptic+qa): QA found no HIGH/MED in the r6 fix itself — first clean
+  lens of the tranche; Skeptic's HIGH was a true instrument gap (the
+  ClipInfo wiring had no clipped-side e2e pin — the wiring revert
+  passed the whole suite, verified by running it), now pinned through
+  Run (M69) plus a tighter-re-clip honesty-bit case; marker vocabulary
+  as false-positive padding accepted-named. Mutation M69 DETECTED.
+
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):

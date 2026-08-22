@@ -956,3 +956,29 @@ func TestRunForgedTrailingMarkerStillJudged(t *testing.T) {
 		t.Fatalf("omission event must not be suppressible by a forged tail: %s", events)
 	}
 }
+
+// TestRunClippedWindowStripsMarkerEndToEnd: the GENUINELY-clipped side
+// of the ClipInfo wiring, driven through Run with the real
+// WorkerJudgeWindow — a >4000-rune result whose distinctive terms
+// (4 of them) all live inside the window must judge as nil after the
+// real marker is stripped; if the wiring drops the bit (clipped[i]
+// stuck false), the marker's own vocabulary pads the window to 7
+// terms and judges it (adversarial director r7, Skeptic HIGH: every
+// prior pin hard-coded wasClipped or used sub-5-char filler, so
+// reverting compileReport to plain Clip passed the full suite —
+// verified before this pin was written).
+func TestRunClippedWindowStripsMarkerEndToEnd(t *testing.T) {
+	ws := t.TempDir()
+	long := "alphaterm betaterm gammaterm deltaterm " + strings.Repeat("ab ", 1400)
+	res, _ := fakeRun(t, ws, []string{
+		`{"spec": "one pass", "tickets": [{"worker_type": "research", "task": "inspect the flux capacitor readings"}]}`,
+		`{"critiques": [], "revised_spec": ""}`,
+		`{"tool": "deliver_result", "result": "` + long + `", "summary": "s"}`,
+		`{"accepted": true, "reason": "complete"}`,
+		"Nothing to report.",
+	}, "check the machine")
+	w := res.WorkerResults[0]
+	if w.ReportEchoed != nil {
+		t.Fatalf("clipped 4-term window must strip its real marker and stay unjudgeable: %v", *w.ReportEchoed)
+	}
+}

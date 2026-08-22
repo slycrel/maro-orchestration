@@ -2006,3 +2006,38 @@ round closed the ROOT of the four-round marker arc.
   StripMarker's scope and writeLog atomicity. No other findings.
 
 Mutations M67–M68 DETECTED. Full suite green. r7 follows on this diff.
+
+## Director tranche — adversarial r7 (2026-08-22, sonnet-medium fallback ×2: skeptic + qa)
+
+Round on the r6 fix layer. QA's verdict: **no HIGH or MEDIUM in the
+fix itself** — first clean lens of the tranche (ClipInfo's bit traced
+1:1 with Clip's truncate branch across all six input shapes). The
+Skeptic's HIGH was an instrument gap, and it was TRUE:
+
+- **HIGH (skeptic, verified by running the mutation BEFORE fixing):
+  the ClipInfo wiring at compileReport had no e2e pin on the
+  genuinely-clipped side** — reverting `windows[i], clipped[i] =
+  …ClipInfo(…)` to plain `Clip` passed the ENTIRE suite (every echo
+  pin hard-codes wasClipped; the one >4000-rune Run test used
+  sub-5-char filler, insensitive either way). FIXED:
+  TestRunClippedWindowStripsMarkerEndToEnd drives a >4000-rune result
+  with 4 in-window distinctive terms through Run — nil when the real
+  marker strips, judged at 7 terms if the wiring drops the bit. M69
+  (the exact wiring revert) went NOT DETECTED → DETECTED across the
+  fix.
+- **LOW (qa): the honesty bit's third real-cut shape (tighter
+  re-clip) was unpinned.** FIXED: TestClipInfoTighterReclip asserts
+  the bit flips back to true and StripMarker removes only the new
+  true-end marker.
+- **LOW (qa, accepted-named): r6 legitimizes marker vocabulary as
+  ordinary padding in the FALSE-POSITIVE direction** — an unclipped
+  forged tail contributes truncated/characters as generic terms that
+  could nudge a window toward a spurious echoed=true. Not unique to
+  marker shape (any two common words pad the same way); echoMinTerms/
+  stopword tuning is a separately-owned heuristic. Named here so the
+  r6 entry doesn't read as strictly positive.
+- **LOW (skeptic): ledger asymmetry** ("pinned end-to-end" was true
+  only of the forged-tail side). Resolved by the new pin; this entry
+  is the correction.
+
+Mutation M69 DETECTED (post-fix). Full suite green. r8 follows.

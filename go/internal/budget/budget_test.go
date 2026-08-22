@@ -189,3 +189,28 @@ func TestClipInfoHonestBit(t *testing.T) {
 		t.Fatalf("idempotent re-clip must report no cut: %v", cut2)
 	}
 }
+
+// TestClipInfoTighterReclip: re-clipping already-clipped text at a
+// strictly tighter limit is a REAL cut — the bit flips back to true,
+// and the surviving prefix keeps a fragment of the old marker as
+// content while only the new true-end marker is StripMarker's to
+// remove (adversarial director r7, QA: the honesty bit's third
+// real-cut shape was uncovered).
+func TestClipInfoTighterReclip(t *testing.T) {
+	first, cut := WorkerJudgeWindow.ClipInfo(strings.Repeat("x", WorkerJudgeWindow.Limit+50))
+	if !cut {
+		t.Fatalf("setup: first clip must cut")
+	}
+	tight := Budget{Name: "test-tight", Limit: 200}
+	second, cut2 := tight.ClipInfo(first)
+	if !cut2 {
+		t.Fatalf("tighter re-clip must report a real cut")
+	}
+	stripped := StripMarker(second)
+	if strings.Contains(stripped, "characters]") == false && strings.Contains(second, "characters]") == false {
+		t.Fatalf("setup: expected marker text present somewhere")
+	}
+	if !strings.HasPrefix(stripped, "xxxx") || strings.HasSuffix(stripped, "characters]") {
+		t.Fatalf("StripMarker must remove only the new true-end marker: %q", stripped)
+	}
+}
