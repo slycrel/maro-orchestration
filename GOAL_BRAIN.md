@@ -773,6 +773,20 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 *Entries 2026-04-23 → 2026-07-14 rotated to `docs/history/goal-brain-decisions-2026-04-to-07.md` (2026-08-16). The archive is part of this append-only log — rotation, not deletion; dev-recall ingests it.*
 
+- **2026-08-21 (Go-port exploration sanctioned — Jeremy):** reacting to
+  the caps sweep: *"feels like another narrow patch. Probably too systemic
+  at this point. Let's go nuts and pivot for a while. Let's make a branch
+  and port maro to golang."* Read: the cap/discipline fragility is
+  systemic to how the Python codebase grew; an exploratory port tests
+  whether the lessons can be made STRUCTURAL (budgets as types carrying
+  their written rationale, no bare slicing of prompt-bound text, no
+  swallowed errors) instead of tripwire-enforced. Scope: exploration on
+  branch `go-port` (worktree), spine-first vertical slice that runs a
+  goal end-to-end, on-disk formats kept compatible with the Python
+  runtime (same workspace layout, same clip-marker format) so records
+  interoperate. This is a pivot "for a while", NOT an abandonment of
+  mainline — live A/B denominators (edge-expansion, shadow lane) keep
+  accruing on the Python runtime, which stays the production system.
 - **2026-08-21 (caps are data-driven or they go; fragility named — Jeremy):**
   *"we might need caps in some cases but generally we should be data
   driven. I regret not pushing back harder early, we keep revisiting this
