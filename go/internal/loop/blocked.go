@@ -29,6 +29,7 @@ package loop
 import (
 	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -57,6 +58,14 @@ type blockDecision struct {
 	redecompose bool
 	metaReason  string
 	stopVerdict string // rides failure-chain text (typed column unported)
+	// Usage from the timeout-split / refinement-hint LLM calls — the
+	// caller adds it to the run totals. Python's adapters record spend
+	// centrally in metrics; Go's only ledger is the outcome row, so
+	// dropping this made recovery calls invisible spend (adversarial
+	// ladder review 2026-08-22, Expert QA HIGH — same class as the
+	// exec-r2 failed-turn salvage fix).
+	tokensIn  int
+	tokensOut int
 }
 
 // errorFingerprint ports _error_fingerprint byte-for-byte: md5 of the
@@ -281,7 +290,7 @@ func heuristicSplitParts(stepText string) []string {
 // Divergence, named: Python routes the call through per-role model
 // assignment (conductor.assign_model_by_role); Go has no role routing
 // yet and uses the run's adapter directly.
-func generateTimeoutSplit(ctx context.Context, a llm.Adapter, stepText string) []string {
+func generateTimeoutSplit(ctx context.Context, a llm.Adapter, stepText string) (split []string, tokensIn, tokensOut int) {
 	if a != nil {
 		prompt := fmt.Sprintf(
 			"An autonomous agent step timed out because it was too large to complete in time.\n\n"+
@@ -292,6 +301,13 @@ func generateTimeoutSplit(ctx context.Context, a llm.Adapter, stepText string) [
 		resp, err := a.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}},
 			llm.Options{MaxTokens: 300, Temperature: 0.2,
 				Timeout: 45 * time.Second, Purpose: "timeout-split"})
+		if resp != nil {
+			tokensIn, tokensOut = resp.TokensIn, resp.TokensOut
+		} else if re := (*llm.ResultError)(nil); errors.As(err, &re) {
+			// A failed recovery call still spent tokens (exec-r2 salvage
+			// pattern).
+			tokensIn, tokensOut = re.TokensIn, re.TokensOut
+		}
 		if err == nil {
 			var steps []string
 			for _, ln := range strings.Split(strings.TrimSpace(resp.Content), "\n") {
@@ -305,7 +321,7 @@ func generateTimeoutSplit(ctx context.Context, a llm.Adapter, stepText string) [
 				}
 			}
 			if len(steps) >= 2 {
-				return steps
+				return steps, tokensIn, tokensOut
 			}
 		}
 	}
@@ -317,16 +333,16 @@ func generateTimeoutSplit(ctx context.Context, a llm.Adapter, stepText string) [
 		}
 	}
 	if len(parts) >= 2 {
-		return parts
+		return parts, tokensIn, tokensOut
 	}
-	return nil
+	return nil, tokensIn, tokensOut
 }
 
 // generateRefinementHint ports step_exec.generate_refinement_hint: a
 // cheap targeted one-sentence fix suggestion for the second retry, with
 // the Python fallback text when the adapter is missing or errors. Same
 // role-routing divergence as generateTimeoutSplit.
-func generateRefinementHint(ctx context.Context, a llm.Adapter, stepText, blockReason, partial string) string {
+func generateRefinementHint(ctx context.Context, a llm.Adapter, stepText, blockReason, partial string) (hint string, tokensIn, tokensOut int) {
 	fallback := fmt.Sprintf(
 		"[Refinement attempt 2 — blocked: %s] "+
 			"Analyze the failure carefully. Try a completely different approach: "+
@@ -334,7 +350,7 @@ func generateRefinementHint(ctx context.Context, a llm.Adapter, stepText, blockR
 			"or produce a partial result and mark the step complete.",
 		clipHead(blockReason, 100))
 	if a == nil {
-		return fallback
+		return fallback, 0, 0
 	}
 	prompt := fmt.Sprintf(
 		"A step in an autonomous agent loop failed twice.\n\nStep: %s\nFailure reason: %s\n",
@@ -347,27 +363,41 @@ func generateRefinementHint(ctx context.Context, a llm.Adapter, stepText, blockR
 	resp, err := a.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}},
 		llm.Options{MaxTokens: 150, Temperature: 0.3,
 			Timeout: 45 * time.Second, Purpose: "refinement-hint"})
+	if resp != nil {
+		tokensIn, tokensOut = resp.TokensIn, resp.TokensOut
+	} else if re := (*llm.ResultError)(nil); errors.As(err, &re) {
+		tokensIn, tokensOut = re.TokensIn, re.TokensOut
+	}
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return fallback
+		return fallback, tokensIn, tokensOut
 	}
 	return fmt.Sprintf("[Refinement — previous attempts blocked: %s] Suggested approach: %s",
-		clipHead(blockReason, 200), strings.TrimSpace(resp.Content))
+		clipHead(blockReason, 200), strings.TrimSpace(resp.Content)), tokensIn, tokensOut
 }
 
 // handleBlockedStep ports _handle_blocked_step: decide retry / split /
-// redecompose / terminal from the evidence. Pure decision — mutates no
-// loop state; the caller applies it. Branch order is Python's exactly;
-// the unported branches (token_runaway, escape-pattern hints, diagnosis
-// consult) are noted in place so the seams stay visible.
+// redecompose / terminal from the evidence. Mutates no loop state — the
+// caller applies the decision — but it is NOT side-effect-free: the
+// timeout-split and refinement-hint branches make live, billed LLM
+// calls (up to 45s each), and their usage rides back on the decision.
+// Branch order is Python's exactly; the unported branches
+// (token_runaway, escape-pattern hints, diagnosis consult) are noted in
+// place so the seams stay visible. Also unported: retry model-tier
+// escalation (loop_blocked.py:235-242, cheap→mid→power via
+// step_tier_overrides) — Go has no model-tier registry yet, so retries
+// re-run on the same adapter (adversarial ladder review 2026-08-22,
+// Skeptic — was silently dropped, now named).
 func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	out StepOutcome, priorRetries int, fingerprints []string,
 	siblings []StepOutcome, replanCount int) blockDecision {
 
-	// Go folds stuck_reason into Result; a worker-flagged block carries
-	// the "flag_stuck: " prefix exec.go composed. Strip it so the
-	// prefix-sensitive checks below see the reason Python would see.
-	blockReason := out.Result
-	reason := strings.TrimPrefix(blockReason, "flag_stuck: ")
+	// StuckReason is Python's separate outcome field; the fallback keeps
+	// pre-typed-field producers (tool-less lane) working off Result.
+	blockReason := out.StuckReason
+	if blockReason == "" {
+		blockReason = strings.TrimPrefix(out.Result, "flag_stuck: ")
+	}
+	reason := blockReason
 
 	// (token_runaway abandonment would sit here — brake unported.)
 
@@ -395,13 +425,25 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	// fakes success (the fabricated-input false-success bug). Honest
 	// terminal instead. (Python excludes "[ralph verify]"-prefixed
 	// reasons — no ralph verifier here yet; the guard returns with it.)
-	if isInputConsumingStep(stepText) && looksLikeMissingInput(blockReason) {
+	// Both signal sources, Python parity (_looks_like_missing_input on
+	// block_reason OR step_result — the attempted text names the missing
+	// resource when the reason doesn't).
+	if isInputConsumingStep(stepText) &&
+		(looksLikeMissingInput(blockReason) || looksLikeMissingInput(out.Attempted)) {
 		return blockDecision{
 			stuckReason: fmt.Sprintf(
+				// clip(block_reason, 1000) — Python's runaway bound above
+				// measured max. The old FailureChainEntry (600) inner clip
+				// spent the ENTIRE chain-entry budget on the raw reason, so
+				// the outer clip in loop.go always dropped the trailing
+				// do-not-fabricate instruction (adversarial ladder review
+				// 2026-08-22, Architect HIGH). The nested inner+outer clip
+				// itself is Python parity (clip(_stuck_reason, 600) at the
+				// chain append).
 				"MISSING_INPUT: a required input appears absent — %s. "+
 					"A missing external input cannot be retried, split, or manufactured; "+
 					"escalate for the real input rather than fabricating one.",
-				budget.FailureChainEntry.Clip(blockReason)),
+				budget.BlockReason.Clip(blockReason)),
 			metaReason:  "missing external input — honest fail, do not fabricate",
 			stopVerdict: "external-interrupt",
 		}
@@ -409,6 +451,8 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 
 	// Combined exec+analyze steps are structurally wrong — split on the
 	// first block regardless of reason; retrying the shape won't fix it.
+	// (Reaching this reactively should now be rare: Run shapes the
+	// initial plan too, Python's label="initial-plan" pass.)
 	if isCombinedExecAnalyze(stepText) {
 		return blockDecision{
 			splitInto:  splitExecAnalyze(stepText),
@@ -419,10 +463,12 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	// Timeouts must not be retried identically — the subprocess just
 	// times out again. Split smaller, or stop honestly if splitting fails.
 	if strings.Contains(strings.ToLower(blockReason), "timed out") {
-		if split := generateTimeoutSplit(ctx, a, stepText); len(split) > 0 {
+		split, tin, tout := generateTimeoutSplit(ctx, a, stepText)
+		if len(split) > 0 {
 			return blockDecision{
 				splitInto:  split,
 				metaReason: "timeout — decomposed into smaller steps",
+				tokensIn:   tin, tokensOut: tout,
 			}
 		}
 		return blockDecision{
@@ -432,6 +478,7 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 				blockReason),
 			metaReason:  "timeout and split-recovery failed — terminal",
 			stopVerdict: "out-of-budget",
+			tokensIn:    tin, tokensOut: tout,
 		}
 	}
 
@@ -456,6 +503,7 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	// Standard retry: under threshold AND the errors are converging.
 	if priorRetries < retryThreshold && converging {
 		var hint string
+		var hintTin, hintTout int
 		if priorRetries == 0 {
 			// The retry acts on WHY it was blocked — the reason travels
 			// wide (Python's [:120] cut 93% of live reasons; 1000 is the
@@ -467,12 +515,16 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 					"If you lack required information, say NEED_INFO: [what's missing] instead of guessing.",
 				clipHead(blockReason, 1000))
 		} else {
-			hint = generateRefinementHint(ctx, a, stepText, blockReason, out.Summary)
+			// partial_result=step_result in Python — the attempted text
+			// for a flag_stuck block, not the (always-empty-on-blocked)
+			// Summary.
+			hint, hintTin, hintTout = generateRefinementHint(ctx, a, stepText, blockReason, out.Attempted)
 		}
 		return blockDecision{
 			retry:      true,
 			hint:       hint,
 			metaReason: fmt.Sprintf("retry — errors converging, under threshold (%s)", metaCtx),
+			tokensIn:   hintTin, tokensOut: hintTout,
 		}
 	}
 

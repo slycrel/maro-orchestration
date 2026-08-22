@@ -56,6 +56,16 @@ type StepOutcome struct {
 	// Warnings are adapter-reported oddities for this step (folded into
 	// Result.Warnings by Run).
 	Warnings []string
+	// StuckReason/Attempted mirror Python's separate blocked-outcome
+	// fields (stuck_reason and result — for flag_stuck, result IS the
+	// attempted text, step_exec.py:1948-49). The ladder's fingerprint
+	// and missing-input checks read the typed pair; Result keeps the
+	// folded human-readable form for the failure chain. Folding both
+	// into Result gave reason+attempted ONE shared 200-char fingerprint
+	// head instead of Python's independent 200+200 (adversarial ladder
+	// review 2026-08-22 — three lenses independently).
+	StuckReason string
+	Attempted   string
 }
 
 // Opts parameterizes a run. Goal is required; zero values elsewhere mean
@@ -85,9 +95,9 @@ type Result struct {
 	// data-retention doctrine.
 	ProjectDir string
 	Steps      []StepOutcome
-	TokensIn  int
-	TokensOut int
-	Elapsed   time.Duration
+	TokensIn   int
+	TokensOut  int
+	Elapsed    time.Duration
 	// Warnings carries non-fatal oddities (a captain's-log write that
 	// failed, adapter parse suspects) to the CALLER instead of dying in a
 	// print inside the loop. Honest scope (adversarial r3): the CLI
@@ -244,6 +254,17 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 	}
 
+	if execMode {
+		// Python shapes the INITIAL plan too (_prepare_execution,
+		// _shape_steps label="initial-plan", loop_planning.py:87) —
+		// without this a combined exec+analyze step burns a full worker
+		// call and records a blocked outcome before the ladder's
+		// reactive split ever sees it (adversarial ladder review
+		// 2026-08-22, Minimalist HIGH). Exec lane only: tool-less steps
+		// are single LLM calls with no exec/analyze boundary to split.
+		steps = shapeSteps(steps)
+	}
+
 	if evErr := rec.Event("LOOP_STARTED", loopID,
 		fmt.Sprintf("Go loop started: %d steps for %s", len(steps), budget.Clip(goal, 200)),
 		map[string]any{"steps": len(steps), "backend": a.Name(),
@@ -313,6 +334,14 @@ stepLoop:
 		res.TokensIn += out.TokensIn
 		res.TokensOut += out.TokensOut
 		res.Warnings = append(res.Warnings, out.Warnings...)
+		if out.Status == "done" {
+			// Successful step — the adapter is healthy. Python resets the
+			// streak on EVERY done step (loop_execute.py:1884); resetting
+			// only on non-timeout splits let non-consecutive timeouts
+			// accumulate to a false adapter-hung bail (adversarial ladder
+			// review 2026-08-22, Expert QA HIGH).
+			consecTimeouts = 0
+		}
 		if out.Status != "done" {
 			// The reason travels whole (marked breaker, not a truncator).
 			failChain = append(failChain, budget.FailureChainEntry.Clip(
@@ -328,14 +357,32 @@ stepLoop:
 				// lane keeps v0's run-through: its steps are single LLM
 				// calls whose prior-evidence filter already excludes
 				// blocked results.
+				// Python hashes (stuck_reason, result) as independent
+				// 200-char heads — result IS the attempted text for a
+				// flag_stuck block. Feeding the folded Result gave both
+				// one shared head and truncated `attempted` away on long
+				// reasons (adversarial ladder review 2026-08-22, three
+				// lenses).
+				fpReason := out.StuckReason
+				if fpReason == "" {
+					fpReason = out.Result
+				}
 				fps := append(stepFingerprints[step.text],
-					// Go folds the stuck reason into Result; Summary is the
-					// closest analogue of Python's separate partial result.
-					errorFingerprint(out.Result, out.Summary))
+					errorFingerprint(fpReason, out.Attempted))
 				stepFingerprints[step.text] = fps
 				retries := stepRetries[step.text]
+				// Siblings exclude the CURRENT attempt: Python decides
+				// before appending to step_outcomes (loop_execute.py:1929
+				// and the recovery-branch appends inside
+				// _process_blocked_step) — self-counting inflated the
+				// sibling failure rate and fired premature redecompose on
+				// small plans (adversarial ladder review 2026-08-22,
+				// Skeptic + Expert QA HIGH). Prior attempts of this same
+				// step DO stay in — that is Python's behavior too.
 				d := handleBlockedStep(ctx, a, step.text, out, retries, fps,
-					res.Steps, replanCount)
+					res.Steps[:len(res.Steps)-1], replanCount)
+				res.TokensIn += d.tokensIn
+				res.TokensOut += d.tokensOut
 				action := "stuck"
 				switch {
 				case d.retry:
@@ -393,7 +440,11 @@ stepLoop:
 						len(res.Steps)-1, len(shaped), d.metaReason)))
 					add := make([]queuedStep, len(shaped))
 					for i, s := range shaped {
-						add[i] = queuedStep{text: s}
+						// Children of a worker-injected step keep the
+						// injected audit mark — splitting must not launder
+						// scope creep (adversarial ladder review
+						// 2026-08-22, Architect).
+						add[i] = queuedStep{text: s, injected: step.injected}
 					}
 					queue = append(add, queue...)
 					replanCount++
@@ -417,7 +468,11 @@ stepLoop:
 						len(res.Steps)-1, len(shaped), d.metaReason)))
 					add := make([]queuedStep, len(shaped))
 					for i, s := range shaped {
-						add[i] = queuedStep{text: s}
+						// Children of a worker-injected step keep the
+						// injected audit mark — splitting must not launder
+						// scope creep (adversarial ladder review
+						// 2026-08-22, Architect).
+						add[i] = queuedStep{text: s, injected: step.injected}
 					}
 					queue = append(add, queue...)
 					replanCount++

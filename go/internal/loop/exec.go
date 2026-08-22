@@ -281,7 +281,8 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step, hint string
 		{Role: "user", Content: sb.String()},
 	}, opts)
 	if err != nil {
-		out := StepOutcome{Step: step, Status: "blocked", Result: err.Error()}
+		out := StepOutcome{Step: step, Status: "blocked", Result: err.Error(),
+			StuckReason: err.Error()}
 		var re *llm.ResultError
 		if errors.As(err, &re) {
 			out.TokensIn, out.TokensOut = re.TokensIn, re.TokensOut
@@ -307,6 +308,7 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step, hint string
 		// blocked step, not a silent success.
 		if strings.TrimSpace(resp.Content) == "" {
 			out.Status, out.Result = "blocked", "worker produced no output"
+			out.StuckReason = out.Result
 		} else {
 			out.Status, out.Result = "done", resp.Content
 		}
@@ -316,15 +318,18 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step, hint string
 			reason = "(no reason given)"
 		}
 		msg := "flag_stuck: " + reason
-		if att := strings.TrimSpace(argString(tc.Arguments, "attempted")); att != "" {
+		att := strings.TrimSpace(argString(tc.Arguments, "attempted"))
+		if att != "" {
 			msg += " (attempted: " + att + ")"
 		}
 		out.Status, out.Result = "blocked", msg
+		out.StuckReason, out.Attempted = reason, att
 	default: // complete_step
 		result := argString(tc.Arguments, "result")
 		if strings.TrimSpace(result) == "" {
 			out.Status, out.Result = "blocked",
 				"worker called complete_step with an empty result"
+			out.StuckReason = out.Result
 			break
 		}
 		out.Status, out.Result = "done", result

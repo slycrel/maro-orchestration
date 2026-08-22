@@ -261,7 +261,11 @@ direction).
   against CPython fixtures; round-1 generic hint, round-2 LLM
   refinement hint threaded into the retry prompt with the RETRY
   REMINDER), sibling-failure-rate re-decomposition (>50% blocked with
-  ≥3 executed), re-decompose via the planner (≤5 sub-steps, capped at
+  ≥3 executed, current attempt EXCLUDED from the evidence — Python
+  decides before appending to step_outcomes; the ladder r1 review
+  caught Go self-counting the just-blocked attempt, which fired
+  premature redecompose on small plans), re-decompose via the planner
+  (≤5 sub-steps, capped at
   2 replans), and a terminal verdict that halts with the reason, the
   stop verdict (riding the failure-chain text — no typed column yet),
   and the unexecuted remainder NAMED. Thresholds verbatim (3 retries /
@@ -270,14 +274,39 @@ direction).
   with the evidence (retries, fingerprints, replan count, action). A
   recovered run is DONE with its blocked attempts still in the record.
   The tool-less lane keeps v0's run-through — deliberate asymmetry.
+  Ladder r1 fix layer (adversarial, 4 lenses, sonnet-medium fallback):
+  the INITIAL plan is shaped too (Python's label="initial-plan" pass —
+  a combined exec+analyze step no longer burns a worker call before
+  the reactive split sees it); blocked outcomes carry a typed
+  (StuckReason, Attempted) pair mirroring Python's separate
+  stuck_reason/result fields, so the fingerprint gets independent
+  200-char heads and the missing-input check reads BOTH signal sources;
+  the MISSING_INPUT inner clip is Python's clip(reason, 1000) runaway
+  bound, not the 600-char chain budget (which guaranteed the
+  do-not-fabricate instruction fell off the assembled entry); the
+  timeout-split and refinement-hint calls return their token usage into
+  the run totals (with the failed-call ResultError salvage); a
+  successful step resets the consecutive-timeout streak (Python
+  loop_execute.py:1884 — without it, non-consecutive timeouts
+  accumulated to a false adapter-hung bail); split/redecompose children
+  of a worker-injected step keep the WasInjected audit mark. All six
+  fixes carry mutation-verified must-detect pins.
   Unported ladder pieces, named: token_runaway abandonment (no ingest
   brake), escape-pattern demotion hints (step_exec detectors), mid-loop
   diagnosis consult (introspect, Phase 44), navigator shadow, per-role
-  model routing for split/hint calls, the pending_context injection
+  model routing for split/hint calls, retry model-tier escalation
+  (loop_blocked.py:235-242 cheap→mid→power via step_tier_overrides —
+  Go has no model-tier registry; retries re-run on the same adapter),
+  the pending_context injection
   seam (hints ride the step prompt), boundary/recon tag guards in step
   shaping, mid-loop iteration-budget bump (the 2× cap stays the outer
-  breaker — binding on small plans, so retries there exhaust budget
-  before the retry threshold).
+  breaker — binding on small plans: for a 1-step plan the cap is 2, so
+  the 3-retry threshold is structurally unreachable there; Python's
+  max_iterations=40 + one-time 50% bump machinery is what actually
+  gives the ladder room). Known shared-key risk, inherited from Python:
+  stepRetries/stepFingerprints key by literal step text, so two plan
+  positions with byte-identical text (e.g. two splits both falling back
+  to the generic analysis clause) share retry/fingerprint state.
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a

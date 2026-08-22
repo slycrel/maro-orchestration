@@ -286,8 +286,8 @@ func TestExecRequestedOnIncapableBackendDegradesLoudly(t *testing.T) {
 func TestGoalSlugParity(t *testing.T) {
 	cases := map[string]string{
 		"Audit the Widget Repo, thoroughly & fast!": "audit-the-widget-repo-thoroughly",
-		"":            "unnamed-goal",
-		"!!! ???":     "unnamed-goal",
+		"":                            "unnamed-goal",
+		"!!! ???":                     "unnamed-goal",
 		"one two three four five six": "one-two-three-four-five",
 	}
 	for in, want := range cases {
@@ -832,14 +832,14 @@ func TestSplitExecAnalyzeConverges(t *testing.T) {
 func TestHeuristicTimeoutSplitEmulatesLookahead(t *testing.T) {
 	// The Python regex splits bare " and " only BEFORE a Capitalized
 	// clause (RE2 has no lookahead; Go emulates it).
-	parts := generateTimeoutSplit(context.Background(), nil,
+	parts, _, _ := generateTimeoutSplit(context.Background(), nil,
 		"download the dataset; clean the records and Compute the summary statistics")
 	want := []string{"download the dataset", "clean the records", "Compute the summary statistics"}
 	if len(parts) != 3 || parts[0] != want[0] || parts[1] != want[1] || parts[2] != want[2] {
 		t.Fatalf("heuristic split: %+v", parts)
 	}
 	// Lowercase after "and" is NOT a boundary — and one part is no split.
-	if got := generateTimeoutSplit(context.Background(), nil, "read the file and analyze it thoroughly"); got != nil {
+	if got, _, _ := generateTimeoutSplit(context.Background(), nil, "read the file and analyze it thoroughly"); got != nil {
 		t.Fatalf("lowercase and must not split: %+v", got)
 	}
 }
@@ -1009,5 +1009,222 @@ func TestExecLaneAdapterHungBailsAfterConsecutiveTimeouts(t *testing.T) {
 	if !strings.Contains(joined, "adapter appears hung") ||
 		!strings.Contains(joined, "[stop: external-interrupt]") {
 		t.Fatalf("hung bail missing from chain:\n%s", joined)
+	}
+}
+
+// --- Ladder r1 fix-layer pins (adversarial ladder review 2026-08-22) ---
+
+// Sibling-rate evidence must EXCLUDE the current attempt (Python decides
+// before appending to step_outcomes) — self-counting fired premature
+// redecompose on small plans (Skeptic + Expert QA HIGH).
+func TestExecLaneSiblingRateExcludesCurrentAttempt(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["alpha probe task", "beta probe task", "gamma probe task"]`,
+		`{"tool": "flag_stuck", "reason": "transient error A"}`,
+		`{"tool": "complete_step", "result": "alpha done", "summary": "s"}`,
+		`{"tool": "flag_stuck", "reason": "transient error B"}`,
+		`{"tool": "complete_step", "result": "beta done", "summary": "s"}`,
+		`{"tool": "flag_stuck", "reason": "transient error C"}`,
+		`{"tool": "complete_step", "result": "gamma done", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "sibling exclusion case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every block must resolve as a plain retry: with self-counting, the
+	// beta block already sees 2/3 blocked (>50%, >=3) and redecomposes.
+	if res.Status != "done" || len(res.Steps) != 6 {
+		t.Fatalf("status=%s steps=%d %+v", res.Status, len(res.Steps), res.Steps)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	joined := ""
+	for _, c := range chain {
+		joined += c.(string) + "\n"
+	}
+	if strings.Contains(joined, "sibling failure rate") {
+		t.Fatalf("self-counted sibling redecompose fired:\n%s", joined)
+	}
+	if !strings.Contains(joined, "step 4 retry 1 with hint") {
+		t.Fatalf("gamma block did not resolve as a retry:\n%s", joined)
+	}
+}
+
+// MISSING_INPUT keeps the wide reason: the inner clip is Python's
+// clip(block_reason, 1000), not the 600-char chain budget that spent the
+// whole entry on the raw reason and dropped the do-not-fabricate
+// instruction (Architect HIGH).
+func TestHandleBlockedStepMissingInputKeepsWideReason(t *testing.T) {
+	reason := "config.yml does not exist; " +
+		strings.Repeat("context detail ", 40) + "TAIL-MARKER-SURVIVES"
+	out := StepOutcome{Step: "read the config file", Status: "blocked",
+		Result: "flag_stuck: " + reason, StuckReason: reason}
+	d := handleBlockedStep(context.Background(), nil, "read the config file",
+		out, 0, nil, nil, 0)
+	if d.stopVerdict != "external-interrupt" ||
+		!strings.HasPrefix(d.stuckReason, "MISSING_INPUT") {
+		t.Fatalf("expected missing-input terminal, got %+v", d)
+	}
+	if !strings.Contains(d.stuckReason, "TAIL-MARKER-SURVIVES") {
+		t.Fatalf("647-char reason was clipped below Python's 1000 bound: %q", d.stuckReason)
+	}
+	if !strings.Contains(d.stuckReason, "fabricating one") {
+		t.Fatalf("do-not-fabricate instruction lost: %q", d.stuckReason)
+	}
+}
+
+// Python checks BOTH signal sources (_looks_like_missing_input on
+// block_reason OR step_result); only the attempted text names the
+// missing resource here (Skeptic).
+func TestHandleBlockedStepMissingInputSeesAttemptedSignal(t *testing.T) {
+	out := StepOutcome{Step: "read the customer data file", Status: "blocked",
+		Result:      "flag_stuck: the schema validation step reported an unspecified failure",
+		StuckReason: "the schema validation step reported an unspecified failure",
+		Attempted:   "searched the workspace but data.csv does not exist"}
+	d := handleBlockedStep(context.Background(), nil, "read the customer data file",
+		out, 0, nil, nil, 0)
+	if !strings.HasPrefix(d.stuckReason, "MISSING_INPUT") ||
+		d.stopVerdict != "external-interrupt" {
+		t.Fatalf("attempted-text signal missed, got %+v", d)
+	}
+}
+
+// The INITIAL plan is shaped too (Python _prepare_execution,
+// label="initial-plan") — a combined exec+analyze step must be split
+// before it ever burns a worker call (Minimalist HIGH).
+func TestExecLaneInitialPlanIsShaped(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	combined := "run the full test suite and analyze the failure output"
+	fake := execFake(
+		`["`+combined+`", "write the final summary"]`,
+		`{"tool": "complete_step", "result": "suite ran", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "failures analyzed", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "summary written", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "initial shaping case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 3 {
+		t.Fatalf("combined step not pre-split: status=%s steps=%d %+v",
+			res.Status, len(res.Steps), res.Steps)
+	}
+	for i, s := range res.Steps {
+		if s.Step == combined {
+			t.Fatalf("step %d executed in its combined form: %q", i, s.Step)
+		}
+	}
+}
+
+// Timeout-split / refinement-hint LLM calls are real spend — their usage
+// must land in the outcome totals (Expert QA HIGH; same class as the
+// exec-r2 failed-turn salvage).
+func TestExecLaneRecoveryCallsCountTokens(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := execFake(
+		`["download the huge corpus entirely", "compose final note"]`,
+		`{"tool": "flag_stuck", "reason": "operation timed out at the ceiling"}`,
+		"1. fetch corpus part one now\n2. fetch corpus part two now",
+		`{"tool": "complete_step", "result": "part one done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "part two done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "note composed", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "recovery spend case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" {
+		t.Fatalf("status=%s %+v", res.Status, res.Steps)
+	}
+	// Fake bills 10/5 per call: plan + 4 step attempts + 1 split call.
+	if res.TokensIn != 60 || res.TokensOut != 30 {
+		t.Fatalf("recovery-call usage dropped: in=%d out=%d (want 60/30)",
+			res.TokensIn, res.TokensOut)
+	}
+}
+
+// A successful step resets the consecutive-timeout streak (Python
+// loop_execute.py:1884) — without it, non-consecutive timeouts
+// accumulate to a false adapter-hung bail (Expert QA HIGH).
+func TestExecLaneTimeoutStreakResetsOnSuccess(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	tblock := `{"tool": "flag_stuck", "reason": "request timed out at the ceiling"}`
+	fake := execFake(
+		`["download alpha corpus fully", "tiny middle task", "download beta corpus fully"]`,
+		tblock,
+		"1. fetch alpha shard one now\n2. fetch alpha shard two now",
+		`{"tool": "complete_step", "result": "shard one done", "summary": "s"}`,
+		tblock,
+		"1. fetch beta shard one now\n2. fetch beta shard two now",
+		tblock,
+		"1. fetch gamma shard one now\n2. fetch gamma shard two now",
+		`{"tool": "complete_step", "result": "gamma one done", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "gamma two done", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "timeout streak case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	chain, _ := rows[len(rows)-1]["failure_chain"].([]any)
+	joined := ""
+	for _, c := range chain {
+		joined += c.(string) + "\n"
+	}
+	// Streak with the success in between is 1,0,1,2 — never 3. Without
+	// the reset it reads 1,1,2,3 and bails "adapter appears hung".
+	if strings.Contains(joined, "adapter appears hung") {
+		t.Fatalf("false adapter-hung bail despite interleaved success:\n%s", joined)
+	}
+	if len(res.Steps) != 6 {
+		t.Fatalf("run bailed early: %d steps %+v", len(res.Steps), res.Steps)
+	}
+}
+
+// flag_stuck carries the typed (StuckReason, Attempted) pair mirroring
+// Python's separate fields — folding both into Result gave the
+// fingerprint ONE shared 200-char head, so long-reason retries that
+// differed only in attempted collapsed to one fingerprint (three lenses).
+func TestFlagStuckCarriesTypedReasonAndAttempted(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	reason := strings.TrimSpace(
+		strings.Repeat("the widget assembler rejected the payload shape ", 5)) // ~240 chars
+	fake := execFake(
+		`["examine the widget data"]`,
+		`{"tool": "flag_stuck", "reason": "`+reason+`", "attempted": "tried parsing with the old schema"}`,
+		`{"tool": "complete_step", "result": "widget examined", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "typed fields case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := res.Steps[0]
+	if b.Status != "blocked" || b.StuckReason != reason ||
+		b.Attempted != "tried parsing with the old schema" {
+		t.Fatalf("typed fields not populated: %+v", b)
+	}
+	if !strings.HasPrefix(b.Result, "flag_stuck: ") {
+		t.Fatalf("folded Result form lost: %q", b.Result)
+	}
+	// Independent 200-char heads: same >200-char reason, different
+	// attempted → DIFFERENT fingerprints (the folded form collapsed them).
+	if errorFingerprint(reason, "attempt one") == errorFingerprint(reason, "attempt two") {
+		t.Fatal("attempted text no longer discriminates fingerprints")
 	}
 }

@@ -641,3 +641,117 @@ Residuals: the named-divergence lists in PORT.md/slot.go (all
 refusal-direction or diagnostics-only). Full suite green across 12
 packages, race detector clean on the concurrency pins, live smoke
 (single + concurrent) PASS.
+
+---
+
+## Blocked-step LADDER tranche — adversarial round 1 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Commit under review: 033a556f (blocked.go + loop.go/exec.go wiring).
+Four lenses (Skeptic, Architect, Minimalist, Expert QA), all returned
+exit 0. 16 distinct findings after dedup; **five HIGH-class claims, all
+VERIFIED against both sources — zero hallucinated findings again**
+(arc streak intact across 5 rounds). The flagship pattern held a 7th
+time in spirit: the densest defects sat exactly where this tranche
+wired NEW machinery into last round's fixed lane (the append-then-
+decide ordering, the budget-clip interplay with the caps doctrine).
+
+### Verification Ledger
+
+1. **HIGH — sibling-rate self-contamination** (Skeptic #1, QA #3,
+   Architect #3): Go appended the current attempt to `res.Steps`
+   BEFORE `handleBlockedStep` read it as the sibling evidence; Python
+   decides first (loop_execute.py:1929 appends after; the recovery
+   branches append inside _process_blocked_step at :275/:332/:408 and
+   `continue` past the outer append). Self-counting pushed
+   `sibling_rate` over 0.5 with `len>=3` on small plans, firing
+   premature redecompose and burning replan budget before the retry
+   threshold was ever reached. VERIFIED (both orderings quoted).
+   Ledger nuance the Skeptic got slightly wrong: prior retries of the
+   SAME step do land in Python's step_outcomes — only the current
+   attempt is excluded, so the fix passes `res.Steps[:len-1]`, not a
+   self-filtered slice. **FIXED** + pin
+   `TestExecLaneSiblingRateExcludesCurrentAttempt` (Run-level — the
+   reviewers noted the existing unit test hand-built a correct slice
+   and could never see the wiring bug).
+2. **HIGH — MISSING_INPUT inner clip used the wrong budget**
+   (Architect #1, QA #4): blocked.go clipped the embedded reason with
+   FailureChainEntry (600) where Python uses clip(block_reason, 1000)
+   (loop_blocked.py:1085) — the inner cut consumed the entire outer
+   chain-entry budget, so the trailing do-not-fabricate instruction
+   ALWAYS fell off the assembled entry for long reasons. VERIFIED,
+   with one correction to the reviewers' framing: nested clipping
+   itself is Python parity (`clip(_stuck_reason, 600)` at Python's own
+   chain append) — the defect is only the wrong inner bound.
+   **FIXED** (BlockReason.Clip) + pin
+   `TestHandleBlockedStepMissingInputKeepsWideReason` (647-char reason
+   with a tail sentinel).
+3. **HIGH — the INITIAL plan was never shaped** (Minimalist #1):
+   Python shapes every fresh plan (_prepare_execution →
+   _shape_steps(label="initial-plan"), loop_planning.py:87); Go only
+   shaped split/redecompose products, so a combined exec+analyze step
+   burned a real worker call and recorded a blocked outcome before the
+   ladder's reactive split could act. VERIFIED. **FIXED** (exec lane
+   shapes the decomposed plan before the queue is built; capTotal now
+   counts shaped steps) + pin `TestExecLaneInitialPlanIsShaped`.
+4. **HIGH — recovery LLM calls dropped their usage** (QA #1):
+   generateTimeoutSplit/generateRefinementHint read only
+   resp.Content; blockDecision carried no usage; only the redecompose
+   branch added spend to the outcome row. VERIFIED (Python's adapters
+   record spend centrally in metrics, so this was a Go-only accounting
+   hole — same class as the exec-r2 failed-turn salvage). **FIXED**
+   (usage rides blockDecision, ResultError salvage included) + pin
+   `TestExecLaneRecoveryCallsCountTokens` (exact-total assert against
+   the Fake's 10/5 billing).
+5. **HIGH — consecutive-timeout streak never reset on success**
+   (QA #2): Python resets on EVERY done step (loop_execute.py:1884);
+   Go reset only on non-timeout splits, so non-consecutive timeouts
+   accumulated to a false "adapter appears hung" bail — a terminal
+   record that lies about root cause. VERIFIED. **FIXED** + pin
+   `TestExecLaneTimeoutStreakResetsOnSuccess` (timeout/success/
+   timeout/timeout interleave must not bail).
+6. **MEDIUM — fingerprint fed structurally different data than
+   Python** (Skeptic #4, Architect #4, Minimalist #2): the folded
+   Result gave reason+attempted ONE shared 200-char head vs Python's
+   independent heads ((stuck_reason, result), result=attempted for
+   flag_stuck, step_exec.py:1948-49) — long-reason retries differing
+   only in attempted collapsed to one fingerprint, biasing toward
+   "not converging". VERIFIED. **FIXED**: StepOutcome carries a typed
+   (StuckReason, Attempted) pair set by every blocked path; the
+   fingerprint and the ladder read the typed fields (Result keeps the
+   folded human-readable form). Pin
+   `TestFlagStuckCarriesTypedReasonAndAttempted`.
+7. **MEDIUM — missing-input check read one signal source** (Skeptic
+   #3, Minimalist #3): Python checks block_reason OR step_result;
+   Go checked only the reason. Minimalist argued the folded Result
+   incidentally covered both — true pre-fix, and exactly the
+   fragility that the typed-field split would have silently broken.
+   **FIXED** alongside #6 (checks StuckReason OR Attempted) + pin
+   `TestHandleBlockedStepMissingInputSeesAttemptedSignal`.
+8. **MEDIUM — retry tier escalation dropped without being named**
+   (Skeptic #2): VERIFIED (loop_blocked.py:235-242, cheap→mid→power
+   via step_tier_overrides). Go has no model-tier registry to wire it
+   to; **NAMED** in blocked.go's comment and PORT.md's unported list —
+   the honest fix for a machinery-doesn't-exist-yet divergence.
+9. **LOW — WasInjected dropped for split/redecompose children**
+   (Architect #5): VERIFIED (retry propagated it; the twins didn't).
+   **FIXED** — children keep the injected audit mark.
+10. **LOW — "pure decision" comment overclaimed** (Architect #6):
+    handleBlockedStep makes live billed LLM calls. **FIXED** — comment
+    now separates "no loop-state mutation" from "not side-effect-free".
+11. **LOW — text-keyed retry/fingerprint maps** (Skeptic #5, QA #5,
+    Minimalist #4): VERIFIED as faithful Python parity
+    (step_retries/error_fingerprints key by literal step text).
+    Flagged not fixed; named in PORT.md as an inherited shared-key
+    risk (the generic defaultAnalysisPart fallback is the likeliest
+    collision source).
+12. **MEDIUM — 2× cap starves ladder thresholds on small plans**
+    (Architect #2): already disclosed in PORT.md; the disclosure now
+    quantifies it (1-step plan → cap 2 → 3-retry threshold
+    structurally unreachable) and names Python's max_iterations=40 +
+    bump as the unported machinery that gives the ladder room.
+    Accepted, not fixed — the iteration-budget port is its own slice.
+
+All six fix-layer pins are **mutation-verified**: each fix was
+temporarily reverted and its pin confirmed to fail (H1-H5 + the
+dual-signal MEDIUM), per the derive-mutations-from-the-file rule.
+Full suite green across 12 packages, race pass clean, binary rebuilt.
