@@ -4026,3 +4026,27 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   the actual question: promote milestone-DAG parallelism into the
   stack? Basis: Jeremy's 2026-08-22 message + code verification this
   session.
+
+- **2026-08-22 — Go port PACK tranche: "export then import success"
+  GATE PASSED + adversarial r1–r4 to FIXPOINT (branch `go-port`, HEAD
+  `e79392db`):** Jeremy's stated hurdle (*"one hurdle for 'looks like
+  we might end up ok' is an export then import success"*) is closed
+  cross-runtime: `go/crossrt_smoke.sh` proves Python export→seal → Go
+  import (Go independently re-verifies the review-hash + canonical
+  payload digest + per-artifact shas; trust demoted per §3) → Go
+  export→seal → Python import (byte-parity of the canonical digest
+  proven by Python's own gates), plus a bidirectional tamper step —
+  each runtime refuses a tampered pack the other sealed. Adversarial
+  arc: r1 4 lenses → 4 HIGHs (`dcc94494`); r2 2 lenses → 2 HIGHs
+  (`aef23174`); r3 2 lenses → 1 HIGH (`2ea5b2d2`); r4 1 lens → 1 HIGH
+  (`e79392db`) — fixpoint called; ALL FOUR rounds' HIGHs sat in the
+  previous round's fix (bomb-cap typeflag bypass → PAX meta-record
+  bypass → Decoder trailing-data regression), reinforcing the standing
+  fix-layer-first lesson. Zero hallucinated reviewer claims across ~30
+  verified findings (sonnet-medium fallback; codex capped til 08-27).
+  Go is now deliberately STRICTER than Python on ~8 hostile pack
+  shapes (all refusal-direction, named in `go/PORT.md` as backport
+  candidates — decompression ceiling, UTF-8/lone-surrogate refusal,
+  manifest/archive bijection, trailing-data strict decode). Ledger:
+  `go/REVIEW.md` on the branch. Basis: live smoke runs + reviewer
+  artifacts + green 12-package suite this session.
