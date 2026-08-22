@@ -179,6 +179,19 @@ var (
 			"window shares it so echo checks compare like against like",
 	}
 
+	// SummaryJudgeWindow bounds an outcome summary riding an inspector
+	// judge prompt (goal-alignment score, session-quality notes).
+	SummaryJudgeWindow = Budget{
+		Name:  "summary-judge-window",
+		Limit: 4000,
+		Why: "Python quality_gate._REVIEW_STEP_CUT=4000 — the marked " +
+			"backstop over the summary field's per-lane upstream bounds " +
+			"(NOW lane clips at 2000, agenda builds under 4000, evolver " +
+			"verify is one line; all three writers traced, review r2 " +
+			"2026-08-21). Do not tighten below 4000 expecting a 2000 " +
+			"upstream net — the agenda lane has none",
+	}
+
 	// InjectedStep bounds one worker-injected step's text before it
 	// becomes the next prompt's step line.
 	InjectedStep = Budget{
@@ -210,6 +223,7 @@ var Registry = []Budget{
 	PanicValue,
 	InjectedStep,
 	WorkerJudgeWindow,
+	SummaryJudgeWindow,
 }
 
 // markerRe recognizes a clip marker at end-of-string. Format is

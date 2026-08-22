@@ -35,8 +35,14 @@ func run(args []string) error {
 	if len(args) >= 1 && args[0] == "director" {
 		return runDirector(args[1:])
 	}
+	if len(args) >= 1 && args[0] == "inspect" {
+		return runInspect(args[1:])
+	}
+	if len(args) >= 1 && args[0] == "evolve" {
+		return runEvolve(args[1:])
+	}
 	if len(args) < 1 || args[0] != "run" {
-		return fmt.Errorf("usage: maro run \"goal\" [flags] | maro director \"directive\" [flags] | maro pack export|seal|import|adopt [flags]")
+		return fmt.Errorf("usage: maro run \"goal\" [flags] | maro director \"directive\" [flags] | maro pack export|seal|import|adopt [flags] | maro inspect [flags] | maro evolve [flags]")
 	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	maxSteps := fs.Int("max-steps", 8, "maximum decomposed steps")

@@ -900,6 +900,68 @@ brake, constraint tiers/HITL gates, URL pre-fetch, worker push guard
 (`missing_write_targets`), tool-pathology classification, per-step model
 routing/trajectory escalation.
 
+**Inspector/evolver tranche (2026-08-22, self-improvement slice 1):**
+`internal/inspector` ports src/inspector.py (fork-point, 1066 lines):
+six friction-signal heuristics (the seventh, repeated_rephrasing, was
+census-removed in Python — "a threshold returns with its comparison
+site or not at all"; the port starts at six), thresholds resolved
+env > config.yml > default, goal-alignment judging that returns nil
+without an adapter (the 2026-07-31 fail-open census fix: 0.7 stays a
+DISPLAY value; unjudged sessions cap at "fair" and cannot earn the
+alignment-gated delight signal), the judged-goal-NOT-achieved and
+verdict-pending fair-caps (outcome_policy.is_verdict_pending ported
+inline), session-presence breach fractions (>30% of sessions, never
+raw counts), the deep-pass cadence tick (locked RMW, corrupt-field
+self-heal + negative clamp), report + suggestion persistence
+(inspection-log.jsonl; suggestions.jsonl rows in the Python 9-field
+schema, one locked batch append), and `maro inspect`. Named
+divergence: the Go CLI defaults ADAPTER-LESS — Python's standalone
+entry silently builds MODEL_CHEAP (up to 2 calls per outcome); the
+no-silent-spend decree puts that behind `-llm`. Named unported:
+inspector_loop daemon, attribution enrichment.
+`internal/evolver` ports the evolver.py/evolver_store.py slice:
+Suggestion/EvolverReport with the FULL on-disk field set (rows
+interop with the Python runtime — shared workspace, same path+".lock"
+flock protocol), content-key dedup save (the 81-duplicate calibration
+bug), pending/dismiss/applied lifecycle with keyed merges that
+re-emit unparseable lines verbatim, the cadence tick, the proposer
+(system prompt + playbook GUIDANCE_FORM_RULES verbatim; outcomes
+summary keeps the SF-2 tri-state discipline — done-but-not-achieved
+is failure signal), auto-apply at confidence >= 0.8 for the low-risk
+categories (observation no-op; prompt_tweak -> medium tiered lesson
+minted_by=evolver, dedup-by-text via the knowledge snapshot,
+reinforcement counters named unported; new_guardrail behind the same
+manual/env/config gate, default HELD, epoch-seconds added_at — the
+ISO-string bug that silently killed Python's whole constraint lane is
+pinned), injection-guard scan FAIL-CLOSED in front of every category
+(src/injection_guard.py ported as `internal/guard`, pattern lists
+verbatim; the RE2 lookahead in the exfil-URL rule is enforced
+post-match, same accept/reject), change_log.jsonl audit rows before
+every mutation, and revert via the audit trail (lesson_add is
+bookkeeping-only — Python parity, append-only store; guardrail_append
+removal is behavioral). Plus `record.LoadOutcomes` (newest-first
+tolerant reader over the shared outcomes ledger), `record.LockedRMW`,
+the SummaryJudgeWindow budget (Python _REVIEW_STEP_CUT=4000 with its
+traced-writers rationale), and `maro evolve` with
+-list/-apply/-dismiss/-revert.
+Named divergences from fork-point Python, deliberate: (1) unknown
+suggestion categories land `action_failed`, never the silent
+"applied" no-op that hid cost_optimization for months; (2) revert's
+guardrail matcher accepts `source == <id>` — apply WRITES that key,
+but Python's revert matches only `"evolver:<id>"`, so current-format
+rows are unremovable there (backport-correction candidate); (3) the
+0.6-0.79 advisor gate is unported — those rows stay pending for
+review instead of getting an Opus hearing; (4) _verify_post_apply's
+test-suite run is unported and NOT faked — Go auto-applies only data
+rows, and the revert path is the safety net this slice keeps. Named
+unported (package docs carry the same list): statistical scanners,
+graduation, harness-friction/persona-gap/skill-candidate/island
+passes, verify_applied_suggestions V2 lifecycle, playbook append,
+Telegram notify, step traces in the proposer summary, skill_pattern
+and sub_mission engines (both HELD with reasons naming the Python
+CLI). Mutations M71–M84 all DETECTED (compiling mutants verified —
+M71's first form didn't compile and was rebuilt semantic).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
@@ -912,7 +974,11 @@ routing/trajectory escalation.
    slice above); ~~director's plan/delegate/review~~ DONE (director
    slice above); the evaluate_closure decision layer + check-in/
    escalation machinery remain (they return with restart machinery).
-4. Inspector/evolver self-improvement loop.
+4. ~~Inspector/evolver self-improvement loop~~ — slice 1 DONE
+   (inspector/evolver tranche above); the statistical scanners,
+   graduation, skill engines, and the V2 verify lifecycle return
+   with their subsystems (skills store, constraint engine, goal
+   queue).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
