@@ -10,8 +10,8 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
-	"github.com/slycrel/maro-orchestration/go/internal/runs"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/runs"
 )
 
 // TestRunWritesRunMetadataAndFeedsNextRecall pins the closure tranche's

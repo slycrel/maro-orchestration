@@ -1,9 +1,9 @@
 package loop
 
 import (
-	"fmt"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"

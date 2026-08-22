@@ -13,7 +13,7 @@
 //     cannot misdirect the carve.
 //
 // Honest residual, shared with the Python sibling (llm_parse
-//._find_json_bounds): with NO fence present, the first balanced bracket
+// ._find_json_bounds): with NO fence present, the first balanced bracket
 // in the text wins — prose containing an incidental well-formed bracket
 // pair before the real payload returns the wrong span on both runtimes.
 package jsonx

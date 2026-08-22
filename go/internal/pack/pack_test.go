@@ -44,7 +44,7 @@ func TestPayloadSHA256MatchesPython(t *testing.T) {
 		{"class": "skill_md", "path": "artifacts/skills/s.md", "sha256": "y"},
 	}
 	files := map[string][]byte{
-		"artifacts/a.jsonl":    []byte("{\"rule\":\"r\"}\n"),
+		"artifacts/a.jsonl":     []byte("{\"rule\":\"r\"}\n"),
 		"artifacts/skills/s.md": []byte("# sé\n"),
 	}
 	got, err := payloadSHA256(arts, files)

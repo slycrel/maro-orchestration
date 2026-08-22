@@ -39,8 +39,9 @@ func TestClipShortTextPassesUntouched(t *testing.T) {
 
 // Marker parity with Python context_budget.clip — the literal string was
 // captured from the Python runtime on 2026-08-21:
-//   'B'*5000 clipped at 4000 ->
-//   ...'B … [truncated: first 4000 of 5000 characters]', total len 4045.
+//
+//	'B'*5000 clipped at 4000 ->
+//	...'B … [truncated: first 4000 of 5000 characters]', total len 4045.
 func TestClipMarkerMatchesPythonRuntime(t *testing.T) {
 	got := Clip(strings.Repeat("B", 5000), 4000)
 	if !strings.HasSuffix(got, "B … [truncated: first 4000 of 5000 characters]") {

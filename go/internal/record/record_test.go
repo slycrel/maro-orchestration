@@ -1,12 +1,12 @@
 package record
 
 import (
-	"fmt"
-	"sync"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 

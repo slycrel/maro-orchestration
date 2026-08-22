@@ -38,7 +38,7 @@ func TestRunInjectsRecallIntoDecomposePrompt(t *testing.T) {
 	}}
 	rec := record.New(ws)
 	res, err := Run(context.Background(), fake, rec, Opts{
-		Goal: "deploy the widget service after checking the staging index",
+		Goal:     "deploy the widget service after checking the staging index",
 		MaxSteps: 1, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestRecallEventFailureSurfacesAsWarningOnHealthyRun(t *testing.T) {
 	fake := &llm.Fake{Script: []string{`["do the thing"]`, "done it"}}
 	rec := record.New(ws)
 	res, err := Run(context.Background(), fake, rec, Opts{
-		Goal: "a goal that succeeds despite a dead event log",
+		Goal:     "a goal that succeeds despite a dead event log",
 		MaxSteps: 1, DryRun: true})
 	if err != nil || res.Status != "done" {
 		t.Fatalf("healthy run broke: %v %+v", err, res)

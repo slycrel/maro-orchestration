@@ -453,9 +453,9 @@ func (im *importer) provenanceStamp(originalID, originalClass string, row map[st
 	imported := map[string]any{
 		"imported_from": im.label, "pack": im.packTag,
 		"original_id": originalID, "original_class": originalClass,
-		"original_confirmations": row["confirmations"],
+		"original_confirmations":  row["confirmations"],
 		"original_contradictions": row["contradictions"],
-		"imported_at": im.now,
+		"imported_at":             im.now,
 	}
 	if prov, ok := row["imported"].(map[string]any); ok && len(prov) > 0 {
 		imported["original_provenance"] = prov
