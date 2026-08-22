@@ -276,3 +276,48 @@ func TestRunExecNoStepsRanWritesNamedSkipRow(t *testing.T) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
 }
+
+// TestRunClosureRowStampFailureWritesDurableMarker: when the post-hoc
+// row stamp fails, the failure lands as a named run-dir row, not just
+// a terminal warning — a silent failure recreates the row-unjudged bug
+// behind a rarer trigger (adversarial routing r4: the marker path had
+// zero coverage). Fault injection: a DIRECTORY squatting on the
+// ledger's .tmp path makes the rewrite's WriteFile fail while plain
+// appends still succeed.
+func TestRunClosureRowStampFailureWritesDurableMarker(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	if err := os.MkdirAll(filepath.Join(ws, "memory", "outcomes.jsonl.tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &llm.Fake{Script: []string{
+		`["write the greeting file"]`,
+		`{"tool": "complete_step", "result": "wrote greeting.txt", "summary": "wrote", "confidence": "strong"}`,
+		`{"checks":[{"failure_mode":"file missing","description":"greeting exists","command":"true"}]}`,
+		`{"complete":true,"confidence":0.9,"gaps":[],"summary":"Goal achieved."}`,
+	}, AgentToolsOK: true}
+	res, err := Run(context.Background(), fake, record.New(ws), Opts{
+		Goal: "write a greeting file", MaxSteps: 2, DryRun: false, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warned := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "outcome-row verdict stamp failed") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("stamp failure must warn: %v", res.Warnings)
+	}
+	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	if rerr != nil || !strings.Contains(string(rows), "outcome_row_stamp_failed") {
+		t.Fatalf("stamp failure must leave a durable marker: %v %s", rerr, rows)
+	}
+	// The metadata stamp (a different owner) must still have landed.
+	meta, _ := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	if !strings.Contains(string(meta), `"goal_achieved": true`) &&
+		!strings.Contains(string(meta), `"goal_achieved":true`) {
+		t.Fatalf("metadata stamp must survive a row-stamp failure: %s", meta)
+	}
+}

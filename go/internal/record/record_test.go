@@ -184,6 +184,16 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 		t.Fatalf("loopB row must be untouched: %v", rows[1])
 	}
 
+	// Capture the first stamp's timestamp so the unjudged re-stamp can
+	// be shown to ADVANCE it — non-empty alone is satisfied by the
+	// first stamp and detects nothing (mutation M34 escape).
+	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	var first map[string]any
+	if err := json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	firstAt, _ := first["goal_verdict_at"].(string)
+
 	// Unjudged stamp (nil, nil): source + goal_verdict_at update, prior
 	// verdict AND its confidence survive untouched (row-stamp merge
 	// semantics — Python parity; runs.StampVerdict's metadata stamp is
@@ -192,7 +202,6 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
-	var first map[string]any
 	if err := json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0]), &first); err != nil {
 		t.Fatal(err)
 	}
@@ -202,8 +211,11 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 	if first["goal_verdict_confidence"] != 0.85 {
 		t.Fatalf("nil confidence must leave the prior value untouched: %v", first)
 	}
-	if s, _ := first["goal_verdict_at"].(string); s == "" {
-		t.Fatalf("every stamp records WHEN the verdict landed: %v", first)
+	// "Unverifiable stamps get it too" (Python): the UNJUDGED re-stamp
+	// must itself advance the timestamp — a branch-gated write leaves
+	// it stale exactly on the stamps whose only new fact is WHEN.
+	if s, _ := first["goal_verdict_at"].(string); s == "" || s == firstAt || s < firstAt {
+		t.Fatalf("unjudged re-stamp must advance goal_verdict_at: first=%q now=%q", firstAt, s)
 	}
 	// An unjudged re-stamp writes NO history (nothing was superseded).
 	if _, has := first["verdict_history"]; has {
@@ -271,5 +283,48 @@ func TestStampOutcomeVerdictNewestDuplicateAndHistory(t *testing.T) {
 	entry, _ := hist[0].(map[string]any)
 	if entry["goal_achieved"] != false || entry["superseded_by"] != SourceNowVerify {
 		t.Fatalf("history entry must carry the old verdict + superseder: %v", entry)
+	}
+	// The live row's own goal_verdict_at must ADVANCE on every stamp
+	// (µs-granularity nowISO) — a branch-gated timestamp would leave it
+	// stale while history still captured correctly (r4 Skeptic).
+	liveAt, _ := newRow["goal_verdict_at"].(string)
+	histAt, _ := entry["goal_verdict_at"].(string)
+	if liveAt == "" || liveAt == histAt || liveAt < histAt {
+		t.Fatalf("goal_verdict_at must advance on re-stamp: live=%q hist=%q", liveAt, histAt)
+	}
+}
+
+// TestStampOutcomeVerdictHistoryOnForeignJudgedRow: re-stamping a row
+// judged by ANOTHER writer (goal_achieved set at WriteOutcome, no
+// source/at keys — a NOW row or a Python row) writes ""-defaulted
+// strings into history, never JSON null (r4 Skeptic; Python .get(k,"")
+// parity).
+func TestStampOutcomeVerdictHistoryOnForeignJudgedRow(t *testing.T) {
+	ws := t.TempDir()
+	r := New(ws)
+	no := false
+	if _, err := r.WriteOutcome(Outcome{Goal: "g", Status: "done", LoopID: "f",
+		GoalAchieved: &no}); err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	if err := r.StampOutcomeVerdict("f", &yes, SourceClosure, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	var row map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(raw))), &row); err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := row["verdict_history"].([]any)
+	if len(hist) != 1 {
+		t.Fatalf("foreign judged row must still get history on re-stamp: %v", row)
+	}
+	entry, _ := hist[0].(map[string]any)
+	if v, ok := entry["goal_verdict_source"].(string); !ok || v != "" {
+		t.Fatalf("missing prior source must be \"\", not null: %v", entry)
+	}
+	if v, ok := entry["goal_verdict_at"].(string); !ok || v != "" {
+		t.Fatalf("missing prior at must be \"\", not null: %v", entry)
 	}
 }

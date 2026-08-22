@@ -1612,3 +1612,37 @@ Verification ledger:
 
 Mutations M28-M31 all DETECTED first try. Flagship 17-for-17 (the HIGH
 sits in StampOutcomeVerdict — the newest function in the port).
+
+## Routing tranche — adversarial r4 (2026-08-22, 1 lens, SAME-MODEL FALLBACK: sonnet-medium)
+
+Diff 45079a5b..50a34672 (the r3 fix layer). Verdict: CONTESTED at the
+doc layer only — 1 verified HIGH (a stale doc comment), no code-logic
+HIGHs. Fixed same round; convergence is at hand.
+
+Verification ledger:
+- VERIFIED (HIGH, doc): StampOutcomeVerdict's exported doc still said
+  "nil confidence REMOVES the key" — the exact semantics r3 reversed.
+  Fixed: doc now states the merge semantics and names the pop-owner
+  (runs.StampVerdict).
+- VERIFIED (MED): the outcome_row_stamp_failed marker path had zero
+  coverage. Fixed: fault-injection pin (directory on the .tmp path
+  fails the rewrite while appends succeed) asserting warning + durable
+  marker + surviving metadata stamp; mutation M32 DETECTED.
+- VERIFIED (LOW): history entries carried JSON null where Python
+  writes "" for missing prior source/at (foreign-judged rows). Fixed:
+  ""-defaulted type asserts; pin
+  TestStampOutcomeVerdictHistoryOnForeignJudgedRow; M33 DETECTED.
+  (Confidence null in history IS Python parity — .get with no default.)
+- VERIFIED (LOW): no pin proved goal_verdict_at advances on re-stamps.
+  Fixed: progression asserts on both judged and UNJUDGED re-stamps;
+  M34 ESCAPED first (non-empty-only assert satisfied by the first
+  stamp — strengthened to strict advancement), then DETECTED.
+- NOTED (LOW, operational): closure_verdicts.jsonl has no production
+  reader — the durable marker is manually discoverable only; carried
+  into PORT.md.
+- NOTED (clean passes, quoted): no double-write/masking in the marker;
+  runDir guard traced sound.
+
+Mutations M32-M34 all DETECTED (M34 on a strengthened pin — escape
+recorded). Round yield: doc + test hardening only, no behavior HIGHs —
+NEXT ROUND IS THE FIXPOINT CHECK.

@@ -341,8 +341,10 @@ const (
 //   - achieved true/false sets goal_achieved; nil leaves any existing
 //     key untouched (an unjudged closure must never erase a prior
 //     verdict on the row).
-//   - source and confidence are always updated (nil confidence
-//     REMOVES the key — no fabricated zeros).
+//   - source and goal_verdict_at are always updated; confidence is a
+//     MERGE — written when provided, nil leaves any existing key
+//     untouched (Python row-stamp parity; runs.StampVerdict's
+//     full-replacement metadata stamp is the one where nil POPS).
 //
 // The read→patch→rename runs under the same flock every appender takes
 // (Python parity: locked_write inside the same critical section), so a
@@ -394,10 +396,16 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	if achieved != nil {
 		if prior, judged := row["goal_achieved"]; judged {
 			hist, _ := row["verdict_history"].([]any)
+			// String fields default to "" like Python's .get(key, "") —
+			// a row judged by another writer (a Python row, a direct
+			// Outcome.GoalAchieved) may lack them, and a JSON null where
+			// Python writes "" is a cross-runtime landmine (r4).
+			priorSource, _ := row["goal_verdict_source"].(string)
+			priorAt, _ := row["goal_verdict_at"].(string)
 			row["verdict_history"] = append(hist, map[string]any{
 				"goal_achieved":           prior,
-				"goal_verdict_source":     row["goal_verdict_source"],
-				"goal_verdict_at":         row["goal_verdict_at"],
+				"goal_verdict_source":     priorSource,
+				"goal_verdict_at":         priorAt,
 				"goal_verdict_confidence": row["goal_verdict_confidence"],
 				"superseded_at":           nowISO(),
 				"superseded_by":           source,
