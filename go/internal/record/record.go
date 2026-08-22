@@ -79,6 +79,11 @@ type Outcome struct {
 	// instruction exactly on the long-reason runs that need them.
 	StopVerdict string
 	StuckReason string
+	// GoalAchieved is TRI-STATE (NOW-lane verify, Python handle.py's
+	// _verify_now_outcome): nil writes NO key — absence means "not
+	// judged", never failed. VerdictSummary rides only when non-empty.
+	GoalAchieved   *bool
+	VerdictSummary string
 }
 
 // WriteOutcome appends one outcome row. Field names match the Python
@@ -118,6 +123,12 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 		"measurement_class": "go-port",
 		"stop_verdict":      o.StopVerdict,
 		"stuck_reason":      o.StuckReason,
+	}
+	if o.GoalAchieved != nil {
+		row["goal_achieved"] = *o.GoalAchieved
+	}
+	if o.VerdictSummary != "" {
+		row["goal_verdict_summary"] = o.VerdictSummary
 	}
 	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row); err != nil {
 		return "", err

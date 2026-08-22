@@ -14,8 +14,10 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/closure"
 	"github.com/slycrel/maro-orchestration/go/internal/config"
+	"github.com/slycrel/maro-orchestration/go/internal/intent"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/loop"
+	"github.com/slycrel/maro-orchestration/go/internal/now"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -39,6 +41,8 @@ func run(args []string) error {
 	model := fs.String("model", "", "model alias or id (backend default when empty)")
 	safe := fs.Bool("safe", false,
 		"force tool-less utility mode (worker steps get no agent tools)")
+	laneFlag := fs.String("lane", "auto",
+		"auto|now|agenda — auto classifies (NOW = single call, AGENDA = loop)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -106,6 +110,45 @@ func run(args []string) error {
 	}
 
 	rec := record.New(ws)
+
+	// Routing (director tranche slice 1): NOW vs AGENDA, decided before
+	// the loop and PRINTED — the lane is a run-shaping decision the
+	// operator must see, same doctrine as the exec-mode line above.
+	lane := *laneFlag
+	switch lane {
+	case "now", "agenda":
+		fmt.Printf("lane: %s (forced by -lane)\n", strings.ToUpper(lane))
+	case "auto":
+		cls := intent.Classify(context.Background(), adapter, goal, *backend == "dry")
+		lane = cls.Lane
+		fmt.Printf("lane: %s (%.2f) — %s\n", strings.ToUpper(cls.Lane),
+			cls.Confidence, cls.Reason)
+	default:
+		return fmt.Errorf("unknown -lane %q (auto|now|agenda)", *laneFlag)
+	}
+	if lane == "now" {
+		nres, nerr := now.Run(context.Background(), adapter, rec, goal,
+			*backend == "dry", *model)
+		if nerr != nil {
+			return nerr
+		}
+		for _, w := range nres.Warnings {
+			fmt.Fprintln(os.Stderr, "warn:", w)
+		}
+		fmt.Printf("\n=== %s (%s, now lane, %d in / %d out tokens, %s) ===\n",
+			strings.ToUpper(nres.Status), nres.LoopID,
+			nres.TokensIn, nres.TokensOut, nres.Elapsed.Round(1e8))
+		if nres.GoalAchieved != nil && !*nres.GoalAchieved {
+			fmt.Printf("goal: Not achieved: %s\n", nres.VerdictSummary)
+		}
+		if nres.NowVerifyError != "" {
+			fmt.Printf("goal: not judged (verify errored: %s)\n", nres.NowVerifyError)
+		}
+		// Deliberately unclipped — the terminal is the delivery surface.
+		fmt.Printf("\n%s\n", nres.Answer)
+		return nil
+	}
+
 	res, err := loop.Run(context.Background(), adapter, rec, loop.Opts{
 		Goal:     goal,
 		Model:    *model,

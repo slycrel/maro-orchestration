@@ -82,3 +82,43 @@ func TestClosureLine(t *testing.T) {
 		t.Fatalf("skip line must not fake check counts: %q", got)
 	}
 }
+
+// Routing reaches the CLI end-to-end (director tranche slice 1): a
+// NOW-shaped goal on the dry backend classifies heuristically and runs
+// the single-call lane; -lane agenda forces the loop for the same goal.
+func TestRunLaneRoutingEndToEnd(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	t.Setenv("MARO_USER_DIR", t.TempDir())
+	if err := run([]string{"run", "-backend", "dry", "what time is it?"}); err != nil {
+		t.Fatal(err)
+	}
+	rows := readOutcomeRows(t, ws)
+	if rows[len(rows)-1]["task_type"] != "now" {
+		t.Fatalf("NOW-shaped goal must route now: %v", rows[len(rows)-1])
+	}
+	if err := run([]string{"run", "-backend", "dry", "-lane", "agenda", "what time is it?"}); err != nil {
+		t.Fatal(err)
+	}
+	rows = readOutcomeRows(t, ws)
+	if rows[len(rows)-1]["task_type"] != "loop" {
+		t.Fatalf("-lane agenda must force the loop: %v", rows[len(rows)-1])
+	}
+}
+
+func readOutcomeRows(t *testing.T, ws string) []map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}

@@ -440,6 +440,45 @@ direction).
   stranded-run-sweep family; until it ports, a crash between
   StampVerdict and Finalize leaves a "running" record only recall's
   InterruptStatuses softens.
+- Intent routing + the NOW lane (`internal/intent` + `internal/now`,
+  director tranche slice 1) — the CLI stops assuming every goal is a
+  loop. `intent.Classify` ports intent.py's routing half: LLM
+  classification (prompt near-verbatim, 128 tokens, purpose "routing")
+  with the heuristic keyword fallback (CPython fixture parity on lanes
+  AND confidences), then the CAPABILITY overrides that win over
+  classification — file-deliverable goals cannot run in a lane that
+  writes no files (burn-in batch 3), live-data asks cannot run in a
+  lane that fetches nothing (config-gated: now_lane.live_data_routing,
+  flag OFF inert per the DEFAULTS.md contract). Boolean fields parse
+  fail-OPEN (is-true-or-"true"); lane whitelisted, confidence
+  safe_float'd. `now.Run` is handle.py's _run_now + _verify_now_outcome:
+  one tool-less call (2048/0.4) then the now-verify judge (160 tokens —
+  64 fit `{"fulfilled": false}` and no why, which shipped an inert fix
+  once; run 2113a608) with the TRI-STATE verdict: fulfilled → stamped
+  true; not fulfilled (including NON-ANSWERS — generic how-to-find-it
+  guidance demotes) → incomplete + the judge's why; errored judge →
+  fail-open UNJUDGED with the error MARKED (now_verify_error — a broken
+  verdict pipe must not look like a deliberately unjudged run, review
+  F7). NOW runs get run dirs, outcome rows (task_type "now",
+  goal_achieved tri-state on the row like Python), StampVerdict
+  (go_now_verify_v1), finalize. The routing decision is PRINTED
+  (`lane: NOW (0.98) — …`) beside the exec-mode line; `-lane
+  auto|now|agenda` forces. Live-fire: real classify routed NOW @0.98,
+  real judge stamped goal_achieved=true on row + metadata. Named
+  divergences (Go-stricter, deliberate): the link-triage NOW shortcut
+  and the live-data URL exemption are BOTH unported — they assume the
+  NOW lane pre-fetches carried URLs (web_fetch enrichment,
+  conversational-compute decree), and Go's NOW lane fetches nothing, so
+  honoring them would route unanswerable asks to a lane that cannot
+  answer; the classifier prompt's link-read EXCEPTION paragraph is
+  omitted for the same reason. Deliberately unported with their
+  subsystems: web_fetch enrichment, the deterministic provenance guard
+  (claimed inputs/outputs on disk), check_goal_clarity + imperative
+  rewrite (needs the ask-the-user surface), introspects_self's consumer
+  (container-isolation routing — the field is carried, its consumer
+  named), NOW artifact write, navigator dispatch, deferred learning,
+  personas/workers, and director.py's plan/delegate/review layer (the
+  tranche's second half).
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):
@@ -668,7 +707,9 @@ routing/trajectory escalation.
 2. ~~Closure verification~~ — evidence pipeline + verdict stamp DONE
    (closure tranche above); the quality-gate half (step-level review)
    and the restart consumers return with their subsystems.
-3. Director, intent routing, NOW-vs-AGENDA lanes.
+3. ~~Intent routing + NOW-vs-AGENDA lanes~~ — DONE (routing tranche
+   slice above); director.py's plan/delegate/review + evaluate_closure
+   decision layer remain (they return with restart machinery).
 4. Inspector/evolver self-improvement loop.
 5. Heartbeat, projects, escalation, notifications, viz.
 
