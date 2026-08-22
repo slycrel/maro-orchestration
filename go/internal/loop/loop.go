@@ -38,6 +38,21 @@ type StepOutcome struct {
 	Result    string
 	TokensIn  int
 	TokensOut int
+	// Warnings are adapter-reported oddities for this step (folded into
+	// Result.Warnings by Run).
+	Warnings []string
+}
+
+// Opts parameterizes a run. Goal is required; zero values elsewhere mean
+// defaults. DryRun MUST be set when the adapter is canned/scripted —
+// the row's dry_run field is what excludes synthetic rows from the
+// Python learning funnel (adversarial r2 2026-08-22, Expert QA: a dry
+// row stamped dry_run:false is a fabricated production record).
+type Opts struct {
+	Goal     string
+	Model    string // "" = backend default
+	MaxSteps int    // <=0 = 8
+	DryRun   bool
 }
 
 type Result struct {
@@ -54,15 +69,16 @@ type Result struct {
 	Warnings []string
 }
 
-// Run executes goal end-to-end and records the run. rec may not be nil —
-// a run that leaves no record did not happen, per the delivery doctrine.
-// model is what the operator asked for ("" = backend default); it lands
-// in the outcome row so cross-runtime analyses don't misattribute spend
-// to a backend name (adversarial round 2026-08-22, Expert QA).
-func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model string, maxSteps int) (*Result, error) {
+// Run executes the goal end-to-end and records the run. rec may not be
+// nil — a run that leaves no record did not happen, per the delivery
+// doctrine. opts.Model lands in the outcome row so cross-runtime
+// analyses don't misattribute spend to a backend name (adversarial
+// round 2026-08-22, Expert QA).
+func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*Result, error) {
 	if rec == nil {
 		return nil, fmt.Errorf("nil recorder — runs must leave records")
 	}
+	goal, model, maxSteps := opts.Goal, opts.Model, opts.MaxSteps
 	start := time.Now()
 	// Random join key, same generator as outcome ids — a wall-clock
 	// modulus collides across runs at sub-second cadence and loop_id is
@@ -84,6 +100,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model s
 			Summary:   budget.FailureChainEntry.Clip("decompose failed: " + err.Error()),
 			TaskType:  "loop",
 			Model:     recModel,
+			DryRun:    opts.DryRun,
 			TokensIn:  planUse.TokensIn,
 			TokensOut: planUse.TokensOut,
 			ElapsedMS: time.Since(start).Milliseconds(),
@@ -113,6 +130,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model s
 		res.Steps = append(res.Steps, out)
 		res.TokensIn += out.TokensIn
 		res.TokensOut += out.TokensOut
+		res.Warnings = append(res.Warnings, out.Warnings...)
 		if out.Status != "done" {
 			// The reason travels whole (marked breaker, not a truncator).
 			failChain = append(failChain, budget.FailureChainEntry.Clip(
@@ -139,6 +157,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model s
 	if _, err := rec.WriteOutcome(record.Outcome{
 		Goal: goal, Status: res.Status, Summary: summary,
 		TaskType: "loop", Model: recModel, LoopID: loopID,
+		DryRun:   opts.DryRun,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		ElapsedMS: res.Elapsed.Milliseconds(), FailChain: failChain,
 	}); err != nil {
@@ -157,15 +176,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal, model s
 func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []StepOutcome) StepOutcome {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Overall goal: %s\n\nYour step: %s\n", goal, step)
-	if len(prior) > 0 {
-		sb.WriteString("\nResults from earlier steps:\n")
-		for i, p := range prior {
-			// Prior evidence rides the measured step-result window, marked
-			// when cut — the exact discipline the Python audit retrofitted.
-			fmt.Fprintf(&sb, "--- step %d [%s] ---\n%s\n", i, p.Status,
-				budget.StepResult.Clip(p.Result))
-		}
-	}
+	sb.WriteString(renderPrior(prior))
 	resp, err := a.Complete(ctx, []llm.Message{
 		{Role: "system", Content: stepSystem},
 		{Role: "user", Content: sb.String()},
@@ -183,10 +194,50 @@ func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []
 	}
 	if strings.TrimSpace(resp.Content) == "" {
 		return StepOutcome{Step: step, Status: "blocked",
-			Result: "worker produced no output"}
+			Result: "worker produced no output", Warnings: resp.Warnings}
 	}
 	return StepOutcome{Step: step, Status: "done", Result: resp.Content,
-		TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
+		TokensIn: resp.TokensIn, TokensOut: resp.TokensOut,
+		Warnings: resp.Warnings}
+}
+
+// renderPrior renders earlier step results for the next prompt: each
+// entry rides the per-entry StepResult window, and the WHOLE block is
+// bounded by StepContextTotal with oldest-first eviction — the Python
+// ContextBudget discipline, both axes (adversarial r2 2026-08-22,
+// Skeptic: the per-entry clip alone leaves the growing dimension
+// unbounded). Evictions are marked in the prompt, never silent.
+func renderPrior(prior []StepOutcome) string {
+	if len(prior) == 0 {
+		return ""
+	}
+	blocks := make([]string, len(prior))
+	total := 0
+	keepFrom := len(prior)
+	for i := len(prior) - 1; i >= 0; i-- {
+		b := fmt.Sprintf("--- step %d [%s] ---\n%s\n", i, prior[i].Status,
+			budget.StepResult.Clip(prior[i].Result))
+		n := len([]rune(b))
+		// The newest entry always rides (a clipped entry fits by
+		// construction); older ones ride until the total budget is spent.
+		if i < len(prior)-1 && total+n > budget.StepContextTotal.Limit {
+			break
+		}
+		blocks[i] = b
+		total += n
+		keepFrom = i
+	}
+	var sb strings.Builder
+	sb.WriteString("\nResults from earlier steps:\n")
+	if keepFrom > 0 {
+		fmt.Fprintf(&sb,
+			"[%d earlier step result(s) evicted to fit the %d-char context budget — oldest first]\n",
+			keepFrom, budget.StepContextTotal.Limit)
+	}
+	for i := keepFrom; i < len(prior); i++ {
+		sb.WriteString(blocks[i])
+	}
+	return sb.String()
 }
 
 func lastResult(steps []StepOutcome) string {

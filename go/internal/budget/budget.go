@@ -80,6 +80,19 @@ var (
 			"4k is a runaway bound for a hand-written file, not a working cap",
 	}
 
+	// StepContextTotal bounds the TOTAL prior-step evidence in one
+	// worker prompt — the per-entry clip alone is "unbounded in the
+	// dimension that actually grows" (context_budget.py docstring; the
+	// quadratic-growth case ContextBudget exists for). Oldest entries
+	// are evicted, and the eviction is marked (adversarial r2
+	// 2026-08-22, Skeptic: only the per-entry half was ported).
+	StepContextTotal = Budget{
+		Name:  "step-context-total",
+		Limit: 24000,
+		Why: "matches Python ContextBudget DEFAULT_TOTAL_BUDGET (~6k tokens; " +
+			"sized 2026-08 so five p99 step results fit whole)",
+	}
+
 	// VerdictProse bounds closure/verdict prose fields on stored rows.
 	VerdictProse = Budget{
 		Name:  "verdict-prose",
@@ -99,6 +112,7 @@ var Registry = []Budget{
 	BlockReason,
 	FailureChainEntry,
 	OperatorDoc,
+	StepContextTotal,
 	VerdictProse,
 }
 

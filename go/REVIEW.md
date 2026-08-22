@@ -74,3 +74,50 @@ REFUTED as non-issues: always-6-digit timestamp fractions (Python
 parsers accept both shapes); unclipped step results on stdout
 (deliberate — the terminal is the delivery surface and the full result
 is the deliverable; commented at the call site).
+
+## Round 2 — 2026-08-22, on the r1 fixes (88dacc88)
+
+2 lenses (Skeptic, Expert QA), same sonnet-medium fallback, aimed at
+the fix layer. (First attempt returned permission-blocked stubs — the
+orchestrator launched reviewers from inside `go/`, and safe-mode reads
+are cwd-scoped; re-run from `~/claude`. Reviewer-side failure it was
+not.) Again zero hallucinated claims.
+
+### Verification Ledger (HIGHs)
+
+1. **`dry_run` never set** (Expert QA) — VERIFIED: only writers of the
+   field were the struct declaration and serialization;
+   `lesson_funnel_stats.py` keys on `dry_run is True` to exclude
+   synthetic rows, so a `-backend dry` row in a real workspace was a
+   fabricated production record. Third sibling of r1's model/cost
+   findings on the same struct. **FIXED**: `loop.Opts{DryRun}` threads
+   from the CLI's dry branch into both outcome writes; pinned.
+2. **Split stdout/stderr capture broke true last-event-wins** (Expert
+   QA) — VERIFIED: Python merges (`stderr=subprocess.STDOUT`,
+   llm.py:1504) so "last" means chronological; the Go split meant "any
+   stderr result beats any stdout result". **FIXED**: one merged
+   capture file, exactly Python's shape; e2e fixture test proves a
+   noisy stderr merges harmlessly.
+3. **Only the per-entry half of the context discipline ported**
+   (Skeptic) — VERIFIED: `ContextBudget DEFAULT_TOTAL_BUDGET = 24000`
+   with oldest-first eviction is the audit's actual deliverable ("per-
+   entry caps are unbounded in the dimension that actually grows");
+   the Go loop re-sent every prior step with no total bound and
+   `-max-steps` had no ceiling. **FIXED**: `budget.StepContextTotal`
+   (24000, registered with rationale), oldest-evicted with a marked
+   eviction note, `-max-steps` bounded [1,32]; pinned.
+
+### Mediums/Lows — fixed
+
+`subtype` must equal `"success"` (missing subtype now rejected, with
+`error_during_execution` fixture); `FindClaudeBin` validates
+isfile+X_OK so a stale CLAUDE_BIN can't make `auto` commit to a dead
+backend; parse-failing result-shaped lines beside a success now ride
+`Response.Warnings` → `Result.Warnings` instead of vanishing;
+`buildAdapter("auto")` reports both constructors' real errors;
+`NewID`'s rand-failure fallback keeps the 8-char join-key shape;
+`Complete` now has end-to-end fixture-script coverage (success + model
+flag threading, timeout branch, nonzero-exit branch). The backend-order
+comment was VERIFIED CORRECT for this box (`~/.maro/config.yml` lists
+subprocess first) but unsourced — now cites the config file and names
+Python's shipped anthropic-first default.

@@ -51,6 +51,12 @@ func run(args []string) error {
 	if goal == "" {
 		return fmt.Errorf("no goal given")
 	}
+	// Hard ceiling: each step re-sends (budgeted) prior evidence, so an
+	// absurd step count is quadratic prompt volume and real spend
+	// (adversarial r2 2026-08-22, Skeptic — the flag was unbounded).
+	if *maxSteps < 1 || *maxSteps > 32 {
+		return fmt.Errorf("-max-steps %d out of range [1,32]", *maxSteps)
+	}
 
 	// Assert the resolved store BEFORE any write — the resolved path is
 	// part of the result (live-store discipline, 2026-08-16 incident).
@@ -71,7 +77,15 @@ func run(args []string) error {
 	fmt.Printf("backend: %s\n", adapter.Name())
 
 	rec := record.New(ws)
-	res, err := loop.Run(context.Background(), adapter, rec, goal, *model, *maxSteps)
+	res, err := loop.Run(context.Background(), adapter, rec, loop.Opts{
+		Goal:     goal,
+		Model:    *model,
+		MaxSteps: *maxSteps,
+		// dry_run is the field Python's learning funnel keys on to
+		// exclude synthetic rows; a canned run recorded as real is a
+		// fabricated record (adversarial r2 2026-08-22, Expert QA).
+		DryRun: *backend == "dry",
+	})
 	if err != nil {
 		return err
 	}
@@ -117,15 +131,27 @@ func buildAdapter(kind string) (llm.Adapter, error) {
 			"dry-run step result",
 		}}, nil
 	case "auto":
-		// Box order: subprocess first, anthropic second — same as the
-		// Python backend_order on this machine.
+		// Order source: this box's ~/.maro/config.yml model.backend_order
+		// lists subprocess, anthropic (checked 2026-08-22). Python's
+		// SHIPPED default is anthropic-first (llm.py DEFAULT_BACKEND_ORDER)
+		// — the box config overrides it; wiring auto-order to the config
+		// file belongs to the config tranche.
+		subErr, anthErr := error(nil), error(nil)
 		if a, err := llm.NewSubprocess(); err == nil {
 			return a, nil
+		} else {
+			subErr = err
 		}
 		if a, err := llm.NewAnthropic(); err == nil {
 			return a, nil
+		} else {
+			anthErr = err
 		}
-		return nil, fmt.Errorf("no backend available (claude CLI not found, ANTHROPIC_API_KEY unset)")
+		// Both real reasons travel — a hardcoded summary goes stale the
+		// moment a constructor grows a second failure mode (adversarial
+		// r2 2026-08-22, Expert QA).
+		return nil, fmt.Errorf("no backend available (subprocess: %v; anthropic: %v)",
+			subErr, anthErr)
 	default:
 		return nil, fmt.Errorf("unknown backend %q", kind)
 	}

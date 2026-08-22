@@ -243,8 +243,10 @@ func NewID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// Timestamp fallback keeps ids unique enough for a single box;
 		// the error is not worth failing a record over, but it is not
-		// silent either — the id shape says which path made it.
-		return fmt.Sprintf("t%x", time.Now().UnixNano())
+		// silent either — the 't' prefix says which path made it, while
+		// the total stays 8 chars so join-key consumers keyed on the
+		// uuid4().hex[:8] shape still parse it (adversarial r2, QA).
+		return fmt.Sprintf("t%07x", time.Now().UnixNano()&0xFFFFFFF)
 	}
 	return hex.EncodeToString(b[:])
 }

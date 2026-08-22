@@ -24,6 +24,11 @@ type Response struct {
 	Content   string
 	TokensIn  int
 	TokensOut int
+	// Warnings are non-fatal oddities the adapter saw (e.g. a
+	// result-shaped line that failed to parse beside the one that
+	// succeeded); callers fold them into the run's warning surface
+	// rather than letting them die in a scrollback (adversarial r2).
+	Warnings []string
 }
 
 // Options are per-call knobs. Zero values mean "adapter default".

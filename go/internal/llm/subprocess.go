@@ -49,9 +49,16 @@ func NewSubprocess() (*Subprocess, error) {
 	return &Subprocess{Bin: bin, DefaultTimeout: 180 * time.Second}, nil
 }
 
+// FindClaudeBin validates every candidate the way Python
+// _claude_bin_available does (isfile + X_OK) — a stale CLAUDE_BIN must
+// not make the auto backend commit to a broken subprocess and skip the
+// anthropic fallback (adversarial r2 2026-08-22, Skeptic).
 func FindClaudeBin() (string, error) {
 	if v := os.Getenv("CLAUDE_BIN"); v != "" {
-		return v, nil
+		if isExecutableFile(v) {
+			return v, nil
+		}
+		return "", fmt.Errorf("CLAUDE_BIN=%q is not an executable file", v)
 	}
 	if p, err := exec.LookPath("claude"); err == nil {
 		return p, nil
@@ -62,11 +69,16 @@ func FindClaudeBin() (string, error) {
 		"/usr/local/bin/claude",
 		"/opt/homebrew/bin/claude",
 	} {
-		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+		if isExecutableFile(cand) {
 			return cand, nil
 		}
 	}
 	return "", errors.New("claude CLI not found (CLAUDE_BIN, PATH, known locations)")
+}
+
+func isExecutableFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0
 }
 
 func (a *Subprocess) Name() string { return "subprocess" }
@@ -107,31 +119,29 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 	// Disk-backed capture, like Python's _run_subprocess_safe: memory use
 	// is bounded by the largest single line, never the whole transcript
 	// (adversarial round 2026-08-22, Skeptic — the in-memory buffers grew
-	// unbounded for the subprocess's whole lifetime).
-	outF, err := os.CreateTemp("", "maro-go-claude-*.out")
+	// unbounded for the subprocess's whole lifetime). ONE merged file,
+	// exactly Python's stdout=combined_f, stderr=subprocess.STDOUT:
+	// split-file capture threw away chronology, so a stray stderr
+	// result-shaped line always beat the real stdout result (adversarial
+	// r2 2026-08-22, Expert QA).
+	capF, err := os.CreateTemp("", "maro-go-claude-*.jsonl")
 	if err != nil {
 		return nil, fmt.Errorf("create capture file: %w", err)
 	}
-	defer os.Remove(outF.Name())
-	defer outF.Close()
-	errF, err := os.CreateTemp("", "maro-go-claude-*.err")
-	if err != nil {
-		return nil, fmt.Errorf("create capture file: %w", err)
-	}
-	defer os.Remove(errF.Name())
-	defer errF.Close()
+	defer os.Remove(capF.Name())
+	defer capF.Close()
 
 	cmd := exec.CommandContext(cctx, a.Bin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout = outF
-	cmd.Stderr = errF
+	cmd.Stdout = capF
+	cmd.Stderr = capF
 
 	runErr := cmd.Run()
 
 	// Parse the capture for the result event regardless of exit status —
 	// the Python adapter scans merged output because the CLI has emitted
 	// valid results alongside nonzero exits.
-	res, parseErr := scanForResult(outF.Name(), errF.Name())
+	res, suspects, parseErr := scanForResult(capF.Name())
 	if res != nil {
 		if res.IsError {
 			// The whole diagnostic travels; the record boundary applies
@@ -143,7 +153,11 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 				TokensOut: res.Usage.OutputTokens,
 			}
 		}
-		if res.Subtype != "" && res.Subtype != "success" {
+		if res.Subtype != "success" {
+			// Python _extract_result_success requires the literal equality
+			// — a MISSING subtype fails there too, so it fails here
+			// (adversarial r2 2026-08-22, Skeptic: "not present-and-wrong"
+			// is weaker than "present-and-right").
 			return nil, &ResultError{
 				Msg: fmt.Sprintf("claude CLI result subtype %q is not success: %s",
 					res.Subtype, strings.TrimSpace(res.Result)),
@@ -155,6 +169,10 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 			Content:   res.Result,
 			TokensIn:  res.Usage.InputTokens,
 			TokensOut: res.Usage.OutputTokens,
+			// A result-shaped line that failed to parse BESIDE the one
+			// that succeeded is still worth the operator's eye
+			// (adversarial r2: the diagnostic was dropped on success).
+			Warnings: suspects,
 		}, nil
 	}
 	if cctx.Err() == context.DeadlineExceeded {
@@ -162,94 +180,93 @@ func (a *Subprocess) Complete(ctx context.Context, msgs []Message, opts Options)
 			timeout, opts.Purpose)
 	}
 	if runErr != nil {
-		return nil, fmt.Errorf("claude CLI failed: %w — stderr: %s",
-			runErr, fileText(errF.Name()))
+		return nil, fmt.Errorf("claude CLI failed: %w — output: %s",
+			runErr, fileText(capF.Name()))
 	}
 	return nil, fmt.Errorf("no result event in claude CLI output (purpose=%s): %v",
 		opts.Purpose, parseErr)
 }
 
-// scanForResult walks the captured streams line-wise for the result
-// event. Mirrors Python _parse_stream_json: the LAST result event wins
-// (not the first — the CLI's output is not trusted to emit exactly one),
-// and when no per-line event parsed at all, a whole-text extraction
-// fallback covers a pretty-printed single object. A line that LOOKS like
-// a result event but fails strict unmarshal is reported in the error
-// rather than silently skipped — "no result event" must be
-// distinguishable from "a result event we couldn't read" (adversarial
-// round 2026-08-22, Expert QA).
-func scanForResult(paths ...string) (*resultEvent, error) {
+// scanForResult walks the single merged capture line-wise for the
+// result event. Mirrors Python _parse_stream_json over its merged fd:
+// the LAST result event in true write order wins (not the first — the
+// CLI's output is not trusted to emit exactly one), and when no
+// per-line event parsed at all, a whole-text extraction fallback covers
+// a pretty-printed single object. Every line that LOOKS like a result
+// event but fails strict unmarshal is collected — on failure it rides
+// the error, on success it rides the caller's warnings; either way "no
+// result event" stays distinguishable from "a result event we couldn't
+// read" (adversarial rounds 1+2, Expert QA).
+func scanForResult(path string) (*resultEvent, []string, error) {
 	var found *resultEvent
-	var suspect string
-	for _, path := range paths {
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("open capture %s: %w", path, err)
+	var suspects []string
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open capture %s: %w", path, err)
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 || line[0] != '{' {
+			continue
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			line := bytes.TrimSpace(sc.Bytes())
-			if len(line) == 0 || line[0] != '{' {
-				continue
+		var ev resultEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			if bytes.Contains(line, []byte(`"type":"result"`)) ||
+				bytes.Contains(line, []byte(`"type": "result"`)) {
+				suspects = append(suspects, fmt.Sprintf(
+					"a result-shaped line failed to parse (%v): %.500s", err, line))
 			}
-			var ev resultEvent
-			if err := json.Unmarshal(line, &ev); err != nil {
-				if bytes.Contains(line, []byte(`"type":"result"`)) ||
-					bytes.Contains(line, []byte(`"type": "result"`)) {
-					suspect = fmt.Sprintf("a result-shaped line failed to parse (%v): %.500s", err, line)
-				}
-				continue
-			}
-			if ev.Type == "result" {
-				e := ev
-				found = &e
-			}
+			continue
 		}
-		scanErr := sc.Err()
-		f.Close()
-		if scanErr != nil {
-			return nil, fmt.Errorf("scanning CLI capture: %w", scanErr)
+		if ev.Type == "result" {
+			e := ev
+			found = &e
 		}
+	}
+	scanErr := sc.Err()
+	f.Close()
+	if scanErr != nil {
+		return nil, nil, fmt.Errorf("scanning CLI capture: %w", scanErr)
 	}
 	if found != nil {
-		return found, nil
+		return found, suspects, nil
 	}
-	if ev := wholeTextResult(paths); ev != nil {
-		return ev, nil
+	if ev := wholeTextResult(path); ev != nil {
+		return ev, suspects, nil
 	}
-	if suspect != "" {
-		return nil, errors.New("no parseable {\"type\":\"result\"} event; " + suspect)
+	if len(suspects) > 0 {
+		return nil, suspects, errors.New(
+			"no parseable {\"type\":\"result\"} event; " + strings.Join(suspects, "; "))
 	}
-	return nil, errors.New("no {\"type\":\"result\"} event")
+	return nil, nil, errors.New("no {\"type\":\"result\"} event")
 }
 
 // wholeTextResult is the Python _extract_result_object fallback: a
 // pretty-printed single result object that line-scanning cannot see.
-// Capped at 8MB per stream — past that, a transcript with no line-parsed
-// result event is malformed beyond rescue, not pretty-printed.
-func wholeTextResult(paths []string) *resultEvent {
-	for _, path := range paths {
-		st, err := os.Stat(path)
-		if err != nil || st.Size() == 0 || st.Size() > 8*1024*1024 {
-			continue
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		obj, err := jsonx.Object(string(raw))
-		if err != nil || obj["type"] != "result" {
-			continue
-		}
-		re, err := json.Marshal(obj)
-		if err != nil {
-			continue
-		}
-		var ev resultEvent
-		if json.Unmarshal(re, &ev) == nil && ev.Type == "result" {
-			return &ev
-		}
+// Capped at 8MB — past that, a transcript with no line-parsed result
+// event is malformed beyond rescue, not pretty-printed.
+func wholeTextResult(path string) *resultEvent {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() == 0 || st.Size() > 8*1024*1024 {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	obj, err := jsonx.Object(string(raw))
+	if err != nil || obj["type"] != "result" {
+		return nil
+	}
+	re, err := json.Marshal(obj)
+	if err != nil {
+		return nil
+	}
+	var ev resultEvent
+	if json.Unmarshal(re, &ev) == nil && ev.Type == "result" {
+		return &ev
 	}
 	return nil
 }

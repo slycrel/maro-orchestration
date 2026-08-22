@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"context"
 	"encoding/json"
 	"os"
@@ -37,7 +38,7 @@ func TestRunEndToEndRecordsCompatibleRows(t *testing.T) {
 		"facts: A and B",
 		"final answer using A and B",
 	}}
-	res, err := Run(context.Background(), fake, record.New(ws), "answer the question", "", 8)
+	res, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "answer the question", MaxSteps: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestBlockedStepReasonTravelsWholeToFailureChain(t *testing.T) {
 		"fine result",
 		"   ",
 	}}
-	res, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8)
+	res, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "goal", MaxSteps: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestPriorEvidenceRidesMarkedBudgetNotBareSlice(t *testing.T) {
 		long,
 		"consumed",
 	}}
-	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8); err != nil {
+	if _, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "goal", MaxSteps: 8}); err != nil {
 		t.Fatal(err)
 	}
 	// The step-2 prompt (Prompts[2]: decompose, step1, step2) must carry
@@ -133,7 +134,7 @@ func TestDecomposeFailureIsRecordedNotSilent(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws)
 	fake := &llm.Fake{Script: []string{"no json array here at all"}}
-	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8); err == nil {
+	if _, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "goal", MaxSteps: 8}); err == nil {
 		t.Fatal("decompose failure must surface as an error")
 	}
 	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -168,7 +169,7 @@ func TestBlockedStepSalvagesUsageFromTypedError(t *testing.T) {
 		Fake:     llm.Fake{Script: []string{`["one", "two"]`, "ok"}},
 		failCall: 3, // decompose, step1 ok, step2 fails
 	}
-	res, err := Run(context.Background(), ad, record.New(ws), "goal", "", 8)
+	res, err := Run(context.Background(), ad, record.New(ws), Opts{Goal: "goal", MaxSteps: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestOutcomeRowRecordsRequestedModel(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws)
 	fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
-	if _, err := Run(context.Background(), fake, record.New(ws), "goal", "sonnet", 8); err != nil {
+	if _, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "goal", Model: "sonnet", MaxSteps: 8}); err != nil {
 		t.Fatal(err)
 	}
 	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -209,7 +210,7 @@ func TestOutcomeRowRecordsRequestedModel(t *testing.T) {
 	ws2 := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws2)
 	fake2 := &llm.Fake{Script: []string{`["one"]`, "done"}}
-	if _, err := Run(context.Background(), fake2, record.New(ws2), "goal", "", 8); err != nil {
+	if _, err := Run(context.Background(), fake2, record.New(ws2), Opts{Goal: "goal", MaxSteps: 8}); err != nil {
 		t.Fatal(err)
 	}
 	rows2 := readJSONL(t, filepath.Join(ws2, "memory", "outcomes.jsonl"))
@@ -227,7 +228,7 @@ func TestLoopIDsAreDistinctAcrossRuns(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 5; i++ {
 		fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
-		res, err := Run(context.Background(), fake, record.New(ws), "goal", "", 8)
+		res, err := Run(context.Background(), fake, record.New(ws), Opts{Goal: "goal", MaxSteps: 8})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,5 +236,45 @@ func TestLoopIDsAreDistinctAcrossRuns(t *testing.T) {
 			t.Fatalf("loop_id %q repeated", res.LoopID)
 		}
 		seen[res.LoopID] = true
+	}
+}
+
+// dry_run must reach the row — it is the Python funnel's synthetic-row
+// gate (adversarial r2 2026-08-22, Expert QA).
+func TestDryRunFlagLandsInOutcomeRow(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
+	if _, err := Run(context.Background(), fake, record.New(ws),
+		Opts{Goal: "goal", MaxSteps: 8, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if rows[0]["dry_run"] != true {
+		t.Fatalf("dry_run=%v — a canned run recorded as real", rows[0]["dry_run"])
+	}
+}
+
+// Total-budget discipline on prior evidence: with many large prior
+// steps, the oldest are evicted WITH a marker; the newest survive whole
+// (adversarial r2 2026-08-22, Skeptic — only the per-entry clip existed).
+func TestPriorEvidenceTotalBudgetEvictsOldestMarked(t *testing.T) {
+	prior := make([]StepOutcome, 10)
+	for i := range prior {
+		prior[i] = StepOutcome{Step: "s", Status: "done",
+			Result: fmt.Sprintf("STEP%02d-", i) + strings.Repeat("x", 3900)}
+	}
+	got := renderPrior(prior)
+	if n := len([]rune(got)); n > 24000+200 { // header + eviction note ride above the budget
+		t.Fatalf("rendered prior evidence %d runes — total budget not enforced", n)
+	}
+	if !strings.Contains(got, "STEP09-") {
+		t.Fatal("newest entry evicted — eviction must be oldest-first")
+	}
+	if strings.Contains(got, "STEP00-") {
+		t.Fatal("oldest entry survived a blown budget")
+	}
+	if !strings.Contains(got, "evicted to fit the 24000-char context budget") {
+		t.Fatal("eviction unmarked — silent truncation reborn")
 	}
 }

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ func TestScanForResultLastEventWins(t *testing.T) {
 	out := writeCapture(t, "out",
 		`{"type":"result","subtype":"success","result":"first","is_error":false}`+"\n"+
 			`{"type":"result","subtype":"success","result":"second","is_error":false}`+"\n")
-	res, err := scanForResult(out)
+	res, _, err := scanForResult(out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,7 @@ func TestScanForResultLastEventWins(t *testing.T) {
 func TestScanForResultReportsUnparseableResultLine(t *testing.T) {
 	out := writeCapture(t, "out",
 		`{"type":"result","usage":{"input_tokens":"not-a-number"}}`+"\n")
-	_, err := scanForResult(out)
+	_, _, err := scanForResult(out)
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -49,7 +50,7 @@ func TestScanForResultReportsUnparseableResultLine(t *testing.T) {
 // object with no NDJSON events still yields the result.
 func TestScanForResultPrettyPrintedFallback(t *testing.T) {
 	out := writeCapture(t, "out", "{\n  \"type\": \"result\",\n  \"subtype\": \"success\",\n  \"result\": \"hi\",\n  \"is_error\": false\n}\n")
-	res, err := scanForResult(out)
+	res, _, err := scanForResult(out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,5 +68,96 @@ func TestBuildPromptEndMarkerUnconditional(t *testing.T) {
 	}
 	if strings.Contains(p, "[SYSTEM INSTRUCTIONS]\nhello") {
 		t.Fatalf("user content leaked into system block:\n%s", p)
+	}
+}
+
+// A parse-failing result-shaped line beside a successful one must
+// surface as a suspect, not vanish (adversarial r2, Expert QA).
+func TestScanForResultKeepsSuspectBesideSuccess(t *testing.T) {
+	out := writeCapture(t, "out",
+		`{"type":"result","usage":{"input_tokens":"bad"}}`+"\n"+
+			`{"type":"result","subtype":"success","result":"ok","is_error":false}`+"\n")
+	res, suspects, err := scanForResult(out)
+	if err != nil || res.Result != "ok" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	if len(suspects) != 1 || !strings.Contains(suspects[0], "failed to parse") {
+		t.Fatalf("suspect lost beside success: %v", suspects)
+	}
+}
+
+// --- end-to-end Complete coverage through a fixture "claude" script
+// (adversarial r2, Skeptic: the literal production entry point had no
+// test touching its exec.CommandContext invocation).
+
+func fixtureBin(t *testing.T, script string) *Subprocess {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fake-claude")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &Subprocess{Bin: p, DefaultTimeout: 5e9}
+}
+
+func TestCompleteEndToEndSuccessAndModelFlag(t *testing.T) {
+	// The script proves the --model flag reached argv by echoing "$@"
+	// into the result payload, and proves stdout/stderr merge by writing
+	// a non-JSON stderr line that must not break parsing.
+	a := fixtureBin(t, `echo "stderr noise" 1>&2
+printf '{"type":"result","subtype":"success","result":"args: %s","is_error":false,"usage":{"input_tokens":3,"output_tokens":4}}\n' "$*"`)
+	resp, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}},
+		Options{Model: "sonnet", Purpose: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Content, "--model sonnet") {
+		t.Fatalf("model flag not threaded: %q", resp.Content)
+	}
+	if resp.TokensIn != 3 || resp.TokensOut != 4 {
+		t.Fatalf("usage lost: %+v", resp)
+	}
+}
+
+func TestCompleteRejectsMissingSubtype(t *testing.T) {
+	a := fixtureBin(t, `printf '{"type":"result","result":"looks fine","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}\n'`)
+	_, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}}, Options{Purpose: "test"})
+	if err == nil {
+		t.Fatal("missing subtype accepted as success")
+	}
+	var re *ResultError
+	if !errors.As(err, &re) || re.TokensIn != 1 || re.TokensOut != 2 {
+		t.Fatalf("usage not salvaged on subtype rejection: %v", err)
+	}
+}
+
+func TestCompleteRejectsErrorSubtypeShapes(t *testing.T) {
+	a := fixtureBin(t, `printf '{"type":"result","subtype":"error_during_execution","result":"boom","is_error":false}\n'`)
+	if _, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}}, Options{Purpose: "test"}); err == nil {
+		t.Fatal("error_during_execution accepted as success")
+	}
+}
+
+func TestCompleteTimeoutBranch(t *testing.T) {
+	a := fixtureBin(t, "sleep 5")
+	_, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}},
+		Options{Timeout: 150e6, Purpose: "test"}) // 150ms
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("timeout branch: %v", err)
+	}
+}
+
+func TestCompleteRunErrCarriesOutput(t *testing.T) {
+	a := fixtureBin(t, `echo "fatal: config exploded" 1>&2
+exit 3`)
+	_, err := a.Complete(t.Context(), []Message{{Role: "user", Content: "hi"}}, Options{Purpose: "test"})
+	if err == nil || !strings.Contains(err.Error(), "config exploded") {
+		t.Fatalf("diagnostic lost on nonzero exit: %v", err)
+	}
+}
+
+func TestFindClaudeBinRejectsBrokenCLAUDE_BIN(t *testing.T) {
+	t.Setenv("CLAUDE_BIN", filepath.Join(t.TempDir(), "nope"))
+	if _, err := FindClaudeBin(); err == nil {
+		t.Fatal("nonexistent CLAUDE_BIN accepted — auto would commit to a dead backend")
 	}
 }
