@@ -60,15 +60,26 @@ var exfilPatterns = []*regexp.Regexp{
 // exfilURLShape is the URL half without Python's lookahead, ANCHORED so
 // it can be tested at each scheme occurrence (see the scan loop). Matches
 // are re-checked against allowedURLHosts before they count as findings.
-var exfilURLShape = regexp.MustCompile(`(?i)^https?://[^\s]{3,50}\.(com|io|net)/[^\s]{5,}`)
+// The scheme tolerates 0-2 slashes (`https:host/x`, `https:/host/x`,
+// `https://host/x`) because WHATWG special schemes do — a real client
+// fetches all three identically, so a detector that required `//` missed
+// the slash-light forms (r5 review; Python requires `//` too — backport
+// candidate #10).
+// The host group's first char is [^/\s] so the `/{0,2}` scheme slashes
+// are consumed by the scheme, never absorbed into the host — otherwise a
+// nested `https://x.com/...` would match with the slashes as host chars,
+// defeating the short-inner-host exclusion that keeps the legit r.jina.ai
+// proxy shape clean (r5 regression guard).
+var exfilURLShape = regexp.MustCompile(`(?i)^https?:/{0,2}[^/\s][^\s]{2,49}\.(com|io|net)/[^\s]{5,}`)
 
-// schemeRe locates every URL scheme occurrence. Python's re.search scans
+// schemeRe locates every URL scheme occurrence (slash count irrelevant —
+// the shape and host parser handle the slashes). Python's re.search scans
 // ALL start positions, so a nested URL like
 // `https://r.jina.ai/https://evil.com/leak` is flagged on its INNER host
 // even though the outer host is allowlisted; Go's FindAllString returns
 // one leftmost-longest match and would allowlist on the outer host (the
 // r2-review bypass). Testing each scheme position restores the parity.
-var schemeRe = regexp.MustCompile(`(?i)https?://`)
+var schemeRe = regexp.MustCompile(`(?i)https?:`)
 
 var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 
@@ -76,9 +87,11 @@ var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 // WHATWG normalization step) so they can't hide inside a hostname.
 var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
 
-// urlCandidateMax bounds per-scheme candidate work (DoS guard). The exfil
-// shape's longest fixed span is scheme + host(≤50) + `.tld/` + a short
-// path, well under this.
+// urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
+// — a byte slice is deliberate so a huge candidate is never rune-copied
+// (that would defeat the cap). A mid-rune cut is harmless: the exfil
+// shape's host sits in the first ~54 bytes, so anything past the cap is
+// already irrelevant to the match decision.
 const urlCandidateMax = 512
 
 // Allowed source locations — auto-apply permitted without manual review
@@ -182,12 +195,12 @@ func ScanContent(content, source string) ScanReport {
 	// host never launders a non-allowlisted inner one.
 	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
 		cand := target[loc[0]:]
-		// Bound the candidate before any scan work. Without this, a blob
-		// of `https://` repeated with no whitespace is O(schemes × tail)
-		// per ScanContent — each candidate would be the whole remaining
-		// target (r4 review DoS). The exfil shape needs only a scheme, a
-		// ≤50-rune host, a TLD, and a short path, so a few hundred bytes
-		// is always enough to decide a match.
+		// Bound the candidate (in BYTES) before any scan work. Without
+		// this, a blob of `https://` repeated with no whitespace is
+		// O(schemes × tail) per ScanContent — each candidate would be the
+		// whole remaining target (r4 review DoS). The exfil shape needs
+		// only a scheme, a ≤50-rune host, a TLD, and a short path, so a
+		// few hundred bytes is always enough to decide a match.
 		if len(cand) > urlCandidateMax {
 			cand = cand[:urlCandidateMax]
 		}
@@ -247,11 +260,16 @@ func ScanContent(content, source string) ScanReport {
 // of an allowlisted apex) and still closes the lookalike bypass.
 func urlHostAllowed(url string) bool {
 	rest := url
-	for _, p := range []string{"https://", "http://"} {
+	for _, p := range []string{"https:", "http:"} {
 		if strings.HasPrefix(strings.ToLower(rest), p) {
 			rest = rest[len(p):]
 			break
 		}
+	}
+	// Strip up to two leading slashes/backslashes — WHATWG special-scheme
+	// slash leniency (0, 1, or 2 before the authority).
+	for n := 0; n < 2 && len(rest) > 0 && (rest[0] == '/' || rest[0] == '\\'); n++ {
+		rest = rest[1:]
 	}
 	// Authority ends at the first '/', '\', '?', or '#'. Backslash is an
 	// authority terminator for special schemes (http/https) in the WHATWG

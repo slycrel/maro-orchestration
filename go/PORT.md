@@ -1035,7 +1035,19 @@ check applied-state; (7) EVOLVER_REVERTED logged even when not persisted;
 (8) `inspection_finding` silently marked applied=true (no apply arm) —
 Go holds it; (9) malformed `goal_achieved` graded as unjudged rather than
 judged-false at FOUR sites — inspector.py, evolver.py (~155), metrics.py
-(~576, feeds goal_achieved_rate), recall.py (~464).
+(~576, feeds goal_achieved_rate), recall.py (~464); (10) exfil URL scan
+requires `://`, missing the WHATWG slash-light forms (`https:host/x`,
+`https:/host/x`) a real client fetches.
+
+**r5 CONFIRMATION round (2026-08-22, skeptic+qa) — first zero-HIGH round.**
+Both lenses traced the full WHATWG authority-shape checklist and VERIFIED
+the parser sound (no manufactured bypass). Two non-HIGH fixes: scheme now
+tolerates 0-2 slashes (the slash-light bypass — backport candidate #10;
+the shape's host-first-char is `[^/\s]` so the scheme, not the host,
+consumes the slashes, keeping the legit nested-proxy shape clean), and the
+`urlCandidateMax` doc corrected (byte bound, intentional). The Revert
+ordering residual was re-confirmed honest. Mutations M104/M105 DETECTED.
+r6 must also be zero-HIGH for the two-consecutive-clean fixpoint.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 

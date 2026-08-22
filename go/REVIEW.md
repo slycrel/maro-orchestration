@@ -2384,3 +2384,44 @@ WORSE than Python, so the fix restored parity rather than out-hardening.
 Fix-layer mutations M102/M103 DETECTED with compiling mutants. Full suite
 green, gofmt/vet clean. r5 (confirmation) follows — r4 carried a HIGH, so
 the two-consecutive-clean-round fixpoint clock has not started.
+
+### Round 5 (CONFIRMATION round: Skeptic + Expert QA — sonnet-medium fallback; commit b095c9e3)
+
+**Verdict: NO BLOCKERS FOUND (zero HIGH) — first clean round.** Both
+lenses independently traced the full WHATWG authority-shape checklist
+(multiple `@`, `@`/`\` orderings, port-only, empty host, mixed-case
+scheme, percent-encoding, IPv6 brackets, control chars, the 512-cap) and
+marked the parser **VERIFIED sound** — explicitly declining to manufacture
+a bypass. The Revert ordering residual was independently confirmed as
+honest Python-parity, not papered over.
+
+**Non-HIGH findings, addressed:**
+
+- **MEDIUM (Skeptic #1, shared) — scheme-slash leniency.** WHATWG special
+  schemes tolerate 0-1 slashes, so `https:evil.com/x` and `https:/evil.com/x`
+  are fetched as `https://evil.com/x` — but `schemeRe`/`exfilURLShape`
+  required `://`, missing the slash-light forms. Live-reproduced (both
+  scanned clean). **Fixed:** scheme now tolerates 0-2 slashes across
+  `schemeRe`, `exfilURLShape`, and `urlHostAllowed`'s scheme strip. A
+  regression this introduced (the slash-optional shape let `[^\s]` absorb
+  the slashes, false-positiving the legit inner `x.com`) was caught by the
+  probe and fixed by forbidding a slash as the host's first char
+  (`[^/\s][^\s]{2,49}`), which forces the scheme to consume its slashes.
+  Fixtures added; M104 (slash-leniency) + M105 (host-first-char regression
+  guard) DETECTED. Named backport candidate #10.
+
+- **LOW (both lenses) — `urlCandidateMax` doc said "512 runes" but the
+  bound is bytes.** Byte-bounding is intentional (a `[]rune` copy of a huge
+  candidate would defeat the DoS cap); comments corrected to say bytes.
+  Not exploitable (both lenses confirmed the host sits in the first ~54
+  bytes).
+
+- **ACCEPTED-NAMED (both lenses re-confirmed) — the Revert
+  constraint-before-persist ordering residual is honestly framed and true
+  Python-parity; a fault-injection sad-path test for it remains the one
+  named test gap (deferred — no clean in-process LockedRMW failure hook).**
+
+Fix-layer mutations M104/M105 DETECTED with compiling mutants. Full suite
+green, gofmt/vet clean. This is the first zero-HIGH round; r6 (second
+confirmation) must also be zero-HIGH to reach the two-consecutive-clean
+fixpoint.
