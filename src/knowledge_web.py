@@ -3739,7 +3739,7 @@ class KnowledgeEdge:
     """A directed relationship between two knowledge nodes."""
     source_id: str                     # From node
     target_id: str                     # To node
-    relation: str                      # "supports", "contradicts", "extends", "implements", "related"
+    relation: str                      # "supports", "contradicts", "extends", "implements", "related", "co_derived"
     weight: float = 1.0                # Relationship strength (0-1)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -4201,12 +4201,21 @@ def load_knowledge_edges(*, node_id: Optional[str] = None) -> List[KnowledgeEdge
     for d in _read_store(p, "load_knowledge_edges"):
         if node_id and d.get("source_id") != node_id and d.get("target_id") != node_id:
             continue
+        # Coerce weight at the loader boundary (edge-review r1, QA lens):
+        # rows are untrusted JSON, and a single string-typed weight would
+        # otherwise construct fine and then TypeError inside every max()
+        # consumer — the exact class that wedged the lessons store
+        # 2026-08-16. Non-numeric / NaN weights are drift, skip-and-count.
         try:
+            w = float(d.get("weight", 1.0))
+            if w != w:  # NaN
+                raise ValueError("NaN weight")
+            d = dict(d, weight=w)
             edges.append(KnowledgeEdge(**{
                 k: v for k, v in d.items()
                 if k in KnowledgeEdge.__dataclass_fields__
             }))
-        except TypeError:
+        except (TypeError, ValueError):
             drifted += 1
     if drifted:
         log.warning("load_knowledge_edges: %d row(s) in %s are JSON but not "
@@ -4273,7 +4282,15 @@ def _edge_expansion_enabled() -> bool:
         val = _cfg_get("knowledge.edge_expansion", False)
         if isinstance(val, str):
             return val.strip().lower() in ("true", "1", "yes", "on")
-        return val is True
+        if isinstance(val, bool):
+            return val
+        # YAML `1`/`1.0` means ON, same shapes the string branch accepts
+        # (edge-review r1, Skeptic: `val is True` silently read int 1 as
+        # disabled). Anything else stays OFF — strict for an OFF-default
+        # behaviour-changing flag.
+        if isinstance(val, (int, float)):
+            return val == 1
+        return False
     except Exception:
         return False
 
@@ -4289,8 +4306,12 @@ def derive_coderivation_edges(*, dry_run: bool = False) -> Dict[str, int]:
     never participate (decree 2026-08-02: reference data is not learned
     knowledge).
     """
-    nodes = load_knowledge_nodes(status="")  # all statuses — candidates too
-    fp = [n for n in nodes if not n.node_id.startswith(LINK_FARM_PREFIX)]
+    nodes = load_knowledge_nodes(status="")  # unfiltered read; narrowed below
+    # active + candidate only (edge-review r1, Skeptic: status="" also
+    # sweeps superseded nodes — no new edges for explicitly retired content).
+    fp = [n for n in nodes
+          if not n.node_id.startswith(LINK_FARM_PREFIX)
+          and n.status in (NODE_ACTIVE, NODE_CANDIDATE)]
 
     by_outcome: Dict[str, List[str]] = {}
     for n in fp:
@@ -4306,24 +4327,34 @@ def derive_coderivation_edges(*, dry_run: bool = False) -> Dict[str, int]:
                 pair = (uniq[i], uniq[j])
                 pair_shared[pair] = pair_shared.get(pair, 0) + 1
 
-    # Existing co_derived weights, max-wins per unordered pair.
-    existing: Dict[tuple, float] = {}
-    for e in load_knowledge_edges():
-        if e.relation != CODERIVATION_RELATION:
-            continue
-        key = tuple(sorted((e.source_id, e.target_id)))
-        existing[key] = max(existing.get(key, 0.0), e.weight)
-
+    # Read-decide-append under one lock spanning the whole transaction
+    # (edge-review r1, Skeptic/Architect: two racing sweeps — heartbeat
+    # maintenance + a finalize tail or manual CLI — could both snapshot a
+    # pair as missing and both append it; per-append flock only makes the
+    # writes atomic, not the decision). locked_write is reentrant per
+    # thread, so the inner locked_append skips re-acquisition.
+    from file_lock import locked_write
+    edges_path = _knowledge_edges_path()
+    edges_path.parent.mkdir(parents=True, exist_ok=True)
     appended = 0
-    for pair, shared in sorted(pair_shared.items()):
-        weight = _coderivation_weight(shared)
-        if weight <= existing.get(pair, 0.0) + 1e-9:
-            continue
-        if not dry_run:
-            append_knowledge_edge(KnowledgeEdge(
-                source_id=pair[0], target_id=pair[1],
-                relation=CODERIVATION_RELATION, weight=weight))
-        appended += 1
+    with locked_write(edges_path):
+        # Existing co_derived weights, max-wins per unordered pair.
+        existing: Dict[tuple, float] = {}
+        for e in load_knowledge_edges():
+            if e.relation != CODERIVATION_RELATION:
+                continue
+            key = tuple(sorted((e.source_id, e.target_id)))
+            existing[key] = max(existing.get(key, 0.0), e.weight)
+
+        for pair, shared in sorted(pair_shared.items()):
+            weight = _coderivation_weight(shared)
+            if weight <= existing.get(pair, 0.0) + 1e-9:
+                continue
+            if not dry_run:
+                append_knowledge_edge(KnowledgeEdge(
+                    source_id=pair[0], target_id=pair[1],
+                    relation=CODERIVATION_RELATION, weight=weight))
+            appended += 1
 
     stats = {
         "pairs": len(pair_shared),
@@ -4446,42 +4477,68 @@ def _expand_scored_via_edges(scored: List[tuple],
     filtered candidate list. Seeds = top-``max_results`` nodes with a
     positive lexical score; a seed's neighbours (restricted to the same
     eligible pool) inherit ``seed_score * edge_weight * damping`` when that
-    beats their own score. Boosted nodes get ``via_edge_from`` stamped."""
+    beats their own score.
+
+    Expansion counts only when it changes MEMBERSHIP of the rendered
+    top-``max_results`` set (edge-review r1, Architect HIGH: stamping
+    neighbours already inside the slice fired KNOWLEDGE_EDGE_EXPANSION —
+    the A/B denominator — on recalls whose rendered set was identical to
+    text-only ranking). Set unchanged → the text-only ranking is returned
+    verbatim, so the ON arm renders exactly what OFF would. Set changed →
+    only nodes newly INSIDE the slice get ``via_edge_from`` stamped."""
     seeds = [(s, n) for s, n in scored[:max_results] if s > 0]
     if not seeds:
         return scored
     try:
         adjacency = _coderivation_adjacency()
     except Exception:
+        # A poisoned edge store must not look like "no edges were useful"
+        # (edge-review r1, Expert QA) — log before degrading to text-only.
+        log.warning("edge expansion: adjacency load failed — "
+                    "falling back to text-only ranking", exc_info=True)
         return scored
     if not adjacency:
         return scored
 
-    own = {n.node_id: s for s, n in scored}
-    pool = {n.node_id: n for _, n in scored}
-    boosted: Dict[str, tuple] = {}  # node_id -> (score, seed_id)
-    for seed_score, seed in seeds:
-        for nb_id, weight in adjacency.get(seed.node_id, []):
-            if nb_id not in pool:
-                continue  # filtered out (status/confidence/lf-) — stays out
-            candidate = seed_score * weight * EDGE_EXPANSION_DAMPING
-            if (candidate > own.get(nb_id, 0.0)
-                    and candidate > boosted.get(nb_id, (0.0, ""))[0]):
-                boosted[nb_id] = (candidate, seed.node_id)
+    try:
+        own = {n.node_id: s for s, n in scored}
+        pool = {n.node_id: n for _, n in scored}
+        boosted: Dict[str, tuple] = {}  # node_id -> (score, seed_id)
+        for seed_score, seed in seeds:
+            for nb_id, weight in adjacency.get(seed.node_id, []):
+                if nb_id not in pool:
+                    continue  # filtered (status/confidence/lf-) — stays out
+                candidate = seed_score * weight * EDGE_EXPANSION_DAMPING
+                if (candidate > own.get(nb_id, 0.0)
+                        and candidate > boosted.get(nb_id, (0.0, ""))[0]):
+                    boosted[nb_id] = (candidate, seed.node_id)
 
-    if not boosted:
+        if not boosted:
+            return scored
+
+        baseline_ids = {n.node_id for _, n in scored[:max_results]}
+        merged: List[tuple] = []
+        for s, n in scored:
+            if n.node_id in boosted:
+                merged.append((boosted[n.node_id][0], n))
+            else:
+                merged.append((s, n))
+        merged.sort(key=lambda x: x[0], reverse=True)
+
+        final_ids = {n.node_id for _, n in merged[:max_results]}
+        if final_ids == baseline_ids:
+            return scored  # reorder-only — expansion made no difference
+        for _, n in merged[:max_results]:
+            if n.node_id in boosted and n.node_id not in baseline_ids:
+                n.via_edge_from = boosted[n.node_id][1]  # fresh per load
+        return merged
+    except Exception:
+        # The whole body is guarded (edge-review r1, Expert QA): recall.py
+        # wraps injection in a blanket swallow, so an unguarded crash here
+        # would silently drop the entire knowledge block for the goal.
+        log.warning("edge expansion failed — "
+                    "falling back to text-only ranking", exc_info=True)
         return scored
-
-    merged: List[tuple] = []
-    for s, n in scored:
-        if n.node_id in boosted:
-            new_score, seed_id = boosted[n.node_id]
-            n.via_edge_from = seed_id  # instance attr, fresh per load
-            merged.append((new_score, n))
-        else:
-            merged.append((s, n))
-    merged.sort(key=lambda x: x[0], reverse=True)
-    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -4559,43 +4616,11 @@ def inject_knowledge_for_goal(
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Wiki-link extraction — parse [[concept]] references from node descriptions
-# ---------------------------------------------------------------------------
-
-_WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-
-
-def extract_wiki_links(text: str) -> List[str]:
-    """Extract [[wiki-link]] references from text."""
-    return _WIKI_LINK_RE.findall(text)
-
-
-def build_wiki_link_edges(nodes: List[KnowledgeNode]) -> List[KnowledgeEdge]:
-    """Build edges from wiki-links in node descriptions.
-
-    If node A's description references [[concept-B]] and a node with
-    title matching "concept-B" exists, create a "related" edge A→B.
-    """
-    title_to_id: Dict[str, str] = {}
-    for node in nodes:
-        # Normalize title for matching: lowercase, hyphens/spaces equivalent
-        key = node.title.lower().replace(" ", "-").replace("_", "-")
-        title_to_id[key] = node.node_id
-
-    edges: List[KnowledgeEdge] = []
-    for node in nodes:
-        refs = extract_wiki_links(node.description)
-        for ref in refs:
-            ref_key = ref.lower().replace(" ", "-").replace("_", "-")
-            target_id = title_to_id.get(ref_key)
-            if target_id and target_id != node.node_id:
-                edges.append(KnowledgeEdge(
-                    source_id=node.node_id,
-                    target_id=target_id,
-                    relation="related",
-                ))
-    return edges
+# build_wiki_link_edges / extract_wiki_links removed 2026-08-21 (edge-review
+# r1, Minimalist): zero production callers since inception, same dead-writer
+# class as record_skill_knowledge_edge (removed fcff27be). BACKLOG's own fix
+# direction rejected the regex-only mechanism; derive_coderivation_edges is
+# the live first-party edge writer.
 
 
 # ---------------------------------------------------------------------------

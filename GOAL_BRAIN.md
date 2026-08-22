@@ -3818,3 +3818,23 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   metric artifact — knowledge_web grew past the size normalizer, threshold
   top-15%→18% with the instance recorded in the test). Basis: this
   session's live probes + commit.
+- **2026-08-21 — edge-traversal adversarial r1 REJECT → fixed to green
+  same session (4× sonnet-medium fallback, codex capped til 08-27):**
+  two VERIFIED HIGHs, both mine — (1) the A/B denominator was
+  self-corrupting: expansion stamped/evented neighbours already inside
+  the rendered top-k, so `KNOWLEDGE_EDGE_EXPANSION` fired on recalls
+  whose rendered set was identical to text-only; fixed with
+  set-membership semantics (set unchanged → ON arm returns text-only
+  ranking verbatim). The shipped 4/120 replay figure was list-compared —
+  corrected set-based readout is **2/120 (1.7%)**, receipts now
+  committed (`scripts/replay_edge_expansion.py` +
+  `docs/history/2026-08-21-edge-review-r1.md`). (2) One malformed weight
+  row silently killed writer AND reader forever (the 2026-08-16
+  string-typed-numeric class); loader now coerces with skip-and-count +
+  forged-row fixtures. Also: spanning lock on the sweep's
+  read-decide-append, flag accepts numeric 1, guarded expansion body
+  (recall's blanket swallow sits above), maintenance-wiring + CLI tests,
+  superseded nodes excluded, dead `build_wiki_link_edges` sibling
+  deleted. Full ledger + rejected-findings rationale in the review
+  record. Basis: verified-before-fix against the repo, all findings'
+  code claims held this round.

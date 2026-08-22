@@ -181,6 +181,30 @@ class TestFlagCoercion:
                             lambda key, default=None: default)
         assert kw._edge_expansion_enabled() is False
 
+    def test_expansion_int_one_enables(self, monkeypatch):
+        # edge-review r1, Skeptic: the old `val is True` read YAML `1` as
+        # disabled — the only killswitch in the tree with that asymmetry.
+        import knowledge_web as kw
+        import config
+        monkeypatch.setattr(config, "get", lambda key, default=None: 1)
+        assert kw._edge_expansion_enabled() is True
+
+    def test_expansion_int_zero_disables(self, monkeypatch):
+        import knowledge_web as kw
+        import config
+        monkeypatch.setattr(config, "get", lambda key, default=None: 0)
+        assert kw._edge_expansion_enabled() is False
+
+    def test_expansion_other_values_stay_off(self, monkeypatch):
+        # Strict for an OFF-default behaviour-changing flag: arbitrary
+        # truthy junk does not switch recall behaviour.
+        import knowledge_web as kw
+        import config
+        for junk in (2, 3.5, ["true"], {"on": True}):
+            monkeypatch.setattr(config, "get",
+                                lambda key, default=None, _j=junk: _j)
+            assert kw._edge_expansion_enabled() is False
+
 
 # ---------------------------------------------------------------------------
 # query_knowledge one-hop expansion
@@ -284,7 +308,11 @@ class TestInjectExpansion:
         events = []
         monkeypatch.setattr(captains_log, "log_event",
                             lambda **k: events.append(k))
-        block = inject_knowledge_for_goal("frobnicate the widget")
+        # max_nodes=2: small enough that the sibling can only render via the
+        # edge (set-semantics: expansion counts only on membership change —
+        # with the default 5 all four seeded nodes render in both arms).
+        block = inject_knowledge_for_goal("frobnicate the widget",
+                                          max_nodes=2)
         assert "[linked]" in block
         assert "gadget calibration baseline" in block
         exp = [e for e in events
@@ -304,3 +332,217 @@ class TestInjectExpansion:
         assert "[linked]" not in block
         assert not [e for e in events
                     if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
+
+
+# ---------------------------------------------------------------------------
+# Set-semantics — expansion counts only when rendered MEMBERSHIP changes
+# (edge-review r1, Architect HIGH: the old per-node boost stamped neighbours
+# already inside the top-k, firing the A/B-denominator event on recalls whose
+# rendered set was identical to text-only ranking)
+# ---------------------------------------------------------------------------
+
+def _bare_node(nid):
+    from knowledge_web import KnowledgeNode
+    return KnowledgeNode(node_id=nid, node_type="insight",
+                         title=nid, description=nid)
+
+
+class TestExpansionSetSemantics:
+    def test_reorder_only_returns_text_ranking_verbatim(self, monkeypatch):
+        """Neighbour already in the rendered slice: boost would only reorder
+        or relabel — the ON arm must return exactly what OFF renders, with
+        no via_edge_from stamp (so no event fires downstream)."""
+        import knowledge_web as kw
+        seed, nb = _bare_node("seed"), _bare_node("nb")
+        monkeypatch.setattr(kw, "_coderivation_adjacency",
+                            lambda: {"seed": [("nb", 0.9)],
+                                     "nb": [("seed", 0.9)]})
+        scored = [(1.0, seed), (0.2, nb)]  # both inside top-5 on their own
+        out = kw._expand_scored_via_edges(list(scored), 5)
+        assert [(s, n.node_id) for s, n in out] == [(1.0, "seed"), (0.2, "nb")]
+        assert getattr(nb, "via_edge_from", None) is None
+
+    def test_membership_change_marks_only_new_entrant(self, monkeypatch):
+        import knowledge_web as kw
+        seed, other, nb = _bare_node("seed"), _bare_node("other"), _bare_node("nb")
+        monkeypatch.setattr(kw, "_coderivation_adjacency",
+                            lambda: {"seed": [("nb", 0.9)]})
+        scored = [(1.0, seed), (0.3, other), (0.0, nb)]
+        out = kw._expand_scored_via_edges(list(scored), 2)
+        # nb inherits 1.0 * 0.9 * 0.5 = 0.45 > other's 0.3 → enters top-2
+        assert [n.node_id for _, n in out[:2]] == ["seed", "nb"]
+        assert getattr(nb, "via_edge_from", None) == "seed"
+        assert getattr(seed, "via_edge_from", None) is None
+        assert getattr(other, "via_edge_from", None) is None
+
+    def test_boosted_but_already_rendered_not_marked(self, monkeypatch):
+        """When the set DOES change, a baseline member that also got a boost
+        still carries no stamp — only genuine new entrants are 'expansion'."""
+        import knowledge_web as kw
+        seed = _bare_node("seed")
+        weak = _bare_node("weak")
+        filler = _bare_node("filler")
+        nb = _bare_node("nb")
+        monkeypatch.setattr(kw, "_coderivation_adjacency",
+                            lambda: {"seed": [("weak", 0.9), ("nb", 0.85)]})
+        scored = [(1.0, seed), (0.1, weak), (0.05, filler), (0.0, nb)]
+        out = kw._expand_scored_via_edges(list(scored), 3)
+        top = [n.node_id for _, n in out[:3]]
+        assert top == ["seed", "weak", "nb"]  # nb displaced filler
+        assert getattr(nb, "via_edge_from", None) == "seed"
+        assert getattr(weak, "via_edge_from", None) is None  # was rendered anyway
+
+    def test_expansion_body_crash_degrades_to_text_ranking(self, monkeypatch,
+                                                           caplog):
+        """recall.py wraps injection in a blanket swallow — a crash inside
+        expansion must degrade to text-only ranking WITH a log line, never
+        propagate (edge-review r1, Expert QA)."""
+        import logging
+        import knowledge_web as kw
+        seed = _bare_node("seed")
+        monkeypatch.setattr(kw, "_coderivation_adjacency",
+                            lambda: {"seed": [("nb",)]})  # malformed pair
+        scored = [(1.0, seed)]
+        with caplog.at_level(logging.WARNING):
+            out = kw._expand_scored_via_edges(list(scored), 5)
+        assert out == scored
+        assert any("edge expansion" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Forged-row hardening (edge-review r1, Expert QA HIGH: a single malformed
+# weight in the shared edges file must not wedge the writer or silently
+# no-op the reader — the string-typed-numeric class that hit lessons
+# 2026-08-16)
+# ---------------------------------------------------------------------------
+
+def _forge_edge_row(tmp_workspace, weight):
+    p = tmp_workspace / "memory" / "knowledge_edges.jsonl"
+    row = {"source_id": "seed1", "target_id": "sib1",
+           "relation": "co_derived", "weight": weight}
+    with open(p, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+class TestForgedWeightRows:
+    def test_loader_skips_and_warns_on_string_weight(self, tmp_workspace,
+                                                     caplog):
+        import logging
+        from knowledge_web import load_knowledge_edges
+        _forge_edge_row(tmp_workspace, "high")
+        with caplog.at_level(logging.WARNING):
+            edges = load_knowledge_edges()
+        assert edges == []
+        assert any("skipped" in r.message for r in caplog.records)
+
+    def test_loader_skips_nan_weight(self, tmp_workspace):
+        from knowledge_web import load_knowledge_edges
+        _forge_edge_row(tmp_workspace, float("nan"))
+        assert load_knowledge_edges() == []
+
+    def test_loader_coerces_numeric_string_weight(self, tmp_workspace):
+        from knowledge_web import load_knowledge_edges
+        _forge_edge_row(tmp_workspace, "0.7")
+        edges = load_knowledge_edges()
+        assert len(edges) == 1
+        assert edges[0].weight == pytest.approx(0.7)
+
+    def test_writer_survives_forged_row(self, tmp_workspace):
+        from knowledge_web import derive_coderivation_edges
+        _forge_edge_row(tmp_workspace, "high")
+        _mk_node("aaa", "alpha", "a", sources=["outcome:o1"])
+        _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
+        stats = derive_coderivation_edges()
+        assert stats["edges_appended"] == 1  # sweep did not wedge
+
+    def test_reader_survives_forged_row(self, tmp_workspace):
+        from knowledge_web import query_knowledge
+        _seed_graph(tmp_workspace)
+        _forge_edge_row(tmp_workspace, None)
+        results = query_knowledge("frobnicate the widget",
+                                  expand_edges=True, max_results=2)
+        # The real derived edge still surfaces the sibling.
+        assert "sib1" in [n.node_id for n in results]
+
+
+# ---------------------------------------------------------------------------
+# Maintenance-cadence wiring (edge-review r1, Expert QA: the production call
+# path — mirrors test_skill_maintenance_wires_node_promotion)
+# ---------------------------------------------------------------------------
+
+class TestMaintenanceWiring:
+    def test_maintenance_wires_edge_derivation(self, tmp_workspace,
+                                               monkeypatch):
+        import knowledge_web as kw
+        from skill_lifecycle import run_skill_maintenance
+        seen = {}
+
+        def _capture(*, dry_run=False, **k):
+            seen["dry_run"] = dry_run
+            return {"pairs": 3, "edges_appended": 2, "edges_existing": 1}
+
+        monkeypatch.setattr(kw, "derive_coderivation_edges", _capture)
+        result = run_skill_maintenance(dry_run=False)
+        assert seen.get("dry_run") is False
+        assert result["knowledge_edges_derived"] == 2
+
+    def test_maintenance_flag_off_skips_sweep(self, tmp_workspace,
+                                              monkeypatch):
+        import knowledge_web as kw
+        from skill_lifecycle import run_skill_maintenance
+        called = []
+        monkeypatch.setattr(kw, "derive_coderivation_edges",
+                            lambda **k: called.append(1) or {})
+        monkeypatch.setattr(kw, "_edge_derivation_enabled", lambda: False)
+        result = run_skill_maintenance(dry_run=False)
+        assert called == []
+        assert result["knowledge_edges_derived"] == 0
+
+    def test_maintenance_survives_sweep_exception(self, tmp_workspace,
+                                                  monkeypatch):
+        import knowledge_web as kw
+        from skill_lifecycle import run_skill_maintenance
+
+        def _boom(**k):
+            raise RuntimeError("poisoned store")
+
+        monkeypatch.setattr(kw, "derive_coderivation_edges", _boom)
+        result = run_skill_maintenance(dry_run=False)  # must not raise
+        assert result["knowledge_edges_derived"] == 0
+
+
+# ---------------------------------------------------------------------------
+# CLI (edge-review r1, Architect: the one entry point with zero coverage)
+# ---------------------------------------------------------------------------
+
+class TestCli:
+    def test_derive_edges_cli(self, tmp_workspace, capsys):
+        from knowledge import main
+        _mk_node("aaa", "alpha", "a", sources=["outcome:o1"])
+        _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
+        main(["derive-edges"])
+        out = capsys.readouterr().out
+        assert "appended 1 edge row(s)" in out
+        assert len(_edges(tmp_workspace)) == 1
+
+    def test_derive_edges_cli_dry_run(self, tmp_workspace, capsys):
+        from knowledge import main
+        _mk_node("aaa", "alpha", "a", sources=["outcome:o1"])
+        _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
+        main(["derive-edges", "--dry-run"])
+        out = capsys.readouterr().out
+        assert "would append 1 edge row(s)" in out
+        assert _edges(tmp_workspace) == []
+
+
+# ---------------------------------------------------------------------------
+# Sweep scope — superseded nodes stay out (edge-review r1, Skeptic)
+# ---------------------------------------------------------------------------
+
+class TestSweepScope:
+    def test_superseded_nodes_mint_no_edges(self, tmp_workspace):
+        from knowledge_web import derive_coderivation_edges
+        _mk_node("aaa", "alpha", "a", sources=["outcome:o1"],
+                 status="superseded")
+        _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
+        assert derive_coderivation_edges()["edges_appended"] == 0

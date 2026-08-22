@@ -24,8 +24,6 @@ from knowledge_web import (
     find_knowledge_node,
     query_knowledge,
     inject_knowledge_for_goal,
-    extract_wiki_links,
-    build_wiki_link_edges,
 )
 
 
@@ -223,37 +221,3 @@ class TestKnowledgeInjection:
         assert len(result) <= 600  # some header overhead
 
 
-# ---------------------------------------------------------------------------
-# Wiki-link extraction
-# ---------------------------------------------------------------------------
-
-class TestWikiLinks:
-
-    def test_extract_wiki_links(self):
-        text = "This relates to [[core-loop]] and [[memory-system]] design."
-        links = extract_wiki_links(text)
-        assert links == ["core-loop", "memory-system"]
-
-    def test_extract_no_links(self):
-        assert extract_wiki_links("no links here") == []
-
-    def test_build_edges_from_wiki_links(self):
-        nodes = [
-            _make_node(node_id="n1", title="Core Loop",
-                       description="The main loop, related to [[memory-system]]"),
-            _make_node(node_id="n2", title="Memory System",
-                       description="Stores outcomes from [[core-loop]]"),
-        ]
-        edges = build_wiki_link_edges(nodes)
-        assert len(edges) == 2  # bidirectional references
-        sources = {(e.source_id, e.target_id) for e in edges}
-        assert ("n1", "n2") in sources
-        assert ("n2", "n1") in sources
-
-    def test_no_self_referencing_edges(self):
-        nodes = [
-            _make_node(node_id="n1", title="Self Ref",
-                       description="This is about [[self-ref]]"),
-        ]
-        edges = build_wiki_link_edges(nodes)
-        assert len(edges) == 0  # self-ref should not create edge

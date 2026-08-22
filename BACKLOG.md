@@ -110,16 +110,36 @@ structurally, forever. The read side needed a write side first.
   stronger direct hit, never widens the eligible pool
   (status/confidence/lf- filters bind neighbours too). Rendered
   expansions stamp `KNOWLEDGE_EDGE_EXPANSION` (the A/B denominator) and
-  a `[linked]` marker.
-- *First offline readout* (120 recent real goals replayed, read-only,
-  both arms): expansion changed 4/120 recalls (3%), 4 distinct nodes
-  surfaced via edges — conservative as designed; coverage grows as the
-  490 candidate nodes promote (only 82 first-party nodes are ACTIVE
-  today). 20 pins in tests/test_knowledge_edges.py.
+  a `[linked]` marker. Post-review semantics: expansion counts only when
+  it changes MEMBERSHIP of the rendered top-k — set unchanged means the
+  ON arm returns the text-only ranking verbatim, so the event never
+  fires on reorder/decoration-only recalls.
+- *Adversarial r1* (4× sonnet-medium fallback, codex capped): REJECT →
+  fixed same session. Two VERIFIED HIGHs — the A/B denominator fired on
+  membership-identical recalls (Architect), and one malformed weight row
+  silently killed both halves forever (Expert QA; loader now coerces
+  with skip-and-count). Full ledger, fix list, and rejected-findings
+  rationale: `docs/history/2026-08-21-edge-review-r1.md`. Side
+  deletions: dead `build_wiki_link_edges`/`extract_wiki_links` sibling
+  removed. Deferred with named triggers: adjacency cache / sweep
+  watermark (if either store 10×s), edge decay (if a source-retraction
+  path is ever built), centrality size-normalizer (metric revisit — the
+  percentile fix was measured worse; threshold widening recorded in
+  test_codebase_graph.py).
+- *Offline readout, corrected* (120 recent real goals, read-only, both
+  arms, SET comparison — `scripts/replay_edge_expansion.py`, receipts in
+  the review record): expansion changed membership on **2/120 recalls
+  (1.7%)** — the pre-review 4/120 figure compared ordered lists and
+  counted two pure reorderings. Conservative as designed; coverage grows
+  as the 490 candidate nodes promote (only 82 first-party nodes are
+  ACTIVE today). ~45 pins in tests/test_knowledge_edges.py.
 - [ ] A/B against text-only recall on live traffic (the default-flip
       gate): KNOWLEDGE_EDGE_EXPANSION events are the denominator; judge
       whether edge-surfaced nodes correlate with better outcomes once
-      enough events accrue.
+      enough events accrue. Interpretation caveat (r1 Skeptic):
+      edge-surfaced renders bump `times_applied`, which feeds base
+      lexical ranking — a node's later lexical rise may be expansion
+      feedback, not lexical merit.
 
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 

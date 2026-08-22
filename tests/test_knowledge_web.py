@@ -33,7 +33,6 @@ from knowledge_web import (
     TieredLesson,
     confidence_from_k_samples,
     decay_score,
-    extract_wiki_links,
     forget_lesson,
     inject_tiered_lessons,
     load_tiered_lessons,
@@ -1286,42 +1285,6 @@ class TestKnowledgeEdges:
         kw.append_knowledge_edge(KnowledgeEdge(source_id="c", target_id="d", relation="extends"))
         result = kw.load_knowledge_edges(node_id="a")
         assert len(result) == 1
-
-
-# ===========================================================================
-# Wiki-links
-# ===========================================================================
-
-class TestWikiLinks:
-    def test_extract_single_link(self):
-        assert extract_wiki_links("See [[concept-a]] for details") == ["concept-a"]
-
-    def test_extract_multiple_links(self):
-        text = "Uses [[pattern-x]] and [[technique-y]]"
-        assert extract_wiki_links(text) == ["pattern-x", "technique-y"]
-
-    def test_no_links(self):
-        assert extract_wiki_links("No links here") == []
-
-    def test_build_wiki_link_edges(self):
-        nodes = [
-            KnowledgeNode(node_id="n1", node_type="principle", title="Pattern X",
-                          description="Related to [[technique-y]]"),
-            KnowledgeNode(node_id="n2", node_type="technique", title="Technique Y",
-                          description="Standalone"),
-        ]
-        edges = kw.build_wiki_link_edges(nodes)
-        assert len(edges) == 1
-        assert edges[0].source_id == "n1"
-        assert edges[0].target_id == "n2"
-
-    def test_wiki_link_no_self_reference(self):
-        nodes = [
-            KnowledgeNode(node_id="n1", node_type="principle", title="Concept A",
-                          description="See also [[concept-a]]"),
-        ]
-        edges = kw.build_wiki_link_edges(nodes)
-        assert len(edges) == 0
 
 
 # ===========================================================================
