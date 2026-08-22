@@ -104,16 +104,18 @@ def _probes() -> List[Dict[str, Any]]:
              # status=None or it defaults to active-only, which is a filter,
              # not a round trip.
              load=lambda: knowledge_web.load_knowledge_nodes(status=None),
-             # Probed 2026-08-04: disk == loaded, i.e. this store is
-             # rewritten in place, not appended. So no gap is expected and
-             # any future gap is a finding.
-             drops=""),
+             # Loader validates numeric fields since 2026-08-21
+             # (edge-review r3): a validation drop is by design, announced
+             # by the loader's own drift warning.
+             drops="malformed rows (non-numeric/out-of-range confidence "
+                   "or times_applied), by design"),
         dict(name="knowledge edges", path=mem / "knowledge_edges.jsonl",
              load=knowledge_web.load_knowledge_edges,
-             # Probed 2026-08-04: disk == loaded, i.e. this store is
-             # rewritten in place, not appended. So no gap is expected and
-             # any future gap is a finding.
-             drops=""),
+             # Loader validates the whole row since 2026-08-21 (edge-review
+             # r1-r3): a validation drop is by design, announced by the
+             # loader's own drift warning.
+             drops="malformed rows (bad endpoint ids, non-numeric/"
+                   "non-finite/out-of-range weight), by design"),
         dict(name="skills", path=mem / "skills.jsonl",
              load=skills.load_skills,
              # Probed 2026-08-04: disk == loaded, i.e. this store is

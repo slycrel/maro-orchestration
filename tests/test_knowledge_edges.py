@@ -353,6 +353,15 @@ class TestInjectExpansion:
         events = []
         monkeypatch.setattr(captains_log, "log_event",
                             lambda **k: events.append(k))
+        # First prove the boost IS computed at the query layer — without
+        # this the test also passes in the world where expansion silently
+        # no-ops (edge-review r3, Skeptic: asserted-the-object-not-the-flow).
+        from knowledge_web import query_knowledge
+        q = query_knowledge("frobnicate the widget", expand_edges=True,
+                            max_results=2)
+        qids = [n.node_id for n in q]
+        assert "sib1" in qids
+        assert getattr(q[qids.index("sib1")], "via_edge_from", None) == "seed1"
         # max_chars small enough that only the first (seed) entry renders;
         # the boosted sibling enters the query top-2 but never the render.
         block = inject_knowledge_for_goal("frobnicate the widget",
@@ -498,8 +507,12 @@ class TestForgedWeightRows:
         # edge-review r2 (three lenses): inf parses "successfully" past a
         # NaN-only guard, then permanently freezes max-wins idempotency and
         # dominates every boost comparison. Range is the contract (0-1).
+        # _read_store rides stdlib json (jsonl_utils, `import json`), whose
+        # default allow_nan round-trips Infinity/NaN — so these fixtures
+        # exercise the REAL ingestion path (edge-review r3, Architect L4).
         from knowledge_web import load_knowledge_edges
-        for w in (float("inf"), float("-inf"), 1e9, -50, 1.5, True, False):
+        for w in (float("inf"), float("-inf"), float("nan"),
+                  1e9, -50, 1.5, True, False):
             _forge_edge_row(tmp_workspace, w)
         assert load_knowledge_edges() == []
 
@@ -616,3 +629,102 @@ class TestSweepScope:
                  status="superseded")
         _mk_node("bbb", "beta", "b", sources=["outcome:o1"])
         assert derive_coderivation_edges()["edges_appended"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Production render budget (edge-review r3, Architect: the "rendered-inert at
+# max_chars=600" diagnosis must be an executable pin, not prose)
+# ---------------------------------------------------------------------------
+
+class TestProductionBudget:
+    def test_boosted_entrant_truncated_at_production_budget(
+            self, tmp_workspace, monkeypatch):
+        """At recall.py's literal shape (max_nodes=5, max_chars=600) with
+        ordinary-length entries (~200-char descriptions), only the first
+        couple of entries render — a boosted entrant that genuinely changes
+        query-level membership still lands behind the cutoff. This is the
+        mechanism behind the 2026-08-21 0/500 readout."""
+        import captains_log
+        import config
+        from knowledge_web import (derive_coderivation_edges,
+                                   inject_knowledge_for_goal,
+                                   query_knowledge)
+        long_desc = ("how to frobnicate widgets safely and calibrate the "
+                     "frobnication of each widget under load ") * 4  # >200
+        _mk_node("seed1", "widget frobnication procedure", long_desc,
+                 sources=["outcome:o1"], confidence=0.8)
+        _mk_node("med1", "widget frobnication field notes", long_desc,
+                 confidence=0.8)
+        _mk_node("med2", "widget frobnication checklist", long_desc,
+                 confidence=0.8)
+        _mk_node("noise", "unrelated cooking recipe", "bake bread " * 30,
+                 confidence=0.8)
+        _mk_node("noise2", "unrelated gardening tips", "prune roses " * 30,
+                 confidence=0.8)
+        # Appended last: can only reach the top-5 via the edge boost.
+        _mk_node("sib1", "gadget calibration baseline",
+                 "calibration numbers observed on the bench " * 6,
+                 sources=["outcome:o1"], confidence=0.8)
+        derive_coderivation_edges()
+        monkeypatch.setattr(
+            config, "get",
+            lambda key, default=None: (True if key == "knowledge.edge_expansion"
+                                       else default))
+        # The boost is computed: sib1 enters the query-level top-5.
+        q = query_knowledge("frobnicate the widget", max_results=5,
+                            min_confidence=0.3, expand_edges=True)
+        qids = [n.node_id for n in q]
+        assert "sib1" in qids
+        assert getattr(q[qids.index("sib1")], "via_edge_from", None) == "seed1"
+        # ...but at the production budget it never renders, so no event.
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda **k: events.append(k))
+        block = inject_knowledge_for_goal("frobnicate the widget",
+                                          max_chars=600)
+        rendered = [l for l in block.splitlines() if l.startswith("- ")]
+        assert 1 <= len(rendered) < 5  # the budget cuts the tail
+        assert "gadget calibration baseline" not in block
+        assert "[linked]" not in block
+        assert not [e for e in events
+                    if e.get("event_type") == "KNOWLEDGE_EDGE_EXPANSION"]
+
+
+# ---------------------------------------------------------------------------
+# Node-loader hardening (edge-review r3, Skeptic HIGH — the sibling store:
+# one forged confidence row must not blank the whole knowledge block)
+# ---------------------------------------------------------------------------
+
+def _forge_node_row(tmp_workspace, **fields):
+    p = tmp_workspace / "memory" / "knowledge_nodes.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    row = {"node_id": "forged", "node_type": "insight", "title": "forged",
+           "description": "forged row", "status": "active"}
+    row.update(fields)
+    with open(p, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+class TestForgedNodeRows:
+    def test_loader_skips_malformed_confidence(self, tmp_workspace):
+        from knowledge_web import load_knowledge_nodes
+        for c in ("high", float("nan"), float("inf"), 1.5, -0.2, True):
+            _forge_node_row(tmp_workspace, confidence=c)
+        assert load_knowledge_nodes() == []
+
+    def test_loader_skips_malformed_times_applied(self, tmp_workspace):
+        from knowledge_web import load_knowledge_nodes
+        for ta in ("many", float("nan"), float("inf"), -3, True):
+            _forge_node_row(tmp_workspace, times_applied=ta)
+        assert load_knowledge_nodes() == []
+
+    def test_one_forged_node_does_not_blank_recall(self, tmp_workspace):
+        """Pre-fix, a string confidence TypeError'd inside query_knowledge
+        and recall.py's blanket swallow dropped the ENTIRE knowledge block
+        for every goal. Now the one bad row is skipped and the rest render."""
+        from knowledge_web import inject_knowledge_for_goal
+        _mk_node("good", "widget frobnication procedure",
+                 "how to frobnicate widgets safely", confidence=0.8)
+        _forge_node_row(tmp_workspace, confidence="high")
+        block = inject_knowledge_for_goal("frobnicate the widget")
+        assert "widget frobnication procedure" in block

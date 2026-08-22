@@ -4177,12 +4177,31 @@ def load_knowledge_nodes(
             continue
         if tag and tag not in d.get("tags", []):
             continue
+        # Numeric fields validated at the loader boundary (edge-review r3,
+        # Skeptic HIGH — the sibling of the edges guard): a string/NaN/inf
+        # confidence constructs fine and then TypeErrors (or dominates) in
+        # query_knowledge's filter/scoring, where recall.py's blanket
+        # swallow turns ONE bad row into a silently blank knowledge block
+        # for every goal. Skip-and-count like the edges loader.
         try:
+            c = d.get("confidence", 0.5)
+            if isinstance(c, bool):
+                raise ValueError("bool confidence")
+            cf = float(c)
+            if not 0.0 <= cf <= 1.0:  # False for NaN and ±inf too
+                raise ValueError("confidence out of range")
+            ta = d.get("times_applied", 0)
+            if isinstance(ta, bool):
+                raise ValueError("bool times_applied")
+            taf = float(ta)
+            if not taf >= 0:  # False for NaN
+                raise ValueError("times_applied out of range")
+            d = dict(d, confidence=cf, times_applied=int(taf))
             nodes.append(KnowledgeNode(**{
                 k: v for k, v in d.items()
                 if k in KnowledgeNode.__dataclass_fields__
             }))
-        except TypeError:
+        except (TypeError, ValueError, OverflowError):  # int(inf) overflows
             drifted += 1
     if drifted:
         log.warning("load_knowledge_nodes: %d row(s) in %s are JSON but not "
@@ -4214,6 +4233,9 @@ def load_knowledge_edges(*, node_id: Optional[str] = None) -> List[KnowledgeEdge
             if not (isinstance(sid, str) and sid
                     and isinstance(tid, str) and tid):
                 raise ValueError("bad endpoint id")
+            # relation is deliberately NOT validated here: every consumer
+            # compares it against string constants (`!=` is safely True for
+            # any non-string), so a junk relation is inert by construction.
             wraw = d.get("weight", 1.0)
             if isinstance(wraw, bool):  # no legit writer emits bools
                 raise ValueError("bool weight")

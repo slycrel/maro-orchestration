@@ -147,18 +147,22 @@ structurally, forever. The read side needed a write side first.
   artifacts of laxer measurement layers. ~55 pins in
   tests/test_knowledge_edges.py incl. a known-gap pin on the truncation
   undercount.
-- [ ] A/B against text-only recall on live traffic (the default-flip
-      gate): KNOWLEDGE_EDGE_EXPANSION events are the denominator; judge
-      whether edge-surfaced nodes correlate with better outcomes once
-      enough events accrue. Measured baseline 2026-08-21: the
-      denominator will read ~0 until candidate promotion improves the
-      seed/neighbour pool or the recall render budget
-      (`inject_knowledge_for_goal` `max_chars=600` at recall.py:865)
-      grows — budget change is a recall-wide scope decision, not made
-      unilaterally. Interpretation caveat (r1 Skeptic): edge-surfaced
-      renders bump `times_applied`, which feeds base lexical ranking —
-      a node's later lexical rise may be expansion feedback, not
-      lexical merit.
+- [ ] **BLOCKED, not pending** (r3 Architect: name the circularity) —
+      A/B against text-only recall on live traffic (the default-flip
+      gate): KNOWLEDGE_EDGE_EXPANSION events are the denominator, and
+      as wired the denominator structurally cannot accrue: the 600-char
+      render budget (`inject_knowledge_for_goal` at recall.py:865)
+      truncates every boosted entrant (0/500 rendered vs 29/500
+      query-level — both reproducible via
+      `scripts/replay_edge_expansion.py [N] [--query-level]`). The gate
+      resolves only after one of: (a) Jeremy raises the recall render
+      budget (queued in READING_QUEUE — recall-wide scope decision),
+      (b) candidate promotion materially strengthens the seed/neighbour
+      pool (re-run the replay to check), or (c) we accept a proxy
+      metric counting boosted-but-truncated candidates. Interpretation
+      caveat once unblocked (r1 Skeptic): edge-surfaced renders bump
+      `times_applied`, which feeds base lexical ranking — a node's
+      later lexical rise may be expansion feedback, not lexical merit.
 
 ### dev-recall missed a decree we had written down — ranking, not coverage (FOUND 2026-08-20, Jeremy: "makes me a little worried")
 

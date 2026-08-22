@@ -3855,3 +3855,20 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   BACKLOG, not changed). Records:
   `docs/history/2026-08-21-edge-review-r2.md`. Basis: live replay +
   isolation probe this session.
+- **2026-08-21 — edge-review r3 CONTESTED → fixed; arc at review
+  fixpoint (lows only remain):** r3 (Skeptic+Architect) found no HIGH in
+  the r2 fix layer itself — its HIGHs were one hop out and both real:
+  `load_knowledge_nodes` was the unhardened sibling (one forged
+  confidence row would blank the ENTIRE knowledge block via recall's
+  blanket swallow — now validated at the loader boundary,
+  0/1319 live rows affected), and the 29/500 diagnosis was an
+  unreceipted prose number (now reproducible:
+  `scripts/replay_edge_expansion.py 500 --query-level`). The A/B
+  default-flip gate is honestly re-marked **BLOCKED** (the 600-char
+  budget means the event denominator structurally cannot accrue) with
+  the render-budget decision queued in READING_QUEUE for Jeremy —
+  options: raise budget / wait on candidate promotion / accept a
+  boosted-but-truncated proxy. Executable pin added at the literal
+  production budget. Records:
+  `docs/history/2026-08-21-edge-review-r3.md`. Basis: verified against
+  live-store censuses before landing the guards.
