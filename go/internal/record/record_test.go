@@ -121,10 +121,24 @@ func TestConcurrentAppendsDoNotCorrupt(t *testing.T) {
 	if len(lines) != workers*rows {
 		t.Fatalf("want %d rows, got %d — rows lost or fused", workers*rows, len(lines))
 	}
+	uniq := map[string]bool{}
 	for n, line := range lines {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatalf("line %d torn/fused: %v", n, err)
 		}
+		msg, _ := m["summary"].(string)
+		idx := strings.LastIndex(msg, "w")
+		if idx < 0 {
+			t.Fatalf("line %d payload missing tag: %q", n, msg)
+		}
+		tag := msg[idx:]
+		if uniq[tag] {
+			t.Fatalf("duplicate append %q — a drop compensated by a double-write", tag)
+		}
+		uniq[tag] = true
+	}
+	if len(uniq) != workers*rows {
+		t.Fatalf("want %d distinct payloads, got %d", workers*rows, len(uniq))
 	}
 }

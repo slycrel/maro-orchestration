@@ -26,7 +26,13 @@ fence, no numbering inside the strings.`
 // Usage reports what the decompose call spent — the caller must fold it
 // into the run's totals; planning tokens are real spend too (adversarial
 // round 2026-08-22 flagged the class: usage dropped on non-happy paths).
-type Usage struct{ TokensIn, TokensOut int }
+// Warnings carries the adapter's parse-suspect diagnostics the same way
+// (adversarial r4 — the r3 Warnings plumbing had this unfixed sibling:
+// they died inside errors.As on the planning turn).
+type Usage struct {
+	TokensIn, TokensOut int
+	Warnings            []string
+}
 
 // Decompose asks the adapter to break goal into at most maxSteps steps.
 // Operator context (GOALS/CONTEXT/SIGNALS.md from the workspace user
@@ -59,11 +65,13 @@ func Decompose(ctx context.Context, a llm.Adapter, workspaceDir, goal string, ma
 		use := Usage{}
 		var re *llm.ResultError
 		if errors.As(err, &re) {
-			use = Usage{TokensIn: re.TokensIn, TokensOut: re.TokensOut}
+			use = Usage{TokensIn: re.TokensIn, TokensOut: re.TokensOut,
+				Warnings: re.Warnings}
 		}
 		return nil, use, fmt.Errorf("decompose: %w", err)
 	}
-	use := Usage{TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
+	use := Usage{TokensIn: resp.TokensIn, TokensOut: resp.TokensOut,
+		Warnings: resp.Warnings}
 
 	steps, err := jsonx.StringArray(resp.Content)
 	if err != nil {

@@ -172,3 +172,30 @@ file (Skeptic). `planner.Decompose` now takes the caller's resolved
 workspace instead of independently re-deriving it from env — one
 value threaded through, matching the resolved-once-asserted-then-used
 discipline `main.go` prints (QA).
+
+## Round 4 — 2026-08-22, on the r3 fixes (b87da153) — FIXPOINT
+
+1 lens (Expert QA), same sonnet-medium fallback, scoped to the r3 fix
+layer. **No HIGHs.** One MEDIUM, two LOWs — the round's own verdict:
+"everything else is fixpoint-consistent with rounds 1–3." Per the
+house standard (converges to lows by round 3–4; QA at no-fresh-HIGHs
+two rounds running), this is the fixpoint. All three findings fixed
+anyway — each was cheap and the MEDIUM was real:
+
+1. **MEDIUM — `planner.Decompose`'s salvage dropped
+   `ResultError.Warnings`** — VERIFIED, and verify-before-fix widened
+   it: the SUCCESS path dropped `resp.Warnings` too (the reviewer
+   flagged only the error half). The r3 Warnings plumbing had an
+   unfixed sibling exactly where r4's sibling-census probe pointed.
+   **FIXED**: `planner.Usage` grew `Warnings`; populated on both
+   paths; success-path warnings ride `Result.Warnings`, and on
+   decompose failure — a path with no `Result` to carry them — they
+   land in the stuck row's `failure_chain` (clipped), which is that
+   row's diagnostic surface. Pinned in both planner and loop tests.
+2. **LOW — filter/eviction composition untested** — FIXED: fixture
+   mixes blocked entries into a list bulky enough to force eviction;
+   asserts blocked entries absent, eviction fired, newest done entry
+   rides under its ORIGINAL index label, oldest evicted.
+3. **LOW — contention test asserted count, not content** — FIXED:
+   the 200 rows must now carry 200 DISTINCT worker/iteration tags (a
+   double-write compensating a drop no longer passes).

@@ -98,7 +98,14 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps)
 	if err != nil {
 		// Decompose failing IS an outcome; record it before returning —
-		// including whatever the failed planning turn still spent.
+		// including whatever the failed planning turn still spent. The
+		// planning turn's parse-suspect diagnostics ride the failure
+		// chain: this path returns no Result to carry Warnings, and the
+		// chain is the stuck row's diagnostic surface (adversarial r4).
+		chain := []string{budget.FailureChainEntry.Clip("decompose: " + err.Error())}
+		for _, w := range planUse.Warnings {
+			chain = append(chain, budget.FailureChainEntry.Clip("decompose warning: "+w))
+		}
 		_, recErr := rec.WriteOutcome(record.Outcome{
 			Goal: goal, Status: "stuck", LoopID: loopID,
 			Summary:   budget.FailureChainEntry.Clip("decompose failed: " + err.Error()),
@@ -108,7 +115,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			TokensIn:  planUse.TokensIn,
 			TokensOut: planUse.TokensOut,
 			ElapsedMS: time.Since(start).Milliseconds(),
-			FailChain: []string{budget.FailureChainEntry.Clip("decompose: " + err.Error())},
+			FailChain: chain,
 		})
 		if recErr != nil {
 			return nil, fmt.Errorf("decompose failed (%v) AND recording failed: %w", err, recErr)
@@ -117,8 +124,11 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	}
 
 	res := &Result{Goal: goal, LoopID: loopID,
-		// Planning tokens are real spend; start the totals with them.
-		TokensIn: planUse.TokensIn, TokensOut: planUse.TokensOut}
+		// Planning tokens are real spend; start the totals with them —
+		// and the planning turn's warnings are diagnostics like any
+		// step's (adversarial r4: they were dropped on both paths).
+		TokensIn: planUse.TokensIn, TokensOut: planUse.TokensOut,
+		Warnings: planUse.Warnings}
 
 	if evErr := rec.Event("LOOP_STARTED", loopID,
 		fmt.Sprintf("Go loop started: %d steps for %s", len(steps), budget.Clip(goal, 200)),

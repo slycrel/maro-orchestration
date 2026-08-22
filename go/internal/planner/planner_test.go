@@ -71,3 +71,42 @@ func TestOperatorDocsRideWholeWithMarkedRunawayBound(t *testing.T) {
 		t.Fatal("runaway doc cut without marker")
 	}
 }
+
+// suspectAdapter mimics the subprocess backend's diagnostic shapes: a
+// success carrying parse-suspect warnings, or a typed ResultError doing
+// the same.
+type suspectAdapter struct {
+	fail bool
+}
+
+func (s *suspectAdapter) Name() string { return "suspect" }
+
+func (s *suspectAdapter) Complete(context.Context, []llm.Message, llm.Options) (*llm.Response, error) {
+	if s.fail {
+		return nil, &llm.ResultError{Msg: "boom", TokensIn: 7, TokensOut: 3,
+			Warnings: []string{"failed to parse result-shaped line 4"}}
+	}
+	return &llm.Response{Content: `["one"]`, TokensIn: 10, TokensOut: 5,
+		Warnings: []string{"failed to parse result-shaped line 2"}}, nil
+}
+
+// The planning turn's parse-suspect diagnostics must survive BOTH paths
+// (adversarial r4 — they died inside errors.As on error, and were never
+// read on success).
+func TestDecomposeCarriesAdapterWarningsBothPaths(t *testing.T) {
+	ws := t.TempDir()
+	_, use, err := Decompose(context.Background(), &suspectAdapter{}, ws, "goal", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(use.Warnings) != 1 || !strings.Contains(use.Warnings[0], "line 2") {
+		t.Fatalf("success-path warnings dropped: %v", use.Warnings)
+	}
+	_, use, err = Decompose(context.Background(), &suspectAdapter{fail: true}, ws, "goal", 4)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if use.TokensIn != 7 || len(use.Warnings) != 1 || !strings.Contains(use.Warnings[0], "line 4") {
+		t.Fatalf("error-path salvage incomplete: tokens=%d warnings=%v", use.TokensIn, use.Warnings)
+	}
+}

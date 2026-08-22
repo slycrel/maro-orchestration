@@ -302,3 +302,99 @@ func TestBlockedStepDiagnosticsDoNotReachLaterPrompts(t *testing.T) {
 		t.Fatalf("blocked step index rendered:\n%s", step3Prompt)
 	}
 }
+
+// warningAdapter fails or succeeds a chosen call WITH suspect warnings
+// attached, the way the subprocess backend reports a garbled
+// result-shaped line beside the real result.
+type warningAdapter struct {
+	llm.Fake
+	failCall int
+	warnCall int
+	calls    int
+}
+
+func (w *warningAdapter) Complete(ctx context.Context, msgs []llm.Message, opts llm.Options) (*llm.Response, error) {
+	w.calls++
+	if w.calls == w.failCall {
+		return nil, &llm.ResultError{Msg: "planner refused", TokensIn: 7, TokensOut: 3,
+			Warnings: []string{"failed to parse result-shaped line 9"}}
+	}
+	resp, err := w.Fake.Complete(ctx, msgs, opts)
+	if err == nil && w.calls == w.warnCall {
+		resp.Warnings = []string{"failed to parse result-shaped line 9"}
+	}
+	return resp, err
+}
+
+// Decompose failure has no Result to carry Warnings — the stuck row's
+// failure chain is where the planning turn's diagnostics must land
+// (adversarial r4).
+func TestDecomposeFailureWarningsRideFailureChain(t *testing.T) {
+	ws := t.TempDir()
+	ad := &warningAdapter{failCall: 1}
+	_, err := Run(context.Background(), ad, record.New(ws), Opts{Goal: "goal", MaxSteps: 8})
+	if err == nil {
+		t.Fatal("want decompose failure")
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if len(rows) != 1 {
+		t.Fatalf("want 1 stuck row, got %d", len(rows))
+	}
+	chain, _ := rows[0]["failure_chain"].([]any)
+	if len(chain) != 2 {
+		t.Fatalf("want error + warning in failure_chain, got %v", chain)
+	}
+	if !strings.Contains(chain[1].(string), "decompose warning: failed to parse result-shaped line 9") {
+		t.Fatalf("planning-turn suspect missing from chain: %v", chain)
+	}
+}
+
+// The planning turn's SUCCESS-path warnings must ride Result.Warnings
+// like any step's (adversarial r4 — dropped on both paths before).
+func TestDecomposeSuccessWarningsRideResult(t *testing.T) {
+	ws := t.TempDir()
+	ad := &warningAdapter{Fake: llm.Fake{Script: []string{`["one"]`, "ok"}}, warnCall: 1}
+	res, err := Run(context.Background(), ad, record.New(ws), Opts{Goal: "goal", MaxSteps: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "result-shaped line 9") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("planning-turn success warnings dropped: %v", res.Warnings)
+	}
+}
+
+// The status filter and the oldest-first eviction walk are separately
+// tested but were never proven to COMPOSE (adversarial r4): a blocked
+// entry mixed into a list bulky enough to force eviction must neither
+// ride the prompt nor distort the eviction accounting or labels.
+func TestMixedBlockedListEvictsAndFiltersTogether(t *testing.T) {
+	big := strings.Repeat("z", 3900)
+	var prior []StepOutcome
+	for i := 0; i < 10; i++ {
+		st := "done"
+		if i == 3 || i == 7 {
+			st = "blocked"
+		}
+		prior = append(prior, StepOutcome{Step: "s", Status: st,
+			Result: fmt.Sprintf("entry-%d ", i) + big})
+	}
+	out := renderPrior(prior)
+	if strings.Contains(out, "entry-3") || strings.Contains(out, "entry-7") {
+		t.Fatal("blocked entries reached the rendered prompt")
+	}
+	if !strings.Contains(out, "evicted to fit") {
+		t.Fatal("bulk list did not trigger eviction")
+	}
+	if !strings.Contains(out, "--- step 9 ") {
+		t.Fatal("newest done entry (original index 9) must always ride")
+	}
+	if strings.Contains(out, "--- step 0 ") {
+		t.Fatal("oldest done entry survived a budget that must evict it")
+	}
+}
