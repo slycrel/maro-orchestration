@@ -78,6 +78,34 @@ func TestRunInjectsRecallIntoDecomposePrompt(t *testing.T) {
 	}
 }
 
+// TestRecallEventFailureRidesTheDecomposeFailureChain: when the
+// RECALL_PERFORMED write fails AND decompose dies, the held recall
+// warning lands in the stuck outcome's failure chain — the PORT.md
+// claim had no executing test (adversarial recall r1, Skeptic).
+func TestRecallEventFailureRidesTheDecomposeFailureChain(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	// A DIRECTORY at the captain's-log path fails every Event append
+	// while outcomes.jsonl stays writable.
+	if err := os.MkdirAll(filepath.Join(ws, "memory", "captains_log.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &llm.Fake{Script: []string{"this is not a JSON step array at all"}}
+	rec := record.New(ws)
+	_, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "goal whose planning fails", MaxSteps: 1, DryRun: true})
+	if err == nil {
+		t.Fatal("decompose should have failed")
+	}
+	raw, rerr := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !strings.Contains(string(raw), "RECALL_PERFORMED") {
+		t.Fatalf("recall event-write failure missing from the stuck row's chain:\n%s", raw)
+	}
+}
+
 // TestRunRecallDegradesWithoutStore: a workspace with no memory store
 // plans exactly as before — the seam degrades to "knows nothing" and
 // the decompose prompt carries no recall block.

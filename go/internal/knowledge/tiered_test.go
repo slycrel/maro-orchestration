@@ -179,6 +179,70 @@ func TestLoadFiltersSortAndLimit(t *testing.T) {
 	}
 }
 
+// TestLoadOptionsZeroValueMeansUnlimited: the zero value must degrade
+// to "everything", never to a silent empty read indistinguishable from
+// an empty store (adversarial recall r1 2026-08-22, Skeptic HIGH — an
+// earlier draft's Limit<0-for-unlimited made LoadOptions{} return
+// results[:0] with skipped==0 and err==nil).
+func TestLoadOptionsZeroValueMeansUnlimited(t *testing.T) {
+	ws := t.TempDir()
+	writeTierFile(t, ws, TierLong,
+		lessonRow("z1", "first", 0.9, 0, ""),
+		lessonRow("z2", "second", 0.8, 0, ""),
+	)
+	got, skipped, err := NewStore(ws).LoadTieredLessons(TierLong, LoadOptions{})
+	if err != nil || skipped != 0 || len(got) != 2 {
+		t.Fatalf("zero-value LoadOptions must load the full store: %d rows, skipped %d, err %v",
+			len(got), skipped, err)
+	}
+}
+
+// TestNonFiniteScoreFailsTheRow: strconv.ParseFloat mints NaN/Inf from
+// the strings "NaN"/"Infinity", and a NaN score survives EVERY
+// MinScore filter (NaN < x is always false) uncounted. Go refuses the
+// row — deliberate stricter-than-Python refusal, named in PORT.md.
+func TestNonFiniteScoreFailsTheRow(t *testing.T) {
+	ws := t.TempDir()
+	today := time.Now().UTC().Format("2006-01-02")
+	writeTierFile(t, ws, TierLong,
+		`{"lesson_id":"nan","task_type":"agenda","outcome":"done","lesson":"nan score","score":"NaN","last_reinforced":"`+today+`"}`,
+		`{"lesson_id":"inf","task_type":"agenda","outcome":"done","lesson":"inf score","score":"-Infinity","last_reinforced":"`+today+`"}`,
+		`{"lesson_id":"numnan","task_type":"agenda","outcome":"done","lesson":"nan confidence","score":0.9,"confidence":"Inf","last_reinforced":"`+today+`"}`,
+		lessonRow("fine", "healthy neighbour", 0.8, 0, ""),
+	)
+	got, skipped, err := NewStore(ws).LoadTieredLessons(TierLong, LoadOptions{MinScore: 0.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].LessonID != "fine" {
+		t.Fatalf("non-finite rows survived: %+v", got)
+	}
+	if skipped != 3 {
+		t.Fatalf("skipped = %d, want 3 (refusals must be counted)", skipped)
+	}
+}
+
+// TestEvidenceSourcesTypeDriftKeepsCitedness: a drifted non-list
+// truthy evidence_sources value must stay CITED (no 0.90 penalty),
+// matching Python's bool(evidence_sources) truthiness on the duck-typed
+// row — the shape-only assertion silently flipped ranking (adversarial
+// recall r1, Skeptic + Expert QA independently).
+func TestEvidenceSourcesTypeDriftKeepsCitedness(t *testing.T) {
+	ws := t.TempDir()
+	text := "identical lesson text for the citation tie"
+	writeTierFile(t, ws, TierLong,
+		lessonRow("drift", text, 1.0, 0, `"evidence_sources":"run:abc"`),
+		lessonRow("uncited", text, 1.0, 0, ""),
+	)
+	got, _, _ := NewStore(ws).QueryLessonsScored("identical lesson text citation tie", 10, "agenda")
+	if len(got) != 2 {
+		t.Fatalf("want both rows: %+v", got)
+	}
+	if got[0].Lesson.LessonID != "drift" || got[0].Score <= got[1].Score {
+		t.Fatalf("drifted-but-truthy citation lost its no-penalty rank: %+v", got)
+	}
+}
+
 // TestQueryLessonsScoredFilters: provisional, quarantined (minted_from
 // "prompt"), and contested rows leave every injection surface; the pool
 // spans LONG + MEDIUM. Python-truthiness pin: provisional:"false" is a

@@ -399,9 +399,53 @@ direction).
   dataclass carries them until they explode inside the ranker);
   byte-invalid rows are refused before decode (Go's encoding/json
   would otherwise launder invalid UTF-8 into U+FFFD — the corruption
-  signal loads_clean exists to preserve); Python-truthiness is kept
-  where it is load-bearing (`provisional: "false"` is truthy and
-  stays filtered).
+  signal loads_clean exists to preserve); NON-FINITE numeric strings
+  ("NaN"/"Infinity" — both strconv.ParseFloat and Python float()
+  accept them) fail the row and are counted, because a NaN score
+  survives every MinScore filter (`NaN < x` is always false) uncounted
+  (r1 Skeptic); Python-truthiness is kept where it is load-bearing
+  (`provisional: "false"` is truthy and stays filtered;
+  a type-drifted truthy `evidence_sources` value stays CITED via a
+  one-element carrier — the shape-only assertion silently applied the
+  0.90 penalty Python would not, r1 Skeptic + Expert QA
+  independently). Container fields with NO ranking consumer
+  (imported/canon/delta_evidence/grounding/merged_variants) coerce to
+  empty on shape drift without failing the row — behavior-inert
+  today; a future consumer of those fields must revisit that choice.
+  Recall r1 fix layer (adversarial, 4 lenses, sonnet-medium
+  fallback): LoadOptions' zero value now means UNLIMITED — the
+  Limit<0-for-unlimited draft made `LoadOptions{}` silently return an
+  empty result set indistinguishable from an empty store (the round's
+  HIGH; zero value must degrade to "everything", never "nothing");
+  Recall carries a recover() folding an unanticipated panic into
+  Sources["error_recall_panic"] (the Go stand-in for Python's
+  per-substrate except blankets — this seam eats hand-editable data
+  and must never crash a run); ContextBlock ports the 2026-08-14
+  degenerate-budget floor WITH the subtraction (limit-64 ≤ 0 would
+  hit Clip's breaker-off path and return unbounded text); the
+  metadata-scan cap comment states honestly that it bounds only the
+  read phase (the listing+stat phase is O(lifetime runs) in BOTH
+  runtimes — inherited, needs a shared index to fix); prior-attempt
+  ordering is a lexical sort on raw started_at, byte-for-byte
+  Python's — known-preserved misordering across heterogeneous
+  timestamp shapes. Further named after r1: the tiered-store
+  QUARANTINE SIDECAR (_quarantine_unparseable) is unported —
+  LoadTieredLessons is a pure READER and must not be reused as the
+  read half of a rebuild-style rewrite (reinforce/promote/GC) until
+  the sidecar lands, or skipped rows would be destroyed on rewrite
+  (the exact Python incident the sidecar closed; the existing
+  UnionVariantsIntoLesson is line-in-place and preserves undecodable
+  rows, so it is not exposed); the lesson-render icon drops Python's
+  SF-2 goal_achieved-preferred branch — dead code in Python today (no
+  writer stamps goal_achieved on tiered rows) and TieredLesson has no
+  such field here, so wiring it up in Python requires a synchronized
+  Go patch; readers of lessons.jsonl take no flock in either runtime
+  (writers do) — safe while every writer is a single write() or an
+  atomic rename; LoadOptions' Raw/MaxAgeDays/LessonType surface and
+  FindPriorAttempts' windowHours/excludeHandleID/project parameters
+  are Python-parity surface with no production Go caller yet
+  (unit-tested only; the project lane is dead on the CLI path until
+  project threading lands pre-decompose).
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a

@@ -261,6 +261,72 @@ func TestDecomposeExtrasOrder(t *testing.T) {
 	}
 }
 
+// TestOversizedSingleLessonRendersNothing: a lesson whose one line
+// exceeds the whole LessonInject budget drops the BLOCK (empty, no
+// citation), never a mid-line cut — the degenerate shape of the
+// breaker doctrine (adversarial recall r1, Skeptic: the path existed
+// with no fixture proving it).
+func TestOversizedSingleLessonRendersNothing(t *testing.T) {
+	ws := t.TempDir()
+	huge := strings.Repeat("widget lore accretes beyond every prompt budget ", 30) // ~1440 chars
+	writeLessonRows(t, ws, "medium", row("huge1", "agenda", "done", huge, ""))
+	rr := Recall(ws, "widget lore prompt budget", "")
+	if rr.Lessons != "" {
+		t.Fatalf("oversized lesson must drop the block, got %d chars:\n%.120s...",
+			len(rr.Lessons), rr.Lessons)
+	}
+	if cited, _ := rr.Sources["lesson_ids_cited"].([]string); len(cited) != 0 {
+		t.Fatalf("dropped line must not be cited: %v", cited)
+	}
+}
+
+// TestFindPriorAttemptsSkipsMalformedMetadata: corrupt / non-object /
+// type-drifted metadata.json rows degrade to their own absence — the
+// healthy neighbours still load, nothing panics (adversarial recall
+// r1, Expert QA: the tiered guard had five fixtures, this sibling had
+// zero).
+func TestFindPriorAttemptsSkipsMalformedMetadata(t *testing.T) {
+	ws := t.TempDir()
+	goal := "rebuild the index"
+	writeRunMeta(t, ws, "good-x", map[string]any{
+		"handle_id": "good", "started_at": isoAgo(time.Hour),
+		"prompt": goal, "status": "done",
+	})
+	// Corrupt JSON.
+	dir := filepath.Join(ws, "runs", "corrupt-x")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte("{torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Non-object JSON.
+	dir2 := filepath.Join(ws, "runs", "array-x")
+	if err := os.MkdirAll(dir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "metadata.json"), []byte(`["not","an","object"]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Type-drifted fields: prompt non-string → skipped (no prompt);
+	// started_at non-string → unparseable → skipped.
+	writeRunMeta(t, ws, "numprompt-x", map[string]any{
+		"handle_id": "np", "started_at": isoAgo(time.Hour),
+		"prompt": 123, "status": "done",
+	})
+	writeRunMeta(t, ws, "numwhen-x", map[string]any{
+		"handle_id": "nw", "started_at": 42,
+		"prompt": goal, "status": "done",
+	})
+	got, err := FindPriorAttempts(ws, goal, 24.0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "good" {
+		t.Fatalf("healthy row lost among malformed neighbours: %+v", got)
+	}
+}
+
 func TestTextSimilarityMatchesPython(t *testing.T) {
 	// memory_ledger._text_similarity is word-set Jaccard over
 	// lowercased [a-z0-9 ] text.

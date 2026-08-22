@@ -44,8 +44,14 @@ import (
 )
 
 // MetadataScanCap is recall.py's _METADATA_SCAN_CAP: newest-first bound
-// on run-dir metadata reads per call — keeps recall O(recent activity),
-// not O(lifetime run count).
+// on run-dir METADATA READS per call. Stated honestly (adversarial
+// recall r1 2026-08-22, Architect): the cap bounds only the second
+// phase — the listing+stat phase before it scales with LIFETIME run
+// count in both runtimes (Python iterdir+stat has the identical
+// shape), so a workspace accumulating tens of thousands of runs pays
+// a growing per-run listing cost. Inherited limitation, named in
+// PORT.md; bounding the first phase needs an index both runtimes
+// agree on.
 const MetadataScanCap = 200
 
 // NearMatchThreshold is recall.py's _NEAR_MATCH_THRESHOLD for the
@@ -85,10 +91,27 @@ type Result struct {
 // nothing". project enables the project-family match lane on prior
 // attempts (the Go loop passes "" until it threads a project concept
 // pre-decompose — named in PORT.md).
-func Recall(workspaceDir, goal, project string) Result {
+//
+// The recover below is the Go stand-in for Python recall()'s
+// per-substrate `except Exception` blankets: this seam consumes
+// hand-editable, possibly corrupted on-disk data, and its contract is
+// that a broken store never blocks a run — an UNANTICIPATED bug here
+// must degrade to "knows nothing" with the panic named in Sources,
+// not crash the orchestrator (adversarial recall r1 2026-08-22,
+// Expert QA: the doctrine held only for anticipated failures).
+func Recall(workspaceDir, goal, project string) (res Result) {
 	t0 := time.Now()
 	sources := map[string]any{"slice": "loop"}
-	res := Result{Sources: sources}
+	res = Result{Sources: sources}
+	defer func() {
+		if r := recover(); r != nil {
+			sources["error_recall_panic"] = fmt.Sprint(r)
+			sources["elapsed_ms"] = time.Since(t0).Milliseconds()
+			// Partial substrate results assembled before the panic
+			// stay on res — same degradation direction as Python,
+			// where a later substrate's failure keeps earlier ones.
+		}
+	}()
 
 	prior, scanErr := FindPriorAttempts(workspaceDir, goal, 24.0, project, "")
 	if scanErr != nil {
@@ -292,6 +315,12 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 			When: started, Match: match, GoalAchieved: ga, StopVerdict: sv,
 		})
 	}
+	// Lexical sort on the RAW started_at string — byte-for-byte
+	// Python's `attempts.sort(key=lambda a: a.when, reverse=True)`.
+	// Known-preserved wrinkle (adversarial recall r1, Architect):
+	// heterogeneous timestamp shapes (space vs T separator) would
+	// misorder; both runtimes share it, and fixing it is a
+	// cross-runtime change, not a Go patch.
 	sort.SliceStable(attempts, func(i, j int) bool {
 		return attempts[i].When > attempts[j].When
 	})
@@ -408,12 +437,27 @@ func (r Result) ContextBlock() string {
 			"surface the blocker instead of retrying.",
 		len(r.PriorAttempts), breakdown,
 		r.PriorAttempts[0].When, r.PriorAttempts[0].Status)
-	if len([]rune(text)) <= budget.RecallContext.Limit {
+	limit := budget.RecallContext.Limit
+	if len([]rune(text)) <= limit {
 		return text
+	}
+	if limit <= 128 {
+		// Degenerate budget: no room for an announced cut — the bound
+		// wins. Ported WITH Python's 2026-08-14 fixpoint guard, not
+		// just the subtraction: limit-64 at or below zero would hit
+		// budget.Clip's breaker-off path and return the WHOLE text
+		// unbounded (adversarial recall r1 2026-08-22, Expert QA —
+		// unreachable at today's 4000 constant, reintroduced-landmine
+		// class).
+		r := []rune(text)
+		if limit < 0 {
+			limit = 0
+		}
+		return string(r[:limit])
 	}
 	// Reserve room for clip's marker so the return honors the bound
 	// (Python as_context_block's max_chars - 64).
-	return budget.Clip(text, budget.RecallContext.Limit-64)
+	return budget.Clip(text, limit-64)
 }
 
 // DecomposeExtras assembles the context blocks the initial decompose

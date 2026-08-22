@@ -84,10 +84,16 @@ func IsQuarantined(tl TieredLesson) bool { return tl.MintedFrom == "prompt" }
 // emptiness is the flag.
 func IsContested(tl TieredLesson) bool { return len(tl.Contested) > 0 }
 
-// LoadOptions mirror load_tiered_lessons' keyword filters. Limit < 0
-// means unlimited (Python's limit=None). Raw skips the decay derivation
-// AND the MinScore filter — exactly Python's ordering, where the
-// min_score check sits behind `not raw`.
+// LoadOptions mirror load_tiered_lessons' keyword filters. Limit <= 0
+// means unlimited (Python's limit=None) — the ZERO VALUE must degrade
+// to "everything", never to "nothing": an earlier draft used Limit < 0
+// for unlimited, which made LoadOptions{} silently return an empty
+// result set indistinguishable from an empty store (adversarial recall
+// r1 2026-08-22, Skeptic HIGH — the zero-value footgun sat one field
+// away from every caller). Same idiom as budget.Clip's "a breaker that
+// is off is off". Raw skips the decay derivation AND the MinScore
+// filter — exactly Python's ordering, where the min_score check sits
+// behind `not raw`.
 type LoadOptions struct {
 	TaskType   string
 	LessonType string
@@ -144,7 +150,7 @@ func (s *Store) LoadTieredLessons(tier string, o LoadOptions) ([]TieredLesson, i
 	sort.SliceStable(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
-	if o.Limit >= 0 && len(results) > o.Limit {
+	if o.Limit > 0 && len(results) > o.Limit {
 		results = results[:o.Limit]
 	}
 	return results, skipped, nil
@@ -249,8 +255,19 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 	if cm, isMap := m["canon"].(map[string]any); isMap {
 		tl.Canon = cm
 	}
+	// evidence_sources feeds the ranker's citation-penalty check, so its
+	// coercion must preserve Python TRUTHINESS, not just shape: Python's
+	// duck-typed row carries a drifted non-list value as-is and
+	// bool(evidence_sources) still reads a non-empty string as CITED. A
+	// shape-only assertion here silently flipped exactly that row to
+	// "uncited" — a ranking change with no skipped-count trace
+	// (adversarial recall r1 2026-08-22, Skeptic + Expert QA
+	// independently). A truthy non-list lands as a one-element carrier;
+	// citedness survives and the drift stays visible on the struct.
 	if ev, isList := m["evidence_sources"].([]any); isList {
 		tl.EvidenceSources = ev
+	} else if truthy(m["evidence_sources"]) {
+		tl.EvidenceSources = []any{m["evidence_sources"]}
 	}
 	tl.MergedVariants = stringList(m["merged_variants"])
 	if gr, isList := m["grounding"].([]any); isList {
@@ -263,18 +280,25 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 	return tl, ok
 }
 
-// coerceFloat matches Python float(): numbers and numeric strings pass,
-// bools count as 1/0, anything else fails the row.
+// coerceFloat matches Python float() — numbers and numeric strings
+// pass, bools count as 1/0, anything else fails the row — with one
+// deliberate Go-stricter refusal: non-finite results (NaN/±Inf, which
+// strconv.ParseFloat happily produces from the strings "NaN" and
+// "Infinity", and Python's float() equally accepts) fail the row. A
+// NaN score is poison downstream — `NaN < MinScore` is always false,
+// so the row would survive EVERY score filter uncounted (adversarial
+// recall r1 2026-08-22, Skeptic). No writer in either runtime emits
+// non-finite scores; refusing them is the safe direction.
+// The decoder runs UseNumber, so no float64 arm is needed from the
+// only caller (adversarial r1, Minimalist — the dead arms are gone).
 func coerceFloat(v any) (float64, bool) {
 	switch t := v.(type) {
 	case json.Number:
 		f, err := t.Float64()
-		return f, err == nil
-	case float64:
-		return t, true
+		return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
 	case string:
 		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		return f, err == nil
+		return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
 	case bool:
 		if t {
 			return 1, true
@@ -295,8 +319,6 @@ func coerceInt(v any) (int, bool) {
 		}
 		f, err := t.Float64()
 		return int(f), err == nil
-	case float64:
-		return int(t), true
 	case string:
 		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
 		return int(n), err == nil
@@ -322,8 +344,6 @@ func truthy(v any) bool {
 	case json.Number:
 		f, err := t.Float64()
 		return err != nil || f != 0
-	case float64:
-		return t != 0
 	case []any:
 		return len(t) > 0
 	case map[string]any:
@@ -353,7 +373,7 @@ func (s *Store) QueryLessonsScored(query string, n int, taskType string) (ranked
 	var candidates []TieredLesson
 	for _, tier := range []string{TierLong, TierMedium} {
 		pool, skipped, err := s.LoadTieredLessons(tier, LoadOptions{
-			TaskType: taskType, Limit: -1,
+			TaskType: taskType, // zero Limit = full store (limit=None)
 		})
 		skippedOut += skipped
 		if err != nil {
@@ -371,6 +391,10 @@ func (s *Store) QueryLessonsScored(query string, n int, taskType string) (ranked
 		return nil, skippedOut, loadErrs
 	}
 	ranked = TFIDFRankScored(query, candidates, n)
+	// NOT redundant with the ranker's own topK: the no-signal path
+	// returns ALL lessons ignoring topK (the deliberate parity quirk),
+	// and this caller-side bound is Python's ranked[:n] — exactly the
+	// slice that tames it there too.
 	if len(ranked) > n {
 		ranked = ranked[:n]
 	}

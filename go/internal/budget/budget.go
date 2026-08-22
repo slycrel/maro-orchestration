@@ -120,10 +120,12 @@ var (
 	RecallContext = Budget{
 		Name:  "recall-context",
 		Limit: 4000,
-		Why: "matches Python RecallResult.as_context_block max_chars=4000 " +
-			"(widened from 1200 in the 2026-08-13 STORE review: briefs were " +
-			"severed mid-instruction); clip reserves 64 marker chars, same " +
-			"as the Python site",
+		Why: "same bound as Python RecallResult.as_context_block " +
+			"max_chars=4000 (widened from 1200 in the 2026-08-13 STORE " +
+			"review: briefs were severed mid-instruction); clip reserves " +
+			"64 marker chars like the Python site. Coverage differs: the " +
+			"Go v1 block is attempts-only, a strict subset of the " +
+			"substrates Python folds under this number (see PORT.md)",
 	}
 
 	// InjectedStep bounds one worker-injected step's text before it

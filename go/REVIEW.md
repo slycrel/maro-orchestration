@@ -860,3 +860,136 @@ plan-mutation products, budget-exhausted terminal with remainder
 named). Residuals: the named-divergence lists in blocked.go/PORT.md
 (tier escalation, partial-output carrier, pending_context seam,
 iteration-budget machinery, text-keyed maps).
+
+## Memory RECALL tranche — adversarial round 1 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Four lenses (Skeptic / Architect / Minimalist / Expert QA) on
+86f47212..71c9ad97 — the recall tranche (internal/recall +
+knowledge retrieval half + planner/loop wiring). Launch note, recorded
+honestly: the first launch attempt backgrounded the four reviewers and
+let the parent shell exit without `wait` — the harness reaped the
+process group and all four died mid-first-turn (events captured, no
+final messages). Salvage was impossible; relaunched with `wait`. All
+four then returned complete numbered lists, status 0.
+
+### Verification Ledger
+
+1. **HIGH (Skeptic) — LoadOptions zero value returned a silent EMPTY
+   result set.** `Limit < 0`-for-unlimited made `LoadOptions{}` mean
+   `results[:0]` with skipped==0 and err==nil — indistinguishable from
+   an empty store; every in-tranche caller dodged it by passing -1.
+   VERIFIED (the truncation guard read `o.Limit >= 0`). **FIXED**:
+   Limit <= 0 now means unlimited (zero value degrades to
+   "everything", never "nothing" — same idiom as Clip's breaker-off),
+   pinned by TestLoadOptionsZeroValueMeansUnlimited,
+   mutation-verified. This round's HIGH is the tranche's own new API
+   surface — the flagship fix-layer pattern's 10th consecutive
+   instance (every round's HIGH inside the newest layer of change).
+2. **MEDIUM (Skeptic) — coerceFloat accepted "NaN"/"Infinity" strings**;
+   a NaN score survives every MinScore filter (NaN < x always false),
+   uncounted. VERIFIED (strconv.ParseFloat probe: both parse, err
+   nil; Python float() equally accepts — parity, but against the
+   guard's purpose). **FIXED** as a named Go-stricter refusal:
+   non-finite coercion fails the row and is counted; pinned by
+   TestNonFiniteScoreFailsTheRow, mutation-verified.
+3. **MEDIUM (Skeptic + Expert QA, independently) — evidence_sources
+   type drift silently flipped citedness.** A truthy non-list value
+   (e.g. `"run:abc"`) zeroed EvidenceSources, applying the 0.90
+   penalty Python's bool() truthiness would not — a ranking divergence
+   with no skipped-count trace. VERIFIED against knowledge_web.py:3109
+   and the duck-typed construction. **FIXED**: truthy non-list lands
+   as a one-element carrier (citedness preserved, drift visible);
+   pinned by TestEvidenceSourcesTypeDriftKeepsCitedness,
+   mutation-verified. Container fields with no ranking consumer
+   (imported/canon/delta_evidence/grounding/merged_variants) keep
+   coerce-to-empty — named behavior-inert in PORT.md.
+4. **MEDIUM (Expert QA) — no panic isolation in the seam.** Python
+   recall() blankets every substrate in except-Exception; Go had no
+   recover anywhere, so an unanticipated bug in ~900 new lines of
+   corrupted-data handling would crash the run, against the seam's
+   own contract. VERIFIED (grep: zero recover() in the module; no
+   currently-reachable panic found — defense-in-depth, not a
+   demonstrated crash). **FIXED**: Recall() defers a recover folding
+   the panic into Sources["error_recall_panic"], keeping partial
+   substrate results.
+5. **MEDIUM (Expert QA) — FindPriorAttempts had zero malformed-
+   metadata fixtures** while the tiered guard had five. VERIFIED.
+   **FIXED**: TestFindPriorAttemptsSkipsMalformedMetadata (corrupt
+   JSON, non-object, type-drifted prompt/started_at). Mutation note,
+   recorded honestly: the unmarshal-guard-removal mutation is MASKED
+   by redundant downstream guards (nil-map rows fall out via the
+   meta==nil and empty-prompt checks), so the pin was
+   mutation-verified against the failure class it actually guards —
+   an unchecked type assertion panicking on a drifted field
+   (DETECTED).
+6. **MEDIUM (Skeptic) — the "held recall warning reaches the failure
+   chain" claim had no executing test.** VERIFIED. **FIXED**:
+   TestRecallEventFailureRidesTheDecomposeFailureChain (captain's-log
+   path made a directory + unparseable decompose reply → stuck row's
+   chain carries the RECALL_PERFORMED write failure),
+   mutation-verified.
+7. **MEDIUM (Skeptic) — no fixture for a single lesson whose one line
+   exceeds the whole 1200 budget.** VERIFIED (the path drops the
+   block honestly, but nothing proved it). **FIXED**:
+   TestOversizedSingleLessonRendersNothing (block empty, nothing
+   cited), mutation-verified against the breaker-turned-truncator
+   mutation.
+8. **MEDIUM (Expert QA) — ContextBlock's limit-64 lacked Python's
+   2026-08-14 degenerate-budget floor**; at limit<=64 the subtraction
+   hits Clip's breaker-off path and returns UNBOUNDED text. VERIFIED
+   (unreachable at today's 4000 constant — reintroduced-landmine
+   class, the port-from-shape-not-fix-history failure mode again).
+   **FIXED**: the <=128 floor ported with the subtraction.
+9. **HIGH (Architect) — Recall breaks Run's context-cancellation
+   contract. REFUTED as stated**: no file I/O anywhere in the module
+   is ctx-bound (planner's operatorDocs, record's appends — all plain
+   os calls); only LLM calls thread ctx. Recall matches the module's
+   actual discipline. The kernel of value landed under #10.
+10. **MEDIUM (Architect) — "O(recent activity)" overclaim.** VERIFIED:
+    the cap bounds only metadata reads; the listing+stat phase is
+    O(lifetime run count) in BOTH runtimes (recall.py:407-411
+    identical). **FIXED** as honesty: comment + PORT.md now state the
+    inherited limitation; bounding the first phase needs a
+    cross-runtime index (backlog-class).
+11. **MEDIUM (Architect + Expert QA) — quarantine-sidecar gap
+    unnamed.** Partially REFUTED: UnionVariantsIntoLesson rewrites
+    line-in-place and PRESERVES undecodable rows (verified — the
+    `continue` leaves lines[i] intact), so "destructive" was wrong;
+    but the sidecar IS unported and LoadTieredLessons must not become
+    the read half of a rebuild-style rewrite until it lands. **FIXED**
+    as naming: PORT.md states the precondition.
+12. **MEDIUM (Minimalist) — QueryLessonsScored's re-truncation is
+    dead code. REFUTED**: the no-signal path returns ALL lessons
+    ignoring topK (the parity quirk the reviewer's own prompt
+    described), so the caller-side bound is live and is Python's
+    ranked[:n]. A clarifying comment landed at the site.
+13. **LOW (Skeptic) — lesson-icon render drops the SF-2
+    goal_achieved branch.** VERIFIED as dead-in-Python-today (no
+    writer stamps goal_achieved on tiered rows — grep confirmed).
+    Named in PORT.md as a synchronized-patch knob.
+14. **LOW (Architect) — lexical sort on raw started_at misorders
+    heterogeneous timestamp shapes.** VERIFIED as byte-for-byte
+    Python parity. Named known-preserved (comment + PORT.md);
+    fixing is cross-runtime.
+15. **LOW (Architect) — RecallContext budget Why overclaimed
+    "matches" as_context_block.** VERIFIED (Go's block is
+    attempts-only). **FIXED**: Why reworded to same-bound,
+    subset-coverage.
+16. **LOW (Minimalist ×5) — dead float64 arms in the coercers
+    (UseNumber makes them unreachable — VERIFIED, DELETED);
+    unused option/parameter surface (Raw/MaxAgeDays/LessonType,
+    windowHours/excludeHandleID/project, AcquiredFor) — VERIFIED,
+    KEPT as Python-parity surface and named unit-tested-only in
+    PORT.md (the project lane is dead on the CLI path until project
+    threading lands).**
+17. **LOW (Architect) — unlocked reads beside flocked writers.**
+    VERIFIED as parity (Python's loader takes no read lock); safe
+    while writers are single-write/atomic-rename. Named in PORT.md.
+
+Score: 20 verified-or-partially-verified findings, 2 refuted
+(A-ctx-contract, M-dead-truncation), 1 reframed (destructive→naming).
+The hallucination streak ends at "claims that misread composition,
+not code": both refuted claims cited real lines but drew wrong
+conclusions about reachability — still zero fabricated probes/quotes
+across the arc. Post-fix: 13 packages green, vet clean, race clean on
+touched packages, 6 new mutation-verified pins.
