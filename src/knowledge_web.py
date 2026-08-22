@@ -4769,7 +4769,11 @@ def import_link_farm(
         content = post.get("content", "")
         description = summary
         if content and len(content) > len(summary):
-            # Append first ~600 chars of full content if richer than summary
+            # Append first ~600 chars of full content if richer than summary.
+            # Deliberate STORE decision, not evidence truncation (caps sweep
+            # 2026-08-21): lf- nodes are third-party reference corpus — the
+            # excerpt sizes what we persist per imported post, and the full
+            # source stays in the link-farm repo. Left as-is on purpose.
             extra = content[:600].strip()
             if extra and extra not in summary:
                 description = f"{summary}\n\n{extra}"

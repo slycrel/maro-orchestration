@@ -238,8 +238,13 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             step_tier_overrides[step_text] = MODEL_POWER
             log.info("step %d retry tier-up: mid → power", step_idx)
         _br_reason = outcome.get("stuck_reason", "blocked")
+        # failure_chain lands in the memory ledger — lesson extraction reads
+        # it. Live stuck_reasons run median 291 / p99 594 / max 913 chars
+        # (caps sweep 2026-08-21, n=184), so the old [:60]/[:80] cuts fed the
+        # learning pipeline under a third of the real failure. 600 = measured
+        # p99; clip() marks any cut.
         failure_chain.append(
-            f"step {step_idx} blocked ({_br_reason[:60]}); retry {_prior_retries + 1} with hint"
+            f"step {step_idx} blocked ({clip(_br_reason, 600)}); retry {_prior_retries + 1} with hint"
         )
         _retry_reminder = (
             f"RETRY REMINDER — ORIGINAL GOAL: {ctx.goal}\n"
@@ -289,7 +294,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         # to be broken down differently, not just retried.
         _recovery_delta = 1
         failure_chain.append(
-            f"step {step_idx} re-decomposing: {_decision.metacognitive_reason[:80]}"
+            f"step {step_idx} re-decomposing: {clip(_decision.metacognitive_reason, 600)}"
         )
         try:
             from planner import decompose
@@ -452,7 +457,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                   reason=_stuck_reason)
     except Exception:
         pass
-    failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
+    # Same memory-ledger surface as the retry/re-decompose entries above —
+    # measured p99 bound, marked cut (caps sweep 2026-08-21).
+    failure_chain.append(f"step {step_idx} terminal: {clip(_stuck_reason, 600)}")
     if item_index >= 0:
         try:
             o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
@@ -548,7 +555,11 @@ def _error_fingerprint(outcome: dict) -> str:
     import hashlib
     reason = outcome.get("stuck_reason", "")
     result = outcome.get("result", "")
-    # Normalize: strip timestamps, whitespace, and take first 200 chars of each
+    # Normalize: strip timestamps, whitespace, and take first 200 chars of
+    # each. Deliberate hash-input normalization, NOT evidence truncation
+    # (caps sweep 2026-08-21): the head of a failure carries its identity;
+    # tails vary with noise (paths, ids, timing) and would make identical
+    # failures look like progress.
     _norm_reason = " ".join(reason.split())[:200]
     _norm_result = " ".join(result.split())[:200]
     _combined = f"{_norm_reason}|{_norm_result}"
@@ -1064,7 +1075,11 @@ def _handle_blocked_step(
             hint="",
             loop_status="stuck",
             stuck_reason=(
-                f"MISSING_INPUT: a required input appears absent — {block_reason[:120]}. "
+                # This reaches the operator on escalation — they are being
+                # asked for the real input, so they need the real reason. Old
+                # [:120] cut 93% of live block reasons (median 291, max 913 —
+                # caps sweep 2026-08-21); 1000 is a runaway bound above max.
+                f"MISSING_INPUT: a required input appears absent — {clip(block_reason, 1000)}. "
                 "A missing external input cannot be retried, split, or manufactured; "
                 "escalate for the real input rather than fabricating one."
             ),
@@ -1212,8 +1227,12 @@ def _handle_blocked_step(
     if prior_retries < _RETRY_THRESHOLD and converging:
         if prior_retries == 0:
             # Round 1: generic fallback hint
+            # The hint is injected into the retry attempt's prompt — the
+            # retry acts on WHY it was blocked, and the old [:120] cut 93%
+            # of live reasons below half (median 291, max 913 — caps sweep
+            # 2026-08-21). 1000 is a runaway bound above measured max.
             hint = (
-                f"[Previous attempt blocked: {block_reason[:120]}] "
+                f"[Previous attempt blocked: {clip(block_reason, 1000)}] "
                 "Try an alternative approach: use a different tool, rephrase the request, "
                 "work around the obstacle, or summarize what you know so far and mark complete. "
                 "If you lack required information, say NEED_INFO: [what's missing] instead of guessing."

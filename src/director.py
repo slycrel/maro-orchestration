@@ -468,7 +468,10 @@ def run_director(
                 # return the list unchanged — byte-identical injection).
                 items, age_stamped = stamp_items_with_age(items)
                 if items or parent_goal_brain:
-                    memory_block = format_worker_memory_block(items, goal_brain=parent_goal_brain, max_chars=1200)
+                    # No max_chars override — the callee's default owns the
+                    # budget (override-discipline sweep 2026-08-21: this
+                    # restated the default, two owners of one number).
+                    memory_block = format_worker_memory_block(items, goal_brain=parent_goal_brain)
                     if memory_block:
                         # Prepend memory block to context (highest priority)
                         context = memory_block + ("\n\n" + context if context else "")

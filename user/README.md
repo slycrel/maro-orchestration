@@ -31,9 +31,9 @@ repo copy only) was closed 2026-07-10; put your real files in
 
 | File | Read by | Injected where |
 |------|---------|----------------|
-| `GOALS.md` | `src/planner.py` | First ~500 chars into every goal-decomposition prompt |
-| `CONTEXT.md` | `src/planner.py` | First ~500 chars into every goal-decomposition prompt |
-| `SIGNALS.md` | `src/planner.py`, `src/evolver_scans.py` | ~500 chars into decompose prompts; ~600 chars into evolver signal scanning (weights proposed sub-missions toward your declared threads) |
+| `GOALS.md` | `src/planner.py` | Injected whole into every goal-decomposition prompt (marked clip at 4k chars as a runaway bound) |
+| `CONTEXT.md` | `src/planner.py` | Injected whole into every goal-decomposition prompt (marked clip at 4k chars as a runaway bound) |
+| `SIGNALS.md` | `src/planner.py`, `src/evolver_scans.py` | Injected whole into decompose prompts and evolver signal scanning (marked clip at 4k chars; weights proposed sub-missions toward your declared threads) |
 | `CONFIG.md` | `src/handle.py`, `src/heartbeat.py` | Not injected into prompts — a flat `key: value` config lane (see below) |
 | `COMPLETION_STANDARD.md` | `src/handle.py` | Completion-quality standard appended to run prompts (neutral; usually fine as shipped) |
 

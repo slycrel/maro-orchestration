@@ -773,6 +773,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 *Entries 2026-04-23 → 2026-07-14 rotated to `docs/history/goal-brain-decisions-2026-04-to-07.md` (2026-08-16). The archive is part of this append-only log — rotation, not deletion; dev-recall ingests it.*
 
+- **2026-08-21 (caps are data-driven or they go; fragility named — Jeremy):**
+  *"we might need caps in some cases but generally we should be data
+  driven. I regret not pushing back harder early, we keep revisiting this
+  decision… it's making the system fragile. Let's clean up at least what
+  we know and consider more."* Strengthens the 2026-07-29
+  caps=circuit-breakers decree from posture to standing rule: a cap needs
+  a written reason (measured distribution, documented field contract, or
+  store decision) or it gets removed. Applied same day: truncation-audit
+  tranche 2 burned down (inventory 110 → 101; claim_probe receipts,
+  loop_blocked retry/escalation/failure_chain, adjudication
+  failure_summary, inspector judge windows, planner's operator-doc [:500]
+  — every fix distribution-backed, every stay adjudicated in place), plus
+  a NEW structural tripwire (`test_budget_override_discipline.py` +
+  registry): call-site budget-kwarg overrides must carry a registered
+  "why", so the recall-600 class can't land unregistered again. The
+  fragility complaint is answered structurally, not just by this sweep.
 - **2026-08-21 (recall knowledge budget — arbitrary cap killed — Jeremy):**
   *"by now you know my position on arbitrary character limits; Unless there
   is very good reason, 600 chars is kind of silly low."* Provenance check

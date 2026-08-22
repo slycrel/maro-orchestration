@@ -3853,8 +3853,47 @@ capture**, which is what makes the rung amortize instead of evaporate.
   `tests/test_truncation_discipline.py` (inventory 176/129) +
   `scan_verdict_bypasses` (12 frozen sites).
 
+  **Tranche 2 DONE 2026-08-21** (caps sweep, triggered by Jeremy's
+  fragility decree — *"we might need caps in some cases but generally we
+  should be data driven… it's making the system fragile"*). Inventory
+  110 → 101 rows, every fix distribution-backed:
+  - claim_probe: probe receipt [:400] was censoring 13% of 447 live
+    receipts at its own cap (median 30, tail unknowable — the cap
+    destroyed the metric) → marked clip 2000; event re-cut [:300]
+    dropped; `probe_command` stored whole (it's the replay handle).
+  - loop_blocked: retry hint + MISSING_INPUT escalation cut
+    block_reason at 120 while 93% of live reasons exceed it (n=184,
+    median 291, max 913) → marked clip 1000; failure_chain entries
+    (memory-ledger surface, lesson extraction reads them) [:60]/[:80]
+    → marked clip 600 (=p99); fingerprint [:200] commented deliberate
+    (hash-input normalization).
+  - knowledge_lens/memory_ledger: `failure_summary` — the evidence the
+    contradiction-adjudication judge reads — was cut [:300] at capture
+    (only copy) and re-cut at read → marked clip 600 both ends.
+  - inspector: alignment judge scored goal-match on [:400] of results
+    that run median 1,180 / p99 4,671 → `_REVIEW_STEP_CUT` (4000)
+    marked, same for the notes prompt [:200]. The six evidence-[:80]
+    sites STAY — they enforce FrictionSignal's documented anonymized
+    max-80 field contract.
+  - planner: GOALS/CONTEXT/SIGNALS.md injected at [:500] while all
+    three live operator docs run 925–1161 chars — the operator's
+    hand-written mission definition was majority-invisible to
+    decompose → marked clip 4000. evolver_scans' SIGNALS [:600] same
+    fix. user/README + user/SIGNALS.md prose updated.
+  - Adjudicated-stay rows keep their inventory entries (director's 7 =
+    log/notify bounds; knowledge_lens reasoning::400 = prompted-shape
+    bounds; lf- import excerpt = store decision, now commented).
+  - NEW structural tripwire `tests/test_budget_override_discipline.py`
+    + `tests/data/budget_override_registry.json`: AST-scans call-site
+    literal budget kwargs (max_chars/max_chars_per_entry/max_len);
+    every override needs a registered non-empty "why" — the recall-600
+    class (unregistered override silently starving a consumer) can't
+    land unnoticed again. Redundant overrides removed (director 1200,
+    recall playbook 800, team 1000 — each restated the callee's
+    default). Count caps (max_results/max_entries) = named v1 upgrade
+    edge, deliberately out of scope.
+
   **Still open (the live remainder):**
-  - Burn-down tranche 2 — targets in the status block above.
   - **STORE retention decision (Jeremy's):**
     `memory_ledger.compress_old_outcomes` (120/600) is now
     load-bearing — outcome rows carry real evidence and

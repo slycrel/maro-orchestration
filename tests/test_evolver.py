@@ -2998,15 +2998,27 @@ class TestLoadUserSignals:
         result = _load_user_signals()
         assert result == ""
 
-    def test_reads_and_caps_at_600_chars(self, tmp_path):
-        """Reads the workspace-overlay SIGNALS.md (beats the repo template) and caps at 600 chars."""
+    def test_reads_whole_file_with_marked_runaway_clip(self, tmp_path):
+        """Reads the workspace-overlay SIGNALS.md (beats the repo template) whole.
+
+        Caps sweep 2026-08-21: the old bare [:600] silently cut the live
+        operator-authored file (992 chars) to 60%. Now the whole doc passes
+        through up to a 4000-char runaway bound, and any cut is MARKED by
+        context_budget.clip so the scanner can tell trimmed from complete.
+        """
         user_dir = tmp_path / "user"
         user_dir.mkdir()
-        (user_dir / "SIGNALS.md").write_text("A" * 700)
 
+        # A realistic-sized hand-written doc passes through uncut.
+        (user_dir / "SIGNALS.md").write_text("A" * 700)
+        assert _load_user_signals() == "A" * 700
+
+        # A runaway doc is bounded AND the cut is marked, not silent.
+        (user_dir / "SIGNALS.md").write_text("B" * 5000)
         result = _load_user_signals()
-        assert len(result) <= 600
-        assert result == "A" * 600
+        assert len(result) < 5000
+        assert result.startswith("B" * 100)
+        assert "[truncated: first 4000 of 5000 characters]" in result
 
     def test_repo_template_used_when_no_overlay(self, tmp_path, monkeypatch):
         """Without a workspace overlay, the repo/install template is the fallback."""

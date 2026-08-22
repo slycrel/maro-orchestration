@@ -116,7 +116,14 @@ def _load_user_signals() -> str:
         from config import user_file as _user_file
         _signals_path = _user_file("SIGNALS.md")
         if _signals_path is not None:
-            return _signals_path.read_text(encoding="utf-8").strip()[:600]
+            # Breaker, not a truncator (caps sweep 2026-08-21): the old bare
+            # [:600] silently cut the OPERATOR'S OWN declared threads — the
+            # live file ran 992 chars, so signal scanning saw 60% of what
+            # Jeremy wrote. clip() marks any cut; 4000 is a runaway bound
+            # for a hand-written doc, not a target.
+            from context_budget import clip
+            return clip(
+                _signals_path.read_text(encoding="utf-8").strip(), 4000)
     except Exception:
         pass
     return ""

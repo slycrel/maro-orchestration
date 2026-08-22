@@ -200,9 +200,10 @@ def run_milestone_reanchor(
     course or when the check could not run).
 
     Reads the commitment from the run's resolved_intent.md artifact,
-    summarizes the last 3 step outcomes (any status, tagged — 600 chars
-    each), asks the coherence question, records the verdict to
-    build/reanchor.jsonl, and emits a captain's-log event.
+    summarizes the last 3 step outcomes (any status, tagged, each clipped
+    at the gate's measured evidence window with a marker), asks the
+    coherence question, records the verdict to build/reanchor.jsonl, and
+    emits a captain's-log event.
     """
     interpretation = ""
     try:
@@ -214,10 +215,16 @@ def run_milestone_reanchor(
     # Last 3 outcomes REGARDLESS of status, each tagged (round-1 review,
     # Architect): a blocked or skipped stretch is often exactly where drift
     # lives — a done-only summary would hide the signal this check exists
-    # to catch.
+    # to catch. Window rides the gate's measured constant (caps sweep
+    # 2026-08-21): step results run median 1,180 / p99 4,671 chars, so the
+    # old bare [:600] showed this check under half of a typical outcome —
+    # the same starved shape quality_gate measured and fixed — and clip()
+    # marks the cut so the model can tell trimmed evidence from complete.
+    from context_budget import clip
+    from quality_gate import _REVIEW_STEP_CUT
     recent_work = "\n---\n".join(
         f"[{getattr(o, 'status', '?') or '?'}] "
-        + (getattr(o, "result", "") or "")[:600]
+        + clip(getattr(o, "result", "") or "", _REVIEW_STEP_CUT)
         for o in step_outcomes[-3:]
     )
 

@@ -948,7 +948,11 @@ def _adjudicate_locked(
         cited_rules = [rules_by_id[r] for r in rule_ids if r in rules_by_id]
         cited_lessons = _lesson_texts_by_id(lesson_ids)
 
-        failure_summary = str(ctx.get("failure_summary") or "")[:300]
+        # Bounded (marked clip at 600 — measured p99) by the writer in
+        # memory_ledger; the old [:300] re-cut here ate the marker and half
+        # the tail before the judge prompt below saw it (caps sweep
+        # 2026-08-21). Keep a wide marked breaker only.
+        failure_summary = clip(str(ctx.get("failure_summary") or ""), 600)
         goal_preview = str(ctx.get("goal_preview") or "")[:200]
 
         def _record(verdict: str, reasoning: str,

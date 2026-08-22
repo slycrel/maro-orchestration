@@ -1068,10 +1068,17 @@ def decompose(
     # personal context (SF-5/docs-02).
     try:
         from config import user_file as _user_file
+        from context_budget import clip as _clip
         for _ctx_file in ("GOALS.md", "CONTEXT.md", "SIGNALS.md"):
             _ctx_path = _user_file(_ctx_file)
             if _ctx_path is not None:
-                _ctx = _ctx_path.read_text(encoding="utf-8").strip()[:500]
+                # Breaker, not a truncator (caps sweep 2026-08-21): the old
+                # bare [:500] silently cut all three live operator docs
+                # (GOALS.md 1161 / CONTEXT.md 925 / SIGNALS.md 992 chars) to
+                # under half — the mission definition is the one input the
+                # operator wrote by hand for exactly this prompt. 4000 is a
+                # runaway bound per doc; clip() marks any cut it makes.
+                _ctx = _clip(_ctx_path.read_text(encoding="utf-8").strip(), 4000)
                 if _ctx:
                     extras.append(f"USER CONTEXT ({_ctx_file}):\n{_ctx}")
     except Exception:

@@ -1052,7 +1052,12 @@ def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
                 "loop_id": loop_id,
                 "rule_ids": rule_ids,
                 "lesson_ids": lesson_ids,
-                "failure_summary": str(row.get("summary", "") or "")[:300],
+                # This is the evidence the adjudication judge reads to decide
+                # whether injected knowledge caused the failure — and the cut
+                # happens at capture, so it was the only copy. Live failure
+                # reasons run median 291 / p99 594 chars (caps sweep
+                # 2026-08-21); the old bare [:300] halved the tail unmarked.
+                "failure_summary": _clip(str(row.get("summary", "") or ""), 600),
                 "goal_preview": str(row.get("goal", "") or "")[:200],
                 "verdict_source": str(row.get("goal_verdict_source", "") or ""),
                 # MH taxonomy relabel (#7 Overgeneralization, 2026-08-09):

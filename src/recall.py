@@ -852,10 +852,11 @@ def recall(
         # 6. Captain's-log read bridge (recent learning-system activity).
         result.learning_activity = recent_learning_activity()
 
-        # 7. Director's playbook.
+        # 7. Director's playbook. No max_chars override — inject_playbook's
+        # default owns the budget (override-discipline sweep 2026-08-21).
         try:
             from playbook import inject_playbook
-            result.playbook = inject_playbook(max_chars=800)
+            result.playbook = inject_playbook()
         except Exception:
             pass
 

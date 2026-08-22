@@ -4,10 +4,11 @@
   WHAT THIS FILE IS
   External signals and active research threads the system should be aware
   of when proposing or executing missions. Two readers:
-    - src/planner.py injects the first ~500 chars into every
-      goal-decomposition prompt
-    - src/evolver_scans.py feeds the first ~600 chars to signal scanning,
-      so proposed sub-missions get weighted toward your declared threads
+    - src/planner.py injects the whole file into every goal-decomposition
+      prompt (marked clip at 4k chars as a runaway bound)
+    - src/evolver_scans.py feeds the whole file to signal scanning (same
+      4k marked clip), so proposed sub-missions get weighted toward your
+      declared threads
 
   WHERE YOUR REAL FILE GOES
   Do NOT put personal research threads in this repo copy — it ships with

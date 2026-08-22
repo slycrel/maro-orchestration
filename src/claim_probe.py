@@ -268,13 +268,22 @@ def probe_contested_claims(claims: list) -> list:
             )
             probe_exit = result.returncode
             combined = (result.stdout or "") + (result.stderr or "")
-            probe_out = combined[:400]
+            # The receipt behind a DISMISSED_BY_PROBE verdict flip. The old
+            # [:400] censored 13% of live receipts at the cap (caps sweep
+            # 2026-08-21: n=447, median 30, 57 at cap — true tail unknowable
+            # because the cap destroyed it). clip() marks any cut; the
+            # verdict itself rides the exit code, not this text.
+            from context_budget import clip as _clip
+            probe_out = _clip(combined, 2000)
             if result.returncode == 0:
                 _why_insufficient = probe_insufficient_for_numbers(
                     safe_str(claim.get("claim", "")), cmd)
                 if _why_insufficient:
                     probe_status = "insufficient"
-                    probe_out = f"[{_why_insufficient}] {probe_out}"[:400]
+                    # Prefix is our own short reason string; probe_out is
+                    # already bounded above — no re-cut (it could eat the
+                    # reason's tail or the marker).
+                    probe_out = f"[{_why_insufficient}] {probe_out}"
                 else:
                     probe_status = "dismissed"
                     original_verdict = safe_str(claim.get("verdict", "CONTESTED"))
@@ -323,10 +332,14 @@ def _emit_claim_probed(claim: dict, cmd: str, probe_status: str,
                 "reviewer_verdict": safe_str(claim.get("original_verdict")
                                               or claim.get("verdict", "")),
                 "final_verdict": safe_str(claim.get("verdict", "")),
-                "probe_command": cmd[:300],
+                # Whole command — it is the replay handle for re-running the
+                # probe; a cut command is un-runnable (caps sweep 2026-08-21).
+                "probe_command": cmd,
                 "probe_status": probe_status,
                 "probe_exit_code": probe_exit,
-                "probe_output_preview": probe_out[:300],
+                # Already bounded (marked clip) at capture — a second cut here
+                # was eating 13% of receipts on the calibration surface.
+                "probe_output_preview": probe_out,
             },
         )
     except Exception:

@@ -207,10 +207,12 @@ def create_team_worker(
         _shared_block = ""
         if shared_ctx:
             # Subagent context firewall: pass only task-relevant entries, not
-            # full history. 1000 chars/entry (was 200 — a silent cut stacked
-            # under step_exec's 600-char store cut left workers ~200 chars of
-            # "relevant context"; truncation audit 2026-08-06).
-            _filtered_ctx = firewall_shared_ctx(task, shared_ctx, max_entries=5, max_chars_per_entry=1000)
+            # full history. Per-entry budget lives on firewall_shared_ctx's
+            # own default (1000 — was 200 until the 2026-08-06 truncation
+            # audit: a silent cut stacked under step_exec's then-600-char
+            # store cut left workers ~200 chars of "relevant context").
+            # No override here (override-discipline sweep 2026-08-21).
+            _filtered_ctx = firewall_shared_ctx(task, shared_ctx, max_entries=5)
             _entries = [f"  [{k}]: {v}" for k, v in _filtered_ctx.items()]
             if _entries:
                 _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)
