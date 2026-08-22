@@ -3990,3 +3990,18 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   4 lenses) run same session on the branch. Branch does not land to
   main; `land.sh` untouched. Basis: test/smoke/parity output this
   session.
+- **2026-08-22 — Go port review arc to FIXPOINT (branch `go-port`,
+  r1–r4, HEAD `2f8df017`):** r1 4 lenses → 6 HIGHs fixed
+  (`88dacc88`); r2 fix-layer → 3 HIGHs fixed (`ffa08096`); r3 → 2
+  HIGHs fixed (`b87da153`); r4 → no HIGHs, one MEDIUM fixed
+  (`2f8df017`) — declared fixpoint per the converges-by-r3-4
+  standard. Zero hallucinated reviewer claims across all four rounds
+  (sonnet-medium same-model fallback throughout; codex capped til
+  08-27). Ledger: `go/REVIEW.md` on the branch. Standing lesson for
+  later tranches: porting a recently-hardened function from memory of
+  its SHAPE reintroduces the pre-fix bug (the Go clip shipped
+  Python's pre-2026-08-14 forged-marker bypass; renderPrior shipped
+  ungated prior-evidence forwarding the Python director gates on
+  done) — diff the Python sibling's fix history, not just its
+  signature, before porting. Basis: reviewer artifacts + test/smoke
+  output this session.
