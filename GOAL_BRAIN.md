@@ -3916,3 +3916,15 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   sites), memory_bridge/playbook single-owner defaults unmeasured.
   Records: `docs/history/2026-08-21-caps-sweep-review.md`. Basis:
   distributions measured from this box's live workspace before each fix.
+- **2026-08-21 — caps-sweep review r2 CONTESTED → fixed; stopping at
+  fixpoint-adjacent:** both r2 HIGHs were residue of r1's own fixes —
+  the navigator "fix" had removed a dead key while the actually-judged
+  text stayed bare-sliced [:300] (now marked clip 600 = measured p99,
+  with a lane-adjudication segmentation note), and the inspector
+  comment's upstream-bound story was false for 2 of 3 lanes (agenda
+  lane has a 4000 budget, not a 2000 net — comment now warns against
+  tightening). Sibling previews annotated, playbook docstring example
+  de-drifted. No new defect class; remaining items are BACKLOG'd
+  tranches. Records: `docs/history/2026-08-21-caps-sweep-review.md`
+  (r2 section). Basis: both HIGH traces re-verified against the tree
+  before fixing.

@@ -580,12 +580,16 @@ def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> Optio
 
     try:
         # The judge scores goal-match on this text. The production caller
-        # (inspect_session) passes outcome["summary"], which closure_verify
-        # already bounds at VERDICT_PROSE_CAP (2000, marked) — so the real
-        # governing bound is upstream; _REVIEW_STEP_CUT (4000) is a generous
-        # ceiling above it, not a fresh measurement of this field (review
-        # 2026-08-21). The old [:400] cut even the upstream-bounded text in
-        # half. Goal is clipped (marked) at an identity-preview width.
+        # (inspect_session) passes outcome["summary"], whose writers bound
+        # it upstream per lane (review r2, 2026-08-21, all three traced):
+        # handle.py NOW lane clips at VERDICT_PROSE_CAP (2000, marked);
+        # loop_finalize's agenda lane builds it under STORE_TOTAL_BUDGET
+        # (4000); evolver's verify lane passes one stdout line (unbounded
+        # by cap, bounded by being a single line). So this window is the
+        # equal-or-above backstop, NOT a fresh measurement — do not tighten
+        # it below 4000 expecting a 2000 upstream net; the agenda lane has
+        # none. The old [:400] cut every lane's text hard. Goal is clipped
+        # (marked) at an identity-preview width.
         from context_budget import clip as _clip
         from quality_gate import _REVIEW_STEP_CUT
         prompt = (
@@ -699,8 +703,8 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
                    (" (goal verified achieved)" if achieved else " (goal judged NOT achieved)"))
                 + "\n"
                 # Same window rationale as the alignment judge above (the
-                # field is upstream-bounded at VERDICT_PROSE_CAP; this is a
-                # generous marked ceiling, and the old [:200] cut it 10x).
+                # field is upstream-bounded per lane at 2000-4000; this is
+                # the marked backstop, and the old [:200] cut it 10-20x).
                 f"Goal: {_clip(goal, 100)}\n"
                 f"Result: {_clip(summary, _REVIEW_STEP_CUT)}\n"
                 f"Friction signals: {[s.signal_type for s in friction_signals]}\n"

@@ -90,9 +90,58 @@ under-diagnosed.
   three redundant-override removals) — the single-owner notes above are
   the response.
 
-## Ledger falsifier check
+## Ledger falsifier check (r1)
 
 No UNSETTLED entries this round — every claim was settleable by reading the
 tree and running the scanner/tests locally, which is the honest state for a
 review whose subject is mostly test infrastructure and comment claims. The
 probes were runnable and run.
+
+---
+
+# Round 2 — fix diff (`e484f5e4..e88beca0`), Skeptic + Architect
+
+Round dir: `/tmp/adversarial-review.5JwlTC`. Verdict: CONTESTED → fixed
+(SAME-MODEL FALLBACK: sonnet-medium). Both HIGHs verified real.
+
+## Verification Ledger (r2)
+
+- **VERIFIED (HIGH, Skeptic): the r1 navigator "fix" removed a dead key,
+  not the starved surface** — `navigator_shadow.py:511` bare-sliced the
+  text the navigator actually judges (`WorkReport.summary`) at [:300],
+  unmarked, cutting the measured p99 tail. FIXED: marked `clip(…, 600)`
+  (= measured p99, matching same-commit siblings); comment notes pairs
+  recorded before 2026-08-21 saw the narrower input, so lane adjudication
+  can segment; inventory row deleted (99 rows).
+- **VERIFIED (HIGH Architect / MED Skeptic, same finding): the r1
+  inspector comment's upstream-bound story was false for 2 of 3 lanes.**
+  Traced: handle.py NOW lane → VERDICT_PROSE_CAP 2000; loop_finalize
+  agenda lane → STORE_TOTAL_BUDGET 4000 (no 2000 net — the majority
+  path); evolver verify lane → one uncapped stdout line. FIXED: comment
+  rewritten per-lane with an explicit do-not-tighten warning. (The r1
+  comment repeated the exact defect class r1 had flagged — noted.)
+- **VERIFIED (MED, Architect): `claim_preview[:200]`/`summary[:120]`
+  siblings in the same event dict left bare with no exemption note.**
+  FIXED: exemption comment (claim is short-by-prompt-contract, preview-
+  named) + per-event total note (~4.4KB worst-case row, accepted).
+- **VERIFIED (LOW, Skeptic): playbook docstring example restated the
+  default (`inject_playbook(max_chars=800)`).** FIXED: kwarg dropped.
+
+## Accepted residuals (r2)
+
+- clean.py fixture assertion is non-discriminating (scanner never visits
+  signature defaults) — kept as documentation-by-test; the top.py/deep.py
+  halves carry the must-detect load (Skeptic LOW).
+- Real-tree `src/maro_assets/` coverage proven only by the synthetic
+  rglob fixture, not against the live tree (Architect LOW) — accepted;
+  the fixture pins the traversal semantics.
+- Probe-receipt tests depend on a real shell + `cat` (Skeptic LOW) —
+  accepted; this box and CI are Linux, and the shell path IS the
+  production path being pinned.
+- Architect confirmed the single-owner notes at memory_bridge/playbook
+  are accurate (positive verification, no action).
+
+Convergence: r2 highs were both residue of r1's own fixes; no new defect
+class. Lows-only expected next round — stopping at r2 per the
+review-to-fixpoint practice (converges to lows by round 3-4; this arc's
+remaining items are BACKLOG'd tranches, not review residue).

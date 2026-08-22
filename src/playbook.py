@@ -33,7 +33,7 @@ learning data is never destroyed).
 Usage:
     from playbook import load_playbook, inject_playbook, append_to_playbook
     wisdom = load_playbook()              # Full text
-    block = inject_playbook(max_chars=800) # Ranked selection for injection
+    block = inject_playbook()  # Ranked selection for injection (default budget)
     append_to_playbook("Research tasks need gather→synthesize→verify steps.")
 """
 

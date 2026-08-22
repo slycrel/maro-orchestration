@@ -60,7 +60,6 @@
  "src/memory_ledger.py::summary::120": 1,
  "src/memory_ledger.py::summary::80": 1,
  "src/mission.py::result_summary::200": 1,
- "src/navigator_shadow.py::block_reason::300": 1,
  "src/notify.py::reason::200": 1,
  "src/notify_telegram.py::excerpt::400": 1,
  "src/notify_telegram.py::gap_text::300": 1,

@@ -505,10 +505,16 @@ def shadow_blocked_step_live(
         # stuck is the only terminal action — everything else is the loop
         # still trying. status feeds the navigator's extend-vs-close instinct.
         status = "failed" if heuristic_action == "stuck" else "partial"
+        # The text the navigator actually judges. The old bare [:300] cut
+        # the p99 tail of live block reasons (n=184, median 291, p99 594,
+        # max 913 — caps sweep r2, 2026-08-21) unmarked; 600 = measured
+        # p99, clip() marks any cut. NOTE for lane adjudication: pairs
+        # recorded before 2026-08-21 saw the narrower unmarked input.
+        from context_budget import clip as _cb_clip
         work = WorkReport(
             move="execute",
             status=status,
-            summary=(block_reason or "step blocked")[:300],
+            summary=_cb_clip(block_reason or "step blocked", 600),
             recommendation=heuristic_action,
             signals=sig,
         )

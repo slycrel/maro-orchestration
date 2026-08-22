@@ -328,7 +328,13 @@ def _emit_claim_probed(claim: dict, cmd: str, probe_status: str,
                 f"Claim probe {probe_status}: "
                 f"{safe_str(claim.get('claim', ''))[:120]}"
             ),
+            # Per-field bounds only; a worst-case row (claim + cmd + output
+            # all saturated) runs ~4.4KB in the append-forever log — accepted,
+            # the fields are individually marked (review r2, 2026-08-21).
             context={
+                # Honest preview of the LLM-emitted claim (short by prompt
+                # contract, unlike cmd/probe_out) — deliberately narrower
+                # than the evidence fields below.
                 "claim_preview": safe_str(claim.get("claim", ""))[:200],
                 "reviewer_verdict": safe_str(claim.get("original_verdict")
                                               or claim.get("verdict", "")),
