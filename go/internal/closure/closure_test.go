@@ -745,3 +745,22 @@ func TestVerifyScrubsDowngradeReason(t *testing.T) {
 		t.Fatalf("summary unscrubbed: %q", v.Summary)
 	}
 }
+
+// TestRunCheckWaitDelayScalesToShortTimeouts: the timeout/4 scaling was
+// unreachable in production (no caller sets TimeoutPerCheck) and
+// unpinned — an instrument with no must-detect fixture (r4 Skeptic).
+// A 2s-timeout probe with a pipe-holding child must return on the
+// ~500ms scaled grace, nowhere near the flat 2s.
+func TestRunCheckWaitDelayScalesToShortTimeouts(t *testing.T) {
+	dir := t.TempDir()
+	cmd := `sleep 30 & exit 0`
+	started := time.Now()
+	code, _, _ := runCheck(context.Background(), cmd, dir, 2*time.Second)
+	elapsed := time.Since(started)
+	if code != 0 {
+		t.Fatalf("probe exited 0; got %d", code)
+	}
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("scaled WaitDelay did not fire: %s (flat 2s grace would exceed this)", elapsed)
+	}
+}

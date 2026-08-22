@@ -1411,3 +1411,42 @@ min(2s, timeout/4), noted in PORT.md.
 self-inflicted test deletion and a vacuous pin fixture. Mutations
 M10-M11 DETECTED (M11 on the second fixture). Not yet a fixpoint —
 r4 checks this layer. Verdict: CONTESTED → fixes applied.
+
+## Closure tranche — adversarial round 4 — FIXPOINT (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+**Scope:** the r3 fix layer, 81bd780f..28340947. One lens (Skeptic).
+NO HIGH FOUND — the reviewer traced both r3 flagship fixes end-to-end
+(WaitDelay group reap: confirmed Cancel never fires on the ErrWaitDelay
+path and the explicit kill is minimal and race-free; DowngradeReason:
+confirmed detection correctly reads raw text while both live sinks get
+the scrubbed field) and reported them sound.
+
+### Ledger (lows, all addressed)
+
+- **M — WaitDelay timeout/4 scaling unreachable and unpinned:
+  VERIFIED** (no caller sets TimeoutPerCheck; both pins used 10s
+  timeouts). Fixed per the reviewer's option (b): the arithmetic is now
+  falsifiable — TestRunCheckWaitDelayScalesToShortTimeouts (2s timeout
+  → returns on the ~500ms scaled grace, measured 0.50s). Mutation M12
+  (flat 2s restored): DETECTED. The r3 "L — fixed" entry stands
+  corrected: it was fixed-but-unfalsifiable until now.
+- **L — "scrub ONCE" comment described two-of-three fields as
+  exhaustive:** fixed — one boundary block, comment names all three
+  prose fields and the add-a-field rule.
+- **L — reap-pin timing bounds under loaded runners:** accepted as-is
+  (6s + 2s-poll against a 2s grace and SIGKILL delivery); revisit only
+  if it ever flakes.
+- **Correction (r3 ledger):** the four restored tests span TWO files —
+  three in main_test.go plus TestRunPackLifecycleThroughCLI, which
+  lives in pack_cmd_test.go and was never damaged. No coverage was
+  lost; the r3 phrasing cost the r4 reviewer real verification time.
+
+### Verdict: NO BLOCKERS FOUND — FIXPOINT (SAME-MODEL FALLBACK: sonnet-medium)
+
+Closure tranche converged r1→r4: 6 verified HIGHs (r1) → 2 (r2) → 1
+(r3) → 0 (r4), lows-only close. Flagship pattern finished 14-for-14
+across the tranche's rounds — every round's top finding sat in the
+newest layer of change, including two in this reviewer lineage's own
+prior fixes. Mutations M1-M12 all DETECTED (two on strengthened pins,
+both escapes recorded). Zero fabricated probes or quotes across all
+four rounds.

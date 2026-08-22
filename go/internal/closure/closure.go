@@ -745,24 +745,17 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// inconclusive probes — no check ran cleanly.
 	judged := checksRun > inconclusive
 
-	// Scrub the judge prose ONCE at the return boundary so every
-	// consumer — durable row, metadata stamp, captain's-log event, CLI
-	// print — gets the same scrubbed text: the verdict prompt carries
-	// raw probe stdout/stderr, and the CLI line added for r1 was a
-	// second, unscrubbed egress for the same prose (adversarial closure
-	// r2 2026-08-22, Architect HIGH). FailedChecks stay raw on purpose:
-	// the fingerprint is computed from them and must match a fingerprint
-	// computed anywhere else in the run's lifetime (Python computes on
-	// unscrubbed signatures too).
+	// The boundary is THIS block, and it must name every prose field
+	// (summary, gaps, downgradeReason) — the r2 comment claimed "once at
+	// the boundary" while covering two of three, which is exactly what
+	// let downgradeReason slip (r3: the admission regex quotes raw
+	// \w+-only secret shapes intact into a field reaching the metadata
+	// stamp and the captain's-log event). A new prose field on Verdict
+	// gets scrubbed HERE or it ships unscrubbed.
 	summary = scrub.Secrets(summary)
 	for i := range gaps {
 		gaps[i] = scrub.Secrets(gaps[i])
 	}
-	// downgradeReason quotes a raw-summary substring (the admission
-	// match) and flows to the metadata stamp and the captain's-log
-	// event — the r2 boundary scrub missed it (adversarial closure r3
-	// 2026-08-22, Skeptic: \w+-only secret shapes fit the admission
-	// regex's captured words intact).
 	downgradeReason = scrub.Secrets(downgradeReason)
 
 	v = Verdict{
