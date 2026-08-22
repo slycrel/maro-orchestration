@@ -97,9 +97,12 @@ var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
 
 // urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
 // — a byte slice is deliberate so a huge candidate is never rune-copied
-// (that would defeat the cap). A mid-rune cut is harmless: the exfil
-// shape's host sits in the first ~54 bytes, so anything past the cap is
-// already irrelevant to the match decision.
+// (that would defeat the cap). The cap is applied AFTER the scheme + the
+// unbounded WHATWG ignore-slashes/control prefix (see the scan loop), so it
+// bounds the AUTHORITY window, not the raw offset from the scheme — a long
+// slash/tab pad can't starve the host out of the window (r7). A mid-rune
+// cut is harmless: the exfil shape's host sits in the first ~54 bytes of
+// the authority, so anything past the cap is irrelevant to the match.
 const urlCandidateMax = 512
 
 // Allowed source locations — auto-apply permitted without manual review
@@ -203,14 +206,40 @@ func ScanContent(content, source string) ScanReport {
 	// host never launders a non-allowlisted inner one.
 	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
 		cand := target[loc[0]:]
-		// Bound the candidate (in BYTES) before any scan work. Without
-		// this, a blob of `https://` repeated with no whitespace is
-		// O(schemes × tail) per ScanContent — each candidate would be the
-		// whole remaining target (r4 review DoS). The exfil shape needs
-		// only a scheme, a ≤50-rune host, a TLD, and a short path, so a
-		// few hundred bytes is always enough to decide a match.
-		if len(cand) > urlCandidateMax {
-			cand = cand[:urlCandidateMax]
+		// Skip the scheme + the WHATWG "ignore slashes" run BEFORE capping.
+		// The ignorable prefix is scheme + any run of `/`, `\`, tab, CR, or
+		// LF (special-scheme slash leniency + the tab/CR/LF-strip step), and
+		// r6 made that slash run UNBOUNDED. If the byte cap were applied from
+		// the scheme position (as it was through r6), a long slash- or
+		// tab-pad — `https:` + 600×`/` + `evil.com/leak` — would fill the
+		// whole 512-byte window with ignorable prefix and truncate the host
+		// away, so the shape never matched and the URL scanned clean while a
+		// real client still fetches it (r7 review; both Go and Python missed
+		// this — Python's own `{3,50}` host bound has the same blind spot, so
+		// closing it here makes Go MORE correct than Python — backport
+		// candidate #11). Capping AFTER the prefix guarantees the window
+		// holds the authority. The prefix scan is O(run) and each run belongs
+		// to exactly one scheme, so total work stays linear in the (already
+		// 50k-capped) content.
+		skip := len("http:")
+		if strings.HasPrefix(strings.ToLower(cand), "https:") {
+			skip = len("https:")
+		}
+		for skip < len(cand) {
+			if c := cand[skip]; c == '/' || c == '\\' || c == '\t' || c == '\r' || c == '\n' {
+				skip++
+				continue
+			}
+			break
+		}
+		// Bound the AUTHORITY window (in BYTES). Without this, a blob of
+		// `https://` repeated with no whitespace is O(schemes × tail) per
+		// ScanContent — each candidate would be the whole remaining target
+		// (r4 review DoS). The exfil shape needs only a scheme, a ≤50-rune
+		// host, a TLD, and a short path, so a few hundred bytes past the
+		// prefix is always enough to decide a match.
+		if len(cand) > skip+urlCandidateMax {
+			cand = cand[:skip+urlCandidateMax]
 		}
 		// Candidate ends at the next SPACE. ASCII tab/CR/LF are then
 		// REMOVED from within it, mirroring the WHATWG URL "remove all

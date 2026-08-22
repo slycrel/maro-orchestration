@@ -2466,3 +2466,47 @@ fixpoint.
 Fix-layer mutation M106 DETECTED with a compiling mutant. Full suite green,
 gofmt/vet clean. r6's fix RESETS the fixpoint clock — r7 is now the first of
 two required consecutive zero-HIGH rounds.
+
+## Round 7 (2026-08-22, skeptic + qa, SAME-MODEL FALLBACK: sonnet-medium)
+
+### Verdict: REJECT → FIXED (one HIGH + one LOW, both closed). Verification Ledger:
+
+- **HIGH (skeptic; QA missed it) — cap-starvation: the 512-byte candidate
+  cap was applied from the scheme position, so a long ignorable prefix
+  starves the host out of the window.** VERIFIED live: `https:` + 600×`/` +
+  `evil-collector.com/leak-secret-data` → `IsClean=true, risk=low` (bypass);
+  same for 600 tabs (control-strip also ran after the cap). Root cause is
+  r6's unbounded slash run interacting with r4's fixed cap — the fix-layer
+  pattern, mutated from grammar to window. Verify-before-fix also REFUTED
+  the skeptic's "Go-only regression" claim: Python ALSO scans both clean
+  (`injection_guard.scan_content` → risk=low) because its `{3,50}` host
+  bound is the same blind spot — a SHARED fork-point gap (backport #11), and
+  Go's unbounded `[/\\]*` lets Go out-harden Python. FIXED by skipping
+  scheme + the WHATWG ignore-slashes/control run BEFORE the cap (cap now
+  bounds the authority window); O(run) prefix scan, one run per scheme, so
+  total work stays linear in the 50k-capped content. Live re-probe: all pad
+  variants now flag; padded-allowlisted + nested-proxy stay clean; the r3
+  in-host-tab case still flags. Mutation M107 (cap-from-scheme) COMPILES and
+  FAILS the new pin — load-bearing.
+
+- **LOW (qa) — the Revert store-write-failure honesty contract had no
+  test.** Real gap (already accepted-named across r3–r6). CLOSED this round:
+  the r3/r4 fix guarantees Reverted=false + "NOT updated" detail +
+  applied-stays-true when the suggestion-store write fails after the
+  behavioral revert, but nothing exercised it. Added a clean in-process
+  fault hook — pre-create the suggestions `.tmp` path as a directory so
+  LockedRMW's `os.WriteFile` fails EISDIR on the store write ONLY (the
+  constraint file uses its own sibling `.tmp`, so the behavioral half still
+  lands). Pins Reverted=false / Behavioral=true / applied=true / retry
+  completes. Mutation M108 (Reverted:true unconditional) COMPILES and FAILS
+  it. The "needs cross-file txn" residual (ordering, Python parity) stands,
+  but its honesty contract is now test-covered.
+
+- **CONFIRMED CLEAN (both lenses) — r6's `[/\\]*` slash-run widening.** QA
+  reconstructed the M106 mutant AND a partial-fix mutant (widen the regex but
+  leave `urlHostAllowed`'s loop at `n < 2`) and showed both directions of the
+  r6 pins are load-bearing, not tautological; the two sites stay in sync.
+
+Fix-layer mutations M107/M108 DETECTED with compiling mutants. Full suite
+green, gofmt/vet clean. r7's HIGH fix RESETS the fixpoint clock — r8 is the
+first of two required consecutive zero-HIGH rounds.

@@ -1039,7 +1039,12 @@ judged-false at FOUR sites — inspector.py, evolver.py (~155), metrics.py
 requires `://`, missing ONLY the WHATWG slash-LIGHT forms (0 or 1 slash:
 `https:host/x`, `https:/host/x`) a real client fetches — Python's `[^\s]+`
 after `://` still absorbs the slash-HEAVY forms (`https:///host`), so
-those are a Go-r5-regression, not a Python gap (see r6).
+those are a Go-r5-regression, not a Python gap (see r6); (11) exfil URL
+scan window can be STARVED by a long ignorable prefix — Python's `{3,50}`
+host-length bound and Go's (pre-r7) 512-byte candidate cap both miss
+`https:` + 600×`/` (or tab) + `evil.com/leak`, which a real client fetches
+by skipping the ignore-slashes/control run; Go r7 fixes this (cap applied
+AFTER the prefix) and is now MORE correct than Python here.
 
 **r5 CONFIRMATION round (2026-08-22, skeptic+qa) — first zero-HIGH round.**
 Both lenses traced the full WHATWG authority-shape checklist and VERIFIED
@@ -1073,6 +1078,32 @@ confirmations from r5 (userinfo/backslash/tab parser, Revert honesty) held.
 Candidate #10 reworded: the slash-heavy forms were never a Python gap.
 r6's fix resets the fixpoint clock — r7 is now the first of two required
 zero-HIGH rounds.
+
+**r7 round (2026-08-22, skeptic+qa) — NOT zero-HIGH; the flagship pattern
+mutates from grammar to WINDOW.** The skeptic (QA missed it — the multi-lens
+payoff) found a HIGH one layer under r6: r6 made the leading slash run
+UNBOUNDED, but the 512-byte candidate cap was still applied from the scheme
+position, so `https:` + 600×`/` (or 600 tabs — control-strip also ran after
+the cap) + `evil.com/leak` filled the whole window with ignorable prefix and
+truncated the host away → scanned clean while a real client fetches it.
+Verify-before-fix confirmed the live bypass; it also REFUTED the skeptic's
+"Go-only regression" framing — Python misses it too (its `{3,50}` host bound
+is the same blind spot), so this is a shared fork-point gap (backport
+candidate #11), and Go's unbounded `[/\\]*` lets Go fix it to be MORE correct
+than Python. Fixed by skipping scheme + the WHATWG ignore-slashes/control
+run BEFORE the cap, so the 512 bytes bound the AUTHORITY window (prefix scan
+is O(run), one run per scheme → total stays linear in the 50k-capped
+content). must-detect pins added (600-slash, 600-tab, slash/backslash mix,
+straddling the cap) + a padded-allowlisted negative control; mutation M107
+(cap-from-scheme) COMPILES and FAILS the pin. QA's only finding was the LOW
+Revert fault-injection test gap — CLOSED this round: a clean in-process hook
+(pre-create the suggestions `.tmp` path as a directory → EISDIR on the store
+write only, constraint write untouched) pins Reverted=false / Behavioral=true
+/ applied-stays-true / retry-completes; mutation M108 (Reverted:true
+unconditional) COMPILES and FAILS it. The r4-named "needs cross-file txn"
+residual stands (the ordering is unchanged — Python parity), but its honesty
+contract is now test-covered. Full suite green, gofmt/vet clean. r7's HIGH
+fix resets the clock again — r8 is the first of two required clean rounds.
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 

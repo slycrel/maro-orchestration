@@ -571,6 +571,58 @@ func TestRevertUnappliedRefuses(t *testing.T) {
 	}
 }
 
+// r7 review: the sad path the r3/r4 honesty fixes exist for, finally pinned.
+// When the behavioral revert succeeds (constraint row removed) but the
+// suggestion-store write then fails, Revert must NOT claim success —
+// Reverted=false, the detail says the store wasn't updated, the row still
+// reads applied=true (so IsApplied stays true and a retry isn't blocked), and
+// a subsequent Revert completes the bookkeeping. Fault hook: pre-create the
+// suggestions store's ".tmp" path as a DIRECTORY so LockedRMW's os.WriteFile
+// on it fails with EISDIR — this touches ONLY the suggestions write (the
+// constraint file uses its own sibling .tmp), so the behavioral half still
+// lands. No chmod (root/CI-flaky); purely in-process.
+func TestRevertStoreWriteFailureReportsUnpersisted(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	g := baseSuggestion("rw-fail", "new_guardrail", "all", "block force push", 0.9)
+	g.Pattern = `git\s+push\s+--force`
+	mustSave(t, ws, g)
+	if _, err := Apply(ws, rec, nil, "rw-fail", true); err != nil {
+		t.Fatal(err)
+	}
+	// Sabotage the suggestion-store write, not the constraint-store write.
+	tmpBlock := suggestionsPath(ws) + ".tmp"
+	if err := os.MkdirAll(tmpBlock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res := Revert(ws, rec, "rw-fail")
+	if res.Reverted {
+		t.Fatalf("store write failed but Reverted=true (record lies): %+v", res)
+	}
+	if !res.Behavioral {
+		t.Fatalf("constraint removal should still have happened: %+v", res)
+	}
+	if !strings.Contains(res.Detail, "NOT updated") {
+		t.Fatalf("detail must disclose the un-persisted store: %q", res.Detail)
+	}
+	if !IsApplied(ws, "rw-fail") {
+		t.Fatal("un-persisted revert must leave applied=true (retry must not be blocked)")
+	}
+
+	// Clear the fault; a retry must now complete the bookkeeping.
+	if err := os.Remove(tmpBlock); err != nil {
+		t.Fatal(err)
+	}
+	retry := Revert(ws, rec, "rw-fail")
+	if !retry.Reverted {
+		t.Fatalf("retry after fault cleared should persist: %+v", retry)
+	}
+	if IsApplied(ws, "rw-fail") {
+		t.Fatal("retry did not clear applied")
+	}
+}
+
 // The keyed merge replaces only the target's line — concurrent rows and
 // torn lines survive (Python's lost-update fix).
 func TestApplyKeyedMergePreservesNeighbors(t *testing.T) {
