@@ -1311,6 +1311,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   throwaway harness per round, and record EQUIVALENT mutants as
   equivalent rather than contorting a test to kill one.
 
+- **2026-08-22 (Jeremy): use concurrency where we can — milestones first,
+  flip-and-gate-back.** Verbatim: *"Yeah, I'd like to use concurrency
+  where we can. I'm a little concerned we're not sure exactly where to
+  use it yet, but milestones are a good place to start. I do feel as
+  though some of our steps could be run concurrently... that's more
+  planner type work than it is step work directly, maybe we can get into
+  that later."* And on the default: *"I think we should flip and gate
+  the flip back if it doesn't work right honestly."* So:
+  milestone-DAG parallelism ships ON by default
+  (`mission.parallel_milestones` is the revert lever), step-level
+  concurrency is deferred planner-shaped work (step-skeleton entry), and
+  one-agent-per-milestone stays the rule (the scaling-study regime that
+  actually penalizes is same-task fan-out).
+
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
@@ -4050,3 +4065,18 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   manifest/archive bijection, trailing-data strict decode). Ledger:
   `go/REVIEW.md` on the branch. Basis: live smoke runs + reviewer
   artifacts + green 12-package suite this session.
+- **2026-08-22 — milestone-DAG parallelism SHIPPED + FLIPPED ON (dev
+  Mac), the concurrency question Jeremy reopened, answered in code:**
+  `Milestone.depends_on` (ordering only — never gates on outcome,
+  preserving continue-past-failure parity), decompose emits earlier-index
+  edges (cycle-free by construction; absent → chain to predecessor = old
+  sequential behavior; legacy mission.json loads as a chain),
+  `_run_milestone_dag` runs ready milestones concurrently
+  (`mission.parallel_milestones` default ON per the flip decree — the
+  flag is the revert lever; `mission.milestone_workers` 2; stall
+  fallback beats deadlock on malformed load-path deps; thread-crash
+  backstop). Inert until a decomposition explicitly declares
+  independence. Tests: tests/test_mission_parallel.py (13) + suite
+  10240 green on the Mac. Step-level concurrency recorded as deferred
+  planner work at the step-skeleton entry. Basis: this session's build +
+  Jeremy's in-session decrees (Decisions).

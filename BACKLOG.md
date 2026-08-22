@@ -2357,7 +2357,33 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
   directly precisely so nothing had to go digging. My earlier framing
   of this as a capture miss was wrong.
 
-### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
+### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16; **v1 milestone-DAG SHIPPED + FLIPPED ON 2026-08-22**)
+
+**SHIPPED 2026-08-22 (dev Mac), Jeremy's go: "I'd like to use concurrency
+where we can… milestones are a good place to start" + flip decree "we
+should flip and gate the flip back if it doesn't work right honestly."**
+`Milestone.depends_on` (ids; ORDERING only, never gates on outcome —
+preserves the sequential walk's continue-past-failure semantics exactly),
+decompose declares edges as earlier-index refs (cycle-free by
+construction; absent/malformed → chain to predecessor = old behavior;
+refs to dropped milestones discarded), legacy mission.json loads as a
+chain. `_run_milestone_dag` runs ready milestones concurrently
+(`mission.parallel_milestones` **default ON — the flag is the revert
+lever**; `mission.milestone_workers` default 2; ContextVar propagation
+like the feature pool; malformed/cyclic dep sets from the load path fall
+back to list order instead of deadlocking; thread-crash backstop marks
+the milestone failed). Whole-mission saves serialized behind an
+in-process lock. The flip is inert until a decomposition explicitly
+emits independent milestones — undecorated decompositions execute
+byte-identically to the sequential walk. Tests:
+`tests/test_mission_parallel.py` (13: parse/chain/invalid-ref/round-trip/
+legacy-load/concurrency-barrier/dependency-order/failure-parity/
+revert-lever/stall-fallback/thread-crash); full suite 10240 green.
+Step-level concurrency deliberately NOT this chunk (Jeremy: "more
+planner type work… maybe we can get into that later" — recorded at the
+step-skeleton entry). Remaining below: the schedule-which-areas
+question, merge story for out-of-order findings, budget model — v1 runs
+what decompose declares independent and nothing more.
 
 - [ ] **Jeremy, verbatim:** *"why aren't we running concurrent agent
   processes (i.e. multiple map location build-outs) to speed up the
@@ -5540,6 +5566,14 @@ component there and a 'redo but with re-shaping' context there as well
 when we find step dependencies and need to revisit/refine 'finished'
 step work. Which feels like a different way to organize/approach a
 sidequest really, so maybe there's something there."
+
+**Re-affirmed 2026-08-22** while flipping milestone-DAG parallelism on:
+*"I do feel as though some of our steps could be run concurrently…
+that's more planner type work than it is step work directly, maybe we
+can get into that later."* Still design input, deliberately sequenced
+AFTER the milestone lane proves out — the planner emitting concurrency
+structure (a step DAG) is this entry's build, and the milestone
+scheduler now shipping is its smaller sibling and its evidence source.
 
 Reading (agreed in-session): decompose emits a **contract skeleton** —
 step stubs with broad-brush contracts that harden as work proceeds
