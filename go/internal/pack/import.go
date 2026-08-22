@@ -166,6 +166,15 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	artifactBytes := map[string][]byte{}
 	for _, a := range artifacts {
 		p, _ := a["path"].(string)
+		if p == "pack.json" || p == "REVIEW.md" {
+			// Seal excludes the reserved members before its bijection loop,
+			// so it refuses these; Import read them from the raw member map
+			// and would have fed the manifest/review bytes through a trust
+			// lane (r2 2026-08-22, QA — keep the two checks provably the
+			// same, not incidentally so).
+			return nil, fmt.Errorf(
+				"import refused: manifest lists reserved member %q as an artifact", p)
+		}
 		data, present := members[p]
 		if !present {
 			return nil, fmt.Errorf(
@@ -367,22 +376,59 @@ type importer struct {
 	provGate bool // knowledge.provenance_gate_enabled (default true)
 }
 
-// rowID extracts the identity field of one imported row, refusing rows
-// whose id is absent or not a string: with the "" fallback, every such
-// row collapses onto the SAME "imported-<pack>-" identity — the first
-// imports, the rest are silently eaten as "already_imported"
-// (adversarial round 2026-08-22, Skeptic; Python shares the collapse,
-// named in PORT.md).
-func rowID(row map[string]any, field string) (string, error) {
+// rowID extracts the identity field of one imported row. Scalars are
+// coerced to Python's str() form (Python builds the new id with an
+// f-string, so a numeric or bool id imports there — r2 2026-08-22
+// narrowed r1's refuse-all-non-strings, which silently dropped rows a
+// Python import keeps). Absent, null, empty, and composite (array/
+// object) ids are refused: with the "" fallback every such row collapses
+// onto the SAME "imported-<pack>-" identity — the first imports, the
+// rest are silently eaten as "already_imported" (r1, Skeptic; Python
+// still has the collapse for absent/empty and stringifies composites,
+// named in PORT.md). The second return is the raw value for the report
+// row, so the audit trail keeps what the row actually carried.
+func rowID(row map[string]any, field string) (string, any, error) {
 	v, present := row[field]
 	if !present {
-		return "", fmt.Errorf("%s missing", field)
+		return "", "", fmt.Errorf("%s missing", field)
 	}
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return "", fmt.Errorf("%s is not a non-empty string: %v", field, v)
+	switch v.(type) {
+	case string, float64, bool, json.Number:
+		if s := asString(v); s != "" {
+			return s, v, nil
+		}
+		return "", v, fmt.Errorf("%s is empty", field)
+	default:
+		return "", v, fmt.Errorf("%s is not a scalar: %v", field, v)
 	}
-	return s, nil
+}
+
+// scanRows splits one JSONL artifact into decodable rows, refusing rows
+// whose raw text carries lone-surrogate \u escapes BEFORE decoding —
+// Go's json.Unmarshal would silently rewrite them to U+FFFD inside the
+// exact trust-bearing text the provenance classifier reads, where Python
+// keeps (and later chokes loudly on) the lone surrogate (r2 2026-08-22,
+// Skeptic HIGH). A refused or undecodable row costs that row, not the
+// import (per-row fault isolation); undecodable rows are skipped
+// silently to match Python's json.JSONDecodeError → continue.
+func scanRows(content string, onMalformed func(err error)) []map[string]any {
+	var rows []map[string]any
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if err := refuseLoneSurrogates([]byte(line)); err != nil {
+			onMalformed(err)
+			continue
+		}
+		var row map[string]any
+		if json.Unmarshal([]byte(line), &row) != nil {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func (im *importer) provenanceStamp(originalID, originalClass string, row map[string]any) map[string]any {
@@ -406,19 +452,15 @@ func (im *importer) importRulesAsHypotheses(content string) ([]map[string]any, e
 		return nil, err
 	}
 	var results []map[string]any
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var row map[string]any
-		if json.Unmarshal([]byte(line), &row) != nil {
-			continue
-		}
-		originalID, err := rowID(row, "rule_id")
+	rows := scanRows(content, func(err error) {
+		results = append(results, map[string]any{
+			"rule_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+	})
+	for _, row := range rows {
+		originalID, rawID, err := rowID(row, "rule_id")
 		if err != nil {
 			results = append(results, map[string]any{
-				"rule_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+				"rule_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
 			continue
 		}
 		ruleText, _ := row["rule"].(string)
@@ -460,19 +502,15 @@ func (im *importer) importHypotheses(content string) ([]map[string]any, error) {
 		return nil, err
 	}
 	var results []map[string]any
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var row map[string]any
-		if json.Unmarshal([]byte(line), &row) != nil {
-			continue
-		}
-		originalID, err := rowID(row, "hyp_id")
+	rows := scanRows(content, func(err error) {
+		results = append(results, map[string]any{
+			"hyp_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+	})
+	for _, row := range rows {
+		originalID, rawID, err := rowID(row, "hyp_id")
 		if err != nil {
 			results = append(results, map[string]any{
-				"hyp_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+				"hyp_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
 			continue
 		}
 		lessonText, _ := row["lesson"].(string)
@@ -580,19 +618,15 @@ func (im *importer) importLessons(content string) ([]map[string]any, error) {
 		return nil, err
 	}
 	var results []map[string]any
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var row map[string]any
-		if json.Unmarshal([]byte(line), &row) != nil {
-			continue
-		}
-		originalID, err := rowID(row, "lesson_id")
+	rows := scanRows(content, func(err error) {
+		results = append(results, map[string]any{
+			"lesson_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+	})
+	for _, row := range rows {
+		originalID, rawID, err := rowID(row, "lesson_id")
 		if err != nil {
 			results = append(results, map[string]any{
-				"lesson_id": "", "outcome": "malformed_skipped", "error": err.Error()})
+				"lesson_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
 			continue
 		}
 		res := im.importOneLesson(row, originalID, snap)

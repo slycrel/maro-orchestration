@@ -284,3 +284,57 @@ Skeptic #8): traversal guards exact, tamper chain wired end-to-end with
 real negative controls, provenance regexes a verified regex-for-regex
 port, O_EXCL at the adopt write site, fixpoint ports (variant-union,
 border coercion, laundering gate) genuine.
+
+## Round 2 — 2026-08-22, on the r1 fix layer (dcc94494)
+
+2 lenses (Skeptic + Expert QA), sonnet-medium fallback, scoped to the
+fixes. Both lenses independently landed the same HIGH — in the r1 fix
+itself, the historically likeliest home:
+
+### Verification Ledger
+
+1. **HIGH (both lenses) — decompression bounds had a total bypass for
+   non-regular tar entries** — VERIFIED: the `Typeflag != TypeReg`
+   `continue` ran BEFORE the member-count and byte caps, so millions of
+   tiny repetitive dir/symlink headers decompress-looped unbounded, and
+   `TestReadArchiveRefusesBombs` (built on writeArchive, which only
+   emits TypeReg) passed on the gap. **FIXED**: every header counts
+   against the entry cap, non-regular entries are refused outright (a
+   legitimate pack only holds regular files), duplicate member names
+   refused too (r2 Skeptic LOW: last-wins could show a reviewer's tar
+   tool different bytes than the digest blesses).
+   `TestReadArchiveRefusesNonRegularAndDuplicateEntries` hand-rolls raw
+   tars (dir, symlink, header bomb, dup name).
+2. **HIGH (Skeptic) — lone-surrogate refusal guarded only pack.json;
+   row content went through plain json.Unmarshal** — VERIFIED: the
+   rules/hypotheses/lessons lanes would silently U+FFFD-mangle the
+   exact text the provenance classifier reads. **FIXED**: `scanRows`
+   runs `refuseLoneSurrogates` per line before decoding; a refused row
+   is `malformed_skipped` (per-row fault isolation), pinned by
+   `TestImportRefusesLoneSurrogateRowContent`.
+3. **MEDIUM (both) — rowID refused ids Python imports** — VERIFIED
+   against pack.py:538 (f-string coerces any present id, so
+   `{"rule_id": 42}` imports in Python) — r1's refuse-all-non-strings
+   silently dropped rows a Python import keeps, and PORT.md's residual
+   overclaimed the Python collapse. **FIXED**: scalar ids coerce via
+   asString (str() parity); absent/null/empty/composite refuse; PORT.md
+   corrected; the malformed report row now carries the raw offending
+   value (QA LOW — audit parity with Python's original_id field).
+4. **LOW (QA) — Import accepted pack.json/REVIEW.md as manifest
+   artifacts where Seal refused them** — VERIFIED (artifactBytes was
+   built from the raw member map; the stowaway loop excluded the
+   reserved names). **FIXED**: reserved names refused in Import's
+   artifact loop; `TestImportRefusesReservedMemberAsArtifact`.
+5. **LOW (QA) — GateEnabled missed int64/uint64** — FIXED, cases added.
+6. **LOW (Skeptic) — explicit-null config parity was asserted, not
+   pinned** — and the probe REFUTED the lens's mechanism claim: Go's
+   `Get[any]` on explicit null returns the DEFAULT (nil interface fails
+   the assertion), so the gate stays ON where Python's `bool(None)`
+   turns it OFF — a real divergence, safe direction, now pinned
+   (`TestGateEnabledExplicitNullConfig`) and named in PORT.md.
+   Skeptic #5 explicitly re-verified the surrogate scanner's escape
+   state machine as correct — the r2 gap was call-site coverage, not
+   the scanner.
+
+Full suite green (12 packages), crossrt_smoke.sh (incl. bidirectional
+tamper step): PASS.

@@ -82,6 +82,10 @@ func GateEnabled(val any) bool {
 		return false // Python bool(None)
 	case int:
 		return t != 0
+	case int64:
+		return t != 0
+	case uint64:
+		return t != 0
 	case float64:
 		return t != 0
 	default:

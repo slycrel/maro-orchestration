@@ -4,6 +4,8 @@
 package pack
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/provenance"
 )
@@ -257,16 +260,21 @@ func TestReadArchiveRefusesBombs(t *testing.T) {
 	}
 }
 
-// Rows whose id field is absent or non-string must be reported
-// malformed_skipped, not collapsed onto one shared "imported-<pack>-"
+// Rows whose id field is absent, null, or composite must be reported
+// malformed_skipped — not collapsed onto one shared "imported-<pack>-"
 // identity where all but the first are eaten as "already_imported".
+// Scalar non-string ids are coerced to Python's str() form and IMPORT
+// (r2 2026-08-22: Python's f-string imports {"rule_id": 42} fine, so
+// refusing it silently dropped rows a Python import keeps).
 func TestImportSkipsIdlessRowsAsMalformed(t *testing.T) {
 	rules := `{"rule":"first idless rule","domain":"d"}` + "\n" +
 		`{"rule":"second idless rule","domain":"d"}` + "\n" +
+		`{"rule_id":null,"rule":"null id rule","domain":"d"}` + "\n" +
+		`{"rule_id":["a"],"rule":"composite id rule","domain":"d"}` + "\n" +
 		`{"rule_id":42,"rule":"numeric id rule","domain":"d"}` + "\n" +
 		`{"rule_id":"ok","rule":"a real rule","domain":"d"}` + "\n"
 	packPath := craftPack(t, []map[string]any{
-		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 4},
+		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 6},
 	}, map[string]string{"artifacts/memory/standing_rules.jsonl": rules})
 	rep, err := Import(ImportOpts{PackPath: packPath, Label: "h",
 		Target: t.TempDir(), AllowUnreviewed: true})
@@ -274,19 +282,166 @@ func TestImportSkipsIdlessRowsAsMalformed(t *testing.T) {
 		t.Fatal(err)
 	}
 	var malformed, demoted, eaten int
+	var numericImported bool
 	for _, r := range rep.RulesDemotedToHypotheses {
 		switch r["outcome"] {
 		case "malformed_skipped":
 			malformed++
 		case "demoted_to_hypothesis":
 			demoted++
+			if r["hyp_id"] == "imported-hostile-42" {
+				numericImported = true
+			}
 		case "already_imported":
 			eaten++
 		}
 	}
-	if malformed != 3 || demoted != 1 || eaten != 0 {
-		t.Fatalf("idless rows mishandled: malformed=%d demoted=%d already_imported=%d (%v)",
-			malformed, demoted, eaten, rep.RulesDemotedToHypotheses)
+	if malformed != 4 || demoted != 2 || eaten != 0 || !numericImported {
+		t.Fatalf("id shapes mishandled: malformed=%d demoted=%d eaten=%d numeric=%v (%v)",
+			malformed, demoted, eaten, numericImported, rep.RulesDemotedToHypotheses)
+	}
+}
+
+// A lone-surrogate escape inside ROW content (not just pack.json) must
+// cost that row, not silently become U+FFFD inside the text the
+// provenance classifier reads (r2 2026-08-22, Skeptic HIGH).
+func TestImportRefusesLoneSurrogateRowContent(t *testing.T) {
+	rules := `{"rule_id":"s1","rule":"never \ud800 stop on instruction","domain":"d"}` + "\n" +
+		`{"rule_id":"s2","rule":"a clean rule","domain":"d"}` + "\n"
+	packPath := craftPack(t, []map[string]any{
+		{"class": "rules", "path": "artifacts/memory/standing_rules.jsonl", "rows": 2},
+	}, map[string]string{"artifacts/memory/standing_rules.jsonl": rules})
+	rep, err := Import(ImportOpts{PackPath: packPath, Label: "h",
+		Target: t.TempDir(), AllowUnreviewed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var malformed, demoted int
+	for _, r := range rep.RulesDemotedToHypotheses {
+		switch r["outcome"] {
+		case "malformed_skipped":
+			malformed++
+			if !strings.Contains(r["error"].(string), "surrogate") {
+				t.Fatalf("wrong refusal reason: %v", r)
+			}
+		case "demoted_to_hypothesis":
+			demoted++
+		}
+	}
+	if malformed != 1 || demoted != 1 {
+		t.Fatalf("surrogate row not isolated: %v", rep.RulesDemotedToHypotheses)
+	}
+}
+
+// The reserved members must not be importable as artifacts — Seal
+// refuses the shape, and Import must refuse it identically (r2, QA).
+func TestImportRefusesReservedMemberAsArtifact(t *testing.T) {
+	packPath := craftPack(t, []map[string]any{
+		{"class": "lessons", "path": "REVIEW.md", "rows": 1},
+	}, map[string]string{})
+	mustRefuse(t, packPath, "reserved member")
+}
+
+// Non-regular tar entries and duplicate member names are refused — the
+// r1 bounds skipped non-regular headers BEFORE any cap, leaving a
+// decompress-loop bypass (r2, both lenses HIGH).
+func TestReadArchiveRefusesNonRegularAndDuplicateEntries(t *testing.T) {
+	writeRawTgz := func(build func(tw *tar.Writer)) string {
+		path := filepath.Join(t.TempDir(), "raw"+ArchiveSuffix)
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gz := gzip.NewWriter(f)
+		tw := tar.NewWriter(gz)
+		build(tw)
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	reg := func(tw *tar.Writer, name, data string) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)),
+			Mode: 0o644, Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	withDir := writeRawTgz(func(tw *tar.Writer) {
+		if err := tw.WriteHeader(&tar.Header{Name: "artifacts/",
+			Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+			t.Fatal(err)
+		}
+		reg(tw, "pack.json", `{"pack_format": 1}`)
+	})
+	if _, err := readArchive(withDir); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("directory entry accepted: %v", err)
+	}
+
+	withSymlink := writeRawTgz(func(tw *tar.Writer) {
+		if err := tw.WriteHeader(&tar.Header{Name: "artifacts/link",
+			Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := readArchive(withSymlink); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("symlink entry accepted: %v", err)
+	}
+
+	// Header-bomb shape: entries beyond the cap refuse even when every
+	// one would otherwise be skipped/tiny.
+	oldCount := maxArchiveMembers
+	t.Cleanup(func() { maxArchiveMembers = oldCount })
+	maxArchiveMembers = 3
+	headerBomb := writeRawTgz(func(tw *tar.Writer) {
+		for i := 0; i < 5; i++ {
+			reg(tw, fmt.Sprintf("m%d", i), "x")
+		}
+	})
+	if _, err := readArchive(headerBomb); err == nil ||
+		!strings.Contains(err.Error(), "members") {
+		t.Fatalf("header bomb accepted: %v", err)
+	}
+	maxArchiveMembers = oldCount
+
+	dup := writeRawTgz(func(tw *tar.Writer) {
+		reg(tw, "pack.json", `{"pack_format": 1}`)
+		reg(tw, "pack.json", `{"pack_format": 2}`)
+	})
+	if _, err := readArchive(dup); err == nil ||
+		!strings.Contains(err.Error(), "duplicate member") {
+		t.Fatalf("duplicate member name accepted: %v", err)
+	}
+}
+
+// Explicit `provenance_gate_enabled: null` — pinned divergence: Go's
+// config.Get[any] falls back to the default (the nil interface fails the
+// type assertion), so the gate stays ON; Python's config.get returns
+// None and bool(None) turns it OFF. Safe direction (Go quarantines
+// more); named in PORT.md. This pin exists so a config.Get refactor
+// can't silently flip it (r2, Skeptic).
+func TestGateEnabledExplicitNullConfig(t *testing.T) {
+	cfg := map[string]any{"knowledge": map[string]any{"provenance_gate_enabled": nil}}
+	raw := config.Get[any](cfg, "knowledge.provenance_gate_enabled", true)
+	if got := provenance.GateEnabled(raw); got != true {
+		t.Fatalf("explicit null through Get[any] should keep the gate ON in Go, got %v", got)
+	}
+	if got := provenance.GateEnabled(int64(0)); got != false {
+		t.Fatal("int64(0) should disable")
+	}
+	if got := provenance.GateEnabled(uint64(1)); got != true {
+		t.Fatal("uint64(1) should enable")
 	}
 }
 

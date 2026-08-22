@@ -95,6 +95,7 @@ func readArchive(path string) (map[string][]byte, error) {
 	tr := tar.NewReader(gz)
 	members := map[string][]byte{}
 	var total int64
+	entries := 0
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -103,12 +104,27 @@ func readArchive(path string) (map[string][]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		if hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		if len(members) >= maxArchiveMembers {
+		// EVERY header counts against the entry cap, and non-regular
+		// entries are refused outright — a legitimate pack only ever holds
+		// regular files, and r2 (2026-08-22, both lenses) showed the r1
+		// bounds had a total bypass: dir/symlink headers hit a bare
+		// `continue` BEFORE any cap, so millions of tiny repetitive
+		// headers decompress-looped unbounded.
+		entries++
+		if entries > maxArchiveMembers {
 			return nil, fmt.Errorf(
 				"refused %s: more than %d members", path, maxArchiveMembers)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			return nil, fmt.Errorf(
+				"refused %s: member %s is not a regular file (typeflag %q)",
+				path, hdr.Name, hdr.Typeflag)
+		}
+		if _, dup := members[hdr.Name]; dup {
+			// Last-wins would let a raw-archive viewer show a reviewer
+			// different bytes than the ones the digest blesses.
+			return nil, fmt.Errorf(
+				"refused %s: duplicate member %s", path, hdr.Name)
 		}
 		// LimitReader at cap+1: reading a full cap+1 bytes proves the
 		// member is over the cap without materializing the rest.

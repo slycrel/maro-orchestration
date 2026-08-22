@@ -126,9 +126,13 @@ manifest/archive bijection at both seal and import (duplicate manifest
 paths, un-manifested stowaway members, and manifest rows with no archive
 member are all refused — Python KeyErrors on the missing-member case but
 silently carries stowaways and double-imports duplicate paths); rows
-whose id field is absent or non-string are reported `malformed_skipped`
-(Python collapses them onto one shared `imported-<pack>-` identity and
-silently eats all but the first as `already_imported`); `pack_format`
+whose id field is absent, null, empty, or composite (array/object) are
+reported `malformed_skipped` — scalar ids (number/bool) are coerced to
+Python's `str()` form and import at parity (r2 correction: Python's
+f-string imports `{"rule_id": 42}` fine; only ABSENT/empty ids collapse
+onto one shared `imported-<pack>-` identity there, silently eaten as
+`already_imported`, and Python stringifies null/composites into junk
+ids); `pack_format`
 that is present but not a valid integer is a hard refusal (Python
 TypeErrors — closed, but as a crash).
 
@@ -153,6 +157,16 @@ non-canonical literals; pinned by test, documented in `canonical.go`.
 CLI drift: Go uses flags (`-pack`, `-name`) where Python's `maro-pack`
 uses positionals, and Go has no `export --seal` one-shot and no
 interactive confirm (missing `-yes` refuses rather than prompts).
+
+Round 2 (fix-layer review, 2 lenses) additions: non-regular tar entries
+(dirs/symlinks/devices) and duplicate member names are refused outright
+and EVERY header counts against the entry cap (the r1 bounds skipped
+non-regular headers before any cap — a decompress-loop bypass);
+lone-surrogate escapes are refused per-row in JSONL content, not just
+pack.json; Import refuses `pack.json`/`REVIEW.md` listed as artifacts
+(matching Seal); explicit `provenance_gate_enabled: null` keeps the
+gate ON in Go where Python's `bool(None)` turns it OFF (pinned, safe
+direction).
 
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
