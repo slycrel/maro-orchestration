@@ -406,3 +406,22 @@ func TestContextBlockDegenerateBudgetStaysBounded(t *testing.T) {
 		t.Fatalf("limit 129: clip path unbounded: %d runes", n)
 	}
 }
+
+// TestPanicTraceKeepsStackUnderOversizedValue: a payload-carrying panic
+// value must not crowd the stack — the actionable half — out of the
+// PanicTrace budget (adversarial recall r3 2026-08-22: value-first
+// ordering with one shared budget reproduced the bare-value problem at
+// a higher threshold; the value is now clipped separately first).
+func TestPanicTraceKeepsStackUnderOversizedValue(t *testing.T) {
+	ws := t.TempDir()
+	panicHook = func() { panic(strings.Repeat("corrupted-row-payload ", 400)) }
+	defer func() { panicHook = nil }()
+	rr := Recall(ws, "any goal", "")
+	trace, _ := rr.Sources["error_recall_panic"].(string)
+	if !strings.Contains(trace, "corrupted-row-payload") {
+		t.Fatalf("panic value missing entirely: %q", trace)
+	}
+	if !strings.Contains(trace, "goroutine") && !strings.Contains(trace, "recall") {
+		t.Fatalf("oversized panic value crowded the stack out of the budget:\n%s", trace)
+	}
+}

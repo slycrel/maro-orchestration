@@ -239,8 +239,8 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 	in("times_applied", &tl.TimesApplied)
 	in("times_reinforced", &tl.TimesReinforced)
 	// Truthiness fields — Python bool(x): "false" is truthy, {} is not.
-	tl.Provisional = truthy(m["provisional"])
-	if truthy(m["contested"]) {
+	tl.Provisional = Truthy(m["provisional"])
+	if Truthy(m["contested"]) {
 		// IsContested keys on map emptiness; a non-map truthy value
 		// (schema drift) must still read as contested, so it lands as a
 		// carrier entry rather than being absorbed.
@@ -287,7 +287,7 @@ func CoerceEvidenceSources(v any) []any {
 	if ev, isList := v.([]any); isList {
 		return ev
 	}
-	if truthy(v) {
+	if Truthy(v) {
 		return []any{v}
 	}
 	return nil
@@ -346,7 +346,14 @@ func coerceInt(v any) (int, bool) {
 
 // truthy ports Python bool(): nil/false/0/""/empty containers are
 // false; everything else — including the string "false" — is true.
-func truthy(v any) bool {
+// Truthy is Python bool() semantics over decoded-JSON values. Exported
+// because it is LOAD-BEARING at the pack-import boundary too: every
+// gate-feeding boolean crossing that boundary (provisional) must
+// preserve Python truthiness, not JSON shape — the same rule
+// CoerceEvidenceSources owns for the container case (adversarial
+// recall r3 2026-08-22: the r2 fix generalized the mechanism for one
+// field but not the rule across the function it was editing).
+func Truthy(v any) bool {
 	switch t := v.(type) {
 	case nil:
 		return false

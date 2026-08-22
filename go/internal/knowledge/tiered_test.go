@@ -300,10 +300,10 @@ func TestQueryLessonsScoredUnreadableTierDegrades(t *testing.T) {
 // direction for the provisional/contested gates (r2 Skeptic: the safe
 // direction was asserted, never proven).
 func TestTruthyNumberParseErrorFailsOpen(t *testing.T) {
-	if !truthy(json.Number("1e999999999")) {
+	if !Truthy(json.Number("1e999999999")) {
 		t.Fatal("unparseable number must fail open to truthy")
 	}
-	if truthy(json.Number("0")) || !truthy(json.Number("0.5")) {
+	if Truthy(json.Number("0")) || !Truthy(json.Number("0.5")) {
 		t.Fatal("plain number truthiness broken")
 	}
 }

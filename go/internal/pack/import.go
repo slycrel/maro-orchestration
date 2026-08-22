@@ -744,7 +744,12 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	if evidence == nil {
 		evidence = []any{}
 	}
-	provisional, _ := row["provisional"].(bool)
+	// Truthiness again, NOT shape: the same writer-sibling class as the
+	// evidence coercion above, one field down — a shape-only .(bool) read
+	// "provisional": "true" as false and silently promoted the row past
+	// the recall-time provisional gate (adversarial recall r3 2026-08-22,
+	// the flagship pattern's next instance).
+	provisional := knowledge.Truthy(row["provisional"])
 	score := originalScore
 	if score > 0.5 {
 		score = 0.5

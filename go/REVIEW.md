@@ -1068,3 +1068,55 @@ correct conclusions from correct reads. All 7 r2 mutations DETECTED
 (recover, stack, skip counter, floor, truthy arm, warnings wiring,
 importer coercion). Post-fix: 13 packages green, vet clean, race clean
 on the 4 touched packages, binary rebuilt.
+
+## Memory RECALL tranche — adversarial round 3 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Scope: the r2 fix layer (6f0177ae). 1 lens (Expert QA) per the
+converging-fix-layer sizing. Artifacts:
+`$SP/adv-review-recall-r3.jkEglS/qa.md` (+ full transcript). Every
+code claim verified before fixing.
+
+### Verification Ledger
+
+1. **HIGH (QA) — the r2 fix generalized the mechanism, not the rule:
+   `provisional` was the same writer-sibling bug one field down.**
+   VERIFIED: import.go:747 held `provisional, _ :=
+   row["provisional"].(bool)` vs Python pack.py:830
+   `provisional=bool(row.get(...))`; zero provisional fixtures
+   anywhere in pack tests, so the suite was green with the defect. A
+   `"provisional": "true"` row imported as trusted and passed the
+   recall-time provisional gate — trust ESCALATION, strictly worse
+   than the citedness penalty r2 closed. Flagship pattern instance
+   #12: the round's HIGH one field below the previous round's fix.
+   **FIXED**: knowledge.Truthy exported as the boolean half of the
+   boundary rule (CoerceEvidenceSources is the container half),
+   importer rewired, TestImportPreservesProvisionalThroughTypeDrift
+   pins both drift directions (mutation: reverting to `.(bool)` →
+   FAIL).
+2. **MED (QA) — value-first ordering under one shared PanicTrace
+   budget lets an oversized panic value crowd out the stack.**
+   VERIFIED by inspection of Clip (first-N-runes) + the `%v\n%s`
+   ordering — the bare-value problem r2 closed, reproduced at a
+   higher threshold. **FIXED**: the value clips separately under a
+   new PanicValue budget (500, registered with Why) before joining
+   the stack; TestPanicTraceKeepsStackUnderOversizedValue panics
+   with an ~8.8k-char value and asserts the stack survives
+   (mutation: unsplit format restored → FAIL).
+3. **LOW (QA) — panicHook is an unsynchronized package var, safe
+   only while the package's tests stay serial.** VERIFIED. **FIXED**
+   (comment-grade, matching the finding's own fix shape): the seam
+   now documents no-t.Parallel() for this package and names the
+   single production call site.
+4. **Negative controls (QA, recorded)** — the reviewer confirmed the
+   skip-counter's three sites and the not-a-skip boundary
+   (window/exclude/no-match) against both fixtures and recall.go,
+   and confirmed the PORT.md parity claim about Python's silent
+   `continue`s against src/recall.py. No hole found.
+
+### Verdict derivation
+
+3 findings: 1 HIGH + 1 MED fixed with mutation-verified round-trip
+pins, 1 LOW fixed comment-grade. Zero refuted. Both r3 mutations
+DETECTED. Post-fix: full suite green, vet clean, race clean on the 3
+touched packages, binary rebuilt. Not yet lows-only — round 4 runs on
+this fix layer.

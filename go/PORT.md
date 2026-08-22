@@ -471,6 +471,23 @@ direction).
   Named accepted (r2): with Limit<=0 as unlimited there is no way to
   request literally zero rows — acceptable because no caller wants an
   empty read from a retrieval API (comment on LoadOptions).
+  Recall r3 fix layer (adversarial, 1 QA lens, sonnet-medium
+  fallback): the r2 fix generalized the MECHANISM for the one named
+  field but not the RULE across the function — one field below the
+  citedness rewire, `provisional` was still a shape-only `.(bool)`
+  read, so `"provisional": "true"` imported as TRUSTED and sailed
+  past the recall-time provisional gate (trust escalation, strictly
+  worse than the 0.90 penalty the r2 fix closed; flagship pattern
+  instance #12). knowledge.Truthy is now EXPORTED as the boolean
+  half of the boundary rule (CoerceEvidenceSources is the container
+  half): every gate-feeding value crossing the pack-import boundary
+  preserves Python truthiness, not JSON shape, with round-trip pins
+  for both directions of drift. Also from r3: the panic VALUE is
+  clipped separately (new PanicValue budget, 500) before joining the
+  stack under PanicTrace, so a payload-carrying panic value cannot
+  crowd the stack — the actionable half — out of the budget; the
+  panicHook seam carries a no-t.Parallel() comment (unsynchronized
+  by design, single production caller).
 - A run whose project-dir setup fails still records a stuck outcome
   carrying the planning spend before erroring out; a transcript file
   that cannot be created degrades to the deleted-temp capture with a

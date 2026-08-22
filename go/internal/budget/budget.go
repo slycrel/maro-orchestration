@@ -139,6 +139,18 @@ var (
 			"bare panic VALUE with no trace is un-actionable)",
 	}
 
+	// PanicValue bounds the recovered panic's VALUE half before it is
+	// joined with the stack under PanicTrace — value-first ordering with
+	// one shared budget let a runaway payload-carrying value crowd out
+	// the stack entirely (adversarial recall r3 2026-08-22).
+	PanicValue = Budget{
+		Name:  "panic-value",
+		Limit: 500,
+		Why: "panic values are usually one line; 500 chars shows any sane " +
+			"value whole while guaranteeing ~3.4k of PanicTrace's 4000 " +
+			"remains for the stack — the actionable half of the record",
+	}
+
 	// InjectedStep bounds one worker-injected step's text before it
 	// becomes the next prompt's step line.
 	InjectedStep = Budget{
@@ -167,6 +179,7 @@ var Registry = []Budget{
 	LessonInject,
 	RecallContext,
 	PanicTrace,
+	PanicValue,
 	InjectedStep,
 }
 

@@ -590,3 +590,33 @@ func TestImportPreservesCitednessThroughTypeDrift(t *testing.T) {
 		t.Fatalf("falsy evidence should persist as []: %v", rows)
 	}
 }
+
+// TestImportPreservesProvisionalThroughTypeDrift: the NEXT field down
+// in the same writer-sibling class (adversarial recall r3 2026-08-22,
+// the flagship pattern's 12th instance). A shape-only .(bool) read
+// "provisional": "true" as FALSE — silently promoting the row past the
+// recall-time provisional gate, a trust escalation strictly worse than
+// the citedness penalty the r2 fix closed. Truthiness must survive the
+// import; falsy drift ("") must still land as false.
+func TestImportPreservesProvisionalThroughTypeDrift(t *testing.T) {
+	ws := fixtureWorkspace(t)
+	if err := os.WriteFile(filepath.Join(ws, "memory", "long", "lessons.jsonl"),
+		[]byte(`{"lesson_id":"prov","lesson":"provisional lesson with string flag","source_goal":"g","confidence":0.9,"tier":"long","score":1.0,"minted_from":"outcome","provisional":"true"}`+"\n"+
+			`{"lesson_id":"trusted","lesson":"trusted lesson with falsy drift","source_goal":"g","confidence":0.9,"tier":"long","score":1.0,"minted_from":"outcome","provisional":""}`+"\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	importInto(t, exportSealed(t, ws), target)
+	rows := readLines(t, filepath.Join(target, "memory", "medium", "lessons.jsonl"))
+	byLesson := map[string]any{}
+	for _, r := range rows {
+		byLesson[r["lesson"].(string)] = r["provisional"]
+	}
+	if v, _ := byLesson["provisional lesson with string flag"].(bool); !v {
+		t.Fatalf("truthy drifted provisional flattened to trusted on WRITE — smuggled past the recall gate: %v", rows)
+	}
+	if v, _ := byLesson["trusted lesson with falsy drift"].(bool); v {
+		t.Fatalf("falsy provisional drift should import as false: %v", rows)
+	}
+}

@@ -112,8 +112,14 @@ func Recall(workspaceDir, goal, project string) (res Result) {
 			// handling (adversarial recall r2 2026-08-22, Expert QA).
 			// Bounded under the PanicTrace budget — the string rides a
 			// captain's-log event row.
+			// The value is clipped FIRST so a runaway payload-carrying panic
+			// value cannot crowd the stack — the actionable half — out of
+			// the overall PanicTrace budget (adversarial recall r3
+			// 2026-08-22: value-first ordering reproduced the bare-value
+			// problem at a higher threshold).
 			sources["error_recall_panic"] = budget.PanicTrace.Clip(
-				fmt.Sprintf("%v\n%s", r, debug.Stack()))
+				budget.PanicValue.Clip(fmt.Sprintf("%v", r)) +
+					"\n" + string(debug.Stack()))
 			sources["elapsed_ms"] = time.Since(t0).Milliseconds()
 			// Partial substrate results assembled before the panic
 			// stay on res — same degradation direction as Python,
@@ -152,6 +158,9 @@ func Recall(workspaceDir, goal, project string) (res Result) {
 // guarded parse paths (adversarial recall r2 2026-08-22, Skeptic — an
 // instrument nothing proves can fire is untrusted). Nil in production;
 // the test points it at panic() between the substrates.
+// Unsynchronized by design: tests in this package must stay serial (no
+// t.Parallel()) while they use this seam, and Recall's one production
+// caller is the loop's single-threaded pre-decompose site.
 var panicHook func()
 
 // lessonsBlock runs the ranked selection (agenda-typed first, untyped
