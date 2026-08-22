@@ -483,6 +483,15 @@ on matched tickets, scored on cost-per-accepted-outcome, not tokens.
 
 Full analysis: `research/2026-08-19-sol-advisor-efficiency-claim.md`.
 
+**Urgency note (2026-08-21, from the scaling-agent-systems audit):** the
+box logs show this path is production-DORMANT — zero director/worker/review
+events in 7,120 captains_log rows; all step-cost records are the solo loop;
+no telegram listener running. The ungated review tax is real but currently
+un-paid. When the bypass A/B does run, the DeepMind/MIT paper
+(`research/2026-08-21-scaling-agent-systems-audit.md`) supplies the prior:
+centralized review is the right SHAPE (best error containment, 4.4× vs
+17.2×), and the cost to beat is its measured 3.9× efficiency penalty.
+
 ### Link-farm research leads — four adjudicated steal candidates (FOUND 2026-08-20/21, runs 0ebadc02/f89bf29b/92491e53; Jeremy: "not 'next', but probably worth a visit before later")
 
 Promoted from the link-farm-maro-scan burn-in series' deliverables (full
@@ -505,21 +514,42 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
       sample. Source: Granite @granite0x,
       https://x.com/granite0x/status/2087960767287230592 (2026-08-14).
 
-**2. Re-check default fan-out width against the DeepMind/MIT coordination-cost study.** ← the one to take first
-- [ ] Get the actual paper (260 multi-agent configs, 6 benchmarks: past a
-      ~45% single-agent baseline, adding agents is net-negative; error
-      amplification up to 17.2x; every multi-agent variant underperformed
-      solo on SWE-bench). Extract the degradation curve's shape.
-- [ ] Audit recent multi-agent runs against solo baselines IN OUR OWN LOGS —
-      cheap, uses data we already have — and if the pattern reproduces, add
-      a guard against reflexive fan-out where a solo agent already scores
-      high. NOTE the provenance loop: Jeremy dispatched this exact link
-      2026-08-14 (`751e2dea`, ended incomplete — see the Re-run identity
-      live-miss entry); this item is that unfinished question, properly
-      resourced. Source: Yarchi @undefinedki,
+**2. Re-check default fan-out width against the DeepMind/MIT coordination-cost study.** ← **DONE 2026-08-21** (dev Mac session; full writeup with the box-log audit: `research/2026-08-21-scaling-agent-systems-audit.md`)
+- [x] Get the actual paper — found: "Towards a Science of Scaling Agent
+      Systems" (arXiv:2512.08296, Nature MI 8:1157, DeepMind+MIT). Curve
+      extracted: ~45% single-agent-baseline saturation threshold
+      (β̂=−0.236, p=0.004); range +80.8% (decomposable) to −70.0%
+      (sequential planning); SWE-bench Verified — ALL four MAS variants
+      under solo (−2.1% to −14.9%); error amplification centralized 4.4×
+      → independent 17.2×; turns T=2.72(n+0.5)^1.724; comm overhead
+      58–515%. Caveat: R²cv only 0.37–0.41, and every benchmark task fits
+      one context — cross-context orchestration (maro's core loop) is
+      outside what was measured.
+- [x] Audit our own logs — **the multi-agent arm is EMPTY**: all 4,919
+      step-cost records are the solo loop; 0 director/worker/review
+      events in 7,120 captains_log rows; the 205 events.jsonl "director"
+      matches are goals ABOUT director code; no telegram listener
+      process. The Director path is code-live, production-dormant, so the
+      pattern cannot reproduce retrospectively. Measurable instead: our
+      verify lane = 12.4% of spend ($52/$419) buying the same
+      error-containment mechanism the paper prices at +285% comm/3.9×
+      efficiency in centralized MAS. The "guard against reflexive
+      fan-out" therefore landed as doctrine at the decision sites, not a
+      code hook: evidence notes added to "Concurrent milestone-area
+      agents" and "Director worker-review" entries; lead #3 (topology
+      search) drops in priority — the paper measured that search space as
+      mostly negative above the threshold. Provenance loop closed: this
+      finishes Jeremy's incomplete 2026-08-14 `751e2dea` dispatch,
+      building on (not rediscovering) its partial ANSWER. Source: Yarchi
+      @undefinedki,
       https://x.com/undefinedki/status/2087634870260449474 (2026-08-14).
 
 **3. Automated multi-agent topology search — read as the complement to #2.**
+   *(Priority DOWN after #2 landed 2026-08-21: the scaling-agent-systems
+   paper measured this search space and found it mostly negative for
+   SWE-shaped work above the ~45% saturation threshold; a topology search
+   earns tokens only in the sub-threshold or decomposable regimes. Keep
+   sequenced, revisit if we enter those regimes.)*
 - [ ] Google/Cambridge line: search sub-agent prompts + communication graphs
       (mutation/pruning, compute-optimal topology per task) instead of
       hand-designing. Our workflow patterns are hand-designed topologies; if
@@ -2360,6 +2390,18 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
   expect to throw away) and expensive as BUILD-OUT. Decide which one
   this is, per area, and the scheduler follows. Pairs with the
   thread-architecture arc and with "Open-thread structure".
+- [ ] **Evidence gate (added 2026-08-21, from the DeepMind/MIT
+  scaling-agent-systems audit —
+  `research/2026-08-21-scaling-agent-systems-audit.md`):** the paper's
+  260-config result maps exactly onto this entry's pathfinding-vs-build-out
+  distinction. Concurrent probes are predicted to pay only where the areas
+  are genuinely independent (decomposable regime, up to +80.8%) or the
+  solo baseline is weak (sub-~45%-shaped: the run is stuck); concurrent
+  build-out of DEPENDENT areas is its −70% sequential-planning case, with
+  super-linear turn overhead (T∝n^1.7) and 4.4–17.2× error amplification
+  by architecture. Any build here must A/B against the sequential baseline
+  before earning a default — same gate discipline as
+  `knowledge.edge_expansion`.
 
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
