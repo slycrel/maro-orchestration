@@ -321,6 +321,72 @@ direction).
   stepRetries/stepFingerprints key by literal step text, so two plan
   positions with byte-identical text (e.g. two splits both falling back
   to the generic analysis clause) share retry/fingerprint state.
+- Closure verification (`internal/closure` + `internal/runs`) — done ≠
+  successful, made structural. The loop's "done" says the steps
+  drained; only `closure.Verify` says the GOAL was achieved, and the
+  two stamps stay separate. The pipeline is Python
+  closure_verify.verify_goal_completion's spine: plan checks by
+  INVERSION (LLM, plan prompt ported with the stated-guarantee and
+  deliverable sections trimmed to what this runtime supplies) → run
+  them MECHANICALLY (bash -c, per-check timeout, stdout/stderr caps
+  500/300, cwd = the exec lane's project dir; cwd unresolved → checks
+  REFUSED as env-unresolved inconclusive rows, never run in the
+  launcher's directory — B3a) → verdict (LLM) → verdict integrity.
+  Ported lessons, each with a pinned test: pass/fail/INCONCLUSIVE
+  tri-state per probe (_check_outcome branch-for-branch — the
+  verifier's own failure is missing data, not disproof); judged
+  tri-state (all-inconclusive → judged=false → goal_achieved stamp
+  ABSENT, the 4/5-false-negatived-dogfood lesson); the
+  ungrounded-False confidence cap (complete=false contradicting every
+  executed probe with no file content in evidence → 0.65, below the
+  trust floor, cut marked in the summary — run 2738d9c0); the
+  behavioral-gap downgrade Signal 1 (the verdict's own prose admits
+  runtime wasn't exercised + zero behavioral-modality probes →
+  deterministic flip with the reason as the summary opener);
+  verdict-first summaries (the FLAG writes the opener; prose can only
+  elaborate — run d2f4e2f4); per-segment probe-modality
+  classification (quote-aware top-level split, most-behavioral wins,
+  hint-before-runner precedence, non-exec runner flags — CPython
+  fixture parity); closure_fingerprint byte-parity (md5 12-hex over
+  sorted normalized hard-fail signatures, §9.3 — cross-runtime verdict
+  rows compare); work summary with VISIBLE truncation (4000/300/6
+  Python-parity literals; the markers are judge-facing byte-parity
+  text, deliberately not budget.Clip's vocabulary); the
+  project-file-inventory grounding block (probe paths that EXIST —
+  2026-07-09: two known-good runs false-negatived by checks against
+  invented filenames); every closure outcome — verdict or NAMED skip —
+  a durable row in build/closure_verdicts.jsonl
+  (persist-the-artifacts decree). `internal/runs` is the WRITER half
+  of the metadata contract recall.FindPriorAttempts reads (the gap
+  named since the recall tranche): run dir + source/build/artifact
+  skeleton, prompt.txt first-wins, metadata.json merge-writes
+  (started_at first-writer-wins, nil POPS a key, atomic temp+rename),
+  StampVerdict = _apply_verdict_tuple parity (every member set or
+  popped, gaps capped at 5 with an announced count cut). Wiring:
+  run dir created BEFORE recall and the run excluded from its own
+  prior-attempt scan (recall.RecallExcluding); closure fires on the
+  exec lane's done runs (CLOSURE_VERDICT event after LOOP_FINISHED);
+  goal_achieved tri-state stamps only judged verdicts and feeds the
+  NEXT run's recall icons — pure-Go workspaces stop degrading to zero
+  prior attempts. Named divergences: the tool-less lane SKIPS closure
+  with a durable "tool_less_lane" row (it structurally writes no
+  files; Python judges all lanes because every lane there has a cwd);
+  a verdict missing its "complete" flag is REFUSED as
+  verdict_parse_failed (Python defaults the missing key to true —
+  Go-stricter, a verdict without its load-bearing flag is not a
+  verdict); dry-run/nil-adapter skips leave no row (Python parity).
+  Deliberately unported with their subsystems: scope failure modes,
+  resolved-intent deliverables + precondition preflight,
+  stated-guarantee claim coverage, the verdict AUDIT (second-opinion
+  pass over negatives), NEXT.md ledger gap, failed-check file
+  evidence (so the ungrounded-False cap covers every all-passed
+  confident False here), behavioral-gap Signals 2/3, nicknames /
+  run-ref index / thread brains / locked_rmw (the Go loop is
+  metadata.json's only writer — single-writer assumption NAMED, writes
+  atomic so readers never tear), and the restart/declare-blocked
+  DECISION consumers: evaluate_closure's action mapping waits for the
+  restart machinery — the fingerprint is minted and persisted now so
+  §9.3 convergence data accrues, but no Go caller yet disposes.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):
@@ -546,7 +612,9 @@ routing/trajectory escalation.
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
    prior-attempt slice DONE (recall tranche above); playbook, edges,
    and the other named substrates return with their consumers.
-2. Closure verification / quality gate.
+2. ~~Closure verification~~ — evidence pipeline + verdict stamp DONE
+   (closure tranche above); the quality-gate half (step-level review)
+   and the restart consumers return with their subsystems.
 3. Director, intent routing, NOW-vs-AGENDA lanes.
 4. Inspector/evolver self-improvement loop.
 5. Heartbeat, projects, escalation, notifications, viz.

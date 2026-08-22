@@ -27,10 +27,12 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/closure"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/planner"
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/runs"
 )
 
 const stepSystem = `You are a capable worker executing one step of a larger
@@ -115,6 +117,11 @@ type Result struct {
 	// ladder r2 2026-08-22, Skeptic + Expert QA HIGH, independently).
 	StopVerdict string
 	StuckReason string
+	// Closure is the goal-level completion verdict (closure tranche) —
+	// nil when closure did not run (tool-less lane, dry-run, stuck run,
+	// or no run dir). done ≠ successful: Status says the steps drained;
+	// Closure says whether the GOAL was achieved.
+	Closure *closure.Verdict
 }
 
 // Run executes the goal end-to-end and records the run. rec may not be
@@ -139,6 +146,20 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		recModel = a.Name() + "-default"
 	}
 
+	// Run dir + metadata (closure tranche): the writer half of the
+	// contract recall.FindPriorAttempts reads — created BEFORE recall so
+	// a crash mid-run still leaves a scannable "running" attempt, and
+	// excluded from recall below so the run never reads its own
+	// seconds-old metadata as a prior attempt. Best-effort: a run-dir
+	// failure degrades to the pre-tranche world (no metadata, no
+	// closure persistence), never blocks the run.
+	runDir, rdErr := runs.Create(rec.WorkspaceDir, loopID, goal)
+	var recallWarns []string
+	if rdErr != nil {
+		runDir = ""
+		recallWarns = append(recallWarns, "run-dir setup failed: "+rdErr.Error())
+	}
+
 	// Memory recall before planning (recall tranche): ranked tiered
 	// lessons + prior-attempt context ride the decompose prompt, the
 	// same two extras channels Python's loop feeds decompose
@@ -147,7 +168,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	// failure degrades to "knows nothing" — a broken memory store must
 	// never block a run. project is "" until the loop threads a project
 	// concept pre-decompose (the exec lane resolves its slug later).
-	rr := recall.Recall(rec.WorkspaceDir, goal, "")
+	rr := recall.RecallExcluding(rec.WorkspaceDir, goal, "", loopID)
 	// Instrumented from day one, like Python's RECALL_PERFORMED — the
 	// emission lives at this call site rather than inside the seam
 	// (recall keeps no recorder handle by design; named in PORT.md).
@@ -155,7 +176,6 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	for k, v := range rr.Sources {
 		recallCtx[k] = v
 	}
-	var recallWarns []string
 	if evErr := rec.Event("RECALL_PERFORMED", "recall",
 		fmt.Sprintf("recall slice=loop: %d prior attempts.", len(rr.PriorAttempts)),
 		recallCtx, loopID); evErr != nil {
@@ -193,6 +213,9 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		})
 		if recErr != nil {
 			return nil, fmt.Errorf("decompose failed (%v) AND recording failed: %w", err, recErr)
+		}
+		if runDir != "" {
+			_ = runs.Finalize(runDir, "stuck")
 		}
 		return nil, err
 	}
@@ -288,6 +311,9 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 				FailChain: []string{budget.FailureChainEntry.Clip(setupErr.Error())},
 			}); recErr != nil {
 				return nil, fmt.Errorf("%v AND recording failed: %w", setupErr, recErr)
+			}
+			if runDir != "" {
+				_ = runs.Finalize(runDir, "stuck")
 			}
 			return nil, setupErr
 		}
@@ -627,7 +653,76 @@ stepLoop:
 			"tokens_out": res.TokensOut}, loopID); err != nil {
 		res.Warnings = append(res.Warnings, "captain's log write failed: "+err.Error())
 	}
+
+	// Closure verification (closure tranche): done ≠ successful — the
+	// drain above says the STEPS completed; only closure says the GOAL
+	// was achieved, and the two stamps stay separate. Exec-lane only in
+	// v0: the tool-less lane structurally writes no files, so its
+	// closure would burn two LLM calls to reach env-unresolved-unjudged
+	// — the skip is recorded instead (Go-stricter divergence, PORT.md;
+	// Python judges all lanes because every lane there has a cwd).
+	if runDir != "" {
+		if execMode && !opts.DryRun && res.Status == "done" {
+			v := closure.Verify(ctx, a, goal, closureSteps(res.Steps), closure.Options{
+				WorkspacePath: res.ProjectDir,
+				LoopID:        loopID,
+				PersistRow: func(row map[string]any) {
+					if perr := runs.AppendVerdictRow(runDir, row); perr != nil {
+						res.Warnings = append(res.Warnings,
+							"closure verdict row write failed: "+perr.Error())
+					}
+				},
+			})
+			res.Closure = &v
+			// goal_achieved is TRI-STATE: an unjudged verdict stamps
+			// nothing — absence means "not judged", and a false here
+			// demotes the run everywhere the stamp is read (recall's
+			// prior-attempt icons included).
+			var achieved *bool
+			if v.Judged {
+				achieved = &v.Complete
+			}
+			if serr := runs.StampVerdict(runDir, achieved, "go_closure_v1",
+				v.Summary, v.Confidence, v.DowngradeReason, v.Gaps); serr != nil {
+				res.Warnings = append(res.Warnings, "verdict stamp failed: "+serr.Error())
+			}
+			if evErr := rec.Event("CLOSURE_VERDICT", "closure_verdict",
+				budget.Clip(v.Summary, 200),
+				map[string]any{
+					"complete": v.Complete, "judged": v.Judged,
+					"confidence": v.Confidence, "checks_run": v.ChecksRun,
+					"checks_passed":      v.ChecksPassed,
+					"inconclusive_count": v.InconclusiveCount,
+					"gap_count":          len(v.Gaps),
+					"downgrade_reason":   v.DowngradeReason,
+					"fingerprint":        closure.Fingerprint(v),
+					"skip_reason":        v.SkipReason,
+				}, loopID); evErr != nil {
+				res.Warnings = append(res.Warnings, "captain's log write failed (CLOSURE_VERDICT): "+evErr.Error())
+			}
+		} else if !opts.DryRun && res.Status == "done" {
+			// The named skip row keeps "closure never ran" distinguishable
+			// from "closure ran and produced nothing" in the run dir.
+			if perr := runs.AppendVerdictRow(runDir, map[string]any{
+				"skipped": "tool_less_lane"}); perr != nil {
+				res.Warnings = append(res.Warnings,
+					"closure verdict row write failed: "+perr.Error())
+			}
+		}
+		if ferr := runs.Finalize(runDir, res.Status); ferr != nil {
+			res.Warnings = append(res.Warnings, "run metadata finalize failed: "+ferr.Error())
+		}
+	}
 	return res, nil
+}
+
+// closureSteps maps loop step outcomes into closure's view.
+func closureSteps(steps []StepOutcome) []closure.StepView {
+	out := make([]closure.StepView, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, closure.StepView{Text: s.Step, Result: s.Result})
+	}
+	return out
 }
 
 func executeStep(ctx context.Context, a llm.Adapter, goal, step string, prior []StepOutcome) StepOutcome {

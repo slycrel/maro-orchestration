@@ -101,6 +101,16 @@ type Result struct {
 // not crash the orchestrator (adversarial recall r1 2026-08-22,
 // Expert QA: the doctrine held only for anticipated failures).
 func Recall(workspaceDir, goal, project string) (res Result) {
+	return RecallExcluding(workspaceDir, goal, project, "")
+}
+
+// RecallExcluding is Recall with the caller's OWN run excluded from the
+// prior-attempt scan (Python find_prior_attempts exclude_handle_id):
+// a loop that creates its run dir before recalling would otherwise
+// read its own seconds-old metadata as an exact-match prior attempt
+// and warn about repeating itself (closure tranche 2026-08-22 — the
+// Go loop now writes run metadata, so the hazard is live).
+func RecallExcluding(workspaceDir, goal, project, excludeHandleID string) (res Result) {
 	t0 := time.Now()
 	sources := map[string]any{"slice": "loop"}
 	res = Result{Sources: sources}
@@ -127,7 +137,7 @@ func Recall(workspaceDir, goal, project string) (res Result) {
 		}
 	}()
 
-	prior, priorSkipped, scanErr := FindPriorAttempts(workspaceDir, goal, 24.0, project, "")
+	prior, priorSkipped, scanErr := FindPriorAttempts(workspaceDir, goal, 24.0, project, excludeHandleID)
 	if scanErr != nil {
 		sources["error_prior_attempts"] = scanErr.Error()
 	}
