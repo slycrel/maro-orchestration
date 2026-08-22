@@ -267,8 +267,15 @@ direction).
   premature redecompose on small plans), re-decompose via the planner
   (≤5 sub-steps, capped at
   2 replans), and a terminal verdict that halts with the reason, the
-  stop verdict (riding the failure-chain text — no typed column yet),
-  and the unexecuted remainder NAMED. Thresholds verbatim (3 retries /
+  stop verdict, and the unexecuted remainder NAMED. Since r2 the
+  verdict and the whole stuck reason land in TYPED outcome columns
+  (stop_verdict / stuck_reason — Python memory.record_outcome and the
+  loop result dict), and the chain entry's verdict tag is appended
+  AFTER the entry's single clip (marker-class): the chain text was the
+  only carrier, and the 600-char entry clip could eat the tag and the
+  do-not-fabricate instruction on exactly the long-reason runs that
+  need them (r2, both lenses independently — this round's HIGH again
+  sat in the previous round's fix). Thresholds verbatim (3 retries /
   0.5 sibling / 2 replans / 3-consecutive-ceiling-timeout adapter-hung
   bail). Every decision is recorded as a METACOGNITIVE_DECISION event
   with the evidence (retries, fingerprints, replan count, action). A
@@ -277,10 +284,17 @@ direction).
   Ladder r1 fix layer (adversarial, 4 lenses, sonnet-medium fallback):
   the INITIAL plan is shaped too (Python's label="initial-plan" pass —
   a combined exec+analyze step no longer burns a worker call before
-  the reactive split sees it); blocked outcomes carry a typed
+  the reactive split sees it; r2 made it UNCONDITIONAL across both
+  lanes like Python's _prepare_execution, and closed the fourth
+  shaping surface — worker inject_steps, Python's label="inject");
+  blocked outcomes carry a typed
   (StuckReason, Attempted) pair mirroring Python's separate
   stuck_reason/result fields, so the fingerprint gets independent
-  200-char heads and the missing-input check reads BOTH signal sources;
+  200-char heads and the missing-input check reads BOTH signal sources
+  (honest scope, named r2: the second signal is live for flag_stuck
+  only — llm.ResultError has no partial-output carrier, so Python's
+  killed-subprocess tail (step_exec.py:1659, last 2000 chars) is
+  structurally unavailable until the adapter grows one);
   the MISSING_INPUT inner clip is Python's clip(reason, 1000) runaway
   bound, not the 600-char chain budget (which guaranteed the
   do-not-fabricate instruction fell off the assembled entry); the

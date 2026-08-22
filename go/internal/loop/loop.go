@@ -106,6 +106,14 @@ type Result struct {
 	// just failed — a store-write failure cannot be reliably recorded in
 	// that store. Surfacing to the caller is the v0 ceiling; see PORT.md.
 	Warnings []string
+	// StopVerdict/StuckReason are the typed terminal columns (Python
+	// stop_verdict / stuck_reason). The failure-chain TEXT was their only
+	// carrier, and the per-entry clip could truncate the verdict tag and
+	// the do-not-fabricate instruction on long reasons — the exact
+	// guarantee the MISSING_INPUT branch exists to make (adversarial
+	// ladder r2 2026-08-22, Skeptic + Expert QA HIGH, independently).
+	StopVerdict string
+	StuckReason string
 }
 
 // Run executes the goal end-to-end and records the run. rec may not be
@@ -254,16 +262,16 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 	}
 
-	if execMode {
-		// Python shapes the INITIAL plan too (_prepare_execution,
-		// _shape_steps label="initial-plan", loop_planning.py:87) —
-		// without this a combined exec+analyze step burns a full worker
-		// call and records a blocked outcome before the ladder's
-		// reactive split ever sees it (adversarial ladder review
-		// 2026-08-22, Minimalist HIGH). Exec lane only: tool-less steps
-		// are single LLM calls with no exec/analyze boundary to split.
-		steps = shapeSteps(steps)
-	}
+	// Python shapes the INITIAL plan too (_prepare_execution →
+	// _shape_steps label="initial-plan", loop_planning.py:87, called
+	// unconditionally in agent_loop before any lane branch) — without
+	// this a combined exec+analyze step burns a full worker call and
+	// records a blocked outcome before the ladder's reactive split ever
+	// sees it (adversarial ladder r1 2026-08-22, Minimalist HIGH).
+	// Unconditional, both lanes: the r1 fix gated this to exec mode as
+	// an unnamed narrowing; Python splits combined steps on the
+	// tool-less path as well (r2, Skeptic).
+	steps = shapeSteps(steps)
 
 	if evErr := rec.Event("LOOP_STARTED", loopID,
 		fmt.Sprintf("Go loop started: %d steps for %s", len(steps), budget.Clip(goal, 200)),
@@ -379,6 +387,10 @@ stepLoop:
 				// small plans (adversarial ladder review 2026-08-22,
 				// Skeptic + Expert QA HIGH). Prior attempts of this same
 				// step DO stay in — that is Python's behavior too.
+				// The slice ALIASES res.Steps' backing array: safe only
+				// because handleBlockedStep reads it synchronously and
+				// returns before the next append — never let it escape
+				// the call (r2, Skeptic).
 				d := handleBlockedStep(ctx, a, step.text, out, retries, fps,
 					res.Steps[:len(res.Steps)-1], replanCount)
 				res.TokensIn += d.tokensIn
@@ -425,6 +437,10 @@ stepLoop:
 						consecTimeouts++
 						if consecTimeouts >= maxConsecutiveTimeouts {
 							haltedEarly = true
+							res.StopVerdict = "external-interrupt"
+							res.StuckReason = fmt.Sprintf(
+								"adapter appears hung: %d consecutive steps timed out at the ceiling — "+
+									"transport failure, not step size", consecTimeouts)
 							failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 								"adapter appears hung: %d consecutive steps timed out at the ceiling — "+
 									"transport failure, not step size [stop: external-interrupt]; "+
@@ -457,6 +473,9 @@ stepLoop:
 						// Recovery tooling broke, not the goal — Python
 						// stamps external-interrupt to keep the two apart.
 						haltedEarly = true
+						res.StopVerdict = "external-interrupt"
+						res.StuckReason = fmt.Sprintf(
+							"re-decompose failed after %d retries (%v)", retries, derr)
 						failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 							"re-decompose failed after %d retries (%v) [stop: external-interrupt]; "+
 								"%d step(s) not executed: ", retries, derr, len(queue))+nameRemainder()))
@@ -484,12 +503,23 @@ stepLoop:
 					if stuck == "" {
 						stuck = out.Result
 					}
-					entry := fmt.Sprintf("halted on terminal verdict: %s (%s)",
-						stuck, d.metaReason)
+					// The typed columns carry the verdict and the WHOLE
+					// reason (bounded by the inner BlockReason clip); the
+					// chain entry is the prose view. Clip the prose ONCE,
+					// then append the verdict tag AFTER the clip — the tag
+					// is marker-class, like the clip marker itself, and
+					// the pre-fix ordering let the 600-char entry budget
+					// eat it (with the do-not-fabricate tail) on exactly
+					// the long-reason runs that need them (adversarial
+					// ladder r2 2026-08-22, both lenses' HIGH).
+					res.StopVerdict = d.stopVerdict
+					res.StuckReason = stuck
+					entry := budget.FailureChainEntry.Clip(fmt.Sprintf(
+						"halted on terminal verdict: %s (%s)", stuck, d.metaReason))
 					if d.stopVerdict != "" {
 						entry += " [stop: " + d.stopVerdict + "]"
 					}
-					failChain = append(failChain, budget.FailureChainEntry.Clip(entry))
+					failChain = append(failChain, entry)
 					if len(queue) > 0 {
 						failChain = append(failChain, budget.FailureChainEntry.Clip(fmt.Sprintf(
 							"%d step(s) not executed: ", len(queue))+nameRemainder()))
@@ -499,8 +529,15 @@ stepLoop:
 			}
 		}
 		if len(injected) > 0 {
-			add := make([]queuedStep, len(injected))
-			for i, s := range injected {
+			// Python shapes ALL four plan-mutation surfaces — initial,
+			// split, redecompose, AND inject (loop_post_step.py:1011,
+			// label="inject"). Go ported three of four; a worker-injected
+			// combined exec+analyze step burned a call in its broken form
+			// before the reactive split saw it (adversarial ladder r2
+			// 2026-08-22, Skeptic HIGH).
+			shaped := shapeSteps(injected)
+			add := make([]queuedStep, len(shaped))
+			for i, s := range shaped {
 				add[i] = queuedStep{text: s, injected: true}
 			}
 			queue = append(add, queue...)
@@ -538,6 +575,7 @@ stepLoop:
 		DryRun:   opts.DryRun,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		ElapsedMS: res.Elapsed.Milliseconds(), FailChain: failChain,
+		StopVerdict: res.StopVerdict, StuckReason: res.StuckReason,
 	}); err != nil {
 		return res, fmt.Errorf("run finished (%s) but outcome recording failed: %w",
 			res.Status, err)

@@ -57,7 +57,7 @@ type blockDecision struct {
 	splitInto   []string // non-empty → replace the step with these
 	redecompose bool
 	metaReason  string
-	stopVerdict string // rides failure-chain text (typed column unported)
+	stopVerdict string // → Result.StopVerdict + the outcome row's typed stop_verdict column (grown r2 2026-08-22)
 	// Usage from the timeout-split / refinement-hint LLM calls — the
 	// caller adds it to the run totals. Python's adapters record spend
 	// centrally in metrics; Go's only ledger is the outcome row, so
@@ -391,8 +391,13 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	out StepOutcome, priorRetries int, fingerprints []string,
 	siblings []StepOutcome, replanCount int) blockDecision {
 
-	// StuckReason is Python's separate outcome field; the fallback keeps
-	// pre-typed-field producers (tool-less lane) working off Result.
+	// StuckReason is Python's separate outcome field. Every production
+	// producer (the four blocked branches in executeExecStep) sets it
+	// unconditionally, and only the exec lane calls this function — the
+	// fallback is a defensive backstop for hand-built outcomes (tests),
+	// not a live path (adversarial ladder r2 2026-08-22, both lenses:
+	// the earlier comment wrongly credited it to the tool-less lane,
+	// which never reaches the ladder).
 	blockReason := out.StuckReason
 	if blockReason == "" {
 		blockReason = strings.TrimPrefix(out.Result, "flag_stuck: ")
@@ -427,7 +432,13 @@ func handleBlockedStep(ctx context.Context, a llm.Adapter, stepText string,
 	// reasons — no ralph verifier here yet; the guard returns with it.)
 	// Both signal sources, Python parity (_looks_like_missing_input on
 	// block_reason OR step_result — the attempted text names the missing
-	// resource when the reason doesn't).
+	// resource when the reason doesn't). Honest scope (r2, Skeptic): the
+	// second signal is live for flag_stuck ONLY — the other blocked
+	// producers have no Attempted, and Go's llm.ResultError carries no
+	// partial-output field, so Python's killed-subprocess tail (last
+	// 2000 chars, step_exec.py:1659, which routinely contains the
+	// "not found" text) is structurally unavailable until the adapter
+	// grows a partial-output carrier. Named in PORT.md.
 	if isInputConsumingStep(stepText) &&
 		(looksLikeMissingInput(blockReason) || looksLikeMissingInput(out.Attempted)) {
 		return blockDecision{

@@ -70,6 +70,15 @@ type Outcome struct {
 	ElapsedMS int64
 	DryRun    bool
 	FailChain []string
+	// StopVerdict is Python's typed stop_verdict outcome column
+	// (memory.py record_outcome); StuckReason mirrors the loop result's
+	// stuck_reason field (loop_artifacts.py — attribution reads it).
+	// Grown 2026-08-22 (ladder r2, Skeptic + Expert QA HIGH): the
+	// failure-chain text was the ONLY carrier of both, and the per-entry
+	// clip could truncate the verdict tag and the do-not-fabricate
+	// instruction exactly on the long-reason runs that need them.
+	StopVerdict string
+	StuckReason string
 }
 
 // WriteOutcome appends one outcome row. Field names match the Python
@@ -107,6 +116,8 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 		"recovery_steps":    0,
 		"recorded_at":       nowISO(),
 		"measurement_class": "go-port",
+		"stop_verdict":      o.StopVerdict,
+		"stuck_reason":      o.StuckReason,
 	}
 	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row); err != nil {
 		return "", err

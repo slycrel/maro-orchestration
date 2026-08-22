@@ -1228,3 +1228,115 @@ func TestFlagStuckCarriesTypedReasonAndAttempted(t *testing.T) {
 		t.Fatal("attempted text no longer discriminates fingerprints")
 	}
 }
+
+// --- Ladder r2 fix-layer pins (adversarial ladder r2 2026-08-22) ---
+
+// The verdict tag and the whole stuck reason must survive to the
+// PERSISTED record: the tag rides after the chain entry's single clip,
+// and the typed stop_verdict/stuck_reason columns carry the full
+// evidence (both r2 lenses' HIGH — the r1 pin asserted the decision
+// struct, not the flow, and the outer clip ate the tag on long reasons).
+func TestExecLaneTerminalVerdictSurvivesPersistedRecord(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	reason := "the ledger file does not exist: " +
+		strings.Repeat("checked location detail ", 19) + "TAIL-MARKER-XYZ" // ~500 chars
+	fake := execFake(
+		`["read the ledger file"]`,
+		`{"tool": "flag_stuck", "reason": "`+reason+`"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "persisted verdict case", MaxSteps: 2, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" || res.StopVerdict != "external-interrupt" {
+		t.Fatalf("status=%s verdict=%q", res.Status, res.StopVerdict)
+	}
+	rows := readJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"))
+	row := rows[len(rows)-1]
+	if row["stop_verdict"] != "external-interrupt" {
+		t.Fatalf("typed stop_verdict column: %v", row["stop_verdict"])
+	}
+	sr, _ := row["stuck_reason"].(string)
+	if !strings.Contains(sr, "TAIL-MARKER-XYZ") || !strings.Contains(sr, "fabricating one") {
+		t.Fatalf("typed stuck_reason lost evidence or instruction: %q", sr)
+	}
+	chain, _ := row["failure_chain"].([]any)
+	tagged := false
+	for _, c := range chain {
+		if strings.Contains(c.(string), "halted on terminal verdict") &&
+			strings.HasSuffix(strings.TrimSpace(c.(string)), "[stop: external-interrupt]") {
+			tagged = true
+		}
+	}
+	if !tagged {
+		t.Fatalf("verdict tag clipped from the persisted chain entry: %+v", chain)
+	}
+}
+
+// Worker-injected steps are shaped like every other plan-mutation
+// surface (Python loop_post_step.py label="inject") — a combined
+// exec+analyze injection must not execute in its broken form
+// (r2 Skeptic HIGH: three of four shaping sites were ported).
+func TestExecLaneInjectedStepsAreShaped(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	combined := "run the linter and analyze the results"
+	fake := execFake(
+		`["main step", "closing step"]`,
+		`{"tool": "complete_step", "result": "found follow-up", "summary": "s",
+		  "inject_steps": ["`+combined+`"]}`,
+		`{"tool": "complete_step", "result": "linter ran", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "results analyzed", "summary": "s"}`,
+		`{"tool": "complete_step", "result": "closed", "summary": "s"}`,
+	)
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "inject shaping case", MaxSteps: 4, DryRun: true, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 4 {
+		t.Fatalf("status=%s steps=%d %+v", res.Status, len(res.Steps), res.Steps)
+	}
+	for i, s := range res.Steps {
+		if s.Step == combined {
+			t.Fatalf("step %d executed the combined injection raw: %q", i, s.Step)
+		}
+	}
+	// The shaped children keep the worker-injected audit mark.
+	if !res.Steps[1].WasInjected || !res.Steps[2].WasInjected {
+		t.Fatalf("injected mark lost on shaped children: %+v", res.Steps)
+	}
+}
+
+// Initial-plan shaping is UNCONDITIONAL (Python _prepare_execution runs
+// before any lane branch) — the tool-less lane splits combined steps
+// too (r2 Skeptic: the r1 fix gated it to exec mode unnamed).
+func TestToollessLaneInitialPlanIsShaped(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	combined := "run the benchmark suite and analyze the timing results"
+	fake := &llm.Fake{Script: []string{
+		`["` + combined + `"]`,
+		"benchmark output captured",
+		"timings look flat",
+	}}
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "tool-less shaping case", MaxSteps: 2, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "done" || len(res.Steps) != 2 {
+		t.Fatalf("combined step not split on tool-less lane: status=%s steps=%d %+v",
+			res.Status, len(res.Steps), res.Steps)
+	}
+	for i, s := range res.Steps {
+		if s.Step == combined {
+			t.Fatalf("step %d ran combined: %q", i, s.Step)
+		}
+	}
+}

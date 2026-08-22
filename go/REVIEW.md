@@ -755,3 +755,64 @@ All six fix-layer pins are **mutation-verified**: each fix was
 temporarily reverted and its pin confirmed to fail (H1-H5 + the
 dual-signal MEDIUM), per the derive-mutations-from-the-file rule.
 Full suite green across 12 packages, race pass clean, binary rebuilt.
+
+### Ladder round 2 — fix-layer review (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+Commit under review: 629123d7 (the r1 fix layer). Two lenses (Skeptic,
+Expert QA), both exit 0. The flagship pattern held an **8th time**,
+emphatically: both lenses independently found the round's HIGH inside
+r1's MISSING_INPUT fix.
+
+1. **HIGH (both lenses) — the outer chain clip undid the inner-clip
+   fix one frame up**: r1 widened the inner clip to 1000, but the
+   assembled entry ("halted on terminal verdict: <reason+instruction>
+   (<metaReason>) [stop: <verdict>]") was re-clipped to 600 at the
+   ledger boundary — for reasons ≳400 chars (inside Python's measured
+   p99), the do-not-fabricate tail, the metaReason, AND the [stop:]
+   tag were all cut. Go had no typed column: PORT.md's own "rides the
+   failure-chain text" divergence meant the clip destroyed the ONLY
+   copy. Python structurally protects both (typed stuck_reason in the
+   result dict, stop_verdict column in record_outcome, run_trace edge).
+   VERIFIED (entry assembly + budget limits + Python's loop_blocked
+   :465 reason-only clip quoted). **FIXED at the root**: the outcome
+   row grew the typed stop_verdict/stuck_reason columns (Python
+   parity, closing the named divergence early), Result carries them,
+   all three verdict-terminal sites stamp them, and the chain entry's
+   verdict tag is appended AFTER the entry's single clip (marker-class,
+   like the clip marker itself). Pin:
+   `TestExecLaneTerminalVerdictSurvivesPersistedRecord` — Run-level,
+   asserts the PERSISTED row and chain (QA's #2: the r1 pin asserted
+   the decision struct, not the flow — a flow-level pin now exists;
+   both the tag-ordering and typed-column mutations verified detected).
+2. **HIGH (Skeptic) — inject_steps bypassed shaping**: Python shapes
+   all FOUR plan-mutation surfaces (initial, split, redecompose,
+   inject — loop_post_step.py:1011 label="inject"); r1 ported three.
+   VERIFIED. **FIXED** (shapeSteps at the splice; children keep the
+   injected audit mark) + pin `TestExecLaneInjectedStepsAreShaped`,
+   mutation-verified.
+3. **MEDIUM (Skeptic) — initial shaping gated to exec mode, unnamed**:
+   Python's _prepare_execution runs before any lane branch. VERIFIED
+   (agent_loop.py:566 unconditional). **FIXED** (unconditional, both
+   lanes) + pin `TestToollessLaneInitialPlanIsShaped`,
+   mutation-verified.
+4. **MEDIUM (Skeptic) — dual-signal fix live for flag_stuck only**:
+   the other three blocked producers have no Attempted, and Go's
+   ResultError has no partial-output field — Python's killed-subprocess
+   tail (step_exec.py:1659) is structurally unavailable. VERIFIED.
+   **NAMED** (blocked.go comment + PORT.md honest-scope note); plumbing
+   a partial-output carrier through the subprocess adapter is its own
+   slice.
+5. **LOW (both) — fallback comment credited the tool-less lane**,
+   which never reaches the ladder; the fallback is a test-construction
+   backstop. **FIXED** (comment rewritten).
+6. **LOW (Skeptic) — sibling slice aliases the live backing array**:
+   safe today (synchronous read-only), fragile under refactor.
+   **FIXED** (invariant documented at the call site).
+
+Zero hallucinated claims again (streak now 6 rounds). Incident note,
+recorded honestly: during mutation-checking, a `git checkout --` used
+as "restore" reverted loop.go to the COMMITTED state, wiping the
+uncommitted r2 fixes in that file; they were re-applied immediately
+(byte-identical — the test cache confirmed) and all mutation checks
+re-run with in-place string flips. Lesson: never use git checkout to
+unwind a mutation over uncommitted work.
