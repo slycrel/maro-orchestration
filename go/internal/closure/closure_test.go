@@ -2,10 +2,15 @@ package closure
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
@@ -395,4 +400,206 @@ func TestProjectFileInventoryBounded(t *testing.T) {
 	if projectFileInventory(filepath.Join(ws, "nope"), 10) != "" {
 		t.Fatal("missing root must degrade to empty")
 	}
+}
+
+// --- closure r1 fix-layer pins (adversarial round 1, 2026-08-22) ---
+
+// TestCutRunesIsRuneSafe: every truncation in this package must cut on
+// runes (Python str[:n] parity); a byte slice mid-multibyte corrupts
+// judge-facing evidence. Mutation must-detect: byte-slicing cutRunes.
+func TestCutRunesIsRuneSafe(t *testing.T) {
+	s := strings.Repeat("é", 10) // 2 bytes per rune
+	got := cutRunes(s, 5)
+	if got != strings.Repeat("é", 5) {
+		t.Fatalf("cutRunes not rune-based: %q", got)
+	}
+	if cutRunes("abc", 5) != "abc" {
+		t.Fatal("short string must pass through")
+	}
+}
+
+// TestRenderStepForClosureRuneCounts: the honesty marker's "%d of %d
+// characters" must be RUNE counts — Python's len() — and the cut must
+// not split a multibyte character.
+func TestRenderStepForClosureRuneCounts(t *testing.T) {
+	result := strings.Repeat("汉", workSummaryResultCut+7)
+	out := RenderStepForClosure("step", result, 1)
+	want := fmt.Sprintf("showing the first %d of %d characters",
+		workSummaryResultCut, workSummaryResultCut+7)
+	if !strings.Contains(out, want) {
+		t.Fatalf("marker counts bytes, not runes:\n%s", out[:200])
+	}
+	if strings.Contains(out, "�") || !utf8.ValidString(out) {
+		t.Fatal("truncation split a rune")
+	}
+}
+
+// TestFailedCheckSignatureRuneSafe: signature cuts land on rune
+// boundaries so the fingerprint stays cross-runtime comparable.
+func TestFailedCheckSignatureRuneSafe(t *testing.T) {
+	r := CheckResult{Command: strings.Repeat("ü", 250), ExitCode: 1,
+		Stderr: strings.Repeat("ö", 250)}
+	sig := FailedCheckSignature(r)
+	if !utf8.ValidString(sig) || strings.Contains(sig, "�") {
+		t.Fatalf("signature split a rune: %q", sig)
+	}
+	if !strings.HasPrefix(sig, strings.Repeat("ü", 200)+" => exit 1") {
+		t.Fatalf("command not cut at 200 runes: %q", sig[:50])
+	}
+}
+
+// TestVerifyPanicRecovered: the never-returns-an-error contract must
+// hold for UNANTICIPATED bugs — Python added its catch-all only after
+// two 2026-07-27 runs lost closure invisibly, and recall repeated the
+// omission-then-fix one tranche ago. The seam forces the panic; the
+// recover must persist a named "exception" row and return the skip
+// verdict instead of crashing the loop.
+func TestVerifyPanicRecovered(t *testing.T) {
+	closurePanicHook = func() { panic("injected: doubly-asserted type") }
+	defer func() { closurePanicHook = nil }()
+	fake := &llm.Fake{Script: []string{planJSON("true"), `unused`}}
+	var rows []map[string]any
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir(), PersistRow: collectRows(&rows)})
+	if v.SkipReason != "exception" || v.Judged {
+		t.Fatalf("panic must yield nullVerdict(exception): %+v", v)
+	}
+	if len(rows) != 1 || rows[0]["skipped"] != "exception" {
+		t.Fatalf("exception row missing: %+v", rows)
+	}
+	detail, _ := rows[0]["skip_detail"].(string)
+	if !strings.Contains(detail, "injected: doubly-asserted type") ||
+		!strings.Contains(detail, "closure.Verify") {
+		t.Fatalf("skip_detail must carry panic value + stack: %q", detail)
+	}
+}
+
+// TestVerifyRowCarriesCheckResults: the durable row must answer "why
+// did check N fail" from disk alone (persist-the-artifacts decree —
+// Python's check_results array; the aggregate-only draft could not).
+func TestVerifyRowCarriesCheckResults(t *testing.T) {
+	fake := &llm.Fake{Script: []string{
+		planJSON("echo out-marker; echo err-marker >&2; exit 3"),
+		`{"complete":false,"confidence":0.8,"gaps":["g"],"summary":"failed"}`,
+	}}
+	var rows []map[string]any
+	Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir(), PersistRow: collectRows(&rows)})
+	if len(rows) != 1 {
+		t.Fatalf("rows: %+v", rows)
+	}
+	if _, has := rows[0]["commands"]; has {
+		t.Fatal("nonstandard bare commands list must be gone")
+	}
+	crs, ok := rows[0]["check_results"].([]map[string]any)
+	if !ok || len(crs) != 1 {
+		t.Fatalf("check_results missing: %+v", rows[0])
+	}
+	cr := crs[0]
+	if cr["exit_code"] != 3 || cr["outcome"] != "fail" ||
+		!strings.Contains(cr["stdout"].(string), "out-marker") ||
+		!strings.Contains(cr["stderr"].(string), "err-marker") {
+		t.Fatalf("check_results row incomplete: %+v", cr)
+	}
+}
+
+// TestVerifyClassifiesOnFullStderr: outcome classification reads the
+// UNTRUNCATED stderr (Python's order) — the inconclusive phrases sit at
+// the end of verbose diagnostics, and classifying the 300-char head
+// flips verifier failures into goal-disproving hard fails.
+func TestVerifyClassifiesOnFullStderr(t *testing.T) {
+	cmd := `printf 'x%.0s' $(seq 1 400) >&2; echo 'foo: command not found' >&2; exit 1`
+	fake := &llm.Fake{Script: []string{
+		planJSON(cmd),
+		`{"complete":true,"confidence":0.9,"gaps":[],"summary":"ok"}`,
+	}}
+	var rows []map[string]any
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir(), PersistRow: collectRows(&rows)})
+	if v.InconclusiveCount != 1 || v.Judged {
+		t.Fatalf("phrase past byte 300 must still classify inconclusive: %+v", v)
+	}
+	crs := rows[0]["check_results"].([]map[string]any)
+	if got := crs[0]["stderr"].(string); len([]rune(got)) > 300 {
+		t.Fatalf("stored stderr must still be truncated: %d runes", len([]rune(got)))
+	}
+}
+
+// TestVerifyConfidenceStringCoerced: safe_float parity — a judge that
+// emits "confidence": "0.9" keeps its signal instead of silently
+// falling to the 0.7 default the ungrounded-False cap reads.
+func TestVerifyConfidenceStringCoerced(t *testing.T) {
+	fake := &llm.Fake{Script: []string{
+		planJSON("true"),
+		`{"complete":true,"confidence":"0.9","gaps":[],"summary":"ok"}`,
+	}}
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir()})
+	if v.Confidence != 0.9 {
+		t.Fatalf("string confidence must coerce: %+v", v)
+	}
+	fake2 := &llm.Fake{Script: []string{
+		planJSON("true"),
+		`{"complete":true,"confidence":"NaN","gaps":[],"summary":"ok"}`,
+	}}
+	v2 := Verify(context.Background(), fake2, "goal", nil,
+		Options{WorkspacePath: t.TempDir()})
+	if v2.Confidence != 0.7 {
+		t.Fatalf("non-finite confidence must fall to default: %+v", v2)
+	}
+}
+
+// TestVerifyGapsBareStringCoerced: a bare-string gaps field is drift,
+// not absence — carrying it beats silently reading a stated gap as a
+// clean verdict (the recall tranche's evidence-coercion direction).
+func TestVerifyGapsBareStringCoerced(t *testing.T) {
+	fake := &llm.Fake{Script: []string{
+		planJSON("true"),
+		`{"complete":false,"confidence":0.9,"gaps":"the one gap","summary":"no"}`,
+	}}
+	v := Verify(context.Background(), fake, "goal", nil,
+		Options{WorkspacePath: t.TempDir()})
+	if len(v.Gaps) != 1 || v.Gaps[0] != "the one gap" {
+		t.Fatalf("bare-string gaps must coerce to one-element slice: %+v", v.Gaps)
+	}
+}
+
+// TestRunCheckKillsProcessGroupOnTimeout: a timed-out probe must not
+// orphan backgrounded children — SIGKILL to bash alone never runs the
+// trap-EXIT cleanup the plan prompt encourages, leaving servers bound
+// to ports across runs. Setpgid + kill(-pgid) closes it structurally.
+func TestRunCheckKillsProcessGroupOnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	cmd := `sleep 30 & echo $! > child.pid; wait`
+	started := time.Now()
+	code, _, _ := runCheck(context.Background(), cmd, dir, 300*time.Millisecond)
+	elapsed := time.Since(started)
+	if code != -1 {
+		t.Fatalf("expected timeout exit -1, got %d", code)
+	}
+	// The surviving orphan ALSO holds runCheck's output pipes open, so
+	// without the group kill this call blocks the child's full lifetime
+	// (mutation M4 escaped the liveness probe alone: 30s later the child
+	// had exited naturally). The prompt return IS the observable fix.
+	if elapsed > 5*time.Second {
+		t.Fatalf("runCheck blocked %s past its 300ms timeout — orphan held the pipes", elapsed)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("child pid never written: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return // child gone — group kill worked
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("backgrounded child %d survived the timeout kill", pid)
 }

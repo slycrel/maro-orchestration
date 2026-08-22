@@ -644,6 +644,17 @@ stepLoop:
 		ElapsedMS: res.Elapsed.Milliseconds(), FailChain: failChain,
 		StopVerdict: res.StopVerdict, StuckReason: res.StuckReason,
 	}); err != nil {
+		// Outcome recording failed but the run itself finished — finalize
+		// the run dir and name the gap before surfacing the error, or the
+		// metadata lies "running" forever and closure's absence is
+		// indistinguishable from a crash (adversarial closure r1
+		// 2026-08-22, Skeptic: every OTHER early return got a Finalize;
+		// this one, directly above the closure block, had none).
+		if runDir != "" {
+			_ = runs.AppendVerdictRow(runDir, map[string]any{
+				"skipped": "outcome_record_failed", "skip_detail": err.Error()})
+			_ = runs.Finalize(runDir, res.Status)
+		}
 		return res, fmt.Errorf("run finished (%s) but outcome recording failed: %w",
 			res.Status, err)
 	}
@@ -662,10 +673,21 @@ stepLoop:
 	// — the skip is recorded instead (Go-stricter divergence, PORT.md;
 	// Python judges all lanes because every lane there has a cwd).
 	if runDir != "" {
-		if execMode && !opts.DryRun && res.Status == "done" {
+		// Eligibility is "did any step actually run", NOT terminal status:
+		// Python's _closure_eligible_statuses spans done/partial/stuck/
+		// restart because a stuck run that wrote real files still deserves
+		// the honest "what got delivered" signal — and it's exactly the
+		// run where closure catches the most false negatives (adversarial
+		// closure r1 2026-08-22, three lenses independently; handle.py's
+		// comment: "the CLOSURE_VERDICT event makes the recovery paths
+		// observable"). Only the restart-escalation DECISION is
+		// done-gated in Python, and that consumer is unported.
+		ranAnyStep := done > 0
+		if execMode && !opts.DryRun && ranAnyStep {
 			v := closure.Verify(ctx, a, goal, closureSteps(res.Steps), closure.Options{
 				WorkspacePath: res.ProjectDir,
 				LoopID:        loopID,
+				DryRun:        opts.DryRun,
 				PersistRow: func(row map[string]any) {
 					if perr := runs.AppendVerdictRow(runDir, row); perr != nil {
 						res.Warnings = append(res.Warnings,
@@ -700,11 +722,18 @@ stepLoop:
 				}, loopID); evErr != nil {
 				res.Warnings = append(res.Warnings, "captain's log write failed (CLOSURE_VERDICT): "+evErr.Error())
 			}
-		} else if !opts.DryRun && res.Status == "done" {
+		} else if !opts.DryRun {
 			// The named skip row keeps "closure never ran" distinguishable
-			// from "closure ran and produced nothing" in the run dir.
+			// from "closure ran and produced nothing" in the run dir —
+			// for EVERY terminal status, or a stuck run's empty jsonl is
+			// indistinguishable from a crash before the finish path
+			// (persist-the-artifacts decree; adversarial closure r1).
+			reason := "tool_less_lane"
+			if execMode && !ranAnyStep {
+				reason = "no_steps_ran"
+			}
 			if perr := runs.AppendVerdictRow(runDir, map[string]any{
-				"skipped": "tool_less_lane"}); perr != nil {
+				"skipped": reason}); perr != nil {
 				res.Warnings = append(res.Warnings,
 					"closure verdict row write failed: "+perr.Error())
 			}

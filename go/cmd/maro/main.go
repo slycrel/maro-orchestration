@@ -128,6 +128,15 @@ func run(args []string) error {
 	fmt.Printf("\n=== %s (%s, %d steps, %d in / %d out tokens, %s) ===\n",
 		strings.ToUpper(res.Status), res.LoopID, len(res.Steps),
 		res.TokensIn, res.TokensOut, res.Elapsed.Round(1e8))
+	// done ≠ successful must reach the operator, not just metadata.json:
+	// the DONE banner says the steps drained; only this line says whether
+	// the GOAL was judged achieved (adversarial closure r1 2026-08-22,
+	// Skeptic — the tranche's headline guarantee was write-only).
+	if res.Closure != nil {
+		fmt.Printf("goal: %s (confidence %.2f, %d/%d checks passed)\n",
+			res.Closure.Summary, res.Closure.Confidence,
+			res.Closure.ChecksPassed, res.Closure.ChecksRun)
+	}
 	for i, s := range res.Steps {
 		// Deliberately unclipped: the terminal is the delivery surface and
 		// the full result is the deliverable — caps bound prompts and

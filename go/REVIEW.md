@@ -1174,3 +1174,111 @@ tranche converges at r4: r1 20v/2r → r2 9 findings (joint HIGH) →
 r3 3 findings (1 HIGH) → r4 lows-only. Flagship pattern finished
 12-for-12 across the arc: every round's top finding sat inside the
 newest layer of change.
+
+## Closure tranche — adversarial round 1 (2026-08-22, SAME-MODEL FALLBACK: sonnet-medium)
+
+**Intent:** port closure_verify's evidence spine (plan-by-inversion → mechanical
+checks → verdict → integrity caps) + the `internal/runs` metadata writer, wired
+into the exec lane — done ≠ successful made structural, with CPython fixture
+parity on fingerprint/modality/outcome/summaries.
+
+**Scope reviewed:** f99cedb8..754ef935 (closure tranche commit). Four lenses
+(Skeptic, Architect, Minimalist, Expert QA), REVIEWER_MODEL=sonnet
+REVIEWER_EFFORT=medium. ~17 findings, one self-withdrawn in-flight.
+
+### Verification Ledger
+
+**H1 — Verdict rows persisted unscrubbed (Skeptic 1): VERIFIED.**
+Python scrubs at the write site — `from secret_scrub import scrub` +
+`scrub({...**row})` in `_persist_verdict_row` (closure_verify.py:966); Go's
+`runs.AppendVerdictRow` was a raw `json.Marshal` append and no downstream pass
+rescrubs the file. Fixed at the single write owner. The pin test then caught a
+second, deeper hole: `scrub.Walk` descends only `[]any`/`map[string]any`, so the
+concretely-typed `[]map[string]any` check rows passed through UNTOUCHED — the
+fix routes the row through a JSON round-trip first so Walk sees only decoded
+shapes. Pin: TestAppendVerdictRowScrubsSecrets (failed against Walk-only,
+passes with round-trip — the mutation evidence ran forward).
+
+**H2 — Byte-based truncation (Skeptic 2 + Minimalist 3 + QA 4): VERIFIED.**
+Five+ cut sites byte-sliced (`head[:300]`, `result[:4000]`, `cmd[:200]`,
+`stdout[:500]`, `stderr[:300]`, `detail[:300]`) while the same file's
+Fingerprint already rune-sliced — Python str[:n] is codepoint-based, and a
+mid-rune cut corrupts judge-facing evidence and the honesty markers' "%d of %d
+characters" counts. Fixed with `cutRunes` at every site; marker counts are now
+rune counts. Pins: TestCutRunesIsRuneSafe, TestRenderStepForClosureRuneCounts,
+TestFailedCheckSignatureRuneSafe. Mutation M1 (byte-slicing cutRunes): DETECTED.
+
+**H3 — Closure gate narrower than Python (Architect 2 + Minimalist 1):
+VERIFIED.** handle.py:2627 `_closure_eligible_statuses = ("done", "partial",
+"stuck", "restart")` gated by `_ran_any_step`; Go required `res.Status ==
+"done"`, so a stuck exec run that wrote real files got neither verdict nor
+skip row — indistinguishable from a crash. Fixed: gate is now "any step ran";
+non-judging terminal paths write named skip rows ("no_steps_ran",
+"tool_less_lane"). Pins: TestRunStuckWithStepsStillGetsClosure,
+TestRunExecNoStepsRanWritesNamedSkipRow. Mutation M5 (done-only gate
+restored): DETECTED.
+
+**H4 — No panic recovery in Verify (QA 1): VERIFIED.** Python wraps the whole
+body in `except Exception` (closure_verify.py:1907-1916, the 2026-07-27
+"both tire runs lost closure this way" comment); Go had no recover, and a
+panic would crash the loop AFTER the work succeeded — worse than Python's
+lose-one-verdict. Fixed: deferred recover → "exception" row with
+PanicValue/PanicTrace-bounded detail → nullVerdict("exception");
+closurePanicHook seam mirrors recall's. Pin: TestVerifyPanicRecovered.
+Mutation M2 (recover persists nothing): DETECTED.
+
+**H5 — Durable row drops per-check evidence (QA 2): VERIFIED.** Python's row
+carries a full `check_results` array (closure_verify.py:1868-1902); the Go
+draft persisted aggregates + a nonstandard bare `commands` list and could not
+answer "why did check N fail" from disk. Fixed: Python-parity check_results
+(description/command/exit_code/outcome/stdout/stderr, rune-cut), `commands`
+dropped, gaps clipped at 500, summary under VerdictProse. Pin:
+TestVerifyRowCarriesCheckResults.
+
+**H6 — Outcome classified on truncated stderr (Minimalist 2): VERIFIED.**
+Python classifies on FULL stderr then stores the truncated copy
+(closure_verify.py:1198-1206); Go truncated first, so an inconclusive phrase
+past byte 300 flipped a verifier failure into goal-disproving hard fail.
+Fixed: classify-then-truncate. Pin: TestVerifyClassifiesOnFullStderr.
+Mutation M3 (classify on truncated): DETECTED.
+
+### Mediums/lows — all fixed except where named
+
+- Confidence safe_float parity (Minimalist 4): numeric strings coerce via
+  strconv.ParseFloat, non-finite refused → default. Pin:
+  TestVerifyConfidenceStringCoerced.
+- Process-group kill on timeout (Architect 3 + Minimalist 5): Setpgid +
+  kill(-pgid) — a Go-hardening upgrade beyond Python parity, named in
+  PORT.md. Pin: TestRunCheckKillsProcessGroupOnTimeout. Mutation M4 escaped
+  the liveness probe alone (the orphan holds runCheck's pipes open, blocking
+  Run() the child's full lifetime — by return time the child had exited
+  naturally); the pin grew an elapsed-time assertion and M4 is now DETECTED.
+- WriteOutcome-failure path (Skeptic 3): best-effort named skip row +
+  Finalize before the early return.
+- CLI surfaces the verdict (Skeptic 4): goal line beside the DONE/STUCK
+  banner — done ≠ successful is operator-visible.
+- Malformed gaps coercion (QA 6): bare string → one-element slice. Pin:
+  TestVerifyGapsBareStringCoerced.
+- strconv.Itoa replaces hand-rolled itoa (Minimalist 6).
+- Options.DryRun threaded from the call site (Architect 7).
+- Signal-1 unconditionally live (Architect 1): VERIFIED as parity-with-None —
+  Python with resolved_intent=None behaves identically, so this is doc-grade;
+  the 18773dfa stand-down gate is owed WITH the intent subsystem. Named in
+  PORT.md.
+- bash-vs-sh (Architect 4): reframed in PORT.md as a NAMED upgrade (the plan
+  prompt's own scaffolding teaches bash idioms), not parity.
+- DONE_WITHOUT_VERDICT tripwire (QA 3): unported with the stranded-run-sweep
+  family, now NAMED in PORT.md's unported list.
+- Env inheritance to probes (Architect 5): unchanged — consistent with the
+  codebase-wide trust model; the new durable sink is now scrubbed (H1), which
+  was the actionable half.
+- Architect 6 self-withdrew in-flight (exit -1 is already in the
+  inconclusive exit-code set) — recorded for the trace, no action.
+
+### Verdict derivation
+
+6 HIGHs, all VERIFIED against the Python siblings and fixed with pinned tests;
+5 of 5 must-detect mutations DETECTED (M4 after strengthening the pin — the
+escape itself was a finding about the pin, recorded above). Zero fabricated
+probes or quotes this round — the streak holds. Verdict: CONTESTED → fixes
+applied; r2 on the fix layer next.

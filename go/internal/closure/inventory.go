@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -45,7 +46,7 @@ func projectFileInventory(root string, cap int) string {
 			}
 			entries = append(entries, p)
 			if len(entries) >= cap {
-				entries = append(entries, "... (truncated at "+itoa(cap)+" files)")
+				entries = append(entries, "... (truncated at "+strconv.Itoa(cap)+" files)")
 				return false
 			}
 		}
@@ -65,16 +66,4 @@ func projectFileInventory(root string, cap int) string {
 	}
 	walk(root, "")
 	return strings.Join(entries, "\n")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }

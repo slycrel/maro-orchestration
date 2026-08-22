@@ -154,3 +154,34 @@ func TestAppendVerdictRowAppends(t *testing.T) {
 		t.Fatalf("row 0 unstamped: %q %v", lines[0], err)
 	}
 }
+
+// TestAppendVerdictRowScrubsSecrets: the row writer is the single scrub
+// owner (Python: scrub({...**row}) in _persist_verdict_row) — probe
+// stderr and LLM prose land in a durable jsonl and nothing downstream
+// rescrubs it (adversarial closure r1 2026-08-22, Skeptic HIGH).
+func TestAppendVerdictRowScrubsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaky := "curl -H 'Authorization: Bearer sk-ant-api03-" +
+		strings.Repeat("a", 40) + "' https://x"
+	if err := AppendVerdictRow(dir, map[string]any{
+		"summary": leaky,
+		"check_results": []map[string]any{
+			{"stderr": leaky},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "build", "closure_verdicts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sk-ant-api03-") {
+		t.Fatalf("secret survived into the durable row: %s", raw)
+	}
+	if !strings.Contains(string(raw), "Authorization") {
+		t.Fatalf("scrub should redact the secret, not the whole field: %s", raw)
+	}
+}

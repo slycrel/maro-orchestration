@@ -168,3 +168,69 @@ func TestRunToolLessLaneWritesNamedSkipRow(t *testing.T) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
 }
+
+// TestRunStuckWithStepsStillGetsClosure: eligibility is "did any step
+// run", not terminal status — Python's _closure_eligible_statuses spans
+// done/partial/stuck/restart because a stuck run that wrote real files
+// is exactly where the honest "what got delivered" signal matters most
+// (adversarial closure r1 2026-08-22, three lenses independently).
+func TestRunStuckWithStepsStillGetsClosure(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{
+		`["write the file", "read the follow-up ledger"]`,
+		`{"tool": "complete_step", "result": "wrote it", "summary": "ok", "confidence": "strong"}`,
+		`{"tool": "flag_stuck", "reason": "the follow-up ledger file does not exist: checked both locations"}`,
+		`{"checks":[{"failure_mode":"file missing","description":"file exists","command":"true"}]}`,
+		`{"complete":false,"confidence":0.8,"gaps":["follow-up undone"],"summary":"Partial delivery."}`,
+	}, AgentToolsOK: true}
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "stuck run closure case", MaxSteps: 3, DryRun: false, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" {
+		t.Fatalf("expected stuck run, got %s", res.Status)
+	}
+	if res.Closure == nil || !res.Closure.Judged || res.Closure.Complete {
+		t.Fatalf("stuck run with a done step must still get closure: %+v", res.Closure)
+	}
+	raw, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["goal_achieved"] != false || meta["status"] != "stuck" {
+		t.Fatalf("stuck run stamp/finalize: %v", meta)
+	}
+}
+
+// TestRunExecNoStepsRanWritesNamedSkipRow: an exec run whose only step
+// blocked without running leaves a NAMED skip row — the persist-the-
+// artifacts decree makes "closure never ran" distinguishable from a
+// crash before the finish path.
+func TestRunExecNoStepsRanWritesNamedSkipRow(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	fake := &llm.Fake{Script: []string{
+		`["read the ledger"]`,
+		`{"tool": "flag_stuck", "reason": "ledger file does not exist"}`,
+	}, AgentToolsOK: true}
+	rec := record.New(ws)
+	res, err := Run(context.Background(), fake, rec, Opts{
+		Goal: "no steps ran case", MaxSteps: 2, DryRun: false, Exec: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "stuck" || res.Closure != nil {
+		t.Fatalf("expected stuck run without closure: %s %+v", res.Status, res.Closure)
+	}
+	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	if rerr != nil || !strings.Contains(string(rows), `"skipped":"no_steps_ran"`) {
+		t.Fatalf("named skip row missing: %v %s", rerr, rows)
+	}
+}

@@ -328,8 +328,15 @@ direction).
   closure_verify.verify_goal_completion's spine: plan checks by
   INVERSION (LLM, plan prompt ported with the stated-guarantee and
   deliverable sections trimmed to what this runtime supplies) → run
-  them MECHANICALLY (bash -c, per-check timeout, stdout/stderr caps
-  500/300, cwd = the exec lane's project dir; cwd unresolved → checks
+  them MECHANICALLY (bash -c — a NAMED upgrade, not parity: Python's
+  shell=True resolves to /bin/sh (dash on this box), while the shared
+  plan prompt's own scaffolding examples use bash idioms, so Go runs
+  the shell the prompt teaches; per-check timeout with a PROCESS-GROUP
+  kill — Setpgid + kill(-pgid), closing the orphaned-background-server
+  leak Python shares; per-check stdout/stderr stored at 500/300 RUNE
+  cuts, with outcome classified on the FULL stderr first — the
+  inconclusive phrases sit at the end of verbose diagnostics; cwd =
+  the exec lane's project dir; cwd unresolved → checks
   REFUSED as env-unresolved inconclusive rows, never run in the
   launcher's directory — B3a) → verdict (LLM) → verdict integrity.
   Ported lessons, each with a pinned test: pass/fail/INCONCLUSIVE
@@ -342,7 +349,12 @@ direction).
   trust floor, cut marked in the summary — run 2738d9c0); the
   behavioral-gap downgrade Signal 1 (the verdict's own prose admits
   runtime wasn't exercised + zero behavioral-modality probes →
-  deterministic flip with the reason as the summary opener);
+  deterministic flip with the reason as the summary opener — and it is
+  UNCONDITIONALLY live here: Python's 18773dfa stand-down gate keys on
+  resolved_intent deliverables, which are unported, so Go behaves like
+  Python with resolved_intent=None — parity-with-None, but the
+  false-demotion risk for honestly-worded all-document goals returns
+  with the intent subsystem and is owed the gate then);
   verdict-first summaries (the FLAG writes the opener; prose can only
   elaborate — run d2f4e2f4); per-segment probe-modality
   classification (quote-aware top-level split, most-behavioral wins,
@@ -350,8 +362,9 @@ direction).
   fixture parity); closure_fingerprint byte-parity (md5 12-hex over
   sorted normalized hard-fail signatures, §9.3 — cross-runtime verdict
   rows compare); work summary with VISIBLE truncation (4000/300/6
-  Python-parity literals; the markers are judge-facing byte-parity
-  text, deliberately not budget.Clip's vocabulary); the
+  Python-parity literals, cut and COUNTED in runes — Python len()
+  semantics; the markers are judge-facing parity text, deliberately
+  not budget.Clip's vocabulary); the
   project-file-inventory grounding block (probe paths that EXIST —
   2026-07-09: two known-good runs false-negatived by checks against
   invented filenames); every closure outcome — verdict or NAMED skip —
@@ -364,8 +377,22 @@ direction).
   StampVerdict = _apply_verdict_tuple parity (every member set or
   popped, gaps capped at 5 with an announced count cut). Wiring:
   run dir created BEFORE recall and the run excluded from its own
-  prior-attempt scan (recall.RecallExcluding); closure fires on the
-  exec lane's done runs (CLOSURE_VERDICT event after LOOP_FINISHED);
+  prior-attempt scan (recall.RecallExcluding); closure fires on ANY
+  exec-lane run that executed a step — Python's
+  _closure_eligible_statuses semantics: a stuck run that wrote real
+  files still gets the honest what-got-delivered signal — with named
+  skip rows ("no_steps_ran", "tool_less_lane",
+  "outcome_record_failed") for every terminal path that doesn't judge
+  (CLOSURE_VERDICT event after LOOP_FINISHED); Verify wrapped in a
+  deferred recover persisting an "exception" row (the 2026-07-27
+  both-tire-runs lesson — an uncaught panic here would crash the loop
+  AFTER the work succeeded); the durable row carries the Python-parity
+  check_results array (per-check description/command/exit/outcome/
+  stdout/stderr) and is SCRUBBED at the single write owner
+  (runs.AppendVerdictRow, via a JSON round-trip because scrub.Walk
+  descends only decoded shapes); the verdict line reaches the CLI
+  beside the DONE/STUCK banner — done ≠ successful is operator-visible,
+  not write-only;
   goal_achieved tri-state stamps only judged verdicts and feeds the
   NEXT run's recall icons — pure-Go workspaces stop degrading to zero
   prior attempts. Named divergences: the tool-less lane SKIPS closure
@@ -386,7 +413,12 @@ direction).
   atomic so readers never tear), and the restart/declare-blocked
   DECISION consumers: evaluate_closure's action mapping waits for the
   restart machinery — the fingerprint is minted and persisted now so
-  §9.3 convergence data accrues, but no Go caller yet disposes.
+  §9.3 convergence data accrues, but no Go caller yet disposes. Also
+  unported: the DONE_WITHOUT_VERDICT tripwire (runs.close_run's
+  finished-without-closure detector, LT-0 b) — it belongs to the
+  stranded-run-sweep family; until it ports, a crash between
+  StampVerdict and Finalize leaves a "running" record only recall's
+  InterruptStatuses softens.
 - Memory RECALL (`internal/recall` + the retrieval half of
   `internal/knowledge`) — the loop reads what the system already knows
   before it plans. `recall.Recall` is the seam (recall.py's contract):

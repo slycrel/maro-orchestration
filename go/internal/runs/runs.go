@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+
+	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
 // Dir is the run-dir path for a handle id (does not create it). Python
@@ -155,7 +157,25 @@ func AppendVerdictRow(runDir string, row map[string]any) error {
 	for k, v := range row {
 		full[k] = v
 	}
-	out, err := json.Marshal(full)
+	// Scrub at the single write owner (Python: `scrub({...**row})` at
+	// closure_verify.py's _persist_verdict_row) — probe stdout/stderr and
+	// LLM prose land verbatim in a durable jsonl otherwise, and no
+	// downstream pass ever rescrubs this file (adversarial closure r1
+	// 2026-08-22, Skeptic HIGH: a working scrub package existed and the
+	// one new durable sink didn't call it). The JSON round-trip first is
+	// load-bearing, not belt-and-braces: scrub.Walk descends only
+	// []any/map[string]any, and callers hand this function concretely
+	// typed nests ([]map[string]any check rows) it would otherwise skip
+	// wholesale — the scrub pin test caught exactly that.
+	raw, err := json.Marshal(full)
+	if err != nil {
+		return err
+	}
+	var norm any
+	if err := json.Unmarshal(raw, &norm); err != nil {
+		return err
+	}
+	out, err := json.Marshal(scrub.Walk(norm, scrub.Secrets))
 	if err != nil {
 		return err
 	}

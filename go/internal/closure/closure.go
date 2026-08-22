@@ -39,12 +39,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
@@ -142,15 +147,10 @@ func CheckOutcome(exitCode int, stderr string) string {
 // Nondeterministic output (timestamps, tmp paths) can only make
 // fingerprints DIFFER, which fails open to a normal restart.
 func FailedCheckSignature(r CheckResult) string {
-	cmd := r.Command
-	if len(cmd) > 200 {
-		cmd = cmd[:200]
-	}
+	cmd := cutRunes(r.Command, 200)
 	out := strings.Join(strings.Fields(r.Stderr+" "+r.Stdout), " ")
 	if out != "" {
-		if len(out) > 200 {
-			out = out[:200]
-		}
+		out = cutRunes(out, 200)
 		return fmt.Sprintf("%s => exit %d: %s", cmd, r.ExitCode, out)
 	}
 	return fmt.Sprintf("%s => exit %d", cmd, r.ExitCode)
@@ -228,15 +228,29 @@ const (
 // missing (Python run 2738d9c0).
 func RenderStepForClosure(text, result string, index int) string {
 	head := text
-	if len(head) > workSummaryTextCut {
-		head = head[:workSummaryTextCut] +
+	if len([]rune(head)) > workSummaryTextCut {
+		head = cutRunes(head, workSummaryTextCut) +
 			fmt.Sprintf("… [step text truncated at %d]", workSummaryTextCut)
 	}
-	if len(result) > workSummaryResultCut {
+	if n := len([]rune(result)); n > workSummaryResultCut {
 		return fmt.Sprintf("Step %d: %s\nResult [TRUNCATED — showing the first %d of %d characters; the rest was NOT shown to you]: %s",
-			index, head, workSummaryResultCut, len(result), result[:workSummaryResultCut])
+			index, head, workSummaryResultCut, n, cutRunes(result, workSummaryResultCut))
 	}
 	return fmt.Sprintf("Step %d: %s\nResult: %s", index, head, result)
+}
+
+// cutRunes bounds s at n RUNES — Python str[:n] semantics. Every cut
+// in this package routes through it: byte slicing splits multi-byte
+// UTF-8 mid-rune, silently corrupting judge-facing evidence and
+// breaking cross-runtime truncation parity (adversarial closure r1
+// 2026-08-22, three lenses independently — the same file's Fingerprint
+// already sliced runes, so the inconsistency was the finding).
+func cutRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // Ungrounded-False cap. The floor is the trust line above which a
@@ -364,6 +378,12 @@ Respond with JSON only:
   "summary": "one or two sentences, opening with the verdict ('Goal achieved.' or 'Goal not achieved.') matching the complete flag"
 }`
 
+// closurePanicHook is a test seam proving the recover contract fires
+// (an instrument nothing can trigger is untrusted — the recall seam's
+// precedent). Unsynchronized by design: this package's tests stay
+// serial (no t.Parallel()) while they use it.
+var closurePanicHook func()
+
 // nullVerdict is the skip verdict: UNJUDGED, not complete — verification
 // never ran, so it carries no evidence in either direction.
 func nullVerdict(reason string) Verdict {
@@ -377,8 +397,23 @@ func nullVerdict(reason string) Verdict {
 func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exitCode int, stdout, stderr string) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// bash, not Python's sh: a deliberate upgrade, named in PORT.md —
+	// the plan prompt's own scaffolding examples use bash idioms.
 	c := exec.CommandContext(cctx, "bash", "-c", cmd)
 	c.Dir = cwd
+	// Kill the whole PROCESS GROUP on timeout, not just the direct bash:
+	// the plan prompt encourages backgrounded servers with trap-EXIT
+	// cleanup, and a SIGKILL to bash alone never runs the trap, leaving
+	// the server orphaned on its port across every closure-verified run
+	// (adversarial closure r1 2026-08-22, Architect + Minimalist —
+	// Python shares the leak; Go can close it structurally).
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if c.Process != nil {
+			return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
 	var out, errb strings.Builder
 	c.Stdout = &out
 	c.Stderr = &errb
@@ -400,12 +435,30 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 // returns an error; every failure lands as a named skip (unjudged) or
 // as verdict evidence. The caller stamps goal_achieved from
 // (Judged, Complete): unjudged verdicts stamp NOTHING.
-func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o Options) Verdict {
+func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o Options) (v Verdict) {
 	persist := func(row map[string]any) {
 		if o.PersistRow != nil {
 			o.PersistRow(row)
 		}
 	}
+	// The never-returns-an-error contract holds for UNANTICIPATED bugs
+	// too: Python only reached this shape after two 2026-07-27 runs lost
+	// closure to an invisible exception, and the recall seam repeated
+	// the same omission-then-fix one tranche ago (adversarial closure r1
+	// 2026-08-22, Expert QA). An uncaught panic here would crash the
+	// whole loop AFTER the work succeeded — losing the finalize and the
+	// outcome the verdict was meant to annotate.
+	defer func() {
+		if r := recover(); r != nil {
+			persist(map[string]any{
+				"skipped": "exception",
+				"skip_detail": budget.PanicTrace.Clip(
+					budget.PanicValue.Clip(fmt.Sprintf("%v", r)) +
+						"\n" + string(debug.Stack())),
+			})
+			v = nullVerdict("exception")
+		}
+	}()
 	if o.DryRun || a == nil {
 		// Intentional skips — no row, matching Python (dry_run/no-adapter
 		// return before the skip-row machinery).
@@ -418,10 +471,7 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	skip := func(reason string, detail string) Verdict {
 		row := map[string]any{"skipped": reason}
 		if detail != "" {
-			if len(detail) > 300 {
-				detail = detail[:300]
-			}
-			row["skip_detail"] = detail
+			row["skip_detail"] = cutRunes(detail, 300)
 		}
 		persist(row)
 		return nullVerdict(reason)
@@ -493,6 +543,10 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 		return skip("no_checks_generated", detail)
 	}
 
+	if closurePanicHook != nil {
+		closurePanicHook()
+	}
+
 	// Phase 2: run checks mechanically. No LLM judgment on exit codes.
 	var results []CheckResult
 	checks := planChecks
@@ -518,18 +572,18 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 			continue
 		}
 		code, stdout, stderr := runCheck(ctx, c.command, o.WorkspacePath, timeout)
-		if len(stdout) > 500 {
-			stdout = stdout[:500]
-		}
-		if len(stderr) > 300 {
-			stderr = stderr[:300]
-		}
+		// Classify on the FULL stderr, then truncate only the stored
+		// copy — the inconclusive-detection phrases sit near the END of
+		// verbose diagnostics, and classifying the 300-char head flipped
+		// verifier failures into goal-disproving hard fails (adversarial
+		// closure r1 2026-08-22, Minimalist; Python's order).
+		outcome := CheckOutcome(code, stderr)
 		results = append(results, CheckResult{
 			Description: c.description, Command: c.command,
 			Modality: modality, ExitCode: code,
-			Stdout: stdout, Stderr: stderr,
+			Stdout: cutRunes(stdout, 500), Stderr: cutRunes(stderr, 300),
 			Passed:  code == 0,
-			Outcome: CheckOutcome(code, stderr),
+			Outcome: outcome,
 		})
 	}
 	if len(results) == 0 {
@@ -574,22 +628,43 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	if !ok {
 		return skip("verdict_parse_failed", "complete flag missing or non-bool")
 	}
+	// safe_float parity: numeric STRINGS coerce (LLMs emit
+	// "confidence": "0.9" often enough that Python handles it); only
+	// genuinely non-numeric or non-finite input falls to the default —
+	// a silent 0.7 here would discard the judge's load-bearing signal
+	// right where the ungrounded-False cap reads it (adversarial
+	// closure r1 2026-08-22, Minimalist — the recall tranche's
+	// type-drift pattern recurring one tranche later).
 	confidence := 0.7
-	if f, ok := vdObj["confidence"].(float64); ok {
+	switch f := vdObj["confidence"].(type) {
+	case float64:
 		confidence = f
-		if confidence < 0 {
-			confidence = 0
-		}
-		if confidence > 1 {
-			confidence = 1
+	case string:
+		if pf, perr := strconv.ParseFloat(strings.TrimSpace(f), 64); perr == nil &&
+			!math.IsNaN(pf) && !math.IsInf(pf, 0) {
+			confidence = pf
 		}
 	}
+	if confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
 	var gaps []string
-	if raw, ok := vdObj["gaps"].([]any); ok {
+	switch raw := vdObj["gaps"].(type) {
+	case []any:
 		for _, g := range raw {
 			if gs, ok := g.(string); ok && gs != "" {
 				gaps = append(gaps, gs)
 			}
+		}
+	case string:
+		// A bare string is drift, not absence — carry it rather than
+		// silently reading a stated gap as a clean verdict (the
+		// evidence-coercion direction the recall tranche pinned).
+		if raw != "" {
+			gaps = append(gaps, raw)
 		}
 	}
 	summary, _ := vdObj["summary"].(string)
@@ -629,7 +704,7 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// inconclusive probes — no check ran cleanly.
 	judged := checksRun > inconclusive
 
-	v := Verdict{
+	v = Verdict{
 		Complete: complete, Confidence: confidence, Gaps: gaps,
 		Summary:      VerdictFirstSummary(summary, complete, judged),
 		ChecksRun:    checksRun,
@@ -637,20 +712,35 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 		Judged: judged, DowngradeReason: downgradeReason,
 		FailedChecks: failedSigs,
 	}
-	cmds := make([]string, 0, len(results))
+	// Per-check evidence rides the durable row (Python parity — the
+	// aggregate-only draft could not answer "why did check N fail";
+	// adversarial closure r1 2026-08-22, Expert QA: a row that cites the
+	// persist-the-artifacts decree must actually persist the artifacts).
+	checkRows := make([]map[string]any, 0, len(results))
 	for _, r := range results {
-		cmds = append(cmds, r.Command)
+		checkRows = append(checkRows, map[string]any{
+			"description": cutRunes(r.Description, 300),
+			"command":     cutRunes(r.Command, 300),
+			"exit_code":   r.ExitCode,
+			"outcome":     r.Outcome,
+			"stdout":      r.Stdout,
+			"stderr":      r.Stderr,
+		})
+	}
+	clippedGaps := make([]string, 0, len(v.Gaps))
+	for _, g := range v.Gaps {
+		clippedGaps = append(clippedGaps, budget.Clip(g, 500))
 	}
 	persist(map[string]any{
 		"complete": v.Complete, "confidence": v.Confidence,
-		"gaps": v.Gaps, "summary": v.Summary,
+		"gaps": clippedGaps, "summary": budget.VerdictProse.Clip(v.Summary),
 		"checks_run": v.ChecksRun, "checks_passed": v.ChecksPassed,
 		"inconclusive_count": v.InconclusiveCount, "judged": v.Judged,
 		"downgrade_reason":      v.DowngradeReason,
 		"failed_checks":         v.FailedChecks,
 		"fingerprint":           Fingerprint(v),
 		"modality_distribution": modalityDist,
-		"commands":              cmds,
+		"check_results":         checkRows,
 	})
 	return v
 }
