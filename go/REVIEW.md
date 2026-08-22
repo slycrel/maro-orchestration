@@ -2324,3 +2324,63 @@ status literal), plus a detector-evasion HIGH in the rewritten guard.
 Fix-layer mutations M97/M98/M100 DETECTED with compiling mutants; M101
 void (refuted finding, dead code removed). Full suite green, gofmt/vet
 clean. r4 (confirmation) follows.
+
+### Round 4 (fix-layer re-review: Skeptic + Expert QA — sonnet-medium fallback; commit e7039829)
+
+**Verdict: CONTESTED → fixed.** Flagship a FOURTH time: the HIGH lived in
+the r2/r3 authority parser — a different terminator character (`\`)
+reopened the userinfo-confusion class. Notably this one made Go diverge
+WORSE than Python, so the fix restored parity rather than out-hardening.
+
+**Verification Ledger:**
+
+- **VERIFIED HIGH (Skeptic) — backslash authority-terminator bypass.**
+  `https://evil.com\@api.anthropic.com/leak` scanned CLEAN in Go: the
+  parser split authority only on `/?#`, so it read `evil.com\` as userinfo
+  and `api.anthropic.com` as the host (exact allowlist match). A WHATWG
+  client terminates the authority at `\` (special scheme), fetching
+  `evil.com`. Live-reproduced. **Python FLAGS it** (its prefix-check reads
+  the real host right after the scheme) — so Go had diverged worse.
+  **Fixed:** `\` added to the authority-terminator set, restoring parity.
+  Pin added to `TestURLExfilAuthorityBypassesFlagged`. M102 DETECTED.
+
+- **VERIFIED MEDIUM (QA) — algorithmic DoS in the per-scheme scan.** A
+  no-whitespace blob of `https://` repeated (~6250 schemes in 50K runes)
+  made each candidate the full remaining tail → O(schemes × tail) work,
+  worsened by r3's per-candidate `Replace`. **Fixed:** candidates bounded
+  to `urlCandidateMax=512` before any scan work (the exfil shape never
+  needs more). Probe confirms the 50K blob now scans instantly. Perf cap
+  (no functional mutation).
+
+- **VERIFIED MEDIUM (both lenses) — EVOLVER_REVERTED event fired with a
+  misleading type when the revert didn't persist.** The r3 fix corrected
+  the `Reverted` bool but left the captain's-log event unconditional, so a
+  type-keyed consumer would count a non-persisted revert as done.
+  **Fixed:** the event context now carries `persisted: storePersisted` so
+  type+context consumers see the truth.
+
+- **ACCEPTED-NAMED MEDIUM (Skeptic #2 / QA) — Revert ordering residual.**
+  The behavioral constraint removal happens before the applied-flag flip,
+  so a persist failure leaves "constraint gone, applied=true". This is
+  Python-parity and requires a rare cross-file write failure AFTER a
+  successful constraint-file write; a true fix needs cross-file
+  transactions the store doesn't have. Named as a residual + backport
+  candidate; the `detail` and `Reverted=false` already flag the state.
+
+- **CONFIRMED CLEAN (both lenses re-verified) — the r3 pending_human_
+  review literal (byte-for-byte Python parity, observe.py-keyed) and the
+  three hardened goal_achieved readers (no unhardened FOURTH reader in
+  production; record.go stores the raw value without judging).**
+
+- **DOC (QA #4/#5) — backport-candidate list expanded.** The malformed-
+  goal_achieved divergence exists at four Python sites (inspector.py,
+  evolver.py, metrics.py, recall.py), and Python silently marks
+  `inspection_finding` applied=true (no arm) where Go holds it. Both now
+  named in PORT.md.
+
+- **ACCEPTED-NAMED LOW (QA #6) — added the bare-`\r` fixture and a cross-
+  newline negative control to the guard tests.**
+
+Fix-layer mutations M102/M103 DETECTED with compiling mutants. Full suite
+green, gofmt/vet clean. r5 (confirmation) follows — r4 carried a HIGH, so
+the two-consecutive-clean-round fixpoint clock has not started.

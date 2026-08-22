@@ -926,9 +926,14 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 		}
 	}
 
+	// The event carries the persisted truth so a consumer keying on event
+	// TYPE (not the free-text detail) isn't misled into counting a non-
+	// persisted revert as done (r4 review — the EVOLVER_REVERTED name
+	// otherwise lies when storePersisted is false).
 	_ = rec.Event("EVOLVER_REVERTED", suggestionID,
 		fmt.Sprintf("Reverted suggestion %s (%s): %s", suggestionID, category, detail),
-		map[string]any{"suggestion_id": suggestionID, "category": category, "target": target},
+		map[string]any{"suggestion_id": suggestionID, "category": category,
+			"target": target, "persisted": storePersisted},
 		"")
 	// Reverted reflects the DURABLE state: if the store write failed, the
 	// row still reads applied=true, so IsApplied stays true and the

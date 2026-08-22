@@ -76,6 +76,11 @@ var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 // WHATWG normalization step) so they can't hide inside a hostname.
 var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
 
+// urlCandidateMax bounds per-scheme candidate work (DoS guard). The exfil
+// shape's longest fixed span is scheme + host(≤50) + `.tld/` + a short
+// path, well under this.
+const urlCandidateMax = 512
+
 // Allowed source locations — auto-apply permitted without manual review
 // (Python _ALLOWED_SOURCE_DIRS, verbatim).
 var allowedSourceDirs = map[string]bool{
@@ -177,6 +182,15 @@ func ScanContent(content, source string) ScanReport {
 	// host never launders a non-allowlisted inner one.
 	for _, loc := range schemeRe.FindAllStringIndex(target, -1) {
 		cand := target[loc[0]:]
+		// Bound the candidate before any scan work. Without this, a blob
+		// of `https://` repeated with no whitespace is O(schemes × tail)
+		// per ScanContent — each candidate would be the whole remaining
+		// target (r4 review DoS). The exfil shape needs only a scheme, a
+		// ≤50-rune host, a TLD, and a short path, so a few hundred bytes
+		// is always enough to decide a match.
+		if len(cand) > urlCandidateMax {
+			cand = cand[:urlCandidateMax]
+		}
 		// Candidate ends at the next SPACE. ASCII tab/CR/LF are then
 		// REMOVED from within it, mirroring the WHATWG URL "remove all
 		// ASCII tab or newline" step — a real client fetches
@@ -239,9 +253,15 @@ func urlHostAllowed(url string) bool {
 			break
 		}
 	}
-	// Authority ends at the first '/', '?', or '#'.
+	// Authority ends at the first '/', '\', '?', or '#'. Backslash is an
+	// authority terminator for special schemes (http/https) in the WHATWG
+	// URL Standard — a real client fetches `https://evil.com\@host/x` with
+	// host `evil.com` (the '\' ends the authority BEFORE the '@'), so a
+	// parser that split only on '@' would read the trailing host as the
+	// target and wave it through (r4 review; Python's prefix-check happens
+	// to flag this because the real host sits right after the scheme).
 	authority := rest
-	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+	if i := strings.IndexAny(authority, "/\\?#"); i >= 0 {
 		authority = authority[:i]
 	}
 	// Strip userinfo: everything up to and including the LAST '@'.

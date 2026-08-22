@@ -1013,6 +1013,30 @@ dead code, removed). NEW backport candidate: (9) Python's exfil scan
 shares the tab/newline-in-host evasion. Fix-layer mutations M97/M98/M100
 DETECTED (M101 void — refuted finding).
 
+**r4 fix-layer re-review (2026-08-22, skeptic+qa) — flagship a 4th time,
+this one a Go-worse divergence.** HIGH: `https://evil.com\@host/x` scanned
+clean in Go (authority split only on `/?#`, reading the pre-`@` part as
+userinfo) while a WHATWG client — and Python's prefix-check — resolve the
+host as `evil.com`; fixed by adding `\` to the authority terminator set
+(restores parity). MEDIUMs: per-scheme URL scan bounded to 512 runes/
+candidate (DoS on a no-whitespace many-scheme blob); EVOLVER_REVERTED
+event now carries `persisted` so a type-keyed consumer isn't misled on a
+non-persisted revert. Accepted-named residual: Revert removes the
+constraint before flipping applied, so a persist failure leaves
+constraint-gone-but-applied=true (Python parity, needs cross-file txn).
+Fix-layer mutations M102/M103 DETECTED.
+
+Backport-correction candidates (fork-point Python bugs the Go port fixed
+or diverges from, for a later Python pass): (1) revert guardrail source-
+key mismatch; (2) exfil URL lookahead prefix-only (lookalike domain);
+(3) exfil URL userinfo (`@`) bypass; (4) exfil URL backslash-authority
+bypass; (5) exfil URL tab/newline-in-host evasion; (6) revert doesn't
+check applied-state; (7) EVOLVER_REVERTED logged even when not persisted;
+(8) `inspection_finding` silently marked applied=true (no apply arm) —
+Go holds it; (9) malformed `goal_achieved` graded as unjudged rather than
+judged-false at FOUR sites — inspector.py, evolver.py (~155), metrics.py
+(~576, feeds goal_achieved_rate), recall.py (~464).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
