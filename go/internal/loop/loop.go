@@ -191,7 +191,23 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			"captain's log write failed (RECALL_PERFORMED): "+evErr.Error())
 	}
 
-	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps, rr.DecomposeExtras()...)
+	// Matching skills for decompose prompt injection, plus the run-keyed
+	// manifest of what actually entered the prompt. The manifest is written
+	// UNCONDITIONALLY — an empty match set is a data point (a cold store
+	// legitimately matches nothing), so present-and-empty means "nothing was
+	// injected" while absent means the recorder never ran. Attribution reads
+	// it, so the distinction is load-bearing.
+	//
+	// NAMED GAP (slice 3b): Python routes each matched skill through
+	// select_variant_for_task before injection, so a parent can be swapped
+	// for its active A/B challenger. Variants are excluded from candidate
+	// discovery in both runtimes, so this injects the parent where Python
+	// might inject the challenger — the arms stay exclusive either way.
+	skillsExtra, skillWarns := injectSkills(rec.WorkspaceDir, runDir, goal)
+	recallWarns = append(recallWarns, skillWarns...)
+
+	extras := append(rr.DecomposeExtras(), skillsExtra)
+	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps, extras...)
 	// Seed spend (the routing classify call) is real cost this run
 	// caused — fold it in HERE so both exits (decompose-failed row and
 	// the normal totals) report it (adversarial routing r1 2026-08-22:

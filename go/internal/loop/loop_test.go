@@ -11,6 +11,8 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/runs"
+	"github.com/slycrel/maro-orchestration/go/internal/skills"
 )
 
 func readJSONL(t *testing.T, path string) []map[string]any {
@@ -428,5 +430,78 @@ func TestRunSeedTokensReachOutcomeRow(t *testing.T) {
 	row := rows[len(rows)-1]
 	if row["tokens_in"].(float64) < 1000003 || row["tokens_out"].(float64) < 500001 {
 		t.Fatalf("seed spend must reach the row: %v", row)
+	}
+}
+
+// The skills manifest is the attribution rail: it must be written on EVERY
+// run, empty match set included, or "absent" stops meaning "the recorder
+// never ran". And a matching skill must actually reach the decompose
+// prompt — the whole point of the library.
+func TestRunWritesSkillsManifestAndInjectsMatch(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+
+	// No skills at all: the manifest must still land, saying nothing matched.
+	fake := &llm.Fake{Script: []string{`["one"]`, "done"}}
+	res, err := Run(context.Background(), fake, record.New(ws),
+		Opts{Goal: "some unrelated goal", MaxSteps: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(runs.Dir(ws, res.LoopID), "source", "skills_manifest.jsonl")
+	rows := readJSONL(t, manifest)
+	if len(rows) != 1 {
+		t.Fatalf("the manifest must be written even with no matches: %+v", rows)
+	}
+	match, _ := rows[0]["match"].(map[string]any)
+	if match == nil || match["method"] != "none" {
+		t.Fatalf("empty match set must be recorded as method=none: %+v", rows[0])
+	}
+	if got, ok := rows[0]["skills"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("skills must be present-and-empty, got %#v", rows[0]["skills"])
+	}
+
+	// Now a skill whose trigger fires: it must reach the prompt AND the
+	// manifest, carrying its content hash and match tier.
+	s := skills.Skill{ID: "sk-1", Name: "Fact Gatherer",
+		Description:     "gather facts before answering",
+		TriggerPatterns: []string{"answer the question"},
+		StepsTemplate:   []string{"gather", "answer"},
+		CreatedAt:       "2026-08-20T10:00:00+00:00", Tier: "provisional",
+		SuccessRate: 1.0, UtilityScore: 1.0, CircuitState: "closed",
+		Imported: map[string]any{},
+	}
+	if err := skills.SaveSkill(ws, s); err != nil {
+		t.Fatal(err)
+	}
+	fake2 := &llm.Fake{Script: []string{`["one"]`, "done"}}
+	res2, err := Run(context.Background(), fake2, record.New(ws),
+		Opts{Goal: "answer the question", MaxSteps: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := fake2.Prompts[0] // the decompose turn, flattened
+	if !strings.Contains(sys, "Reusable skills from past successful goals:") ||
+		!strings.Contains(sys, "Skill: Fact Gatherer") {
+		t.Fatalf("matched skill must ride the decompose prompt: %q", sys)
+	}
+	rows = readJSONL(t, filepath.Join(runs.Dir(ws, res2.LoopID),
+		"source", "skills_manifest.jsonl"))
+	if len(rows) != 1 {
+		t.Fatalf("manifest rows: %+v", rows)
+	}
+	got, _ := rows[0]["skills"].([]any)
+	if len(got) != 1 {
+		t.Fatalf("the injected skill must be recorded: %+v", rows[0])
+	}
+	entry, _ := got[0].(map[string]any)
+	if entry["id"] != "sk-1" || entry["match_method"] != "keyword" {
+		t.Fatalf("manifest entry: %+v", entry)
+	}
+	if entry["content_hash"] != skills.ComputeSkillHash(s) {
+		t.Fatalf("manifest must carry the content hash that was injected: %+v", entry)
+	}
+	if rk, _ := entry["routing_key"].(string); len(rk) != 8 {
+		t.Fatalf("routing key must be the 8-char goal hash: %+v", entry)
 	}
 }

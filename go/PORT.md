@@ -1737,6 +1737,98 @@ directive (r3 onward) earned its keep twice: r3's dedup-window-keyed-
 to-the-wrong-arg and r4's Cycle/report.Skipped seam were both invisible
 to diff-scoped review.
 
+### Skill library — slice 3a: store + retrieval (2026-08-23)
+
+The half that makes a skill REACH a run: `internal/skills` (types +
+store + match) and the loop wiring that injects matched skills into the
+decompose prompt and records the run-keyed manifest. Ports skills.py's
+store/retrieval surface and all of skill_types.py.
+
+**Lessons are data, and the admission predicate is the contract.**
+skills.jsonl is a shared workspace store, so the load-bearing question
+is not the struct but what a row must PROVE before it is admitted as a
+Skill. `ValidateSkillRow` checks the STORED value, never what the
+constructor made of it — Python's own arc took six adversarial rounds to
+land there, and each rule is a probed finding this port inherits: a
+forged row carrying a healthy skill's `content_hash` but
+`description=7` could not have its hash recomputed, counted as "not
+stale", won the dedup on a later `created_at`, and DELETED the healthy
+skill. `content_hash`/`created_at` ABSENCE is refused (absent is not
+empty, and neither is proof — both are fields a destructive caller acts
+on, and both are excluded from the dedup identity, so neither absence
+shows up as a difference). The tolerant `DictToSkill` stays for read
+paths; degrading them would be a behaviour change nobody asked for.
+
+**`record.LoadsClean` — the shared byte-hygiene door.** New primitive
+porting jsonl_utils.loads_clean: refuses raw non-UTF-8, lone-surrogate
+ESCAPES (a pure-ASCII line whose parsed value is tainted), trailing data
+after the object, and DUPLICATE NAMES (both decoders silently keep the
+last value, so `{"applied":false,"applied":true}` reads as applied and a
+rewrite destroys the other value — two values where one is discarded by
+an implementation detail is a corrupt row). Numbers decode via
+UseNumber so an int literal stays distinguishable from a float, which
+the validator depends on (7 vs 7.0). Go needs the writer-side twin MORE
+than Python: encoding/json rejects NaN/Inf (matching allow_nan=False)
+but silently rewrites invalid UTF-8 to U+FFFD, so taint would be
+laundered at the WRITER with no error at all. Named divergence: Python's
+json.loads accepts the non-standard NaN/Infinity tokens and its
+validator then rejects the row; Go refuses the line outright — same
+outcome (the row strands), different door. `pack` and `knowledge` carry
+older partial twins (utf8-only, surrogate-only); unifying them is a
+follow-up, not a silent mid-feature refactor.
+
+**Two proofs, deliberately different strengths.** `proveLine` (live
+store) proves the FULL admission predicate — a constructible Skill with
+`tier=7` (hash-excluded, JSON-clean) was emitted by Python, REPLACED the
+healthy row, and stranded on the next load. `proveRecordLine` (archive)
+proves only that the strict reader admits the line, because the archive
+is a RETENTION store: demanding full validity there would let a
+hash-less skill refuse its own retention copy, and since the archive
+gates the live-pool removal, an over-strict proof would block the cull
+(or, for a caller that swallows the error, delete without a copy). The
+first cut had this wrong in the strict direction and a test caught it.
+Also fixed at the serializer: a Go-built Skill literal leaves slices
+nil, and nil marshals to `null` — a row BOTH validators refuse. Python's
+dataclass defaults make those `[]`, so the writer normalizes rather than
+asking 30-odd call sites to remember.
+
+**Retrieval** is Python's tier ladder minus the trained router: keyword
+(trigger overlap either direction, plus tags as substring-in-goal only)
+→ TF-IDF fallback (smoothed IDF, island-match boost, cosine). Winners
+carry `match_method`/`match_score`, and the caller's telemetry reports
+`{method, n_candidates, top_score, scores}` with method "none" when
+nothing matched — the graded gap signal. NAMED GAP: router.py is not
+ported (no Go consumer), so this is the path Python takes on an
+untrained workspace — identical there, a real difference on a trained
+box; the "router"/"mixed" tier stamps stay defined so the field means
+the same thing in both runtimes' records.
+
+**Loop wiring:** matched skills ride the decompose system prompt beside
+recall's extras, and `runs.AppendSkillsManifest` records what actually
+entered the prompt — UNCONDITIONALLY, empty match set included, because
+absence must mean "the recorder did not run" and not "nothing matched"
+(a cold store legitimately matches nothing, and that is a data point).
+NAMED GAP (3b): Python routes each match through
+`select_variant_for_task` first, so a parent can be swapped for its
+active A/B challenger; variants are excluded from candidate discovery in
+both runtimes, so the arms stay exclusive either way. Project isolation
+is implemented and pinned in `FindMatchingSkills`, but the Go loop
+resolves its project slug only in exec mode AFTER planning, so the
+caller passes the empty slug — Python's own documented legacy behaviour
+(filtering disabled), not a difference in the filter.
+
+**Cross-runtime, executed live (not asserted):** a Python-written row is
+admitted by Go with a byte-identical recomputed `content_hash` (pinned
+as a fixture in `store_test.go`), and a Go-written store loads in Python
+(`skills.load_skills`) with `compute_skill_hash` agreeing and
+`find_matching_skills` returning the SAME skill, tier and score (keyword
+/ 2.0) as Go's matcher on the same goal. The TF-IDF fixtures pin
+Python's ACTUAL output (b=1.2, a=1.0 on a three-doc corpus) rather than
+Go-derived expectations, including the degenerate case both share: a
+one-skill (or all-identical) corpus scores zero everywhere, because
+df==N zeroes the smoothed IDF — so the TF-IDF tier is silent on a cold
+workspace rather than injecting a spurious match.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
@@ -1752,9 +1844,12 @@ to diff-scoped review.
 4. ~~Inspector/evolver self-improvement loop~~ — slice 1 DONE
    (inspector/evolver tranche above); ~~statistical scanners,
    graduation, V2 verify lifecycle~~ — slice 2 DONE (self-improvement
-   slice 2 above). Remaining: skill engines (with the skills store),
-   sub_mission (with the goal queue), playbook.md port (unblocks
-   guidance-only guardrails + graduation playbook appends).
+   slice 2 above); ~~skills store + retrieval~~ — slice 3a DONE (skill
+   library slice above). Remaining: skill LIFECYCLE (slice 3b — outcome
+   recording, utility/circuit updates, promote/demote, A/B variants,
+   island culls, test gate), sub_mission (with the goal queue),
+   playbook.md port (unblocks guidance-only guardrails + graduation
+   playbook appends).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —

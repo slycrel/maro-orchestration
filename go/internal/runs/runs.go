@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
@@ -215,4 +216,62 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// SkillManifestEntry is one skill that actually entered a prompt. The shape
+// is the caller's — this stays a dumb appender.
+type SkillManifestEntry struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	ContentHash string  `json:"content_hash"`
+	VariantOf   *string `json:"variant_of"`
+	Tier        string  `json:"tier"`
+	RoutingKey  string  `json:"routing_key"`
+	MatchMethod string  `json:"match_method"`
+	MatchScore  float64 `json:"match_score"`
+}
+
+// SkillManifestMeta is the record-level selection telemetry: present even
+// when the skills list is empty, which is what turns the binary gap signal
+// ("nothing matched") into a graded one.
+type SkillManifestMeta struct {
+	Method      string  `json:"method"`
+	NCandidates int     `json:"n_candidates"`
+	TopScore    float64 `json:"top_score"`
+}
+
+// AppendSkillsManifest appends one skill-injection event to
+// <run-dir>/source/skills_manifest.jsonl.
+//
+// An EMPTY entries list is RECORDED, not skipped. Absence of this file used
+// to mean two different things — "no skills matched" and "the recorder never
+// ran" — which makes the file useless as an attribution rail: a cold-store
+// run legitimately matches nothing, and that is a data point, not a gap.
+// Present-and-empty means nothing was injected; absent means the recorder
+// genuinely did not run.
+//
+// JSONL because injection can happen more than once per run (decompose,
+// curated summaries, replans). Best-effort by contract: it returns an error
+// for the caller's warning channel but a failure must never kill a run.
+func AppendSkillsManifest(runDir string, entries []SkillManifestEntry,
+	stage string, meta *SkillManifestMeta, now string) error {
+	if runDir == "" {
+		return nil
+	}
+	if entries == nil {
+		entries = []SkillManifestEntry{}
+	}
+	rec := map[string]any{"ts": now, "stage": stage, "skills": entries}
+	if meta != nil {
+		rec["match"] = meta
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	out := filepath.Join(runDir, "source", "skills_manifest.jsonl")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	return record.AppendRawLine(out, raw)
 }
