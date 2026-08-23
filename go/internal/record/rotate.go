@@ -2,6 +2,7 @@ package record
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,9 +61,17 @@ const (
 // rotationInProgress is Python's _rotation_in_progress module global. The
 // LOG_ROTATED audit append lands in the FRESH active file and re-enters
 // this function; without the guard a rotate_mb smaller than the retained
-// tail cascades. It is also what keeps Locked from deadlocking against
-// itself here, since Locked is not reentrant and the audit event appends
-// under the same lock path.
+// tail cascades.
+//
+// The failure it prevents is UNBOUNDED RECURSION, not a deadlock. An
+// earlier version of this comment said the guard also kept Locked from
+// deadlocking against itself — it does not, and the distinction matters
+// because a maintainer who goes looking for the lock nesting will not
+// find any and may conclude the guard is removable. The Locked critical
+// section closes before the audit append is made; each re-entry takes and
+// releases the lock cleanly and then recurses, one archive per row, until
+// the process dies (adversarial r8 MEDIUM ×2 — the guard was also pinned
+// only at a retention where neither failure could occur).
 var rotationInProgress atomic.Bool
 
 // warnOnce emits each distinct config warning a single time per process.
@@ -148,7 +157,33 @@ func (r *Recorder) maybeRotateCaptainsLog(path string) {
 	if rotateMB <= 0 {
 		return // explicitly disabled
 	}
-	maxBytes := int64(rotateMB * 1024 * 1024)
+	// Python computes `int(rotate_mb * 1024 * 1024)` INSIDE the try that
+	// wraps the whole rotation, and Python ints are arbitrary precision.
+	// So the two out-of-range cases behave differently there and both
+	// must be reproduced (adversarial r8 MEDIUM):
+	//
+	//   - .inf / .nan  → int() RAISES, the except warns, rotation is
+	//     abandoned. `.inf` is exactly what an operator writes to mean
+	//     "never rotate".
+	//   - a finite but enormous value → int() succeeds, max_bytes is a
+	//     huge int, and the size check simply never fires.
+	//
+	// Go's int64(±Inf) / int64(NaN) / int64(overflow) is an unrepresentable
+	// conversion: on amd64 all three yield MinInt64, so `size < maxBytes`
+	// is FALSE and the log rotates every time — the exact inversion of
+	// what `.inf` was asked for, on a file Python considers untouched.
+	// (The result is even architecture-dependent; arm64 saturates the
+	// other way.)
+	product := rotateMB * 1024 * 1024
+	if math.IsNaN(product) || math.IsInf(product, 0) {
+		warn("captains_log: rotation failed: cannot convert float %s to integer",
+			nonFiniteName(product))
+		return
+	}
+	if product >= math.MaxInt64 {
+		return // Python's huge-but-finite max_bytes: the gate never fires
+	}
+	maxBytes := int64(product)
 	if st.Size() < maxBytes {
 		return
 	}
@@ -238,9 +273,17 @@ func (r *Recorder) maybeRotateCaptainsLog(path string) {
 		return
 	}
 
-	// The audit row, byte-identical to Python's. It re-enters EventNoted,
-	// which re-enters this function — the guard above is what stops that,
-	// and it is still held here because the deferred Store has not run.
+	// The audit row. Its PROSE is byte-identical to Python's, which is
+	// what matters — subject and summary are the strings a reader and the
+	// log's own consumers see. The row as a whole is not: this port's JSON
+	// separators and its nested-context key order are both named, accepted
+	// divergences (PORT.md, and pyjson's sorted nested maps). An earlier
+	// version of this comment claimed the whole row was byte-identical,
+	// which contradicted PORT.md's own honest note (adversarial r8 LOW).
+	//
+	// It re-enters EventNoted, which re-enters this function — the guard
+	// above is what stops that, and it is still held here because the
+	// deferred Store has not run.
 	if err := r.EventNoted("LOG_ROTATED", archiveName,
 		fmt.Sprintf("Rotated %d entries to %s; %d retained in the active file",
 			archived, archiveName, retained),
@@ -327,4 +370,14 @@ func ArchivePaths(memoryDir string) []string {
 func AllLogPaths(memoryDir string) []string {
 	return append(ArchivePaths(memoryDir),
 		filepath.Join(memoryDir, "captains_log.jsonl"))
+}
+
+// nonFiniteName spells a non-finite float the way CPython's exception
+// message does, so the warning a Go operator reads matches the one the
+// Python runtime would have logged for the same config.
+func nonFiniteName(f float64) string {
+	if math.IsNaN(f) {
+		return "NaN"
+	}
+	return "infinity"
 }

@@ -133,7 +133,18 @@ func TestTheAuditRowIsSpelledTheWayPythonSpellsIt(t *testing.T) {
 	goRow := findRotatedRow(t, readFileString(t, path))
 
 	// The archive NAME carries a wall-clock stamp, so each side's own name
-	// is normalized away; everything else must match exactly.
+	// is normalized away.
+	//
+	// What this comparison can and cannot see, stated honestly because the
+	// previous version of this comment said "everything else must match
+	// exactly" and that is not what it does (adversarial r8 LOW). Both
+	// sides go through json.Marshal on a map, which SORTS keys and emits
+	// compact separators — so the comparison is deliberately blind to key
+	// order and to separator spacing, which are exactly the two ways these
+	// rows do differ, and both are named accepted divergences. What it
+	// pins is the VALUES: subject, summary prose, audience, and every
+	// context field. The raw-shape assertion below covers the one
+	// separator regression this would otherwise miss.
 	norm := func(row map[string]any) map[string]any {
 		ctx, _ := row["context"].(map[string]any)
 		name, _ := ctx["archive"].(string)
@@ -164,6 +175,17 @@ func TestTheAuditRowIsSpelledTheWayPythonSpellsIt(t *testing.T) {
 		t.Errorf("LOG_ROTATED row differs from the one CPython wrote\n got %s\nwant %s",
 			gotJSON, wantJSON)
 	}
+	// The comparison above normalizes separators away, which means it
+	// would stay green if this writer stopped using pyjson entirely and
+	// fell back to encoding/json — the output would canonicalize to the
+	// same map. The recurring bug family in this port is an emitted string
+	// drifting by a character, so the raw bytes get their own assertion.
+	rawRow := findRotatedRawLine(t, readFileString(t, path))
+	if strings.Contains(rawRow, `", "`) || strings.Contains(rawRow, `": "`) {
+		t.Errorf("the audit row was written with Python-style separators, so "+
+			"this writer is no longer going through pyjson:\n%s", rawRow)
+	}
+
 	// The audience is already covered by the whole-row comparison above.
 	// Stated again on its own because it is the one field a reader is most
 	// likely to "fix" on intuition: rotation feels like news, and Python's
@@ -300,39 +322,120 @@ func TestAFileShorterThanTheRetentionIsLeftAlone(t *testing.T) {
 	}
 }
 
-// The re-entrancy guard. The LOG_ROTATED append lands in the fresh active
-// file and re-enters the rotation check; without the guard it takes the
-// same non-reentrant flock and deadlocks, and with a threshold below the
-// retained tail it would cascade. A retention of 0 makes the fresh file
-// EMPTY, which is the sharpest version of both.
+// A non-finite or enormous rotate_mb. `.inf` is what an operator writes to
+// mean "never rotate", and Go's int64 conversion turns it into MinInt64 —
+// so `size < maxBytes` is false and the log rotates EVERY time, the exact
+// inversion of the request, on a file Python considers untouched.
+//
+// Differentials, so the expectation is CPython's behaviour rather than my
+// reading of int()'s overflow rules.
+func TestANonFiniteRotationThresholdIsRefusedTheWayPythonRefusesIt(t *testing.T) {
+	const rows = 60
+	for _, tc := range []struct {
+		name string
+		cfg  string
+	}{
+		{"infinity", "captains_log:\n  rotate_mb: .inf\n  rotate_keep: 10\n"},
+		{"nan", "captains_log:\n  rotate_mb: .nan\n  rotate_keep: 10\n"},
+		{"overflows int64 but finite", "captains_log:\n  rotate_mb: 1.0e300\n  rotate_keep: 10\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			py := pythonRotateRawCfg(t, t.TempDir(), tc.cfg, rows)
+			if got := int(py["n_archives"].(float64)); got != 0 {
+				t.Fatalf("CPython produced %d archives on %s; the premise of "+
+					"this case is wrong", got, tc.name)
+			}
+
+			_, mem, path := rotWorkspaceRawCfg(t, tc.cfg)
+			seedLog(t, path, rows)
+			before := readFileString(t, path)
+			New(filepath.Dir(mem)).maybeRotateCaptainsLog(path)
+
+			if got := len(ArchivePaths(mem)); got != 0 {
+				t.Errorf("rotated %d archive(s) on %s where CPython rotated "+
+					"none — the shared log now disagrees about which rows "+
+					"are live", got, tc.name)
+			}
+			if after := readFileString(t, path); after != before {
+				t.Errorf("the active file was rewritten on %s (%d -> %d bytes); "+
+					"CPython left it alone", tc.name, len(before), len(after))
+			}
+		})
+	}
+}
+
+// The re-entrancy guard. The LOG_ROTATED append lands in the FRESH active
+// file and re-enters the rotation check; without the guard, a threshold
+// below the retained tail cascades — one archive per row, until the
+// process dies.
+//
+// The retention is the whole test, and the first version of this pin got
+// it exactly backwards. It used retention 0, calling that "the sharpest
+// version"; it is the one retention at which the bug CANNOT happen. With
+// no tail the fresh active file holds only the ~250-byte audit row, the
+// re-entered call returns at the size gate having never consulted the
+// guard, and the pin passes against a runtime with the guard deleted —
+// verified (adversarial r8 MEDIUM). Retention 10 leaves ~2.5 KB against a
+// 1,048-byte gate, so the re-entry reaches the guard and the guard is
+// what stops it.
+//
+// Retention 0 is kept as a second case, labelled for what it actually
+// tests: that an empty tail rotates at all.
 func TestTheAuditAppendDoesNotReenterRotation(t *testing.T) {
-	_, mem, path := rotWorkspace(t, 0.001, 0)
-	seedLog(t, path, 60)
+	for _, tc := range []struct {
+		name       string
+		keep       int
+		wantActive int
+		guarded    bool
+	}{
+		{"retained tail exceeds the threshold (the cascade case)", 10, 11, true},
+		{"empty tail (rotates, but cannot cascade)", 0, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, mem, path := rotWorkspace(t, 0.001, tc.keep)
+			seedLog(t, path, 60)
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r := New(filepath.Dir(mem))
-		if err := r.Event("SEED", "trigger", "trip the gate", nil, ""); err != nil {
-			t.Error(err)
-		}
-	}()
-	select {
-	case <-done:
-	case <-timeoutAfter(30):
-		t.Fatal("rotation did not return within 30s — the audit append " +
-			"re-entered Locked, which is not reentrant, and blocked on itself")
-	}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				r := New(filepath.Dir(mem))
+				if err := r.Event("SEED", "trigger", "trip the gate", nil, ""); err != nil {
+					t.Error(err)
+				}
+			}()
+			select {
+			case <-done:
+			case <-timeoutAfter(30):
+				t.Fatal("rotation did not return within 30s — the audit " +
+					"append re-entered rotation and did not stop")
+			}
 
-	archives := ArchivePaths(mem)
-	if len(archives) != 1 {
-		t.Fatalf("got %d archives, want exactly 1 — a cascade wrote more: %v",
-			len(archives), archives)
-	}
-	active := readLines(t, path)
-	if len(active) != 1 {
-		t.Errorf("active file holds %d rows, want just the LOG_ROTATED audit "+
-			"row: %v", len(active), active)
+			archives := ArchivePaths(mem)
+			if len(archives) != 1 {
+				t.Fatalf("got %d archives, want exactly 1 — a cascade wrote "+
+					"more: %v", len(archives), archives)
+			}
+			active := readLines(t, path)
+			if len(active) != tc.wantActive {
+				t.Errorf("active file holds %d rows, want %d (%d retained + "+
+					"the LOG_ROTATED audit row)", len(active), tc.wantActive,
+					tc.keep)
+			}
+			// Says out loud which case is actually exercising the guard, so
+			// a future edit to the fixture cannot silently disarm it again.
+			if tc.guarded {
+				size := int64(0)
+				for _, l := range active {
+					size += int64(len(l)) + 1
+				}
+				if size < 1024*1024/1000 {
+					t.Fatalf("the post-rotation active file is %d bytes, "+
+						"under the %d-byte gate — this case can no longer "+
+						"reach the guard and has stopped testing it",
+						size, 1024*1024/1000)
+				}
+			}
+		})
 	}
 }
 
@@ -1127,4 +1230,17 @@ func TestAMalformedConfigWarnsOnceNotOnEveryAppend(t *testing.T) {
 			t.Errorf("warning repeated %d times: %q", n, l)
 		}
 	}
+}
+
+// findRotatedRawLine returns the raw LOG_ROTATED line, unparsed, so a test
+// can assert on bytes rather than on a decoded map.
+func findRotatedRawLine(t *testing.T, content string) string {
+	t.Helper()
+	for _, l := range strings.Split(content, "\n") {
+		if strings.Contains(l, `"LOG_ROTATED"`) {
+			return l
+		}
+	}
+	t.Fatal("no LOG_ROTATED row in the active file")
+	return ""
 }

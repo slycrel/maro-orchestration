@@ -168,8 +168,17 @@ func TestSlugifyIsByteIdenticalToPythons(t *testing.T) {
 		"aΣ'",          // trailing case-ignorable stays final
 		"Σ alone",      // nothing cased before it: stays σ
 		"ΑΣ\U00010D50", // the cased supplement decides this one
-		"ΑΣࢗ",          // the case-ignorable supplement decides this one
-		"ΑΣ\U0001171E", // the exclusion decides this one
+		// These two need a CASED rune AFTER the mark to discriminate.
+		// Without one the scan runs off the end of the string and every
+		// spelling of the tables yields ς, so the fixtures were labelled
+		// for tables that did not decide their outcome — verified by
+		// mutating each table and watching this test stay green
+		// (adversarial r8 LOW). The real per-code-point coverage is in
+		// pytext's sweep; what was missing here was the composition
+		// through Slugify, which is where the divergence lands on a
+		// FILENAME.
+		"ΑΣࢗΑ",          // case-ignorable supplement: skip the mark, hit Α
+		"ΑΣ\U0001171EΑ", // the exclusion: stop at the mark, do not reach Α
 	}
 	want := pythonSlugify(t, names)
 	for i, n := range names {

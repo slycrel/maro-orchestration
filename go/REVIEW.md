@@ -4140,3 +4140,118 @@ by me in the immediately preceding round. Confident prose about a
 guarantee is the least reliable line in the file.
 
 NEXT: r8 over the whole chunk, then adversarial r1 over `internal/tasks`.
+
+## Adversarial r8 — whole chunk (opus tier)
+
+0 HIGH, 4 MEDIUM, 3 LOW. All seven reproduced independently before any
+fix; all seven fixed; every fix then mutation-verified. Reviewer tier was
+raised for this round per the standing escalation rule, and it earned it —
+three of the seven are pins that could not fail, which is the class this
+chunk keeps producing and which the previous rounds had stopped finding.
+
+### MEDIUM — the re-entrancy pin passed with the guard deleted
+
+`TestTheAuditAppendDoesNotReenterRotation` seeded `rotate_keep: 0` and
+called that "the sharpest version of both" failure modes. It is the one
+retention at which NEITHER can occur: with no retained tail the fresh
+active file holds only the ~250-byte audit row, so the re-entered call
+returns at the size gate having never consulted the guard.
+
+Verified by deleting the CAS guard: the pin passed. The same mutant
+against a `keep: 10` fixture hangs — unbounded recursion, one archive per
+row, on the shared `memory/` directory.
+
+Re-fixtured at retention 10 (a ~2.5 KB tail against a 1,048-byte gate),
+with retention 0 kept as a second case labelled for what it actually
+tests. The pin now fails on the guard-deleted mutant, bounded by its own
+30s timeout rather than hanging. It also asserts that the post-rotation
+active file still exceeds the gate, so a future fixture edit cannot
+silently disarm it the same way again.
+
+### MEDIUM — the guard's comment named a deadlock that cannot happen
+
+The comment claimed the guard also kept `Locked` from deadlocking against
+itself. `Locked`'s critical section closes at `rotate.go:239`; the audit
+append is at `:244`, outside it. Nothing nests — each re-entry takes and
+releases the lock cleanly and then recurses. Python's own comment says
+"cascades" and says nothing about locks; the deadlock was invented on this
+side. Corrected in both the source and the test, because a maintainer who
+goes looking for the lock nesting will not find it and may conclude the
+guard is removable — which is exactly how the cascade comes back.
+
+### MEDIUM — the audience census certified events from its own registry
+
+This is a defect in the r7 fix, one round old. `record.go` matched the
+non-literal-emitter detector (its `Event`/`EventRelated` delegate inward
+to `EventNoted`), so the harvest swept up every event-shaped literal in
+that file — including the `userSurfacedEvents` map keys declared there.
+Every declared type therefore certified itself as emitted. Renaming all
+three real `SKILL_PROMOTED` / `SKILL_DEMOTED` / `ISLAND_CULLED` emitters
+left the census green: a tripwire written *because* the registry drifted
+silently could no longer see the registry drift.
+
+The accounting now has two kinds. `indirectHarvest` is for files whose
+literals ARE the events they emit; `indirectDelegation` is for files whose
+non-literal call originates nothing, and whose literals are declarations
+rather than emissions. Both mutations now fail: renaming the emitters, and
+removing `record.go` from the delegation list (so it is still accounted
+for, not silently ignored).
+
+The general lesson is worth keeping. An allowlist added to close a blind
+spot is itself a blind spot unless something proves each entry still
+earns its place — and "harvest everything in the file" is too coarse a
+tool when one of those files is where the registry lives.
+
+### MEDIUM — `rotate_mb: .inf` rotated here and was refused there
+
+Python computes `int(rotate_mb * 1024 * 1024)` inside the try that wraps
+the whole rotation, and Python ints are arbitrary precision. So `.inf` and
+`.nan` RAISE and abandon rotation, while a finite-but-enormous value
+succeeds and simply never fires the gate.
+
+Go's `int64` of any of the three is an unrepresentable conversion: on
+amd64 all yield `MinInt64`, so `size < maxBytes` is false and the log
+rotates every single time. `.inf` is precisely what an operator writes to
+mean "never rotate", and it produced the exact inversion — on a file
+Python considers untouched. The result is even architecture-dependent
+(arm64 saturates the other way).
+
+Both Python behaviours are now reproduced separately, with a
+three-case differential against CPython's own `_maybe_rotate`.
+
+### LOW — three comments and a fixture set that claimed more than they did
+
+`rotate.go` called the audit row "byte-identical to Python's" while
+PORT.md honestly records that separators and nested key order differ; the
+row's PROSE is byte-identical and the row is not. The audit-row
+differential said "everything else must match exactly" while marshalling
+both sides through `json.Marshal`, which sorts keys and normalizes
+separators — so it is deliberately blind to the two things that actually
+differ. Its comment now says what it pins, and a raw-bytes assertion
+covers the regression it could not see: a writer that stopped using
+`pyjson` entirely would have canonicalized to the same map and stayed
+green.
+
+Two `Slugify` fixtures were labelled for tables that did not decide them.
+`"ΑΣ𑜞"` and `"ΑΣࢗ"` end after the mark, so the scan runs off the
+string and every spelling of the tables yields ς; mutating either table
+left the test green. Both now carry a trailing cased rune, and each fails
+on exactly the table its label names.
+
+### What the round says about the practice
+
+Escalating the reviewer tier changed what came back. r7 at the lower tier
+found real defects but did not find a single un-failable pin; r8 found
+three, one of them in r7's own fix. The pattern across r5–r8 is that this
+chunk's dangerous defects are not wrong code — they are green tests and
+confident comments about code that is fine, which is the one thing a
+review scoped to a diff will never surface.
+
+And a fix is not a finding closed. r7's census fix introduced the r8
+census defect, and both my r7 pins and r8's three all shared one property:
+they were written against code that was already correct, so nothing in
+writing them could reveal that they proved nothing. Only mutating the
+production code does.
+
+NEXT: r9 over the whole chunk once the playbook module lands, then
+adversarial r1 over `internal/tasks`.

@@ -259,7 +259,10 @@ var userSurfacedEvents = map[string]bool{
 	"EVOLVER_REVERTED":     true,
 	"EVOLVER_VERDICT":      true,
 	"GRADUATION_PROPOSED":  true,
-	"GRADUATION_VERIFIED":  true,
+	// The playbook CURATION pass is user-surfaced; a single append
+	// (PLAYBOOK_UPDATED) is not. Different verbs, different audiences.
+	"PLAYBOOK_CURATED":    true,
+	"GRADUATION_VERIFIED": true,
 
 	// LOG_ROTATED is deliberately ABSENT, verified against the live
 	// frozenset rather than read off the source: it appears in Python's

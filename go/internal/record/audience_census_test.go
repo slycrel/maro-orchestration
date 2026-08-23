@@ -55,6 +55,12 @@ var knownEmittedEvents = map[string]string{
 	// point: the trip is the decision a user should see, the mismatch is
 	// the qualifier an operator finds when they go looking at why.
 	"INPUT_MISMATCH": "system",
+	// The playbook's two verbs, and they do NOT share an audience —
+	// verified against the live frozenset, not read off a list.
+	// PLAYBOOK_UPDATED is one append the evolver made; PLAYBOOK_CURATED
+	// is the dream-cycle rewrite that reshapes the whole document.
+	"PLAYBOOK_UPDATED": "system",
+	"PLAYBOOK_CURATED": "user",
 }
 
 // The registry drifted silently once already: skill slices 3b and 3c
@@ -82,14 +88,29 @@ func TestEveryEmittedEventTypeHasADecidedAudience(t *testing.T) {
 	// Two mechanisms answer that. indirect finds the non-literal call
 	// sites; a file holding one is not trusted to the regex, so instead
 	// every event-type-shaped literal ANYWHERE in it is harvested into the
-	// census (eventShaped). And any such file that is not named in
-	// indirectSites fails outright, so the next variable emitter is a red
-	// test rather than another silent hole.
+	// census (eventShaped). And any such file that is not accounted for
+	// below fails outright, so the next variable emitter is a red test
+	// rather than another silent hole.
+	//
+	// The accounting has TWO kinds, and collapsing them into one was a
+	// real defect (adversarial r8 MEDIUM). record.go's non-literal call is
+	// Event/EventRelated delegating INWARD to EventNoted — it originates
+	// nothing. Harvesting it swept up the userSurfacedEvents map keys
+	// declared in that same file, so every declared type certified itself
+	// as emitted: renaming all three real SKILL_PROMOTED / SKILL_DEMOTED /
+	// ISLAND_CULLED emitters left the census green. A tripwire written
+	// because the registry drifted silently could no longer see the
+	// registry drift.
 	indirect := regexp.MustCompile(`\.Event(?:Related|Noted)?\(\s*[^"\s]`)
 	eventShaped := regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
-	indirectSites := map[string]string{
+	// Files whose event-shaped literals ARE the events they emit.
+	indirectHarvest := map[string]string{
 		"skills/utility.go": "circuit state -> event type via a map literal",
-		"record/record.go":  "Event/EventRelated delegating to EventNoted",
+	}
+	// Files whose non-literal call originates no event of its own. Their
+	// literals are NOT harvested — they are declarations, not emissions.
+	indirectDelegation := map[string]string{
+		"record/record.go": "Event/EventRelated delegating to EventNoted",
 	}
 	found := map[string][]string{}
 	var unexpectedIndirect []string
@@ -110,7 +131,11 @@ func TestEveryEmittedEventTypeHasADecidedAudience(t *testing.T) {
 			found[m[1]] = append(found[m[1]], rel)
 		}
 		if indirect.Match(src) {
-			if _, ok := indirectSites[filepath.ToSlash(rel)]; !ok {
+			key := filepath.ToSlash(rel)
+			if _, ok := indirectDelegation[key]; ok {
+				return nil // originates nothing; harvesting it self-certifies
+			}
+			if _, ok := indirectHarvest[key]; !ok {
 				unexpectedIndirect = append(unexpectedIndirect, rel)
 				return nil
 			}
@@ -126,11 +151,13 @@ func TestEveryEmittedEventTypeHasADecidedAudience(t *testing.T) {
 	if len(unexpectedIndirect) > 0 {
 		t.Errorf("these files pass a non-literal event type to an Event* "+
 			"writer, so the literal census cannot see what they emit: %s\n"+
-			"Either pass a literal, or add the file to indirectSites so its "+
-			"event-shaped literals are harvested instead.",
+			"Either pass a literal, add the file to indirectHarvest so its "+
+			"event-shaped literals are harvested, or — if its call only "+
+			"delegates inward and originates nothing — to "+
+			"indirectDelegation.",
 			strings.Join(unexpectedIndirect, ", "))
 	}
-	for site := range indirectSites {
+	for site := range indirectHarvest {
 		var seen bool
 		for _, sites := range found {
 			for _, s := range sites {
