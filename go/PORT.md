@@ -2753,3 +2753,61 @@ Python writes a bare `datetime.now(timezone.utc).isoformat()` there, which
 omits the fractional part when the microsecond is 0, where the package-wide
 stamp always writes six digits for lexicographic sorting. Nothing sorts a
 marker, so the faithful spelling wins.
+
+### The daily log and MEMORY.md — `internal/record/dailylog.go` (2026-08-23)
+
+Python's `record_outcome` maintains three surfaces, and the Go port wrote
+one. `memory/<YYYY-MM-DD>.md` and `memory/MEMORY.md` are the two a person
+actually opens, and a Go run left no trace in either (adversarial r5,
+MEDIUM).
+
+The asymmetry is what made this worth porting rather than shrugging at.
+`MEMORY.md` is a full REWRITE from the ledger, so the next Python run heals
+a Go-only gap. The daily log is APPEND-PER-OUTCOME: nothing rebuilds it, so
+every Go run was a **permanent** hole in that day's record. The warning
+text says exactly that, and the two surfaces are announced differently for
+that reason.
+
+**Two clocks, and porting the bug is the point.** `_daily_path()` names the
+file from `date.today()` — the machine's LOCAL date — while the heading
+inside it is `recorded_at[:10]`, which is UTC. This box runs at UTC-6, so
+the two genuinely disagree here every evening between 18:00 and midnight
+local; it is not a theoretical edge. Matching it is mandatory because
+`_update_memory_index` globs `????-??-??.md` and keys on the FILENAME: a
+runtime that "fixed" the skew would file runs where the other runtime's
+reader never looks.
+
+**Python's reader is stricter than ours, and the index has to match it.**
+`load_outcomes` rehydrates each row into the `Outcome` dataclass, so a row
+missing any of the six fields that have no default (`outcome_id`, `goal`,
+`task_type`, `status`, `summary`, `lessons`) raises `TypeError` and is
+dropped — measured, not inferred; CPython announced "4 row(s) ... are JSON
+but not loadable under the current schema" when the probe seeded partial
+rows. The exclusion happens BEFORE the last-ten slice, so a dropped row
+does not consume a window slot. `updateMemoryIndex` therefore loads
+everything, filters, then takes ten. `LoadOutcomes`' tolerance is right for
+its other consumers and wrong here, so the filter is local to this one
+renderer — the only Go function whose OUTPUT lands in a file Python
+rewrites.
+
+**One place the port deliberately does NOT use the hardened tri-state.**
+`record.GoalAchieved` grades a malformed `goal_achieved` as
+judged-NOT-achieved, which is right for a trust decision. The index counts
+with a plain bool assertion instead, matching Python's `is True` / `is
+False`, because these three buckets must still sum to the window size — a
+malformed verdict belongs in the unjudged remainder, not in the failures.
+
+**Absent by design, and pinned as such:** the daily entry omits Python's
+cost suffix (the Go row has no `cost_usd` — a hardcoded 0.0 is a record
+that lies about spend) and its Lessons block (the Go row's `lessons` is
+empty; the extractor is not ported). Neither is written as an untakeable
+branch. A test asserts both fields are still empty, so the day either
+starts carrying data this writer fails and names itself as the thing to
+update.
+
+**One named divergence, a deliberate improvement.** Python wraps
+`_update_memory_index` in a bare `except: pass`, so an unwritable memory
+dir leaves the index silently months stale. Go returns the error, and the
+caller announces it as a warning. The behaviour that matters — a failure
+here never fails the outcome — is preserved at the call site rather than by
+swallowing.

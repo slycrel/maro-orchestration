@@ -3578,3 +3578,58 @@ order, compact-vs-indent spelling, both stats counters, and the loop wiring
 
 NEXT: r5 M1 (the daily markdown log + MEMORY.md index, absent in Go), then
 M2, L1–L4; then adversarial r1 over `internal/tasks`.
+
+---
+
+## Adversarial r5 — M1: the two human-readable surfaces (2026-08-23): FIXED
+
+Python's `record_outcome` writes three files; the Go port wrote one. The
+daily markdown log and `MEMORY.md` are ported in `internal/record/dailylog.go`
+— rationale, the two-clock quirk, and the stricter-reader match are in
+PORT.md.
+
+**Differential first.** Both files are shared with Python, so the pins are
+byte comparisons against CPython, with ONE case table passed to both sides
+rather than transcribed. A hand-kept expectation table drifts silently the
+moment Python's format string changes, which is the failure this port keeps
+re-learning.
+
+**Mutation battery** (`scratchpad/mut_m1.py`): 36 mutants derived from
+`dailylog.go` and `record.go`, not from the diff. First pass 26/35 with six
+survivors and three killed by the compiler; **final 33/36**, three
+survivors, all proved equivalent.
+
+Real gaps the battery exposed, each now pinned:
+
+| Survivor | Verdict |
+|---|---|
+| summary cut measured in BYTES | **real gap, and the differential was blind to it.** The 500-rune case does not separate a rune cut from a byte cut — both counts exceed 400 and both implementations trim. The shape that separates them is WIDE BUT SHORT: 250 runes at 500 bytes, where Python leaves the summary alone and a byte test says "too long" and then slices `runes[:400]` out of a 250-rune slice. Pinned with that case. |
+| file named from UTC rather than local | **real gap — a time-of-day-blind pin.** The test took its expectation from `time.Now()`, so it agreed with itself no matter which clock the code used. On this box (UTC-6) it would have passed all morning and failed after 18:00. Rewritten to CONSTRUCT a zone that puts local time at 23:59:59 of the previous UTC day, so the two dates differ whenever the suite runs, with a fatal guard if the construction stops crossing the boundary. |
+| last-ten window taken BEFORE the schema filter | **real gap — the fixture was too small.** With five ledger rows, dropping the unloadable row left the same four either way. Extended to twelve rows with the unloadable one inside the newest ten, so windowing first yields nine loadable rows and filtering first yields ten. |
+| the daily-log failure swallowed | mutant killed by the **compiler**, which proves nothing; rewritten to compile, then killed by the announcement pin. |
+| lock file is not the one Python takes | same — the original mutant left a function literal uncalled. Rewritten as a lock on a DIFFERENT path, which is the divergence that actually matters, and killed. |
+| blank lesson lines counted | same — left the loop variable unused. Rewritten and killed. |
+
+**Three proved equivalents, with their proofs:**
+
+- **`day` sliced by bytes.** `recordedAt` is ASCII ISO-8601 from `nowISO()`
+  and `WriteOutcomeWithLog` is its only caller, so bytes and runes cannot
+  disagree. The rune slice stays because the parameter is a string and the
+  next caller may not be.
+- **Index rendered before the ledger append.** The mutant ADDS an earlier
+  render; the authoritative one after the append overwrites it, so nothing
+  observable changes. The property it was meant to test is pinned by its
+  sibling: removing the LATER render is killed.
+- **`recorded_at` re-read from the clock.** Two reads microseconds apart,
+  and the heading consumes only `[:10]`. Named residual: a read pair
+  straddling midnight UTC would disagree, which is not observable without
+  injecting a clock.
+
+**A wrong test premise, caught by the test itself.** The
+announced-not-swallowed pin first made the memory dir read-only and expected
+both surfaces to fail. Only `MEMORY.md` did: `O_APPEND` on a file that
+already exists needs no directory write at all, so the daily log succeeded.
+It takes two different levers, and the test now says so.
+
+NEXT: r5 M2 (`pytext.Repr` is not Python's `repr()`), then L1–L4; then
+adversarial r1 over `internal/tasks`.

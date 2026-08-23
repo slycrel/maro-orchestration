@@ -106,21 +106,41 @@ type Outcome struct {
 // missing != zero, and the Python Outcome dataclass defaults the field
 // on load.
 func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
+	id, _, err := r.WriteOutcomeWithLog(o)
+	return id, err
+}
+
+// WriteOutcomeWithLog is WriteOutcome plus the two human-readable surfaces
+// Python's record_outcome also maintains: today's daily markdown log and
+// the MEMORY.md index. It returns the warnings those raised.
+//
+// They are warnings, not errors, and only the LEDGER append can fail the
+// call — that is Python's split too (its index update is wrapped in a bare
+// except). What Go does not copy is the silence: a person whose MEMORY.md
+// has been stale for months should be told, so the failures come back to
+// the caller instead of being swallowed here.
+//
+// The order is Python's: ledger append, then daily log, then index. The
+// index READS the ledger, so it must run after the append or it renders a
+// stats block that is one run behind the file it sits next to.
+func (r *Recorder) WriteOutcomeWithLog(o Outcome) (string, []string, error) {
 	dir, err := r.memoryDir()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	id := NewID()
 	fail := o.FailChain
 	if fail == nil {
 		fail = []string{}
 	}
+	taskType := orDefault(o.TaskType, "general")
+	recordedAt := nowISO()
 	row := map[string]any{
 		"outcome_id":        id,
 		"goal":              o.Goal,
 		"status":            o.Status,
 		"summary":           o.Summary,
-		"task_type":         orDefault(o.TaskType, "general"),
+		"task_type":         taskType,
 		"model":             o.Model,
 		"loop_id":           o.LoopID,
 		"project":           o.Project,
@@ -131,7 +151,7 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 		"lessons":           []string{},
 		"failure_chain":     fail,
 		"recovery_steps":    0,
-		"recorded_at":       nowISO(),
+		"recorded_at":       recordedAt,
 		"measurement_class": "go-port",
 		"stop_verdict":      o.StopVerdict,
 		"stuck_reason":      o.StuckReason,
@@ -147,9 +167,21 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 	}
 	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row,
 		outcomeKeyOrder); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return id, nil
+	var warns []string
+	if err := appendDailyLog(dir, o, taskType, recordedAt); err != nil {
+		// Named precisely: this hole is PERMANENT. The daily log is
+		// append-per-outcome, so unlike MEMORY.md nothing ever rebuilds it
+		// and no later run heals the gap.
+		warns = append(warns, "daily log NOT written for outcome "+id+
+			" — this run is permanently absent from the day's record: "+err.Error())
+	}
+	if err := updateMemoryIndex(dir); err != nil {
+		warns = append(warns, "MEMORY.md index NOT updated after outcome "+id+
+			" (the next successful outcome rewrites it in full): "+err.Error())
+	}
+	return id, warns, nil
 }
 
 // outcomeKeyOrder is the order this row is built above, which is the

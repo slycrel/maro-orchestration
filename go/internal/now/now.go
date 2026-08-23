@@ -162,7 +162,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 	// boundary (closure doctrine: scrub where the field is SET, so
 	// every consumer — row, stamp, terminal — inherits clean text).
 	summary := budget.StepResult.Clip(res.Answer)
-	if _, werr := rec.WriteOutcome(record.Outcome{
+	_, outWarns, werr := rec.WriteOutcomeWithLog(record.Outcome{
 		Goal: goal, Status: res.Status, Summary: summary,
 		TaskType: "now", Model: model, LoopID: loopID, DryRun: dryRun,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
@@ -170,7 +170,9 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 		GoalAchieved:      res.GoalAchieved,
 		GoalVerdictSource: verdictSource,
 		VerdictSummary:    budget.VerdictProse.Clip(res.VerdictSummary),
-	}); werr != nil {
+	})
+	res.Warnings = append(res.Warnings, outWarns...)
+	if werr != nil {
 		res.Warnings = append(res.Warnings, "outcome recording failed: "+werr.Error())
 	}
 	if evErr := rec.Event("NOW_ANSWERED", loopID,

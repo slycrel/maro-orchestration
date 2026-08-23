@@ -228,7 +228,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		for _, w := range recallWarns {
 			chain = append(chain, budget.FailureChainEntry.Clip(w))
 		}
-		_, recErr := rec.WriteOutcome(record.Outcome{
+		_, recWarns, recErr := rec.WriteOutcomeWithLog(record.Outcome{
 			Goal: goal, Status: "stuck", LoopID: loopID,
 			Summary:   budget.FailureChainEntry.Clip("decompose failed: " + err.Error()),
 			TaskType:  "loop",
@@ -244,6 +244,14 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		}
 		if runDir != "" {
 			_ = runs.Finalize(runDir, "stuck")
+		}
+		if len(recWarns) > 0 {
+			// This path returns no LoopResult, so there is no Warnings slice
+			// to carry them — and a permanently-missing daily-log entry is
+			// not worth losing to that. Fold them into the error the caller
+			// is about to print.
+			err = fmt.Errorf("%w (recorded, with warnings: %s)",
+				err, strings.Join(recWarns, "; "))
 		}
 		return nil, err
 	}
@@ -327,7 +335,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 			// decompose branch above records, this path didn't).
 			setupErr := fmt.Errorf("exec mode: cannot set up project dir %s: %w",
 				res.ProjectDir, err)
-			if _, recErr := rec.WriteOutcome(record.Outcome{
+			_, recWarns, recErr := rec.WriteOutcomeWithLog(record.Outcome{
 				Goal: goal, Status: "stuck", LoopID: loopID,
 				Summary:   budget.FailureChainEntry.Clip("project dir setup failed: " + err.Error()),
 				TaskType:  "loop",
@@ -337,11 +345,16 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 				TokensOut: res.TokensOut,
 				ElapsedMS: time.Since(start).Milliseconds(),
 				FailChain: []string{budget.FailureChainEntry.Clip(setupErr.Error())},
-			}); recErr != nil {
+			})
+			if recErr != nil {
 				return nil, fmt.Errorf("%v AND recording failed: %w", setupErr, recErr)
 			}
 			if runDir != "" {
 				_ = runs.Finalize(runDir, "stuck")
+			}
+			if len(recWarns) > 0 {
+				setupErr = fmt.Errorf("%w (recorded, with warnings: %s)",
+					setupErr, strings.Join(recWarns, "; "))
 			}
 			return nil, setupErr
 		}
@@ -664,14 +677,16 @@ stepLoop:
 	if last := lastResult(res.Steps); last != "" {
 		summary += " " + budget.StepResult.Clip(last)
 	}
-	if _, err := rec.WriteOutcome(record.Outcome{
+	_, outWarns, err := rec.WriteOutcomeWithLog(record.Outcome{
 		Goal: goal, Status: res.Status, Summary: summary,
 		TaskType: "loop", Model: recModel, LoopID: loopID,
 		DryRun:   opts.DryRun,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		ElapsedMS: res.Elapsed.Milliseconds(), FailChain: failChain,
 		StopVerdict: res.StopVerdict, StuckReason: res.StuckReason,
-	}); err != nil {
+	})
+	res.Warnings = append(res.Warnings, outWarns...)
+	if err != nil {
 		// Outcome recording failed but the run itself finished — finalize
 		// the run dir and name the gap before surfacing the error, or the
 		// metadata lies "running" forever and closure's absence is
