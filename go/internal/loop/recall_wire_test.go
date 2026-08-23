@@ -10,6 +10,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/skills"
 )
 
 // TestRunInjectsRecallIntoDecomposePrompt pins the recall tranche's
@@ -152,5 +153,54 @@ func TestRecallEventFailureSurfacesAsWarningOnHealthyRun(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("recall event-write failure silent on happy path; warnings: %v", res.Warnings)
+	}
+}
+
+// Skills ride the decompose prompt AHEAD of ancestry and lessons —
+// Python's extras order (planner.py:962). The port's premise is that a
+// goal planned by either runtime sees the same prompt; a different
+// context ORDER is a silent A/B confound, not a cosmetic difference.
+func TestDecomposeExtrasOrderSkillsBeforeLessons(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("MARO_WORKSPACE", ws)
+	memDir := filepath.Join(ws, "memory", "medium")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lesson := "always smoke the staging index before a widget deploy"
+	row := `{"lesson_id":"ord1","task_type":"agenda","outcome":"done","lesson":"` +
+		lesson + `","score":1.0,"last_reinforced":"` +
+		time.Now().UTC().Format("2006-01-02") + `","times_reinforced":2}` + "\n"
+	if err := os.WriteFile(filepath.Join(memDir, "lessons.jsonl"), []byte(row), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := skills.Skill{ID: "sk-order", Name: "Index Smoker",
+		Description:     "smoke the index",
+		TriggerPatterns: []string{"staging index"},
+		StepsTemplate:   []string{"smoke"},
+		CreatedAt:       "2026-08-20T10:00:00+00:00", Tier: "provisional",
+		SuccessRate: 1.0, UtilityScore: 1.0, CircuitState: "closed",
+		Imported: map[string]any{},
+	}
+	if err := skills.SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &llm.Fake{Script: []string{`["inspect the staging index"]`, "done"}}
+	if _, err := Run(context.Background(), fake, record.New(ws), Opts{
+		Goal:     "deploy the widget service after checking the staging index",
+		MaxSteps: 1, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	sys := fake.Prompts[0]
+	skillAt := strings.Index(sys, "Reusable skills from past successful goals:")
+	lessonAt := strings.Index(sys, "## Lessons from Prior Runs")
+	if skillAt < 0 || lessonAt < 0 {
+		t.Fatalf("both blocks must be present: skills=%d lessons=%d\n%s",
+			skillAt, lessonAt, sys)
+	}
+	if skillAt > lessonAt {
+		t.Fatalf("skills must precede lessons (planner.py:962): skills at %d, lessons at %d",
+			skillAt, lessonAt)
 	}
 }

@@ -248,12 +248,20 @@ type MatchOptions struct {
 	// Project isolation: when non-empty, only skills with project==""
 	// (global) or project==this value are considered.
 	Project string
-	// OnlyIDs restricts candidates to the run's injected manifest (used at
-	// attribution time). When set, A/B challengers in the set stay eligible
-	// — they were the routed arm. When nil (candidate discovery),
-	// challengers are excluded: a challenger is reachable ONLY via its
-	// parent's routing.
-	OnlyIDs []string
+	// OnlyIDs, with RestrictToIDs set, limits candidates to the run's
+	// injected manifest (used at attribution time). Challengers in that set
+	// stay eligible — they were the routed arm. In candidate-discovery mode
+	// (RestrictToIDs false) challengers are excluded: a challenger is
+	// reachable ONLY via its parent's routing.
+	//
+	// The mode is an explicit FLAG, not the nil-ness of the slice: in Go a
+	// slice built by appending over an empty manifest is nil, not empty, so
+	// "restrict to these zero ids" and "do not restrict" would have been
+	// the same value — and an attribution caller with an empty manifest
+	// would have silently scored the entire library. Python's `only_ids=[]`
+	// is unambiguous because a list comprehension is never None.
+	OnlyIDs       []string
+	RestrictToIDs bool
 }
 
 // FindMatchingSkills ports find_matching_skills' tier ladder, minus the
@@ -267,8 +275,20 @@ type MatchOptions struct {
 // The tier stamps ("router"/"mixed") stay defined in the telemetry contract
 // so the field means the same thing in both runtimes' records.
 func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchTelemetry) {
+	return FindMatchingSkillsIn(LoadSkills(ws).Skills, goal, o)
+}
+
+// FindMatchingSkillsIn is the matcher over an already-loaded pool, so a
+// caller that needs the LoadResult's loss counters reads the store once and
+// announces what it lost.
+func FindMatchingSkillsIn(pool []Skill, goal string, o MatchOptions) ([]Skill, MatchTelemetry) {
 	tel := MatchTelemetry{Method: "none", Scores: map[string]float64{}}
-	note := func(method string, winners []Skill, scores []float64, nCandidates int) []Skill {
+	// note RETURNS the telemetry rather than mutating a captured copy that
+	// the same return statement also reads: Go orders function calls
+	// left-to-right but leaves other operands of an expression
+	// unspecified, so `return note(...), tel` was reading a value whose
+	// freshness the spec does not promise.
+	note := func(method string, winners []Skill, scores []float64, nCandidates int) ([]Skill, MatchTelemetry) {
 		out := make([]Skill, 0, len(winners))
 		for i, sk := range winners {
 			sk.MatchMethod = method
@@ -279,19 +299,18 @@ func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchT
 		if len(out) == 0 {
 			tel.Method = "none"
 			tel.TopScore = 0
-			return out
+			return out, tel
 		}
 		tel.Method = method
 		tel.TopScore = round4(scores[0])
 		for i, sk := range out {
 			tel.Scores[sk.ID] = round4(scores[i])
 		}
-		return out
+		return out, tel
 	}
 
-	pool := LoadSkills(ws).Skills
 	if len(pool) == 0 {
-		return note("none", nil, nil, 0), tel
+		return note("none", nil, nil, 0)
 	}
 
 	if o.Project != "" {
@@ -313,7 +332,7 @@ func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchT
 	}
 	pool = closed
 
-	if o.OnlyIDs != nil {
+	if o.RestrictToIDs {
 		only := map[string]bool{}
 		for _, id := range o.OnlyIDs {
 			only[id] = true
@@ -335,7 +354,7 @@ func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchT
 		pool = kept
 	}
 	if len(pool) == 0 {
-		return note("none", nil, nil, 0), tel
+		return note("none", nil, nil, 0)
 	}
 
 	// Keyword tier: exact trigger-pattern overlap, either direction, plus
@@ -375,7 +394,7 @@ func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchT
 			winners = append(winners, h.skill)
 			scores = append(scores, float64(h.score))
 		}
-		return note("keyword", winners, scores, len(pool)), tel
+		return note("keyword", winners, scores, len(pool))
 	}
 
 	// TF-IDF tier: relevance-ranked retrieval when no keyword match fires
@@ -385,7 +404,7 @@ func FindMatchingSkills(ws string, goal string, o MatchOptions) ([]Skill, MatchT
 	for _, s := range ranked {
 		scores = append(scores, s.MatchScore)
 	}
-	return note("tfidf_fallback", ranked, scores, len(pool)), tel
+	return note("tfidf_fallback", ranked, scores, len(pool))
 }
 
 // FormatSkillsForPrompt ports format_skills_for_prompt: the injection block

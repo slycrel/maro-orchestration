@@ -32,10 +32,24 @@ import (
 //
 // Numbers decode as json.Number so an int stays distinguishable from a
 // float — Python's json.loads makes that distinction and its validators
-// depend on it (7 vs 7.0). Named divergence: Python's json.loads ACCEPTS
-// the non-standard NaN/Infinity tokens and its validators then reject the
-// row for non-finiteness; Go's decoder refuses the line outright. Same
-// outcome (the row strands), different door.
+// depend on it (7 vs 7.0). NaN/Infinity are refused at this same door in
+// both runtimes: Go's decoder rejects the tokens outright, and Python
+// passes json.loads a parse_constant hook that raises on them
+// (jsonl_utils._refuse_constant) — a row does not have to be laundered to
+// do damage, it only has to be ADMITTED into a removal decision.
+//
+// Named divergences that remain, both in the strand-safe direction except
+// where noted:
+//
+//   - Nesting depth. Go refuses at encoding/json's maxNestingDepth (10000);
+//     CPython's parser goes deeper before its own stack gives out (measured:
+//     Python admits depth 20000, refuses ~2M). Both strand eventually, at
+//     different depths.
+//   - Integer literals longer than 4300 digits. CPython's int() conversion
+//     is capped there and raises, so loads_clean strands the row; Go would
+//     admit it. Refused explicitly below, because this is the direction that
+//     matters — a row Go admits and Python strands is a row only one runtime
+//     will act on.
 func LoadsClean(line string) (map[string]any, error) {
 	if !utf8.ValidString(line) {
 		return nil, fmt.Errorf("byte-tainted line (raw non-UTF-8 bytes)")
@@ -70,55 +84,76 @@ func IsFrameBlank(raw string) bool { return raw == "" }
 
 // refuseDuplicateNames walks the token stream and fails any object that
 // names the same key twice, at any depth.
+//
+// The walk is ITERATIVE, over an explicit stack. A recursive walker is the
+// natural shape and it is the wrong one here: this runs BEFORE Decode, so
+// nothing has bounded the nesting yet, and encoding/json's own
+// maxNestingDepth lives in the scanner, which Token() does not drive for
+// delimiters. A recursive version died of an unrecoverable `fatal error:
+// stack overflow` on a ~4MB line (measured: depth 1.5M returned an error,
+// 2M fataled) — no recover, no defer, no strand, just process death on
+// every run until someone hand-edited the store. Python removed recursion
+// from its equivalent scanner for exactly this reason (jsonl_utils r6), and
+// a line that does not parse must STRAND, not kill the reader.
 func refuseDuplicateNames(line string) error {
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
-	var walk func() error
-	walk = func() error {
+
+	// One frame per open container. seen == nil marks an array frame; an
+	// object frame alternates key/value via expectKey.
+	type frame struct {
+		seen      map[string]bool
+		expectKey bool
+	}
+	var stack []frame
+	for {
 		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		delim, ok := tok.(json.Delim)
-		if !ok {
-			return nil // scalar
+		if num, isNum := tok.(json.Number); isNum && !intFitsPython(num) {
+			return fmt.Errorf("integer literal exceeds 4300 digits — refused")
 		}
-		switch delim {
-		case '{':
-			seen := map[string]bool{}
-			for dec.More() {
-				kt, err := dec.Token()
-				if err != nil {
-					return err
+		if delim, isDelim := tok.(json.Delim); isDelim {
+			switch delim {
+			case '{':
+				stack = append(stack, frame{seen: map[string]bool{}, expectKey: true})
+				continue
+			case '[':
+				stack = append(stack, frame{})
+				continue
+			default: // '}' or ']'
+				if len(stack) == 0 {
+					return fmt.Errorf("unbalanced JSON delimiter")
 				}
-				key, ok := kt.(string)
-				if !ok {
+				stack = stack[:len(stack)-1]
+			}
+		} else if len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.seen != nil && top.expectKey {
+				key, isStr := tok.(string)
+				if !isStr {
 					return fmt.Errorf("non-string object key")
 				}
-				if seen[key] {
+				if top.seen[key] {
 					return fmt.Errorf("duplicate name %q in one object", key)
 				}
-				seen[key] = true
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-		case '[':
-			for dec.More() {
-				if err := walk(); err != nil {
-					return err
-				}
+				top.seen[key] = true
+				top.expectKey = false
+				continue
 			}
 		}
-		if _, err := dec.Token(); err != nil { // closing delimiter
-			return err
+		// A value just closed or completed: the enclosing object expects
+		// its next key.
+		if len(stack) > 0 {
+			if top := &stack[len(stack)-1]; top.seen != nil {
+				top.expectKey = true
+			}
 		}
-		return nil
 	}
-	if err := walk(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 // RefuseLoneSurrogates scans raw JSON text for \uD800–\uDFFF escapes that do
@@ -176,4 +211,21 @@ func RefuseLoneSurrogates(raw []byte) error {
 		i += 5
 	}
 	return nil
+}
+
+// intFitsPython reports whether an integer literal is one CPython can
+// convert. CPython caps int() at 4300 digits and raises above it, so
+// loads_clean strands such a row; without this check Go would admit a row
+// Python strands, and only one runtime would act on it. Float literals are
+// unaffected in both runtimes.
+func intFitsPython(n json.Number) bool {
+	s := n.String()
+	if strings.ContainsAny(s, ".eE") {
+		return true // a float literal, not an int() conversion
+	}
+	digits := len(s)
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		digits--
+	}
+	return digits <= 4300
 }

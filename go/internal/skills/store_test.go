@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // pythonRow is a row emitted by fork-point Python (skill_types.skill_to_dict
@@ -164,7 +166,7 @@ func TestSaveSkillCarriesUnprovableSameIDRow(t *testing.T) {
 	writeStore(t, ws, keep)
 	s, _ := DictToSkill(map[string]any{"id": "same", "name": "n",
 		"description": "d", "created_at": "2026-08-20T10:00:00+00:00"})
-	if err := SaveSkill(ws, s); err != nil {
+	if err := SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
 	lines := readStore(t, ws)
@@ -186,7 +188,7 @@ func TestSaveSkillCarriesTaintedLineVerbatimAndReplacesItsOwn(t *testing.T) {
 	}
 	s, _ := DictToSkill(map[string]any{"id": "a", "name": "n-a",
 		"description": "new", "created_at": "2026-08-20T10:00:00+00:00"})
-	if err := SaveSkill(ws, s); err != nil {
+	if err := SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -212,7 +214,7 @@ func TestSaveSkillRefusesTaintedContentWithoutTouchingTheStore(t *testing.T) {
 	bad, _ := DictToSkill(map[string]any{"id": "a", "name": "n",
 		"description": "d", "created_at": "2026-08-20T10:00:00+00:00"})
 	bad.Tier = "\xff\xfe" // hash-excluded field: the hash cannot see this
-	if err := SaveSkill(ws, bad); err == nil {
+	if err := SaveSkill(ws, &bad); err == nil {
 		t.Fatal("a byte-tainted skill must be refused")
 	}
 	if lines := readStore(t, ws); len(lines) != 1 || lines[0] != original {
@@ -225,7 +227,7 @@ func TestSaveSkillRefusesNonFiniteScore(t *testing.T) {
 	s, _ := DictToSkill(map[string]any{"id": "a", "name": "n",
 		"description": "d", "created_at": "2026-08-20T10:00:00+00:00"})
 	s.UtilityScore = mathInf()
-	if err := SaveSkill(ws, s); err == nil {
+	if err := SaveSkill(ws, &s); err == nil {
 		t.Fatal("a non-finite score must be refused (Python allow_nan=False)")
 	}
 	if _, err := os.Stat(skillsPath(ws)); err == nil {
@@ -264,3 +266,212 @@ func TestArchiveSkillsProvesEveryLineBeforeAnyAppend(t *testing.T) {
 }
 
 func mathInf() float64 { return math.Inf(1) }
+
+// --- r1 fixes ---
+
+// The caller must see the content_hash the save computed. Python's
+// save_skill mutates in place, and a mint path that records a manifest
+// entry from the just-saved skill would otherwise stamp an empty hash — a
+// provenance record that cannot be checked against the row it describes.
+func TestSaveSkillGivesTheCallerItsContentHash(t *testing.T) {
+	ws := t.TempDir()
+	s := base("h", "Hasher")
+	if s.ContentHash != "" {
+		t.Fatal("fixture should start unhashed")
+	}
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.ContentHash == "" {
+		t.Fatal("caller left holding an empty content_hash")
+	}
+	stored := LoadSkills(ws).Skills[0]
+	if stored.ContentHash != s.ContentHash {
+		t.Fatalf("caller's hash %q != stored %q", s.ContentHash, stored.ContentHash)
+	}
+}
+
+// The writer must not be stricter than its own reader. U+FFFD is routine,
+// legitimate text in LLM-minted skills (run output carries web-fetched
+// text), and the reader admits it — so refusing it at the writer froze a
+// live skill (no outcome or utility write could ever land) and, because
+// archiving is all-or-nothing, blocked whole culls.
+func TestReplacementCharRoundTripsThroughWriterAndArchive(t *testing.T) {
+	ws := t.TempDir()
+	s := base("u", "Caf�")
+	s.Description = "handles caf� data"
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatalf("writer refused text the reader admits: %v", err)
+	}
+	got := LoadSkills(ws).Skills
+	if len(got) != 1 || got[0].Name != "Caf�" {
+		t.Fatalf("round trip: %+v", got)
+	}
+	// It must also be updatable — the frozen-row failure — and archivable.
+	if err := SaveSkill(ws, &got[0]); err != nil {
+		t.Fatalf("a stored skill must stay updatable: %v", err)
+	}
+	if err := ArchiveSkills(ws, got, "culled"); err != nil {
+		t.Fatalf("one such row must not block a cull: %v", err)
+	}
+}
+
+// Integer literals must survive the read exactly. Routing them through
+// float64 turned MaxInt64 into a NEGATIVE counter, and these fields are
+// decision inputs: consecutive_failures drives the circuit breaker,
+// variant_wins/losses drive A/B adjudication.
+func TestLargeIntegerCountersSurviveTheReadExactly(t *testing.T) {
+	ws := t.TempDir()
+	s := base("big", "Big")
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(skillsPath(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimRight(string(raw), "\n")
+	for _, c := range []struct {
+		literal string
+		want    int
+	}{
+		{"9223372036854775807", 9223372036854775807},
+		{"9007199254740993", 9007199254740993},
+		{"4611686018427387903", 4611686018427387903},
+	} {
+		mutated := strings.Replace(line, `"variant_wins":0`,
+			`"variant_wins":`+c.literal, 1)
+		if mutated == line {
+			t.Fatal("fixture anchor missing")
+		}
+		row, err := record.LoadsClean(mutated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sk, err := ValidateSkillRow(row)
+		if err != nil {
+			t.Fatalf("%s must be admitted: %v", c.literal, err)
+		}
+		if sk.VariantWins != c.want {
+			t.Errorf("%s read back as %d", c.literal, sk.VariantWins)
+		}
+	}
+}
+
+// A load ANNOUNCES what it lost. Half a library going byte-tainted
+// otherwise looks exactly like "nothing matched" — which is also what a
+// healthy cold store looks like, so the absence of a signal is the only
+// signal.
+func TestLoadSkillsAnnouncesItsLosses(t *testing.T) {
+	ws := t.TempDir()
+	if got := LoadSkills(ws).Announce(); len(got) != 0 {
+		t.Fatalf("a cold store has nothing to announce: %+v", got)
+	}
+	s := base("ok", "Fine")
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+	path := skillsPath(ws)
+	raw, _ := os.ReadFile(path)
+	body := string(raw) + "{\"id\":\"torn\",\"name\":\"\xff\"}\n" +
+		"{\"id\":\"drift\",\"name\":123}\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := LoadSkills(ws)
+	if l.Unparseable != 1 || l.Drifted != 1 {
+		t.Fatalf("counts: unparseable=%d drifted=%d", l.Unparseable, l.Drifted)
+	}
+	w := l.Announce()
+	if len(w) != 1 || !strings.Contains(w[0], "1 unparseable and 1") {
+		t.Fatalf("announcement: %+v", w)
+	}
+
+	// An UNREADABLE store is not a cold store: reporting them alike made a
+	// permissions or EIO failure read as "no skills yet".
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o644)
+	if os.Geteuid() == 0 {
+		t.Skip("root reads through the mode bits")
+	}
+	l = LoadSkills(ws)
+	if !l.Unreadable {
+		t.Fatal("an unreadable store must say so")
+	}
+	if w := l.Announce(); len(w) != 1 || !strings.Contains(w[0], "could not be read") {
+		t.Fatalf("announcement: %+v", w)
+	}
+}
+
+// A whole-valued float must keep Python's ".0". Python's dedup identity
+// re-serializes the PARSED row (doctor._dedup_identity, sort_keys=True),
+// so a Go-written `"success_rate":1` and a Python-written
+// `"success_rate": 1.0` describing the same skill stopped comparing equal
+// and the dedup pass quietly stopped collapsing them. Line SPACING is
+// invisible to that consumer; the value spelling is not.
+func TestEmittedFloatsKeepPythonsSpelling(t *testing.T) {
+	ws := t.TempDir()
+	s := base("f", "Floaty")
+	s.SuccessRate = 1.0
+	s.UtilityScore = 0.75
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(skillsPath(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := string(raw)
+	if !strings.Contains(line, `"success_rate":1.0`) {
+		t.Errorf("whole float lost its .0: %s", line)
+	}
+	if !strings.Contains(line, `"utility_score":0.75`) {
+		t.Errorf("fractional float: %s", line)
+	}
+	// Integer fields stay integers — the distinction both validators read.
+	if !strings.Contains(line, `"use_count":0`) ||
+		strings.Contains(line, `"use_count":0.0`) {
+		t.Errorf("int field spelled as a float: %s", line)
+	}
+	// And the same rule on the stats store.
+	if _, err := RecordSkillOutcome(ws, "f", true, OutcomeTelemetry{Confidence: 1}); err != nil {
+		t.Fatal(err)
+	}
+	statsRaw, err := os.ReadFile(skillStatsPath(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(statsRaw), `"success_rate":1.0`) ||
+		!strings.Contains(string(statsRaw), `"total_uses":1`) {
+		t.Errorf("stats row spelling: %s", statsRaw)
+	}
+}
+
+// The key ORDER has one definition. Emitting the struct directly kept a
+// second copy of skill_to_dict's contract that could drift silently.
+func TestEmittedKeyOrderMatchesSkillToDict(t *testing.T) {
+	ws := t.TempDir()
+	s := base("k", "Keyed")
+	if err := SaveSkill(ws, &s); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(skillsPath(ws))
+	line := strings.TrimRight(string(raw), "\n")
+	at := -1
+	for _, key := range skillKeyOrder {
+		next := strings.Index(line, `"`+key+`":`)
+		if next < 0 {
+			t.Fatalf("key %q missing from the emitted row", key)
+		}
+		if next < at {
+			t.Fatalf("key %q is out of skill_to_dict order", key)
+		}
+		at = next
+	}
+	if got := len(s.ToDict()); got != len(skillKeyOrder) {
+		t.Fatalf("ToDict has %d keys, the order list has %d",
+			got, len(skillKeyOrder))
+	}
+}

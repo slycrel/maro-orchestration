@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -28,6 +27,32 @@ type LoadResult struct {
 	Drifted      int      // JSON, but not admissible as a Skill
 	Unparseable  int      // not JSON at all, or byte-tainted
 	HashMismatch []string // ids whose content no longer matches their stamp
+	Unreadable   bool     // the store exists but could not be read at all
+	Path         string
+}
+
+// Announce renders what the load LOST, for a caller that has a warning rail.
+// An unannounced loss is the failure this whole posture exists to prevent:
+// half a library going byte-tainted looks exactly like "nothing matched",
+// which is also what a healthy cold store looks like.
+func (r LoadResult) Announce() []string {
+	var out []string
+	if r.Unreadable {
+		return append(out, fmt.Sprintf("skills: store exists but could not "+
+			"be read; treating as empty for this run (%s)", r.Path))
+	}
+	if r.Unparseable > 0 || r.Drifted > 0 {
+		out = append(out, fmt.Sprintf("skills: %d unparseable and %d "+
+			"JSON-but-not-loadable row(s) excluded from this read; they "+
+			"remain in the store verbatim (%s)",
+			r.Unparseable, r.Drifted, r.Path))
+	}
+	if len(r.HashMismatch) > 0 {
+		out = append(out, fmt.Sprintf("skills: content_hash mismatch on "+
+			"%d skill(s) — possible tampering: %s",
+			len(r.HashMismatch), strings.Join(r.HashMismatch, ", ")))
+	}
+	return out
 }
 
 // LoadSkills ports load_skills: every admissible skill in the store, oldest
@@ -50,9 +75,15 @@ type LoadResult struct {
 func LoadSkills(ws string) LoadResult {
 	var res LoadResult
 	res.Skills = []Skill{}
-	raw, err := os.ReadFile(skillsPath(ws))
+	res.Path = skillsPath(ws)
+	raw, err := os.ReadFile(res.Path)
 	if err != nil {
-		return res // missing store is an empty store
+		// A missing store is an empty store; an UNREADABLE one is not.
+		// Returning the same empty result for both made a permissions or
+		// EIO failure byte-for-byte indistinguishable from a cold install,
+		// so a library that had gone unreachable read as "no skills yet".
+		res.Unreadable = !os.IsNotExist(err)
+		return res
 	}
 	lines := strings.Split(string(raw), "\n")
 	seen := map[string]bool{}
@@ -98,9 +129,15 @@ func LoadSkills(ws string) LoadResult {
 // A row that cannot be PROVEN to be a Skill is not a version of this skill,
 // so it cannot be the thing this save replaces: `{"id":"same","operator_
 // note":"keep this row"}` must survive a save of skill `same`.
-func SaveSkill(ws string, s Skill) error {
-	s.ContentHash = ComputeSkillHash(s)
-	line, err := proveLine(s) // refuse BEFORE the store is touched
+// The skill is taken by POINTER so the caller sees the content_hash this
+// computed — Python's save_skill mutates the dataclass in place and its
+// callers depend on it. Taking a copy meant a caller that saved a
+// freshly-minted skill and then recorded a manifest entry from it wrote an
+// EMPTY content_hash: a provenance record that cannot be checked against
+// the row it claims to describe.
+func SaveSkill(ws string, s *Skill) error {
+	s.ContentHash = ComputeSkillHash(*s)
+	line, err := proveLine(*s) // refuse BEFORE the store is touched
 	if err != nil {
 		return err
 	}
@@ -162,7 +199,11 @@ func ArchiveSkills(ws string, toArchive []Skill, reason string) error {
 	if len(toArchive) == 0 {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// The port-wide stamp (record/scans/graduation), not RFC3339Nano:
+	// Go's nano layout strips trailing zeros, so two stamps of the same
+	// instant sort differently from Python's always-six-digit isoformat,
+	// and the port's own parser does not accept the "Z" that layout emits.
+	now := nowISO()
 	var lines []string
 	for _, s := range toArchive {
 		line, _, err := proveRecordLine(s)

@@ -3138,3 +3138,51 @@ arc). Verify-before-fix held at 0% hallucination across all five rounds.
 Jeremy's whole-chunk scope directive earned its keep twice: r3's
 dedup-window-keyed-to-the-wrong-arg and r4's Cycle/report.Skipped seam were
 both invisible to diff-scoped review.
+
+## Skill library slice 3a — r1 (2026-08-23)
+
+1 HIGH, 3 MED, 6 LOW, 5 INFO, against commit 6750c5cd on a pristine
+`git archive` extract (the worktree was dirty with slice-3b work).
+Verify-before-fix: every claim checked against the code first, 0%
+hallucination.
+
+HIGH: `record.LoadsClean`'s duplicate-name walker recursed with no depth
+bound, BEFORE the decoder's own maxNestingDepth could apply — one
+over-nested line in a shared store took the Go process down with an
+unrecoverable `fatal error: stack overflow` on every subsequent run
+(reproduced: 1.5M depth errors cleanly, 2M fatals). Python strands the
+same line. Rewritten as an iterative walk.
+
+MEDs, all honest-omission class: the load's loss counters reached no
+caller (and an unreadable store was indistinguishable from a cold one);
+skills rode the decompose prompt LAST where Python puts them FIRST
+(planner.py:962) — a silent A/B confound; and `isCleanText` refused a
+literal U+FFFD the reader admits, which freezes a live skill against all
+future writes and blocks a whole cull.
+
+LOWs fixed: int literals routed through float64 (MaxInt64 → negative
+counter, on fields that drive the circuit breaker and A/B); `SaveSkill`
+by value hid the computed content_hash from its caller; `OnlyIDs`
+nil-vs-empty flipped the retrieval mode; `note(...), tel` relied on
+unspecified operand evaluation order; `archived_at` used the wrong
+timestamp layout. Two LOWs documented rather than fixed (created_at
+acceptance is wider than the comment claimed; the two runtimes' nesting
+depth doors differ) — both strand-safe directions.
+
+INFO acted on: the NaN "named divergence" did not exist (Python refuses
+at the same door via parse_constant); `ToDict` was dead surface holding a
+second copy of the key-order contract, now the single source via
+MarshalJSON — which also restored Python's float spelling (`1.0`, not
+`1`), the one that matters because `success_rate` is inside
+`doctor._dedup_identity`.
+
+Attacked and confirmed solid: the admission predicate field by field (313
+crafted rows, 294 agreeing, all 19 diffs being the two documented LOWs),
+surrogate escapes (4000-case fuzz, zero verdict differences), the
+id-claimed-after-proof rule, save carrying 7 foreign line shapes
+byte-for-byte, refusal-before-touch, archive all-or-nothing, concurrency
+under flock, and the whole retrieval ladder (348 cross-runtime goal-runs
+across three corpora diffing ids, tier, score and telemetry — 0 diffs).
+
+NEXT: r2 over the WHOLE chunk (3a + 3b + these fixes) per the
+whole-chunk directive.

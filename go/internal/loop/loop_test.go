@@ -471,7 +471,7 @@ func TestRunWritesSkillsManifestAndInjectsMatch(t *testing.T) {
 		SuccessRate: 1.0, UtilityScore: 1.0, CircuitState: "closed",
 		Imported: map[string]any{},
 	}
-	if err := skills.SaveSkill(ws, s); err != nil {
+	if err := skills.SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
 	fake2 := &llm.Fake{Script: []string{`["one"]`, "done"}}

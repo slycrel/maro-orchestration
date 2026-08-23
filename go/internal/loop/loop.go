@@ -197,16 +197,16 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	// legitimately matches nothing), so present-and-empty means "nothing was
 	// injected" while absent means the recorder never ran. Attribution reads
 	// it, so the distinction is load-bearing.
-	//
-	// NAMED GAP (slice 3b): Python routes each matched skill through
-	// select_variant_for_task before injection, so a parent can be swapped
-	// for its active A/B challenger. Variants are excluded from candidate
-	// discovery in both runtimes, so this injects the parent where Python
-	// might inject the challenger — the arms stay exclusive either way.
 	skillsExtra, skillWarns := injectSkills(rec.WorkspaceDir, runDir, goal)
 	recallWarns = append(recallWarns, skillWarns...)
 
-	extras := append(rr.DecomposeExtras(), skillsExtra)
+	// Skills ride FIRST, ahead of ancestry and lessons, in Python's extras
+	// order (planner.py:962 — [skills, ancestry, lessons, cost]). The
+	// port's whole premise is that a goal planned by either runtime sees
+	// the same prompt; a different context ORDER is a silent A/B confound,
+	// not a cosmetic difference. The planner drops empty extras, so a
+	// no-match run still composes exactly as Python's does.
+	extras := append([]string{skillsExtra}, rr.DecomposeExtras()...)
 	steps, planUse, err := planner.Decompose(ctx, a, rec.WorkspaceDir, goal, maxSteps, extras...)
 	// Seed spend (the routing classify call) is real cost this run
 	// caused — fold it in HERE so both exits (decompose-failed row and

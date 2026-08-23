@@ -2,6 +2,7 @@ package record
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -77,5 +78,74 @@ func TestIsFrameBlankIsEmptyOnly(t *testing.T) {
 		if IsFrameBlank(s) {
 			t.Fatalf("%q must be a row, not framing", s)
 		}
+	}
+}
+
+// A deeply nested line must STRAND, not kill the process. The walker runs
+// before Decode, so nothing has bounded the nesting yet; a recursive
+// version took an unrecoverable `fatal error: stack overflow` here — no
+// recover, no strand, just death on every subsequent run of a shared store.
+func TestLoadsCleanDeepNestingStrandsAndDoesNotCrash(t *testing.T) {
+	for _, depth := range []int{5000, 20000, 2000000} {
+		line := `{"a":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + "}"
+		_, err := LoadsClean(line)
+		if depth >= 20000 && err == nil {
+			t.Errorf("depth %d: encoding/json's own max depth must refuse it", depth)
+		}
+		// The property under test is that the call RETURNS at all.
+		_ = err
+	}
+}
+
+// The iterative walker must still catch a duplicate name at any depth, in
+// either container, and must not confuse an array element with a key.
+func TestRefuseDuplicateNamesAtDepth(t *testing.T) {
+	dup := []string{
+		`{"a":1,"a":2}`,
+		`{"x":{"a":1,"a":2}}`,
+		`{"x":[{"a":1,"a":2}]}`,
+		`{"x":[[[{"deep":{"a":1,"a":2}}]]]}`,
+		`{"x":{"y":{"z":[1,2,{"a":1,"a":2}]}}}`,
+	}
+	for _, line := range dup {
+		if _, err := LoadsClean(line); err == nil {
+			t.Errorf("duplicate name not caught: %s", line)
+		}
+	}
+	ok := []string{
+		`{"a":1,"b":2}`,
+		`{"x":["a","a","a"]}`,               // repeated array VALUES are fine
+		`{"x":{"a":1},"y":{"a":2}}`,         // same name in sibling objects
+		`{"x":[{"a":1},{"a":2}]}`,           // same name in sibling array elements
+		`{"a":[1,[2,[3,{"b":{"c":[4]}}]]]}`, // mixed nesting, no duplicates
+	}
+	for _, line := range ok {
+		if _, err := LoadsClean(line); err != nil {
+			t.Errorf("false duplicate on %s: %v", line, err)
+		}
+	}
+}
+
+// A row Go admits and Python strands is a row only one runtime will act
+// on. CPython's int() conversion is capped at 4300 digits and raises above
+// it, so loads_clean strands the line; Go's decoder is happy to keep it.
+func TestLoadsCleanRefusesOverlongIntegerLiterals(t *testing.T) {
+	long := strings.Repeat("9", 4301)
+	if _, err := LoadsClean(`{"n":` + long + `}`); err == nil {
+		t.Error("a 4301-digit integer must strand, as it does in Python")
+	}
+	if _, err := LoadsClean(`{"n":-` + long + `}`); err == nil {
+		t.Error("the sign is not a digit")
+	}
+	if _, err := LoadsClean(`{"n":` + strings.Repeat("9", 4300) + `}`); err != nil {
+		t.Errorf("4300 digits is within the cap: %v", err)
+	}
+	// A float literal is not an int() conversion in either runtime.
+	if _, err := LoadsClean(`{"n":1e400}`); err != nil {
+		t.Errorf("float literals are unaffected: %v", err)
+	}
+	// Nested, and as an array element.
+	if _, err := LoadsClean(`{"a":{"b":[1,` + long + `]}}`); err == nil {
+		t.Error("the cap applies at any depth")
 	}
 }

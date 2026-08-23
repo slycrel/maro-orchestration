@@ -1829,6 +1829,155 @@ one-skill (or all-identical) corpus scores zero everywhere, because
 df==N zeroes the smoothed IDF — so the TF-IDF tier is silent on a cold
 workspace rather than injecting a spurious match.
 
+### Skill library — slice 3b: lifecycle (2026-08-23)
+
+The half that makes a skill EARN its place: outcome recording
+(`stats.go`), the utility EMA and circuit breaker, A/B variant routing,
+the frontier gate and skill-decision provenance (`utility.go`), plus the
+loop wiring that routes each matched skill through its active challenger.
+
+**The stats store repeats the skills store's argument, and pays the same
+prices.** `skill-stats.jsonl` is a keyed store that REWRITES itself on
+every counter bump, so the whole admission argument applies again:
+`validateStatsRow` proves the RAW values the coercing constructor would
+otherwise launder, unprovable rows are STRANDED verbatim rather than
+dropped, and the read announces what it excluded. Three failures from
+Python's arc are pinned as tests here: ONE torn byte used to empty the
+map and the next bump rebuilt the file from nothing (probed live in
+Python: 4 lines → 1); a routine injection bump flipped a stored
+`"false"` string to JSON `true` because the updater does not recompute
+that field; and an operator's hand-added note was deleted by every
+counter update until the write became a merge OVER the stored row.
+
+Two shapes are load-bearing and easy to get wrong:
+
+- **Strandees ride FIRST.** With them at the tail, a same-id stranded row
+  overrode the repaired one for any naive last-row-wins parser — the
+  rewrite "preserved" the corruption in the winning position.
+- **A batch is ONE transaction.** `RecordSkillInjectionOutcomes` takes
+  the whole manifest under one lock: a per-id loop made a mid-list
+  failure a reachable partial batch, and the retry then double-counted
+  the prefix.
+
+Evidence must arrive as evidence, so a non-encodable id or non-finite
+telemetry is refused AT THE DOOR — before the lock, before `MkdirAll`,
+before anything is touched — and the error is RETURNED, never swallowed:
+an earlier Python version warned and returned normally, so a disk-full
+lost the outcome while the caller proceeded as if evidence existed.
+The whole read-modify-write runs under the store lock with require
+semantics; a transaction that cannot lock refuses to run, because a
+fail-open lock over a whole-store RMW is the classic lost update.
+
+**Counters that measure different things stay separate.** The legacy
+`total_uses`/`successes` pair credits keyword-matched bystanders at a
+~1.0 base rate; `injected_*` counts closure-verdict outcomes for skills
+that were ACTUALLY in the run's manifest. An injection verdict never
+touches the legacy pair, and `FrontierSkills` gates on `injected_runs`,
+NOT `use_count` — that field's only writer was removed after it turned
+out to have no caller, so it sat at 0 for 312 of 314 live skills and
+silently starved the whole variant subsystem behind it.
+
+**A/B routing is the full sha1 digest mod pool size** (Python's
+`int(sha1(...).hexdigest(), 16) % len(pool)`), read as a big.Int. A
+truncated prefix routes differently, and the arms must agree across
+runtimes or the evidence is not comparable — pinned against Python's
+actual buckets for three keys at two pool sizes. This closes slice 3a's
+named variant-routing gap: `injectSkills` now routes each match and
+records the ROUTED skill in the manifest, while match tier and score come
+from the MATCHED parent, which the challenger inherits as its selection
+evidence.
+
+**NAMED DIVERGENCE (backport candidate #14):** Python captures
+`old_utility` AFTER applying the EMA, so every `SKILL_CIRCUIT_*` event it
+logs reports `utility_before == utility_after`. Go captures the real
+prior value. The stored EMA is identical — the fix is in the reporting —
+but a log line claiming an unchanged utility across a circuit trip is
+misleading evidence, and evidence is the point. The 8-step EMA/circuit
+trace is pinned against Python's full-precision `repr()` output, compared
+EXACTLY rather than to a tolerance: the EMA compounds, so a rounded pin
+would hide an arithmetic-order divergence for several steps.
+
+Mutation battery: 25 must-detect mutations derived from the FILES (each
+site asserted unique before mutation), 25 killed.
+
+### Skill library — r1 review fixes (2026-08-23)
+
+One HIGH, three MED, six LOW from the slice-3a adversarial round. Every
+claim was verified against the code before any fix; none were
+hallucinated.
+
+**H1 — unbounded recursion in `record.LoadsClean` (fixed).** The
+duplicate-name walker recursed once per nesting level, and it runs BEFORE
+`Decode`, so nothing had bounded the nesting yet — `encoding/json`'s own
+`maxNestingDepth` lives in the scanner, which `Token()` does not drive
+for delimiters. Reproduced: depth 1.5M returned an error, 2M took an
+unrecoverable `fatal error: stack overflow`. Not "a skill is lost" — the
+BINARY dies, before decompose, on every run, until someone hand-edits the
+store, and `LoadsClean` is the shared primitive every keyed store points
+at. Python strands the same line and lives. Now an ITERATIVE walk over an
+explicit stack, with the deep-nesting and nested-duplicate cases pinned.
+
+**M2 — the load's losses reached no one (fixed).** `LoadResult` carried
+`Drifted`/`Unparseable`/`HashMismatch` and no caller read any of them, so
+half a library going byte-tainted looked exactly like "nothing matched" —
+which is also what a healthy cold store looks like. `LoadResult.Announce`
+now renders them and `injectSkills` puts them on the run's warning rail
+(which reaches both loop exits). Same finding's second half: any
+`ReadFile` error returned an empty result, making a permissions or EIO
+failure indistinguishable from a cold install; `Unreadable` now
+distinguishes them. `injectSkills` also reads the store ONCE now instead
+of twice.
+
+**M3 — skills rode the decompose prompt in the wrong position (fixed).**
+Python's extras order is `[skills, ancestry, lessons, cost]`
+(planner.py:962); Go appended skills LAST. Not a crash — a silent A/B
+confound, since the port's premise is that a goal planned by either
+runtime sees the same prompt. Pinned with both blocks present.
+
+**M4 — the writer was stricter than its own reader (fixed).**
+`isCleanText` refused a literal U+FFFD that `LoadsClean` admits, so such
+a skill could be loaded and injected but never updated again (in 3b:
+every outcome and utility write fails permanently), and because
+archiving is all-or-nothing, ONE of them blocked an entire cull. The
+justification — "the store has no legitimate producer of it" — is false
+for skills minted from run output carrying web-fetched text. U+FFFD is
+now admitted; raw non-UTF-8 and surrogate code points, which cannot
+round-trip at all, still are not.
+
+**Lows fixed:** integer literals no longer route through `float64`
+(MaxInt64 became a NEGATIVE counter, and these fields drive the circuit
+breaker and A/B); `SaveSkill` takes a POINTER so the caller sees the
+content_hash it computed (Python mutates in place, and a manifest entry
+built from a just-saved skill would have carried an empty hash);
+`MatchOptions` gained an explicit `RestrictToIDs` flag, because a Go
+caller building ids from an EMPTY manifest holds a nil slice and the
+nil-vs-empty test would have scored the whole library; the matcher's
+`note` closure now RETURNS its telemetry rather than being read as a
+second operand in the same return statement (gc evaluates left-to-right,
+the spec does not promise it); `archived_at` uses the port-wide stamp
+instead of RFC3339Nano.
+
+**Lows documented instead of fixed:** the `created_at` divergence is
+wider than "odd offsets" (ISO basic format, week dates, hour-only,
+lowercase `t`, hour 24, compact offsets — all Go-strands-what-Python-
+admits, and nothing either runtime MINTS is affected), and the nesting
+depth at which the two doors refuse differs (Go at 10000, CPython
+around 2M).
+
+**INFO acted on:** the NaN "divergence" was not one — Python refuses
+those tokens at the same door via `parse_constant`, so the comment and
+this doc were wrong, not the code. `Skill.ToDict` was dead surface
+duplicating the key-order contract; it is now the SINGLE source, via a
+`MarshalJSON` that emits through the ordered marshaller. That also fixes
+the float spelling: Go wrote `"success_rate":1` where Python writes
+`1.0`, and `success_rate` is IN Python's dedup identity
+(`doctor._dedup_identity` re-serializes the PARSED row with
+`sort_keys=True`), so Python's skills dedup silently stopped collapsing
+rows once Go had written any. Line SPACING still differs — Python uses
+`json.dumps`' default separators, every Go store in this port writes
+compact JSON — but that consumer cannot see spacing, and it is a
+port-wide question for a pass over every emitter, not a skills one.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
@@ -1844,12 +1993,13 @@ workspace rather than injecting a spurious match.
 4. ~~Inspector/evolver self-improvement loop~~ — slice 1 DONE
    (inspector/evolver tranche above); ~~statistical scanners,
    graduation, V2 verify lifecycle~~ — slice 2 DONE (self-improvement
-   slice 2 above); ~~skills store + retrieval~~ — slice 3a DONE (skill
-   library slice above). Remaining: skill LIFECYCLE (slice 3b — outcome
-   recording, utility/circuit updates, promote/demote, A/B variants,
-   island culls, test gate), sub_mission (with the goal queue),
-   playbook.md port (unblocks guidance-only guardrails + graduation
-   playbook appends).
+   slice 2 above); ~~skills store + retrieval~~ — slice 3a DONE;
+   ~~outcome recording, utility/circuit updates, A/B variants,
+   frontier gate, provenance~~ — slice 3b DONE (both skill-library
+   slices above). Remaining from skills.py: promote/demote and the mint
+   path, island culls, the test gate. Then sub_mission (with the goal
+   queue), playbook.md port (unblocks guidance-only guardrails +
+   graduation playbook appends).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —

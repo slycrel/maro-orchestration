@@ -169,6 +169,29 @@ func DictToSkill(d map[string]any) (Skill, error) {
 	return s, nil
 }
 
+// skillKeyOrder is skill_to_dict()'s key order — the order Python's
+// json.dumps emits, and therefore the order a row rewritten by either
+// runtime must read in.
+var skillKeyOrder = []string{"id", "name", "description", "trigger_patterns",
+	"steps_template", "source_loop_ids", "created_at", "use_count",
+	"success_rate", "content_hash", "tier", "utility_score", "failure_notes",
+	"consecutive_failures", "consecutive_successes", "circuit_state",
+	"optimization_objective", "island", "variant_of", "variant_wins",
+	"variant_losses", "project", "imported", "origin", "domain", "tags"}
+
+// MarshalJSON emits the row through ToDict rather than the struct tags, so
+// the key set and order have ONE definition and float fields get Python's
+// spelling (success_rate 1.0, not 1 — see marshalValue). Encoding the
+// struct directly kept a second, silently-drifting copy of the same
+// contract.
+func (s Skill) MarshalJSON() ([]byte, error) {
+	line, err := marshalOrdered(s.ToDict(), skillKeyOrder)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(line), nil
+}
+
 // ToDict ports skill_to_dict — the exact key set Python writes.
 func (s Skill) ToDict() map[string]any {
 	return map[string]any{
@@ -342,8 +365,18 @@ func proveRecordLine(s Skill) (string, map[string]any, error) {
 	// A Go caller building a Skill literal leaves those nil, and nil
 	// marshals to `null` — a row BOTH runtimes' validators then refuse
 	// ("must be a list of strings"). Normalizing here rather than at each
-	// caller keeps the emitted row identical to Python's by construction;
-	// doing it in the caller would be a footgun with 30-odd call sites.
+	// caller keeps the emitted row's VALUES identical to Python's by
+	// construction; doing it in the caller would be a footgun with 30-odd
+	// call sites.
+	//
+	// Values, not bytes: Python writes json.dumps' default separators
+	// (`", "` / `": "`) and every Go store in this port writes compact
+	// JSON, so rows from the two runtimes are visibly different text in the
+	// same file. Nothing consumes that difference — Python's dedup identity
+	// re-serializes the PARSED row (doctor._dedup_identity, sort_keys=True),
+	// which is why the float SPELLING mattered and the spacing does not —
+	// but it is a port-wide divergence, not a skills one, and it belongs to
+	// a pass over every emitter rather than to this file.
 	s.TriggerPatterns = orEmpty(s.TriggerPatterns)
 	s.StepsTemplate = orEmpty(s.StepsTemplate)
 	s.SourceLoopIDs = orEmpty(s.SourceLoopIDs)

@@ -10,7 +10,7 @@ func skillRow(t *testing.T, ws string, s Skill) {
 	if s.CreatedAt == "" {
 		s.CreatedAt = "2026-08-20T10:00:00+00:00"
 	}
-	if err := SaveSkill(ws, s); err != nil {
+	if err := SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -155,9 +155,20 @@ func TestFindMatchingSkillsVariantOnlyViaManifest(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "p" {
 		t.Fatalf("challenger must not be an independent candidate: %+v", got)
 	}
-	got, _ = FindMatchingSkills(ws, "make a widget", MatchOptions{OnlyIDs: []string{"c"}})
+	got, _ = FindMatchingSkills(ws, "make a widget",
+		MatchOptions{RestrictToIDs: true, OnlyIDs: []string{"c"}})
 	if len(got) != 1 || got[0].ID != "c" {
 		t.Fatalf("challenger must stay eligible via the manifest: %+v", got)
+	}
+	// Restrict-to-nothing must mean nothing. A Go caller that builds ids by
+	// appending over an EMPTY manifest holds a nil slice, and reading the
+	// mode off that nil would have scored the entire library instead —
+	// attributing a run's outcome to skills it never injected.
+	var fromEmptyManifest []string
+	got, tel := FindMatchingSkills(ws, "make a widget",
+		MatchOptions{RestrictToIDs: true, OnlyIDs: fromEmptyManifest})
+	if len(got) != 0 || tel.Method != "none" {
+		t.Fatalf("an empty manifest must restrict to nothing: %+v %+v", got, tel)
 	}
 }
 
