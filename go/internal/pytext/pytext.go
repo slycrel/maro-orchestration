@@ -45,6 +45,17 @@ func Strip(s string) string { return strings.TrimFunc(s, IsSpace) }
 // its tail.
 func TrimRight(s string) string { return strings.TrimRightFunc(s, IsSpace) }
 
+// TrimLeft is Python's str.lstrip() with no argument. Measured: it strips
+// the same 29 code points as str.isspace(), so it shares IsSpace — and,
+// like Strip, it differs from strings.TrimLeft(s, " \t") and from
+// strings.TrimLeftFunc(s, unicode.IsSpace) on U+001C..U+001F.
+//
+// The call site that needs it decides whether a line is a markdown bullet
+// (`line.lstrip().startswith("- ")`), so the four-code-point difference
+// decides whether a bullet is counted, deduped, or passed through as
+// prose.
+func TrimLeft(s string) string { return strings.TrimLeftFunc(s, IsSpace) }
+
 // Lower is Python's str.lower(). Go's strings.ToLower applies SIMPLE case
 // mapping (one rune in, one rune out); Python applies the full mapping,
 // where U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) lowercases to two

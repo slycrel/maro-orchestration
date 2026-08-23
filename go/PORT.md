@@ -3004,3 +3004,71 @@ production code and watch for red. An 11-mutant battery over the append
 path kills all 11 as of this commit; the corpus additions that killed A6
 and A11 were both *fixtures the base document could not produce*, not
 finer assertions.
+
+### Curation (slice 2)
+
+`curate_playbook` plus the two helpers only it uses. This is the pass that
+rewrites the whole document, so its guards are all about not destroying an
+operator's file:
+
+- **Alarms expire before compression.** An expired reading that survives
+  into the prompt comes back rephrased as durable advice, and there is then
+  nothing left to identify it as an alarm.
+- **The lock is dropped across the LLM round trip**, deliberately — holding
+  a write lock across a network call starves concurrent `Append` writers
+  into lock timeouts. Because it is dropped, the write re-reads and
+  compares against the snapshot, and discards the whole pass if another
+  writer landed meanwhile.
+- **Archive before rewrite, abort if archiving fails.** Never rewrite what
+  you cannot restore.
+
+Two numeric gates measured rather than transcribed: `len(new) > len(old) *
+1.1` and `new_bullets >= max(1, ceil(old_bullets * 0.6))`. Both are float
+comparisons in Python. Swept 0..20000, `math.Ceil(float64(n)*0.6)` agrees
+with the exact rational ceil at every n and the growth gate agrees with
+`10*new > 11*old` at every pair — so the integer reformulations happen to
+be equivalent *here*. They are still not what Python evaluates, and the
+equivalence is an accident of these two constants, not of the shape.
+
+Every length in the validator is a CODE-POINT length. The corpus carries
+both directions: a CJK candidate that byte-length would reject and Python
+accepts, and an ASCII candidate that byte-length would accept and Python
+rejects.
+
+One measured behaviour worth stating because it looks like a bug: **a
+playbook with no bullets can never pass compression.** The floor is
+`max(1, ceil(0 * 0.6)) = 1`, so even an identical rewrite of a prose-only
+document is rejected and the deterministic result is kept.
+
+**Named divergence:** a nil adapter skips the compression pass. Python
+builds its own cheap-worker adapter from the role table when the caller
+passes none, and neither `conductor.assign_model_by_role` nor
+`llm.build_adapter` is ported. A nil adapter therefore behaves like
+Python's adapter-construction *failure* — the same outcome reached for a
+different reason. When the role table lands, `Curate` should build one.
+
+### The half nothing was checking
+
+Until slice 2 this package had no pin at all on the captain's-log rows it
+emits, and those are the half of its output that is actually DATA. The
+playbook file is prose a human would notice; the rows are indexed by
+`event_type`, rendered from `summary`, and read by `context` key. Both
+`PLAYBOOK_UPDATED` (from `Append`, landed in the previous commit) and
+`PLAYBOOK_CURATED` now have row-level differentials against CPython.
+
+The gap was found by asking what a mutant could change without any test
+noticing — not by review, and not by anything failing.
+
+**One recorded equivalent mutant.** Making `droppedKeys` return a nil
+slice changes nothing observable: `pyjson`'s `[]string` case renders a nil
+slice as `[]` exactly like an empty one, so the captain's-log row is
+Python-shaped either way (`encoding/json` would emit `null`). It is kept
+non-nil regardless, because `CurateStats` is public and nothing binds a
+future consumer to `pyjson`. The encoder rule the argument rests on is now
+pinned in `internal/pyjson`, and that pin was verified to fail when the
+`[]string` case is removed.
+
+The first version of that reasoning was written the other way round — the
+comment claimed a nil slice "marshals to null" in this writer, which is
+false. Two batteries in a row, the finding was not wrong code but a
+confident comment about correct code.
