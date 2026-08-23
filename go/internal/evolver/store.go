@@ -31,8 +31,10 @@
 // V2 cadence-verdict lifecycle; _verify_post_apply's test-suite run
 // (Go auto-applies only data rows, and faking a pytest verdict would
 // be dishonest — the revert path is the safety net this slice keeps);
-// playbook.md append; Telegram notify; step traces in the outcomes
-// summary (no Go step-trace store).
+// Telegram notify; step traces in the outcomes summary (no Go
+// step-trace store). The playbook.md append IS ported now
+// (internal/playbook), and with it the guidance-only guardrail's
+// durable home — see applyAction's tail.
 //
 // Cross-runtime note: this store is SHARED with the Python runtime
 // (same workspace, same .lock flock protocol). A Go-held row is
@@ -53,6 +55,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/guard"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
+	"github.com/slycrel/maro-orchestration/go/internal/playbook"
+	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -694,16 +698,25 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 		// pattern is (near-)always Python-valid, but a Python-valid
 		// pattern using lookaround would be refused here — refusing is
 		// the conservative direction for a row Python will execute.
+		//
+		// Neither guidance-only path RETURNS. Python's logs-and-falls-
+		// through, so the EVOLVER_APPLIED row and the playbook append at
+		// the bottom happen for a pattern-less guardrail exactly as they
+		// do for a matched one. This code used to return early — which
+		// suppressed BOTH, and on a shared store that is a row Python
+		// writes and this runtime does not.
 		pattern := strings.TrimSpace(stringOr(d["pattern"]))
 		if pattern == "" {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s has no matchable pattern — "+
-				"guidance only, no durable home in the Go slice (playbook unported)\n", suggestionID)
-			return actionGuidanceOnly
+				"guidance only, no constraint row\n", suggestionID)
+			outcome = actionGuidanceOnly
+			break
 		}
 		if _, err := regexp.Compile("(?i)" + pattern); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s pattern is not a valid regex (%v) — "+
-				"guidance only, no durable home in the Go slice (playbook unported)\n", suggestionID, err)
-			return actionGuidanceOnly
+				"guidance only, no constraint row\n", suggestionID, err)
+			outcome = actionGuidanceOnly
+			break
 		}
 		// Idempotent by source==id: a retry after a partial apply (the
 		// row's `applied` stamp failed to persist) must not append a
@@ -757,13 +770,85 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 		map[string]any{"suggestion_id": suggestionID, "category": category, "confidence": confidence},
 		"")
 
-	// Python also appends prompt_tweak/new_guardrail/observation text
-	// (confidence >= 0.7) to the director's playbook.md — the playbook
-	// surface is unported; named in the package doc. (This is why a
-	// guidance-only guardrail returns actionGuidanceOnly above rather
-	// than actionApplied: Python's stamp was honest because the prose
-	// landed in the playbook; Go has no such durable home yet.)
+	// The director's playbook is the durable home for the applied
+	// insight, and for a guardrail whose pattern could not be matched it
+	// is the ONLY home — Python's own comment at the guardrail branch
+	// says so: "the prose still lands in the playbook below, which is the
+	// honest home for a guardrail we can't match".
+	//
+	// Failure is swallowed to match Python's bare `except Exception:
+	// pass`. It is NOT swallowed for the purpose of the return value: a
+	// guidance-only guardrail is only upgraded to "applied" when the
+	// prose actually landed.
+	landed := false
+	if confidence >= 0.7 && playbookSection[category] != "" {
+		if err := playbook.Append(workspaceDir, rec, text,
+			playbookSection[category], "evolver:"+suggestionID,
+			pyStrKey(d["playbook_key"])); err == nil {
+			landed = true
+		}
+	}
+	if outcome == actionGuidanceOnly && landed {
+		// The r1 Finding B divergence closes HERE, and only here. The
+		// hold existed because stamping "applied" with no durable home
+		// was a record that lies. The home now exists, so the honest
+		// stamp is the same one Python writes.
+		outcome = actionApplied
+	}
 	return outcome
+}
+
+// playbookSection maps an applied suggestion's category to the playbook
+// section its prose belongs in, and doubles as the membership test for
+// which categories get appended at all.
+//
+// Python spells the membership test and the mapping separately, with a
+// `.get(category, "Learned")` default that is unreachable — every member
+// of the tuple is a key of the dict. Folding them removes a default that
+// could never fire; the three entries are the contract.
+//
+// "Learned" is deliberately NOT one of the four seed sections, so an
+// observation entry ranks as LEARNED in injection and outranks the
+// curated seed. That is Python's behaviour, not an accident of this port.
+var playbookSection = map[string]string{
+	"prompt_tweak":  "Execution",
+	"new_guardrail": "Quality",
+	"observation":   "Learned",
+}
+
+// pyStrKey ports `str(d.get("playbook_key", "") or "")`.
+//
+// The alarm key decides whether a later reading REPLACES this entry in
+// place or accretes beside it, so silently yielding "" for a non-string
+// turns an alarm into a permanent insight. Python's `or ""` collapses
+// every falsey value first, then `str()` renders whatever survives.
+//
+// NAMED DIVERGENCE on a value that is out of contract anyway: Go's JSON
+// decoder folds integers and floats into one float64, so a stored `5`
+// and a stored `5.0` are indistinguishable here and both render the way
+// Python renders the float. Every writer in either runtime puts a STRING
+// in this field (scans.go's "drift:<metric>" and friends); a number here
+// is malformed data, and rendering it as a float is the conservative
+// reading of malformed data.
+func pyStrKey(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		if t {
+			return "True"
+		}
+		return "" // falsey: the `or ""` collapses it before str()
+	case float64:
+		if t == 0 {
+			return "" // falsey
+		}
+		return pyjson.FloatRepr(t)
+	default:
+		return ""
+	}
 }
 
 func stringOr(v any) string {
@@ -975,10 +1060,18 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 }
 
 // stampAction runs applyAction and stamps the row's applied/status
-// fields from its tri-state result. actionGuidanceOnly is NOT "applied":
-// the Go slice has no playbook surface to carry guidance-only guardrails,
-// so the row is HELD (visible, retryable) rather than stamped with a
-// success it never earned (r1 review Finding B).
+// fields from its tri-state result.
+//
+// actionGuidanceOnly now reaches stampAction only when the prose did NOT
+// land in the playbook — which, with the playbook ported, means the
+// suggestion sat below the 0.7 confidence gate that both runtimes apply
+// before appending. Above that gate a guidance-only guardrail applies,
+// because its prose has a durable home.
+//
+// Below it, the row is still HELD (visible, retryable) rather than
+// stamped with a success it never earned (r1 review Finding B). That is
+// a NAMED divergence: Python stamps applied there anyway, with the prose
+// going nowhere.
 func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 	switch applyAction(workspaceDir, rec, d) {
 	case actionApplied:
@@ -988,8 +1081,9 @@ func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 	case actionGuidanceOnly:
 		d["applied"] = false
 		d["status"] = "held_for_review"
-		d["block_reason"] = "new_guardrail has no matchable regex pattern — guidance only; " +
-			"the Go slice has no playbook surface, so apply the prose via the Python CLI (shared store)"
+		d["block_reason"] = "new_guardrail has no matchable regex pattern — guidance only, " +
+			"and below the 0.7 confidence gate neither runtime appends the prose to the " +
+			"playbook, so it has no durable home; review manually"
 	default: // actionFailed
 		d["applied"] = false
 		d["status"] = "action_failed"

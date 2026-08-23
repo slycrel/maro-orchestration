@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/playbook"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -337,14 +338,18 @@ func TestApplyGuardrailHeldThenManual(t *testing.T) {
 	}
 }
 
-// A guardrail with no pattern (or an invalid one) applies as guidance
-// only — NO constraint row is written, never a rule that can't fire.
-// A guidance-only guardrail (no/invalid pattern) has NO durable home in
-// the Go slice — Python's honest "applied" stamp relied on the prose
-// landing in playbook.md, which is unported. So it must be HELD, never
-// stamped applied (r1 review Finding B — the old assertion pinned the
-// lie). No constraint row, no lesson, and NO EVOLVER_APPLIED event.
-func TestApplyGuardrailWithoutPatternIsHeld(t *testing.T) {
+// A guardrail with no pattern (or an invalid one) writes NO constraint
+// row — never a rule that can't fire — and its prose lands in the
+// playbook instead, which Python calls "the honest home for a guardrail
+// we can't match".
+//
+// This assertion is the INVERSE of what it was, and the reason is not a
+// change of mind: the r1 Finding B hold existed because the Go slice had
+// no playbook, so stamping "applied" was a record that lies. The playbook
+// is ported now, the prose has a durable home, and the honest stamp is
+// the one Python writes. What the test guards has not changed — that the
+// stamp matches reality — only which answer reality gives.
+func TestApplyGuardrailWithoutPatternLandsInThePlaybook(t *testing.T) {
 	ws := t.TempDir()
 	rec := record.New(ws)
 	empty := baseSuggestion("g-2", "new_guardrail", "all", "avoid destructive deletes generally", 0.9)
@@ -355,21 +360,79 @@ func TestApplyGuardrailWithoutPatternIsHeld(t *testing.T) {
 		if _, err := Apply(ws, rec, nil, id, true); err != nil {
 			t.Fatal(err)
 		}
-		if IsApplied(ws, id) {
-			t.Fatalf("%s: guidance-only guardrail claimed applied with no durable effect", id)
-		}
-		s := GetSuggestion(ws, id)
-		if s.Status != "held_for_review" || !strings.Contains(s.BlockReason, "guidance only") {
-			t.Fatalf("%s: guidance-only must be held with a reason: %+v", id, s)
+		if !IsApplied(ws, id) {
+			s := GetSuggestion(ws, id)
+			t.Fatalf("%s: prose landed in the playbook but the row was "+
+				"not stamped applied: %+v", id, s)
 		}
 	}
 	if rows := readAllRows(t, dynamicConstraintsPath(ws)); len(rows) != 0 {
 		t.Fatalf("pattern-less/invalid guardrails wrote constraint rows: %v", rows)
 	}
-	// No EVOLVER_APPLIED event for a guardrail that did nothing durable.
+
+	// The durable effect the stamp is claiming: both prose lines, under
+	// the guardrail section, attributed to their suggestion ids.
+	pb := playbook.Load(ws)
+	for _, want := range []string{
+		"avoid destructive deletes generally *(from evolver:g-2)*",
+		"flag unbalanced parens *(from evolver:g-3)*",
+	} {
+		if !strings.Contains(pb, want) {
+			t.Errorf("playbook is missing %q\n%s", want, pb)
+		}
+	}
+	if q := playbook.SectionText(ws, "Quality"); !strings.Contains(q, "evolver:g-2") {
+		t.Errorf("guardrail prose did not land in the Quality section:\n%s", q)
+	}
+
+	// Python emits EVOLVER_APPLIED here — its log_event sits after the
+	// category switch and is not conditional on a constraint row. The Go
+	// path used to return early and skip it, which on a shared store is a
+	// row Python writes and this runtime does not.
 	logRaw, _ := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
-	if strings.Contains(string(logRaw), "EVOLVER_APPLIED") {
-		t.Fatal("guidance-only guardrail fired a false EVOLVER_APPLIED event")
+	if n := strings.Count(string(logRaw), "EVOLVER_APPLIED"); n != 2 {
+		t.Fatalf("want one EVOLVER_APPLIED per guidance-only guardrail, got %d\n%s",
+			n, logRaw)
+	}
+}
+
+// The hold did not disappear — it narrowed to exactly the case Python
+// leaves homeless. Below the 0.7 confidence gate there is no playbook
+// append in EITHER runtime, so a pattern-less guardrail still has no
+// durable effect here, and stamping it applied would be the same lie r1
+// Finding B named.
+//
+// This is a NAMED divergence from Python, which stamps applied anyway.
+func TestALowConfidenceGuidanceOnlyGuardrailIsStillHeld(t *testing.T) {
+	ws := t.TempDir()
+	rec := record.New(ws)
+	low := baseSuggestion("g-low", "new_guardrail", "all", "vague advice", 0.69)
+	mustSave(t, ws, low)
+	if _, err := Apply(ws, rec, nil, "g-low", true); err != nil {
+		t.Fatal(err)
+	}
+	if IsApplied(ws, "g-low") {
+		t.Fatal("a guardrail below the playbook gate claimed applied with " +
+			"no durable effect anywhere")
+	}
+	s := GetSuggestion(ws, "g-low")
+	if s.Status != "held_for_review" || !strings.Contains(s.BlockReason, "guidance only") {
+		t.Fatalf("want held with a reason, got %+v", s)
+	}
+	if pb := playbook.Load(ws); strings.Contains(pb, "vague advice") {
+		t.Fatalf("a sub-0.7 suggestion reached the playbook:\n%s", pb)
+	}
+
+	// Control: the same suggestion at 0.70 DOES land, so the assertions
+	// above are reporting the confidence gate and not a broken append.
+	ws2 := t.TempDir()
+	ok := baseSuggestion("g-ok", "new_guardrail", "all", "vague advice", 0.70)
+	mustSave(t, ws2, ok)
+	if _, err := Apply(ws2, record.New(ws2), nil, "g-ok", true); err != nil {
+		t.Fatal(err)
+	}
+	if !IsApplied(ws2, "g-ok") {
+		t.Fatal("control arm: a guardrail AT the gate did not apply")
 	}
 }
 
@@ -550,9 +613,11 @@ func TestRevertTwiceRefusesSecond(t *testing.T) {
 func TestRevertUnappliedRefuses(t *testing.T) {
 	ws := t.TempDir()
 	rec := record.New(ws)
-	// A guidance-only guardrail: held, never applied, but changeLogAppend
-	// still wrote an audit row at the top of applyAction.
-	held := baseSuggestion("r-held", "new_guardrail", "all", "avoid destructive deletes", 0.9)
+	// A guidance-only guardrail BELOW the playbook gate: held, never
+	// applied, but changeLogAppend still wrote an audit row at the top of
+	// applyAction. (At 0.9 this same row now applies — its prose lands in
+	// the playbook — so the confidence is load-bearing here, not filler.)
+	held := baseSuggestion("r-held", "new_guardrail", "all", "avoid destructive deletes", 0.5)
 	mustSave(t, ws, held)
 	if _, err := Apply(ws, rec, nil, "r-held", true); err != nil {
 		t.Fatal(err)

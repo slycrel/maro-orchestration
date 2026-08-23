@@ -3072,3 +3072,39 @@ The first version of that reasoning was written the other way round — the
 comment claimed a nil slice "marshals to null" in this writer, which is
 false. Two batteries in a row, the finding was not wrong code but a
 confident comment about correct code.
+
+### Wiring the playbook into the evolver (2026-08-23)
+
+Porting the playbook unblocked a divergence the Go slice had been
+carrying deliberately. `evolver_store.applyAction` used to return early
+for a guidance-only guardrail — one whose `pattern` is missing or is not
+a valid regex — because Python's honest `applied` stamp relied on the
+prose landing in `playbook.md`, and this runtime had nowhere to put it
+(r1 review Finding B: stamping applied would have been a record that
+lies). The playbook exists now, so:
+
+- the two guidance-only paths **fall through** instead of returning, the
+  way Python's do;
+- the prose is appended under the category's section
+  (`prompt_tweak`→Execution, `new_guardrail`→Quality,
+  `observation`→Learned) at confidence ≥ 0.7;
+- `EVOLVER_APPLIED` is emitted for those rows, which it previously was
+  not — Python's `log_event` sits after the category switch and is not
+  conditional on a constraint row, so on the shared store this was a row
+  Python wrote and Go did not;
+- the row is stamped applied only when the prose actually landed.
+
+**The hold narrowed rather than disappeared.** Below the 0.7 gate neither
+runtime appends, so a pattern-less guardrail still has no durable effect
+here and is still held — Python stamps applied there anyway, with the
+prose going nowhere. That remains a named divergence, and it is now the
+only one left in this path.
+
+`str(d.get("playbook_key", "") or "")` is ported as `pyStrKey` rather
+than a bare type assertion: the alarm key decides whether a later reading
+replaces an entry in place or accretes beside it, so yielding `""` for a
+non-string silently turns an alarm into a permanent insight. Falsey
+values collapse first (Python's `or`), then `str()` renders what
+survives. Named divergence on out-of-contract data: Go's JSON decoder
+folds `5` and `5.0` into one `float64`, so an integer key renders the way
+Python renders the float.
