@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Verdict-trust policy (Python memory_ledger.verdict_trust — VERIFY_LEARN_ARC
@@ -210,51 +212,18 @@ func coerceInt(v any) (int, bool) {
 // 10 — zero mismatches. The walk-back is therefore exact, not approximate,
 // and the modulo is load-bearing for the length-50 run.
 //
-// digitSupplement covers the code points CPython folds and Go's table does
-// not. Go ships unicode 15.0.0 and CPython here has 16.0.0, so 80 Nd code
-// points in 7 ranges are digits THERE and not HERE — and the failure
-// direction is the unsafe one (an unfoldable confidence is unparseable, an
-// unparseable confidence never downgrades a judged verdict, so a below-floor
-// value would read as FULL trust). Seven range literals close it; the
-// pinned sweep in verdict_digits_test.go re-derives the whole set from
-// CPython and fails if a gap ever reopens.
-//
-// A string with no non-ASCII digits is returned unchanged, so the common
-// path allocates nothing.
-var digitSupplement = [...][2]rune{
-	{0x10D40, 0x10D49}, // Garay
-	{0x116D0, 0x116E3}, // Myanmar Pao / Eastern Pwo Karen (two 10-blocks)
-	{0x11BF0, 0x11BF9}, // Sunuwar
-	{0x16130, 0x16139}, // Gurung Khema
-	{0x16D70, 0x16D79}, // Kirat Rai
-	{0x1CCF0, 0x1CCF9}, // Outlined
-	{0x1E5F1, 0x1E5FA}, // Ol Onal
-}
-
-// asciiDigit returns r's decimal value as an ASCII byte, and whether r is a
-// decimal digit at all.
-func asciiDigit(r rune) (byte, bool) {
-	if unicode.IsDigit(r) {
-		start := r
-		for start > 0 && unicode.IsDigit(start-1) {
-			start--
-		}
-		return byte('0' + (r-start)%10), true
-	}
-	for _, rg := range digitSupplement {
-		if r >= rg[0] && r <= rg[1] {
-			return byte('0' + (r-rg[0])%10), true
-		}
-	}
-	return 0, false
-}
+// The digit VALUE fold moved to pytext.DecimalDigit / pytext.FoldDecimals
+// when playbook's alarm dates turned out to need the same table: CPython's
+// strptime accepts all 760 decimal digits for %Y/%m/%d and maps each by
+// its unicodedata.decimal value. Two callers, one measured table — the
+// pyRepr triplication in this port is what a second copy turns into.
 
 func transformDecimals(s string) string {
 	if !strings.ContainsFunc(s, func(r rune) bool {
 		if r <= unicode.MaxASCII {
 			return false
 		}
-		_, ok := asciiDigit(r)
+		_, ok := pytext.DecimalDigit(r)
 		return ok
 	}) {
 		return s
@@ -263,7 +232,7 @@ func transformDecimals(s string) string {
 	b.Grow(len(s))
 	for _, r := range s {
 		if r > unicode.MaxASCII {
-			if d, ok := asciiDigit(r); ok {
+			if d, ok := pytext.DecimalDigit(r); ok {
 				b.WriteByte(d)
 				continue
 			}
