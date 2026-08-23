@@ -147,9 +147,9 @@ func TestABelowFloorConfidenceInNonASCIIDigitsIsDirectional(t *testing.T) {
 		name string
 		conf string
 	}{
-		{"arabic-indic", "٠.٥"},                 // ٠.٥
-		{"devanagari", "०.५"},                   // ०.५
-		{"fullwidth", "０.５"},                    // ０.５
+		{"arabic-indic", "٠.٥"}, // ٠.٥
+		{"devanagari", "०.५"},   // ०.५
+		{"fullwidth", "０.５"},    // ０.５
 		{"mathematical bold (50-long run)", "\U0001D7CE.\U0001D7D3"},
 		{"unicode-16 only (supplement)", "\U0001E5F1.\U0001E5F6"},
 		{"mixed with ascii", "0.٥"},
@@ -215,13 +215,13 @@ func TestTheFoldedValueIsTheValueCPythonParses(t *testing.T) {
 // rejects every one, and so must this.
 func TestNumericLookingNonDigitsAreStillRefused(t *testing.T) {
 	for _, in := range []string{
-		"Ⅰ",       // Ⅰ ROMAN NUMERAL ONE (Nl)
-		"①",       // ① CIRCLED DIGIT ONE (No)
-		"²",       // ² SUPERSCRIPT TWO (No)
-		"½",       // ½ VULGAR FRACTION ONE HALF (No)
-		"〇",       // 〇 IDEOGRAPHIC NUMBER ZERO (Nl)
-		"一",       // 一 (Lo)
-		"0.①",     // a real digit next to a fake one
+		"Ⅰ",   // Ⅰ ROMAN NUMERAL ONE (Nl)
+		"①",   // ① CIRCLED DIGIT ONE (No)
+		"²",   // ² SUPERSCRIPT TWO (No)
+		"½",   // ½ VULGAR FRACTION ONE HALF (No)
+		"〇",   // 〇 IDEOGRAPHIC NUMBER ZERO (Nl)
+		"一",   // 一 (Lo)
+		"0.①", // a real digit next to a fake one
 	} {
 		if got, ok := coerceFloat(in); ok {
 			t.Errorf("coerceFloat(%q) = %v, accepted; CPython float() raises "+

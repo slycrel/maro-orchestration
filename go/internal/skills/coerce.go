@@ -277,17 +277,11 @@ func pyStrip(s string) string { return strings.TrimFunc(s, pyIsSpace) }
 // in Go and another in Python meant the same skill scored differently in
 // the two runtimes.
 //
-// NAMED DIVERGENCE, version-dependent and unfixable from here: 27 further
-// runes disagree purely because Go's and CPython's Unicode tables are at
-// different revisions (Garay, recent Latin Extended-D additions). Those
-// move with the toolchains, not with this code, and nothing either runtime
-// mints uses them.
-func pyLower(s string) string {
-	if !strings.ContainsRune(s, 0x0130) {
-		return strings.ToLower(s)
-	}
-	return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307"))
-}
+// This was a THIRD hand-rolled copy of the same helper — the exact shape
+// that let M2's repr() bug survive in two places after being fixed in one.
+// It delegates now, so the U+0130 mapping and the unicode-table supplement
+// are defined once (adversarial r5, L4).
+func pyLower(s string) string { return pytext.Lower(s) }
 
 // pyRepr renders a string the way Python's !r does. Provenance reasons are
 // stored prose in a shared file, so a differently-spelled reason is a

@@ -3730,3 +3730,57 @@ equivalent.
 NEXT: r5 L4 (`Slugify`'s skew is 187× its documented size and lands on a
 FILENAME) and L2 (no captain's-log rotation in Go), then r6 over the whole
 chunk, then adversarial r1 over `internal/tasks`.
+
+---
+
+## Adversarial r5 — L4: the Slugify table skew (2026-08-23): FIXED
+
+r5 said `Slugify`'s named "Unicode table skew" is 187× its documented size
+(5,060 against a documented 27) and lands on a FILENAME. Measured here, the
+finding is right about the risk and wrong about the arithmetic, in a way
+worth writing down: **there are two different skews and only one of them was
+ever documented.**
+
+| Skew | Measured | Was documented as |
+|---|---|---|
+| `pytext.Lower` — runes CPython lowercases and Go does not | **27**, in 5 runs, 0 the other way | "27 further runes" — **correct** |
+| `Slugify`'s word class — code points CPython's `\w` keeps and Go's `\p{L}\p{N}` drops | **5,004**, in 27 runs, 0 the other way | not documented at all |
+
+The 27 in the doc comment was accurate for `Lower` and was being read as a
+bound on `Slugify`, which composes `Lower` with a word class that skews 185×
+harder. Both numbers being 27 (27 runes / 27 runs) is a coincidence and an
+unhelpful one.
+
+**Both were closed rather than re-documented.** The consequence is the
+reason: this function's own doc says two runtimes disagreeing here is "worse
+than not writing it at all", because the same skill name yields two
+filenames and the skill lands in two files. 27 map entries and 27 range
+literals is a small price for that, and 4,617 of the 5,004 code points are
+just two blocks (Egyptian Hieroglyphs Extended-A and CJK Extension I).
+
+**A third copy of the lowercase helper was found and collapsed.**
+`skills/coerce.go` had its own hand-rolled `pyLower` carrying its own copy
+of the stale "27 further runes, unfixable from here" comment — the same
+duplicated-helper family that let M2's `repr()` bug survive in two places
+after being fixed in one. It delegates to `pytext.Lower` now.
+
+**`Repr`'s printability skew is deliberately left open**, and the doc now
+says why instead of just how big it is: 5,812 code points, it would need
+CPython's whole printability set re-derived, and its consequence is a
+differently-spelled string that parses back to the same value — against a
+wrong trust grade and a split filename for the two that were closed. The
+existing sweep still asserts the direction stays one-way.
+
+**Mutation battery** (`scratchpad/mut_l4.py`): 13 mutants over both files,
+**13/13 killed on the first pass, 0 stale, 0 equivalent.** Two of them (S1,
+S5) restore the pre-fix behaviour exactly, so the batteries are also the
+falsification: without the supplements the new pins fail.
+
+Each table gets three pins: a whole-range sweep that re-derives the truth
+from CPython and fails in EITHER direction, an end-to-end differential
+against Python's real `skill_loader._slugify`, and one that fails when Go's
+tables catch up so the literals get deleted rather than quietly rotting.
+
+NEXT: r5 L2 (no captain's-log rotation in Go, and PORT.md's doctrine line
+conflates rotation with deletion), then r6 over the whole chunk, then
+adversarial r1 over `internal/tasks`.

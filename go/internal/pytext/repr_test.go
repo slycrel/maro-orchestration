@@ -45,8 +45,8 @@ var reprCases = []string{
 	"tab\tnl\ncr\r",            // short forms
 	"\x00\x07\x0b\x0c\x1b\x1f", // \xXX, not raw
 	"\x7f",                     // DEL is Cc
-	"nbsp soft­hyph", // Zs and Cf below 0x100 -> \xXX
-	"zwsp​sep", // Cf above 0xff -> \uXXXX
+	"nbsp soft­hyph",           // Zs and Cf below 0x100 -> \xXX
+	"zwsp​sep",                 // Cf above 0xff -> \uXXXX
 	// Non-printables in [0x100, 0x1000): the ONLY shape where \u's
 	// zero-padding is observable, since anything smaller takes the \x
 	// branch. U+061C is ARABIC LETTER MARK (Cf) and U+0378 is unassigned
@@ -55,10 +55,10 @@ var reprCases = []string{
 	// is at or above U+1000, so the padding never mattered.
 	"arabic mark ؜ here",
 	"unassigned ͸ here",
-	"  ",             // Zl and Zp
-	"astral \U0001d173",        // Cf above 0xffff -> \UXXXXXXXX
-	"private ",           // Co
-	"emoji 🎉 and é",            // printable, stays raw
+	"  ",                // Zl and Zp
+	"astral \U0001d173", // Cf above 0xffff -> \UXXXXXXXX
+	"private ",         // Co
+	"emoji 🎉 and é",     // printable, stays raw
 	"",
 	" ",   // the one printable Zs
 	"\\",  // lone backslash

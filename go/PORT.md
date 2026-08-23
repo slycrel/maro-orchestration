@@ -2179,9 +2179,11 @@ round-trips as `1` there and widens to `1.0` here — the inverse of the
 r1 float-spelling fix, hitting the same dedup consumer, and unreachable
 without a hand-edited or pack-imported row. Non-ASCII escaping
 (`ensure_ascii=True` in Python) and nested `imported` key order remain
-byte-level differences that no consumer reads. 27 further runes
-lowercase differently purely because Go's and CPython's Unicode tables
-are at different revisions; those move with the toolchains.
+byte-level differences that no consumer reads. The 27 runes that
+lowercased differently because Go's and CPython's Unicode tables are at
+different revisions were CLOSED in r5 L4 (`pytext.lowerSupplement`), and
+this file's third hand-rolled copy of the lowercase helper now delegates
+to `pytext.Lower`.
 
 13 further mutations derived from the fixed files, all killed — 59 for
 the chunk.

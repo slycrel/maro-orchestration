@@ -52,14 +52,65 @@ func TrimRight(s string) string { return strings.TrimRightFunc(s, IsSpace) }
 // unconditional multi-rune lowercase mapping there is, so handling it
 // outright is the whole fix.
 //
-// NAMED DIVERGENCE, version-dependent and unfixable from here: 27 further
-// runes disagree purely because Go's and CPython's Unicode tables are at
-// different revisions. Those move with the toolchains, not with this code.
+// The table skew was CLOSED rather than named (adversarial r5, L4). Go
+// ships unicode 15.0.0 where CPython here has 16.0.0, and 27 runes
+// lowercase in CPython and not in Go purely because of that. This used to
+// be documented as "version-dependent and unfixable from here", which was
+// wrong on the second half: 27 entries close it, and lowerSupplement below
+// is that table. Every one is a single-rune mapping and Go's own table maps
+// none of them, so the supplement is a pure addition — measured, not
+// assumed.
+//
+// The pins in lower_skew_test.go re-derive the whole map from CPython, so a
+// gap in EITHER direction fails, and a separate one fails when Go's table
+// catches up so the literals get deleted instead of quietly rotting.
+var lowerSupplement = map[rune]rune{
+	0x01C89: 0x01C8A, // CYRILLIC CAPITAL LETTER TJE
+	0x0A7CB: 0x00264, // LATIN CAPITAL LETTER RAMS HORN
+	0x0A7CC: 0x0A7CD, // LATIN CAPITAL LETTER S WITH DIAGONAL STROKE
+	0x0A7DA: 0x0A7DB, // LATIN CAPITAL LETTER LAMBDA
+	0x0A7DC: 0x0019B, // LATIN CAPITAL LETTER LAMBDA WITH STROKE
+	0x10D50: 0x10D70, // GARAY CAPITAL LETTER A
+	0x10D51: 0x10D71, // GARAY CAPITAL LETTER CA
+	0x10D52: 0x10D72, // GARAY CAPITAL LETTER MA
+	0x10D53: 0x10D73, // GARAY CAPITAL LETTER KA
+	0x10D54: 0x10D74, // GARAY CAPITAL LETTER BA
+	0x10D55: 0x10D75, // GARAY CAPITAL LETTER JA
+	0x10D56: 0x10D76, // GARAY CAPITAL LETTER SA
+	0x10D57: 0x10D77, // GARAY CAPITAL LETTER WA
+	0x10D58: 0x10D78, // GARAY CAPITAL LETTER LA
+	0x10D59: 0x10D79, // GARAY CAPITAL LETTER GA
+	0x10D5A: 0x10D7A, // GARAY CAPITAL LETTER DA
+	0x10D5B: 0x10D7B, // GARAY CAPITAL LETTER XA
+	0x10D5C: 0x10D7C, // GARAY CAPITAL LETTER YA
+	0x10D5D: 0x10D7D, // GARAY CAPITAL LETTER TA
+	0x10D5E: 0x10D7E, // GARAY CAPITAL LETTER RA
+	0x10D5F: 0x10D7F, // GARAY CAPITAL LETTER NYA
+	0x10D60: 0x10D80, // GARAY CAPITAL LETTER FA
+	0x10D61: 0x10D81, // GARAY CAPITAL LETTER NA
+	0x10D62: 0x10D82, // GARAY CAPITAL LETTER PA
+	0x10D63: 0x10D83, // GARAY CAPITAL LETTER HA
+	0x10D64: 0x10D84, // GARAY CAPITAL LETTER OLD KA
+	0x10D65: 0x10D85, // GARAY CAPITAL LETTER OLD NA
+}
+
 func Lower(s string) string {
-	if !strings.ContainsRune(s, 0x0130) {
-		return strings.ToLower(s)
+	if strings.ContainsRune(s, 0x0130) {
+		s = strings.ReplaceAll(s, "İ", "i̇")
 	}
-	return strings.ToLower(strings.ReplaceAll(s, "İ", "i̇"))
+	s = strings.ToLower(s)
+	if !strings.ContainsFunc(s, func(r rune) bool {
+		_, ok := lowerSupplement[r]
+		return ok
+	}) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if l, ok := lowerSupplement[r]; ok {
+			return l
+		}
+		return r
+	}, s)
 }
 
 // lineSeparators is Python str.splitlines()' break set, measured: it is
@@ -151,7 +202,16 @@ func SplitLines(s string) []string {
 // since \uXXXX parses back to exactly the same character, the two
 // spellings carry the same string VALUE. Only the bytes differ, so a
 // consumer that hashes this output rather than parsing it sees two keys.
-// It moves with the toolchains, not with this code.
+//
+// This one is DELIBERATELY left open where its two siblings were closed by
+// enumerated tables (lowerSupplement here, pyWordSupplement in
+// skills/export_md.go). The others were worth 27 and 27 range literals and
+// their consequences were a wrong trust grade and a split filename. This
+// one is 5,812 code points, it would need re-deriving CPython's whole
+// printability set, and its consequence is a differently-spelled string
+// that parses back to the same value. Documented magnitude, direction and
+// consequence beat a table that large. The sweep in repr_test.go asserts
+// the direction stays one-way.
 func Repr(s string) string {
 	quote := byte('\'')
 	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
