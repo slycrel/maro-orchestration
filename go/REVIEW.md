@@ -4018,3 +4018,125 @@ And the MEDIUM is the case for the whole-chunk rule: it was in landed,
 reviewed, green code, invisible to any review scoped to the latest diff.
 
 NEXT: r7 over the whole chunk, then adversarial r1 over `internal/tasks`.
+
+## Adversarial r7 — whole chunk
+
+1 HIGH, 2 MEDIUM, 3 LOW. All six verified against the source before any
+fix; all six fixed. `1 HIGH` after a round that produced `0 HIGH` is the
+whole-chunk rule earning its keep again — the finding was in code r6 had
+just landed and called done.
+
+### HIGH — the ambient loop id had no production caller
+
+r6 added `Recorder.WithLoopID` to answer "rows written by call sites that
+pass no loop id are unattributable on the shared log". Nothing ever called
+it. The mechanism was dead code and its pin could not tell, because the
+pin built its own `Recorder` and set the id itself.
+
+Wired into `loop.Run` and `now.Run`. The instructive part is what happened
+next: my first pin for it passed, and then **survived deleting the
+production line from both files**. The NOW lane already passes an explicit
+id at every one of its own emit sites, so there was nothing for the
+ambient value to fill. I deleted that pin rather than keep one that was
+green for the wrong reason, and replaced it with a delegation-chain pin
+over `Event`/`EventRelated`/`EventNoted` — verified by removing the
+`if loopID == "" { loopID = r.LoopID }` fallback and watching all three
+arms go red.
+
+Then I measured what the scope actually reaches, instead of repeating the
+comment r6 had written. Every emitter in `loop.go` and `now.go` passes
+`loopID` explicitly; the only reachable call site that passes none is
+`LOG_ROTATED`, which fires on the run's own appends. So the live payload
+is one row per rotation, and the skills/evolver/graduation emitters the
+original comment named are not reached at all — Python gets there via
+`loop_finalize.run_evolver`, which is unported. Both comments now say
+that, including the sentence that matters: do not read the scope's
+presence as evidence those paths are wired.
+
+### MEDIUM — the audience census was blind to a non-literal emitter
+
+`audience_census_test.go` walks sibling packages for event types passed to
+the `Event*` writers, matching a **string literal**. `skills.LogCircuitTransition`
+selects its type from a map, so all three `SKILL_CIRCUIT_*` types were
+declared in the registry and verified by nothing — the census counted them
+as covered while never seeing them.
+
+Two mechanisms, because closing the hole and keeping it visible are
+different jobs. A second pattern finds `Event*` calls whose first argument
+is not a literal; a file holding one is not trusted to the regex, so every
+event-type-shaped literal anywhere in it is harvested into the census
+instead. Any such file not named in `indirectSites` fails outright, and a
+stale `indirectSites` entry that harvests nothing also fails — otherwise
+the allowlist becomes the next silent hole. Three mutations run, three
+killed: dropping `SKILL_CIRCUIT_HALF_OPEN` from the registry (the blind
+spot itself, previously green), removing the allowlist entry, and adding a
+stale one.
+
+### MEDIUM — the package doc claimed a verb it has
+
+`record.go`'s header read "There is no delete, rotate, or compact verb
+here at all" with `rotate.go` in the same package. The retention doctrine
+it was protecting is still true and now says so accurately: nothing
+deletes, the head is written to `captains_log.<UTC-stamp>.jsonl` and only
+then is the active file rewritten, so every row survives one of the two
+files. The same block listed the log's keys and omitted `note` and
+`related_ids`.
+
+This is the r5-L2 shape for the third time — a doc whose claim reads as a
+virtue while hiding what the code actually does.
+
+### LOW — an explicit null is not an absent key (and the first pin missed it)
+
+`rotate.go` read its two config keys with `config.Get`, which folds
+"absent" and "present but null" into the same default. Python does not:
+`_cfg_get` hands `None` to `int()`, which raises, which resets **both**
+keys jointly. Measured on `{rotate_mb: null, rotate_keep: 50}` — Python
+rotates at (5.0, 1000), Go rotated at (5.0, 50), disagreeing about how
+much of a shared log stays live. The r6 comment called this unreachable
+without a raw-lookup seam; the seam it needed was presence, not rawness.
+
+Fixed with `config.Lookup`, feeding the raw value to the same coercers so
+the joint reset falls out rather than being special-cased.
+
+The pin is the lesson. The first version used a 60-row fixture, passed,
+and **passed just as green against the unfixed reader** — at 60 rows the
+folded path also archives nothing, because `keep=1000` exceeds the row
+count and the tail guard returns early. Right answer, wrong reason, and
+indistinguishable from a real pass. Above the default retention (1100
+rows) the two paths separate and the mutant fails 1-vs-0. A control arm
+asserts the same fixture with a coercible retention does rotate, since
+"0 archives" is only evidence if 0 is not the fixture's only outcome.
+
+### LOW — two comments naming the wrong character and the wrong set
+
+The rotation test's header and failure message both said a raw **U+2028**
+was the hazard. `json.dumps` escapes U+2028/U+2029 unconditionally; the
+only `splitlines` separator a writer emits verbatim is **U+0085**, which
+is what the fixture actually carries (the U+2028 row is labelled defence
+against a future encoder change).
+
+`verdict.go` called `float()`'s whitespace set `Py_UNICODE_ISSPACE`. That
+name belongs to `str.isspace()`, which has 29 code points; `float()`
+strips 25, and the four extra — U+001C..U+001F — make `float("\x1c1")`
+raise. Both counts re-measured this round rather than carried from the
+note. The wrong name invited a specific wrong repair: routing the trim
+through `pytext.Strip`, which implements `str.strip` correctly at 29 and
+would have made `float()` accept four separators CPython rejects. The
+comment now says so.
+
+### What the round says about the practice
+
+**Two pins in this round passed for the wrong reason, and neither was
+caught by writing them carefully.** Both were caught by mutating the
+production code and watching for red. The now-lane pin was green against a
+deleted fix; the null-config pin was green against the unfixed reader. A
+test written against already-correct code has no signal in it until
+something breaks — the mutation IS the test of the test, and skipping it
+is how a suite fills up with green that means nothing.
+
+r5, r6 and now r7 have each turned up **a comment asserting something the
+code does not do**, and in r6 and r7 the offending comments were written
+by me in the immediately preceding round. Confident prose about a
+guarantee is the least reliable line in the file.
+
+NEXT: r8 over the whole chunk, then adversarial r1 over `internal/tasks`.

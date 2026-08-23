@@ -101,6 +101,12 @@ type Result struct {
 func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, dryRun bool, model string, seedIn, seedOut int) (Result, error) {
 	start := time.Now()
 	loopID := record.NewID()
+	// The NOW lane's loop_id_scope — see the twin in loop.Run, which
+	// carries the full reasoning. Same reachable effect here: this lane's
+	// own emitters all pass loopID explicitly, so the scope's live payload
+	// is the LOG_ROTATED row that rotation writes during this run's
+	// appends (adversarial r7 HIGH).
+	rec = rec.WithLoopID(loopID)
 	res := Result{Status: "done", LoopID: loopID,
 		TokensIn: seedIn, TokensOut: seedOut}
 

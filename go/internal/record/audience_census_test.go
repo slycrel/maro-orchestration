@@ -74,7 +74,25 @@ func TestEveryEmittedEventTypeHasADecidedAudience(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := regexp.MustCompile(`\.Event(?:Related|Noted)?\(\s*"([A-Z][A-Z0-9_]*)"`)
+	// A literal-only census is BLIND to an emitter that passes a variable,
+	// and there is one: skills.LogCircuitTransition selects its event type
+	// from a map, so all three SKILL_CIRCUIT_* types were declared in the
+	// registry above and verified by nothing (adversarial r7 MEDIUM).
+	//
+	// Two mechanisms answer that. indirect finds the non-literal call
+	// sites; a file holding one is not trusted to the regex, so instead
+	// every event-type-shaped literal ANYWHERE in it is harvested into the
+	// census (eventShaped). And any such file that is not named in
+	// indirectSites fails outright, so the next variable emitter is a red
+	// test rather than another silent hole.
+	indirect := regexp.MustCompile(`\.Event(?:Related|Noted)?\(\s*[^"\s]`)
+	eventShaped := regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
+	indirectSites := map[string]string{
+		"skills/utility.go": "circuit state -> event type via a map literal",
+		"record/record.go":  "Event/EventRelated delegating to EventNoted",
+	}
 	found := map[string][]string{}
+	var unexpectedIndirect []string
 	err = filepath.WalkDir(internalDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -87,14 +105,45 @@ func TestEveryEmittedEventTypeHasADecidedAudience(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		rel, _ := filepath.Rel(internalDir, path)
 		for _, m := range call.FindAllStringSubmatch(string(src), -1) {
-			rel, _ := filepath.Rel(internalDir, path)
 			found[m[1]] = append(found[m[1]], rel)
+		}
+		if indirect.Match(src) {
+			if _, ok := indirectSites[filepath.ToSlash(rel)]; !ok {
+				unexpectedIndirect = append(unexpectedIndirect, rel)
+				return nil
+			}
+			for _, m := range eventShaped.FindAllStringSubmatch(string(src), -1) {
+				found[m[1]] = append(found[m[1]], rel+" (non-literal emitter)")
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(unexpectedIndirect) > 0 {
+		t.Errorf("these files pass a non-literal event type to an Event* "+
+			"writer, so the literal census cannot see what they emit: %s\n"+
+			"Either pass a literal, or add the file to indirectSites so its "+
+			"event-shaped literals are harvested instead.",
+			strings.Join(unexpectedIndirect, ", "))
+	}
+	for site := range indirectSites {
+		var seen bool
+		for _, sites := range found {
+			for _, s := range sites {
+				if strings.HasPrefix(filepath.ToSlash(s), site+" ") {
+					seen = true
+				}
+			}
+		}
+		if !seen {
+			t.Errorf("indirectSites names %q, but the walk harvested no "+
+				"event type from it — the entry is stale and is masking "+
+				"the very blind spot it was added to cover", site)
+		}
 	}
 	if len(found) == 0 {
 		t.Fatal("the walk found no event emitters at all — the pattern has " +

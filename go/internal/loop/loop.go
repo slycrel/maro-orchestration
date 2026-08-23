@@ -145,6 +145,23 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 	// modulus collides across runs at sub-second cadence and loop_id is
 	// the outcomes↔captains-log join key (adversarial round 2026-08-22).
 	loopID := "go-" + record.NewID()
+	// Python wraps the whole run body in `loop_id_scope(loop_id)` so that
+	// log_event fills loop_id for call sites deep in the stack that pass
+	// none — skills, evolver, graduation, captain's-log rotation. This is
+	// that scope (adversarial r7 HIGH: r6 added WithLoopID and wired no
+	// production caller to it, so the mechanism was dead code and its pin,
+	// which built its own Recorder, could not tell).
+	//
+	// What it reaches TODAY, measured rather than assumed: every emitter
+	// in this file passes loopID explicitly, so the only reachable call
+	// site that passes none is LOG_ROTATED in record.rotate — and that one
+	// fires on this run's own appends, so the scope is the difference
+	// between an attributed rotation row and an orphan one. The skills /
+	// evolver / graduation emitters also pass none, but this loop does not
+	// call them yet (Python reaches them via loop_finalize.run_evolver;
+	// that wiring is unported). The scope is correct for them in advance —
+	// do not read its presence as evidence they are wired.
+	rec = rec.WithLoopID(loopID)
 	recModel := model
 	if recModel == "" {
 		// The backend picks its own default; say so rather than passing

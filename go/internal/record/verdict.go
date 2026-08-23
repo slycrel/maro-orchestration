@@ -192,8 +192,16 @@ func coerceInt(v any) (int, bool) {
 // equivalent, which is what CPython's PyUnicode_TransformDecimalAndSpace-
 // ToASCII does before float() ever sees the text. Leading/trailing spaces
 // are already handled by strings.TrimSpace at the call site: Go's
-// unicode.White_Space set and CPython's Py_UNICODE_ISSPACE set were
-// measured to be the same 25 code points, so the trim is exact.
+// unicode.White_Space set and the set float() itself strips were measured
+// to be the same 25 code points, so the trim is exact.
+//
+// That set is NOT str.isspace(), which holds 29 — it also carries
+// U+001C..U+001F, and float("\x1c1") raises. The name here used to say
+// Py_UNICODE_ISSPACE, which is the 29-point one, and the wrong name
+// invites the wrong repair: routing this trim through pytext.Strip (which
+// implements str.strip, correctly, at 29) would make float() accept four
+// separators CPython rejects. Two different sets, two different callers
+// (adversarial r7 LOW).
 //
 // The digit VALUE is recovered by walking back to the start of the rune's
 // run and taking the offset mod 10. Measured over Go's OWN digit table:

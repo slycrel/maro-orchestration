@@ -116,16 +116,9 @@ func Merge(base, over map[string]any) map[string]any {
 // config.get. Making that loud needs a warnings channel like Load's —
 // deferred until a caller needs it, noted in PORT.md.
 func Get[T any](cfg map[string]any, path string, def T) T {
-	var cur any = cfg
-	for _, part := range strings.Split(path, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return def
-		}
-		cur, ok = m[part]
-		if !ok {
-			return def
-		}
+	cur, present := Lookup(cfg, path)
+	if !present {
+		return def
 	}
 	if v, ok := cur.(T); ok {
 		return v
@@ -145,4 +138,37 @@ func Get[T any](cfg map[string]any, path string, def T) T {
 		}
 	}
 	return def
+}
+
+// Lookup is Get's presence half: it reports whether the path EXISTS,
+// separately from what it holds. Get cannot express the difference —
+// an absent key and an explicit `key: null` both make it return the
+// default — and for the keys Python feeds to a coercing constructor that
+// difference is behaviour, not pedantry. Python's captains_log does
+//
+//	rotate_mb = float(_cfg_get("captains_log.rotate_mb", 5.0))
+//
+// so an absent key yields 5.0 while an explicit null yields float(None),
+// which RAISES and sends rotate_mb AND rotate_keep back to their
+// defaults jointly. Measured before this seam existed: on
+// `{rotate_mb: null, rotate_keep: 50}` Python rotated at (5.0, 1000) and
+// Go at (5.0, 50), disagreeing about how much of a SHARED captain's log
+// stays live (adversarial r7 LOW).
+//
+// A nil second-return-free variant is not enough: the caller needs
+// present-and-nil to be distinguishable from absent, which is exactly
+// the boolean.
+func Lookup(cfg map[string]any, path string) (any, bool) {
+	var cur any = cfg
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
 }

@@ -2019,7 +2019,12 @@ fixed or parked here honestly):
 - `cost_usd` estimation: rows omit the field rather than lie `0.0`.
 - `config.Get` type mismatches beyond int↔float fall back to the
   default silently (same as Python); a warnings channel like `Load`'s
-  is deferred until a caller needs it.
+  is deferred until a caller needs it. `config.Lookup` (r7) is the
+  presence half — absent vs explicit-null — and callers that feed a
+  value to a coercing constructor MUST use it, because Python
+  distinguishes the two and `Get` cannot: `float(None)` raises where an
+  absent key yields the default. `record.maybeRotateCaptainsLog` is the
+  one such caller today.
 - `Result.Warnings` (record-write failures, unparseable result-shaped
   lines) reach the operator via the CLI's stderr print only — there is
   no durable warnings sink. Deliberate, not deferred laziness: the

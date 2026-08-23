@@ -618,10 +618,17 @@ func TestAnExhaustedArchiveNameSearchAbortsWithoutTouchingTheStore(t *testing.T)
 }
 
 // Python splits this file with str.splitlines(), which breaks on ten
-// separators. This port does not set ensure_ascii, so a Go-written row can
-// carry a RAW U+2028 — and then the two runtimes disagree about how many
-// rows the file holds. Rotation acts on that count, so the disagreement
-// becomes a rewrite that cuts a row in half.
+// separators where a JSONL reader expects one. The reachable rune is
+// U+0085 (NEL): Python's json.dumps escapes U+2028 and U+2029
+// unconditionally, ensure_ascii or not, so those two can never reach the
+// file raw — U+0085 is the only splitlines separator a writer emits
+// verbatim. The fixture carries it at row 30 and keeps a U+2028 at row 31
+// as labelled defence, so a future encoder change that stops escaping
+// shows up here rather than in a rotated log.
+//
+// When the two runtimes disagree about how many rows the file holds,
+// rotation acts on that count, and the disagreement becomes a rewrite
+// that cuts a row in half.
 func TestARowHoldingARawLineSeparatorRotatesTheWayPythonRotatesIt(t *testing.T) {
 	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
 	if err != nil {
@@ -700,7 +707,7 @@ func TestARowHoldingARawLineSeparatorRotatesTheWayPythonRotatesIt(t *testing.T) 
 	want, _ := py["archive"].(string)
 	if got := readFileString(t, archives[0]); got != want {
 		t.Errorf("archive differs from CPython's on a row holding a raw "+
-			"U+2028 — the two runtimes disagree about where rows begin\n"+
+			"U+0085 — the two runtimes disagree about where rows begin\n"+
 			" got %d bytes\nwant %d bytes", len(got), len(want))
 	}
 }
@@ -825,6 +832,64 @@ func TestQuotedRotationConfigIsHonouredTheWayPythonHonoursIt(t *testing.T) {
 	}
 }
 
+// An EXPLICIT null is not an absent key. Python's _cfg_get hands None
+// straight to int(), which raises, which resets both keys jointly — so
+// `rotate_keep: null` disables a 0.001 MB threshold entirely. A config
+// reader that folds absent and null together sees the 1000-line default
+// instead, keeps the caller's 0.001, and rotates a log Python left alone:
+// the two runtimes then disagree about which rows are still live on a
+// SHARED file. Measured at (5.0, 1000) vs (5.0, 50) before config.Lookup
+// existed (adversarial r7 LOW).
+//
+// The fixture must hold MORE rows than the 1000-line default retention,
+// and that is not incidental. At 60 rows the folded reader also produces
+// zero archives — not because it reset, but because keep=1000 exceeds the
+// row count and the tail guard returns early. The first version of this
+// test used 60 rows, passed, and passed just as green against the broken
+// reader: right answer, wrong reason. Above the retention the two paths
+// separate — Python archives nothing at its 5 MB threshold, the folded
+// reader archives the overflow at 0.001 MB.
+//
+// The control arm is the other half: "0 archives" is only evidence if the
+// same fixture with a coercible retention DOES rotate.
+func TestAnExplicitNullRetentionIsNotAnAbsentOne(t *testing.T) {
+	const rows = 1100 // > defaultRotateKeep, see above
+	for _, tc := range []struct {
+		name         string
+		cfg          string
+		wantArchives int
+	}{
+		{"explicit null resets jointly",
+			"captains_log:\n  rotate_mb: 0.001\n  rotate_keep: null\n", 0},
+		{"control: same fixture, coercible retention",
+			"captains_log:\n  rotate_mb: 0.001\n  rotate_keep: 10\n", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			py := pythonRotateRawCfg(t, t.TempDir(), tc.cfg, rows)
+			if got := int(py["n_archives"].(float64)); got != tc.wantArchives {
+				t.Fatalf("CPython produced %d archives, want %d — the "+
+					"premise of this case is wrong, not the port", got,
+					tc.wantArchives)
+			}
+
+			_, mem, path := rotWorkspaceRawCfg(t, tc.cfg)
+			seedLog(t, path, rows)
+			New(filepath.Dir(mem)).maybeRotateCaptainsLog(path)
+
+			if got := len(ArchivePaths(mem)); got != tc.wantArchives {
+				t.Fatalf("got %d archives, want %d (CPython's count) — the "+
+					"two runtimes disagree about which rows are still live",
+					got, tc.wantArchives)
+			}
+			if got, want := withoutAuditRow(readFileString(t, path)),
+				withoutAuditRow(py["active"].(string)); got != want {
+				t.Errorf("active file differs from CPython's\n got %q\nwant %q",
+					truncate(got), truncate(want))
+			}
+		})
+	}
+}
+
 // The reset is JOINT. Python coerces both keys inside ONE try/except, so a
 // rotate_keep it cannot int() sends rotate_mb back to 5 MB as well — and a
 // 15 KB log then does not rotate at all. Reading the keys independently
@@ -869,6 +934,49 @@ func TestTheAmbientLoopIDReachesEventsThatPassNone(t *testing.T) {
 	if got, _ := row["loop_id"].(string); got != "loop-abc123" {
 		t.Errorf("LOG_ROTATED loop_id = %q, want %q — the ambient id did not "+
 			"reach a call site that passes none", got, "loop-abc123")
+	}
+
+	// The delegation chain too: Event -> EventRelated -> EventNoted. Every
+	// production emitter that passes "" (skills.MaybeAutoPromoteSkills,
+	// LogCircuitTransition, evolver's EVOLVER_APPLIED, graduation's
+	// GRADUATION_PROPOSED) goes through one of the two outer verbs, not
+	// EventNoted directly, so a fallback that only worked on the inner one
+	// would leave every real caller unattributed while the rotation pin
+	// above stayed green (adversarial r7).
+	for _, tc := range []struct {
+		name    string
+		subject string
+		emit    func(subject string) error
+	}{
+		{"Event", "chain-event", func(sub string) error {
+			return r.Event("SEED", sub, "x", nil, "")
+		}},
+		{"EventRelated", "chain-related", func(sub string) error {
+			return r.EventRelated("SEED", sub, "x", nil, "", nil)
+		}},
+	} {
+		if err := tc.emit(tc.subject); err != nil {
+			t.Fatal(err)
+		}
+		var seen, attributed int
+		for _, l := range strings.Split(readFileString(t, path), "\n") {
+			var m map[string]any
+			if json.Unmarshal([]byte(l), &m) != nil || m["subject"] != tc.subject {
+				continue
+			}
+			seen++
+			if m["loop_id"] == "loop-abc123" {
+				attributed++
+			}
+		}
+		if seen == 0 {
+			t.Fatalf("%s wrote no row for %q; this case proved nothing",
+				tc.name, tc.subject)
+		}
+		if attributed != seen {
+			t.Errorf("%s: %d of %d rows carry the ambient loop id",
+				tc.name, attributed, seen)
+		}
 	}
 
 	// An explicit argument still wins, exactly as the kwarg does there...

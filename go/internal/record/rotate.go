@@ -122,15 +122,29 @@ func (r *Recorder) maybeRotateCaptainsLog(path string) {
 	// rotating at different thresholds means one of them is archiving rows
 	// the other still considers active.
 	rotateMB, keep := defaultRotateMB, defaultRotateKeep
-	mb, okMB := coerceFloat(config.Get(cfg, "captains_log.rotate_mb", any(defaultRotateMB)))
-	kp, okKeep := coerceInt(config.Get(cfg, "captains_log.rotate_keep", any(defaultRotateKeep)))
+	// config.Lookup, not config.Get: Get folds "absent" and "present but
+	// null" together, and Python does not. There, an absent key reaches
+	// float()/int() as the default and an explicit null reaches them as
+	// None, which raises and resets BOTH keys jointly. Feeding the raw
+	// value (default substituted only when genuinely absent) to the same
+	// coercers reproduces that without a special case (adversarial r7 LOW
+	// — the residual note here used to call this unreachable without a raw
+	// seam, and it was measurably reachable: `{rotate_mb: null,
+	// rotate_keep: 50}` rotated at (5.0, 1000) in Python and (5.0, 50)
+	// here, on a shared log).
+	rawMB, present := config.Lookup(cfg, "captains_log.rotate_mb")
+	if !present {
+		rawMB = any(defaultRotateMB)
+	}
+	rawKeep, present := config.Lookup(cfg, "captains_log.rotate_keep")
+	if !present {
+		rawKeep = any(defaultRotateKeep)
+	}
+	mb, okMB := coerceFloat(rawMB)
+	kp, okKeep := coerceInt(rawKeep)
 	if okMB && okKeep {
 		rotateMB, keep = mb, kp
 	}
-	// Named residual: an explicit `rotate_mb: null` reads as absent here and
-	// as None there, where float(None) raises and resets both. Reaching it
-	// needs a raw-lookup seam in config; not worth one for a key nobody
-	// nulls deliberately.
 	if rotateMB <= 0 {
 		return // explicitly disabled
 	}

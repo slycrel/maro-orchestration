@@ -8,10 +8,17 @@
 //     Go rows carry the compatible key subset plus
 //     measurement_class="go-port" so analyses can include or fence them.
 //   - <workspace>/memory/captains_log.jsonl — {timestamp, event_type,
-//     subject, summary, audience, context, loop_id}.
+//     subject, summary, audience, context, loop_id}, plus the two keys
+//     Python emits only when non-empty: note and related_ids.
 //
-// Data-retention doctrine carries over: this package only APPENDS. There
-// is no delete, rotate, or compact verb here at all.
+// Data-retention doctrine carries over: nothing here DELETES a row.
+// rotate.go does carry a rotation verb (Python's captains_log
+// ._maybe_rotate), and it does not delete: the head is written to
+// captains_log.<UTC-stamp>.jsonl and only then is the active file
+// rewritten with the last captains_log.rotate_keep lines, so every row
+// survives one of the two files. There is no delete or compact verb
+// (adversarial r7 MEDIUM: this block used to claim "no delete, rotate,
+// or compact verb here at all" while rotate.go sat in the same package).
 //
 // Concurrency: appends take the same flock on the same sibling
 // "<name>.lock" file the Python file_lock module uses, so Go and Python
