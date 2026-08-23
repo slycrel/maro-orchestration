@@ -2198,6 +2198,37 @@ to `pytext.Lower`.
 13 further mutations derived from the fixed files, all killed — 59 for
 the chunk.
 
+### `pytext.CaseFold` (2026-08-23) — a dedup key, not a rendering
+
+`playbook.py`'s `_entry_core` ends in `.casefold()`, and its output is
+the dedup key for both `inject_playbook` and `_dedup_text` — so a
+runtime that folds one code point differently keeps a different set of
+bullets in a file both runtimes write. Ported ahead of the playbook
+module itself, since the module cannot be correct without it.
+
+The table was DERIVED, not transcribed: Go's per-rune mapping was dumped
+for all 0x110000 code points and diffed against CPython's `casefold` on
+this box, so the unicode 15-vs-16 skew `Lower` already corrects is not
+re-introduced. 297 entries, 103 expanding past one rune.
+
+Two things worth knowing before touching it:
+
+- **casefold has no context rules.** `'ΟΔΟΣ'.lower()` ends in ς;
+  `'ΟΔΟΣ'.casefold()` ends in σ. Both ς and Σ fold to σ.
+- **`lowerRune` is a second implementation of `Lower`'s per-rune half**,
+  which is a liability — two copies of one mapping drift, and each would
+  have its own passing sweep. A pin re-derives one from the other at
+  every code point rather than trusting they stay in step.
+
+Six mutations: five killed (each table class, the supplement, the
+U+0130 expansion, and a redundant entry caught by the dead-weight
+detector). One EQUIVALENT and recorded as such rather than chased —
+folding the whole string through `Lower` first is byte-identical at
+every code point in every sigma context (5,560,320 strings, 0
+differences), because `Lower` emits ς and the table folds ς to σ. The
+per-rune path is kept anyway: the alternative rests correctness on one
+table entry silently repairing a rule that should not have run.
+
 ### Project ledger — slice 1: NEXT.md and its neighbours (2026-08-23)
 
 `internal/orch` ports Python `orch_items.py`'s ledger half: the NEXT.md
