@@ -4124,3 +4124,29 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (`6678c209` on go-port) — full r10–r14 corpus passed the parser-backed
   internals first-run, known-gap #15 closed, IDNA coverage added; the Go
   file is now the backport REFERENCE for Python's injection_guard.py.
+
+- **2026-08-22 (Engine/data separation decree — Jeremy — CORRECTS the
+  same-day port-philosophy entry above):** the earlier entry recorded, as
+  a neutral observation, that maro's "portable learning" is reified as
+  CODE and that the Go port therefore ports lessons as code. Jeremy
+  corrected the framing: that was Claude saying it was "picking up the
+  learnings and putting them in code," and *"I was surprised that wasn't
+  data. I'd prefer the opposite... maro is the engine, the data is the
+  learning."* Decree: **maro is the ENGINE; the learning is DATA.**
+  Learning reified in code is a smell to fix, not a state to accept.
+  Directive (now): *"we shouldn't port the learned data lessons into code
+  — we should import/export that data-as-learning, including all of the
+  metadata round it in whatever stage it's in (i.e. a potential skill
+  should be in the import/export along with its test metadata)."* So the
+  pack (import/export) is the learning-transfer mechanism and must carry
+  learning at ALL lifecycle stages with metadata (candidate skill + test
+  metadata, provisional lesson + provenance, etc.). Longer-arc vision:
+  maro should eventually GENERATE scripts and other "actionable data"
+  streams itself — learning that becomes executable, produced by the
+  engine as data, never hand-coded in. Go-port implication: port the
+  ENGINE as code (the point of the port), but learned OUTPUTS stay DATA
+  and move through the pack (cross-runtime pack parity already built = the
+  right substrate); the inspector/evolver tranches must read/write learned
+  artifacts as data, not embed them as Go constants. Engine mechanism/
+  policy (e.g. the injection-guard scanner itself) staying code is fine;
+  its LEARNED inputs are not.
