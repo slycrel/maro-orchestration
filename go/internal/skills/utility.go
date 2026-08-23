@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ type UtilityUpdate struct {
 	CircuitAfter     string
 	ConsecutiveFails int
 	ConsecutiveWins  int
+	// Warnings carries the rewrite's own announcement (carried-verbatim
+	// counts, strandees, ghost ids). It exists because the save moved from
+	// SaveSkill to SaveSkills, which HAS an announcement — and dropping it
+	// on the floor would make this the one destructive write in the
+	// library that rewrites the store silently.
+	Warnings []string
 }
 
 // Changed reports whether the circuit state moved — the condition Python
@@ -127,7 +134,25 @@ func UpdateSkillUtility(ws, skillID string, success bool, failureReason string) 
 	up.ConsecutiveFails = target.ConsecutiveFailures
 	up.ConsecutiveWins = target.ConsecutiveSuccesses
 
-	if err := SaveSkill(ws, target); err != nil {
+	// Python recomputes the hash after mutating, then saves through
+	// _save_skills(updated_ids={id}) — the ORDINAL-HOLDING rewrite, not
+	// save_skill.
+	//
+	// This used to call SaveSkill, which is the port of Python's other
+	// writer: it drops the matching row and appends the new one at the
+	// TAIL. pool.go states in its own words why that is wrong here — the
+	// store is read last-row-wins by id, so moving a row past its
+	// neighbours changes pool ORDER, and pool order is the input to every
+	// limit-capped sweep. Measured on one seeded store: after a single
+	// outcome on B, Python's order stayed [A B C D] and Go's became
+	// [A C D B], and a 2-candidate promotion sweep then promoted [A B] in
+	// one runtime and [A C] in the other. This is the library's
+	// highest-frequency writer, so it was the invariant's loudest
+	// violator (adversarial r3 2026-08-23, H1).
+	target.ContentHash = ComputeSkillHash(*target)
+	warns, err := SaveSkills(ws, pool, nil, NewIDSet(skillID))
+	up.Warnings = warns
+	if err != nil {
 		return up, err
 	}
 	return up, nil
@@ -158,16 +183,53 @@ func LogCircuitTransition(rec *record.Recorder, skillID string, u UtilityUpdate,
 		"consecutive_failures":  u.ConsecutiveFails,
 		"consecutive_successes": u.ConsecutiveWins,
 	}
+	// The note is a TOP-LEVEL row key, not a context entry: Python's
+	// render_entry reads entry["note"] and prints a "Note:" line, and
+	// nothing renders context values — so filed under context the failure
+	// reason survived search and vanished from every human-facing render,
+	// which is the one thing a circuit event exists to carry.
+	note := ""
 	if failureReason != "" {
-		ctx["note"] = clipRunes(failureReason, 200)
+		note = clipRunes(failureReason, 200)
 	}
 	// The skill linkage is related_ids, NOT loop_id: filing a subject
 	// linkage as a run id invents a run and loses the linkage.
-	return rec.EventRelated(eventType, u.SkillName, summary, ctx, "",
+	return rec.EventNoted(eventType, u.SkillName, summary, ctx, note, "",
 		[]string{"skill:" + skillID})
 }
 
-func round3(f float64) float64 { return math.RoundToEven(f*1000) / 1000 }
+// round3 is Python's round(f, 3).
+//
+// The obvious spelling — RoundToEven(f*1000)/1000 — rounds the PRODUCT,
+// which carries its own representation error, where Python rounds the
+// exact value of the double. Over the 400 three-decimal half-values
+// 0.0005…0.3995, 202 diverge: round3(0.6675) gave 0.668 where Python
+// gives 0.667. Formatting to decimal and parsing back is the same
+// decimal-correct rounding Python does, and Go's own %.3f already agrees
+// with it — which is how the bug showed itself, as a SKILL_DEMOTED row
+// carrying "utility_score=0.877 < 0.4" in its reason next to
+// context.utility: 0.878, two spellings of one number in one event
+// (adversarial r3 2026-08-23, L4).
+//
+// Reach, measured honestly: walking all 4,194,304 EMA-reachable values
+// 22 steps deep from the default utility_score of 1.0 found ZERO
+// divergences, so the ordinary EMA path was never affected. It is
+// reachable through any STORED score — a pack import, a hand-edited row,
+// a variant inheriting a value — which goes straight into the
+// promotion and demotion events.
+func round3(f float64) float64 { return pyRound(f, 3) }
+
+// pyRound is round(f, n) for the digit counts this package uses.
+func pyRound(f float64, n int) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	out, err := strconv.ParseFloat(strconv.FormatFloat(f, 'f', n, 64), 64)
+	if err != nil {
+		return f
+	}
+	return out
+}
 
 func clipRunes(s string, n int) string {
 	r := []rune(s)
@@ -214,21 +276,33 @@ func SelectVariantForTask(parent Skill, taskID string, pool []Skill) Skill {
 
 // RecordVariantOutcome credits a win or loss to a challenger. A no-op for
 // non-variant skills — a parent's record is its own stats, not an arm.
-func RecordVariantOutcome(ws, skillID string, success bool) error {
+//
+// Like UpdateSkillUtility this saves through the ordinal-holding rewrite
+// (Python: _save_skills(updated_ids={id})), NOT through SaveSkill, so an
+// A/B outcome cannot reorder the pool underneath a capped sweep.
+//
+// It deliberately does NOT recompute content_hash, and the asymmetry with
+// UpdateSkillUtility is Python's: _save_skills backfills only an EMPTY
+// hash for a named write, so a stored hash that disagrees with its skill
+// SURVIVES here and keeps warning on every load. Routing this through
+// SaveSkill silently recomputed it, so one A/B win permanently erased the
+// tamper-detection signal with nothing announced (adversarial r3, L1).
+func RecordVariantOutcome(ws, skillID string, success bool) ([]string, error) {
 	pool := LoadSkills(ws).Skills
 	for i := range pool {
-		s := pool[i]
-		if s.ID != skillID || s.VariantOf == nil {
+		if pool[i].ID != skillID || pool[i].VariantOf == nil {
 			continue
 		}
+		// Mutate IN the pool: taking a copy first meant the saved row and
+		// the pool the rewrite was built from disagreed.
 		if success {
-			s.VariantWins++
+			pool[i].VariantWins++
 		} else {
-			s.VariantLosses++
+			pool[i].VariantLosses++
 		}
-		return SaveSkill(ws, &s)
+		return SaveSkills(ws, pool, nil, NewIDSet(skillID))
 	}
-	return nil
+	return nil, nil
 }
 
 // FrontierSkills returns the skills worth A/B testing: those whose HONEST

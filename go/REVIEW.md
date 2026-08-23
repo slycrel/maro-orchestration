@@ -3304,3 +3304,51 @@ and REFUTED (the tokenizer's class makes every surviving token ASCII).
 
 NEXT: verify each claim against the source, fix, then r4 over the whole
 chunk again.
+
+### r3 fixes (2026-08-23)
+
+All nine claims verified against BOTH sources before anything was
+touched; all nine confirmed, none hallucinated — r3 had executed each
+one, which is the difference from the rounds where the ~30–50% figure
+holds.
+
+| # | Fix |
+|---|-----|
+| H1 | `UpdateSkillUtility` and `RecordVariantOutcome` now save through `SaveSkills(…, updatedIDs)`. `RecordVariantOutcome` also mutates `pool[i]` in place (it was mutating a copy) and returns the rewrite's warnings, which `SaveSkill` had no way to produce. |
+| H2 | `compactnessAdjustedScore` counts code points for the description AND each step. |
+| M1 | `userSurfacedEvents` gained SKILL_PROMOTED, SKILL_DEMOTED, SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_CLOSED, ISLAND_CULLED. SKILL_CIRCUIT_HALF_OPEN stays out, matching Python. |
+| M2 | New `Recorder.EventNoted` writes `note` as a TOP-LEVEL key; `EventRelated` delegates to it. `LogCircuitTransition` routes the failure reason there. |
+| M3 | `RunIslandCycle` takes a `*record.Recorder` and emits one ISLAND_CULLED per island, inside the sorted-island loop so row order is stable. A failed log becomes a warning that NAMES the un-announced retirement. |
+| L1 | Kept deliberately: `RecordVariantOutcome` does not recompute `content_hash`, so a tampered hash survives and keeps warning. The asymmetry with `UpdateSkillUtility` is Python's. |
+| L2 | `appendJSONL` emits through `pyjson.Ordered`. `pyjson.Value` now renders containers RECURSIVELY rather than delegating to `encoding/json` — every compatibility rule had been stopping one level down, which is exactly where a captain's-log row keeps its payload. |
+| L3 | `stampOutcomeVerdictLocked` decodes with `UseNumber`, recovers the row's on-disk key order via a new `orderedKeysOf` token walk, and writes through `AtomicWrite`. |
+| L4 | New `pyRound(f, n)` formats to decimal and parses back — the same decimal-correct rounding Python does. `round3`/`round4` delegate. |
+
+**Pins, and their falsifiers.** The whole suite passed unchanged after
+the fixes, which means nothing pinned any of them. Eleven pins were
+added (`skills/r3fixes_test.go`, `record/verdict_rewrite_test.go`,
+`record/audience_census_test.go`) and then a 17-mutant battery reverted
+each fix to the shape r3 found. **17 killed, 0 survived**, tree restored
+green. Two mutants had to be rewritten mid-battery because the first
+attempt was not faithful — `os.WriteFile(path, …, 0o644)` does not
+change an EXISTING file's mode, so it failed to reproduce the mode
+widening at all, and a `pyjson.Ordered(row, nil)` mutant that left
+`rowKeys` unused was killed by the COMPILER rather than by the test. A
+mutant killed by a build error proves nothing about the pin.
+
+`record/audience_census_test.go` is the drift tripwire r3 asked for: it
+walks `internal/**/*.go` for event types passed to the `Event*` writers
+and fails on any type with no decided audience. It found eight
+undeclared types on its first run (LOOP_STARTED, LOOP_FINISHED,
+CLOSURE_VERDICT, RECALL_PERFORMED, METACOGNITIVE_DECISION, NOW_ANSWERED,
+WORKER_DELEGATION_GAP, WORKER_REPORT_OMISSION); all eight were checked
+against Python's live 32-entry frozenset and all eight are correctly
+"system" there, so no second bug — but they are now declared rather than
+defaulted. It carries a vacuity guard requiring the skill emitters to
+actually be reached.
+
+Deferred, named: `record.AtomicWrite` uses a fixed `path + ".tmp"` where
+Python uses `mkstemp`, so two concurrent UNLOCKED writers to one path
+could rename a partial file. Every current caller holds the store lock.
+Not touched while `record` was under review; it belongs to whichever
+round opens that file next.

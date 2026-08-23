@@ -90,12 +90,34 @@ func Value(v any) (string, error) {
 		}
 		return out, nil
 	}
-	// Nested structures go through the generic encoder — but its non-finite
-	// refusal only ever sees the TOP level, so a nested 1e400 was emitted
-	// verbatim while Python's json.dumps(..., allow_nan=False) refused the
-	// whole write.
 	if err := RefuseNonFinite(v); err != nil {
 		return "", err
+	}
+	// Containers render RECURSIVELY through this function rather than
+	// through the generic encoder. Delegating meant every rule above
+	// stopped applying one level down: a nested 1.0 came out as a bare 1,
+	// which changes the type json.loads parses, and a nested "a -> b" came
+	// out HTML-escaped. The captain's log's whole payload is a nested
+	// context map, so "the top level is Python-shaped" was not worth much
+	// (adversarial r3 2026-08-23, L2).
+	switch t := v.(type) {
+	case []any:
+		return renderList(len(t), func(i int) any { return t[i] })
+	case []string:
+		return renderList(len(t), func(i int) any { return t[i] })
+	case map[string]any:
+		// NAMED DIVERGENCE, same one already accepted for nested
+		// `imported`: Python emits a nested dict in its literal insertion
+		// order and a Go map has none, so nested keys are SORTED. The two
+		// differences that change a parsed VALUE — float spelling and HTML
+		// escaping — are fixed; order is byte-level only, and the ordered
+		// top level is available to any caller that needs it via Ordered.
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return Ordered(t, keys)
 	}
 	var buf strings.Builder
 	enc := json.NewEncoder(&buf)
@@ -104,6 +126,18 @@ func Value(v any) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(buf.String(), "\n"), nil
+}
+
+func renderList(n int, at func(int) any) (string, error) {
+	parts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		one, err := Value(at(i))
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, one)
+	}
+	return "[" + strings.Join(parts, ",") + "]", nil
 }
 
 // RefuseNonFinite walks a decoded value for a number Python would have

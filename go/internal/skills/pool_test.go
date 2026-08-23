@@ -537,7 +537,7 @@ func TestRunIslandCyclePersistsAssignmentsWithoutRevertingConcurrentWrites(t *te
 	if err := SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := RunIslandCycle(ws, 4, false)
+	rep, err := RunIslandCycle(ws, nil, 4, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestRunIslandCyclePersistsAssignmentsWithoutRevertingConcurrentWrites(t *te
 	}
 	// A second cycle assigns nothing and writes nothing.
 	before := poolLines(t, ws)
-	rep, err = RunIslandCycle(ws, 4, false)
+	rep, err = RunIslandCycle(ws, nil, 4, false)
 	if err != nil {
 		t.Fatal(err)
 	}

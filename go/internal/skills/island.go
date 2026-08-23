@@ -5,6 +5,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // IslandDefault is the island a skill lands in when no keyword matched.
@@ -61,10 +64,22 @@ func SkillsByIsland(pool []Skill) map[string][]Skill {
 // utility penalized by length, so a compact skill beats a verbose one of
 // equal utility. The max(penalty, 1.0) floor means a short skill is never
 // boosted above its own utility.
+//
+// The count is in CODE POINTS, because Python's len() on a str counts
+// code points. Counting bytes inflates the penalty for any non-ASCII
+// skill and this is the sort key for CullIslandBottomHalf — the only
+// destructive tier-lifecycle path. Two skills with identical
+// 400-code-point descriptions, one ASCII and one accented, tie in Python
+// and score 0.2406 vs 0.1781 with a byte count, which retires the
+// accented one instead. Measured against the live 432-skill store, 54 of
+// them (12.5%) scored differently (adversarial r3 2026-08-23, H2).
+//
+// The max(penalty, 1.0) floor means the divergence only bites above
+// ~344 characters, which is most real skills.
 func compactnessAdjustedScore(s Skill) float64 {
-	chars := len(s.Description)
+	chars := utf8.RuneCountInString(s.Description)
 	for _, step := range s.StepsTemplate {
-		chars += len(step)
+		chars += utf8.RuneCountInString(step)
 	}
 	penalty := math.Log(1.0 + float64(chars)/200.0)
 	return s.UtilityScore / math.Max(penalty, 1.0)
@@ -191,7 +206,17 @@ type IslandCycleReport struct {
 // The assignment write NAMES exactly the ids it changed: a bulk rewrite
 // that does not name its writes reverts any concurrent save, and this
 // function's whole list comes from an unlocked read.
-func RunIslandCycle(ws string, minIslandSize int, dryRun bool) (IslandCycleReport, error) {
+//
+// rec may be nil (dry runs, tests). When it is not, one ISLAND_CULLED
+// event is written per island AFTER the cull commits — Python logs the
+// same event and this port did not, so a retirement happened with no
+// entry in the one lane an operator actually watches. The archive and
+// provenance rails carried the record; the log did not (adversarial r3
+// 2026-08-23, M3). A failed log is a warning, never a lost cull: the
+// skills are already archived and removed by then, and Python's own
+// emission sits inside a bare `except: pass` for the same reason.
+func RunIslandCycle(ws string, rec *record.Recorder, minIslandSize int,
+	dryRun bool) (IslandCycleReport, error) {
 	rep := IslandCycleReport{Culled: map[string][]string{}}
 	load := LoadSkills(ws)
 	rep.Warnings = append(rep.Warnings, load.Announce()...)
@@ -236,6 +261,28 @@ func RunIslandCycle(ws string, minIslandSize int, dryRun bool) (IslandCycleRepor
 		if len(cr.CulledIDs) > 0 {
 			rep.Culled[name] = cr.CulledIDs
 			rep.TotalCulled += len(cr.CulledIDs)
+			// Emitted per island inside the loop, in the same sorted
+			// island order the culls ran in. Python emits after the loop
+			// by iterating cull_report, whose dict order IS its insertion
+			// order — the same sequence. Ranging the Go map instead would
+			// have made the log rows arrive in a different order each run.
+			if rec != nil && !dryRun {
+				related := make([]string, 0, len(cr.CulledIDs))
+				for _, id := range cr.CulledIDs {
+					related = append(related, "skill:"+id)
+				}
+				err := rec.EventRelated("ISLAND_CULLED", name,
+					fmt.Sprintf("Culled %d bottom-half skills from island.",
+						len(cr.CulledIDs)),
+					map[string]any{"culled_ids": cr.CulledIDs}, "", related)
+				if err != nil {
+					rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+						"island %q: %d skill(s) culled and archived, but the "+
+							"captain's-log entry failed (%v) — the retirement "+
+							"happened and is not in the user lane", name,
+						len(cr.CulledIDs), err))
+				}
+			}
 		}
 	}
 	return rep, nil

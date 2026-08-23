@@ -34,6 +34,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 )
 
 // lockTimeout matches Python file_lock's default deadline (30s).
@@ -143,10 +145,22 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 	if o.GoalVerdictSource != "" {
 		row["goal_verdict_source"] = o.GoalVerdictSource
 	}
-	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row); err != nil {
+	if err := r.appendJSONL(filepath.Join(dir, "outcomes.jsonl"), row,
+		outcomeKeyOrder); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// outcomeKeyOrder is the order this row is built above, which is the
+// order Python's record_outcome builds its own — the literal order a
+// dict then hands to json.dumps.
+var outcomeKeyOrder = []string{
+	"outcome_id", "goal", "status", "summary", "task_type", "model",
+	"loop_id", "project", "tokens_in", "tokens_out", "elapsed_ms",
+	"dry_run", "lessons", "failure_chain", "recovery_steps", "recorded_at",
+	"measurement_class", "stop_verdict", "stuck_reason",
+	"goal_achieved", "goal_verdict_summary", "goal_verdict_source",
 }
 
 // userSurfacedEvents is the Go-emitted subset of Python's
@@ -158,11 +172,26 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 // the r1 parity review caught it. Audience keys on event_type, never on
 // caller discretion (the Python rule).
 var userSurfacedEvents = map[string]bool{
-	"EVOLVER_APPLIED":     true,
-	"EVOLVER_REVERTED":    true,
-	"EVOLVER_VERDICT":     true,
-	"GRADUATION_PROPOSED": true,
-	"GRADUATION_VERIFIED": true,
+	// Skill lifecycle decisions. Added in the r3 fixes: slice 3b/3c
+	// introduced five emitters and did not extend this map, so every
+	// promotion, demotion, circuit trip and island cull this runtime
+	// recorded was stamped "system" and dropped from `maro-log --audience
+	// user`, the viz activity section and the health lane — the decision
+	// ported faithfully and its announcement did not.
+	//
+	// SKILL_CIRCUIT_HALF_OPEN is deliberately ABSENT, matching Python:
+	// half-open is a probation state, not a decision, and the trip and
+	// the recovery that bracket it are both here.
+	"SKILL_PROMOTED":       true,
+	"SKILL_DEMOTED":        true,
+	"SKILL_CIRCUIT_OPEN":   true,
+	"SKILL_CIRCUIT_CLOSED": true,
+	"ISLAND_CULLED":        true,
+	"EVOLVER_APPLIED":      true,
+	"EVOLVER_REVERTED":     true,
+	"EVOLVER_VERDICT":      true,
+	"GRADUATION_PROPOSED":  true,
+	"GRADUATION_VERIFIED":  true,
 }
 
 // Event appends one captain's-log entry. audience comes from the
@@ -178,6 +207,21 @@ func (r *Recorder) Event(eventType, subject, summary string, context map[string]
 // linkage itself would be lost.
 func (r *Recorder) EventRelated(eventType, subject, summary string, context map[string]any,
 	loopID string, relatedIDs []string) error {
+	return r.EventNoted(eventType, subject, summary, context, "", loopID, relatedIDs)
+}
+
+// EventNoted is EventRelated with log_event's `note` — a free-text
+// diagnostic that rides as a TOP-LEVEL row key.
+//
+// The key placement is the whole point. Python's render_entry reads
+// `entry.get("note")` and prints a "Note:" line under the summary;
+// nothing renders context values. Filing a failure reason under
+// context["note"] therefore made it survive query_log's search (which
+// flattens context) and vanish from every human-facing render — so a
+// SKILL_CIRCUIT_OPEN row arrived without the one piece of evidence a
+// circuit event exists to carry (adversarial r3 2026-08-23, M2).
+func (r *Recorder) EventNoted(eventType, subject, summary string, context map[string]any,
+	note, loopID string, relatedIDs []string) error {
 	dir, err := r.memoryDir()
 	if err != nil {
 		return err
@@ -194,9 +238,12 @@ func (r *Recorder) EventRelated(eventType, subject, summary string, context map[
 		"audience":   audience,
 	}
 	// Python writes `if context:` — an EMPTY context is omitted, not
-	// emitted as {}. Same for the optional linkages.
+	// emitted as {}. Same for the note and the optional linkages.
 	if len(context) > 0 {
 		entry["context"] = context
+	}
+	if note != "" {
+		entry["note"] = note
 	}
 	if loopID != "" {
 		entry["loop_id"] = loopID
@@ -204,7 +251,19 @@ func (r *Recorder) EventRelated(eventType, subject, summary string, context map[
 	if len(relatedIDs) > 0 {
 		entry["related_ids"] = relatedIDs
 	}
-	return r.appendJSONL(filepath.Join(dir, "captains_log.jsonl"), entry)
+	return r.appendJSONL(filepath.Join(dir, "captains_log.jsonl"),
+		entry, captainsLogKeyOrder)
+}
+
+// captainsLogKeyOrder is the order Python's log_event builds its dict,
+// which is the order json.dumps then emits. handle_id sits between
+// audience and context there; this runtime has no handle-id ContextVar
+// yet, so the slot is simply never filled — a key this port does not
+// write still rides in its Python position if another runtime's row is
+// ever re-emitted through pyjson.Ordered's unknown-key tail.
+var captainsLogKeyOrder = []string{
+	"timestamp", "event_type", "subject", "summary", "audience",
+	"handle_id", "context", "note", "loop_id", "related_ids",
 }
 
 // appendJSONL appends one row under the same advisory flock protocol as
@@ -214,12 +273,20 @@ func (r *Recorder) EventRelated(eventType, subject, summary string, context map[
 // straight onto that fragment fuses two rows into one malformed line;
 // an LF first strands the fragment as its own row and keeps ours
 // readable (ported from locked_append's 2026-08 hardening).
-func (r *Recorder) appendJSONL(path string, row any) error {
-	raw, err := json.Marshal(row)
+// It emits through pyjson, not encoding/json: both ledgers it writes are
+// read by the Python runtime, and the generic encoder alphabetizes keys,
+// HTML-escapes the "->" in every transition summary, and spells a whole
+// float without its ".0" (which changes the type json.loads parses). The
+// r2 fixes closed exactly this class on the skills-manifest rail and
+// recorded it as "the one writer still on plain json.Marshal" — it was
+// one of two, and the other carries every skill-lifecycle event
+// (adversarial r3 2026-08-23, L2).
+func (r *Recorder) appendJSONL(path string, row map[string]any, keyOrder []string) error {
+	line, err := pyjson.Ordered(row, keyOrder)
 	if err != nil {
 		return fmt.Errorf("marshal row for %s: %w", filepath.Base(path), err)
 	}
-	return AppendRawLine(path, raw)
+	return AppendRawLine(path, []byte(line))
 }
 
 // Locked runs fn while holding the Python-compatible advisory flock for
@@ -408,6 +475,7 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	lines := strings.Split(string(raw), "\n")
 	target := -1
 	var row map[string]any
+	var rowKeys []string
 	// Newest matching row wins — a restarted goal appends a fresh row
 	// per loop.
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -416,11 +484,20 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 			continue
 		}
 		var m map[string]any
-		if jerr := json.Unmarshal([]byte(line), &m); jerr != nil {
+		// UseNumber keeps every stored literal EXACTLY as written. Plain
+		// Unmarshal turns each into a float64, so re-emitting the row
+		// re-types every number on it — a foreign row's `cost: 1.0` came
+		// back as `1`, and an integer counter would have come back as
+		// `42.0`. This function patches three keys; it must not rewrite
+		// the rest of someone else's row (adversarial r3, L3).
+		dec := json.NewDecoder(strings.NewReader(line))
+		dec.UseNumber()
+		if jerr := dec.Decode(&m); jerr != nil {
 			continue
 		}
 		if m["loop_id"] == loopID {
 			target, row = i, m
+			rowKeys = orderedKeysOf(line)
 			break
 		}
 	}
@@ -469,20 +546,60 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	if confidence != nil {
 		row["goal_verdict_confidence"] = *confidence
 	}
-	patched, err := json.Marshal(row)
+	// The row keeps the key ORDER it had on disk, with keys this function
+	// added riding after it in the order the code above assigns them —
+	// which is what Python's dict does when json.loads' order is extended
+	// by assignment. Without it a patched foreign row comes back
+	// alphabetized, a whole-file rewrite of someone else's formatting.
+	//
+	// Residual, recorded: entries INSIDE verdict_history are nested maps,
+	// so they render with sorted keys — the same nested-order divergence
+	// already accepted elsewhere in this port. Byte-level only; every
+	// value and type is preserved.
+	patched, err := pyjson.Ordered(row, append(rowKeys,
+		"verdict_history", "goal_achieved", "goal_verdict_source",
+		"goal_verdict_at", "goal_verdict_confidence"))
 	if err != nil {
 		return err
 	}
-	lines[target] = string(patched)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
+	lines[target] = patched
+	// AtomicWrite, not WriteFile+Rename: this rewrites the WHOLE outcomes
+	// ledger, and it was the fourth copy of the un-fsynced temp+rename
+	// pattern the r2 fixes were supposed to have collapsed. It also
+	// widened an operator's 0600 ledger to 0644 on every stamp, where
+	// Python's atomic_write re-applies the target's existing mode
+	// (adversarial r3, L3).
+	return AtomicWrite(path, []byte(strings.Join(lines, "\n")))
+}
+
+// orderedKeysOf recovers a JSON object's key order from its source text,
+// which decoding into a map throws away.
+func orderedKeysOf(line string) []string {
+	dec := json.NewDecoder(strings.NewReader(line))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp) // don't strand the temp beside the intact ledger
-		return err
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil
 	}
-	return nil
+	var keys []string
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return keys
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return keys
+		}
+		keys = append(keys, key)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return keys
+		}
+	}
+	return keys
 }
 
 // LockedTailAppend holds the file's flock while fn inspects a BOUNDED tail

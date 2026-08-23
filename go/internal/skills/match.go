@@ -248,9 +248,11 @@ func tfidfSkillRank(goal string, pool []Skill, topK int) []Skill {
 }
 
 func round4(f float64) float64 {
-	// Python's round() is half-to-even; the port uses the same rule
-	// wherever a rounded value can reach a shared file or a tie.
-	return math.RoundToEven(f*10000) / 10000
+	// Python's round() is half-to-even AND rounds the exact value of the
+	// double, not the value scaled by 10^n — scaling first carries its
+	// own representation error into the decision. See round3's comment
+	// for the measurement (202 of 400 three-decimal half-values diverge).
+	return pyRound(f, 4)
 }
 
 // ---------------------------------------------------------------------------

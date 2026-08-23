@@ -2308,6 +2308,72 @@ validation summaries), `decompose_goal`/`plan_project` (LLM), the
 `MARO_ORCH_ROOT` branch, and the wider sheriff. `mission.py` and
 `handle_queue.py` are the next step up.
 
+### Skill library — r3 review fixes (2026-08-23)
+
+Whole-chunk round again (3a + 3b + 3c + the r1/r2 fixes), reviewer tier
+escalated to opus per the standing rule rather than grinding more cheap
+rounds. Two HIGH, three MED, four LOW — and unlike earlier rounds every
+claim survived verification, because r3 had actually executed each one.
+Full findings and the fix table are in `REVIEW.md`; what is worth
+carrying forward is the two patterns, both of which are invisible to
+per-function review:
+
+**A correct primitive called from the wrong place.** Both HIGHs. Nothing
+was wrong with `SaveSkill`, `compactnessAdjustedScore`, or `len()` — each
+is right where it is defined. `UpdateSkillUtility` and
+`RecordVariantOutcome` simply called the tail-appending writer where
+Python calls the ordinal-holding one, and the store is read
+last-row-wins, so pool ORDER changed and pool order is the input to every
+limit-capped sweep: one outcome, and a 2-candidate promotion sweep
+promoted `[A B]` in one runtime and `[A C]` in the other off the same
+bytes. Likewise `len()` counts bytes where Python's `len()` on a str
+counts code points, and that expression is the sort key for the only
+destructive tier path — 54 of the live store's 432 skills score
+differently, so a cull retires a different skill. Reviewing each function
+in isolation finds neither.
+
+**The decision ports faithfully and the ANNOUNCEMENT of it does not.**
+All three MEDs. The tier change, the circuit trip and the retirement were
+all correct in the store; what diverged was who hears about it. The
+audience registry was never extended for the five skill events, so every
+promotion, demotion and circuit trip Go recorded was stamped `system` and
+dropped from the operator's curated lane. The circuit event's failure
+reason was filed under `context`, where Python's `render_entry` never
+looks — it survived search and vanished from every human-facing render.
+And `RunIslandCycle` emitted no `ISLAND_CULLED` at all: the archive and
+provenance rails carried the retirement, the log did not. Three separate
+sites, one shape — and the store-level differential that caught
+everything else cannot see any of them, because the stores agree.
+
+That second pattern is why the audience registry is now a TEST rather
+than a comment. `record/audience_census_test.go` walks the source for
+event types passed to the `Event*` writers and fails on any with no
+decided audience; a comment saying "keep this synced with Python's
+frozenset" had been sitting directly above the map the entire time the
+map was wrong.
+
+One fix was to KEEP a divergence rather than remove it: Python's
+`record_variant_outcome` does not recompute `content_hash` and
+`_save_skills` backfills only an EMPTY one, so a tampered hash survives
+and keeps warning on every load. Routing that write through `SaveSkill`
+had been recomputing it — one A/B win silently erased the tamper signal.
+The asymmetry with `UpdateSkillUtility` looks like an oversight in Python
+and is load-bearing.
+
+The `pyjson` fix has the widest blast radius of the LOWs: `Value`
+delegated CONTAINERS to `encoding/json`, so the float spelling and
+HTML-escaping rules stopped applying one level down — and a captain's-log
+row keeps its entire payload one level down. `context: {"utility": 1.0}`
+was going to disk as `1`, which `json.loads` parses as an int.
+
+**Pins and falsifiers.** The full suite passed unchanged after every fix,
+which is the signal that nothing pinned any of them. Eleven pins, then a
+17-mutant battery reverting each fix to the shape r3 found: 17 killed, 0
+survived. Two mutants were rewritten mid-battery for being unfaithful —
+one was killed by the compiler rather than the test, and one
+(`os.WriteFile` with a mode on an existing file) did not reproduce the
+bug at all. A mutant killed by a build error proves nothing.
+
 ## Running
 
 ```sh

@@ -423,13 +423,13 @@ func TestRecordVariantOutcomeOnlyCountsChallengers(t *testing.T) {
 	if err := SaveSkill(ws, &child); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordVariantOutcome(ws, "c", true); err != nil {
+	if _, err := RecordVariantOutcome(ws, "c", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordVariantOutcome(ws, "c", false); err != nil {
+	if _, err := RecordVariantOutcome(ws, "c", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordVariantOutcome(ws, "p", true); err != nil { // no-op
+	if _, err := RecordVariantOutcome(ws, "p", true); err != nil { // no-op
 		t.Fatal(err)
 	}
 	pool := LoadSkills(ws).Skills
