@@ -4102,3 +4102,25 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   interleaving UNSETTLED with its burn-in probe, and the
   `bool(get(...))` sweep edge. Suite 10264 green. Basis: this session's
   probes + fix commits.
+
+- **2026-08-22 (Port philosophy decree — seams-strict, internals-free —
+  Jeremy):** resolving the go-port guard-slice review churn (r10–r14: four
+  consecutive opus rounds of HIGHs, each minted by the previous round's fix
+  to a hand-rolled URL detector), Jeremy chose the spec-grounded parser
+  (nlnwa/whatwg-url, the swipe-over-deps rule's security-parsing exception)
+  AND corrected the port's operating philosophy: *"agree that we should be
+  in data parity, but the internals don't (necessarily) need to be"* — and
+  the data-parity target is the import/export boundary "at the end, not
+  along the way." Refactoring during porting is explicitly welcome ("I'm
+  always a little too ambitious with my ports and I end up doing some
+  refactoring... feel free to do some of that yourself"); interface/duck-
+  typing over strict equivalent types. Standing rule for remaining
+  tranches: pin the SEAMS with fixtures (shared ledgers, pack digests,
+  on-disk formats), free the INTERNALS behind a contract + behavior corpus.
+  Corollary he named: the port revealed much of maro's "portable learning"
+  is reified as CODE (thresholds, gates, fix-history invariants), not
+  data — why lessons get ported rather than imported; a real datapoint for
+  the portable-learning/pack roadmap. Applied same session: guard r15 swap
+  (`6678c209` on go-port) — full r10–r14 corpus passed the parser-backed
+  internals first-run, known-gap #15 closed, IDNA coverage added; the Go
+  file is now the backport REFERENCE for Python's injection_guard.py.
