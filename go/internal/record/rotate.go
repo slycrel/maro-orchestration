@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -64,6 +65,24 @@ const (
 // under the same lock path.
 var rotationInProgress atomic.Bool
 
+// warnOnce emits each distinct config warning a single time per process.
+//
+// This exists because of the asymmetry noted below: Python's load_config is
+// mtime-cached, so a malformed config warns once and again only when the
+// file changes. This runtime re-reads per event, and the read happens
+// BEFORE the size gate — so surfacing the warnings raw would put a line on
+// stderr for every captain's-log append forever, which is how a real
+// warning gets trained out of a reader. Dropping them instead was the
+// previous behaviour (`cfg, _ := config.Load()`) and is worse: a config
+// this runtime could not parse then changed rotation thresholds silently.
+var warnedConfig sync.Map
+
+func warnOnce(msg string) {
+	if _, seen := warnedConfig.LoadOrStore(msg, true); !seen {
+		warn("captains_log: %s", msg)
+	}
+}
+
 // maybeRotateCaptainsLog is called after every captain's-log append.
 func (r *Recorder) maybeRotateCaptainsLog(path string) {
 	if !rotationInProgress.CompareAndSwap(false, true) {
@@ -82,9 +101,36 @@ func (r *Recorder) maybeRotateCaptainsLog(path string) {
 	// worked around: the read is bounded and the alternative (a cache in
 	// config.Load) changes behaviour for every other caller, including the
 	// tests that write a config file and immediately read it back.
-	cfg, _ := config.Load()
-	rotateMB := config.Get(cfg, "captains_log.rotate_mb", defaultRotateMB)
-	keep := config.Get(cfg, "captains_log.rotate_keep", defaultRotateKeep)
+	cfg, warnings := config.Load()
+	for _, w := range warnings {
+		warnOnce(w)
+	}
+	// Python coerces both keys with float()/int() inside ONE try/except:
+	//
+	//	try:
+	//	    rotate_mb = float(_cfg_get("captains_log.rotate_mb", 5))
+	//	    keep = int(_cfg_get("captains_log.rotate_keep", 1000))
+	//	except Exception:
+	//	    rotate_mb, keep = 5.0, 1000
+	//
+	// Two things fall out of that, and typed config.Get reproduced neither.
+	// A QUOTED value — `rotate_mb: "10"`, which is what an operator gets
+	// from a templated or env-substituted config — is a float() there and a
+	// type mismatch here, so Python rotated at 10 MB and this runtime at 5.
+	// And the reset is JOINT: a bad rotate_keep sends rotate_mb back to its
+	// default too. Both matter on a shared store, where the two runtimes
+	// rotating at different thresholds means one of them is archiving rows
+	// the other still considers active.
+	rotateMB, keep := defaultRotateMB, defaultRotateKeep
+	mb, okMB := coerceFloat(config.Get(cfg, "captains_log.rotate_mb", any(defaultRotateMB)))
+	kp, okKeep := coerceInt(config.Get(cfg, "captains_log.rotate_keep", any(defaultRotateKeep)))
+	if okMB && okKeep {
+		rotateMB, keep = mb, kp
+	}
+	// Named residual: an explicit `rotate_mb: null` reads as absent here and
+	// as None there, where float(None) raises and resets both. Reaching it
+	// needs a raw-lookup seam in config; not worth one for a key nobody
+	// nulls deliberately.
 	if rotateMB <= 0 {
 		return // explicitly disabled
 	}
@@ -113,11 +159,26 @@ func (r *Recorder) maybeRotateCaptainsLog(path string) {
 		// strings.TrimSpace. Python reads this file with
 		// `read_text().splitlines()`, which breaks on ten separators, and
 		// filters with `l.strip()`, which drops U+001C–U+001F where Go's
-		// TrimSpace does not. It is not hypothetical here: this port does not
-		// set ensure_ascii, so a Go-written row can carry a RAW U+2028, and
-		// Python would then see two lines where Go sees one — a rotation that
-		// disagrees with the other runtime about where rows begin is a
-		// rotation that cuts one in half.
+		// TrimSpace does not.
+		//
+		// The SplitLines half is reachable, and by exactly one rune. This
+		// comment used to name U+2028, which is wrong: pyjson escapes
+		// U+2028 and U+2029 unconditionally, so neither can reach the file
+		// raw. Measured over every separator splitlines() breaks on, the
+		// only one pyjson emits RAW is U+0085 (NEL) — every other one is
+		// escaped, and U+001F, which pyjson also escapes, is not a
+		// splitlines() break to begin with. So: a Go-written row can carry
+		// a raw U+0085, Python then sees two lines where strings.Split
+		// would see one, and a rotation that disagrees with the other
+		// runtime about where rows BEGIN is a rotation that cuts one in
+		// half. That is what the differential pins.
+		//
+		// The Strip half is parity with no demonstrated reachable case —
+		// both encoders escape U+001C–U+001F, so a line that is only those
+		// runes cannot come from either writer. Kept because matching
+		// Python exactly is free and the file is shared with writers this
+		// port does not own; labelled honestly rather than justified with
+		// the SplitLines argument, which does not carry it.
 		var lines []string
 		for _, l := range pytext.SplitLines(string(raw)) {
 			if pytext.Strip(l) != "" {

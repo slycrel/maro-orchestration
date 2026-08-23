@@ -2164,7 +2164,12 @@ was checked; `AppendSkillsManifest` was the one writer still on plain
 spelled `2.0` as `2` on the cross-runtime attribution rail; and
 `pyLower` handles U+0130, the only unconditional multi-rune lowercase
 mapping in Unicode, which changes both a stored tag and the matching
-corpus.
+corpus. **"Unconditional" is load-bearing and was not, at the time, being
+carried:** there is also exactly one CONTEXT-sensitive mapping — U+03A3,
+which lowercases to ς word-finally and σ elsewhere — and `Lower` did not
+implement it until adversarial r6, so `Slugify("ΟΔΟΣ")` produced a
+different FILENAME in each runtime. Both are now handled, along with the
+three unicode 15-vs-16 table supplements the rule needs.
 
 The emitter family moved into a new `internal/pyjson` package for that
 last fix — the three ways `encoding/json` differs from `json.dumps`

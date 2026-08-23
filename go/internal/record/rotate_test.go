@@ -3,6 +3,7 @@ package record
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -416,6 +417,15 @@ print(json.dumps({
 
 func pythonRotate(t *testing.T, ws string, rotateMB float64, keep, rows int) map[string]any {
 	t.Helper()
+	return pythonRotateRawCfg(t, ws, fmt.Sprintf(
+		"captains_log:\n  rotate_mb: %v\n  rotate_keep: %d\n", rotateMB, keep), rows)
+}
+
+// pythonRotateRawCfg is pythonRotate with the config written verbatim, so a
+// test can hand Python the exact YAML an operator would — including the
+// QUOTED forms that a typed config lookup silently ignores.
+func pythonRotateRawCfg(t *testing.T, ws, cfg string, rows int) map[string]any {
+	t.Helper()
 	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
 	if err != nil {
 		t.Fatal(err)
@@ -426,8 +436,6 @@ func pythonRotate(t *testing.T, ws string, rotateMB float64, keep, rows int) map
 	if err := os.MkdirAll(filepath.Join(ws, "memory"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := fmt.Sprintf("captains_log:\n  rotate_mb: %v\n  rotate_keep: %d\n",
-		rotateMB, keep)
 	if err := os.WriteFile(filepath.Join(ws, "config.yml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +644,19 @@ func TestARowHoldingARawLineSeparatorRotatesTheWayPythonRotatesIt(t *testing.T) 
 			}
 			sep := ""
 			if i == 30 {
-				sep = " " // raw LINE SEPARATOR inside the summary
+				// U+0085 (NEL), not U+2028. Measured, U+0085 is the ONLY
+				// separator splitlines() breaks on that pyjson emits RAW;
+				// U+2028 and U+2029 are escaped unconditionally, so a
+				// fixture built on U+2028 pins a case neither runtime's
+				// writer can produce while the reachable one goes
+				// untested (adversarial r6).
+				sep = "\u0085"
+			}
+			if i == 31 {
+				// Kept as well, one row later: the file is shared, and a
+				// writer this port does not own could still put a raw
+				// U+2028 in it. Defensive, and labelled as such.
+				sep = "\u2028"
 			}
 			b.WriteString(fmt.Sprintf(
 				`{"timestamp": "2026-08-23T00:00:%02d+00:00", "event_type": "SEED", `+
@@ -746,5 +766,257 @@ func TestTheSizeIsRecheckedUnderTheLock(t *testing.T) {
 	if got := readFileString(t, path); got != shrunk {
 		t.Errorf("the shrunk file was rewritten: %d bytes, want %d",
 			len(got), len(shrunk))
+	}
+}
+
+// rotWorkspaceRawCfg is rotWorkspace with the config written verbatim.
+func rotWorkspaceRawCfg(t *testing.T, cfg string) (string, string, string) {
+	t.Helper()
+	ws := t.TempDir()
+	mem := filepath.Join(ws, "memory")
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "config.yml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MARO_WORKSPACE", ws)
+	t.Setenv("MARO_USER_DIR", t.TempDir())
+	return ws, mem, filepath.Join(mem, "captains_log.jsonl")
+}
+
+// Python coerces the two rotation keys with float() and int(), so a QUOTED
+// value is honoured there. A typed config lookup here is not the same thing:
+// it saw a string where it wanted a float64 and fell back to the 5 MB
+// default, so the two runtimes rotated the SHARED log at different
+// thresholds and each considered rows active that the other had archived
+// (adversarial r6).
+//
+// Both cases below are differentials against Python's own _maybe_rotate, so
+// the assertion is "the file agrees", not "my reading of float() agrees".
+func TestQuotedRotationConfigIsHonouredTheWayPythonHonoursIt(t *testing.T) {
+	const cfg = "captains_log:\n  rotate_mb: \"0.001\"\n  rotate_keep: \"10\"\n"
+	const rows = 60
+
+	py := pythonRotateRawCfg(t, t.TempDir(), cfg, rows)
+	if py["n_archives"].(float64) != 1 {
+		t.Fatalf("CPython did not rotate on a quoted config (%v archives); "+
+			"the premise of this test is wrong", py["n_archives"])
+	}
+
+	_, mem, path := rotWorkspaceRawCfg(t, cfg)
+	seedLog(t, path, rows)
+	New(filepath.Dir(mem)).maybeRotateCaptainsLog(path)
+
+	archives := ArchivePaths(mem)
+	if len(archives) != 1 {
+		t.Fatalf("got %d archives, want 1 — a quoted rotate_mb was ignored "+
+			"and this runtime rotates at a different threshold than Python",
+			len(archives))
+	}
+	if got, want := readFileString(t, archives[0]), py["archive"].(string); got != want {
+		t.Errorf("archive differs from CPython's\n got %d bytes\nwant %d bytes",
+			len(got), len(want))
+	}
+	if got, want := withoutAuditRow(readFileString(t, path)),
+		withoutAuditRow(py["active"].(string)); got != want {
+		t.Errorf("active file differs from CPython's\n got %q\nwant %q",
+			truncate(got), truncate(want))
+	}
+}
+
+// The reset is JOINT. Python coerces both keys inside ONE try/except, so a
+// rotate_keep it cannot int() sends rotate_mb back to 5 MB as well — and a
+// 15 KB log then does not rotate at all. Reading the keys independently
+// gets the threshold "right" and the behaviour wrong.
+func TestAnUncoercibleRetentionResetsTheThresholdToo(t *testing.T) {
+	const cfg = "captains_log:\n  rotate_mb: 0.001\n  rotate_keep: \"not a number\"\n"
+	const rows = 60
+
+	py := pythonRotateRawCfg(t, t.TempDir(), cfg, rows)
+	if py["n_archives"].(float64) != 0 {
+		t.Fatalf("CPython rotated despite the uncoercible retention (%v "+
+			"archives); the premise of this test is wrong", py["n_archives"])
+	}
+
+	_, mem, path := rotWorkspaceRawCfg(t, cfg)
+	seedLog(t, path, rows)
+	before := readFileString(t, path)
+	New(filepath.Dir(mem)).maybeRotateCaptainsLog(path)
+
+	if n := len(ArchivePaths(mem)); n != 0 {
+		t.Errorf("rotated into %d archives; CPython's joint reset put the "+
+			"threshold back to 5 MB and left this 15 KB file alone", n)
+	}
+	if got := readFileString(t, path); got != before {
+		t.Errorf("the active file was rewritten (%d bytes -> %d)",
+			len(before), len(got))
+	}
+}
+
+// Python's log_event fills loop_id from the _current_loop_id contextvar
+// whenever the caller passes none, which is how rotation — five frames below
+// any code that knows the loop id — still lands attributed. Every Go call
+// site that passed "" was writing an unattributed row (adversarial r6).
+func TestTheAmbientLoopIDReachesEventsThatPassNone(t *testing.T) {
+	_, mem, path := rotWorkspace(t, 0.001, 10)
+	seedLog(t, path, 60)
+
+	r := New(filepath.Dir(mem)).WithLoopID("loop-abc123")
+	r.maybeRotateCaptainsLog(path)
+
+	row := findRotatedRow(t, readFileString(t, path))
+	if got, _ := row["loop_id"].(string); got != "loop-abc123" {
+		t.Errorf("LOG_ROTATED loop_id = %q, want %q — the ambient id did not "+
+			"reach a call site that passes none", got, "loop-abc123")
+	}
+
+	// An explicit argument still wins, exactly as the kwarg does there...
+	if err := r.Event("SEED", "s", "explicit wins", nil, "loop-explicit"); err != nil {
+		t.Fatal(err)
+	}
+	// ...and WithLoopID COPIES, so the original is untouched and two
+	// concurrent runs cannot see each other's id.
+	base := New(filepath.Dir(mem))
+	if base.WithLoopID("x").LoopID == base.LoopID {
+		t.Error("WithLoopID mutated the receiver; concurrent runs would " +
+			"cross-attribute")
+	}
+
+	var explicit, ambient bool
+	for _, l := range strings.Split(readFileString(t, path), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) != nil || m["subject"] != "s" {
+			continue
+		}
+		switch m["loop_id"] {
+		case "loop-explicit":
+			explicit = true
+		case "loop-abc123":
+			ambient = true
+		}
+	}
+	if !explicit {
+		t.Error("an explicit loop_id was overridden by the ambient one")
+	}
+	if ambient {
+		t.Error("the ambient id leaked onto a row that named its own")
+	}
+}
+
+// coerceInt is int(), not float()-then-truncate: "10.5" is a ValueError
+// there and would be a silent 10 under the easy reading. Derived from
+// CPython so a disagreement in either direction fails.
+func TestCoerceIntMatchesPythonsInt(t *testing.T) {
+	inputs := []string{
+		"10", " 10 ", "-3", "+7", "0", "1_000", "010",
+		"10.5", "1e3", "abc", "", "0x10", "1__0", "_10", "10_",
+		"١٠", "٠", "٠١",
+	}
+	payload, err := json.Marshal(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"out=[]\n"+
+			"for s in json.load(sys.stdin):\n"+
+			"    try: out.append(int(s))\n"+
+			"    except Exception: out.append(None)\n"+
+			"print(json.dumps(out))")
+	cmd.Stdin = strings.NewReader(string(payload))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("python3 unavailable: %v", err)
+	}
+	var want []*int
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("decoding CPython output: %v\n%s", err, out)
+	}
+	var accepted, refused int
+	for i, s := range inputs {
+		got, ok := coerceInt(s)
+		if want[i] == nil {
+			refused++
+			if ok {
+				t.Errorf("coerceInt(%q) = %d, CPython's int() raises", s, got)
+			}
+			continue
+		}
+		accepted++
+		if !ok {
+			t.Errorf("coerceInt(%q) refused; CPython's int() gives %d", s, *want[i])
+		} else if got != *want[i] {
+			t.Errorf("coerceInt(%q) = %d, CPython's int() gives %d", s, got, *want[i])
+		}
+	}
+	if accepted == 0 || refused == 0 {
+		t.Fatalf("the table is one-sided (%d accepted, %d refused); it cannot "+
+			"catch a coercion that is too strict OR too lenient", accepted, refused)
+	}
+	// The non-string shapes YAML actually produces.
+	for _, c := range []struct {
+		in   any
+		want int
+		ok   bool
+	}{
+		{5, 5, true}, {5.0, 5, true}, {5.9, 5, true}, {-5.9, -5, true},
+		{true, 1, true}, {false, 0, true}, {math.NaN(), 0, false},
+		{math.Inf(1), 0, false}, {[]any{1}, 0, false}, {nil, 0, false},
+	} {
+		got, ok := coerceInt(c.in)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("coerceInt(%#v) = (%d, %v), want (%d, %v)",
+				c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// The config read happens on EVERY captain's-log append, BEFORE the size
+// gate, so a malformed config that warned raw would put a line on stderr
+// forever — and a warning that fires on every event is one a reader learns
+// to skip. Dropping the warnings entirely was the previous behaviour and is
+// the worse failure: a config this runtime could not parse then moved the
+// rotation threshold silently. So the pin has to see BOTH ends — at least
+// one warning, and not one per event.
+func TestAMalformedConfigWarnsOnceNotOnEveryAppend(t *testing.T) {
+	_, mem, path := rotWorkspaceRawCfg(t, "captains_log:\n  rotate_mb: [unclosed\n")
+
+	var lines []string
+	oldWarn := warn
+	warn = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	defer func() { warn = oldWarn }()
+	warnedConfig = sync.Map{} // the dedupe is process-wide; isolate this test
+	defer func() { warnedConfig = sync.Map{} }()
+
+	r := New(filepath.Dir(mem))
+	const appends = 5
+	for i := 0; i < appends; i++ {
+		if err := r.Event("SEED", "s", "padding", nil, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("no log was written, so the config was never read: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Fatal("a config this runtime could not parse produced NO warning; " +
+			"the threshold moved silently")
+	}
+	if len(lines) >= appends {
+		t.Errorf("%d warnings over %d appends — the warning fires per event, "+
+			"which trains its reader to ignore stderr:\n%s",
+			len(lines), appends, strings.Join(lines, "\n"))
+	}
+	seen := map[string]int{}
+	for _, l := range lines {
+		seen[l]++
+	}
+	for l, n := range seen {
+		if n > 1 {
+			t.Errorf("warning repeated %d times: %q", n, l)
+		}
 	}
 }

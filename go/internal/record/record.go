@@ -47,10 +47,39 @@ const lockTimeout = 30 * time.Second
 // the store an argument.
 type Recorder struct {
 	WorkspaceDir string
+
+	// LoopID is the ambient loop attribution, the port of Python's
+	// _current_loop_id contextvar. log_event() reads it whenever a caller
+	// passes no explicit loop_id, which is how call sites deep in the
+	// execution stack — skills.py, evolver.py, knowledge_lens.py, and
+	// rotation — land on the right run without threading the id through
+	// every signature. Without it those rows are written with NO loop_id at
+	// all, and on a shared store that is a row Python can attribute and this
+	// runtime cannot (adversarial r6).
+	//
+	// It is a FIELD, not a goroutine-local, and that is a deliberate
+	// divergence: contextvars are per-task, so Python can hold one global
+	// and stay correct under concurrency. The Go equivalent that preserves
+	// that property is WithLoopID below, which copies the Recorder rather
+	// than mutating it — so two concurrent runs hold two Recorders and
+	// neither can see the other's id. Setting this field directly on a
+	// Recorder that is shared across runs would cross-attribute; don't.
+	LoopID string
 }
 
 func New(workspaceDir string) *Recorder {
 	return &Recorder{WorkspaceDir: workspaceDir}
+}
+
+// WithLoopID returns a copy of the Recorder that attributes otherwise
+// unattributed events to loopID — the port of Python's loop_id_scope,
+// spelled as a value rather than a scope because a copy cannot leak across
+// goroutines the way a set/restore pair can. An explicit loopID argument at
+// the call site still wins, exactly as the kwarg does there.
+func (r *Recorder) WithLoopID(loopID string) *Recorder {
+	c := *r
+	c.LoopID = loopID
+	return &c
 }
 
 func (r *Recorder) memoryDir() (string, error) {
@@ -288,6 +317,12 @@ func (r *Recorder) EventNoted(eventType, subject, summary string, context map[st
 	}
 	if note != "" {
 		entry["note"] = note
+	}
+	// `if loop_id is None: loop_id = _current_loop_id.get()` — the explicit
+	// argument wins, the ambient one fills in, and only a genuinely empty
+	// result omits the key.
+	if loopID == "" {
+		loopID = r.LoopID
 	}
 	if loopID != "" {
 		entry["loop_id"] = loopID

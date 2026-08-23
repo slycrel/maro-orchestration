@@ -2,6 +2,7 @@ package record
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -119,6 +120,70 @@ func coerceFloat(v any) (float64, bool) {
 	case interface{ Float64() (float64, error) }: // json.Number
 		f, err := n.Float64()
 		return f, err == nil
+	}
+	return 0, false
+}
+
+// coerceInt is Python's int() for the shapes YAML can produce, and it is
+// NOT coerceFloat with a truncation bolted on: int("10.5") raises where
+// float("10.5") does not, so a config value that would silently become 10
+// under a float-then-truncate reading must instead fall back to the
+// default the way Python's except branch does.
+//
+// Underscores are handled by hand because Go's ParseInt accepts them only
+// in base 0, and base 0 would also accept "0x10" and "0o17", which Python's
+// one-argument int() rejects.
+func coerceInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		if n > math.MaxInt || n < math.MinInt {
+			return 0, false
+		}
+		return int(n), true
+	case float64:
+		// Python's int(float) truncates toward zero and raises on nan/inf.
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		if n >= math.MaxInt || n <= math.MinInt {
+			return 0, false // Python yields a big int; refusing beats wrapping
+		}
+		return int(math.Trunc(n)), true
+	case bool:
+		if n {
+			return 1, true
+		}
+		return 0, true
+	case string:
+		// Same decimal fold as float(): int() runs the text through
+		// PyUnicode_TransformDecimalAndSpaceToASCII too, so Arabic-Indic
+		// digits parse here exactly as they do there.
+		t := transformDecimals(strings.TrimSpace(n))
+		if strings.Contains(t, "_") {
+			// Python allows single underscores BETWEEN digits only.
+			if strings.HasPrefix(t, "_") || strings.HasSuffix(t, "_") ||
+				strings.Contains(t, "__") {
+				return 0, false
+			}
+			body := strings.TrimLeft(t, "+-")
+			if strings.HasPrefix(body, "_") {
+				return 0, false
+			}
+			t = strings.ReplaceAll(t, "_", "")
+		}
+		i, err := strconv.ParseInt(t, 10, 64)
+		if err != nil || i > math.MaxInt || i < math.MinInt {
+			return 0, false
+		}
+		return int(i), true
+	case interface{ Float64() (float64, error) }: // json.Number
+		f, err := n.Float64()
+		if err != nil || f != math.Trunc(f) {
+			return 0, false
+		}
+		return int(f), true
 	}
 	return 0, false
 }

@@ -3825,9 +3825,17 @@ the live frozenset says `system`. Two things caught it and neither was
 review: the audience-census tripwire refused an emitted type it had never
 been told about, and the differential compares against the row **Python's own
 `_maybe_rotate` writes** rather than an f-string I reconstructed from the
-source. A hand-built expectation would have agreed with the mistake. Every
-other field — subject, summary prose, context — matched byte for byte on the
-first run.
+source. A hand-built expectation would have agreed with the mistake.
+
+Every other field — subject, summary prose, `archived`/`retained`/`archive`
+— matched on the first run. **Not "byte for byte", as this section
+originally claimed** (adversarial r6, LOW): the differential decodes both
+rows and re-encodes them with `json.Marshal`, so it compares VALUES, and it
+is structurally blind to the one byte-level divergence known to exist here
+— `pyjson.Value` sorts nested map keys where Python emits dict insertion
+order. That divergence is an accepted port-wide named one, so the test is
+right to compare values; the write-up was wrong to describe what it proved
+as stronger than it is.
 
 **Mutation battery** (`scratchpad/mut_l2.py`): 20 mutants, four rounds.
 
@@ -3846,5 +3854,167 @@ first run.
 | blank-line filter `pytext.Strip` → `strings.TrimSpace` | **real gap.** No fixture contained a line that is nothing but U+001F, which Python's `str.strip()` drops and Go's `TrimSpace` keeps. Added to the raw-separator differential, which now covers both halves of the splitlines/strip pair. |
 | under-lock size re-check removed | **real gap, and it needed a real race.** The test now holds the lock, lets a rotation reach it, shrinks the file underneath and releases — the other-process case the re-check exists for. Its first version used a "small" file that was still over the threshold, so it failed against working code before it could fail against the mutant. |
 
-NEXT: r6 over the whole chunk (all five r5 findings now landed), then
-adversarial r1 over `internal/tasks`.
+---
+
+## Adversarial r6 — whole chunk (rotation + the three r5 table fixes)
+
+First round under the whole-chunk rule rather than latest-diff. **0 HIGH,
+1 MEDIUM, 4 LOW** — and the MEDIUM is the one a diff-scoped review could not
+have raised, because the defect was in code r5 had already landed and
+declared green.
+
+### MEDIUM — Final_Sigma: `pytext.Lower` split a filename
+
+`_slugify('ΟΔΟΣ')` gives CPython `odos` and gave this port `odoσ`. Greek
+lowercase sigma is CONTEXT-SENSITIVE — U+03A3 becomes ς word-finally and σ
+elsewhere — and `Slugify` lowercases before it slugifies, so the divergence
+lands straight on a skill's filename: one skill, two files, one per runtime,
+on a shared store.
+
+Swept over the whole rune range, **U+03A3 is the only context-sensitive
+lowercase mapping there is**, so one rule closes it rather than a table.
+Implemented as UAX #29's Final_Sigma over `Cased` / `Case_Ignorable`, both
+properties measured from CPython rather than transcribed: `Cased` came out
+as exactly Lu ∪ Ll ∪ Lt ∪ Other_Lowercase ∪ Other_Uppercase (4,311) and
+`Case_Ignorable` as Mn ∪ Me ∪ Cf ∪ Lm ∪ Sk plus 17 word-break punctuation
+code points (2,749).
+
+**Both L4 pins were structurally unable to catch this, and one said so out
+loud** while being wrong about it — its comment reads "a single differing
+rune is what changes the slug", which is exactly the assumption a context
+rule breaks. A whole-range single-rune sweep cannot see a two-rune rule, and
+the 18-name slug differential contained no sigma. Both are fixed: the sweep
+grew a third arm, and the differential grew eight sigma names.
+
+**The rule inherits the same unicode 15-vs-16 skew as everything else here**
+— 96 code points — and this one runs in BOTH directions, which none of the
+previous three did:
+
+| Table | Size | Direction |
+|---|---|---|
+| `casedSupplement` | 52 (5 runs) | CPython says Cased, Go 15.0 does not |
+| `caseIgnorableSupplement` | 43 (16 runs) | CPython says Case_Ignorable, Go does not |
+| `caseIgnorableExclusion` | 1 | **Go says Case_Ignorable, CPython does not** |
+
+The exclusion is U+1171E, reclassified Mn → Mc in Unicode 16. Go's table is
+not merely behind there, it disagrees, and a supplement-only fix cannot
+express that. Worth recording as a refinement of the r5 rule of thumb: a
+version skew is not always a subset relation.
+
+### LOW — rotation config dropped Python's `float()` / `int()` coercion
+
+Python reads both keys through `float()` and `int()` inside ONE try/except.
+Typed `config.Get` reproduced neither half. A QUOTED `rotate_mb: "10"` — what
+an operator gets from a templated or env-substituted config — was a float()
+there and a type mismatch here, so **Python rotated the shared log at 10 MB
+and this runtime at 5**, each treating rows as active that the other had
+archived. And the reset is JOINT: an uncoercible `rotate_keep` sends
+`rotate_mb` back to its default too, so a 15 KB log does not rotate at all
+where reading the keys independently rotates it.
+
+Fixed with `coerceInt` alongside the existing `coerceFloat` — and it is
+`int()`, not `float()`-then-truncate, because `int("10.5")` raises where
+`float("10.5")` does not, so the easy reading turns a config error into a
+silent 10. `config.Load`'s warnings are no longer discarded either. Named
+residual: an explicit `rotate_mb: null` reads as absent here and as None
+there; reaching it needs a raw-lookup seam in `config` that no caller wants.
+
+### LOW — `LOG_ROTATED` dropped `loop_id`, and so did every other call site
+
+Python's `log_event` fills `loop_id` from the `_current_loop_id` contextvar
+whenever the caller passes none — its docstring says outright that this is
+how call sites deep in the stack get attributed without threading the id
+through every signature. The port had no ambient id at all, so all three Go
+call sites that pass `""` were writing unattributed rows. **Broader than the
+finding framed it**: it named rotation, but the gap is in `EventNoted`.
+
+Fixed with `Recorder.LoopID` + `WithLoopID`, which COPIES the Recorder
+rather than mutating it. That is a deliberate divergence in mechanism:
+contextvars are per-task, so Python can hold one global and stay correct
+under concurrency, and a mutable field could not. A copy can.
+
+### LOW — the raw-line-separator rationale named the wrong rune
+
+`rotate.go` justified `pytext.SplitLines` with "a Go-written row can carry a
+RAW U+2028", and the differential's fixture used U+2028. Measured across
+every separator `splitlines()` breaks on: **`pyjson` escapes U+2028 and
+U+2029 unconditionally**, so neither can reach the file raw — the fixture
+pinned a case neither runtime's writer can produce. The only separator
+`pyjson` emits raw is **U+0085 (NEL)**, which is exactly the reachable
+hazard. Fixture switched to U+0085, U+2028 kept one row later and labelled
+as defence against writers this port does not own.
+
+The same comment's Strip half was also overstated: both encoders escape
+U+001C–U+001F, so a line that is only those runes cannot come from either
+writer. Kept for parity, relabelled as parity rather than justified with an
+argument that does not carry it.
+
+### LOW — a REVIEW.md claim stronger than its test
+
+Corrected in place above: the L2 audit-row differential compares VALUES, not
+bytes, and is structurally blind to `pyjson.Value`'s nested-key sorting.
+
+### Mutation batteries
+
+**Final_Sigma** (`scratchpad/mut_sigma.py`): 24 mutants over the rule, both
+supplements, the exclusion and the range walker. **24/24 killed, 0 stale.**
+
+Two rounds, and round 1 earned both its corrections:
+
+| Round | Result |
+|---|---|
+| r1 | 20 killed, **1 survived**, 3 spurious "did not compile" |
+| r2 | **24/24 killed** |
+
+| r1 finding | Verdict |
+|---|---|
+| lookback tests `cased` before `caseIgnorable` | **REAL gap.** A rune can be BOTH — the ~267 modifier letters in Lm ∩ Other_Lowercase — and the rule resolves it by testing ignorability FIRST and continuing the scan. `'ʰΣ'.lower()` is `'ʰσ'`; the mutant says `'ʰς'`. **Every arm of my sweep put a cased `a` in front of the code point**, where both orderings agree, so it could not see the difference. Closed with a third arm that puts NOTHING before the rune. |
+| three "did not compile" | **Not real.** My no-compile detector matched the bare substring `"not used"`, which appears in ordinary failure output. A detector that misreads a kill as a non-result is worse than none: it hides exactly the mutants that prove the most. Tightened to the four specific compiler messages. |
+
+The after-arm of that sweep was also **vacuous on arrival**, and nothing said
+so: it was spelled `"Σ"+c+"a"`, and a sigma at index 0 has nothing cased
+before it, so Final_Sigma is false for every c and the assertion compared
+`false == false` 1.1M times while reporting a clean zero. Re-spelled
+`"aΣ"+c`, and every arm now fails if it does not see the rule come out both
+ways.
+
+**Rotation + the r6 fixes** (`scratchpad/mut_l2.py`): grown from 20 to 31
+mutants — the eleven new ones cover the config coercion, the joint reset,
+`coerceInt`, the ambient loop id, `WithLoopID`'s copy semantics and the
+warning dedupe. **31/31 killed, 0 survived, 0 stale.**
+
+| Round | Result |
+|---|---|
+| r6 | 25 killed, 0 survived, **2 stale** — R18/R19 pattern-matched the config block this round rewrote |
+| r7 | **27/27 killed** |
+| r8 | 29 killed, 1 compiler-killed (R29 left `warnings` unused); re-spelled and killed by the new pin → **31/31** |
+
+That round was also **run against a moving file**: I edited `rotate.go`
+while the harness had a mutant applied to it. The harness writes
+`src0.replace(...)` per mutant and restores `src0` after, so a concurrent
+edit is silently clobbered and any mutant in flight is judged against a
+half-applied change. R7 was in flight; it came back killed, which is the
+right answer, but it was not an answer that run had earned. Edits staged as
+a patch, applied after, re-run.
+
+One fix in this round arrived WITHOUT a finding and needed its own pin.
+Surfacing `config.Load`'s warnings put them on a path that runs before the
+size gate on every append, so raw they would have been a stderr line per
+event — a warning that fires constantly is one its reader learns to skip,
+which is the same silence the fix was for, reached the other way. `warnOnce`
+dedupes; the pin asserts BOTH ends (at least one warning, fewer than one per
+append), because a dedupe with no lower bound degrades to "never warn"
+without failing anything.
+
+### What the round says about the practice
+
+Three of the five findings are **a doc or comment asserting something the
+code does not do** — the same shape as r5's L2, where PORT.md's "no
+delete/rotate/compact verbs at all" hid a missing subsystem behind a line
+that read as a virtue. Two of those three were written by me in the previous
+round. Prose that describes a guarantee is worth re-deriving, not re-reading.
+
+And the MEDIUM is the case for the whole-chunk rule: it was in landed,
+reviewed, green code, invisible to any review scoped to the latest diff.
+
+NEXT: r7 over the whole chunk, then adversarial r1 over `internal/tasks`.

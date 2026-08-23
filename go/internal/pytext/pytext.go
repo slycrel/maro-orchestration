@@ -94,9 +94,164 @@ var lowerSupplement = map[rune]rune{
 	0x10D65: 0x10D85, // GARAY CAPITAL LETTER OLD NA
 }
 
+// wordBreakIgnorable is the part of Unicode's Case_Ignorable that is not a
+// whole general category: the Word_Break MidLetter, MidNumLet and
+// Single_Quote punctuation. Measured against CPython rather than
+// transcribed from the spec — these are exactly the 17 code points whose
+// presence between a cased letter and a sigma still yields "ς".
+var wordBreakIgnorable = map[rune]bool{
+	0x0027: true, // APOSTROPHE
+	0x002E: true, // FULL STOP
+	0x003A: true, // COLON
+	0x00B7: true, // MIDDLE DOT
+	0x0387: true, // GREEK ANO TELEIA
+	0x055F: true, // ARMENIAN ABBREVIATION MARK
+	0x05F4: true, // HEBREW PUNCTUATION GERSHAYIM
+	0x2018: true, // LEFT SINGLE QUOTATION MARK
+	0x2019: true, // RIGHT SINGLE QUOTATION MARK
+	0x2024: true, // ONE DOT LEADER
+	0x2027: true, // HYPHENATION POINT
+	0xFE13: true, // PRESENTATION FORM FOR VERTICAL COLON
+	0xFE52: true, // SMALL FULL STOP
+	0xFE55: true, // SMALL COLON
+	0xFF07: true, // FULLWIDTH APOSTROPHE
+	0xFF0E: true, // FULLWIDTH FULL STOP
+	0xFF1A: true, // FULLWIDTH COLON
+}
+
+// Final_Sigma reads two derived properties, so it inherits the same
+// unicode 15.0.0-vs-16.0.0 table skew as Lower, Slugify and the decimal
+// fold — and here the consequence is again a FILENAME, since Slugify
+// lowercases before it slugifies. Measured, the skew is 96 code points and
+// it runs in BOTH directions, which none of the other three did:
+//
+//	casedSupplement           52   CPython says Cased, Go's tables do not
+//	caseIgnorableSupplement   43   CPython says Case_Ignorable, Go does not
+//	caseIgnorableExclusion     1   Go says Case_Ignorable, CPython does not
+//
+// The exclusion is a RECLASSIFICATION, not an addition: U+1171E was Mn in
+// Unicode 15 and became Mc in 16, so Go's own table is not merely behind
+// here, it disagrees. A supplement-only fix cannot express that, which is
+// why this skew gets three tables where lowerSupplement needed one.
+var casedSupplement = [...][2]rune{
+	{0x01C89, 0x01C8A}, // CYRILLIC CAPITAL/SMALL LETTER TJE
+	{0x0A7CB, 0x0A7CD}, // LATIN CAPITAL LETTER RAMS HORN and successors
+	{0x0A7DA, 0x0A7DC}, // LATIN CAPITAL LETTER LAMBDA and successors
+	{0x10D50, 0x10D65}, // GARAY CAPITAL LETTER A..OLD NA
+	{0x10D70, 0x10D85}, // GARAY SMALL LETTER A..OLD NA
+}
+
+var caseIgnorableSupplement = [...][2]rune{
+	{0x00897, 0x00897}, // ARABIC PEPET
+	{0x10D4E, 0x10D4E}, // GARAY VOWEL LENGTH MARK
+	{0x10D69, 0x10D6D}, // GARAY VOWEL SIGN E..SUKUN
+	{0x10D6F, 0x10D6F}, // GARAY REDUPLICATION MARK
+	{0x10EFC, 0x10EFC}, // ARABIC COMBINING ALEF OVERLAY
+	{0x113BB, 0x113C0}, // TULU-TIGALARI VOWEL SIGN U..AI
+	{0x113CE, 0x113CE}, // TULU-TIGALARI SIGN VIRAMA
+	{0x113D0, 0x113D0}, // TULU-TIGALARI CONJOINER
+	{0x113D2, 0x113D2}, // TULU-TIGALARI GEMINATION MARK
+	{0x113E1, 0x113E2}, // TULU-TIGALARI VEDIC TONE marks
+	{0x11F5A, 0x11F5A}, // KAWI SIGN NUKTA
+	{0x1611E, 0x16129}, // GURUNG KHEMA VOWEL SIGN AA and successors
+	{0x1612D, 0x1612F}, // GURUNG KHEMA SIGN marks
+	{0x16D40, 0x16D42}, // KIRAT RAI SIGN marks
+	{0x16D6B, 0x16D6C}, // KIRAT RAI SIGN marks
+	{0x1E5EE, 0x1E5EF}, // OL ONAL SIGN marks
+}
+
+// caseIgnorableExclusion is Mn in Go's tables and Mc in CPython's.
+const caseIgnorableExclusion = 0x1171E // AHOM CONSONANT SIGN MEDIAL RA
+
+func inRanges(r rune, ranges [][2]rune) bool {
+	for _, rg := range ranges {
+		if r >= rg[0] && r <= rg[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// cased and caseIgnorable are Unicode's Cased and Case_Ignorable derived
+// properties, the two inputs to the Final_Sigma rule. Both were measured
+// against CPython over the whole rune range rather than read off the spec:
+// Cased came out as exactly Lu ∪ Ll ∪ Lt ∪ Other_Lowercase ∪
+// Other_Uppercase (4,311 code points) and Case_Ignorable as Mn ∪ Me ∪ Cf ∪
+// Lm ∪ Sk plus the 17 above (2,749).
+//
+// A rune can be BOTH — the modifier letters in Lm ∩ Other_Lowercase are the
+// large case. finalSigma resolves that the way UAX #29 does, by testing
+// case-ignorability first and continuing the scan, so cased() is never
+// asked about them.
+func cased(r rune) bool {
+	return unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lt,
+		unicode.Other_Lowercase, unicode.Other_Uppercase) ||
+		inRanges(r, casedSupplement[:])
+}
+
+func caseIgnorable(r rune) bool {
+	if r == caseIgnorableExclusion {
+		return false
+	}
+	return wordBreakIgnorable[r] ||
+		unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk) ||
+		inRanges(r, caseIgnorableSupplement[:])
+}
+
+// finalSigma is Unicode SpecialCasing's Final_Sigma condition for the rune
+// at index i: there is a cased letter BEFORE it and none AFTER it, skipping
+// case-ignorable characters in both directions.
+func finalSigma(runes []rune, i int) bool {
+	before := false
+	for j := i - 1; j >= 0; j-- {
+		if caseIgnorable(runes[j]) {
+			continue
+		}
+		before = cased(runes[j])
+		break
+	}
+	if !before {
+		return false
+	}
+	for j := i + 1; j < len(runes); j++ {
+		if caseIgnorable(runes[j]) {
+			continue
+		}
+		return !cased(runes[j])
+	}
+	return true
+}
+
+// Lower is Python's str.lower(). Three things separate it from
+// strings.ToLower, and all three cost this port a real divergence:
+//
+//   - U+0130 expands to TWO runes (handled by substitution below);
+//   - 27 runes lowercase in CPython's unicode 16.0.0 and not in Go's 15.0.0
+//     (lowerSupplement);
+//   - U+03A3 is CONTEXTUAL — "ΟΔΟΣ".lower() is "οδος", with a FINAL sigma,
+//     where strings.ToLower gives "οδοσ". Measured over the whole rune
+//     range, it is the ONLY context-sensitive lowercase mapping there is,
+//     so one special case covers it (adversarial r6, MEDIUM). It reached
+//     a FILENAME through Slugify: a skill named "ΟΔΟΣ" was exported to
+//     οδοσ.md here and οδος.md there — one skill, two files.
 func Lower(s string) string {
 	if strings.ContainsRune(s, 0x0130) {
 		s = strings.ReplaceAll(s, "İ", "i̇")
+	}
+	// The sigma decision is made on the ORIGINAL text, because after
+	// ToLower there is nothing left to distinguish a σ that was a Σ.
+	if strings.ContainsRune(s, 'Σ') {
+		runes := []rune(s)
+		var b strings.Builder
+		b.Grow(len(s))
+		for i, r := range runes {
+			if r == 'Σ' && finalSigma(runes, i) {
+				b.WriteRune('ς')
+				continue
+			}
+			b.WriteRune(r)
+		}
+		s = b.String()
 	}
 	s = strings.ToLower(s)
 	if !strings.ContainsFunc(s, func(r rune) bool {

@@ -157,6 +157,19 @@ func TestSlugifyIsByteIdenticalToPythons(t *testing.T) {
 		"sunuwar \U00011BC0 and digits \U00011BF0",
 		"nbsp separated",
 		"infoseparator",
+		// Final_Sigma. Slugify lowercases before it slugifies, so a
+		// context-sensitive lowercase mapping lands directly on the
+		// filename — one skill, two files, one per runtime. Every case
+		// above is context-FREE, which is why the whole table was green
+		// against a Slugify that got "ΟΔΟΣ" wrong (adversarial r6).
+		"ΟΔΟΣ",         // word-final: -> odos, not odoσ
+		"ΟΔΟΣ ΜΕΓΑΣ",   // two of them, with a space between
+		"ΑΣΣ deploy",   // medial then final in one word
+		"aΣ'",          // trailing case-ignorable stays final
+		"Σ alone",      // nothing cased before it: stays σ
+		"ΑΣ\U00010D50", // the cased supplement decides this one
+		"ΑΣࢗ",          // the case-ignorable supplement decides this one
+		"ΑΣ\U0001171E", // the exclusion decides this one
 	}
 	want := pythonSlugify(t, names)
 	for i, n := range names {

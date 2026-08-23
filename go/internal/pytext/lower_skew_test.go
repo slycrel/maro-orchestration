@@ -145,3 +145,200 @@ func strconv16(c int) string {
 	}
 	return string(b)
 }
+
+// The single-rune sweep above CANNOT see a context rule, and said so in its
+// own comment while being wrong about it ("a single differing rune is what
+// changes the slug"). U+03A3 lowercases to ς or σ depending on what
+// surrounds it, so it is invisible one rune at a time — the pin was green
+// against broken code for exactly as long as it existed (adversarial r6).
+//
+// These two sweeps put every code point on BOTH sides of a sigma, which is
+// where its Cased / Case_Ignorable classification decides the answer.
+//
+// The after-sweep is spelled "aΣ"+c and not "Σ"+c+"a" on purpose. The
+// obvious spelling is VACUOUS: a sigma at index 0 has nothing cased before
+// it, so Final_Sigma is false for every c and the assertion compares false
+// to false 1.1M times. It was written that way first and reported a clean
+// zero while the after-side was entirely unexamined; the anti-vacuity
+// guards below exist so that cannot recur silently.
+func TestTheSigmaContextRuleAgreesWithCPythonAtEveryCodePoint(t *testing.T) {
+	// Three arms, not two. The "alone" arm exists because a rune can be
+	// BOTH Cased and Case_Ignorable — the ~267 modifier letters in
+	// Lm ∩ Other_Lowercase — and the rule resolves that by testing
+	// ignorability FIRST and continuing the scan. With a cased "a" already
+	// in front, both orderings agree, so the leading-"a" arm cannot see the
+	// difference: 'ʰΣ'.lower() is 'ʰσ' (skip ʰ, find nothing) while an
+	// implementation that tested cased first would say 'ʰς'. That mutant
+	// survived the two-arm version of this sweep.
+	arms := []struct {
+		name string
+		py   string
+		go_  func(ch string) bool
+	}{
+		{"BEFORE (cased context)",
+			"('a'+chr(c)+'\\u03a3').lower().endswith('\\u03c2')",
+			func(ch string) bool { return strings.HasSuffix(Lower("a"+ch+"Σ"), "ς") }},
+		{"AFTER",
+			"('a\\u03a3'+chr(c)).lower()[1]=='\\u03c2'",
+			func(ch string) bool { return []rune(Lower("aΣ" + ch))[1] == 'ς' }},
+		{"BEFORE (alone)",
+			"(chr(c)+'\\u03a3').lower().endswith('\\u03c2')",
+			func(ch string) bool { return strings.HasSuffix(Lower(ch+"Σ"), "ς") }},
+	}
+	n := len(arms)
+	var expr []string
+	for _, a := range arms {
+		expr = append(expr, "('1' if "+a.py+" else '0')")
+	}
+	out, err := exec.Command("python3", "-c",
+		"import sys;sys.stdout.write(''.join("+strings.Join(expr, "+")+
+			"for c in range(0x110000)))").Output()
+	if err != nil {
+		t.Skipf("python3 unavailable: %v", err)
+	}
+	if len(out) != n*0x110000 {
+		t.Fatalf("got %d flags, want %d", len(out), n*0x110000)
+	}
+	bad := make([]int, n)
+	first := make([]string, n)
+	final := make([]int, n)
+	checked := 0
+	for c := 0; c < 0x110000; c++ {
+		if c >= 0xd800 && c <= 0xdfff {
+			continue
+		}
+		checked++
+		ch := string(rune(c))
+		for k, a := range arms {
+			want := out[n*c+k] == '1'
+			if want {
+				final[k]++
+			}
+			if a.go_(ch) != want {
+				bad[k]++
+				if first[k] == "" {
+					first[k] = "U+" + strings.ToUpper(strconv16(c))
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("nothing was checked; this test proved nothing")
+	}
+	for k, a := range arms {
+		// Each arm must see the rule come out BOTH ways, or it is only
+		// asserting a constant.
+		if final[k] == 0 || final[k] == checked {
+			t.Fatalf("the %s arm is vacuous: %d of %d are final",
+				a.name, final[k], checked)
+		}
+		if bad[k] != 0 {
+			t.Errorf("%d code points are classified differently in the %s arm "+
+				"(first %s) — cased/caseIgnorable disagrees with CPython",
+				bad[k], a.name, first[k])
+		}
+	}
+}
+
+// The dead-table detector the other three supplements each have. When Go's
+// unicode tables reach 16.0.0 these three become no-ops that still read as
+// load-bearing, and the comments above them become wrong.
+func TestTheSigmaSupplementsAreStillCarryingWeight(t *testing.T) {
+	goCased := func(r rune) bool {
+		return unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lt,
+			unicode.Other_Lowercase, unicode.Other_Uppercase)
+	}
+	goIgnorable := func(r rune) bool {
+		return wordBreakIgnorable[r] || unicode.In(r,
+			unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
+	}
+	live := 0
+	for _, rg := range casedSupplement {
+		for r := rg[0]; r <= rg[1]; r++ {
+			if !goCased(r) {
+				live++
+			}
+		}
+	}
+	if live == 0 {
+		t.Errorf("Go unicode %s now knows every rune in casedSupplement; "+
+			"the table is dead code", unicode.Version)
+	}
+	t.Logf("casedSupplement covers %d code points Go's table still misses", live)
+
+	live = 0
+	for _, rg := range caseIgnorableSupplement {
+		for r := rg[0]; r <= rg[1]; r++ {
+			if !goIgnorable(r) {
+				live++
+			}
+		}
+	}
+	if live == 0 {
+		t.Errorf("Go unicode %s now knows every rune in "+
+			"caseIgnorableSupplement; the table is dead code", unicode.Version)
+	}
+	t.Logf("caseIgnorableSupplement covers %d code points Go's table still misses", live)
+
+	// The exclusion is the reverse direction: it only does work while Go
+	// still calls U+1171E case-ignorable.
+	if !goIgnorable(caseIgnorableExclusion) {
+		t.Errorf("Go unicode %s no longer treats U+1171E as case-ignorable; "+
+			"caseIgnorableExclusion is dead code", unicode.Version)
+	}
+}
+
+// End to end on real strings, because the rule is about whole words and the
+// sweeps above only ever look at one neighbour.
+func TestLowerMatchesCPythonOnWordsWithSigma(t *testing.T) {
+	words := []string{
+		"ΟΔΟΣ",         // the finding: word-final sigma
+		"ΟΔΟΣ ΜΕΓΑΣ",   // two of them
+		"Σ",            // alone: nothing cased before it
+		"ΑΣ",           // cased before, nothing after
+		"aΣb",          // cased after: stays σ
+		"aΣ'",          // trailing case-ignorable does not un-finalize it
+		"a'Σ",          // leading case-ignorable does not break the lookback
+		"áΣ",          // combining acute is case-ignorable
+		"a Σ",          // a SPACE is neither cased nor ignorable
+		"ʰΣ",           // BOTH cased and ignorable: ignorable wins, stays σ
+		"aʰΣ",          // ...and skipping it still finds the "a": ς
+		"ʰʰΣ",          // a run of them, still nothing cased behind
+		"ΣΣ",           // first is medial, second final
+		"ΑΣΣ",          //
+		"1Σ",           // a digit is not cased
+		"ΟΔΟΣ.md",      // the shape Slugify actually sees
+		"İΣ",           // composes with the U+0130 expansion
+		"ΑΣ\U00010D50", // composes with the unicode-16 supplement
+		"στίγμαΣ",      // already-lowercase context
+		"ΜΆΪΟΣ",        // accents and diaeresis
+	}
+	payload, err := json.Marshal(words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", "-c",
+		"import json,sys;print(json.dumps([s.lower() for s in json.load(sys.stdin)]))")
+	cmd.Stdin = strings.NewReader(string(payload))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("python3 unavailable: %v", err)
+	}
+	var want []string
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("decoding CPython output: %v\n%s", err, out)
+	}
+	sawFinal := false
+	for i, w := range words {
+		if strings.ContainsRune(want[i], 'ς') {
+			sawFinal = true
+		}
+		if got := Lower(w); got != want[i] {
+			t.Errorf("Lower(%q) = %q, CPython gives %q", w, got, want[i])
+		}
+	}
+	if !sawFinal {
+		t.Fatal("no case in this table produces a final sigma; the table " +
+			"does not exercise the rule it is named for")
+	}
+}
