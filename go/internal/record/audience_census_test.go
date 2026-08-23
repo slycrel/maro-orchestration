@@ -33,6 +33,10 @@ var knownEmittedEvents = map[string]string{
 	"EVOLVER_SKIPPED":         "system",
 	"GRADUATION_PROPOSED":     "user",
 	"GRADUATION_VERIFIED":     "user",
+	// The rotation audit row (r5 L2). "system", checked against the live
+	// frozenset: LOG_ROTATED is in Python's EVENT_TYPES and not in its
+	// USER_SURFACED_EVENTS.
+	"LOG_ROTATED": "system",
 	// Bookkeeping and per-step diagnostics. All eight were checked against
 	// Python's live frozenset when this census was written and all eight
 	// are "system" there — absence is Python's default, so a new event

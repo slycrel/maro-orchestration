@@ -224,6 +224,18 @@ var userSurfacedEvents = map[string]bool{
 	"EVOLVER_VERDICT":      true,
 	"GRADUATION_PROPOSED":  true,
 	"GRADUATION_VERIFIED":  true,
+
+	// LOG_ROTATED is deliberately ABSENT, verified against the live
+	// frozenset rather than read off the source: it appears in Python's
+	// EVENT_TYPES (the set of valid names) and NOT in USER_SURFACED_EVENTS,
+	// so captains_log.event_audience stamps it "system". Rotation is
+	// bookkeeping about the store, not a decision anyone has to act on.
+	//
+	// This entry read `true` for one commit on a misread of that list. Two
+	// things caught it: the audience census tripwire, which refused an
+	// emitted type it had never been told about, and the differential
+	// against the row Python's own _maybe_rotate writes. A hand-built
+	// expectation would have agreed with the mistake.
 }
 
 // Event appends one captain's-log entry. audience comes from the
@@ -283,8 +295,17 @@ func (r *Recorder) EventNoted(eventType, subject, summary string, context map[st
 	if len(relatedIDs) > 0 {
 		entry["related_ids"] = relatedIDs
 	}
-	return r.appendJSONL(filepath.Join(dir, "captains_log.jsonl"),
-		entry, captainsLogKeyOrder)
+	path := filepath.Join(dir, "captains_log.jsonl")
+	if err := r.appendJSONL(path, entry, captainsLogKeyOrder); err != nil {
+		return err
+	}
+	// Size-gated rotation rides on the append, exactly as Python's
+	// log_event calls _maybe_rotate. It never fails the event it was
+	// triggered by — the entry is already durable at this point — so its
+	// problems go to stderr the way Python's logger.warning does rather
+	// than up this return, which ~40 call sites share.
+	r.maybeRotateCaptainsLog(path)
+	return nil
 }
 
 // captainsLogKeyOrder is the order Python's log_event builds its dict,

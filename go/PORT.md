@@ -19,7 +19,7 @@ of them **structural**:
 | No silent truncation — cuts must be marked (`context_budget.clip` + slice census) | `budget.Clip` is the only shortening idiom; marker byte-identical to Python's so records interoperate |
 | No swallowed errors (`except: pass` audits) | errors are returned or recorded; a failed step carries its real reason into the failure chain |
 | The resolved store is part of the result (2026-08-16 live-ledger incident) | `record.New(workspaceDir)` takes the store as an argument; `cmd/maro` prints the resolved workspace before any write |
-| Data retention: append-only, never auto-delete | `record` has no delete/rotate/compact verbs at all |
+| Data retention: append-only, never auto-delete | no delete or compact verb anywhere; the one rewrite is captain's-log ROTATION, which moves entries to a timestamped archive beside the active file and deletes none (`record/rotate.go`) |
 | Named agentic seams (`purpose=` on every call) | `llm.Options.Purpose` is on every call site |
 
 ## On-disk compatibility

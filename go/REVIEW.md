@@ -3784,3 +3784,67 @@ tables catch up so the literals get deleted rather than quietly rotting.
 NEXT: r5 L2 (no captain's-log rotation in Go, and PORT.md's doctrine line
 conflates rotation with deletion), then r6 over the whole chunk, then
 adversarial r1 over `internal/tasks`.
+
+---
+
+## Adversarial r5 — L2: captain's-log rotation (2026-08-23): FIXED
+
+This runtime appended to `captains_log.jsonl` forever and never rotated it,
+while sharing the file with a Python runtime that does. **The doc was the
+reason it went unnoticed.** PORT.md offered "`record` has no
+delete/rotate/compact verbs at all" as the Go shape of the append-only
+invariant, which conflates two different things: the invariant is NEVER
+AUTO-DELETE, and rotation deletes nothing — every entry moves to a
+timestamped archive beside the active file and stays readable. Python's own
+docstring says so outright. A doctrine line that reads as a virtue is a bad
+place to hide a gap; the line is corrected.
+
+What it costs to skip: `load_log` JSON-parses the whole active file per call
+and sits on the dispatch recall hot path, so an unbounded active file makes
+every recall slower forever — and a Go writer that never rotates hands that
+cost to the Python reader. The store is the interop contract, and part of
+the contract is the file's SIZE.
+
+Ported faithfully: size-gated on the append with no scheduler,
+`captains_log.rotate_mb` (default 5, 0 disables) and `rotate_keep` (default
+1000), the same re-entrancy guard, the same `captains_log.<stamp>.jsonl`
+archive naming with its same-second collision suffix, and the LOG_ROTATED
+audit row. Plus `ArchivePaths`/`AllLogPaths` for the archaeology readers.
+
+**Three deliberate improvements over Python**, each named in the code: both
+rewrites go through `AtomicWrite` (Python's `write_text` lets an unlocked
+reader — and `load_log` takes no lock — observe the file mid-truncation);
+the collision search is bounded so a pathological directory warns instead of
+spinning; and `ArchivePaths` drops directories matching the pattern, which
+this port's own test managed to create three of.
+
+**The differential caught me being wrong about Python.** I read `LOG_ROTATED`
+out of a list at captains_log.py:380 and stamped the audit row
+`audience: "user"`. That list is `EVENT_TYPES`, not `USER_SURFACED_EVENTS`;
+the live frozenset says `system`. Two things caught it and neither was
+review: the audience-census tripwire refused an emitted type it had never
+been told about, and the differential compares against the row **Python's own
+`_maybe_rotate` writes** rather than an f-string I reconstructed from the
+source. A hand-built expectation would have agreed with the mistake. Every
+other field — subject, summary prose, context — matched byte for byte on the
+first run.
+
+**Mutation battery** (`scratchpad/mut_l2.py`): 20 mutants, four rounds.
+
+| Round | Result |
+|---|---|
+| r1 | **baseline RED** — a targeted `-run` filter had hidden the audience-census failure. A battery against a red baseline proves nothing; fixed and re-run. |
+| r2 | 17/20, three survivors |
+| r3 | **baseline RED again** — the new collision test was clock-flaky (occupying a second's worth of names can straddle a second boundary, after which every name is free and the test passes for the wrong reason). Fixed with a frozen-clock seam. |
+| r4 | 18/19, one survivor |
+| r5 | **19/19 killed, 0 stale, 1 recorded equivalent.** |
+
+| Survivor | Verdict |
+|---|---|
+| retention guard `keep >= len(lines)` → `keep > len(lines)` | **EQUIVALENT, recorded not chased.** They differ only at `keep == len(lines)`, where the mutant proceeds to `head = lines[:0]` and the `len(head) == 0` guard two lines below returns without touching anything. |
+| empty tail written as a bare `"\n"` | **real gap.** The differential compared row LISTS, and Python writes an EMPTY active file for a retention of zero where the mutant writes one newline — two different files that a line-list comparison cannot tell apart. Now compared as bytes, with each side's own audit row removed. |
+| blank-line filter `pytext.Strip` → `strings.TrimSpace` | **real gap.** No fixture contained a line that is nothing but U+001F, which Python's `str.strip()` drops and Go's `TrimSpace` keeps. Added to the raw-separator differential, which now covers both halves of the splitlines/strip pair. |
+| under-lock size re-check removed | **real gap, and it needed a real race.** The test now holds the lock, lets a rotation reach it, shrinks the file underneath and releases — the other-process case the re-check exists for. Its first version used a "small" file that was still over the threshold, so it failed against working code before it could fail against the mutant. |
+
+NEXT: r6 over the whole chunk (all five r5 findings now landed), then
+adversarial r1 over `internal/tasks`.
