@@ -3160,3 +3160,121 @@ Two smaller rules, both about tests:
   is still a skip.
 - **`Inject` passes `max_chars` through.** Go substituted a default for any
   non-positive budget; Python does not. The sweep now starts below zero.
+### Mission layer — slice 2: the planner and the milestone DAG (2026-08-23)
+
+`decompose_mission`, `_validate_milestone`, `_is_chain_shaped` and
+`_run_milestone_dag` — mission.py's planning half, on top of the store
+ported in slice 1. `run_mission` itself is still out: it needs the agent
+loop. What made this portable ahead of that is that **`run_one` is a
+parameter in Python and stays one here**, so the scheduler's whole
+contract — order and terminality — is exercisable with a fake.
+
+**`str(x)` is not a cast, and this file is where that bites.** Every
+field the model supplies reaches a string through `str(x).strip()`.
+Measured against CPython before any Go was written:
+
+| the model sends | Python writes |
+|---|---|
+| `"title": null` | the four characters `None` |
+| `"title": {"a": 1}` | the eight characters `{'a': 1}` |
+| `"title": true` | `True` |
+| `"features": [1.0, 2]` | features named `1.0` and `2` |
+| `"features": [null, "f"]` | a feature named `None`, KEPT |
+| `"features": "abcde"` | **three** features named `a`, `b`, `c` |
+
+The last one is the family this port keeps producing in miniature:
+`"abcde"[:3]` slices the *string*, and iterating a string yields
+characters. Nothing about the code reads wrong.
+
+This needed a seam the port did not have: **`pyval.Str` / `pyval.Repr`**,
+Python's `str()` and `repr()` over a decoded JSON value. Two properties
+force the ordered decoder rather than a `map[string]any`:
+`str({'b':1,'a':2})` keeps **insertion order**, and `1` vs `1.0` is
+decided by the **literal**, which `json.Unmarshal` into `any` destroys by
+making both `float64`. `Repr` refuses a plain Go map outright rather than
+emit a plausible string in map-iteration order.
+
+**Three malformed payloads RAISE out of `decompose_mission`**, and that
+is the divergence a careless port would smooth over. The parse block is
+wrapped in `except ImportError`, not `except Exception`, so
+`"features": null` (TypeError), `"validation_criteria": null`
+(TypeError), and `"features": {}` (KeyError) all leave the function and
+kill the caller. A Go port that fell through to the heuristic would
+produce a *working mission* where Python produces none — a bigger
+difference than any wrong field.
+
+**Two slice orders, four lines apart, in opposite directions.**
+`safe_list(..., max_items=N)` FILTERS then slices, so a milestones list
+whose first element is a string still yields N objects. The features list
+one scope down SLICES then filters, so a blank first feature yields N-1.
+Both are reproduced verbatim; making them uniform would be a divergence
+in one direction or the other.
+
+**`depends_on` resolution.** Refs are indexes into the *model's* array,
+and feature-less milestones are dropped from ours, so the two numberings
+diverge the moment one is dropped. Only earlier, kept indexes resolve —
+which is what makes cycles impossible by construction *from this writer*.
+A bool is an `int` in Python and must be excluded by hand; `1.0` is not
+an index where `1` is; and an explicitly-signalled-but-entirely-invalid
+list chains to the predecessor rather than silently ungating a milestone
+the model meant to order. Only a literal `[]` means "independent root".
+
+**Where Go cannot copy Python.** CPython's GIL makes `ms.status =
+"failed"` and a persist callback that walks the whole mission mutually
+safe by accident. Go has no such accident and `-race` says so. The mutex
+in the scheduler is therefore not a port of anything — it is the price of
+the same behaviour in a language that means it, and it is deliberately
+coarse enough to cover only the crash-marking and the persist, never the
+milestone body.
+
+**The validation gate defaults to PASS at all four exits** — no criteria,
+dry run, no adapter, unparseable answer. Python's comment says why
+("don't get stuck in validation loops"). A port that failed closed on an
+adapter error would turn a transient outage into a stuck mission, and
+every happy-path test would still be green. It also reads
+`bool(data.get("passed", True))`, which is truthiness: the string
+`"false"` PASSES, and so does `"0"`; only `""`, `null`, `0`, `[]` and
+`{}` fail.
+
+**How the DAG is tested.** Not by wall-clock interleaving, which neither
+runtime promises. Both sides run with a `run_one` that records which
+milestone pairs were ever **concurrently inside a barrier** — so the
+comparison is over the set of overlaps the scheduler *allowed*. A port
+that ran everything sequentially produces identical missions and would
+pass every other assertion.
+
+**Owed.** `run_mission` and `drain_next_mission` (slice 3) need the agent
+loop, and also `config.get_bool`, which landed upstream with the
+milestone-DAG work and is not in the Go config yet. It exists because a
+quoted YAML `"false"` arrives as a *string* and `bool("false")` is True —
+the same truthiness hazard as above, in the direction that silently
+defeats a revert lever.
+
+**Battery.** 43 mutants from the files: 41 killed, 2 recorded EQUIVALENT
+with proofs, 0 survivors. Six needed re-spelling, and the reasons are the
+lesson:
+
+- Three of my own mutants were **no-ops** — one appended to a slice
+  inside its own `range` (which does not extend the loop), one keyed off
+  a map that was always empty. A mutant that does not change behaviour is
+  not evidence of anything, and it looks exactly like a killed one in a
+  green run.
+- Three fixtures **could not discriminate**, and all three failed the
+  same way: the two verdicts happened to COINCIDE on that input. `[1.0]`
+  as a dependency index resolves to B whether it is accepted or skipped.
+  A dependent of a FAILED dependency runs either way — a port that gated
+  on outcome merely *stalls*, and the stall lane runs it anyway, to the
+  same status, in the same order. An unknown dependency id is the same
+  shape.
+
+  What separates all three is **overlap**: released together the
+  milestones run concurrently, stalled they run one at a time. The
+  fixtures that see the rule are the ones where two milestones are
+  waiting on the same thing.
+
+The two equivalents are recorded where the code is, not just here:
+deleting `IsInt`'s literal check changes no verdict because
+`strconv.ParseInt` rejects `.`/`e` anyway, and deleting
+`ValidateMilestone`'s empty-object guard changes none because the
+absent-key default is also `true`. Both stay, because each states the
+RULE where the fallthrough states only an accident.

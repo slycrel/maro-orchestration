@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // StringArray extracts a JSON array of strings from model output that may
@@ -137,3 +139,27 @@ func carve(text string, open, close byte) (string, error) {
 // routing r3; Go-stricter than Python's _now_verdict_rationale, which
 // shares the gap).
 func StripThink(text string) string { return stripThinkBlocks(text) }
+
+// ObjectOrdered is Object with the key order and the number LITERALS
+// kept — the same carve, decoded through pyval.LoadsOrdered.
+//
+// Two callers need it and a map cannot serve either: rendering an
+// LLM-supplied value through Python's `str()` depends on insertion order
+// (`str({'b':1,'a':2})` starts with 'b'), and telling `1` from `1.0`
+// depends on the literal, which json.Unmarshal into `any` throws away by
+// making both float64.
+func ObjectOrdered(text string) (pyval.Obj, error) {
+	payload, err := extract(text, '{', '}')
+	if err != nil {
+		return nil, err
+	}
+	v, err := pyval.LoadsOrdered(payload)
+	if err != nil {
+		return nil, fmt.Errorf("object found but unparseable: %w", err)
+	}
+	o, ok := v.(pyval.Obj)
+	if !ok {
+		return nil, fmt.Errorf("object found but it decoded as %T", v)
+	}
+	return o, nil
+}

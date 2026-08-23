@@ -431,3 +431,16 @@ func IsPrintable(r rune) bool {
 	return r == ' ' || unicode.In(r, unicode.L, unicode.M, unicode.N,
 		unicode.P, unicode.S)
 }
+
+// Split is Python's bare `str.split()`: split on RUNS of whitespace with
+// leading and trailing runs discarded, so "" and "   " both yield no
+// elements at all.
+//
+// strings.Fields is the same shape over a NARROWER set — unicode.IsSpace
+// misses U+001C..U+001F, which arrive through pasted terminal output more
+// often than their obscurity suggests. A goal containing one of them
+// splits into a different number of words in the two runtimes, and the
+// mission heuristic names its phases after `len(words) // 2`.
+func Split(s string) []string {
+	return strings.FieldsFunc(s, IsSpace)
+}
