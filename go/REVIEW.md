@@ -3518,3 +3518,63 @@ measured.
   byte; it narrows the crash window.
 
 NEXT: adversarial r1 over `internal/tasks` as a whole chunk.
+
+---
+
+## Adversarial r5 — H1: the dead skill-attribution writer (2026-08-23): FIXED
+
+**The finding.** Both ends of run-verdict skill attribution were live in
+the Go port and nothing connected them. `internal/loop` wrote
+`source/skills_manifest.jsonl` on every run and stamped the closure
+verdict on every run; `RecordSkillInjectionOutcomes` had **zero non-test
+callers**. So `injected_runs` sat at 0 forever and the two consumers that
+gate on it both failed OPEN:
+
+- `MaybeAutoPromoteSkills` vetoes a promotion only when `InjectedRuns > 0`,
+  so every Go promotion was `evidence:"legacy-only"` and the inflated
+  legacy counters were never checked. Measured on an identical seed: four
+  FAILED verdicts on one injected skill; Python held it at provisional,
+  Go promoted it to established. **Two runtimes, one store, opposite
+  decisions.**
+- `FrontierSkills` gates on `InjectedRuns < minUses`, so it returned an
+  empty frontier forever and the A/B variant subsystem got nothing to split.
+
+This is verbatim the dead-`use_count` failure PORT.md already records. The
+port had swapped one dead gate for another.
+
+**The fix.** `record.StampOutcomeVerdict` now returns the row it wrote, and
+`skills.StampVerdictWithAttribution` composes stamp + attribution as one
+call, which is what `internal/loop` invokes. Python gets this structurally
+— `stamp_outcome_verdict` ends by calling the attributor — but Go's import
+graph forbids it (`skills` imports `record`, so `record` cannot call
+`skills`), so the composition moved UP rather than being left to each
+caller to remember. "A correct primitive called from the wrong place" is
+the failure this port has now made three times, so the prose is backed by a
+source-level tripwire in `internal/loop` that fails if the bare primitive
+is ever called there again — plus an anti-vacuity arm that fails if the
+composed call disappears.
+
+`recordSkillInjectionOutcomesLocked` was extracted from `stats.go` because
+one critical section must span marker-check → batch → marker-write, and
+`record.Locked` is **not reentrant** (flock is per open file description).
+
+**Mutation battery** (`scratchpad/mut_attr.py`): 20 mutants derived from
+`attribution.go`, `stats.go` and `loop.go`. **20/20 killed** after repair —
+first pass 15/18 with one survivor and two killed by the compiler, which
+proves nothing and so were rewritten to compile.
+
+| Outcome | What it exposed |
+|---|---|
+| A2 `goal_achieved` bool gate dropped — **survived** | **real gap.** The gate is NOT redundant with the trust gate, which is the non-obvious part: `record.GoalAchieved` deliberately grades a present-but-non-bool verdict as *judged-NOT-achieved* rather than unjudged, so such a row reaches `VerdictTrustFull` and sails past gate 2. Without gate 1 the failed type assertion yields `achieved=false` and the run's skills are credited with a **failure nobody ever judged**. Python is explicit (`if not isinstance(row.get("goal_achieved"), bool): return`). The two hardenings pull opposite ways on purpose: reading a malformed verdict pessimistically is right for a TRUST policy and refusing to read it at all is right for a learning COUNTER. Pinned over six shapes, with an anti-vacuity assertion that each one really does grade FULL. |
+| A18 `attributed_at` spelling — **survived once rewritten** | **real gap.** The marker's byte pin stopped one character short of the timestamp, so every wrong spelling of it survived. Python writes `datetime.now(timezone.utc).isoformat()` — an AWARE datetime, so `+00:00` is part of the value, there is no trailing `Z`, and the fractional part is six digits or absent. It is the one field a reader must parse. Now pinned by regex. |
+| A1, A15 — killed by the **compiler** | Proved nothing and were reported as such: A1 left `row` unused, A15 named a helper that does not exist. Rewritten to compile (`_ = row`; `DumpsIndent2` for the spelling swap), after which both died to real assertions. |
+
+Everything else — the trust gate, the missing-manifest gate, the marker
+idempotence check, the marker write, string-id refusal, malformed and torn
+announcements, id de-duplication, corrected-verdict announcement,
+unreadable-marker UNKNOWN handling, set-vs-length id comparison, marker key
+order, compact-vs-indent spelling, both stats counters, and the loop wiring
+— died on the first pass.
+
+NEXT: r5 M1 (the daily markdown log + MEMORY.md index, absent in Go), then
+M2, L1–L4; then adversarial r1 over `internal/tasks`.

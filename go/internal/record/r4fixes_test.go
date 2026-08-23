@@ -31,7 +31,7 @@ func TestReStampingAVerdictNeverDuplicatesAKey(t *testing.T) {
 
 	var lens []int
 	for i := 0; i < 4; i++ {
-		if err := r.StampOutcomeVerdict("loopA", &yes, SourceClosure, &conf); err != nil {
+		if _, err := r.StampOutcomeVerdict("loopA", &yes, SourceClosure, &conf); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := os.ReadFile(path)
@@ -78,7 +78,7 @@ func TestStampingAnAlreadyJudgedRowEmitsEachKeyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	no := false
-	if err := New(ws).StampOutcomeVerdict("loopA", &no, SourceClosure, nil); err != nil {
+	if _, err := New(ws).StampOutcomeVerdict("loopA", &no, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)

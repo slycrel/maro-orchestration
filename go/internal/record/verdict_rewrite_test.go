@@ -40,7 +40,7 @@ func TestVerdictStampLeavesForeignRowsAlone(t *testing.T) {
 
 	yes := true
 	conf := 0.85
-	if err := New(ws).StampOutcomeVerdict("mine", &yes, SourceClosure, &conf); err != nil {
+	if _, err := New(ws).StampOutcomeVerdict("mine", &yes, SourceClosure, &conf); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -100,7 +100,7 @@ func TestVerdictStampPreservesWholeFloatLiterals(t *testing.T) {
 	if err := os.WriteFile(path, []byte(row+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := New(ws).StampOutcomeVerdict("mine", nil, SourceNowVerify, nil); err != nil {
+	if _, err := New(ws).StampOutcomeVerdict("mine", nil, SourceNowVerify, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)

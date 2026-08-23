@@ -556,38 +556,53 @@ func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved boo
 	}
 	warns := doorWarns
 	err := record.Locked(path, func() error {
-		r, err := readSkillStats(path)
-		if err != nil {
-			return err
-		}
-		now := nowISO()
-		for _, id := range ids {
-			// A batch is ONE transaction: a refusal aborts the whole batch
-			// with the store untouched, rather than recording some verdicts
-			// and leaving a retry to double-count the rest.
-			stats, existed, err := statsFor(ws, r, id)
-			if err != nil {
-				return err
-			}
-			stats.InjectedRuns++
-			if goalAchieved {
-				stats.InjectedSuccesses++
-			}
-			runs := stats.InjectedRuns
-			if runs < 1 {
-				runs = 1
-			}
-			stats.InjectedSuccessRate = float64(stats.InjectedSuccesses) / float64(runs)
-			stats.LastInjectedVerdictAt = now
-			mergeStats(&r, id, stats, existed)
-		}
-		if err := writeSkillStats(path, r); err != nil {
-			return err
-		}
-		warns = append(warns, writeAnnouncement(path, r)...)
-		return nil
+		inner, ierr := recordSkillInjectionOutcomesLocked(ws, path, ids, goalAchieved)
+		warns = append(warns, inner...)
+		return ierr
 	})
 	return warns, err
+}
+
+// recordSkillInjectionOutcomesLocked is the batch itself, with NO lock of
+// its own. It is separate because record.Locked is not reentrant — flock is
+// per open file description, so a nested Locked on the same path deadlocks —
+// and run-verdict attribution has to hold the stats lock across
+// marker-check → batch → marker-write as one critical section.
+//
+// The ids are assumed already validated and de-duplicated by the caller: the
+// exported form runs them through the shared id door, and attribution reads
+// them from a manifest that refuses non-string ids.
+func recordSkillInjectionOutcomesLocked(ws, path string, ids []string,
+	goalAchieved bool) ([]string, error) {
+	r, err := readSkillStats(path)
+	if err != nil {
+		return nil, err
+	}
+	now := nowISO()
+	for _, id := range ids {
+		// A batch is ONE transaction: a refusal aborts the whole batch
+		// with the store untouched, rather than recording some verdicts
+		// and leaving a retry to double-count the rest.
+		stats, existed, err := statsFor(ws, r, id)
+		if err != nil {
+			return nil, err
+		}
+		stats.InjectedRuns++
+		if goalAchieved {
+			stats.InjectedSuccesses++
+		}
+		runs := stats.InjectedRuns
+		if runs < 1 {
+			runs = 1
+		}
+		stats.InjectedSuccessRate = float64(stats.InjectedSuccesses) / float64(runs)
+		stats.LastInjectedVerdictAt = now
+		mergeStats(&r, id, stats, existed)
+	}
+	if err := writeSkillStats(path, r); err != nil {
+		return nil, err
+	}
+	return writeAnnouncement(path, r), nil
 }
 
 // statsFor finds or creates the record for one id, naming it from the skill

@@ -2700,3 +2700,56 @@ MARO_WORKSPACE=/tmp/maro-go-smoke ./maro run "say hi" -backend dry
 Branch `go-port`, worktree `../maro-wt-goport`, pushed with plain
 `git push origin go-port` — `scripts/land.sh` is main-only and this
 branch does not land to main.
+
+### Run-verdict skill attribution — `internal/skills.StampVerdictWithAttribution` (2026-08-23)
+
+Python's `memory_ledger._maybe_record_skill_injection_outcomes` (the
+2026-07-29 measurement-honesty fix): when a FULL-trust closure verdict
+lands, credit it to the skills the run ACTUALLY injected — read from the
+run dir's `source/skills_manifest.jsonl` — rather than to the
+keyword-matched bystanders the legacy per-step counters credit.
+
+Ported after adversarial r5 found both ends live and nothing joining them
+(see REVIEW.md for the measured Python/Go promotion split). Three things
+about the port are not mechanical:
+
+**The composition moved up a layer.** Python guarantees this structurally:
+`stamp_outcome_verdict` ends by calling the attributor, so a caller cannot
+stamp without crediting. Go cannot express that — `internal/skills` imports
+`internal/record`, so `record` cannot call `skills`. `StampOutcomeVerdict`
+therefore returns the row it wrote and `skills.StampVerdictWithAttribution`
+does the composing. The bare primitive stays callable, which is exactly the
+bug r5 found, so a source-level tripwire in `internal/loop` fails the build
+if it is ever called there again.
+
+**One lock spans marker-check → batch → marker-write.** With the check
+outside any lock, two live stampers both saw no marker, both committed the
+batch, and both reported success — double attribution with no crash
+involved. The stats lock is the natural boundary, and `record.Locked` is
+**not reentrant** (flock is per open file description), so the batch runs
+through a lock-free inner core (`recordSkillInjectionOutcomesLocked`)
+extracted from `stats.go` for the purpose.
+
+**Two hardenings that pull opposite ways, deliberately.**
+`record.GoalAchieved` grades a present-but-non-bool `goal_achieved` as
+judged-NOT-achieved, which is the safe direction for a TRUST policy — a
+value nobody can read must not earn the trusted-good path. Attribution
+instead REFUSES such a row outright, matching Python's
+`isinstance(..., bool)`, because the safe direction for a learning COUNTER
+is the opposite one: crediting a run's skills with a failure nobody judged
+is worse than crediting nothing. The bool gate is therefore not redundant
+with the trust gate, and a mutation battery is what proved it — deleting
+it left every other pin green.
+
+Attribution never fails the stamp (it is telemetry riding on a verdict, and
+Python's wrapper swallows everything for the same reason), but it never
+fails SILENTLY either: every refusal comes back as a warning on the loop
+result, at the level Python logs it. A marker write that fails AFTER the
+batch commits says so precisely — reporting it as "NOT recorded" would be a
+lie about what the store holds.
+
+The marker's timestamp uses `pyval.NowISO`, not this package's `nowISO`:
+Python writes a bare `datetime.now(timezone.utc).isoformat()` there, which
+omits the fractional part when the microsecond is 0, where the package-wide
+stamp always writes six digits for lexicographic sorting. Nothing sorts a
+marker, so the faithful spelling wins.

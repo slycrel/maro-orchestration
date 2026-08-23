@@ -158,7 +158,7 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 	}
 	yes := true
 	conf := 0.85
-	if err := r.StampOutcomeVerdict("loopA", &yes, SourceClosure, &conf); err != nil {
+	if _, err := r.StampOutcomeVerdict("loopA", &yes, SourceClosure, &conf); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -198,7 +198,7 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 	// verdict AND its confidence survive untouched (row-stamp merge
 	// semantics — Python parity; runs.StampVerdict's metadata stamp is
 	// the full-replacement one where nil pops).
-	if err := r.StampOutcomeVerdict("loopA", nil, SourceClosure, nil); err != nil {
+	if _, err := r.StampOutcomeVerdict("loopA", nil, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -221,7 +221,7 @@ func TestStampOutcomeVerdictPatchesNewestRow(t *testing.T) {
 	if _, has := first["verdict_history"]; has {
 		t.Fatalf("unjudged re-stamp must not write history: %v", first)
 	}
-	if err := r.StampOutcomeVerdict("missing", &yes, SourceClosure, nil); err == nil {
+	if _, err := r.StampOutcomeVerdict("missing", &yes, SourceClosure, nil); err == nil {
 		t.Fatalf("missing row must error, not silently no-op")
 	}
 }
@@ -240,7 +240,7 @@ func TestStampOutcomeVerdictNewestDuplicateAndHistory(t *testing.T) {
 		}
 	}
 	no := false
-	if err := r.StampOutcomeVerdict("dup", &no, SourceClosure, nil); err != nil {
+	if _, err := r.StampOutcomeVerdict("dup", &no, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -265,7 +265,7 @@ func TestStampOutcomeVerdictNewestDuplicateAndHistory(t *testing.T) {
 	// superseded verdict, honestly.
 	yes := true
 	conf := 0.7
-	if err := r.StampOutcomeVerdict("dup", &yes, SourceNowVerify, &conf); err != nil {
+	if _, err := r.StampOutcomeVerdict("dup", &yes, SourceNowVerify, &conf); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -308,7 +308,7 @@ func TestStampOutcomeVerdictHistoryOnForeignJudgedRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	yes := true
-	if err := r.StampOutcomeVerdict("f", &yes, SourceClosure, nil); err != nil {
+	if _, err := r.StampOutcomeVerdict("f", &yes, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(ws, "memory", "outcomes.jsonl"))
@@ -346,7 +346,7 @@ func TestStampOutcomeVerdictNullGoalAchievedIsUnjudged(t *testing.T) {
 		t.Fatal(err)
 	}
 	yes := true
-	if err := New(ws).StampOutcomeVerdict("nulljudge", &yes, SourceClosure, nil); err != nil {
+	if _, err := New(ws).StampOutcomeVerdict("nulljudge", &yes, SourceClosure, nil); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(mem, "outcomes.jsonl"))

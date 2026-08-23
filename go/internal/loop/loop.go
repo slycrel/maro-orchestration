@@ -33,6 +33,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
+	"github.com/slycrel/maro-orchestration/go/internal/skills"
 )
 
 const stepSystem = `You are a capable worker executing one step of a larger
@@ -748,8 +749,18 @@ stepLoop:
 			// run reads as permanently unjudged on the one ledger the NOW
 			// lane made verdict-bearing (Python memory_ledger.
 			// stamp_outcome_verdict; adversarial routing r2, both lenses).
-			if soErr := rec.StampOutcomeVerdict(loopID, achieved,
-				record.SourceClosure, confPtr); soErr != nil {
+			// skills.StampVerdictWithAttribution, NOT the bare
+			// record.StampOutcomeVerdict: Python's stamp ends by crediting
+			// the verdict to the skills the run actually injected, and Go's
+			// import graph forbids record calling skills, so the two halves
+			// are composed one layer up. Calling the bare primitive here
+			// leaves injected_runs at 0 forever and both gates behind it
+			// failing open (adversarial r5, H1). A tripwire below fails if
+			// this ever reverts.
+			attrWarns, soErr := skills.StampVerdictWithAttribution(
+				rec, runDir, loopID, achieved, record.SourceClosure, confPtr)
+			res.Warnings = append(res.Warnings, attrWarns...)
+			if soErr != nil {
 				res.Warnings = append(res.Warnings,
 					"outcome-row verdict stamp failed: "+soErr.Error())
 				// Durable marker beside the warning: a failed row stamp

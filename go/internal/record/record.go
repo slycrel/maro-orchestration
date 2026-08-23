@@ -455,22 +455,39 @@ const (
 // The read→patch→rename runs under the same flock every appender takes
 // (Python parity: locked_write inside the same critical section), so a
 // concurrent append cannot be lost to the rewrite.
+// It RETURNS the row as written. Python's stamp_outcome_verdict ends by
+// handing that row to two side-effects that ride on the verdict —
+// contradiction candidates and skill-injection attribution — and both
+// decide from the row's own fields (verdict_trust reads them). A caller
+// that reconstructed the row from the arguments it passed in would be
+// deciding from its intent rather than from what landed, and would drift
+// the moment this function's merge rules change. Go's import graph forbids
+// calling those side-effects from here (skills imports record, not the
+// other way round), so the row travels to the caller instead; see
+// skills.StampVerdictWithAttribution, which is what production calls.
 func (r *Recorder) StampOutcomeVerdict(loopID string, achieved *bool,
-	source string, confidence *float64) error {
+	source string, confidence *float64) (map[string]any, error) {
 	if loopID == "" {
-		return fmt.Errorf("stamp outcome verdict: empty loop id")
+		return nil, fmt.Errorf("stamp outcome verdict: empty loop id")
 	}
 	path := filepath.Join(r.WorkspaceDir, "memory", "outcomes.jsonl")
-	return Locked(path, func() error {
-		return stampOutcomeVerdictLocked(path, loopID, achieved, source, confidence)
+	var row map[string]any
+	err := Locked(path, func() error {
+		var lerr error
+		row, lerr = stampOutcomeVerdictLocked(path, loopID, achieved, source, confidence)
+		return lerr
 	})
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
-	source string, confidence *float64) error {
+	source string, confidence *float64) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lines := strings.Split(string(raw), "\n")
 	target := -1
@@ -502,7 +519,7 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 		}
 	}
 	if target < 0 {
-		return fmt.Errorf("stamp outcome verdict: no row for loop %s", loopID)
+		return nil, fmt.Errorf("stamp outcome verdict: no row for loop %s", loopID)
 	}
 	// Re-stamp honesty (Jeremy decree 2026-08-10: corrections may flip
 	// a verdict "but be honest about it and note they were failures at
@@ -560,7 +577,7 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 		"verdict_history", "goal_achieved", "goal_verdict_source",
 		"goal_verdict_at", "goal_verdict_confidence"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lines[target] = patched
 	// AtomicWrite, not WriteFile+Rename: this rewrites the WHOLE outcomes
@@ -569,7 +586,10 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 	// widened an operator's 0600 ledger to 0644 on every stamp, where
 	// Python's atomic_write re-applies the target's existing mode
 	// (adversarial r3, L3).
-	return AtomicWrite(path, []byte(strings.Join(lines, "\n")))
+	if err := AtomicWrite(path, []byte(strings.Join(lines, "\n"))); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 // orderedKeysOf recovers a JSON object's key order from its source text,
