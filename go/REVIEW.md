@@ -3662,3 +3662,71 @@ only reason it was caught). **Final 17/17.**
 | `C` dropped from the printability guard | **dead code, not missing coverage** — and so was dropping `Z`. Two survivors, one cause: the negative guard was unreachable because L∪M∪N∪P∪S is already disjoint from C∪Z. Removed, and the mutants retargeted at the positive expression that remains, where dropping any category dies immediately. |
 
 NEXT: r5 L1–L4, then adversarial r1 over `internal/tasks`.
+
+---
+
+## Adversarial r5 — L1 + L3: the umask window and the decimal fold (2026-08-23): FIXED
+
+Two LOWs, landed together because one mutation battery covers both.
+
+**L1 — the umask read had a window.** `processUmask` used Python's
+swap-and-restore (`os.umask(0); os.umask(back)`), narrowed to one occurrence
+under a `sync.Once`. Narrowed is not closed: r5 measured ~2.5% leakage under
+contention, and Go's runtime is threaded where Python's comment ("multiprocess,
+not multithreaded, so the window is acceptable") assumes it is not. A file
+created by another goroutine inside that window is world-writable, and mode
+bits do not heal.
+
+The kernel publishes the value directly — `/proc/self/status` carries
+`Umask:` since Linux 4.7 — so the first attempt is now a READ with no window
+at all, and the narrowed swap-and-restore stays as the fallback for a kernel
+or container without `/proc`. A malformed line is REFUSED rather than coerced:
+the fallback is racy but correct, while a plausible-looking wrong value is
+silent until someone else's runtime gets EACCES.
+
+`parseUmaskStatus` is split out of `umaskFromProc` so the refusal cases can be
+driven without a writable `/proc` — and deliberately NOT duplicated into the
+test. Three copies of a "simple" string helper is exactly what let M2's
+`repr()` bug survive this port, and this one decides file modes.
+
+**L3 — Python's `float()` folds every Unicode decimal digit.** CPython runs
+the text through `PyUnicode_TransformDecimalAndSpaceToASCII` before parsing,
+so `float('٠.٥')` is 0.5. Go's `ParseFloat` is ASCII-only, so a
+`goal_verdict_confidence` written in Arabic-Indic digits was unparseable HERE
+and readable THERE — and the direction is the unsafe one, because an
+unparseable confidence never downgrades a judged verdict, so a below-floor
+value read as **FULL** trust.
+
+r5 named "75 divergences". Measured on this box (CPython 3.14.3, unidata
+16.0.0): **all 760 Nd code points parse, 750 of them non-ASCII.** The figure
+was corrected in the code comment rather than repeated.
+
+The fold recovers a digit's VALUE by walking back to the start of its run and
+taking the offset mod 10. That is exact, not approximate, and it was measured
+against Go's own table before being trusted: 680 digit code points in 64 runs,
+63 of length 10 and one of length 50 (U+1D7CE–U+1D7FF), zero mismatches. The
+length-50 run is why the modulo is load-bearing rather than decoration.
+
+**The table skew was closed rather than documented.** Go ships unicode 15.0.0
+against CPython's 16.0.0, leaving 80 Nd code points in 7 ranges that CPython
+folds and Go does not — the same unsafe direction. Seven range literals
+(`digitSupplement`) close it. Unlike `Slugify`'s skew (L4), this one is small,
+enumerable, and lands on a trust decision, so embedding it beats documenting
+it. Three tests keep it honest: a whole-table sweep that re-derives CPython's
+fold map and fails in EITHER direction, a walk-back property test against Go's
+own table, and one that fails when Go's table catches up so the literals get
+deleted instead of quietly becoming dead code.
+
+**Mutation battery** (`scratchpad/mut_l3.py`): 18 mutants over both files.
+First pass 15/18 with one stale pattern; **final 18/18**, one recorded
+equivalent.
+
+| Survivor | Verdict |
+|---|---|
+| `umask` parsed as decimal instead of octal | **real gap, and an ugly one.** The two umasks anyone actually runs — 0002 and 0022 — read as 2 and 22 in both bases only for 0002; the acceptance cases were 0002 and 0, and *both* read identically either way. A base-10 parser passed the whole battery. Pinned with 0022 (18 octal, 22 decimal), 0777, and a refusal case `0089` that is valid decimal and invalid octal. |
+| `TrimSpace` weakened to a left-only trim | **real gap.** Every refusal case was long enough to trip the digit-count bound first, so nothing exercised the trailing side. Pinned with `"Umask:\t0022 \n"`. |
+| writer guard `r > MaxASCII` → `r >= MaxASCII` | **EQUIVALENT, recorded not chased.** The only rune it newly admits is U+007F (DEL), which is Cc in both tables, so `asciiDigit` refuses it and the mutant falls through to the same `WriteRune`. No input distinguishes them. |
+
+NEXT: r5 L4 (`Slugify`'s skew is 187× its documented size and lands on a
+FILENAME) and L2 (no captain's-log rotation in Go), then r6 over the whole
+chunk, then adversarial r1 over `internal/tasks`.
