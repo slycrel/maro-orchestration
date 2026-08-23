@@ -61,6 +61,7 @@ const nestedDecodeDepth = 3
 // bound total work no matter the nesting shape or content size:
 //   - maxScanParses caps whatwg.Parse calls; 4096 × ~65µs ≈ 270ms worst case.
 //   - maxScanDecodeBytes caps percent-decode allocation across all layers.
+//
 // Exhausting either flags FAIL-CLOSED (an input carrying 4096+ distinct URL
 // candidates is pathological for an evolver suggestion; manual review is the
 // safe verdict). The prefilter (urlCandidateNeedsParse) means a benign blob of
@@ -243,6 +244,7 @@ func evalRawCandidate(raw string, b *scanBudget, depth int) string {
 //     a false-ALLOW: `https://r.jina.ai/https%3A%2F%2Fevil.com/…` is invisible
 //     to schemeRe until decoded, so a spent decode budget cleared a real exfil.
 //     This matches the parse-budget and oversized-authority fail-closed posture.
+//
 // Reaching the depth cap with `%` still present stays clean (a documented
 // semantic bound — a one-hop proxy also stops decoding — not a resource
 // exhaustion we chose to abandon mid-examination).
