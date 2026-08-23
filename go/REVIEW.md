@@ -3633,3 +3633,32 @@ It takes two different levers, and the test now says so.
 
 NEXT: r5 M2 (`pytext.Repr` is not Python's `repr()`), then L1–L4; then
 adversarial r1 over `internal/tasks`.
+
+---
+
+## Adversarial r5 — M2: `pytext.Repr` was not `repr()` (2026-08-23): FIXED
+
+Details and the measured Unicode-table skew are in PORT.md. Two things
+about how it was verified are worth keeping.
+
+**The fix was falsified before it was trusted.** Reverting `Repr` to the
+pre-fix version and re-running the new pins reproduced r5's claim as a
+concrete artifact rather than an argument: `triggers: ['first`, a
+frontmatter line cut in half, and Python's real `skill_loader` reading one
+trigger where its own writer's file yields two. A test that passes on
+first run against fixed code proves nothing; this one was made to fail on
+purpose first.
+
+**Mutation battery** (`scratchpad/mut_m2.py`): 17 mutants over `Repr` and
+`IsPrintable`, run against `pytext`, `skills` and `scans` together so the
+two delegating copies are covered. First pass 9/17 with six STALE patterns
+(a heredoc doubled the backslashes in the literals — the harness reported
+them as stale rather than silently counting them as survivors, which is the
+only reason it was caught). **Final 17/17.**
+
+| Survivor | Verdict |
+|---|---|
+| `\u` not zero-padded | **real gap.** Every non-printable in the case table sat at or above U+1000, so `%x` and `%04x` agreed on all of them. The observable shape is a non-printable in [0x100, 0x1000) — anything smaller takes the `\x` branch. Pinned with U+061C (ARABIC LETTER MARK, Cf) and U+0378 (unassigned, Cn), which need four digits where `%x` yields three. |
+| `C` dropped from the printability guard | **dead code, not missing coverage** — and so was dropping `Z`. Two survivors, one cause: the negative guard was unreachable because L∪M∪N∪P∪S is already disjoint from C∪Z. Removed, and the mutants retargeted at the positive expression that remains, where dropping any category dies immediately. |
+
+NEXT: r5 L1–L4, then adversarial r1 over `internal/tasks`.

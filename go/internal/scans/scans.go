@@ -48,6 +48,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -548,18 +549,16 @@ func roundN(f, scale float64) float64 {
 	return math.RoundToEven(f*scale) / scale
 }
 
-// pyRepr quotes a string the way Python repr does — single quotes, except
-// a string containing ' (and no ") switches to double quotes. Calibration
-// prose embeds decision classes with !r, and the text is a cross-runtime
-// dedup key: divergent quoting mints duplicate suggestion rows.
-func pyRepr(s string) string {
-	if strings.Contains(s, "'") && !strings.Contains(s, "\"") {
-		return "\"" + s + "\""
-	}
-	escaped := strings.ReplaceAll(s, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, "'", "\\'")
-	return "'" + escaped + "'"
-}
+// pyRepr quotes a string the way Python repr does. Calibration prose
+// embeds decision classes with !r, and the text is a cross-runtime dedup
+// key: divergent quoting mints duplicate suggestion rows.
+//
+// Delegates rather than reimplementing. There were THREE copies of the
+// two-replacement version, all carrying the same two defects (adversarial
+// r5, MEDIUM: the double-quote branch escaped nothing, and neither branch
+// escaped control characters), and fixing one would have left the other
+// two writing the old spelling into the same shared files.
+func pyRepr(s string) string { return pytext.Repr(s) }
 
 // pyVal renders a rate value the way a Python f-string does: nil → None,
 // whole floats keep their ".0". Shared-ledger prose parity.

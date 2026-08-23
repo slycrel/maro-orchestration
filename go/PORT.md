@@ -2811,3 +2811,52 @@ dir leaves the index silently months stale. Go returns the error, and the
 caller announces it as a warning. The behaviour that matters — a failure
 here never fails the outcome — is preserved at the call site rather than by
 swallowing.
+
+### `pytext.Repr` becomes Python's actual `repr()` (2026-08-23)
+
+The old implementation was two `strings.ReplaceAll` calls, and it had two
+defects (adversarial r5, MEDIUM). The second corrupts a file Python then
+has to read:
+
+- the DOUBLE-QUOTE branch escaped nothing at all, so a value holding both
+  an apostrophe and a backslash came back with the backslash bare;
+- NEITHER branch escaped control or non-printable characters.
+
+`skills/export_md.go` writes SKILL.md's `triggers:` line through this
+function, and Python's `skill_loader._parse_frontmatter` is not a YAML
+parser — it iterates `raw_meta.splitlines()` and splits each line on the
+first colon. Falsified by reverting the fix: a trigger containing a newline
+truncated the line to `triggers: ['first`, and Python's own loader then
+read ONE trigger where its own writer's file yields two. U+2028 broke it
+the same way, since `splitlines()` treats it as a break. Python's exporter
+builds the same line with `repr(t)`, so byte parity here is the contract,
+not an approximation of one.
+
+**Three copies existed** — `pytext.Repr`, `scans.pyRepr`,
+`skills/coerce.go`'s `pyRepr` — all carrying the same two defects. The two
+duplicates now delegate; fixing one and leaving the others would have kept
+the old spelling flowing into the same shared files.
+
+**`IsPrintable` is stated POSITIVELY, and that is load-bearing.** Python
+states the rule negatively (false for Cc, Cf, Cs, Co, Cn, Zl, Zp, Zs, with
+U+0020 the single exception) and transcribing it that way is a trap: Cn is
+UNASSIGNED, and unassigned code points are in no category table at all, so
+a literal "not in C and not in Z" admits 800k+ of them as printable.
+Printable is exactly L, M, N, P, S plus the space.
+
+The first version had BOTH — the negative guard and the positive test — and
+the mutation battery showed the guard was dead code: deleting `C` from it
+survived, and so did deleting `Z`, which is only possible if the line was
+unreachable. Two survivors that looked like missing coverage were one piece
+of dead code. The simplified version is verified equivalent by a sweep of
+all 1,114,112 code points against CPython.
+
+**Named divergence, measured, costing spelling rather than meaning:** Go's
+unicode tables are 15.0.0 where CPython's unidata is 16.0.0, so 5,812 code
+points assigned in 16.0.0 read as Cn here and Go escapes them where Python
+prints them raw. The direction is ONE-WAY (swept: there is no code point Go
+prints raw and Python escapes), and `\uXXXX` parses back to exactly the
+same character — so the two spellings carry the same string VALUE and only
+the bytes differ. A consumer that hashes this output rather than parsing it
+sees two keys. A test asserts the direction and FAILS if the skew ever
+closes, so the note cannot rot silently.

@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Coercion helpers reproducing what dict_to_skill's constructors do to a
@@ -288,15 +289,11 @@ func pyLower(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307"))
 }
 
-// pyRepr renders a string the way Python's !r does — single quotes unless
-// the value contains one and no double quote. Provenance reasons are stored
-// prose in a shared file, so a differently-spelled reason is a differently
-// stored row (the content-key prose divergence family).
-func pyRepr(s string) string {
-	if strings.Contains(s, "'") && !strings.Contains(s, "\"") {
-		return "\"" + s + "\""
-	}
-	escaped := strings.ReplaceAll(s, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, "'", "\\'")
-	return "'" + escaped + "'"
-}
+// pyRepr renders a string the way Python's !r does. Provenance reasons are
+// stored prose in a shared file, so a differently-spelled reason is a
+// differently stored row (the content-key prose divergence family).
+//
+// Delegates rather than reimplementing — see the note on scans.pyRepr:
+// three copies of the old, broken spelling existed and a fix to one would
+// not have reached the others.
+func pyRepr(s string) string { return pytext.Repr(s) }
