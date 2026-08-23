@@ -777,8 +777,13 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   the caps sweep: *"feels like another narrow patch. Probably too systemic
   at this point. Let's go nuts and pivot for a while. Let's make a branch
   and port maro to golang."* Read: the cap/discipline fragility is
-  systemic to how the Python codebase grew; an exploratory port tests
-  whether the lessons can be made STRUCTURAL (budgets as types carrying
+  systemic to how the Python codebase grew. AMENDED same session —
+  Jeremy: *"agree, this is the wrong reason for the port; I've been
+  considering it for months. Worst case we learn nothing and waste some
+  tokens."* So: a long-considered exploration in its own right, sanctioned
+  as low-stakes; the discipline thesis is Claude's framing of what to
+  test, not the motive. The port still tests whether the lessons can be
+  made STRUCTURAL (budgets as types carrying
   their written rationale, no bare slicing of prompt-bound text, no
   swallowed errors) instead of tripwire-enforced. Scope: exploration on
   branch `go-port` (worktree), spine-first vertical slice that runs a
@@ -1305,6 +1310,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   once (`scripts/mutate.py` + spec file) instead of re-deriving a
   throwaway harness per round, and record EQUIVALENT mutants as
   equivalent rather than contorting a test to kill one.
+
+- **2026-08-22 (Jeremy): use concurrency where we can — milestones first,
+  flip-and-gate-back.** Verbatim: *"Yeah, I'd like to use concurrency
+  where we can. I'm a little concerned we're not sure exactly where to
+  use it yet, but milestones are a good place to start. I do feel as
+  though some of our steps could be run concurrently... that's more
+  planner type work than it is step work directly, maybe we can get into
+  that later."* And on the default: *"I think we should flip and gate
+  the flip back if it doesn't work right honestly."* So:
+  milestone-DAG parallelism ships ON by default
+  (`mission.parallel_milestones` is the revert lever), step-level
+  concurrency is deferred planner-shaped work (step-skeleton entry), and
+  one-agent-per-milestone stays the rule (the scaling-study regime that
+  actually penalizes is same-task fan-out).
+
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -3965,3 +3985,168 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   topology search priority DOWN. Queued for Jeremy's read
   (READING_QUEUE). Basis: paper full text + read-only census of the
   box's live workspace this session.
+- **2026-08-21 — Go port v0 SHIPPED to branch `go-port` (9b684131):**
+  spine-first vertical slice per the pivot decision — 19 files /
+  ~1,840 lines: two-tier YAML config, adapter seam (claude-CLI
+  subprocess backend flag-for-flag with the Python adapter + Anthropic
+  Messages + scripted Fake), tolerant JSON extraction, decompose with
+  operator docs riding whole under a budget, execute loop, outcomes +
+  captain's-log records in Python-compatible shapes
+  (`measurement_class: "go-port"` fences rows). Doctrine = lessons as
+  structure: `budget.Budget{Name, Limit, Why}` makes a rationale-less
+  cap a compile-target test failure; clip marker byte-identical to
+  `context_budget.clip`; no swallowed errors; record layer has no
+  delete verbs. Receipts: `go vet` clean, 26 tests green, real
+  claude-CLI smoke (2 steps, 21s, done), and cross-runtime parity —
+  Python `memory_ledger.load_outcomes` parsed the Go-written row into
+  its `Outcome` dataclass. v0 non-goals + next tranches named in
+  `go/PORT.md` (tools, retry ladder, recall, closure, director,
+  inspector, heartbeat). Adversarial round (sonnet-medium fallback,
+  4 lenses) run same session on the branch. Branch does not land to
+  main; `land.sh` untouched. Basis: test/smoke/parity output this
+  session.
+- **2026-08-22 — Go port review arc to FIXPOINT (branch `go-port`,
+  r1–r4, HEAD `2f8df017`):** r1 4 lenses → 6 HIGHs fixed
+  (`88dacc88`); r2 fix-layer → 3 HIGHs fixed (`ffa08096`); r3 → 2
+  HIGHs fixed (`b87da153`); r4 → no HIGHs, one MEDIUM fixed
+  (`2f8df017`) — declared fixpoint per the converges-by-r3-4
+  standard. Zero hallucinated reviewer claims across all four rounds
+  (sonnet-medium same-model fallback throughout; codex capped til
+  08-27). Ledger: `go/REVIEW.md` on the branch. Standing lesson for
+  later tranches: porting a recently-hardened function from memory of
+  its SHAPE reintroduces the pre-fix bug (the Go clip shipped
+  Python's pre-2026-08-14 forged-marker bypass; renderPrior shipped
+  ungated prior-evidence forwarding the Python director gates on
+  done) — diff the Python sibling's fix history, not just its
+  signature, before porting. Basis: reviewer artifacts + test/smoke
+  output this session.
+- **2026-08-22 — scaling-agent-systems audit CORRECTED after Jeremy's
+  pushback ("sounds like you took the paper at face value… I'm not sure
+  why we are avoiding that"):** both his points held. The paper's
+  penalties (4.4–17.2× amplification, super-linear turn overhead) gate
+  SAME-task fan-out — multiple agents on one milestone — not
+  cross-milestone parallelism, which is distinct work items with
+  near-zero agent chatter, the paper's winning decomposable regime. And
+  the audit's "multi-agent arm is empty" was a design artifact dressed
+  as evidence: verified in code, `Milestone` has no dependency field
+  (schema cannot express independence), `run_mission` is hard-serialized
+  behind a drain lock, and `run_parallel_loops` (max 3, phase-1
+  isolation complete) has zero callers — sequential was a default nobody
+  challenged, so the logs never could contain the comparison. Records
+  corrected in place (research doc correction block, BACKLOG
+  "Concurrent milestone-area agents" rewritten with mechanics + the
+  concrete build shape: decompose_mission emits depends_on → DAG →
+  ready milestones run via run_parallel_loops, one agent per milestone,
+  A/B vs sequential before default), READING_QUEUE row rewritten with
+  the actual question: promote milestone-DAG parallelism into the
+  stack? Basis: Jeremy's 2026-08-22 message + code verification this
+  session.
+
+- **2026-08-22 — Go port PACK tranche: "export then import success"
+  GATE PASSED + adversarial r1–r4 to FIXPOINT (branch `go-port`, HEAD
+  `e79392db`):** Jeremy's stated hurdle (*"one hurdle for 'looks like
+  we might end up ok' is an export then import success"*) is closed
+  cross-runtime: `go/crossrt_smoke.sh` proves Python export→seal → Go
+  import (Go independently re-verifies the review-hash + canonical
+  payload digest + per-artifact shas; trust demoted per §3) → Go
+  export→seal → Python import (byte-parity of the canonical digest
+  proven by Python's own gates), plus a bidirectional tamper step —
+  each runtime refuses a tampered pack the other sealed. Adversarial
+  arc: r1 4 lenses → 4 HIGHs (`dcc94494`); r2 2 lenses → 2 HIGHs
+  (`aef23174`); r3 2 lenses → 1 HIGH (`2ea5b2d2`); r4 1 lens → 1 HIGH
+  (`e79392db`) — fixpoint called; ALL FOUR rounds' HIGHs sat in the
+  previous round's fix (bomb-cap typeflag bypass → PAX meta-record
+  bypass → Decoder trailing-data regression), reinforcing the standing
+  fix-layer-first lesson. Zero hallucinated reviewer claims across ~30
+  verified findings (sonnet-medium fallback; codex capped til 08-27).
+  Go is now deliberately STRICTER than Python on ~8 hostile pack
+  shapes (all refusal-direction, named in `go/PORT.md` as backport
+  candidates — decompression ceiling, UTF-8/lone-surrogate refusal,
+  manifest/archive bijection, trailing-data strict decode). Ledger:
+  `go/REVIEW.md` on the branch. Basis: live smoke runs + reviewer
+  artifacts + green 12-package suite this session.
+- **2026-08-22 — milestone-DAG parallelism SHIPPED + FLIPPED ON (dev
+  Mac), the concurrency question Jeremy reopened, answered in code:**
+  `Milestone.depends_on` (ordering only — never gates on outcome,
+  preserving continue-past-failure parity), decompose emits earlier-index
+  edges (cycle-free by construction; absent → chain to predecessor = old
+  sequential behavior; legacy mission.json loads as a chain),
+  `_run_milestone_dag` runs ready milestones concurrently
+  (`mission.parallel_milestones` default ON per the flip decree — the
+  flag is the revert lever; `mission.milestone_workers` 2; stall
+  fallback beats deadlock on malformed load-path deps; thread-crash
+  backstop). Inert until a decomposition explicitly declares
+  independence. Tests: tests/test_mission_parallel.py (13) + suite
+  10240 green on the Mac. Step-level concurrency recorded as deferred
+  planner work at the step-skeleton entry. Basis: this session's build +
+  Jeremy's in-session decrees (Decisions).
+- **2026-08-22 — milestone-DAG adversarial round (4× sonnet-medium
+  fallback): REJECT → fixed to green same session:** every HIGH
+  verified real before fixing
+  (`docs/history/2026-08-22-milestone-dag-adversarial-review.md`).
+  Flagship: the revert lever itself broke on a quoted YAML `"false"`
+  (`bool("false") is True`, config.get returns raw YAML) — the one flag
+  whose purpose is "flip me back under pressure" was the one input with
+  no validation, erring toward staying ON. Fixed with a shared
+  `config.get_bool` (string normalization, unrecognized → default +
+  warning). Also fixed: stall-lane crash backstop parity, crash
+  evidence now durable (log.warning + immediate persist — verbose-gated
+  log_fn alone left zero trace), chain-shaped missions BYPASS the DAG
+  (`_is_chain_shaped` — undecorated missions take the literal pre-DAG
+  path, making the flip honestly inert), all-invalid deps chain instead
+  of ungating, mission-status CLI shows deps, save-lock claim scoped
+  in-process + finally has a failing test. Filed, not deferred:
+  worktree-per-sibling isolation (concurrent milestones share one
+  checkout — v1 relies on the decompose contract), drain-lane DAG
+  wiring (reconcile its divergent loop first), the real-adapter
+  interleaving UNSETTLED with its burn-in probe, and the
+  `bool(get(...))` sweep edge. Suite 10264 green. Basis: this session's
+  probes + fix commits.
+
+- **2026-08-22 (Port philosophy decree — seams-strict, internals-free —
+  Jeremy):** resolving the go-port guard-slice review churn (r10–r14: four
+  consecutive opus rounds of HIGHs, each minted by the previous round's fix
+  to a hand-rolled URL detector), Jeremy chose the spec-grounded parser
+  (nlnwa/whatwg-url, the swipe-over-deps rule's security-parsing exception)
+  AND corrected the port's operating philosophy: *"agree that we should be
+  in data parity, but the internals don't (necessarily) need to be"* — and
+  the data-parity target is the import/export boundary "at the end, not
+  along the way." Refactoring during porting is explicitly welcome ("I'm
+  always a little too ambitious with my ports and I end up doing some
+  refactoring... feel free to do some of that yourself"); interface/duck-
+  typing over strict equivalent types. Standing rule for remaining
+  tranches: pin the SEAMS with fixtures (shared ledgers, pack digests,
+  on-disk formats), free the INTERNALS behind a contract + behavior corpus.
+  Corollary he named: the port revealed much of maro's "portable learning"
+  is reified as CODE (thresholds, gates, fix-history invariants), not
+  data — why lessons get ported rather than imported; a real datapoint for
+  the portable-learning/pack roadmap. Applied same session: guard r15 swap
+  (`6678c209` on go-port) — full r10–r14 corpus passed the parser-backed
+  internals first-run, known-gap #15 closed, IDNA coverage added; the Go
+  file is now the backport REFERENCE for Python's injection_guard.py.
+
+- **2026-08-22 (Engine/data separation decree — Jeremy — CORRECTS the
+  same-day port-philosophy entry above):** the earlier entry recorded, as
+  a neutral observation, that maro's "portable learning" is reified as
+  CODE and that the Go port therefore ports lessons as code. Jeremy
+  corrected the framing: that was Claude saying it was "picking up the
+  learnings and putting them in code," and *"I was surprised that wasn't
+  data. I'd prefer the opposite... maro is the engine, the data is the
+  learning."* Decree: **maro is the ENGINE; the learning is DATA.**
+  Learning reified in code is a smell to fix, not a state to accept.
+  Directive (now): *"we shouldn't port the learned data lessons into code
+  — we should import/export that data-as-learning, including all of the
+  metadata round it in whatever stage it's in (i.e. a potential skill
+  should be in the import/export along with its test metadata)."* So the
+  pack (import/export) is the learning-transfer mechanism and must carry
+  learning at ALL lifecycle stages with metadata (candidate skill + test
+  metadata, provisional lesson + provenance, etc.). Longer-arc vision:
+  maro should eventually GENERATE scripts and other "actionable data"
+  streams itself — learning that becomes executable, produced by the
+  engine as data, never hand-coded in. Go-port implication: port the
+  ENGINE as code (the point of the port), but learned OUTPUTS stay DATA
+  and move through the pack (cross-runtime pack parity already built = the
+  right substrate); the inspector/evolver tranches must read/write learned
+  artifacts as data, not embed them as Go constants. Engine mechanism/
+  policy (e.g. the injection-guard scanner itself) staying code is fine;
+  its LEARNED inputs are not.

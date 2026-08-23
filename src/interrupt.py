@@ -959,11 +959,17 @@ class _SlotCore:
         self.close()
 
 
-# In-process sibling loops (mission feature fan-out, run_parallel_loops)
-# are one cooperating run: they SHARE the project slot instead of refusing
-# each other. The gate excludes *other processes* — file_lock protects the
-# ledgers between threads, and worktree isolation (phase 3b) covers git
-# state. Weakrefs so the registry never pins a leaked slot alive.
+# In-process sibling loops (mission feature/milestone fan-out,
+# run_parallel_loops) are one cooperating run: they SHARE the project slot
+# instead of refusing each other. The gate excludes *other processes* —
+# file_lock protects the ledgers between threads. NOTE (2026-08-22 review):
+# worktree isolation (phase 3b) does NOT cover in-process siblings — it is
+# only provisioned on the LoopBusy path (busy_policy=worktree), which
+# siblings never take. Sibling loops work in the SAME checkout; the
+# decompose contract (mission._DECOMPOSE_SYSTEM) tells the planner not to
+# declare milestones independent when they'd contend over files, and
+# unconditional worktree-per-sibling is a tracked BACKLOG follow-up.
+# Weakrefs so the registry never pins a leaked slot alive.
 _process_slot_cores: Dict[str, "weakref.ref"] = {}
 _process_slots_lock = threading.Lock()
 

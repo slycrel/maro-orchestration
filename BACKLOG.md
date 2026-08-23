@@ -2357,7 +2357,73 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
   directly precisely so nothing had to go digging. My earlier framing
   of this as a capture miss was wrong.
 
-### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
+### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16; **v1 milestone-DAG SHIPPED + FLIPPED ON 2026-08-22**)
+
+**SHIPPED 2026-08-22 (dev Mac), Jeremy's go: "I'd like to use concurrency
+where we can… milestones are a good place to start" + flip decree "we
+should flip and gate the flip back if it doesn't work right honestly."**
+`Milestone.depends_on` (ids; ORDERING only, never gates on outcome —
+preserves the sequential walk's continue-past-failure semantics exactly),
+decompose declares edges as earlier-index refs (cycle-free by
+construction; absent/malformed → chain to predecessor = old behavior;
+refs to dropped milestones discarded), legacy mission.json loads as a
+chain. `_run_milestone_dag` runs ready milestones concurrently
+(`mission.parallel_milestones` **default ON — the flag is the revert
+lever**; `mission.milestone_workers` default 2; ContextVar propagation
+like the feature pool; malformed/cyclic dep sets from the load path fall
+back to list order instead of deadlocking; thread-crash backstop marks
+the milestone failed). Whole-mission saves serialized behind an
+in-process lock. The flip is inert until a decomposition explicitly
+emits independent milestones — undecorated decompositions execute
+byte-identically to the sequential walk. Tests:
+`tests/test_mission_parallel.py` (13: parse/chain/invalid-ref/round-trip/
+legacy-load/concurrency-barrier/dependency-order/failure-parity/
+revert-lever/stall-fallback/thread-crash); full suite 10240 green.
+Step-level concurrency deliberately NOT this chunk (Jeremy: "more
+planner type work… maybe we can get into that later" — recorded at the
+step-skeleton entry). Remaining below: the schedule-which-areas
+question, merge story for out-of-order findings, budget model — v1 runs
+what decompose declares independent and nothing more.
+
+**Adversarial round same session (4× sonnet-medium fallback, codex
+capped til 08-27): REJECT → fixed to green**
+(`docs/history/2026-08-22-milestone-dag-adversarial-review.md`). The
+standouts, all VERIFIED then fixed: the revert lever broke on a quoted
+YAML `"false"` (`bool("false") is True` — new `config.get_bool`, string
+normalization); the stall-fallback lane lacked the crash backstop its
+docstring claimed; a milestone-thread crash left zero durable evidence
+at default verbosity (now log.warning + immediate persist);
+chain-shaped missions now BYPASS the DAG entirely (`_is_chain_shaped`)
+so the flip is literally inert until independence is declared. Two
+follow-ups filed here, not silently deferred:
+- [ ] **Worktree-per-sibling isolation:** in-process sibling loops
+      (concurrent milestones AND the pre-existing feature fan-out) share
+      one project checkout — phase-3b worktree isolation only covers the
+      LoopBusy path siblings never take (interrupt.py comment corrected;
+      it over-claimed). v1 mitigation is the decompose contract ("do not
+      declare independent if they'd edit the same files; when in doubt,
+      keep the dependency"). The build: provision a worktree per
+      top-level sibling loop unconditionally, reusing
+      `loop_parallel._run_in_step_worktree`'s pattern + merge-back.
+      Evidence gate: first burn-in mission with declared independence
+      shows file-level contention (or doesn't).
+- [ ] **Wire drain_next_mission into the DAG:** the heartbeat resume
+      lane is DAG-naive v1 (list order stays topologically valid, so
+      correct but never concurrent). Prerequisite named in its
+      docstring: its loop diverged from run_mission long ago (no
+      validation gate, no hooks, own status vocabulary) — reconcile
+      that divergence first, don't just swap the scheduler in.
+- [ ] **UNSETTLED from the round, with its probe:** real-adapter
+      interleaving under the new width (all tests stub the adapter).
+      Probe: first box burn-in mission with declared independence —
+      watch `subprocess_fork_masters.json` churn + per-call latency
+      during overlap. Premise expires if fork-master keying or
+      session-reuse config changes.
+- [ ] **Named upgrade edge:** the `bool(get(...))` coercion pattern
+      exists at other config call sites (this round fixed only the
+      revert lever + added the shared `config.get_bool`); sweeping the
+      rest is caps-sweep-shaped work — measure which flags are
+      operator-touched before bulk-converting.
 
 - [ ] **Jeremy, verbatim:** *"why aren't we running concurrent agent
   processes (i.e. multiple map location build-outs) to speed up the
@@ -2390,18 +2456,47 @@ against `link-farm/db/ai_links.db` by the runs, read-only.
   expect to throw away) and expensive as BUILD-OUT. Decide which one
   this is, per area, and the scheduler follows. Pairs with the
   thread-architecture arc and with "Open-thread structure".
-- [ ] **Evidence gate (added 2026-08-21, from the DeepMind/MIT
-  scaling-agent-systems audit —
-  `research/2026-08-21-scaling-agent-systems-audit.md`):** the paper's
-  260-config result maps exactly onto this entry's pathfinding-vs-build-out
-  distinction. Concurrent probes are predicted to pay only where the areas
-  are genuinely independent (decomposable regime, up to +80.8%) or the
-  solo baseline is weak (sub-~45%-shaped: the run is stuck); concurrent
-  build-out of DEPENDENT areas is its −70% sequential-planning case, with
-  super-linear turn overhead (T∝n^1.7) and 4.4–17.2× error amplification
-  by architecture. Any build here must A/B against the sequential baseline
-  before earning a default — same gate discipline as
-  `knowledge.edge_expansion`.
+- [ ] **Evidence note, CORRECTED 2026-08-22 (Jeremy pushed back on the
+  2026-08-21 version — "sounds like you took the paper at face value" —
+  and he was right):** the DeepMind/MIT paper
+  (`research/2026-08-21-scaling-agent-systems-audit.md`) measures N
+  agents coordinating on ONE bounded task — same prompt, one answer.
+  That regime gates **same-milestone fan-out** (never point multiple
+  agents at one milestone: 4.4–17.2× error amplification, super-linear
+  turn overhead). It does NOT gate what this entry actually asks for —
+  **cross-milestone parallelism**, distinct work items with near-zero
+  inter-agent communication, which is the paper's *winning* decomposable
+  regime (+80.8% column). The first version of this note conflated the
+  two; likewise "our logs show only solo runs" is a design artifact, not
+  evidence solo is optimal — the system was built sequential, so the
+  comparison never could exist.
+- [ ] **Why maro is sequential — mechanics, not doctrine (verified in
+  code 2026-08-22):** (1) `Milestone` (`src/mission.py:53`) has NO
+  dependency field — the schema literally cannot express "B is
+  independent of A"; ordering is a flat list from `decompose_mission`,
+  so sequential execution is a structural default, never a considered
+  per-mission decision. (2) `run_mission` walks milestones strictly
+  serially with a validation gate between each (linear-pipeline
+  assumption baked in); features within a milestone already parallelize
+  (max 2). (3) `drain_next_mission` holds a one-mission-at-a-time lock.
+  (4) `run_parallel_loops` (`src/agent_loop.py:838`, goal-level
+  concurrency, max 3) has **zero callers** — concurrency phase 1
+  (`c8ec0af`) even fixed its ContextVar/run-dir isolation, then nothing
+  ever wired it. Same shape as the knowledge-edges find: capability
+  minted, never traversed.
+- [ ] **The concrete build shape, when taken up:** teach
+  `decompose_mission` to emit `depends_on` edges (it already structures
+  milestones with an LLM call — the flat list becomes a DAG for free);
+  run ready milestones (deps met) concurrently via the existing
+  `run_parallel_loops` + phase-1 isolation, one agent per milestone,
+  validation gates unchanged; keep the honest costs on the table —
+  shared-store write contention (largely addressed by the 2026-08 lock
+  hardening, verify), and learning-transfer loss during overlap
+  (parallel milestone B can't recall A's fresh lessons for the overlap
+  window — bounded by run length, and the pathfinding case explicitly
+  doesn't want that coupling anyway). A/B against the sequential
+  baseline stays the bar for making it a default, per house gate
+  discipline — but the *question* is now open, not avoided.
 
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
@@ -5511,6 +5606,14 @@ component there and a 'redo but with re-shaping' context there as well
 when we find step dependencies and need to revisit/refine 'finished'
 step work. Which feels like a different way to organize/approach a
 sidequest really, so maybe there's something there."
+
+**Re-affirmed 2026-08-22** while flipping milestone-DAG parallelism on:
+*"I do feel as though some of our steps could be run concurrently…
+that's more planner type work than it is step work directly, maybe we
+can get into that later."* Still design input, deliberately sequenced
+AFTER the milestone lane proves out — the planner emitting concurrency
+structure (a step DAG) is this entry's build, and the milestone
+scheduler now shipping is its smaller sibling and its evidence source.
 
 Reading (agreed in-session): decompose emits a **contract skeleton** —
 step stubs with broad-brush contracts that harden as work proceeds

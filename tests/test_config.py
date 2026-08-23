@@ -499,3 +499,34 @@ class TestUserFileResolution:
                               "bpc-157", "epitalon", "edgar_allen_bot")
                   if m in text]
         assert not leaked, f"personal data markers {leaked} in user/{name}"
+
+
+# ---------------------------------------------------------------------------
+# get_bool — string-form boolean normalization (2026-08-22, the revert-lever
+# footgun: bool("false") is True)
+# ---------------------------------------------------------------------------
+
+class TestGetBool:
+    @pytest.mark.parametrize("raw,expected", [
+        (True, True), (False, False),
+        ("false", False), ("False", False), ("FALSE", False),
+        ("0", False), ("no", False), ("off", False), ("", False),
+        ("true", True), ("1", True), ("yes", True), ("on", True),
+        (0, False), (1, True),
+    ])
+    def test_normalizes_forms(self, monkeypatch, raw, expected):
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "get", lambda key, default=None: raw)
+        assert config_mod.get_bool("any.key", True) is expected
+
+    @pytest.mark.parametrize("default", [True, False])
+    def test_unrecognized_string_falls_to_default(self, monkeypatch, default):
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "get", lambda key, default=None: "flase")
+        assert config_mod.get_bool("any.key", default) is default
+
+    def test_missing_key_returns_default(self, monkeypatch, tmp_path):
+        import config as config_mod
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        assert config_mod.get_bool("definitely.not.a.key", True) is True
+        assert config_mod.get_bool("definitely.not.a.key", False) is False

@@ -106,6 +106,24 @@ finding is probe-verified before landing, which is the verification
 bottleneck applied per-claim. The observed hit rate across r15–r24 is
 consistent with that reading.)
 
+> **Correction (2026-08-22, after Jeremy's pushback — "sounds like you
+> took the paper at face value… we've designed something totally
+> sequential and aren't asking how we can run steps (milestones) in
+> parallel towards each other. I'm not sure why we are avoiding that."):**
+> He was right on both counts. (1) The paper's regime is N agents
+> coordinating on ONE bounded task; its penalties gate *same-milestone
+> fan-out*, not *cross-milestone parallelism* — the latter is distinct
+> work items with near-zero inter-agent communication, i.e. the paper's
+> winning decomposable column, and item 1 below over-applied the gate to
+> it. (2) §2's "the multi-agent arm is empty" is a design artifact, not
+> evidence solo is optimal: `Milestone` has no dependency field,
+> `run_mission` is hard-serialized behind a drain lock, and
+> `run_parallel_loops` was built and never given a caller — sequential
+> was a default nobody challenged, so the logs never could contain the
+> comparison. §5's "topology rationale" stands only for same-task
+> fan-out. The corrected doctrine and the concrete milestone-DAG build
+> shape live in BACKLOG § "Concurrent milestone-area agents".
+
 ## 4. The guard the backlog asked for
 
 "If the pattern reproduces, add a guard against reflexive fan-out where a
