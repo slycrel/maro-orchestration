@@ -467,12 +467,16 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 // LockedTailAppend holds the file's flock while fn inspects a BOUNDED tail
 // of the current content and returns the rows to append; the rows land
 // under the same lock with torn-tail framing. It exists for check-then-
-// append flows (graduation propose) where the check must be atomic with
-// the append but the file may be grown without bound by a co-resident
-// process — a whole-file LockedRMW read there is the exact OOM lever the
-// 8MB tail-read bound closes (r2 review MED-2). tailBytes <= 0 reads the
+// append flows whose check is a TAIL-N predicate (graduation propose):
+// there, a whole-file LockedRMW read pays unbounded memory for a bounded
+// question (r2 review MED-2). The surface-wide rule (r3 review): bounded
+// tail where the semantics are tail-N; whole-file where the semantics are
+// whole-file (keyed merges, full-history dedup — bounding those would
+// silently DROP rows, worse than the read cost). tailBytes <= 0 reads the
 // whole file. A partial first line from mid-file entry is dropped before
-// fn sees the tail.
+// fn sees the tail; a tail cut exactly on a line boundary conservatively
+// drops one whole line, and a single line longer than tailBytes reaches
+// fn as an unparseable fragment.
 func LockedTailAppend(path string, tailBytes int64, fn func(tail string) [][]byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

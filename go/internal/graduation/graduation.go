@@ -171,6 +171,15 @@ func ScanCandidates(ws string, minCount, lookback int) []Candidate {
 // AlreadyProposed ports _already_proposed: a graduation suggestion for this
 // failure class exists in the recent suggestions ledger. Substring match on
 // failure_pattern, Python parity ("graduation:<fc>" tag).
+// proposeDedupWindow is the propose-dedup window — Python
+// _already_proposed's default, used by BOTH the pre-check and the in-lock
+// re-check. It is deliberately NOT the caller's diagnoses-scan lookback:
+// r3 review found the in-lock window keyed to that argument, which
+// resurrected the r2 whole-file-suppression bug for `maro graduate
+// -lookback N` with N>200 and fully for N<=0 (lastLines(tail, 0) = every
+// line of the 8MB tail).
+const proposeDedupWindow = 200
+
 func AlreadyProposed(ws, failureClass string, lookback int) bool {
 	if lookback <= 0 {
 		lookback = 200
@@ -196,6 +205,26 @@ func proposedIn(lines []string, failureClass string) bool {
 		}
 	}
 	return false
+}
+
+// truthy mirrors Python bool() for the display-only fields this package
+// reports (behavior gates keep Python's strict checks).
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t != ""
+	case float64:
+		return t != 0
+	case nil:
+		return false
+	case []any:
+		return len(t) > 0
+	case map[string]any:
+		return len(t) > 0
+	}
+	return v != nil
 }
 
 // lastLines returns the last n non-empty trimmed lines of text.
@@ -237,7 +266,7 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 	var newRows []map[string]any
 	for _, c := range candidates {
 		fc := c.FailureClass
-		if AlreadyProposed(ws, fc, 200) {
+		if AlreadyProposed(ws, fc, proposeDedupWindow) {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "[graduation] %s: already proposed, skipping\n", fc)
 			}
@@ -309,7 +338,7 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 	var landed []map[string]any
 	err := record.LockedTailAppend(path, tailBytes, func(tail string) [][]byte {
 		landed = landed[:0]
-		window := lastLines(tail, lookback)
+		window := lastLines(tail, proposeDedupWindow)
 		var out [][]byte
 		for _, row := range newRows {
 			fp, _ := row["failure_pattern"].(string)
@@ -421,7 +450,7 @@ func VerifyGraduationRules(ws, repoRoot string, lookback int) []VerifyResult {
 		passed, output := runPattern(repoRoot, pattern)
 		sid, _ := d["suggestion_id"].(string)
 		category, _ := d["category"].(string)
-		manual, _ := d["applied_manually"].(bool)
+		manual := truthy(d["applied_manually"]) // Python bool() — display field
 		appliedAt, _ := d["applied_at"].(string)
 		results = append(results, VerifyResult{
 			SuggestionID:    sid,

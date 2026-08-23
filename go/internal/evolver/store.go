@@ -283,7 +283,12 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	// The dedup read and the appends happen under ONE lock: a `seen` set
 	// built outside it reopens the 81-duplicate bug whenever two cadences
 	// derive the same finding concurrently (r1 QA review — repro'd on the
-	// first attempt). Save is cadence-rare; the whole-file RMW is fine.
+	// first attempt). Whole-file RMW is DELIBERATE here, not an oversight
+	// of the 8MB read bound: content dedup is full-history by contract
+	// (Python parity), and a bounded window would silently resurrect
+	// reviewed suggestions — the surface-wide rule (r3 review) is
+	// whole-file where the SEMANTICS are whole-file (keyed merges,
+	// full-history dedup), bounded tail where the semantics are tail-N.
 	var marshalErr error
 	err := record.LockedRMW(p, func(old string) string {
 		seen := map[string]bool{}
@@ -350,13 +355,15 @@ func ListPending(workspaceDir string, limit int) []Suggestion {
 func IsApplied(workspaceDir, suggestionID string) bool {
 	for _, m := range readRows(suggestionsPath(workspaceDir)) {
 		if m["suggestion_id"] == suggestionID {
-			// pyTruthy, NOT a typed assert: rowToSuggestion reads applied
-			// with Python bool() truthiness, and a split read (candidate
-			// path says applied, this guard says not) turned a degraded
-			// row with a malformed applied:"true" into a silent forever-
-			// candidate — Revert reported NothingToRevert, the verify arm
-			// skipped as handled-elsewhere, and the degraded change stayed
-			// live with zero surfacing (r2 review HIGH-2).
+			// pyTruthy, NOT a typed assert — and a NAMED DIVERGENCE, not
+			// parity: fork-point Python's suggestion_is_applied and the
+			// re-apply guard are strict `is True` (only its dataclass
+			// paths use bool()). The r2 split read (candidate path truthy,
+			// this guard strict) turned a degraded row with a malformed
+			// applied:"true" into a silent forever-candidate; unifying on
+			// truthy is the SAFE direction — Python's strict guard lets
+			// the same malformed row REPLAY its mutation on re-apply
+			// (backport candidate #13).
 			return pyTruthy(m["applied"])
 		}
 	}

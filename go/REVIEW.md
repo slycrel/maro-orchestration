@@ -3067,3 +3067,28 @@ noted: guard TestURLScanStaysLinear perf budget can trip under -race on this
 box (guard-slice-owned, not this tranche). NEXT: r3 — expect convergence
 (r2's fixes are narrow: one predicate extraction, one read-path unification,
 one primitive with its own pin).
+
+## Self-improvement slice 2 — r3, WHOLE-SURFACE (2026-08-22): no HIGHs; 2 MED + 2 LOW fixed, rule decreed
+
+Scope change (Jeremy, mid-round): reviews now take the entire chunk + all
+accumulated fixes, not the latest diff — and the round validated it: the
+lead findings were exactly the cross-cutting kind diff-scoping hides.
+
+MED-1: r2's in-lock dedup window keyed to the diagnoses-scan lookback (vs
+Python's fixed 200) — suppression returned at -lookback >200 and fully at
+<=0; the r2 pins sat at 200, the one coinciding value. Fixed with a shared
+proposeDedupWindow constant; pinned at 300 and 0 (M147). MED-2: the 8MB
+"OOM lever" rationale covered one suggestions.jsonl path while eight
+siblings stay whole-file — resolved as a deliberate surface-wide rule
+(bounded tail for tail-N semantics; whole-file for whole-file semantics —
+keyed merges/full-history dedup, where bounding silently drops rows),
+comments corrected at all three sites. LOW-1: r2's pyTruthy read documented
+as a named divergence (fork-point is strict `is True`; strict lets a
+malformed row REPLAY its mutation on re-apply — backport candidate #13).
+LOW-2: applied_manually display read aligned to Python bool() (M148).
+
+Declared sound by execution: coerceFloat 18-case corpus, LockedTailAppend
+edges + unlocked-writer grep (none), refuse-all stamps vs every flow,
+audience registry complete. Round shape: HIGHs 2→2→0, MEDs 6→2→2, and r3's
+MEDs are arg-edge + doc-rationale class — convergence. NEXT: r4
+whole-surface confirmation round; clean/lows-only declares fixpoint.

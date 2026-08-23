@@ -546,3 +546,59 @@ func TestRunGraduationDedupsInsideWindow(t *testing.T) {
 		t.Fatalf("in-window class must dedup, wrote %d", n)
 	}
 }
+
+// --- r3 fix-layer pins (2026-08-22) ---
+
+// The dedup window is the FIXED propose window (Python _already_proposed's
+// 200), never the caller's diagnoses-scan lookback: r3 found the in-lock
+// window keyed to that argument, which suppressed re-proposals for
+// -lookback N>200 and for N<=0 checked the entire 8MB tail (the r2 bug
+// class back again). Both non-default arms must re-propose an aged-out
+// class exactly like Python does.
+func TestRunGraduationDedupWindowIgnoresScanLookback(t *testing.T) {
+	for _, lookback := range []int{300, 0} {
+		ws := t.TempDir()
+		rows := []map[string]any{{
+			"suggestion_id": "grad-old-token_explos", "category": "process_improvement",
+			"target": "all", "suggestion": "old proposal",
+			"failure_pattern": "graduation:token_explosion", "applied": false,
+		}}
+		for i := 0; i < 250; i++ {
+			rows = append(rows, map[string]any{
+				"suggestion_id": fmt.Sprintf("fill-%03d", i), "category": "observation",
+				"target": "all", "suggestion": fmt.Sprintf("filler %d", i),
+			})
+		}
+		writeJSONL(t, suggestionsPath(ws), rows)
+		writeJSONL(t, diagnosesPath(ws), []map[string]any{
+			diag("token_explosion", "l1"), diag("token_explosion", "l2"),
+			diag("token_explosion", "l3"),
+		})
+		if n := RunGraduation(ws, record.New(ws), 3, lookback, false, false); n != 1 {
+			t.Fatalf("lookback=%d: aged-out class must re-propose, wrote %d", lookback, n)
+		}
+	}
+}
+
+// Display-only parity: a malformed truthy applied_manually reports true in
+// VerifyResult (Python bool()), while the applied GATE stays strict.
+func TestVerifyGraduationRulesTruthyManualDisplay(t *testing.T) {
+	ws := t.TempDir()
+	writeJSONL(t, suggestionsPath(ws), []map[string]any{{
+		"suggestion_id": "g1", "category": "process_improvement", "target": "all",
+		"suggestion": "x", "failure_pattern": "graduation:token_explosion",
+		"verify_pattern": "present", "applied": true,
+		"applied_manually": "yes", "applied_at": "2026-08-20T12:00:00+00:00",
+	}})
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "hit.txt"), []byte("token budget check\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	results := VerifyGraduationRules(ws, repo, 200)
+	if len(results) != 1 {
+		t.Fatalf("results: %+v", results)
+	}
+	if !results[0].AppliedManually {
+		t.Fatalf("truthy applied_manually must display true: %+v", results[0])
+	}
+}
