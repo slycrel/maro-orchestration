@@ -3434,3 +3434,87 @@ mission-log caller works around it. It belongs to whichever round opens
 `record`'s append path next.
 
 NEXT: r5 over the whole chunk again.
+
+---
+
+## Task queue — build + differential + mutation battery (2026-08-23): SHIPPED, review pending
+
+`task_store.py` → `internal/tasks`, plus `maro task`. Method was
+measure-first: CPython's on-disk bytes, file mode, lock name and key order
+were captured before a line of Go was written, then the two runtimes were
+driven through the same sequence and diffed.
+
+**Cross-runtime differential** (`scratchpad/ts_diff.sh`, `ts_measure.py`,
+`internal/tasks/probe_test.go`): **101 lines byte-identical** after
+normalising the two volatile fields — `run_id` (uuid4) and the clock —
+both normalised by SHAPE, so a wrongly-shaped id or stamp still diffs. It
+covers enqueue → claim → complete → fail → status summary → a minimal
+task, and asserts the file MODE and the LOCK NAME alongside the bytes.
+
+**The harness was falsified before it was trusted.** Six perturbations of
+the Go side, each of which made it report DIFFERS: ensure_ascii on, no
+trailing newline, mode 0644, lock name appended, two fields transposed,
+`attempt` not incremented. The first attempt at the lock-name perturbation
+was killed by the COMPILER (`declared and not used: stem`), which proves
+nothing about the pin, so it was rewritten as a compiling mutant and
+re-run.
+
+**Mutation battery** (`scratchpad/mut_tasks.py`): 41 mutants derived from
+`tasks.go` and `store.go` — every branch, default, ordering and syscall
+flag they contain — not from the diff. **0 killed by the compiler**
+(checked explicitly, and reported as such if any had been). First pass
+30/40; final **38/41**.
+
+Ten survivors, analysed rather than counted:
+
+| Survivor | Verdict |
+|---|---|
+| temp file outside the target dir | **real gap** — renames fine where /tmp shares a filesystem, EXDEV where it does not. Pinned by pointing `TMPDIR` at a path that does not exist. |
+| any read error swallowed | **real gap** — a torn file was pinned, an unreadable one was not. Pinned with mode 0000 (skipped as root). |
+| leading dot treated as a suffix | **real divergence, not a missing pin** — see below. |
+| lane / source defaults dropped | **real gap** ×2 — Go has no argument defaults, so Python's keywords had to be re-expressed and nothing checked them. |
+| artifact_paths appended not merged | **real gap, and a blind test** — see below. |
+| origin aliased instead of copied | **real gap** — pinned by mutating the caller's slice after `MakeTask`. |
+| summary drops a status-less row | **real gap** — pinned with a foreign row carrying no status. |
+| lock never released | **equivalent**, proved: the deferred `Close` releases the flock, and the shared-lock pin demonstrates a later holder gets in. |
+| `i >= 0` → `i > 0` in the suffix scan | **equivalent**, proved: `i == 0` is unreachable because the leading-dot loop consumed every dot before it. |
+| `List` not sorted | **equivalent**, proved empirically: Go's `filepath.Glob` already returns sorted results. |
+
+**The blind test.** `TestArtifactPathsMergeInPlace` asserted on the object
+read back through `pyval.LoadsOrdered` — which collapses duplicate keys
+exactly as Python's `json.loads` does. A writer emitting `"log"` twice
+therefore read back as one key and looked correct. **A read-back through a
+normalising loader cannot detect a writer that duplicates.** That is r4's
+H1 lesson arriving from the opposite direction, and the pin now counts
+occurrences in the bytes.
+
+**The real divergence.** Extending the lock-name table with dotfile cases
+— and asking CPython for each answer rather than asserting one — showed
+`lockPath("..json")` returning `..lock` where CPython 3.14.3 returns
+`..json.lock`. pathlib's suffix is the last dot AT OR AFTER the first
+non-dot character, which is neither `filepath.Ext` nor the older pathlib
+rule (dot at index > 0 with something after it). Fixed and pinned over
+seven names, every expectation taken from CPython.
+
+**A wrong inference in the port's own parity notes, caught by a pin.** The
+note said a duplicate `blocked_by` entry survives a completion "and keeps
+the dependent blocked". The first half is true; the second is false —
+`claim` gates on each dependency's STATUS, not on the list being empty.
+The test asserting un-claimability failed against correct code, which is
+how it was caught. Both the note and the code comment now say what was
+measured.
+
+**Named divergences, neither hidden nor silently matched:**
+
+- Python sorts the glob only in `list_tasks`; Go's `filepath.Glob` sorts
+  everywhere, so `resolveDependents`, `StatusSummary` and
+  `RecoverStaleClaims` iterate in sorted order where Python's is
+  arbitrary. Only `RecoverStaleClaims` returns its order to a caller.
+- `maro task status` sorts its counts. Python emits `{"total": N,
+  **counts}` where counts is built from an unsorted glob, so its key order
+  is filesystem order and differs run to run — there is no order to be
+  faithful to.
+- An `fsync` before the rename that Python omits. It changes no observable
+  byte; it narrows the crash window.
+
+NEXT: adversarial r1 over `internal/tasks` as a whole chunk.

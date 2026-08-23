@@ -2579,6 +2579,103 @@ package. They were keyed by a script driven off vet's own file:line:col
 rather than a regex over the source, so a two-element literal of some
 other type could not be caught in the sweep by accident.
 
+### Task queue — `internal/tasks` (2026-08-23)
+
+`task_store.py` ported whole (minus its argparse shell, which became
+`maro task`): a file-per-task JSON queue under `output/queues/tasks/`,
+one advisory lock per task file, no global lock. Cross-runtime
+differential: **101 lines byte-identical** after normalising the two
+volatile fields, across enqueue → claim → complete → fail → summary,
+including file mode and lock name. Six deliberate perturbations of the Go
+side each made it diff, so the harness can fail.
+
+**A task is carried as a `pyval.Obj`, not a struct.** Two of its fields
+(`origin`, `artifact_paths`) are open dicts whose keys are whatever the
+producer put there, and Python's writers rewrite the whole dict from what
+they read. Assigning to a Python dict updates a present key in place and
+appends a new one at the tail — which `Obj.Set` does — so `result_status`
+and `error` land at the tail here the way they do in Python without
+anyone arranging it, and a field this port has never heard of survives a
+rewrite at its own position.
+
+**The lock file REPLACES the extension.** Python locks
+`path.with_suffix(".lock")`, so `task-abc.json` is guarded by
+`task-abc.lock`. `record.Locked` APPENDS, which would have given
+`task-abc.json.lock` — a different lock file, taken by only one of the two
+runtimes, excluding nothing. Both writes then succeed, one wins the
+rename, and the loser's update is simply gone with no error anywhere. The
+name-matching pin asks CPython for the answer rather than asserting one
+this package computed; the consequence pin has Python take the lock and
+hold it while Go must wait.
+
+**pathlib's suffix is not `filepath.Ext`, and the rule moved between
+Python versions.** Measured against 3.14.3 here: the suffix is the last
+dot AT OR AFTER the first non-dot character. `..json` therefore has no
+suffix and GAINS one; `.hidden.json` has `.json` and loses it; `x.` has a
+suffix of `.` and becomes `x.lock`. Older pathlib required the dot at
+index > 0 with something after it, which reverses the first and third of
+those. None of these are names a job id produces, so the divergence is
+bounded — it is spelled out because the alternative is a lock file whose
+name depends on which interpreter ran last.
+
+**The task writer is not `file_lock.atomic_write`, one directory over.**
+`ensure_ascii=False` (raw UTF-8), a trailing newline, and mode **0600**
+that is NOT umask-derived — there is no `fchmod`, so mkstemp's 0600
+stands. Asserting the octal is correct HERE and wrong in the `record`
+package's test, for the same reason. Meanwhile the CLI prints with
+ensure_ascii ON, because `main` calls a bare `json.dumps(task, indent=2)`:
+the same reason field is raw UTF-8 in the file and `é`-escaped on the
+terminal, in both runtimes.
+
+**Reads are deliberately NOT announced-and-skipped.** `_read_task` uses
+`json.loads`, which raises, so a torn or unreadable file fails
+`list`/`status` outright. That is the opposite of this port's posture
+everywhere else and it is carried on purpose: a queue that silently
+under-reports its own contents is how a claimed task disappears.
+
+**Two quirks carried verbatim, one of which had a wrong justification.**
+`_check_cycle` tracks the nodes on the CURRENT DFS path and discards on
+the way back out, so a diamond is legal and only a real cycle is refused.
+`_resolve_dependents` uses `list.remove`, which drops ONE occurrence, so a
+duplicate `blocked_by` entry survives a completion. The note this port was
+written from added "and keeps the dependent blocked" — **that inference is
+false**, and the pin asserting it is what caught it: `claim` gates on each
+dependency's STATUS, not on `blocked_by` being empty, and the leftover id
+still points at a done task. The residue is cosmetic. It is still carried,
+because both runtimes must write the same bytes for the same calls.
+
+**Mutation battery: 41 mutants derived from the two files, 0 killed by the
+compiler, final 38/41.** First pass was 30/40. Of the ten survivors, eight
+were missing pins and two were equivalent — and one survivor exposed a blind test:
+`TestArtifactPathsMergeInPlace` read the file back through
+`pyval.LoadsOrdered`, which collapses duplicate keys exactly as Python's
+`json.loads` does, so a writer emitting `"log"` twice read back as one key
+and looked correct. **A read-back through a normalising loader cannot see
+a writer that duplicates** — the r4 H1 lesson arriving from the other
+side. That pin now counts the bytes. A ninth survivor found a real
+divergence rather than a missing pin: the `..json` case above.
+
+The three equivalents are recorded with proofs rather than chased.
+Widening `i >= 0` to `i > 0` in the suffix scan is equivalent because
+`i == 0` is unreachable: the leading-dot loop has already consumed every
+dot before that index. Removing
+the explicit `LOCK_UN` is equivalent because the deferred `Close` releases
+the flock (and the shared-lock pin demonstrates it). Removing
+`sort.Strings` from `List` is equivalent because Go's `filepath.Glob`
+already sorts — verified, not read from the docs. That second one runs the
+other way too: Python sorts only in `list_tasks`, so Go's three other
+sweeps iterate in sorted order where Python's is arbitrary. Nothing
+depends on it except that `RecoverStaleClaims` RETURNS its ids, so a
+caller diffing the two runtimes would see the same set in a different
+order. Named, not hidden.
+
+**One deliberate strengthening:** an `fsync` before the rename, which
+Python omits. It changes no byte either runtime can observe — it only
+narrows the window in which a crash leaves a renamed file with no
+contents. Adding durability is safe in a way that changing bytes is not,
+which is the same reasoning the umask decision used, reaching the opposite
+conclusion because the facts differ.
+
 ## Running
 
 ```sh
