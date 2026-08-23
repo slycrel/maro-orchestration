@@ -1697,6 +1697,46 @@ refuse-all stamps across all five arms, dedup-window unification at
 every call site, verify pass arm-by-arm parity walk, audience registry,
 escalation payload/clip chains, claim/ack state machine.
 
+**r5 confirmation round (2026-08-23): FIXPOINT — 0 HIGH, 0 MED, 1 LOW
+fixed, INFO-only otherwise.** The LOW was the third and (family now
+understood) plausibly last member of the content-key prose family: the
+calibration low-confidence reason rendered the threshold via `%g` →
+"(<6)" where Python interpolates the raw float → "(<6.0)". The reason
+IS the suggestion text and suggestion is a third of contentKey, so one
+shared calibration.jsonl minted one duplicate row per runtime — the
+same failure as r1's pyRepr apostrophe and r4's canon target. FIXED
+with pyVal (Python's float repr) + a byte-for-byte prose pin and a
+non-default-threshold pin; `%g` now appears nowhere in shared prose
+(the one remaining use is verbose stderr). Mutations M153–M154
+DETECTED. New INFO ledger entries: ScanSuggestionOutcomes confidence is
+a third floatField-family site (string/bool → 0.5 default vs Python
+float()/row-drop); unicode-digit confidence strings ("٠.١" parses in
+Python, not Go) — found by a 36-case executed cross-runtime corpus that
+agreed on every OTHER label including all the r4 bool/ErrRange edges;
+graduation template substitution is sequential ReplaceAll vs Python's
+simultaneous .format() (prose-only, and an unknown placeholder in an
+override KeyErrors Python's whole pass while landing literally in Go);
+degenerate CLI args clamp in Go where Python honors them; outcomeTS
+non-string falls through to created_at. Named as fork-point-shared, NOT
+a Go bug: an explicit `maro evolve -verify -verify-apply` on a quiet
+workspace can still walk rows to a terminal park off zero window data —
+Python's CLI makes the identical direct call; the r4 gate closes the
+ambient cadence path, which is exactly what Python's control flow does.
+
+**Arc shape: 2H → 2H → 0H/2M → 1M/2L → 1L. FIXPOINT DECLARED.** The
+convergence criterion held in the healthy direction throughout — the
+broken set shrank every round while the confirmed-solid set grew (r5's
+is the longest of the arc: embedded-only pattern execution, template
+byte-parity, stamp discipline across all five arms, dedup windows at
+every call site, the verify pass arm-by-arm, audience registry,
+notify/escalation clip chains, claim/ack state machine, calibration
+override compare, impact scan format specifiers). Verify-before-fix
+held at 0% hallucination across all five rounds — every finding's code
+claim reproduced before a line was changed. Jeremy's whole-chunk scope
+directive (r3 onward) earned its keep twice: r3's dedup-window-keyed-
+to-the-wrong-arg and r4's Cycle/report.Skipped seam were both invisible
+to diff-scoped review.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

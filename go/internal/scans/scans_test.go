@@ -77,8 +77,46 @@ func TestScanCalibrationLogFindsOverrideAndLowConfidence(t *testing.T) {
 		t.Fatalf("escalate suggestion prose: %q", esc.Suggestion)
 	}
 	res := byClass["resume"]
-	if !strings.Contains(res.Suggestion, "mean confidence 4.0/10") {
-		t.Fatalf("resume suggestion prose: %q", res.Suggestion)
+	// Byte-for-byte against the Python f-string, threshold spelling
+	// included: the reason IS the suggestion text and suggestion is a
+	// third of contentKey, so "(<6)" vs Python's "(<6.0)" would mint a
+	// duplicate row per runtime on a shared store (r5 LOW).
+	wantRes := "mean confidence 4.0/10 (<6.0) — LLM is systematically " +
+		"uncertain on 'resume' decisions; consider adding explicit " +
+		"criteria or worked examples"
+	if !strings.Contains(res.Suggestion, wantRes) {
+		t.Fatalf("resume suggestion prose:\n got %q\nwant %q", res.Suggestion, wantRes)
+	}
+}
+
+// A non-default threshold must keep Python's float spelling too (5.5,
+// not 5.5 via %g coincidence) — pins the pyVal call, not the literal.
+func TestScanCalibrationThresholdSpellingParity(t *testing.T) {
+	ws := t.TempDir()
+	var rows []map[string]any
+	for i := 0; i < 5; i++ {
+		rows = append(rows, map[string]any{
+			"decision_class": "resume", "confidence": 4,
+			"action_raw": "a", "action_final": "a"})
+	}
+	writeJSONL(t, memPath(ws, "calibration.jsonl"), rows)
+
+	for _, c := range []struct {
+		threshold float64
+		want      string
+	}{
+		{5.0, "(<5.0)"},   // whole float → Python repr keeps ".0"
+		{5.5, "(<5.5)"},   // fractional → unchanged
+		{4.25, "(<4.25)"}, // two decimals survive
+	} {
+		got := ScanCalibrationLog(ws, CalibrationOptions{
+			LowConfidenceThreshold: c.threshold})
+		if len(got) != 1 {
+			t.Fatalf("threshold %v: want one finding, got %+v", c.threshold, got)
+		}
+		if !strings.Contains(got[0].Suggestion, c.want) {
+			t.Fatalf("threshold %v: want %q in %q", c.threshold, c.want, got[0].Suggestion)
+		}
 	}
 }
 

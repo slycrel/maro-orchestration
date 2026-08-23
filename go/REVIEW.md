@@ -3116,3 +3116,25 @@ template byte-parity, stamp discipline across all five arms, dedup windows,
 verify parity walk, audience/escalation/claim-ack). Verdict: lows-only once
 the MED lands — this round. NEXT: r5 confirmation; clean/lows-only declares
 fixpoint.
+
+## Self-improvement slice 2 — r5 CONFIRMATION (2026-08-23): FIXPOINT
+
+0 HIGH, 0 MED, 1 LOW, INFO otherwise. The LOW: the calibration
+low-confidence reason rendered its threshold with %g → "(<6)" where Python
+interpolates the raw float → "(<6.0)". Same family as r1's pyRepr apostrophe
+and r4's canon target — the reason IS the suggestion text, suggestion is a
+third of contentKey, so one shared calibration.jsonl minted a duplicate row
+per runtime. Fixed with pyVal + a byte-for-byte prose pin and a
+non-default-threshold pin; %g is now absent from all shared prose. M153-M154
+DETECTED. All three r4 fixes held under direct attack with executed
+cross-runtime evidence (a 36-case coerceFloat corpus agreed label-for-label
+except one unicode-digit exotic, now INFO). One INFO named fork-point-shared,
+not a Go bug: explicit `-verify -verify-apply` on a quiet workspace can still
+park rows off zero data — Python's CLI makes the identical direct call.
+
+ARC CLOSED. Shape 2H -> 2H -> 0H/2M -> 1M/2L -> 1L. The broken set shrank
+every round while the confirmed-solid set grew (r5's is the longest of the
+arc). Verify-before-fix held at 0% hallucination across all five rounds.
+Jeremy's whole-chunk scope directive earned its keep twice: r3's
+dedup-window-keyed-to-the-wrong-arg and r4's Cycle/report.Skipped seam were
+both invisible to diff-scoped review.

@@ -232,10 +232,16 @@ func ScanCalibrationLog(ws string, o CalibrationOptions) []CalibrationFinding {
 				overrideRate*100, o.HighOverrideThreshold*100, pyRepr(dc)))
 		}
 		if meanConf < o.LowConfidenceThreshold {
+			// pyVal, not %g: Python interpolates the raw float, so the
+			// default renders "6.0" where %g gives "6". This reason IS
+			// the suggestion text, and suggestion is a third of
+			// contentKey — a spelling difference mints one duplicate row
+			// per runtime on a shared store (r5 LOW, same family as the
+			// pyRepr apostrophe and the canon target).
 			reasons = append(reasons, fmt.Sprintf(
-				"mean confidence %.1f/10 (<%g) — LLM is systematically uncertain on "+
+				"mean confidence %.1f/10 (<%s) — LLM is systematically uncertain on "+
 					"%s decisions; consider adding explicit criteria or worked examples",
-				meanConf, o.LowConfidenceThreshold, pyRepr(dc)))
+				meanConf, pyVal(o.LowConfidenceThreshold), pyRepr(dc)))
 		}
 		if len(reasons) > 0 {
 			findings = append(findings, CalibrationFinding{
