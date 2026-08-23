@@ -2538,6 +2538,47 @@ verified at 103,771 values against CPython with 0 mismatches. A named
 gap is only as good as the argument attached to it, and that argument
 had never been measured.
 
+### The indent-2 renderer moves to `internal/pyval` (2026-08-23)
+
+The `json.dumps(obj, indent=2)` writer was written inside `internal/orch`
+with a note saying it belonged next to `pyjson.Ordered` and was parked
+because pyjson was under adversarial review — moving a file someone is
+reviewing is how a round's findings stop landing against the thing that
+was reviewed. r4 has landed and the task-store port is the third would-be
+consumer (after mission.json and `pids.go`'s one-shape hand-roll), which
+is past the point where copying it again is cheap. `internal/orch/pyrender.go`
+is now nine one-line wrappers over `internal/pyval` and nothing else.
+
+**It went to a NEW package rather than into `pyjson`, because they are
+not the same writer.** `pyjson` is the single-line JSONL lane, where
+Python's callers pass compact separators; `pyval` is the indent-2 sidecar
+lane. Folding them would have forced one default onto a knob whose two
+settings are both live here: **ensure_ascii is a per-writer decision in
+Python**, and `mission.json` takes the default and escapes while
+`task_store._atomic_write` passes `ensure_ascii=False` and does not. A
+port that picks one globally is wrong for half its callers, and the
+resulting file looks fine until Python reads it back. So `DumpsIndent2`
+escapes, `DumpsIndent2Raw` does not, and the choice stays at the call
+site where Python puts it. They still share the scalar spelling —
+`pyval` defers to `pyjson` for numbers and bools.
+
+The escaping table in `pyval_test.go` is generated from CPython's actual
+output on this box rather than typed from the docs, because the interesting
+cases are exactly the ones intuition gets wrong: **DEL is ASCII and is
+escaped anyway**; U+0085, NBSP, U+2028 and U+2029 are escaped under
+ensure_ascii and raw without it; astral code points become a surrogate
+PAIR; and the C0 controls plus `"` and `\` are escaped in BOTH modes,
+because JSON has no syntax for a raw control character. Seven mutants
+derived from the file — including "ignore the flag", "never escape",
+"`>=` becomes `>`" and "drop the taint check" — were all killed.
+
+**Vet fallout worth recording.** Making `pyField` an alias for an exported
+struct turned 51 terse `{"key", value}` literals into `composites` vet
+findings, because vet only flags unkeyed literals of types from ANOTHER
+package. They were keyed by a script driven off vet's own file:line:col
+rather than a regex over the source, so a two-element literal of some
+other type could not be caught in the sweep by accident.
+
 ## Running
 
 ```sh

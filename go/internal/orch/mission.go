@@ -113,33 +113,33 @@ func SaveMission(ws string, m *Mission, project string) error {
 		features := pyList{}
 		for _, f := range ms.Features {
 			features = append(features, pyObj{
-				{"id", f.ID},
-				{"title", f.Title},
-				{"status", f.Status},
-				{"worker_session_id", strOrNil(f.WorkerSessionID)},
-				{"result_summary", strOrNil(f.ResultSummary)},
-				{"elapsed_ms", carriedInt(f.ElapsedMS, f.elapsedRaw)},
+				{Key: "id", Val: f.ID},
+				{Key: "title", Val: f.Title},
+				{Key: "status", Val: f.Status},
+				{Key: "worker_session_id", Val: strOrNil(f.WorkerSessionID)},
+				{Key: "result_summary", Val: strOrNil(f.ResultSummary)},
+				{Key: "elapsed_ms", Val: carriedInt(f.ElapsedMS, f.elapsedRaw)},
 			})
 		}
 		milestones = append(milestones, pyObj{
-			{"id", ms.ID},
-			{"title", ms.Title},
-			{"features", features},
-			{"validation_criteria", carriedStrings(ms.ValidationCriteria, ms.criteriaRaw)},
-			{"status", ms.Status},
-			{"validation_result", strOrNil(ms.ValidationResult)},
-			{"depends_on", stringsToList(ms.DependsOn)},
+			{Key: "id", Val: ms.ID},
+			{Key: "title", Val: ms.Title},
+			{Key: "features", Val: features},
+			{Key: "validation_criteria", Val: carriedStrings(ms.ValidationCriteria, ms.criteriaRaw)},
+			{Key: "status", Val: ms.Status},
+			{Key: "validation_result", Val: strOrNil(ms.ValidationResult)},
+			{Key: "depends_on", Val: stringsToList(ms.DependsOn)},
 		})
 	}
 	payload := pyObj{
-		{"id", m.ID},
-		{"goal", m.Goal},
-		{"project", m.Project},
-		{"milestones", milestones},
-		{"status", m.Status},
-		{"created_at", m.CreatedAt},
-		{"completed_at", strOrNil(m.CompletedAt)},
-		{"ancestry_context", m.AncestryContext},
+		{Key: "id", Val: m.ID},
+		{Key: "goal", Val: m.Goal},
+		{Key: "project", Val: m.Project},
+		{Key: "milestones", Val: milestones},
+		{Key: "status", Val: m.Status},
+		{Key: "created_at", Val: m.CreatedAt},
+		{Key: "completed_at", Val: strOrNil(m.CompletedAt)},
+		{Key: "ancestry_context", Val: m.AncestryContext},
 	}
 	text, err := DumpsIndent2(payload)
 	if err != nil {
@@ -411,16 +411,16 @@ func GenerateFeatureManifest(ws string, m *Mission, project string) (pyObj, erro
 	for _, ms := range m.Milestones {
 		for _, f := range ms.Features {
 			features = append(features, pyObj{
-				{"id", f.ID},
-				{"title", f.Title},
-				{"milestone_id", ms.ID},
-				{"passes", false},
-				{"contract_id", nil},
-				{"grade_score", nil},
+				{Key: "id", Val: f.ID},
+				{Key: "title", Val: f.Title},
+				{Key: "milestone_id", Val: ms.ID},
+				{Key: "passes", Val: false},
+				{Key: "contract_id", Val: nil},
+				{Key: "grade_score", Val: nil},
 			})
 		}
 	}
-	manifest := pyObj{{"features", features}}
+	manifest := pyObj{{Key: "features", Val: features}}
 	text, err := DumpsIndent2(manifest)
 	if err != nil {
 		return manifest, err
@@ -756,17 +756,17 @@ func (r MissionResult) Summary() string {
 // WriteMissionLog appends one result to mission-log.jsonl.
 func WriteMissionLog(ws string, r MissionResult, m *Mission) error {
 	row := pyObj{
-		{"mission_id", r.MissionID},
-		{"project", r.Project},
-		{"goal", r.Goal},
-		{"status", r.Status},
-		{"milestones_done", r.MilestonesDone},
-		{"milestones_total", r.MilestonesTotal},
-		{"features_done", r.FeaturesDone},
-		{"features_total", r.FeaturesTotal},
-		{"elapsed_ms", r.ElapsedMS},
-		{"created_at", m.CreatedAt},
-		{"completed_at", strOrNil(m.CompletedAt)},
+		{Key: "mission_id", Val: r.MissionID},
+		{Key: "project", Val: r.Project},
+		{Key: "goal", Val: r.Goal},
+		{Key: "status", Val: r.Status},
+		{Key: "milestones_done", Val: r.MilestonesDone},
+		{Key: "milestones_total", Val: r.MilestonesTotal},
+		{Key: "features_done", Val: r.FeaturesDone},
+		{Key: "features_total", Val: r.FeaturesTotal},
+		{Key: "elapsed_ms", Val: r.ElapsedMS},
+		{Key: "created_at", Val: m.CreatedAt},
+		{Key: "completed_at", Val: strOrNil(m.CompletedAt)},
 	}
 	line, err := DumpsCompactPy(row)
 	if err != nil {
@@ -826,8 +826,8 @@ func AcquireDrainLock(ws, missionID string) bool {
 		return false
 	}
 	line, err := DumpsCompactPy(pyObj{
-		{"mission_id", missionID},
-		{"started_at", nowISOPy(time.Now().UTC())},
+		{Key: "mission_id", Val: missionID},
+		{Key: "started_at", Val: nowISOPy(time.Now().UTC())},
 	})
 	if err != nil {
 		return false

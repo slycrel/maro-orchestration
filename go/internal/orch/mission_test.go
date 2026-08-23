@@ -68,7 +68,7 @@ func TestPyStringMatchesEnsureAscii(t *testing.T) {
 // because a newline follows it — which is why the indent-2 sidecars matched
 // byte-for-byte in earlier rounds while the single-line lane's ", " did not.
 func TestDumpsIndent2MatchesPython(t *testing.T) {
-	got, err := DumpsIndent2(pyObj{{"a", pyList{}}, {"b", pyObj{}}})
+	got, err := DumpsIndent2(pyObj{{Key: "a", Val: pyList{}}, {Key: "b", Val: pyObj{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +76,8 @@ func TestDumpsIndent2MatchesPython(t *testing.T) {
 		t.Errorf("empty containers:\n got %q\nwant %q", got, want)
 	}
 
-	got, err = DumpsIndent2(pyObj{{"a", pyObj{{"b", pyObj{{"c",
-		pyList{1, pyList{2, 3}, pyObj{{"d", nil}}}}}}}}})
+	got, err = DumpsIndent2(pyObj{{Key: "a", Val: pyObj{{Key: "b", Val: pyObj{{Key: "c",
+		Val: pyList{1, pyList{2, 3}, pyObj{{Key: "d", Val: nil}}}}}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestDumpsIndent2MatchesPython(t *testing.T) {
 // and ": " after each key. The compact (",", ":") form is something a
 // caller has to ask for, and none of the writers ported here do.
 func TestDumpsCompactCarriesPythonsSeparators(t *testing.T) {
-	got, err := DumpsCompactPy(pyObj{{"a", 1}, {"b", pyList{1, 2}}})
+	got, err := DumpsCompactPy(pyObj{{Key: "a", Val: 1}, {Key: "b", Val: pyList{1, 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +111,10 @@ func TestDumpsCompactCarriesPythonsSeparators(t *testing.T) {
 // unspaced shape, silently mixing two spellings inside one file. Refused
 // rather than rendered, because the wrong bytes are worse than an error.
 func TestRendererRefusesUnorderedContainers(t *testing.T) {
-	if _, err := DumpsIndent2(pyObj{{"a", map[string]any{"x": 1}}}); err == nil {
+	if _, err := DumpsIndent2(pyObj{{Key: "a", Val: map[string]any{"x": 1}}}); err == nil {
 		t.Error("a Go map must be refused, not rendered in pyjson's shape")
 	}
-	if _, err := DumpsIndent2(pyObj{{"a", []any{1}}}); err == nil {
+	if _, err := DumpsIndent2(pyObj{{Key: "a", Val: []any{1}}}); err == nil {
 		t.Error("a []any must be refused: build a pyList")
 	}
 }
