@@ -79,6 +79,19 @@ func Cycle(ctx context.Context, ws string, rec *record.Recorder,
 	}
 	report := evolver.Run(ctx, ws, rec, cfg, adapter, runOpts)
 
+	// Python's run_evolver early-returns on a skipped interval (outcomes
+	// unreadable, or fewer than min_outcomes) BEFORE the graduation propose
+	// and the V2/V3 verify pass — a quiet workspace suppresses both. Without
+	// this gate the verify pass renders `inconclusive` off zero window data
+	// each cycle and BumpExtensionOrPark walks an applied-unverified row to a
+	// TERMINAL "unverifiable" park before any evidence could exist (r4 MED).
+	// Step 1 stays above evolver.Run on purpose: Python runs the structural
+	// graduation check before its early return too.
+	var verify scans.VerifySummary
+	if report.Skipped {
+		return report, verify
+	}
+
 	// 3. Graduation propose (skipped on dry_run, Python parity — the scan
 	// is reachable via `maro graduate -dry`).
 	if !o.DryRun && !o.SkipGraduation {
@@ -90,7 +103,6 @@ func Cycle(ctx context.Context, ws string, rec *record.Recorder,
 	}
 
 	// 4. Cadence verdicts + authority-aware auto-revert.
-	var verify scans.VerifySummary
 	if !o.DryRun && !o.SkipVerify {
 		verify = scans.VerifyAppliedSuggestions(ws, rec, cfg, report.RunID,
 			scans.VerifyOptions{Verbose: o.Verbose})

@@ -3092,3 +3092,27 @@ edges + unlocked-writer grep (none), refuse-all stamps vs every flow,
 audience registry complete. Round shape: HIGHs 2→2→0, MEDs 6→2→2, and r3's
 MEDs are arg-edge + doc-rationale class — convergence. NEXT: r4
 whole-surface confirmation round; clean/lows-only declares fixpoint.
+
+## Self-improvement slice 2 — r4, whole-surface (2026-08-23): 1 MED + 2 LOW fixed; 10 INFO to the divergence ledger
+
+The MED validated the whole-chunk scope again: `selfimprove.Cycle` ignored
+`report.Skipped`, so graduation propose + the verify pass ran on quiet
+intervals Python suppresses — a fresh workspace holding an applied-unverified
+row was walked to a TERMINAL "unverifiable" park off zero evidence (and the
+r2 refuse-all fix made that park permanent). A composition-layer-vs-Python-
+control-flow seam no per-package diff could see; reviewer shipped an executed
+repro. Fixed with a skip gate between steps 2 and 3 (step 1 stays above it,
+Python parity). LOW-1: coerceFloat missed bool and overflow-string Python
+float() edges — both flipped §4 trust in the unsafe direction (malformed →
+FULL); fixed + 7-case pin. LOW-2: canon target defaulted ""→"general" where
+Python's .get default is dead code — a contentKey divergence that would mint
+duplicate rows per runtime on a shared store; now verbatim. All three
+verified against both runtimes before fixing (0% hallucination, 4th round
+running). M149–M152 DETECTED. 10 INFO items recorded in PORT.md as
+divergence-ledger entries (Go the tamer side in each; no action).
+
+Reviewer's solid list is the longest yet (embedded-only pattern execution,
+template byte-parity, stamp discipline across all five arms, dedup windows,
+verify parity walk, audience/escalation/claim-ack). Verdict: lows-only once
+the MED lands — this round. NEXT: r5 confirmation; clean/lows-only declares
+fixpoint.

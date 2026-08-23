@@ -1653,6 +1653,50 @@ no-unlocked-writers grep, refuse-all terminal stamps vs every flow,
 audience registry vs every Go-emitted type. Fix-layer mutations
 M147–M148 DETECTED.
 
+**r4 whole-surface review (2026-08-23): 1 MED + 2 LOW fixed, 10 INFO
+recorded as divergence-ledger entries.** The MED is exactly the seam
+class the whole-chunk scope exists for — invisible to any per-package
+diff. (1) MED (executed repro): `selfimprove.Cycle` ignored
+`report.Skipped` — Python's run_evolver early-returns on a quiet
+interval (outcomes unreadable or < min_outcomes) BEFORE the graduation
+propose and verify passes; Go ran both unconditionally, so a fresh/quiet
+workspace holding an applied-unverified row rendered `inconclusive` off
+zero window data each cycle and BumpExtensionOrPark walked it to a
+TERMINAL "unverifiable" park before any evidence could exist (and
+terminal stamps refuse everything after — the r2 fix made the damage
+permanent). FIXED: skip gate between steps 2 and 3; step 1 (structural
+graduation check) stays above it, Python parity. (2) LOW: coerceFloat
+missed two Python float() edges, both flipping §4 trust in the UNSAFE
+direction (malformed row earning FULL): bools (float(False)=0.0 →
+directional) and out-of-range numeric strings ("-1e999" → -inf →
+directional; Go's ParseFloat returns the same value WITH ErrRange —
+a successful parse in Python's eyes). FIXED + 7-case trust-edge pin
+(incl. +inf→full, underflow→directional, hex/garbage stay full).
+(3) LOW: canon row target defaulted ""→"general" where Python's
+`.get("task_type","general")` default is dead code (key always
+emitted) — target feeds contentKey, so the same finding would mint one
+row per runtime on a shared store. FIXED: verbatim TaskType.
+INFO ledger (verified, deliberately not acted on — Go reads are the
+tamer/safer side in each): floatField excludes JSON bools from
+calibration/drift means (Python counts True as 1.0); suggestion-outcome
+`verified` read strict-bool vs Python truthy; expectedClass non-string
+falls to stuck-rate vs Python str() coercion; revert_failed escalation
+rates carry an additive `reverted` key; ScanStepCosts formatting at
+exotic float boundaries; loadCanonStats malformed-row readings
+(""→general grouping, ""-tier→long, numeric lesson_id skipped);
+impact captains-log fallback scans the 8MB tail without Python's
+pre-limit (post-merge [:limit] converges); parseISO rejects date-only /
+treats naive as UTC (Python can raise on naive/aware compare — Go
+strictly safer); graduation absorbs Python-crash edges (non-string
+loop_id, unhashable evidence); `-verify-apply` without `-verify` is
+silently ignored (UX nit). Fix-layer mutations M149–M152 all DETECTED
+(uniqueness-asserted). r4 confirmed SOLID under attack: embedded-only
+pattern execution (no ledger→sh -c path), template data byte-parity
+(9 classes incl. derived expected_signal), first-writer-wins +
+refuse-all stamps across all five arms, dedup-window unification at
+every call site, verify pass arm-by-arm parity walk, audience registry,
+escalation payload/clip chains, claim/ack state machine.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

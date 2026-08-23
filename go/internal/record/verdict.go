@@ -1,6 +1,7 @@
 package record
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -71,6 +72,12 @@ func VerdictTrust(row map[string]any) string {
 // read "0.5" as unparseable → FULL where Python reads DIRECTIONAL). Only a
 // NON-numeric value is (0, false) — that is Python's TypeError/ValueError
 // pass, and an unreadable confidence never downgrades a judged verdict.
+// Two more Python float() edges matched in r4 (both had flipped trust in
+// the UNSAFE direction — malformed row earning the trusted path): bools
+// coerce (float(False)=0.0 → directional), and out-of-range numeric
+// strings coerce ("-1e999" → -inf → directional; Go's ParseFloat returns
+// the same ±Inf/0 with ErrRange, which is a successful parse in Python's
+// eyes, not an error).
 func coerceFloat(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -79,6 +86,11 @@ func coerceFloat(v any) (float64, bool) {
 		return float64(n), true
 	case int64:
 		return float64(n), true
+	case bool:
+		if n {
+			return 1, true
+		}
+		return 0, true
 	case string:
 		t := strings.TrimSpace(n)
 		// Go ParseFloat accepts hex floats ("0x1p-2"); Python float()
@@ -89,6 +101,9 @@ func coerceFloat(v any) (float64, bool) {
 			return 0, false
 		}
 		f, err := strconv.ParseFloat(t, 64)
+		if err != nil && errors.Is(err, strconv.ErrRange) {
+			return f, true // over/underflow: Python float() yields ±inf / 0.0
+		}
 		return f, err == nil
 	case interface{ Float64() (float64, error) }: // json.Number
 		f, err := n.Float64()

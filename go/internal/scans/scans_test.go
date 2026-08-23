@@ -475,3 +475,25 @@ func TestCalibrationApostropheClassParity(t *testing.T) {
 		t.Fatalf("prose must use Python repr quoting: %q", findings[0].Suggestion)
 	}
 }
+
+// r4 LOW pin: the canon row's target is the lesson's task_type VERBATIM —
+// Python's `.get("task_type", "general")` default is dead code (the key is
+// always emitted), so an empty task_type must stay "" here too. Target
+// feeds contentKey; defaulting would mint a duplicate row per runtime on
+// a shared store.
+func TestScanCanonCandidatesEmptyTaskTypeTargetVerbatim(t *testing.T) {
+	ws := t.TempDir()
+	writeJSONL(t, memPath(ws, "canon_stats.jsonl"),
+		canonHits("blank", 12, []string{"research", "build", "ops"}))
+	writeJSONL(t, filepath.Join(ws, "memory", "long", "lessons.jsonl"),
+		[]map[string]any{canonLesson("blank", "lesson text",
+			map[string]any{"task_type": ""})})
+
+	got := ScanCanonCandidates(ws, 10, 3)
+	if len(got) != 1 {
+		t.Fatalf("want one candidate, got %d: %+v", len(got), got)
+	}
+	if got[0].Target != "" {
+		t.Fatalf("empty task_type must stay verbatim, got %q", got[0].Target)
+	}
+}

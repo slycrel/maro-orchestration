@@ -143,3 +143,59 @@ func TestCycleDryRunProposesOnly(t *testing.T) {
 		t.Fatal("dry run persisted suggestions")
 	}
 }
+
+// r4 MED pin: Python's run_evolver early-returns on a skipped interval
+// BEFORE graduation propose and the verify pass. A quiet workspace (below
+// MinOutcomes) holding an applied-unverified row must NOT get graduation
+// rows proposed nor an extension bump walked toward a terminal park.
+func TestCycleSkippedIntervalSuppressesGraduationAndVerify(t *testing.T) {
+	ws := t.TempDir()
+	mem := func(n string) string { return filepath.Join(ws, "memory", n) }
+
+	// ONE outcome — below the default MinOutcomes → evolver.Run skips.
+	writeJSONL(t, mem("outcomes.jsonl"), []map[string]any{
+		{"loop_id": "l", "goal": "g", "status": "done",
+			"recorded_at": "2026-08-20T10:00:00+00:00"}})
+
+	// Repeated diagnoses that WOULD graduate on a live interval.
+	writeJSONL(t, mem("diagnoses.jsonl"), []map[string]any{
+		{"failure_class": "token_explosion", "loop_id": "l1"},
+		{"failure_class": "token_explosion", "loop_id": "l2"},
+		{"failure_class": "token_explosion", "loop_id": "l3"},
+	})
+
+	// An applied-unverified row the verify pass would render inconclusive
+	// (no window data) and bump toward the terminal "unverifiable" park.
+	writeJSONL(t, mem("suggestions.jsonl"), []map[string]any{
+		{"suggestion_id": "s1", "category": "observation", "target": "all",
+			"suggestion": "x", "confidence": 0.9, "applied": true,
+			"applied_at": "2026-08-20T09:00:00+00:00",
+			"expected_signal": []map[string]any{
+				{"metric": "success_rate", "direction": "up"}}},
+	})
+
+	fake := &llm.Fake{Script: []string{`{"patterns": [], "suggestions": []}`}}
+	report, verify := Cycle(context.Background(), ws, record.New(ws),
+		map[string]any{}, fake, CycleOptions{})
+
+	if !report.Skipped {
+		t.Fatalf("expected skipped interval, got %+v", report)
+	}
+	if verify.Enabled {
+		t.Fatalf("verify pass ran on a skipped interval: %+v", verify)
+	}
+	for _, r := range readRows(t, mem("suggestions.jsonl")) {
+		id, _ := r["suggestion_id"].(string)
+		if strings.HasPrefix(id, "grad-") {
+			t.Fatalf("graduation proposed on a skipped interval: %+v", r)
+		}
+		if id == "s1" {
+			if ext, ok := r["verify_extensions"]; ok && ext != float64(0) {
+				t.Fatalf("extension bumped on a skipped interval: %+v", r)
+			}
+			if vv, _ := r["verify_verdict"].(string); vv != "" {
+				t.Fatalf("verdict stamped on a skipped interval: %+v", r)
+			}
+		}
+	}
+}

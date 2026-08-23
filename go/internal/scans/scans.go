@@ -653,7 +653,13 @@ func ScanCanonCandidates(ws string, minHits, minTaskTypes int) []evolver.Suggest
 		out = append(out, evolver.Suggestion{
 			SuggestionID: "canon-" + record.NewID(),
 			Category:     "crystallization",
-			Target:       orStr(lesson.TaskType, "general"),
+			// Verbatim, NOT defaulted: Python's `c.get("task_type",
+			// "general")` default is dead code — get_canon_candidates
+			// always emits the key — so an empty task_type stays "" in
+			// the target, and target feeds contentKey; defaulting here
+			// would mint a second row per runtime on a shared store
+			// (r4 LOW).
+			Target: lesson.TaskType,
 			Suggestion: fmt.Sprintf(
 				"PROMOTE TO IDENTITY (Stage 3): '%s' — applied %dx across %d task "+
 					"types (%s). Door: maro-memory canon-promote %s (writes playbook "+
@@ -701,13 +707,6 @@ func loadCanonStats(ws string) map[string]canonStat {
 		stats[lid] = s
 	}
 	return stats
-}
-
-func orStr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 // ---------------------------------------------------------------------------
