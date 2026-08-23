@@ -2933,3 +2933,30 @@ pkgs), guard race-clean. Verify-before-fix honored. **This is a bounded new-
 surface finding inside r16's budget code, not churn: the parser core and DoS
 bound held; r17 closes the last resource-exhaustion seam. A clean r18 re-review
 would be fixpoint.**
+
+## Guard slice — r18 (2026-08-22): CLEAN — FIXPOINT
+
+Opus fixpoint-confirmation round on r17 (befbd7f7). **No exploitable defect
+found** after hard effort across all five axes — a genuine clean round, not a
+rubber-stamp. Verified: r16 DoS bound holds (2–4.2MB adversarial inputs incl.
+worstBreadth=4095 proxies + 3MB tail, all ≤1.35s); r17 decode fail-closed holds
+(both drain vectors flag); odd-whitespace/control-char hosts (FF/VT/NBSP/NUL/
+U+2044) rejected by whatwg.Parse itself = client parity; no-% early return
+sound; depth-cap residual is the documented semantic bound (proxy decodes once,
+guard catches single+double); prefilter sound; host==client-fetch by
+construction; reach-heuristic gaps are the pinned Python-parity limits.
+
+Residual named (design premise, not a code bug, unchanged since r15 and shared
+with Python): safety is grounded on "the host a WHATWG client fetches" — a
+downstream consumer using a LENIENT non-WHATWG parser could diverge. Inherent to
+any host-allowlist guard; the r.jina.ai proxy is WHATWG-grounded.
+
+**FIXPOINT DECLARED (guard slice, injection-guard URL exfil).** Arc: r10–r14
+hand-rolled regex CHURN (four opus rounds, each fix minting the next HIGH) →
+Jeremy's fork decision + seams-strict/internals-free decree → r15 spec-grounded
+parser swap (nlnwa/whatwg-url) → r16 unified evaluator + work budget → r17
+decode fail-closed → r18 clean. The design change converted an open-ended defect
+class into a bounded surface that closed in three fix rounds. Mutations M85–M108
+all detected across the arc. Go is the backport REFERENCE for Python's
+injection_guard.py (IDN mapping, userinfo/nested confusion, encoded laundering,
+fail-closed budget — none of which the Python regex catches).

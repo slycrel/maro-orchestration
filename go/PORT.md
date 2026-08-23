@@ -1417,8 +1417,19 @@ fail-closed (matching parse-budget/oversized posture). Pin
 TestURLDecodeBudgetFailsClosed; M108 detected. This is bounded convergence,
 NOT churn: across r15→r16→r17 the broken set shrank (2H+2M+1L → 1H → 1H) while
 the fuzz-confirmed-solid set grew; each HIGH sat in the previous round's new
-code, but the core retired at r15 stayed retired. r18 confirmation round
-launched.
+code, but the core retired at r15 stayed retired.
+
+**r18 — CLEAN, FIXPOINT DECLARED (guard slice DONE).** Opus confirmation round
+found no exploitable defect after hard effort (DoS bound, r17 decode
+fail-closed, control-char host parity, prefilter soundness all re-verified).
+The full arc: r10–r14 hand-rolled-regex CHURN → Jeremy's fork + seams-strict/
+internals-free decree → r15 parser swap → r16 unified evaluator+budget → r17
+decode fail-closed → r18 clean. A design change converted an open-ended defect
+class into a bounded surface that closed in THREE fix rounds. One residual named
+(WHATWG-grounded host vs a hypothetical lenient downstream parser — a design
+premise since r15, shared with Python, not a code bug). Go is the backport
+REFERENCE for injection_guard.py. NEXT: resume the deferred inspector/evolver
+residuals + next tranches (heartbeat/projects/viz).
 
 **Standing lesson banked (feeds [[feedback-review-to-fixpoint]]):** the r15→r16
 step is the churn lesson's mirror image done right — r15 was a *design* change
