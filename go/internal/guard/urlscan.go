@@ -81,20 +81,6 @@ func newScanBudget() *scanBudget {
 	return &scanBudget{parses: maxScanParses, decodeBytes: maxScanDecodeBytes}
 }
 
-// decode meters percent-decoding. On exhaustion it returns the input
-// unchanged, which halts the progressive-decode loop for that candidate — safe
-// because the parse budget still guards every scheme already visible, and a
-// deeper encoded layer that never gets decoded simply is not scanned (a
-// documented bound, not a false-ALLOW: nothing that WOULD have flagged is
-// cleared, the scan just stops looking deeper on pathological input).
-func (b *scanBudget) decode(s string) string {
-	if b.decodeBytes <= 0 {
-		return s
-	}
-	b.decodeBytes -= len(s)
-	return percentDecodeLenient(s)
-}
-
 func urlHostIsAllowed(host string) bool {
 	for _, h := range allowedURLHosts {
 		if host == h {
@@ -243,8 +229,23 @@ func evalRawCandidate(raw string, b *scanBudget, depth int) string {
 // scanNested decodes a candidate's payload (everything past the first
 // authority terminator) one layer at a time and re-evaluates every nested
 // scheme it exposes, through the same evalRawCandidate entry point. Progressive
-// decoding catches double-encoded inner schemes (`https%253A…`). All work is
-// metered by the shared budget.
+// decoding catches double-encoded inner schemes (`https%253A…`).
+//
+// Two budget interactions matter (r17, closing the r16 re-review's HIGH):
+//   - A payload with no `%` left cannot hide an encoded scheme, so it is fully
+//     examined after this pass and returns clean WITHOUT charging the decode
+//     budget. (r16 charged every payload, so a large no-`%` payload drained the
+//     budget as a setup move — the exploit's "drain" candidates.)
+//   - Decode-budget exhaustion fails CLOSED, not open: if the budget is gone
+//     while `%` (unexamined encoded content) remains, an encoded inner scheme
+//     may be lurking that we declined to decode, so we flag rather than clear.
+//     r16's decode() returned the input unchanged here, which read as clean —
+//     a false-ALLOW: `https://r.jina.ai/https%3A%2F%2Fevil.com/…` is invisible
+//     to schemeRe until decoded, so a spent decode budget cleared a real exfil.
+//     This matches the parse-budget and oversized-authority fail-closed posture.
+// Reaching the depth cap with `%` still present stays clean (a documented
+// semantic bound — a one-hop proxy also stops decoding — not a resource
+// exhaustion we chose to abandon mid-examination).
 func scanNested(raw string, skip int, b *scanBudget, depth int) string {
 	i := strings.IndexAny(raw[skip:], "/\\?#")
 	if i < 0 {
@@ -257,11 +258,14 @@ func scanNested(raw string, skip int, b *scanBudget, depth int) string {
 				return f
 			}
 		}
-		next := b.decode(decoded)
-		if next == decoded {
-			return ""
+		if !strings.ContainsRune(decoded, '%') {
+			return "" // nothing encoded remains — fully examined
 		}
-		decoded = next
+		if b.decodeBytes <= 0 {
+			return "scan-budget-exhausted" // encoded content unexamined — fail closed
+		}
+		b.decodeBytes -= len(decoded)
+		decoded = percentDecodeLenient(decoded)
 	}
 	return ""
 }

@@ -439,6 +439,29 @@ func TestURLNestedLaunderDoSBounded(t *testing.T) {
 	}
 }
 
+// TestURLDecodeBudgetFailsClosed pins r17 (the r16 re-review's HIGH): decode-
+// budget exhaustion must fail CLOSED. A percent-encoded inner scheme is
+// invisible to schemeRe until decoded, so if an attacker drains the decode
+// budget and THEN appends an encoded laundering exfil, r16 returned the
+// undecoded string unchanged (read as clean) — a false-ALLOW. Two drain
+// vectors, both must still flag the trailing real exfil:
+//   - large no-`%` payloads (r16 charged these to the budget; r17 doesn't
+//     charge a payload with nothing to decode, so this drain is inert AND the
+//     exfil flags);
+//   - many small encoded payloads that genuinely spend the budget (r17 flags
+//     fail-closed once the budget is gone with `%` still unexamined).
+func TestURLDecodeBudgetFailsClosed(t *testing.T) {
+	evil := "https://r.jina.ai/https%3A%2F%2Fevil-collector.com%2Fleak-data-here"
+	drain := "https://r.jina.ai/" + strings.Repeat("A", 600000)
+	if r := ScanContent(drain+" "+drain+" "+evil, "internal"); r.IsClean || r.RiskLevel != "high" {
+		t.Fatalf("no-%% drain then encoded exfil scanned clean: %+v", r)
+	}
+	unit := "https://r.jina.ai/https%3A%2F%2Fx.com%2F" + strings.Repeat("p", 900) + " "
+	if r := ScanContent(strings.Repeat(unit, 1300)+evil, "internal"); r.IsClean || r.RiskLevel != "high" {
+		t.Fatalf("encoded-payload decode-budget drain then exfil scanned clean: %+v", r)
+	}
+}
+
 // TestURLNestedLaunderPastCapFlagged pins r16 HIGH-2: the nested rescan reads
 // the FULL raw payload, not the 512-capped candidate, so an inner authority
 // pushed past the per-candidate cap by encoded padding is still resolved. This
