@@ -1081,9 +1081,34 @@ func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 	case actionGuidanceOnly:
 		d["applied"] = false
 		d["status"] = "held_for_review"
-		d["block_reason"] = "new_guardrail has no matchable regex pattern — guidance only, " +
-			"and below the 0.7 confidence gate neither runtime appends the prose to the " +
-			"playbook, so it has no durable home; review manually"
+		// The reason must name the cause that ACTUALLY held this row, and
+		// there are three: below the confidence gate, a category with no
+		// playbook section, or an Append that failed (a 30s fail-closed
+		// lock timeout against a concurrent Python writer, an unreadable
+		// file, a full disk). The old string asserted the first
+		// unconditionally, so a high-confidence guardrail held by a lock
+		// timeout sent an operator to lower a threshold it had already
+		// cleared (adversarial r10 LOW). This row is durable and
+		// operator-facing; a confident wrong cause is worse than a vague
+		// right one.
+		//
+		// confidence and category are read off `d` with the same
+		// coercions applyAction uses (store.go:612, :622), so this cannot
+		// drift into a second source of truth for the gate.
+		confidence, _ := d["confidence"].(float64)
+		category, _ := d["category"].(string)
+		reason := "new_guardrail has no matchable regex pattern — guidance only, " +
+			"and the prose did not reach the playbook, so it has no durable home"
+		switch {
+		case confidence < 0.7:
+			reason += " (confidence " + pyjson.FloatRepr(confidence) +
+				" is below the 0.7 append gate)"
+		case playbookSection[category] == "":
+			reason += " (category " + category + " has no playbook section)"
+		default:
+			reason += " (the playbook append failed — see the warning log)"
+		}
+		d["block_reason"] = reason + "; review manually"
 	default: // actionFailed
 		d["applied"] = false
 		d["status"] = "action_failed"

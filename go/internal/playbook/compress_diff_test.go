@@ -200,25 +200,36 @@ func TestTheCompressionPassMatchesPythons(t *testing.T) {
 // the same class as every other length bug in this port, on the one path
 // that costs money.
 func TestTheCompressionSizeGateCountsCodePoints(t *testing.T) {
-	// 60 CJK code points of body: well over 60 bytes, well under 200.
+	// The bullets must be DISTINCT. This fixture used to repeat one bullet
+	// seven times, and Curate applies the size gate to the text AFTER
+	// expiry and dedup — so dedup deleted six of the seven and the 126-rune
+	// /252-byte document the fixture measured reached the gate as 54 runes
+	// /72 bytes, under it in BOTH units. Neither runtime called the model,
+	// both `len(...) != 0` assertions were vacuously satisfied, and the
+	// byte-vs-rune mutant survived (adversarial r10 MEDIUM).
 	var b strings.Builder
 	b.WriteString("# P\n\n## Cost\n\n")
-	for i := 0; i < 6; i++ {
-		b.WriteString("- 日本語テキストです\n")
+	for i := 0; i < 7; i++ {
+		b.WriteString("- 日本語テキストです" + string(rune('あ'+i)) + "\n")
 	}
-	b.WriteString("- 日本語テキストです\n\n*Last updated: 2020-01-01*\n")
+	b.WriteString("\n*Last updated: 2020-01-01*\n")
 	doc := b.String()
 
-	runes := utf8.RuneCountInString(doc)
-	nbytes := len(doc)
-	// The gate is DERIVED from the fixture rather than hand-picked, so a
-	// later edit to the document cannot quietly move the boundary out
-	// from under it — which is exactly how five hand-picked Inject
-	// budgets stopped discriminating earlier in this port.
+	// Straddle measured on what the GATE sees, not on what the fixture
+	// wrote. dedupText is this package's own helper, so the test cannot
+	// drift from the production shrink.
+	gated, _ := dedupText(doc)
+	runes := utf8.RuneCountInString(gated)
+	nbytes := len(gated)
+	// DERIVED from the fixture rather than hand-picked, so a later edit to
+	// the document cannot quietly move the boundary out from under it —
+	// which is exactly how five hand-picked Inject budgets stopped
+	// discriminating earlier in this port.
 	gate := (runes + nbytes) / 2
 	if !(runes < gate && gate < nbytes) {
-		t.Fatalf("fixture does not straddle the gate: %d runes, %d bytes",
-			runes, nbytes)
+		t.Fatalf("the DEDUPED text does not straddle the gate: %d runes, "+
+			"%d bytes, gate %d — this fixture cannot tell the two units "+
+			"apart", runes, nbytes, gate)
 	}
 	cfg := "playbook:\n  alarm_ttl_days: 14\n  curation_min_chars: " +
 		itoa(gate) + "\n"

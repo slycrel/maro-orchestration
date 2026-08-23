@@ -261,7 +261,10 @@ func Curate(ctx context.Context, ws string, a llm.Adapter, rec *record.Recorder,
 	// made Curate half-scoped — the destructive half, since the retention
 	// TTL decides what gets expired (adversarial r9 MEDIUM).
 	cfg, _ := config.LoadFor(ws)
-	if !force && !config.Get(cfg, "playbook.curation_enabled", true) {
+	// pyBool, not config.Get[bool]: Python tests TRUTHINESS here, and the
+	// typed getter silently enabled curation for every falsey non-bool
+	// spelling (r10 MEDIUM). See pyBool.
+	if !force && !pyBool(cfg, "playbook.curation_enabled", true) {
 		return nil
 	}
 
@@ -275,12 +278,9 @@ func Curate(ctx context.Context, ws string, a llm.Adapter, rec *record.Recorder,
 	path := Path(ws)
 	var original string
 	if err := record.Locked(path, func() error {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		original = string(raw)
-		return nil
+		var err error
+		original, err = readText(path)
+		return err
 	}); err != nil {
 		return nil
 	}
@@ -330,11 +330,14 @@ func Curate(ctx context.Context, ws string, a llm.Adapter, rec *record.Recorder,
 
 	skipped := false
 	err := record.Locked(path, func() error {
-		current, err := os.ReadFile(path)
+		// readText, like the snapshot above: the CAS compares this against
+		// `original`, so normalising only one side would make a CR-bearing
+		// file compare unequal to itself and skip every curation forever.
+		current, err := readText(path)
 		if err != nil {
 			return err
 		}
-		if string(current) != original {
+		if current != original {
 			// Another writer appended while we were computing.
 			skipped = true
 			return nil
@@ -447,6 +450,84 @@ var warn = func(msg string) { fmt.Fprintln(os.Stderr, "[playbook] "+msg) }
 // An ABSENT key never reaches int() at all — _cfg_get returns the default
 // and int(<int default>) is that default — so absence and explicit-null
 // are different, which is why this reads through config.Lookup.
+//
+// pyBool is the same story for `if not _cfg_get(key, True)`, which is a
+// plain TRUTHINESS test on whatever config.get returned — not a bool cast
+// and not config.Get[bool].
+//
+// config.Get[bool] falls back to its default on any value that is not a
+// Go bool, so every falsey NON-bool spelling flipped the gate ON: `0`,
+// `null`, `""`, `[]`, `{}` and `0.0` all disabled curation in Python and
+// enabled it in Go — six of ten spellings, every disagreement in the
+// destructive direction, on a workspace whose own config.yml says
+// curation is off (adversarial r10 MEDIUM). `0` and `null` are ordinary
+// operator spellings of "off".
+//
+// Note the asymmetry that makes this worth a helper rather than a cast:
+// the STRING "false" is a non-empty string and therefore TRUE in both
+// runtimes. Truthiness is not parsing.
+// stripIntSeparators removes PEP 515 underscores from an already
+// decimal-folded integer string, reporting false when one sits anywhere
+// CPython would refuse it.
+//
+// The rule is positional, not a count: a separator must have an ASCII
+// digit on BOTH sides. That single condition rejects a leading "_10", a
+// trailing "10_", a doubled "1__0" and a post-sign "+_10" without
+// enumerating them, because in each case one neighbour is a sign, an end,
+// or another underscore.
+//
+// It runs AFTER FoldDecimals, so "١_٠" has already become "1_0" and the
+// neighbour test can be plain ASCII.
+func stripIntSeparators(s string) (string, bool) {
+	if !strings.Contains(s, "_") {
+		return s, true
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '_' {
+			b.WriteByte(c)
+			continue
+		}
+		prevOK := i > 0 && s[i-1] >= '0' && s[i-1] <= '9'
+		nextOK := i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9'
+		if !prevOK || !nextOK {
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+func pyBool(cfg map[string]any, path string, def bool) bool {
+	raw, present := config.Lookup(cfg, path)
+	if !present {
+		return def
+	}
+	switch t := raw.(type) {
+	case nil:
+		return false
+	case bool:
+		return t
+	case int:
+		return t != 0
+	case int64:
+		return t != 0
+	case float64:
+		return t != 0 // NaN is truthy in Python, and NaN != 0 is true here
+	case string:
+		return t != ""
+	case []any:
+		return len(t) != 0
+	case map[string]any:
+		return len(t) != 0
+	case map[any]any: // some YAML decoders hand back non-string keys
+		return len(t) != 0
+	}
+	// An object of an unknown type: Python's default __bool__ is True.
+	return true
+}
+
 func pyInt(cfg map[string]any, path string, def int) (int, bool) {
 	raw, present := config.Lookup(cfg, path)
 	if !present {
@@ -472,11 +553,27 @@ func pyInt(cfg map[string]any, path string, def int) (int, bool) {
 	case string:
 		// int(str) strips Python whitespace and folds Unicode decimals,
 		// then requires an integer literal — no decimal point, no
-		// exponent. strconv.Atoi is that grammar once the digits are
-		// ASCII, except for the underscore separators Python 3 allows in
-		// numeric LITERALS but NOT in int(str), which strconv also
-		// rejects for a plain base-10 parse.
-		n, err := strconv.Atoi(pytext.FoldDecimals(pytext.Strip(t)))
+		// exponent.
+		//
+		// It ALSO accepts PEP 515 underscore separators. This comment
+		// used to claim the opposite ("allowed in numeric LITERALS but
+		// NOT in int(str)"), and that claim was the load-bearing
+		// justification for handing the string straight to strconv.Atoi,
+		// which rejects them (adversarial r10 LOW). Measured:
+		//
+		//	int("1_0") -> 10        int("+1_000") -> 1000
+		//	int("١_٠") -> 10        int("12_34_56") -> 123456
+		//	int("_10"), int("10_"), int("1__0"), int("+_10") -> ValueError
+		//
+		// So a separator is legal only BETWEEN two digits — which is why
+		// this strips them under that rule rather than unconditionally.
+		// Deleting them outright would make Go accept the four spellings
+		// CPython raises on, trading a divergence for its mirror image.
+		s, ok := stripIntSeparators(pytext.FoldDecimals(pytext.Strip(t)))
+		if !ok {
+			return 0, false
+		}
+		n, err := strconv.Atoi(s)
 		if err != nil {
 			return 0, false
 		}

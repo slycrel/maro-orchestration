@@ -4443,3 +4443,179 @@ Three things generalise:
    *fixtures* are built, and are invisible in any single round's diff. This
    is the second round under Jeremy's 2026-08-22 whole-chunk amendment and
    the second time it paid for itself.
+
+## Adversarial r10 — the playbook chunk, whole (opus tier)
+
+Third round under Jeremy's 2026-08-22 whole-chunk amendment, and the one
+that most clearly justifies it. **1 HIGH, 2 MEDIUM, 6 LOW.** All nine
+verified against CPython before any fix; none was hallucinated.
+
+The distribution is the finding. **Only two of the nine were wrong code.**
+Four were *surviving mutants on correct production code* — the code did
+the right thing and nothing in the suite would have noticed it stopping.
+Two were comments and an operator-facing string asserting causes that were
+false. One was a fixture that could not fail.
+
+### HIGH — Python normalises `\r` on every read; Go did not
+
+`Path.read_text()` is text mode with `newline=None`, i.e. **universal
+newlines**: it rewrites `\r\n` *and a lone* `\r` to `\n` before any
+parsing. All five Python reads go through it (`playbook.py:142, 299, 472,
+691, 734`). Go used `os.ReadFile` at all five matching sites and nothing
+downstream re-normalised.
+
+Measured, because the exact set matters in both directions:
+
+```
+b'a\r\nb\rc\n\x0bd\x0ce\x1ef\u2028g'  ->  'a\nb\nc\n\x0bd\x0ce\x1ef\u2028g'
+```
+
+`\r\n` and `\r` translate. `\x0b`, `\x0c`, `\x1e` and U+2028 do **not** —
+so a port that "normalised whitespace" instead would diverge in the
+opposite direction. U+2028/U+2029/U+0085 are line breaks to
+`str.splitlines()` but not to universal newlines, which is exactly the
+confusion a plausible fix would make.
+
+The consequence was structural, not cosmetic. `sectionSpan`'s
+`(?m)^##[ \t]+Cost[ \t]*$` cannot match `## Cost\r`, so `insertEntry` took
+the create-a-new-section branch and Go grew a **second `## Cost` header**
+where Python found the first and normalised the file. A duplicate header
+then re-orders injection (`dict.fromkeys` section order) and changes
+`_valid_compression`'s occurrence-counted header rule. Go also declined to
+curate documents Python curated, and injected fused multi-bullet lines
+into every director and decompose prompt.
+
+This is not hypothetical on a document Go itself writes: `compress()`
+stores the model's reply after stripping only its **ends**, so a model
+answering in CRLF puts CRs into `playbook.md` through Go's own path.
+
+**Why twelve differentials missed it: every fixture in the package is
+LF-only.** `curateCorpus` even contains a lone carriage return — *"a lone
+carriage return is likewise not a split point"* — and that line is
+correct about `_dedup_text`, which is handed a **string**. End to end the
+claim inverts, because by the time `curate_playbook` reaches that helper
+the READ has already turned the CR into a newline. A corpus that only ever
+enters through a helper cannot see what the file boundary does.
+
+Fixed with `decodeText`/`readText` in `playbook.go` and all five sites
+routed through it — including the CAS re-read, which r10 did not name.
+Normalising only the snapshot and not the re-read would have made a
+CR-bearing file compare unequal to itself and skip every curation forever.
+
+### MEDIUM — `curation_enabled` was the third gate the r9 fix stopped one line short of
+
+Python applies plain **truthiness** to whatever `config.get` returns.
+`config.Get[bool]` returns its default on any non-`bool`, so every falsey
+non-bool spelling flipped the gate ON:
+
+| value | CPython | Go (before) |
+|---|---|---|
+| `false` / `true` / `1` | agree | agree |
+| `0`, `null`, `""`, `[]`, `{}`, `0.0` | disabled | **CURATED** |
+| `"false"`, `"0"` | curated (non-empty string) | curated |
+
+Six of ten spellings disagreed, every disagreement in the destructive
+direction: Go expired alarms, collapsed bullets, archived and **rewrote
+the whole document** in a workspace whose own `config.yml` said curation
+was off. `0` and `null` are ordinary operator spellings of "off".
+
+r9's own new test file opened by declaring that *"curation reads three
+config values, and every one of them was ported as a typed getter where
+Python writes `int(...)`"* — false for this third one, which Python does
+not wrap in `int()` at all. The table below it then varied only the two
+numeric keys. Fixed with `pyBool`, the truthiness sibling to `pyInt`.
+
+### MEDIUM — the r9 size-gate fixture could not fail
+
+`TestTheCompressionSizeGateCountsCodePoints` derived its straddle from the
+**pre-dedup** document, but `Curate` applies the gate to the **post-dedup**
+text. The fixture's body was one bullet repeated seven times, so dedup
+removed six:
+
+```
+doc:     126 runes, 252 bytes; gate=189   <- what the fixture measured
+deduped:  54 runes,  72 bytes             <- what the gate actually sees
+gate crossed by RUNES? false   by BYTES? false
+```
+
+Neither runtime crossed the gate, both `len(...) != 0` assertions were
+vacuously satisfied, and the byte-vs-rune mutant survived. The fixture's
+own anti-vacuity guard passed — which is exactly why it read as covered.
+Fixed with distinct bullets and a straddle measured on `dedupText(doc)`,
+so the test cannot drift from the production shrink.
+
+### LOW — `pyInt`'s underscore claim was backwards
+
+The comment claimed Python 3 allows underscores *"in numeric LITERALS but
+NOT in `int(str)`"*, and that claim was the load-bearing justification for
+handing the string straight to `strconv.Atoi`. PEP 515 says the opposite.
+
+**r10's suggested fix was also wrong**, and adopting it would have traded
+one divergence for its mirror image. Measured:
+
+```
+int("1_0") -> 10      int("+1_000") -> 1000    int("١_٠") -> 10
+int("_10"), int("10_"), int("1__0"), int("+_10") -> ValueError
+```
+
+A separator is legal only **between two digits**. Stripping `_`
+unconditionally (r10's suggestion) makes Go accept the four spellings
+CPython raises on. Fixed with `stripIntSeparators`, whose single positional
+condition — an ASCII digit on both sides — rejects all four without
+enumerating them.
+
+### LOW — four correct behaviours with no pin
+
+Each of these was proven correct against CPython **and** proven unpinned by
+a mutant that survived the whole suite:
+
+- `replaceAlarm` replaces only the **first** line with a given alarm key.
+  Duplicate same-key alarms are precisely the pre-mechanism accretion the
+  alarm design exists to clean up, so the state is reachable in a live
+  playbook.
+- `Curate` **expires before it dedups**. Two identical expired alarm lines
+  give `expired=['k:a','k:a'], removed=0` in that order and `['k:a'], 1`
+  in the other — and both numbers are written verbatim into the
+  `PLAYBOOK_CURATED` captain's-log context, which the Python side reads.
+- `Seed` **never overwrites**. Every in-package caller pre-checks the
+  file's existence, so no fixture ever called it on an existing document.
+  `Seed` is exported and is the only verb here that writes the whole
+  document *without archiving first*.
+- `SectionText` had no test at all; `ExpireStaleAlarms` had only a Go-only
+  refusal assertion. Both are exported verbs over the shared document.
+
+### LOW — two strings asserting causes that are false
+
+- A held guardrail's `block_reason` claimed the row sat below the 0.7
+  confidence gate. `landed` is false for **three** reasons — below the
+  gate, a category with no playbook section, or an `Append` that failed
+  (a 30s fail-closed lock timeout against a concurrent Python writer, an
+  unreadable file, a full disk). A high-confidence guardrail held by a
+  lock timeout sent an operator to lower a threshold it had already
+  cleared. This row is durable and operator-facing; a confident wrong
+  cause is worse than a vague right one.
+- `attribRE`'s comment called both `\s` classes load-bearing with an NBSP
+  example. Only the **trailing** one is: the leading class sits before an
+  end-anchored attribution, so whatever it declines to consume becomes
+  trailing whitespace that `entryCore`'s own `pytext.Strip` removes.
+  Recorded as an EQUIVALENT-MUTANT NOTE rather than narrowed — the
+  transcription is the contract.
+
+### What r10 checked and found clean
+
+480 randomized `Append` sequences, 240 randomized documents × 6 `Inject`
+budgets, 720 `validCompression` pairs, the seed bytes, `GUIDANCE_FORM_RULES`
+(sha256 identical both sides), the captain's-log rows, and
+`config.LoadFor`/`Load`/`Lookup` — **0 divergences on LF-only input**, and
+divergence in the *first round* once CR tokens entered the generator.
+
+### The lesson this round adds
+
+**Two of nine findings were wrong code. Seven were the suite lying about
+what it covered** — a fixture that could not discriminate, four correct
+behaviours no test would notice breaking, and two strings stating contracts
+the code did not hold. r9's lesson was that a corpus built from one base
+document never exercises what that base cannot produce. r10's is narrower
+and sharper: **a corpus that only ever enters through a helper cannot see
+what the file boundary does.** The CR was in the fixtures the whole time,
+one call-level below where it mattered.

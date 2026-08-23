@@ -111,10 +111,19 @@ var seedSections = map[string]bool{
 var noInjectSections = map[string]bool{"Signals": true}
 
 var (
-	// attribRE is Python's _ATTRIB_RE. The two `\s` are the measured
-	// 29-code-point class, not Go's five — an attribution preceded by a
-	// NBSP is stripped by Python and kept by Go otherwise, and this
-	// function's output is a dedup key.
+	// attribRE is Python's _ATTRIB_RE. Both `\s` are the measured
+	// 29-code-point class, not Go's five, because the transcription is
+	// the contract — but only the TRAILING one is load-bearing, and the
+	// comment here used to claim both were.
+	//
+	// EQUIVALENT-MUTANT NOTE (adversarial r10 LOW): narrowing the LEADING
+	// class to Go's `\s` changes no output. It sits immediately before an
+	// end-anchored attribution, so whatever it declines to consume becomes
+	// TRAILING whitespace on the remainder — and entryCore's own
+	// pytext.Strip removes that anyway. ParseEntries only asks
+	// match/no-match, where `*` can always match zero. The trailing class
+	// genuinely differs (a dedup key keeps or drops a U+001C) and is
+	// pinned by the "- entry *(from x)*" corpus line.
 	attribRE = regexp.MustCompile(pytext.SpaceClass + `*\*\(from [^)]*\)\*` +
 		pytext.SpaceClass + `*$`)
 
@@ -181,11 +190,53 @@ func Load(ws string) string {
 	if _, err := os.Stat(path); err != nil {
 		_ = Seed(ws)
 	}
-	b, err := os.ReadFile(path)
+	text, err := readText(path)
 	if err != nil {
 		return ""
 	}
-	return string(b)
+	return text
+}
+
+// decodeText is the newline half of Python's
+// `Path.read_text(encoding="utf-8")`, and newlines — not encoding — are
+// where the two runtimes actually diverged.
+//
+// Text mode with the default `newline=None` is UNIVERSAL NEWLINES: it
+// rewrites "\r\n" AND a lone "\r" to "\n" before the caller sees a single
+// character. All FIVE of Python's playbook reads go through it
+// (playbook.py:142, 299, 472, 691, 734); os.ReadFile does not, and
+// nothing downstream re-normalises.
+//
+// It translates those two sequences and NOTHING else. Measured, not
+// assumed: "\x0b", "\x0c", "\x1e" and U+2028 all survive read_text
+// unchanged, so this is a two-step replacement and emphatically not a
+// whitespace fold — widening it would diverge in the other direction.
+//
+// A CR is not hypothetical on a document Go itself writes: compress()
+// stores the model's reply after stripping only its ENDS, so a model that
+// answers in CRLF puts CRs into playbook.md through Go's own path. The
+// consequence was a forged section — sectionSpan's
+// `(?m)^##[ \t]+Cost[ \t]*$` cannot match "## Cost\r", so insertEntry took
+// the create-a-new-section branch and grew a SECOND "## Cost" where
+// Python found the first and normalised the file (adversarial r10 HIGH).
+func decodeText(b []byte) string {
+	s := string(b)
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
+// readText is os.ReadFile through decodeText: the ONE read helper for this
+// package, so a future read site cannot reintroduce the raw-bytes path by
+// omission.
+func readText(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return decodeText(b), nil
 }
 
 // sectionSpan returns the byte offsets of the named section's body, and
@@ -566,11 +617,10 @@ const (
 // the injected context, not the record.
 func ExpireStaleAlarms(ws string, maxAgeDays int) int {
 	path := Path(ws)
-	raw, err := os.ReadFile(path)
+	text, err := readText(path)
 	if err != nil {
 		return 0
 	}
-	text := string(raw)
 
 	updated, dropped := expireText(text, maxAgeDays)
 	if len(dropped) == 0 {
@@ -674,11 +724,10 @@ func Append(ws string, rec *record.Recorder, entry, section, source, key string)
 	var entryLine string
 	var wrote bool
 	err := record.Locked(path, func() error {
-		raw, err := os.ReadFile(path)
+		text, err := readText(path)
 		if err != nil {
 			return err
 		}
-		text := string(raw)
 
 		entryLine = entry
 		if !strings.HasPrefix(entryLine, "- ") {

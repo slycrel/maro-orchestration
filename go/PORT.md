@@ -3278,3 +3278,90 @@ deleting `IsInt`'s literal check changes no verdict because
 `ValidateMilestone`'s empty-object guard changes none because the
 absent-key default is also `true`. Both stay, because each states the
 RULE where the fallthrough states only an accident.
+
+## The playbook — r10 review fixes (2026-08-23)
+
+Nine findings, all verified against CPython before any fix, none
+hallucinated. Only **two were wrong code**. Four were correct behaviours
+with no pin, two were assertions in comments and an operator-facing string
+that were false, and one was a fixture that could not fail. Three port
+rules came out of it.
+
+### Rule 1 — `Path.read_text()` is universal newlines, and that is a parse decision
+
+The Python this port targets never calls `open(..., newline='')`. Every
+read of a workspace document goes through `Path.read_text()`, which
+rewrites `\r\n` **and a lone `\r`** to `\n` before the caller sees one
+character. `os.ReadFile` does not. On the playbook this was not cosmetic:
+the section-header regex is line-anchored with `[ \t]*$`, so `## Cost\r`
+fails to match and the writer creates a section that already exists.
+
+The translation set is exact and must not be widened. Measured:
+
+```
+b'a\r\nb\rc\n\x0bd\x0ce\x1ef\u2028g'  ->  'a\nb\nc\n\x0bd\x0ce\x1ef\u2028g'
+```
+
+U+2028/U+2029/U+0085 are line breaks to `str.splitlines()` but **not** to
+universal newlines — which is precisely the mistake a plausible fix makes,
+because this port already carries a `splitlines`-shaped notion of "line
+break" for other reasons.
+
+`internal/playbook` now has one `readText` helper and no raw read. **Every
+read site must be converted together**, including the compare-and-swap
+re-read: normalising the snapshot but not the re-read makes a CR-bearing
+file compare unequal to itself and skip every curation forever. Any future
+Go port of a Python module that reads a shared document inherits this rule.
+
+### Rule 2 — a truthiness test is not a typed getter, in either direction
+
+`if not _cfg_get("playbook.curation_enabled", True)` is Python truthiness
+on whatever the config held. `config.Get[bool]` returns its default on
+anything that is not a Go `bool`, so `0`, `null`, `""`, `[]`, `{}` and
+`0.0` — six ordinary operator spellings of "off" — all enabled the
+destructive pass.
+
+The port now has `pyBool` beside `pyInt`. The pair is the rule:
+
+| Python writes | Go must use | absent key | falsey non-bool |
+|---|---|---|---|
+| `int(cfg_value)` | `pyInt` | default | may RAISE, abandoning the pass |
+| `if not cfg_value` | `pyBool` | default | falsey |
+| (neither) | `config.Get[T]` | default | default |
+
+And the asymmetry that makes truthiness not parsing: the **string**
+`"false"` is a non-empty string and therefore **true** in both runtimes.
+A `pyBool` that "helpfully" parsed it would be a new divergence.
+
+### Rule 3 — PEP 515 underscores are legal in `int(str)`
+
+The port's comment asserted the opposite, and that assertion was the
+justification for `strconv.Atoi`. Measured:
+
+```
+int("1_0") -> 10     int("+1_000") -> 1000     int("١_٠") -> 10
+int("_10"), int("10_"), int("1__0"), int("+_10") -> ValueError
+```
+
+A separator is legal only **between two digits**. The obvious fix —
+delete underscores, then parse — accepts all four spellings CPython
+raises on, trading a divergence for its mirror image. `stripIntSeparators`
+encodes the positional rule instead: an ASCII digit on both sides,
+checked after `FoldDecimals` so the neighbour test is plain ASCII.
+
+### What the round says about testing this port
+
+r9's lesson was that a corpus built from one base document never exercises
+what that base cannot produce. r10's is narrower and sharper:
+
+**A corpus that only ever enters through a helper cannot see what the file
+boundary does.**
+
+`curateCorpus` contained a lone carriage return the whole time, under the
+name *"a lone carriage return is likewise not a split point"* — and that
+line is *correct* about `_dedup_text`, which is handed a string. End to
+end the claim inverts, because the read already turned the CR into a
+newline. Twelve differentials, one call-level above where it mattered.
+
+The corollary now applied to every new pin here: a differential that
+enters through a helper needs a sibling that enters through the **file**.
