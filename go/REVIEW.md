@@ -3243,3 +3243,64 @@ favour (`ParseFloat("1e-400")` does not `ErrRange`).
 NEXT: r3 over the whole chunk including slice 3c and these fixes. The
 reviewer's own recommendation — make the lifecycle decision functions
 the focus rather than re-reviewing the JSONL door — stands.
+
+## r3 — skill library, whole chunk (2026-08-23, opus)
+
+Reviewer tier escalated per the standing rule (r1/r2 ran on the
+sonnet-medium fallback lane; escalate rather than grind cheap rounds).
+Whole-chunk scope per the 2026-08-22 amendment: slices 3a+3b+3c and the
+r1/r2 fixes, against a pristine `git archive c8f1c69c` extract, focused
+on the lifecycle decision functions as r2 recommended. Every finding was
+reproduced by driving both runtimes over the same seeded store and
+diffing; none was hallucinated this round.
+
+**Not at fixpoint: 2 HIGH, 3 MED, 4 LOW.** They land exactly where r2
+pointed, and two patterns are worth naming because per-function review
+cannot see either:
+
+1. **A correct primitive called from the wrong place.** Both HIGHs are
+   this. `UpdateSkillUtility` and `RecordVariantOutcome` call
+   `SaveSkill` (delete + append at the tail) where Python calls
+   `_save_skills(updated_ids=…)` (the ordinal-holding rewrite) — so the
+   library's highest-frequency writer breaks the invariant `pool.go`
+   states in its own words, and a promotion sweep with a cap promotes a
+   DIFFERENT SET in the two runtimes off the same store. And
+   `compactnessAdjustedScore` counts BYTES where Python counts code
+   points, which is the sort key for the only destructive tier path;
+   54 of the live store's 432 skills score differently. Each function
+   under the microscope is itself right.
+2. **The decision ports faithfully and the ANNOUNCEMENT of it does
+   not.** All three MEDs: the captain's-log audience registry was not
+   extended for the five skill events, so every Go promotion, demotion
+   and circuit trip is invisible to the operator's curated lane; the
+   failure reason is filed under `context` instead of the top-level
+   `note` key, so it never renders; and `RunIslandCycle` writes no
+   `ISLAND_CULLED` entry at all — a retirement with no log line.
+
+Two of the LOWs are this REVIEW.md's own r2 section claiming a class was
+closed when a second instance sat in a file the same review had open:
+`appendJSONL` is still on plain `json.Marshal` (it was one of two
+writers, not one), and `stampOutcomeVerdictLocked` is a fourth
+un-fsynced whole-store rewrite that also widens file mode 600→644 and
+re-types a foreign row's `cost: 1.0` to `1`. The remaining LOWs: a
+variant outcome launders a tampered `content_hash` (falls out of the
+H1 fix), and `round3`/`round4` multiply-then-round where Python rounds
+the exact double — 202 of 400 three-decimal half-values diverge, though
+the reviewer walked all 4.2M EMA-reachable values 22 steps deep and
+found 0 divergences on that path, so the reach is stored/imported
+utility scores rather than the common one.
+
+Attacked and confirmed solid, all executed: a 300-step randomized
+EMA/circuit trace compared at 17 significant digits (0 divergences in
+1200 per-skill snapshots); a real cross-process concurrency race
+(Python writer + 3 Go goroutines, one store — 29 rows, 0 duplicates, 0
+lost, 0 drifted); a whole-library differential over the real 432-skill
+store (island assignment 0/432 mismatches; frontier, rewrite and
+escalation sets identical; matching identical); 2,000 A/B routings
+identical; `FormatSkillsForPrompt` byte-identical; the promotion veto
+path; provenance sidecars byte-identical; the manifest bytes under a
+hostile payload. A byte-vs-codepoint attack on `skillTokens` was tried
+and REFUTED (the tokenizer's class makes every surviving token ASCII).
+
+NEXT: verify each claim against the source, fix, then r4 over the whole
+chunk again.

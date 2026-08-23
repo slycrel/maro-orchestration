@@ -2002,9 +2002,11 @@ port-wide question for a pass over every emitter, not a skills one.
    `retire_losing_variants`, `attribute_failure_to_skills`,
    `load_skill_provenance`) and the Phase-14 test gate
    (`generate_skill_tests`, `run_skill_tests`,
-   `validate_skill_mutation`). Then sub_mission (with the goal queue),
-   playbook.md port (unblocks guidance-only guardrails + graduation
-   playbook appends).
+   `validate_skill_mutation`). Then sub_mission (`mission.py` +
+   `handle_queue.py`) — whose project-ledger substrate `orch_items.py`
+   is DONE, see the project-ledger slice below — then the playbook.md
+   port (unblocks guidance-only guardrails + graduation playbook
+   appends).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
@@ -2183,6 +2185,128 @@ are at different revisions; those move with the toolchains.
 
 13 further mutations derived from the fixed files, all killed — 59 for
 the chunk.
+
+### Project ledger — slice 1: NEXT.md and its neighbours (2026-08-23)
+
+`internal/orch` ports Python `orch_items.py`'s ledger half: the NEXT.md
+checklist, the DECISIONS/RISKS/PROVENANCE section files, the PRIORITY
+value and the lifecycle markers, plus global selection over all of them.
+This is the substrate `sub_mission` and the goal queue sit on, so it
+comes first.
+
+**Why a Markdown ledger needs more care than a JSONL store.** An item
+here has no id. Its identity is its LINE NUMBER, so "where does a line
+begin" is not a formatting question — it decides which item a mark
+flips. Three measured Python behaviours drive the whole package, and in
+all three the obvious Go call gives a different answer:
+
+- **`str.splitlines()` breaks on ten separators**, not one: `\n \v \f
+  \r \x1c \x1d \x1e \x85 U+2028 U+2029`, with `\r\n` counted as one. A
+  NEXT.md carrying a form feed is numbered differently by
+  `strings.Split(s, "\n")`, and every index after it points at the
+  wrong item.
+- **Python re's `\s` is 29 code points**; Go's regexp `\s` is five.
+  Measured over the full rune range, Python's `\s` and `str.isspace()`
+  are the *same* set, and it includes `U+001C–U+001F`, which Go's
+  `unicode.IsSpace` also omits. `ITEM_RE` uses `\s` four times, so an
+  item indented with a non-breaking space parses in Python and vanishes
+  in Go.
+- **`len()` on the indent counts CHARACTERS.** Two non-breaking spaces
+  are two characters and four bytes.
+
+Note that the whitespace set and the line-break set are *different
+sets*: `U+001C` breaks lines but `U+001F` does not, while `U+00A0` is
+whitespace that never breaks. Conflating them gets one of the two
+wrong.
+
+Those primitives now live in **`internal/pytext`** (`IsSpace`, `Strip`,
+`TrimRight`, `Lower`, `SplitLines`, `Repr`) rather than being
+re-derived per package — the same extraction `internal/pyjson` got in
+the r2 fixes, and for the same reason: this family of difference keeps
+reappearing, and two packages disagreeing about whitespace is a bug
+that only shows up in a shared file. `skills/coerce.go` keeps its own
+copies for now and becomes a set of aliases once the skills chunk is at
+fixpoint (deliberate: not editing files under active review).
+
+**Quirks ported verbatim, because the file is shared.** `- [ ]` with
+nothing after it is NOT an item (the text group needs one character)
+while `- [ ] ` with a single trailing space IS one, with empty text.
+`write_next_lines` rstrips the whole joined document, so trailing blank
+lines do not survive a write. `[X]` normalizes to `[x]` on read. The
+checkbox substitution rewrites the FIRST bracket pair on the line.
+
+**Named improvement, not parity.** Python computes the indices
+`append_next_items` returns as `range(len(lines_before), …)` —
+arithmetic that assumes one item per line. An item whose text carries a
+line separator produces two physical lines, so every later index is
+wrong and a caller that marks what it just appended marks a non-item
+and raises. The Go writer emits byte-identical bytes and reads the
+indices back out of the rendered result, so it differs from Python only
+where Python is wrong.
+
+**Named divergences, both narrow.** `ProjectPriority` accepts ASCII
+digits, a sign and PEP-515 underscores; Python's `int()` also accepts
+non-ASCII decimal digits, so a PRIORITY file written in Devanagari
+digits reads as its value there and as 0 here (costs ordering, never
+data). And `MARO_ORCH_ROOT` — Python's second store-routing pin, which
+repoints the whole ledger at a repo-local directory — is deliberately
+unread, for the same reason `MARO_HOME` is: the 2026-08-16 live-ledger
+incident was a second routing variable disagreeing with the first.
+
+**Two safety choices where Python is silent.** A ledger that is not
+valid UTF-8 is REFUSED, because Python's `read_text(encoding="utf-8")`
+raises and admitting it would let this runtime renumber, rewrite and
+mark items in a file the other runtime can no longer open. And the
+DOING-PID sidecar keeps Python's insertion order (via a token walk
+rather than a map range) and carries entries it does not model through
+verbatim, so a rewrite neither churns the file nor drops the other
+side's fields.
+
+The pid probe reproduces Python's three-way answer exactly, including
+the two shapes that read as ALIVE: `EPERM` (a live process owned by
+another user) and pid 0 (`kill(0, sig)` addresses the caller's process
+GROUP and succeeds, which is what Python's `int(rec.get("pid", 0) or
+0)` produces from a missing, null or empty pid). Reading either as dead
+would let a drain loop revert an item a live executor is working on.
+`sheriff.project_lifecycle_state`'s `.maro-failed` / `.maro-paused`
+markers are ported here too, because global selection reads them and
+skipping the check would make this runtime drain a project the operator
+had explicitly pulled out of rotation.
+
+**Verified by execution, not by reading.** Both runtimes were driven
+through the same fixed script of operations (ensure → append → three
+marks → decision/risk/dedupe-refused-risk/provenance) into separate
+workspaces:
+
+- Same file set; **all six files byte-identical** once the timestamp
+  and pid are normalized (`NEXT.md`, `DECISIONS.md`, `RISKS.md`,
+  `PROVENANCE.md`, `PRIORITY`, `.doing_pids.json`).
+- Every derived answer identical: item list with states/text/indents,
+  counts, status, `select_global_next`, appended indices `[11 12 13]`.
+- Python then READ the Go-written workspace and agreed on all of it —
+  and correctly reported the Go-stamped DOING item as stranded once the
+  Go process had exited, which is the sidecar mechanism working across
+  runtimes rather than a divergence.
+
+The Go half of that drive is kept in the tree as `TestDriveProbe`
+(skipped unless `MARO_ORCH_DRIVE_WS` is set) rather than in a
+scratchpad, because an interop claim that can only be re-checked by
+rebuilding a throwaway harness stops being re-checked.
+
+**Mutation battery: 57 derived from the files, all killed.** Three
+mutants are recorded as EQUIVALENT rather than chased with a test that
+could not fail — a guard that cannot fail is worse than no guard:
+making the text group greedy (the parse strips `m[3]` with the same
+character set the pattern would have used), dropping `sort.Strings`
+(`os.ReadDir` already returns entries sorted by filename), and the
+non-string-key branch in the sidecar walk (unreachable: in object
+position `json.Decoder.Token()` returns a string or an error, and
+`dec.More()` has excluded the closing brace).
+
+**Not in this slice:** run records (`RunRecord`, the attempt counter,
+validation summaries), `decompose_goal`/`plan_project` (LLM), the
+`MARO_ORCH_ROOT` branch, and the wider sheriff. `mission.py` and
+`handle_queue.py` are the next step up.
 
 ## Running
 
