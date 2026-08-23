@@ -1441,6 +1441,83 @@ brittle mechanism (churn — stop, redesign) or in a bounded new surface (normal
 convergence — fix and re-review)? The dep swap moved the hard part into a
 WPT-tested library; what's left is ours and small.
 
+**Self-improvement slice 2 (2026-08-22, scans/graduation/verify tranche):**
+Ports evolver_scans.py (fork-point, ~900 lines) + graduation.py (~500)
++ memory_ledger.verdict_trust + the VERIFY_LEARN_ARC V2/V3 cadence
+lifecycle, composed in Python run_evolver's order. Four new packages:
+
+`internal/record/verdict.go` — the §4 verdict-trust policy
+(full/directional/neutral/excluded, VerdictConfidenceFloor=0.7,
+closure_unverifiable excluded from ALL learning consumers) plus the
+shared `GoalAchieved` tri-state; malformed goal_achieved reads
+judged-NOT-achieved (the r3 twin semantics, candidate #9, now the
+single policy site every scan consumes).
+
+`internal/scans` — the five statistical scanners (calibration log,
+step-costs lower-median 2x rule, quality drift with its
+evolver-baselines.jsonl snapshot ledger and 3-consecutive alert,
+canon candidates over canon_stats.jsonl + long-tier lessons with the
+full exclusion battery, suggestion-outcome calibration over
+suggestion_outcomes.jsonl), `RunStatisticalScans` fan-out with
+per-scanner panic isolation, `ScanEvolverImpact` (±12h windows,
+per-window min 3, trust-filtered stuck rates, NaN for insufficient
+data, captains-log EVOLVER_APPLIED fallback), and
+`VerifyAppliedSuggestions` — the V2/V3 pass: cadence verdicts
+(confirmed/degraded/inconclusive) on every applied-unverified row,
+authority asymmetry (auto-applied degraded → revert; HUMAN-applied →
+degraded_needs_review, never auto-reverted, with a re-read-fresh
+narrowing before the irreversible revert), inconclusive →
+verify_extensions bump → park "unverifiable" at max_extensions, V3
+per-class failure_class_rate windows from DATED diagnoses
+(recorded_at stamp, else a lazy events.jsonl join on loop_id;
+undatable rows dropped with the count announced), config knobs
+verify_cadence_verdicts/min_post_apply/max_extensions/delta_threshold/
+use_class_signal, EVOLVER_VERDICT captain's-log events, and
+self_improvement_verdict rows in events.jsonl with the exact
+observe.write_event field set (notify hook command named unported —
+no Telegram in Go).
+
+`internal/graduation` — lessons-are-data made concrete: the 9
+failure-class graduation templates left Python CODE
+(`_GRADUATION_TEMPLATES` dict) and became an embedded JSON data file
+(`graduation_templates.json`) with a workspace override at
+`<ws>/graduation-templates.json`. The override may tune category/
+suggestion/confidence; `verify_pattern` is FORCED back to the shipped
+copy with a named warning, and `VerifyGraduationRules` executes ONLY
+`executablePattern(fc)` — the compiled-in embedded copy — never a
+row- or override-carried string. That's the provenance lesson
+("provenance = producer's bit") applied to shell execution, and it's
+a NAMED BACKPORT CORRECTION: (11) fork-point Python shells out
+whatever `verify_pattern` string suggestions.jsonl carries — anyone
+who can append a ledger row owns a shell. Also: scan/propose with
+count-desc sort, evidence dedup, AlreadyProposed substring dedup
+(Python parity), pending-only rows + GRADUATION_PROPOSED events;
+structural verification (10s `sh -c` timeout in repoRoot, passed =
+exit 0 AND non-empty stdout, newest-APPLIED-row-wins per class,
+empty repoRoot → honestly unavailable, resolved MARO_REPO_ROOT >
+config graduation.repo_root); and the claim/ack notification state
+machine on graduation-verification-state.json (LockedRMW, identity =
+{suggestion_id, applied_at, passed}, 300s lease, Go takes event
+claims only — notify claims stay Python's).
+
+`internal/selfimprove` — the composition layer: `Cycle` runs
+graduation verification → evolver.Run (scanners riding the batch via
+the new `ExtraSuggestions` hook — the scans→evolver import cycle
+resolved by injection, same batch/save/auto-apply position as
+run_evolver's `suggestions.extend`) → graduation propose → the V2
+verify pass. CLI: `maro evolve` gains -impact/-verify/-verify-apply,
+new `maro graduate` (-min-count/-lookback/-dry/-verify).
+
+Named unported (package docs carry the same lists): business-signal /
+harness-friction / persona-gap / advisor / island / router-retrain /
+skill-candidate passes, playbook.md append (returns with the playbook
+port), Telegram notify hook, navigator divergence adjudication.
+Mutations M119–M126: 7 DETECTED outright; M123 (drift 3-consecutive
+→ 1) SURVIVED and was closed with a new negative pin
+(TestScanQualityDriftSingleBreachStaysQuiet) — the human-applied
+never-reverted property is doubly guarded (case arm + re-read), so
+M121 is a deliberate two-line mutant defeating both.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
@@ -1454,10 +1531,11 @@ WPT-tested library; what's left is ours and small.
    slice above); the evaluate_closure decision layer + check-in/
    escalation machinery remain (they return with restart machinery).
 4. ~~Inspector/evolver self-improvement loop~~ — slice 1 DONE
-   (inspector/evolver tranche above); the statistical scanners,
-   graduation, skill engines, and the V2 verify lifecycle return
-   with their subsystems (skills store, constraint engine, goal
-   queue).
+   (inspector/evolver tranche above); ~~statistical scanners,
+   graduation, V2 verify lifecycle~~ — slice 2 DONE (self-improvement
+   slice 2 above). Remaining: skill engines (with the skills store),
+   sub_mission (with the goal queue), playbook.md port (unblocks
+   guidance-only guardrails + graduation playbook appends).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —

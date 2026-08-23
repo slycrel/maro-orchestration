@@ -10,9 +10,12 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
+	"github.com/slycrel/maro-orchestration/go/internal/graduation"
 	"github.com/slycrel/maro-orchestration/go/internal/inspector"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/scans"
+	"github.com/slycrel/maro-orchestration/go/internal/selfimprove"
 )
 
 // runInspect is the `maro inspect` subcommand — one read-only quality
@@ -103,6 +106,9 @@ func runEvolve(args []string) error {
 	dismissID := fs.String("dismiss", "", "dismiss one suggestion by id")
 	reason := fs.String("reason", "", "reason recorded with -dismiss")
 	revertID := fs.String("revert", "", "revert one applied suggestion by id (change_log trail)")
+	impact := fs.Bool("impact", false, "print longitudinal impact of applied suggestions and exit")
+	verifyOnly := fs.Bool("verify", false, "render V2 cadence verdicts (dry-run report) and exit")
+	verifyApply := fs.Bool("verify-apply", false, "with -verify: actually stamp/revert/park")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -119,6 +125,28 @@ func runEvolve(args []string) error {
 	rec := record.New(ws)
 
 	switch {
+	case *impact:
+		records := scans.ScanEvolverImpact(ws, scans.ImpactOptions{})
+		fmt.Println(scans.FormatImpactSummary(records))
+		return nil
+
+	case *verifyOnly:
+		summary := scans.VerifyAppliedSuggestions(ws, rec, cfg, "cli",
+			scans.VerifyOptions{DryRun: !*verifyApply, Verbose: true})
+		if summary.Skipped == "disabled" {
+			fmt.Println("Cadence verdicts disabled (evolver.verify_cadence_verdicts=false).")
+			return nil
+		}
+		mode := "dry-run (use -verify-apply to act)"
+		if *verifyApply {
+			mode = "APPLIED"
+		}
+		fmt.Printf("Cadence verdicts [%s]: %d confirmed, %d reverted, %d revert-failed, "+
+			"%d review-queued, %d unverifiable, %d pending (of %d applied-unverified).\n",
+			mode, summary.Confirmed, summary.Reverted, summary.RevertFailed,
+			summary.ReviewQueued, summary.Unverifiable, summary.Pending, summary.Candidates)
+		return nil
+
 	case *list:
 		pending := evolver.ListPending(ws, 20)
 		if len(pending) == 0 {
@@ -178,7 +206,9 @@ func runEvolve(args []string) error {
 
 	// Full cycle: the proposer needs an adapter (that IS the command);
 	// -dry still loads outcomes and prints the skip/summary shape
-	// without LLM spend or writes.
+	// without LLM spend or writes. selfimprove.Cycle wraps the core in
+	// the run_evolver order: graduation verification → propose+scans+
+	// auto-apply → graduation propose → cadence verdicts.
 	var adapter llm.Adapter
 	if !*dry {
 		a, err := buildAdapter(*backend)
@@ -188,17 +218,103 @@ func runEvolve(args []string) error {
 		adapter = a
 		fmt.Printf("backend: %s\n", adapter.Name())
 	}
-	report := evolver.Run(context.Background(), ws, rec, cfg, adapter, evolver.RunOptions{
-		OutcomesWindow: *window,
-		MinOutcomes:    *minOutcomes,
-		DryRun:         *dry,
-		Verbose:        true,
-	})
+	report, verify := selfimprove.Cycle(context.Background(), ws, rec, cfg, adapter,
+		selfimprove.CycleOptions{
+			OutcomesWindow: *window,
+			MinOutcomes:    *minOutcomes,
+			DryRun:         *dry,
+			Verbose:        true,
+		})
 	if *format == "json" {
 		fmt.Println(evolver.MarshalReport(report))
 		return nil
 	}
 	fmt.Println(report.Summary())
+	if verify.Enabled && verify.Candidates > 0 {
+		fmt.Printf("cadence verdicts: %d confirmed, %d reverted, %d revert-failed, "+
+			"%d review-queued, %d unverifiable, %d pending\n",
+			verify.Confirmed, verify.Reverted, verify.RevertFailed,
+			verify.ReviewQueued, verify.Unverifiable, verify.Pending)
+	}
+	return nil
+}
+
+// runGraduate is the `maro graduate` subcommand (Python: python3 -m
+// graduation) — scan diagnoses for repeated failure classes, propose
+// pending rules, or run the structural verify pass.
+func runGraduate(args []string) error {
+	fs := flag.NewFlagSet("graduate", flag.ContinueOnError)
+	minCount := fs.Int("min-count", 3, "occurrences to trigger graduation")
+	lookback := fs.Int("lookback", 100, "recent diagnoses to scan")
+	dry := fs.Bool("dry", false, "scan only, do not write suggestions")
+	verify := fs.Bool("verify", false, "run the structural verify_pattern pass and report")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("graduate takes no positional arguments (got %q)", fs.Args()[0])
+	}
+
+	ws := config.Workspace()
+	fmt.Printf("workspace: %s\n", ws)
+	cfg, warnings := config.Load()
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "config warning:", w)
+	}
+
+	if *verify {
+		repoRoot := selfimprove.RepoRoot(cfg)
+		if repoRoot == "" {
+			fmt.Println("structural verify skipped: no repo root " +
+				"(set MARO_REPO_ROOT or graduation.repo_root — the shipped " +
+				"grep patterns need a maro source tree to check)")
+			return nil
+		}
+		fmt.Println("Verifying graduated rules (running verify_pattern for each):")
+		results := graduation.VerifyGraduationRules(ws, repoRoot, 200)
+		if len(results) == 0 {
+			fmt.Println("  (no applied graduated rules with a shipped verify_pattern found)")
+			return nil
+		}
+		passCount := 0
+		for _, r := range results {
+			icon := "FAIL"
+			if r.Passed {
+				icon = "PASS"
+				passCount++
+			}
+			fmt.Printf("  [%s] %s\n", icon, r.FailureClass)
+			if r.Output != "" {
+				fmt.Printf("         → %s\n", r.Output)
+			}
+		}
+		fmt.Printf("\n%d/%d verified rules passing\n", passCount, len(results))
+		return nil
+	}
+
+	candidates := graduation.ScanCandidates(ws, *minCount, *lookback)
+	fmt.Printf("Graduation candidates (min_count=%d, lookback=%d):\n", *minCount, *lookback)
+	if len(candidates) == 0 {
+		fmt.Println("  (none)")
+	}
+	for _, c := range candidates {
+		tag := ""
+		if graduation.AlreadyProposed(ws, c.FailureClass, 200) {
+			tag = " [already proposed]"
+		}
+		last := c.LoopIDs
+		if len(last) > 3 {
+			last = last[len(last)-3:]
+		}
+		fmt.Printf("  %s: %dx — loops %s%s\n", c.FailureClass, c.Count,
+			strings.Join(last, ", "), tag)
+	}
+
+	rec := record.New(ws)
+	n := graduation.RunGraduation(ws, rec, *minCount, *lookback, *dry, true)
+	if !*dry {
+		fmt.Printf("\nWrote %d new graduation suggestion(s).\n", n)
+	}
 	return nil
 }
 

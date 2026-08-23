@@ -349,6 +349,70 @@ func Dismiss(workspaceDir, suggestionID, reason string) (bool, error) {
 	return found, err
 }
 
+// VerificationStamp carries stamp_verification's optional fields: nil means
+// "leave the row's value untouched" (the Python keyword-None contract).
+//
+//	Verdict    → verify_verdict (terminal label, or interim "" cleared)
+//	VerifiedAt → the terminal stamp; a truthy ISO string marks the row
+//	             TERMINAL (no longer re-examined). Leave nil for an interim
+//	             inconclusive re-check so the row stays pending.
+//	Extensions → verify_extensions (absolute value, not a delta).
+type VerificationStamp struct {
+	Verdict    *string
+	VerifiedAt *string
+	Extensions *int
+}
+
+// StampVerification ports evolver_store.stamp_verification: durably record
+// VERIFY_LEARN_ARC V2 cadence-verdict state on a suggestion. Keyed-merge
+// write under the lock (same discipline as apply): rows appended/updated by
+// concurrent finalizations between read and write are preserved, and a
+// byte-tainted line is re-emitted verbatim, never re-dumped. Never touches
+// `applied` — a degraded row is reverted by Revert; the verdict is a
+// separate, orthogonal stamp. Returns true if the row was found.
+func StampVerification(workspaceDir, suggestionID string, stamp VerificationStamp) bool {
+	p := suggestionsPath(workspaceDir)
+	if _, err := os.Stat(p); err != nil {
+		return false
+	}
+	found := false
+	_ = record.LockedRMW(p, func(old string) string {
+		var out []string
+		for _, line := range strings.Split(old, "\n") {
+			s := strings.TrimSpace(line)
+			if s == "" {
+				continue
+			}
+			var row map[string]any
+			if json.Unmarshal([]byte(s), &row) != nil {
+				out = append(out, s)
+				continue
+			}
+			if row["suggestion_id"] == suggestionID {
+				found = true
+				if stamp.Verdict != nil {
+					row["verify_verdict"] = *stamp.Verdict
+				}
+				if stamp.VerifiedAt != nil {
+					row["verified_at"] = *stamp.VerifiedAt
+				}
+				if stamp.Extensions != nil {
+					row["verify_extensions"] = *stamp.Extensions
+				}
+				enc, _ := json.Marshal(row)
+				out = append(out, string(enc))
+			} else {
+				out = append(out, s)
+			}
+		}
+		if len(out) == 0 {
+			return ""
+		}
+		return strings.Join(out, "\n") + "\n"
+	})
+	return found
+}
+
 // changeLogAppend writes the audit row BEFORE a mutation happens so
 // changes are recoverable; failure never blocks execution (Python
 // parity — the trail is best-effort, the action is not).

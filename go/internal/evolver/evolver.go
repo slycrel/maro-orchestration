@@ -251,14 +251,24 @@ type RunOptions struct {
 	MinOutcomes    int  // default 3
 	DryRun         bool // analyze without writing or applying
 	Verbose        bool
+	// ExtraSuggestions lets the composition layer (internal/selfimprove)
+	// inject the statistical scanners' rows into THIS cycle's batch — they
+	// persist in the same save, count in the same cycle event, and ride the
+	// same auto-apply pass, exactly where run_evolver extends its list. A
+	// hook rather than an import: scans depends on this package's store, so
+	// the arrow can't point back. Called after LLM analysis with the loaded
+	// outcomes; nil = no extras.
+	ExtraSuggestions func(outcomes []map[string]any) []Suggestion
 }
 
 // Run executes one meta-evolution cycle: load outcomes → LLM analysis →
-// persist suggestions (content-dedup) → auto-apply high-confidence
-// low-risk categories. The statistical scanners, advisor gate,
-// graduation, and post-apply test-suite verify are NOT ported — see the
-// package doc; medium-confidence (0.6-0.79) suggestions therefore stay
-// pending instead of getting an advisor hearing.
+// merge ExtraSuggestions → persist (content-dedup) → auto-apply
+// high-confidence low-risk categories. The advisor gate and post-apply
+// test-suite verify are NOT ported — see the package doc;
+// medium-confidence (0.6-0.79) suggestions therefore stay pending
+// instead of getting an advisor hearing. Graduation and the V2/V3
+// cadence-verdict pass live in internal/selfimprove.Cycle, which wraps
+// this in the Python run_evolver order.
 func Run(ctx context.Context, workspaceDir string, rec *record.Recorder,
 	cfg map[string]any, adapter llm.Adapter, opts RunOptions) EvolverReport {
 	if opts.OutcomesWindow <= 0 {
@@ -305,6 +315,12 @@ func Run(ctx context.Context, workspaceDir string, rec *record.Recorder,
 			ExpectedSignal:   expectedSignal(raw["expected_signal"]),
 			Pattern:          stringOr(raw["pattern"]),
 		})
+	}
+
+	// Statistical-scan rows join the batch here — same position as
+	// run_evolver's suggestions.extend(run_statistical_scans(...)).
+	if opts.ExtraSuggestions != nil {
+		suggestions = append(suggestions, opts.ExtraSuggestions(outcomes)...)
 	}
 
 	report := EvolverReport{

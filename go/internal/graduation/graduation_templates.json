@@ -1,0 +1,59 @@
+{
+  "_comment": "Graduation templates — LEARNING-SHAPED DATA, deliberately not code (Jeremy's lessons-are-data decree, 2026-08-22). Content matches src/graduation.py _GRADUATION_TEMPLATES at the fork point; Python still reifies these as a dict and is the named backport candidate to read this file instead. A workspace copy at <workspace>/graduation-templates.json overrides per failure_class (category/suggestion/confidence — verify_pattern execution stays anchored to this shipped copy; see templates.go). Placeholders: {count}, {loop_ids}, {evidence}.",
+  "templates": {
+    "adapter_timeout": {
+      "category": "observation",
+      "suggestion": "adapter_timeout is a recurring failure ({count}x across loops {loop_ids}). Permanent fix: increase default ClaudeSubprocessAdapter timeout to 600s, or route long-running goal types to API adapter. Consider adding '--step-timeout 600' as a user/CONFIG.md default.",
+      "confidence": 0.75,
+      "verify_pattern": "grep -rn 'step.timeout.*600\\|timeout.*600\\|600.*timeout' src/ user/ 2>/dev/null | head -1"
+    },
+    "constraint_false_positive": {
+      "category": "new_guardrail",
+      "suggestion": "Constraint false positives detected {count}x (loops {loop_ids}). Natural-language steps with action words are being blocked unnecessarily. Add to constraint allowlist: steps that contain action words but have no explicit system path or irreversible target should be tier READ, not DESTROY. Evidence: {evidence}",
+      "confidence": 0.85,
+      "verify_pattern": "grep -n 'allowlist\\|_ALLOWLIST\\|tier.*READ' src/constraint.py 2>/dev/null | head -1"
+    },
+    "decomposition_too_broad": {
+      "category": "prompt_tweak",
+      "suggestion": "decomposition_too_broad detected {count}x (loops {loop_ids}). Steps are consistently exceeding 200K tokens or 120s. Add permanent decompose hint to Director system prompt: 'Research steps must be scoped to a single source or claim cluster. Never bundle multiple research questions into one step.' Evidence: {evidence}",
+      "confidence": 0.8,
+      "verify_pattern": "grep -n 'single source\\|single.*source\\|one step' src/director.py 2>/dev/null | head -1"
+    },
+    "token_explosion": {
+      "category": "prompt_tweak",
+      "suggestion": "token_explosion detected {count}x (loops {loop_ids}): token growth > 3x between consecutive steps. Add to EXECUTE_SYSTEM: explicitly cap intermediate context storage. Completed context should summarize, not quote. Evidence: {evidence}",
+      "confidence": 0.8,
+      "verify_pattern": "grep -n 'under 500\\|500 tokens\\|Target.*token' src/step_exec.py 2>/dev/null | head -1"
+    },
+    "cost_spike": {
+      "category": "observation",
+      "suggestion": "cost_spike detected {count}x (loops {loop_ids}): a single step or the whole loop exceeded the cache-aware dollar-cost threshold. Unlike token_explosion this is real spend (fresh tokens priced at full rate, cache reads at 0.1x), so it survives caching. Likely a pricey model doing genuinely large fresh work — route the costly step to a cheaper model tier, or split the step so the expensive model sees less fresh context. Evidence: {evidence}",
+      "confidence": 0.7,
+      "verify_pattern": "grep -n 'model_key\\|model_for\\|cheap.*mid.*power\\|estimate_cost' src/director.py src/agent_loop.py 2>/dev/null | head -1"
+    },
+    "empty_model_output": {
+      "category": "new_guardrail",
+      "suggestion": "empty_model_output detected {count}x (loops {loop_ids}). Model returns tokens but no tool call and content < 20 chars. Add permanent guardrail: on empty output, immediately inject refinement hint rather than waiting for the second retry cycle. Evidence: {evidence}",
+      "confidence": 0.75,
+      "verify_pattern": "grep -n 'empty.*hint\\|hint.*empty\\|empty_output\\|no.*tool.*call' src/step_exec.py src/agent_loop.py 2>/dev/null | head -1"
+    },
+    "retry_churn": {
+      "category": "observation",
+      "suggestion": "retry_churn detected {count}x (loops {loop_ids}): same step retried 2+ times with different block reasons — a sign the step decomposition is ambiguous. Increase max_retries to 3 and add generate_refinement_hint() call on first churn rather than second. Evidence: {evidence}",
+      "confidence": 0.7,
+      "verify_pattern": "grep -n 'max_retries.*[3-9]\\|MAX_RETRIES.*[3-9]' src/agent_loop.py src/step_exec.py 2>/dev/null | head -1"
+    },
+    "budget_exhaustion": {
+      "category": "prompt_tweak",
+      "suggestion": "budget_exhaustion detected {count}x (loops {loop_ids}): max_iterations reached with remaining steps undone. Director is over-decomposing. Add to decompose prompt: 'Target 4-6 steps unless the goal explicitly requires more. Fewer, broader steps are better than many narrow steps.' Evidence: {evidence}",
+      "confidence": 0.75,
+      "verify_pattern": "grep -n '4-6 steps\\|4 to 6\\|fewer.*steps\\|Fewer.*steps' src/director.py 2>/dev/null | head -1"
+    },
+    "integration_drift": {
+      "category": "observation",
+      "suggestion": "integration_drift detected {count}x (loops {loop_ids}): ImportError or AttributeError caught during execution. An internal module API changed without updating callers. Consider adding a startup self-test (doctor check) that validates imports before beginning a loop. Evidence: {evidence}",
+      "confidence": 0.7,
+      "verify_pattern": "grep -n 'doctor\\|validate_imports\\|self.test' src/agent_loop.py src/handle.py 2>/dev/null | head -1"
+    }
+  }
+}

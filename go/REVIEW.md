@@ -2960,3 +2960,35 @@ class into a bounded surface that closed in three fix rounds. Mutations M85–M1
 all detected across the arc. Go is the backport REFERENCE for Python's
 injection_guard.py (IDN mapping, userinfo/nested confusion, encoded laundering,
 fail-closed budget — none of which the Python regex catches).
+
+## Self-improvement slice 2 — build + mutation battery (2026-08-22): SHIPPED, review pending
+
+Scans/graduation/verify tranche (see PORT.md "Self-improvement slice 2"):
+internal/record/verdict.go (§4 trust policy), internal/scans (5 statistical
+scanners + impact + V2/V3 VerifyAppliedSuggestions), internal/graduation
+(templates as embedded DATA + workspace override; verify_pattern provenance
+anchored to the compiled-in copy — backport correction #11: fork-point Python
+shells out row-carried patterns from suggestions.jsonl), internal/selfimprove
+(Cycle composition in run_evolver order via the new evolver ExtraSuggestions
+hook). CLI: evolve -impact/-verify/-verify-apply, new graduate subcommand.
+
+Gate: build/vet/full-suite green, gofmt clean (urlscan.go pre-existing,
+guard-slice-owned, untouched). Mutation battery M119–M126, derived from the
+FILES per the standing rule:
+
+- M119 pattern-from-row (the Python injection vector restored) — DETECTED
+  (security pin + claim/ack lifecycle both fail)
+- M120 malformed goal_achieved reads unjudged — DETECTED (trust battery)
+- M121 human-applied auto-reverted — property is DOUBLY guarded (case arm +
+  re-read-fresh), no single-line mutant can break it, so M121 is a deliberate
+  two-line mutant defeating both — DETECTED
+- M122 extensions never park — DETECTED
+- M123 drift alerts on 1 breach not 3 — SURVIVED → new negative pin
+  TestScanQualityDriftSingleBreachStaysQuiet added, mutant now DETECTED
+- M124 graduation dedup off — DETECTED
+- M125 Cycle drops the scanner hook — DETECTED (composition test)
+- M126 verifyCounts ignores trust policy — DETECTED
+
+All mutants reverted; final gate green. NEXT: adversarial review r1
+(cross-model, 4 lenses; escalate reviewer tier after round 1 on same-model
+fallback per the 2026-08-22 rule).
