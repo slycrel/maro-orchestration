@@ -4255,3 +4255,191 @@ production code does.
 
 NEXT: r9 over the whole chunk once the playbook module lands, then
 adversarial r1 over `internal/tasks`.
+
+## Adversarial r9 — the playbook chunk, whole (opus tier)
+
+Eight findings: **1 HIGH, 4 MEDIUM, 3 LOW.** Every one of them was verified
+against the code before a fix was written, per standing practice; none was
+hallucinated this round.
+
+The shape of the round is the finding worth keeping. Exactly **one** was
+wrong logic. The HIGH and three of the four MEDIUMs are *green tests and
+confident comments about correct-looking code*: a branch no fixture reached,
+a comment stating a contract the code does not hold, a guard whose fixture
+disables the thing it guards, a helper whose test could not fail. That is
+the same distribution r7 and r8 produced, and it is now the working
+assumption for this port rather than an observation about one round.
+
+### HIGH — an alarm re-read wrote a captain's-log row CPython never writes
+
+Python's alarm-replace branch calls `atomic_write(...)` and then `return`s —
+from inside the `with locked_write` block, i.e. from the *function* — so the
+trailing `log_event(PLAYBOOK_UPDATED, ...)` is never reached. Go set
+`wrote = true`, fell through, and emitted the row.
+
+The playbook *file* was byte-identical, which is why five differentials over
+that file never noticed. The captain's log was not. And it is live: the only
+production caller (`evolver/store.go`) passes a `playbook_key`, and re-firing
+is the entire *point* of an alarm — every second and subsequent reading of
+the same check added a row to a shared, rotated, rendered log. The Python
+side (`discretion_readout.py`) reasons about exactly this event's emission
+discipline, over a log that would have had extra rows in it.
+
+Why nothing caught it: every append fixture in the package passed `key=""`.
+The replace branch existed with no pin on *either* side of it. The fix is one
+deleted line; the pin is `TestAnAlarmReReadEmitsNoLogRow`, which asserts the
+row count **and** that the file shows the replacement — otherwise a Go that
+simply failed the second append would pass the row assertion for entirely the
+wrong reason.
+
+### MEDIUM — `int(_cfg_get(...))` is not `config.Get[int]`
+
+Python wraps both numeric gates in `int()`. `int()` truncates floats, parses
+numeric strings, folds Unicode decimals, and **raises** on `None` — and that
+raise is caught by `curate_playbook`'s outer `except Exception`, abandoning
+the entire pass. `config.Get[int]` folds all of that into "silently use the
+default".
+
+With `alarm_ttl_days: null` in a shared `workspace/config.yml`, Python does
+**no curation at all** while Go expired alarms, collapsed duplicates,
+archived, and rewrote the document. Which binary ran the dream cycle decided
+what learning data survived.
+
+The port now goes through `pyInt`, which returns `ok=false` exactly where
+`int()` would raise, and `Curate` abandons the pass there. Eight configs pin
+it — the two null cases, a non-integral TTL, a quoted number, an unparseable
+string, a negative, an absent key, and a boolean.
+
+### MEDIUM — `Curate` took `ws` as an argument and read its gates from ambient
+
+The package doc states the one deliberate structural difference from Python:
+these verbs take the workspace as an argument instead of reading a
+module-level path. `Curate` half-did it. The file, the archive dir and the
+lock came from `ws`; `curation_enabled`, `alarm_ttl_days` and
+`curation_min_chars` came from `config.Load()`, i.e. from `MARO_WORKSPACE`.
+
+Every fixture called `curateWorkspace`, which does `t.Setenv("MARO_WORKSPACE",
+ws)` **and** passes the same `ws` — so the two could not disagree inside the
+suite. The failure direction is destructive: alarms expired out of a document
+whose own `config.yml` said to keep them.
+
+`config.LoadFor(dir)` now exists and carries the rule in its doc: *any verb
+that takes a workspace argument must use this, not `Load`.* Python cannot be
+compared here — its path and its config are both module-level, so the failure
+mode does not exist there. That makes it a Go-only invariant, and it gets a
+Go-only pin: two workspaces whose configs disagree in both directions.
+
+### MEDIUM — a comment stating a byte contract the code did not hold
+
+`alarmDate`'s comment claimed that Python's regex matches all 760 Unicode
+decimal digits and then strptime rejects the non-ASCII ones, so *"both
+runtimes end up keeping it, for different reasons."*
+
+The second half is false, and the measurement is more specific than either
+the comment or the earlier commit that repeated it:
+
+| directive | CPython pattern | accepts |
+|---|---|---|
+| `%Y` | `(?P<Y>\d\d\d\d)` | all **760** decimal digits, folded by value |
+| `%m` | `(?P<m>1[0-2]\|0[1-9]\|[1-9])` | ASCII only |
+| `%d` | `(?P<d>3[0-1]\|[1-2]\d\|0[1-9]\|[1-9]\| [1-9])` | second digit Unicode-capable **via `[1-2]\d` only** |
+
+So `'٢٠٠١-01-01'` parses to 2001-01-01 and `'2001-01-1٢'` is the 12th, while
+`'2001-1٢-01'` and `'2001-01-0٥'` are `ValueError`s. A stamp with a non-ASCII
+year was expired by Python and kept forever by Go — one runtime deleting a
+line the other keeps restoring.
+
+**Correction to commit `cf1285a9`.** Its message says CPython's *"strptime
+accepts all 760 decimal digits for `%Y/%m/%d`"*. That is true for `%Y` and
+false for `%m`/`%d`. The measurement it was drawn from probed only the year
+position and generalised. The code is right; the recorded claim was not, and
+this is the correction — the commit is landed and its message cannot be
+edited.
+
+`alarmDate` now transcribes the two sub-patterns and a test re-derives them
+from `_strptime.TimeRE()` on the running interpreter, so a CPython change
+fails here instead of drifting. The sweep puts all 760 digits through all
+four positions: 3,050 stamps, 1,542 parsed, 1,508 refused, zero
+disagreements.
+
+### MEDIUM — the compression branch was unreachable, and its guard was a nil-deref away
+
+`curateWorkspace` hardcoded `curation_min_chars` to `1<<30` in *every*
+curation test, and every call site passed `a = nil`. So
+`if runes(text) > minChars && a != nil` was never true, `compress` never ran,
+and the `a != nil` guard was never load-bearing under test — while in
+production it is the only thing between `Curate` and a nil-interface
+dereference on a documented never-returns-an-error path. Go has no `recover`;
+Python has a blanket `except Exception`.
+
+Three mutants survived the shipped suite. The new fixtures reach the branch,
+pin the prompt bytes and the request fields, and cover a nil adapter and an
+erroring one.
+
+### LOW — a `t.Skipf` that swallowed ten differentials whole
+
+Any non-zero exit from the CPython probe — a renamed helper, a changed
+signature, a broken interpreter, or the `/tmp/` safety assert firing — became
+`t.Skipf`, not a failure. Ten of twelve differentials, including the
+seed-bytes pin the package doc calls *"the only honest pin"*, would report
+green while testing nothing.
+
+A **missing** interpreter is still a skip; a **failing** probe is now fatal.
+Falsified with a `python3` shim that exits 3: 71 sub-tests fail where all of
+them previously passed.
+
+### LOW — the 200-code-point summary clip was unpinned
+
+`clipNoEllipsis` exists solely because Python's `summary=entry_line[:200]`
+has no ellipsis while `entry[:500] + "…"`, two lines away, has one. Its
+truncating branch had never executed: every append fixture writes an entry
+far under 200 code points. A mutant appending an ellipsis survived the suite.
+
+### LOW — `Inject` invented a default budget Python does not have
+
+Go substituted `DefaultInjectMaxChars` for any `max_chars <= 0`. Python
+passes the number through. The 137-budget sweep started at 40 and never saw
+it; it now starts below zero.
+
+### The battery
+
+19 mutants derived from the files, not the diff. **18 killed, 1 equivalent
+with a proof, 0 survivors.**
+
+The equivalent one is worth recording rather than "fixing": widening
+`strptimeDay`'s `3[01]` to `3[0-2]` changes no verdict, because the only
+extra string it admits is `"32"` and `time.Parse` rejects day 32 in every
+month of every year (probed exhaustively). The transcription keeps the tight
+bound anyway — the transcription *is* the contract, and a reader who
+"simplified" it would have to re-derive that proof.
+
+Two mutants survived the first battery run for the same reason and it is the
+reason to keep writing batteries: `math.Trunc` → `math.Round`, and
+`int(True)` → 0. Both survived because every alarm in the config table was
+stamped **2001** — expired under any TTL those fixtures produce, so the
+conversion was invisible. The table proved `int()` *raises* where `Get` would
+not, and proved nothing about what `int()` *converts*. The new fixtures put
+the alarm on the boundary the conversion moves, derive the stamp from the
+clock (a fixed date's age changes every day the test runs), and assert the
+fixture **flips** between the right conversion and the wrong one.
+
+### What the round says about the practice
+
+Three things generalise:
+
+1. **A fixture constant chosen to disable a branch is a coverage hole with a
+   plausible cover story.** `1<<30` was written to keep compression out of
+   the way of the tests that were not about compression. It kept it out of
+   the way of the tests that *were*.
+
+2. **A corpus that always starts from the same base document silently never
+   exercises what that base cannot produce.** Every config case shared one
+   2001-stamped alarm, so half the function under test was unreachable
+   through it.
+
+3. **A whole-chunk review sees seams a diff review cannot.** Three of the
+   eight findings — the ambient config read, the unreachable compression
+   branch, the swallowing `Skipf` — are properties of how the package's
+   *fixtures* are built, and are invisible in any single round's diff. This
+   is the second round under Jeremy's 2026-08-22 whole-chunk amendment and
+   the second time it paid for itself.

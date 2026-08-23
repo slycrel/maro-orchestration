@@ -132,6 +132,24 @@ var (
 	// two defaults agree, which is worth not "cleaning up".
 	lastUpdatedRE = regexp.MustCompile(`\*Last updated:.*\*`)
 
+	// strptimeMonth and strptimeDay are the TWO-CHARACTER alternations
+	// CPython's _strptime builds for %m and %d, which is all alarmRE can
+	// hand them. They are transcribed from the measured patterns rather
+	// than reasoned about; see alarmDate for the measurement.
+	//
+	// Note which one carries pytext.DigitClass and which does not: the
+	// day's `[1-2]\d` is Unicode-aware and every other alternation is a
+	// literal. Making them uniform in either direction is a divergence.
+	strptimeMonth = regexp.MustCompile(`^(?:1[0-2]|0[1-9])$`)
+	strptimeDay   = regexp.MustCompile(`^(?:3[01]|[1-2]` + pytext.DigitClass +
+		`|0[1-9])$`)
+	// The day's `3[01]` upper bound is belt-and-braces: widening it to
+	// `3[0-2]` is an EQUIVALENT mutation, because the only extra string it
+	// admits is "32" and time.Parse rejects day 32 in every month of every
+	// year (proved by exhaustive probe, r9 battery). It is transcribed
+	// faithfully anyway — the transcription is the contract, and a reader
+	// who "simplified" it here would have to re-derive that proof.
+
 	// sectionHeaderRE finds the next section boundary. Python anchors with
 	// (?m)^## ; the LINE anchoring is a security property, not a nicety —
 	// a substring lookup let crafted entry text spoof section membership.
@@ -234,21 +252,61 @@ func AlarmKey(line string) string {
 }
 
 // alarmDate is the stamp on an alarm line, and whether the line carries
-// one that Python's strptime would also accept.
+// one that CPython's strptime would also accept.
 //
-// The second return is not redundant with a match. Python's regex matches
-// all 760 Unicode decimal digits, and then strptime REJECTS the non-ASCII
-// ones it just matched — so `_expire_text` catches the ValueError and
-// keeps the line. Both runtimes end up keeping it, for different reasons,
-// and only AlarmKey (which has no strptime step) actually diverges.
+// The second return is not redundant with a match: alarmRE matches all
+// 760 Unicode decimal digits (Python's `\d`), and strptime accepts a
+// DIFFERENT set position by position. A stamp that matches but does not
+// parse means "unreadable stamp → keep, don't guess" in both runtimes.
+//
+// The three positions do not agree, and the earlier comment here claimed
+// they did — that strptime "REJECTS the non-ASCII ones it just matched"
+// so both runtimes keep the line anyway. That is false for the year, and
+// the whole-document differential found it (adversarial r9). CPython's
+// _strptime builds the format from these, measured on this box:
+//
+//	%Y -> (?P<Y>\d\d\d\d)                       Unicode-aware
+//	%m -> (?P<m>1[0-2]|0[1-9]|[1-9])             ASCII literals only
+//	%d -> (?P<d>3[0-1]|[1-2]\d|0[1-9]|[1-9]| [1-9])
+//
+// So, for the two-digit groups alarmRE guarantees:
+//
+//   - the YEAR takes any of the 760, each contributing its
+//     unicodedata.decimal value: '٢٠٠١-01-01' parses as 2001;
+//   - the MONTH is ASCII-only, because both two-character alternations
+//     are literal: '2001-1٢-01' is a ValueError;
+//   - the DAY's SECOND digit is Unicode-capable through `[1-2]\d` and
+//     not otherwise: '2001-01-1٢' is the 12th, while '2001-01-3٠' and
+//     '2001-01-0٥' both fail.
+//
+// Year 0000 is a ValueError in CPython even when it matches ("year must
+// be in 1..9999"), and time.Parse accepts it — so it is refused here
+// explicitly rather than left to the layout.
 func alarmDate(line string) (time.Time, bool) {
 	m := alarmRE.FindStringSubmatch(line)
 	if m == nil {
 		return time.Time{}, false
 	}
-	t, err := time.Parse("2006-01-02", m[2])
-	if err != nil {
+	stamp := m[2]
+	// Split on the two ASCII hyphens alarmRE itself matched.
+	parts := strings.Split(stamp, "-")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	year, month, day := parts[0], parts[1], parts[2]
+	if !strptimeMonth.MatchString(month) || !strptimeDay.MatchString(day) {
 		return time.Time{}, false // unreadable stamp → keep, don't guess
+	}
+	// Only the year and the day's second digit can be non-ASCII by now,
+	// and CPython folds both by decimal VALUE — which is exactly what
+	// pytext.FoldDecimals does.
+	t, err := time.Parse("2006-01-02",
+		pytext.FoldDecimals(year)+"-"+month+"-"+pytext.FoldDecimals(day))
+	if err != nil {
+		return time.Time{}, false
+	}
+	if t.Year() == 0 {
+		return time.Time{}, false // CPython: "year must be in 1..9999"
 	}
 	return t.UTC(), true
 }
@@ -363,9 +421,6 @@ func ParseEntries(text string) []Entry {
 // alarm marker is U+00B7), so byte counting is not a theoretical
 // difference.
 func Inject(ws string, maxChars int) string {
-	if maxChars <= 0 {
-		maxChars = defaultInjectMaxChars
-	}
 	text := Load(ws)
 	if text == "" {
 		return ""
@@ -482,8 +537,27 @@ func clipRunes(s string, n int) string {
 	return string([]rune(s)[:n]) + "…"
 }
 
+// DefaultInjectMaxChars and DefaultAlarmTTLDays are Python's keyword
+// defaults, exported because Go has no optional arguments and the
+// alternative — a verb that silently substitutes its default for a value
+// the caller actually passed — is a sign flip at a prompt-assembly seam.
+//
+// Inject(ws, 0) used to mean "use 800"; in Python `inject_playbook(0)`
+// selects nothing and returns "" (the running cost starts at len(top)+1
+// and every entry overflows). A caller spelling "inject nothing" as 0 got
+// the whole playbook (adversarial r9 LOW). Now 0 means 0 in both, and a
+// caller wanting the default names it.
+const (
+	DefaultInjectMaxChars = defaultInjectMaxChars
+	DefaultAlarmTTLDays   = defaultAlarmTTLDays
+)
+
 // ExpireStaleAlarms drops alarms whose check has stopped re-firing, and
 // returns how many.
+//
+// maxAgeDays has no default here — pass DefaultAlarmTTLDays for Python's.
+// Note that 0 is a real value and an aggressive one: it expires every
+// alarm stamped before this instant.
 //
 // An alarm is only as true as its last reading. When the condition
 // clears, the scanner simply stops emitting it — there is no "resolved"
@@ -548,9 +622,19 @@ func Archive(ws, text, reason string) (string, error) {
 // aborts the rewrite, which is the safe direction.
 const maxArchiveCollisions = 1000
 
-// atomicWrite is a seam so tests can pin the ORDER of the archive write
-// and the rewrite — the invariant that matters is that no rewrite lands
-// before its archive is durable.
+// atomicWrite is a package-level indirection over record.AtomicWrite.
+//
+// Its comment used to say it was "a seam so tests can pin the ORDER of
+// the archive write and the rewrite". No test has ever assigned to it,
+// and the ordering it named is pinned by other means — the two tests that
+// block the history directory with a regular file and then assert the
+// document is untouched. A var described by a contract nothing holds
+// reads to the next author as covered (adversarial r9 LOW).
+//
+// It is kept, and honestly labelled, for one reason: the two writes it
+// fronts are the only ones in this package that can destroy an operator's
+// document, so a future test that needs to fail one of them mid-sequence
+// has somewhere to stand. If that test never arrives, delete this.
 var atomicWrite = record.AtomicWrite
 
 // Append adds an operational insight to the playbook.
@@ -626,7 +710,13 @@ func Append(ws string, rec *record.Recorder, entry, section, source, key string)
 			// re-firing must not leapfrog the rest of the playbook every
 			// time it fires.
 			if replaced, updated := replaceAlarm(text, key, entryLine); replaced {
-				wrote = true
+				// NO captain's-log row, and that is Python's behaviour,
+				// not an omission: its replace branch RETURNS from inside
+				// the lock, so the trailing log_event is never reached.
+				// An alarm re-read is not news — re-firing is the whole
+				// point of an alarm, so logging every reading would add
+				// one row per scan to a shared, rotated, rendered log.
+				// `wrote` stays false (adversarial r9 HIGH).
 				return atomicWrite(path, []byte(stampUpdated(updated)))
 			}
 		}

@@ -58,8 +58,25 @@ func Workspace() string {
 // Python runtime's tolerance — but an unparseable file is REPORTED via
 // the returned warnings, never swallowed (no-silent-errors doctrine).
 func Load() (cfg map[string]any, warnings []string) {
+	return LoadFor(Workspace())
+}
+
+// LoadFor is Load against a NAMED workspace instead of the ambient one.
+//
+// Python has no equivalent because its playbook, memory and config paths
+// are all module-level and all resolve from the same env: a Python verb
+// cannot be pointed at one workspace and read another's config. This
+// port's verbs DO take a workspace argument, which quietly makes that
+// mismatch possible — a verb handed `ws` but calling Load() reads
+// MARO_WORKSPACE's config while writing ws's files (adversarial r9
+// MEDIUM: the failure direction is destructive, since a retention TTL
+// from the wrong file expires alarms out of a document whose own config
+// said to keep them).
+//
+// Any verb that takes a workspace argument must use this, not Load.
+func LoadFor(workspaceDir string) (cfg map[string]any, warnings []string) {
 	user := readYAML(filepath.Join(Home(), "config.yml"), &warnings)
-	ws := readYAML(filepath.Join(Workspace(), "config.yml"), &warnings)
+	ws := readYAML(filepath.Join(workspaceDir, "config.yml"), &warnings)
 	return Merge(user, ws), warnings
 }
 

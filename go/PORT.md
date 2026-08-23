@@ -3108,3 +3108,55 @@ values collapse first (Python's `or`), then `str()` renders what
 survives. Named divergence on out-of-contract data: Go's JSON decoder
 folds `5` and `5.0` into one `float64`, so an integer key renders the way
 Python renders the float.
+
+### The playbook — r9 review fixes (2026-08-23)
+
+Eight findings against the whole chunk; the full write-up is in `REVIEW.md`.
+Three port rules came out of it and belong here rather than in the review
+log, because they constrain code that has not been written yet.
+
+**A verb that takes a workspace argument must not read ambient config.**
+`Curate(ws, …)` resolved its file, archive dir and lock from `ws` and its
+three config gates from `MARO_WORKSPACE`. Python is internally consistent
+here — path *and* config are both module-level — so this is a hazard the Go
+structure creates and Python cannot have. `config.LoadFor(dir)` now exists
+and its doc carries the rule. Every future verb that takes a workspace
+argument uses it.
+
+**`int(...)` is not `config.Get[int]`.** Python's `int()` truncates floats,
+parses numeric strings, folds Unicode decimals, and **raises** on `None` —
+and in `curate_playbook` that raise is caught by an outer `except Exception`
+that abandons the whole pass. `config.Get[int]` silently substitutes the
+default for all four. `pyInt` in `curate.go` is the honest shape: it returns
+`ok=false` exactly where `int()` would raise, and the caller abandons.
+Anywhere else this port meets a Python `int(cfg_value)`, `config.Get` is the
+wrong helper.
+
+**CPython's strptime is Unicode-aware in exactly one of the three date
+positions.** Measured on this box (3.14.3, unidata 16.0.0):
+
+| directive | pattern | accepts |
+|---|---|---|
+| `%Y` | `(?P<Y>\d\d\d\d)` | all **760** decimal digits, folded by value |
+| `%m` | `(?P<m>1[0-2]\|0[1-9]\|[1-9])` | ASCII only |
+| `%d` | `(?P<d>3[0-1]\|[1-2]\d\|0[1-9]\|[1-9]\| [1-9])` | second digit Unicode-capable **via `[1-2]\d` only** |
+
+`'٢٠٠١-01-01'` parses; `'2001-1٢-01'` does not. `alarmDate` transcribes the
+two sub-patterns, folds by value where CPython folds, and a test re-derives
+all three from `_strptime.TimeRE()` on the running interpreter so an upstream
+change fails here instead of drifting.
+
+**This corrects commit `cf1285a9`**, whose message says strptime *"accepts
+all 760 decimal digits for `%Y/%m/%d`"*. True for `%Y`, false for `%m`/`%d` —
+the measurement behind it probed only the year position and generalised. The
+code that commit landed is right; the claim recorded alongside it was not.
+
+Two smaller rules, both about tests:
+
+- **A failing CPython probe is a failure, not a skip.** `runPython` turned
+  any non-zero exit into `t.Skipf`, so ten of twelve differentials — the
+  seed-bytes pin included — would have reported green against a renamed
+  Python helper or a tripped `/tmp/` safety assert. A *missing* interpreter
+  is still a skip.
+- **`Inject` passes `max_chars` through.** Go substituted a default for any
+  non-positive budget; Python does not. The sweep now starts below zero.

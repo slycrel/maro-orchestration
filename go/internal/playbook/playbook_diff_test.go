@@ -59,10 +59,25 @@ func runPython(t *testing.T, ws, snippet string, out any, args ...any) {
 	)
 	res, err := cmd.Output()
 	if err != nil {
+		// A MISSING interpreter is a skip: this box has one, another
+		// might not, and a differential cannot run without both sides.
+		//
+		// A FAILING probe is not. It used to be, and that turned ten of
+		// twelve differentials — including the seed-bytes pin this
+		// package's doc calls "the only honest pin" — into tests that
+		// reported green while running nothing. The failure modes it
+		// swallowed are exactly the ones that matter: a renamed Python
+		// helper, a changed signature, or the /tmp/ safety assert
+		// firing (adversarial r9 LOW).
 		if ee, ok := err.(*exec.ExitError); ok {
-			t.Skipf("python3 playbook probe failed: %v\n%s", err, ee.Stderr)
+			t.Fatalf("the CPython probe FAILED (exit %d). This is not a "+
+				"missing interpreter — the differential cannot report "+
+				"green.\nstderr:\n%s", ee.ExitCode(), ee.Stderr)
 		}
-		t.Skipf("python3 unavailable: %v", err)
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("python3 is present but the probe could not run: %v", err)
 	}
 	if err := json.Unmarshal(res, out); err != nil {
 		t.Fatalf("decoding CPython output: %v\nraw: %s", err, res)
@@ -285,7 +300,10 @@ func TestInjectMatchesPythons(t *testing.T) {
 		"playbook.append_to_playbook('entry under a wide header', section='Ποιότητα', source='evolver:d');" +
 		"playbook.append_to_playbook('a proposed goal', section='Signals', source='evolver:c');"
 
-	var budgets []int
+	// The low end is not decoration: Go's Inject once substituted a default
+	// budget for any max_chars <= 0, which Python does not do (adversarial
+	// r9 LOW). The sweep started at 40 and never saw it.
+	budgets := []int{-1000, -1, 0, 1, 2, 3, 5, 10, 20, 30, 39}
 	for b := 40; b <= 1400; b += 10 {
 		budgets = append(budgets, b)
 	}
@@ -327,7 +345,10 @@ func TestInjectMatchesPythons(t *testing.T) {
 		}
 		// The budget is a contract in BOTH runtimes; asserting it on the
 		// shared expectation means a wrong-but-agreeing pair still fails.
-		if n := runeLen(want[i]); n > b {
+		// A non-positive budget is exempt: nothing can fit in it, so the
+		// comparison is vacuously true and says nothing either way. What
+		// those budgets are here to pin is the EQUALITY above.
+		if n := runeLen(want[i]); n > b && b > 0 {
 			t.Errorf("CPython itself overflowed the budget: %d runes > %d — "+
 				"the contract this pin asserts does not hold", n, b)
 		}

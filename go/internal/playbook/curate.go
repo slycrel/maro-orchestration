@@ -256,7 +256,11 @@ var afterSnapshot = func() {}
 func Curate(ctx context.Context, ws string, a llm.Adapter, rec *record.Recorder,
 	force bool) *CurateStats {
 
-	cfg, _ := config.Load()
+	// LoadFor, not Load: every other path in this function resolves from
+	// the ws ARGUMENT, and reading the gates from the ambient workspace
+	// made Curate half-scoped — the destructive half, since the retention
+	// TTL decides what gets expired (adversarial r9 MEDIUM).
+	cfg, _ := config.LoadFor(ws)
 	if !force && !config.Get(cfg, "playbook.curation_enabled", true) {
 		return nil
 	}
@@ -283,13 +287,30 @@ func Curate(ctx context.Context, ws string, a llm.Adapter, rec *record.Recorder,
 
 	afterSnapshot()
 
-	ttl := config.Get(cfg, "playbook.alarm_ttl_days", defaultAlarmTTLDays)
+	// Python wraps BOTH numeric gates in int(), which is not
+	// config.Get[int]: it truncates floats, parses numeric strings, and
+	// RAISES on None — and that raise is caught by curate_playbook's outer
+	// `except Exception`, abandoning the entire pass. config.Get folds all
+	// three into "silently use the default" (adversarial r9 MEDIUM).
+	ttl, ok := pyInt(cfg, "playbook.alarm_ttl_days", defaultAlarmTTLDays)
+	if !ok {
+		// int() raised. Python abandons curation entirely here — no
+		// expiry, no dedup, no archive, no rewrite — so this does too.
+		warn("playbook: curation failed (non-fatal): " +
+			"playbook.alarm_ttl_days is not an integer")
+		return nil
+	}
 	text, expired := expireText(original, ttl)
 	text, removed := dedupText(text)
 	compressed := false
 
-	minChars := config.Get(cfg, "playbook.curation_min_chars",
+	minChars, ok := pyInt(cfg, "playbook.curation_min_chars",
 		defaultCurationMinChars)
+	if !ok {
+		warn("playbook: curation failed (non-fatal): " +
+			"playbook.curation_min_chars is not an integer")
+		return nil
+	}
 	if utf8.RuneCountInString(text) > minChars && a != nil {
 		if out, ok := compress(ctx, a, text); ok {
 			text, compressed = out, true
@@ -398,4 +419,69 @@ func compress(ctx context.Context, a llm.Adapter, text string) (string, bool) {
 		return "", false
 	}
 	return candidate, true
+}
+
+// warn is the test seam for the two non-fatal curation warnings. Python
+// routes them through logging; this port has no logging sink, and the
+// alternative — printing to stderr unconditionally — is what the
+// no-silent-errors doctrine asks for on a path the operator cannot
+// otherwise see.
+var warn = func(msg string) { fmt.Fprintln(os.Stderr, "[playbook] "+msg) }
+
+// pyInt resolves a config path the way Python's `int(_cfg_get(k, d))`
+// does, returning ok=false where int() would RAISE.
+//
+// The distinction matters because the caller's response to a raise is not
+// "use the default" — curate_playbook's outer `except Exception` swallows
+// it and abandons the whole pass, so a workspace with
+// `alarm_ttl_days: null` gets NO curation in Python while a Get-based
+// port would happily expire alarms and rewrite the document.
+//
+// Measured against CPython:
+//
+//	14 -> 14        7.5 -> 7        -7.5 -> -7   (truncates toward zero)
+//	"10" -> 10      " 10 " -> 10    "٧" -> 7     (str parse, Unicode digits)
+//	"10.5" -> ValueError            "x" -> ValueError
+//	None -> TypeError               true -> 1     false -> 0
+//
+// An ABSENT key never reaches int() at all — _cfg_get returns the default
+// and int(<int default>) is that default — so absence and explicit-null
+// are different, which is why this reads through config.Lookup.
+func pyInt(cfg map[string]any, path string, def int) (int, bool) {
+	raw, present := config.Lookup(cfg, path)
+	if !present {
+		return def, true
+	}
+	switch t := raw.(type) {
+	case nil:
+		return 0, false // int(None) raises TypeError
+	case bool:
+		if t {
+			return 1, true
+		}
+		return 0, true
+	case int:
+		return t, true
+	case int64:
+		return int(t), true
+	case float64:
+		if math.IsNaN(t) || math.IsInf(t, 0) {
+			return 0, false // int(nan)/int(inf) raise
+		}
+		return int(math.Trunc(t)), true
+	case string:
+		// int(str) strips Python whitespace and folds Unicode decimals,
+		// then requires an integer literal — no decimal point, no
+		// exponent. strconv.Atoi is that grammar once the digits are
+		// ASCII, except for the underscore separators Python 3 allows in
+		// numeric LITERALS but NOT in int(str), which strconv also
+		// rejects for a plain base-10 parse.
+		n, err := strconv.Atoi(pytext.FoldDecimals(pytext.Strip(t)))
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false // lists, maps: int() raises TypeError
+	}
 }
