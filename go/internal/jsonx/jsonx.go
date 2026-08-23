@@ -107,6 +107,15 @@ var (
 	// so the caller's error/default is the fail-safe direction.
 	thinkRe     = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think\s*>`)
 	thinkOpenRe = regexp.MustCompile(`(?i)<think\b[^>]*>`)
+	// EQUIVALENT-MUTANT NOTE. Making `(.*?)` greedy survives the whole
+	// battery, and it is genuinely equivalent HERE but not in general:
+	// over 3810 generated fence documents the two spellings never differ
+	// after stripMarkdownFences' strip, and differ in 1578 of them
+	// before it. `$` pins where the match ends, so the only thing the
+	// quantifier controls is how much trailing whitespace lands inside
+	// the capture -- and the strip on the next line eats exactly that.
+	// The laziness is load-bearing only if that strip ever goes away.
+	//
 	// llm_parse._FENCE_RE verbatim: r"^```[a-zA-Z]*\n?(.*?)\n?```$" with
 	// DOTALL, applied with .match() — so it fires only when the fence is
 	// the whole (stripped) message. Python's `$` also matches before a
@@ -136,6 +145,19 @@ func stripMarkdownFences(text string) string {
 // extract is extract_json's preamble: strip traces, unwrap a whole-message
 // fence, carve. See the second rejected hardening at the top of this file
 // for why it does not go looking for fences inside prose.
+//
+// EQUIVALENT-MUTANT NOTE. Swapping these two verbs survives the battery,
+// and 672 generated documents -- think blocks open and closed, inside and
+// outside the fence, with and without decoy brackets -- produce no
+// separator. The reason is structural, not luck: stripMarkdownFences only
+// ever removes backticks, language-tag letters, and whitespace, and carve
+// reacts to nothing but bracket characters, so whichever order runs, the
+// bracket sequence it finally scans is the same.
+//
+// The order still matters and is still pinned -- one column of
+// fence_diff_test.go compares strip(think(x)) against CPython -- it just
+// cannot be observed THROUGH carve. Keep the Python order anyway: the
+// equivalence is a property of today's carve, not a licence.
 func extract(text string, open, close byte) (string, error) {
 	return carve(stripMarkdownFences(stripThinkBlocks(text)), open, close)
 }

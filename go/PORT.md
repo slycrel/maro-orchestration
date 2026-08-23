@@ -3500,6 +3500,15 @@ Three things this second catch taught that the first did not:
   what let r1 skip past it. A doc comment asserting a divergence is safe
   is a claim, and it needs the same measurement as the code.
 
+A third lesson arrived from the mutation battery over the fix, and it is
+the most portable one in this section: **a differential over the helpers
+is not a differential over the pipeline.** `fence_diff_test.go` pinned
+`stripMarkdownFences` and `stripThinkBlocks` against CPython exactly, and
+a mutant that swapped the two verbs *inside `extract`* survived it —
+because nothing in the file called `extract`. Both pieces were right; the
+composition was untested. Every differential in this port now drives the
+function production actually calls, not only the ones it is built from.
+
 The residual is now the honest one and it is **shared**: with prose either
 side of a fence, neither runtime finds it, and the first balanced bracket
 in the message wins on both. That is worth fixing — in

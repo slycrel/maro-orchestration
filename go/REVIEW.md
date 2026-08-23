@@ -4950,3 +4950,77 @@ threaded to the Python probe through the spec JSON so the two cannot
 drift, and it is 4s. Worth naming because the tempting read — "the port
 does not really run milestones concurrently" — would have sent the next
 hour somewhere useless.
+
+### The battery on the fence fix: 17 killed, 2 equivalent
+
+Nineteen mutants derived from `jsonx.go` as it now stands — every choice
+in the regex (each anchor, the language class, both optional newlines,
+laziness, DOTALL, the backtick count), every choice in
+`stripMarkdownFences` (both strip calls, the non-match return, Python's
+`str.strip()` vs Go's `strings.TrimSpace`), and `extract`'s verb order.
+
+**Five survived the first run, and four of them were real.** The corpus
+had been written from measured CPython output, which made it good at the
+cases I had thought to measure and blind to the ones I had not:
+
+- No fence body carried padding, so "don't strip the body" survived.
+- No non-fence document carried padding, so "return the raw text instead
+  of the stripped text" survived.
+- Nothing separated `str.strip()` from `strings.TrimSpace`. They differ on
+  exactly `U+001C`–`U+001F`, which Python treats as whitespace and Go does
+  not, so both TrimSpace substitutions survived. Two cases now cover it,
+  inside a fence body and outside one, because the two strip calls are
+  separate lines and a mutant can hit either.
+
+The fifth is the one worth keeping:
+
+> **A differential over the helpers is not a differential over the
+> pipeline.** `extract` swapping its two verbs survived, because the file
+> compared `stripMarkdownFences(x)` and `stripMarkdownFences(stripThinkBlocks(x))`
+> and never once called `extract`. Both pieces were pinned exactly. The
+> thing production actually calls was not.
+
+Two columns were added that run `extract` itself against CPython's
+`_find_json_bounds` over `strip_markdown_fences(strip_think_blocks(text))`,
+one per bracket type. They are not decoration: the "go back to hunting
+fences anywhere" mutant — the real old code — is killed by them and by
+nothing else in this file.
+
+**Both remaining survivors are equivalent, and each was measured rather
+than argued.**
+
+- *Greedy instead of lazy.* Over 3810 generated fence documents the two
+  spellings never differ after the strip — and differ in **1578** of them
+  before it. `$` pins where the match ends, so the quantifier only
+  controls how much trailing whitespace lands in the capture, and the
+  strip on the next line eats exactly that. Equivalent here, and not in
+  general; the note in the source says so.
+- *Fences stripped before think blocks.* 672 generated documents — think
+  blocks open and closed, inside and outside the fence, with and without
+  decoy brackets — produce no separator. The reason is structural:
+  `stripMarkdownFences` only ever removes backticks, language-tag letters
+  and whitespace, and `carve` reacts to nothing but brackets, so either
+  order hands it the same bracket sequence. The order is still pinned by
+  the `strip(think(x))` column; it simply cannot be observed *through*
+  `carve`. The Python order stays, because the equivalence is a property
+  of today's `carve` rather than a licence.
+
+### The harness bug that the harness caught
+
+Ten of the nineteen mutants never ran. The anchor string for the regex
+line was written as a Python **raw** string, so its leading `\t` was a
+backslash and a `t` rather than a tab, and it matched nothing. The
+battery printed `ANCHOR ... matched 0 sites` ten times and refused to
+count them.
+
+That refusal is the whole value. Without the `count(old) != 1` check, a
+mutant whose anchor misses writes the file back **unchanged**, the suite
+passes, and it is reported as a survivor — ten fabricated pieces of
+evidence that the tests are stronger than they are. The failure mode of a
+mutation harness is not a missed kill, it is a **false green**, and it
+looks exactly like a good result.
+
+The escaping bit generalizes too, in a small way: this anchor needs a
+real tab and a *literal* backslash-n, because the Go source spells the
+newline inside an interpreted string literal. Neither a raw string nor a
+plain one gets both. It is spelled `chr(9) + r'...'` now.

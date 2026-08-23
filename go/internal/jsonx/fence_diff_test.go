@@ -25,11 +25,20 @@ import (
 
 const pyFenceSnippet = `
 import json, sys, llm_parse
+
+def span(pre, open_c, close_c):
+    start, end = llm_parse._find_json_bounds(pre, open_c, close_c)
+    return pre[start:end] if start >= 0 else None
+
 out = []
 for text in json.loads(sys.argv[1]):
+    # extract_json's preamble, in its order.
+    pre = llm_parse.strip_markdown_fences(llm_parse.strip_think_blocks(text))
     out.append([
         llm_parse.strip_markdown_fences(text),
-        llm_parse.strip_markdown_fences(llm_parse.strip_think_blocks(text)),
+        pre,
+        span(pre, '[', ']'),
+        span(pre, '{', '}'),
     ])
 print(json.dumps(out))
 `
@@ -83,6 +92,21 @@ var fenceCorpus = []struct {
 	{"a think block ahead of a fence", "<think>[bad]</think>\n```json\n[\"a\", \"b\"]\n```"},
 	{"a think block ahead of bare json", "<think>{\"bad\":1}</think>\n{\"real\":1}"},
 
+	// Whitespace, on BOTH sides of the unwrap. Each of these was added
+	// because a mutant survived without it: a body left unstripped, a
+	// non-match returning the raw text instead of the stripped text, and
+	// Go's strings.TrimSpace standing in for Python's str.strip().
+	{"a fence body with padding", "```json\n   [\"a\"]   \n```"},
+	{"a fence body padded with newlines", "```json\n\n\n[\"a\"]\n\n\n```"},
+	{"a padded document with no fence", "   [\"a\"]   "},
+	// str.strip() removes U+001C..U+001F; Go's unicode.IsSpace does NOT,
+	// so strings.TrimSpace leaves them and pytext.Strip removes them.
+	// Inside a fence body and outside one, because the two strip calls
+	// are separate lines and a mutant can hit either.
+	{"separators around a fence body", "```json\n\x1c[\"a\"]\x1f\n```"},
+	{"separators around a bare document", "\x1c[\"a\"]\x1f"},
+	{"separators around the whole fence", "\x1c```json\n[\"a\"]\n```\x1f"},
+
 	// Degenerate fences: too few backticks, unterminated, bare.
 	{"only two backticks is not a fence", "``json\n[\"a\"]\n``"},
 	{"an unterminated fence", "```json\n[\"a\", \"b\"]"},
@@ -90,7 +114,7 @@ var fenceCorpus = []struct {
 	{"two bare fence markers", "```\n```"},
 }
 
-func pyFences(t *testing.T, texts []string) [][]string {
+func pyFences(t *testing.T, texts []string) [][]*string {
 	t.Helper()
 	b, err := json.Marshal(texts)
 	if err != nil {
@@ -105,7 +129,7 @@ func pyFences(t *testing.T, texts []string) [][]string {
 		}
 		t.Fatalf("python3 is present but the fence probe could not run: %v", err)
 	}
-	var got [][]string
+	var got [][]*string
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
 	}
@@ -123,17 +147,34 @@ func TestStripMarkdownFencesMatchesCPython(t *testing.T) {
 	}
 	for i, c := range fenceCorpus {
 		t.Run(c.name, func(t *testing.T) {
-			if got := stripMarkdownFences(c.text); got != want[i][0] {
-				t.Errorf("strip_markdown_fences diverges\n input %q\n    go %q\n    py %q",
-					c.text, got, want[i][0])
+			row := want[i]
+			eq := func(what string, got string, ok bool, w *string) {
+				t.Helper()
+				switch {
+				case !ok && w != nil:
+					t.Errorf("%s: go found nothing, py found %q\n input %q", what, *w, c.text)
+				case ok && w == nil:
+					t.Errorf("%s: go found %q, py found nothing\n input %q", what, got, c.text)
+				case ok && *w != got:
+					t.Errorf("%s diverges\n input %q\n    go %q\n    py %q",
+						what, c.text, got, *w)
+				}
 			}
+			eq("strip_markdown_fences", stripMarkdownFences(c.text), true, row[0])
 			// The composed preamble, in extract_json's order: think
-			// blocks, then fences. Column 1 is the whole reason the
-			// ordering cases above are in the corpus.
-			if got := stripMarkdownFences(stripThinkBlocks(c.text)); got != want[i][1] {
-				t.Errorf("strip(think(x)) diverges\n input %q\n    go %q\n    py %q",
-					c.text, got, want[i][1])
-			}
+			// blocks, then fences. This column is the whole reason the
+			// ordering cases are in the corpus.
+			eq("strip(think(x))", stripMarkdownFences(stripThinkBlocks(c.text)), true, row[1])
+
+			// And the composition ITSELF. Pinning the two functions
+			// separately does NOT pin extract: a mutant that swapped the
+			// two verbs inside extract survived the first version of this
+			// file, because nothing here called extract. The pieces being
+			// right is not the same claim as the pipeline being right.
+			arr, aerr := extract(c.text, '[', ']')
+			eq("extract(list)", arr, aerr == nil, row[2])
+			obj, oerr := extract(c.text, '{', '}')
+			eq("extract(dict)", obj, oerr == nil, row[3])
 		})
 	}
 }
