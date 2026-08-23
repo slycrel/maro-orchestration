@@ -64,6 +64,13 @@ const (
 // resolution order, passed in as an argument.
 func ProjectsRoot(ws string) string { return filepath.Join(ws, "projects") }
 
+// MemoryDir is Python orch_items.memory_dir(): <workspace>/memory. Its
+// Python twin has three resolution sources ahead of the workspace (a
+// ContextVar, MARO_MEMORY_DIR, then config) for the same reason
+// ProjectsRoot has MARO_ORCH_ROOT, and this port reads none of them —
+// one resolution order, passed in as an argument.
+func MemoryDir(ws string) string { return filepath.Join(ws, "memory") }
+
 // OutputRoot is Python config.output_dir(): <workspace>/output.
 func OutputRoot(ws string) string { return filepath.Join(ws, "output") }
 

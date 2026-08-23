@@ -2374,6 +2374,121 @@ one was killed by the compiler rather than the test, and one
 (`os.WriteFile` with a mode on an existing file) did not reproduce the
 bug at all. A mutant killed by a build error proves nothing.
 
+### Mission layer — slice 1: the store (2026-08-23)
+
+`mission.json`, `feature_list.json`, `mission-log.jsonl` and the drain
+lock — mission.py's persistence surface, on top of the project ledger
+ported in the previous slice. The DAG executor, the LLM decomposition and
+the validation gates are not here; they need the agent loop and an
+adapter. Formal hierarchy: Mission → Milestone → Feature → worker session.
+
+**Four different write disciplines, one per file, and they are not
+interchangeable.** Python picked each deliberately and a shared store
+reads the difference: `mission.json` goes through `atomic_write`;
+`feature_list.json` is a plain `write_text` on CREATE and a `locked_rmw`
+on PATCH; `mission-log.jsonl` is `locked_append`. The manifest's split is
+the interesting one — it is written unsafely once and patched safely
+forever after, because it is the promise the run is graded against: a
+re-decomposition partway through must not be able to change what "done"
+meant, so `generate_feature_manifest` READS an existing file and never
+rebuilds it.
+
+**Two functions that disagree about the same file, on purpose.**
+`ListMissions` answers "what is on disk" and reads the raw JSON with
+`.get()` defaults; `LoadMission` answers "what can be executed" and takes
+Python's `except Exception: return None` for anything it cannot prove. So
+a `mission.json` with no `id` appears in the operator's list (as `?`) and
+never triggers an autonomous drain. That is Python's behaviour and it is
+load-bearing in both directions, so it is pinned in both directions.
+
+**Carry-unless-changed, because Python's load does no coercion.** A
+stored `elapsed_ms: 1.5` round-trips through Python untouched, and a
+`validation_criteria` that is a bare string stays a bare string. A typed
+Go struct alone would have written `1.5` back as `1` — a silent rewrite of
+a peer's row, the same class of bug the skills pool rewrite was fixed for.
+Both fields keep the literal they were loaded with and emit the typed
+value only once the program has actually changed it.
+
+`depends_on` is the exception: Python DOES normalize that one (non-strings
+and empties dropped), and a non-list takes the legacy branch that
+reconstructs the sequential chain, so an undecomposed mission.json from
+before the DAG still executes exactly as the old sequential walk did.
+
+**Named divergence, narrow:** Python does not type-check the required
+fields, so a `mission.json` whose `id` is the number 7 loads there and is
+re-emitted as 7. This port treats a non-string required field as
+unreadable. Every other tolerance is preserved.
+
+**Proof.** A cross-runtime differential (`orch/mission_probe_test.go`
+plus a scripts-side driver) runs three ways: each runtime writes the same
+mission into its own workspace, each reads the OTHER's files and re-saves,
+and each derives the read-side answers. **All three sections byte- and
+value-identical.** The re-read half is the one that earns its keep — a
+fresh-write comparison cannot see a reader that drops a field, because the
+loss only shows on the way back out. It also has a demonstrated kill: it
+is what caught the mission-log directory bug below.
+
+27 mutants derived from the FILES, not the diff. 27 killed, 0 survived.
+Four needed rewriting first — two were killed by the COMPILER rather than
+by a test (an unused import, an unreachable tail), one was anchored on
+text that did not exist, and two test gaps were real: the required-key
+gate was only exercised wholesale, so a mutant removing ONE of the five
+gates survived, and the briefing cap was only checked on one of its three
+sections. Both tests were widened rather than the mutants weakened.
+
+**A real divergence found on the way:** Python's `locked_append` creates
+the parent directory (`file_lock.py:304`) and so does its lock
+acquisition (`:144`); Go's `record.AppendRawLine` does neither, so the
+first mission log written into a COLD workspace failed outright where
+Python created `memory/`. Fixed at the caller because `record` was under
+adversarial review — it belongs down in `record`, and every direct
+`AppendRawLine` caller has the same hole until it moves.
+
+#### Found while porting: the JSONL lane is not byte-compatible
+
+`internal/pyjson`'s own header states the contract — "the same VALUE is
+not the contract across this port — the same BYTES are" — and names three
+`encoding/json` differences it corrects. It misses two more. Measured, one
+row, through both production writers:
+
+```
+GO:{"timestamp":"2026-05-12T22:19:25.571824+00:00","event_type":"LOOP_CREATED","summary":"reason=initial — café",…}
+PY:{"timestamp": "2026-05-12T22:19:25.571824+00:00", "event_type": "LOOP_CREATED", "summary": "reason=initial — café", …}
+```
+
+1. **Separators.** A bare `json.dumps(obj)` defaults to `(', ', ': ')` —
+   a space after every comma AND every colon. Confirmed against the live
+   store: all 7,124 rows of `captains_log.jsonl` carry `", "`.
+2. **ensure_ascii.** Python escapes every code point from 0x7f up (DEL
+   included; astral planes as a surrogate PAIR). 2,137 of those 7,124 rows
+   carry `\u` escapes, so it is the common case, not an edge. Six Python
+   writers pass `ensure_ascii=False` explicitly — it is a per-writer
+   decision there, and the Go twin has to mirror whichever writer it
+   ports rather than pick one globally.
+
+This never appeared in r1–r3 because every "byte-identical" claim those
+rounds made was about an `indent=2` sidecar, where the item separator
+loses its trailing space anyway. Bounded honestly: no wrong DECISION —
+`doctor._dedup_identity` re-serializes the parsed row through Python's own
+dumps, `deduplicate_lessons` keys on parsed text, and `content_hash` is
+over raw field content, so all three normalize. What it costs is that
+every cross-runtime `diff` of a shared store reports every Go-written line
+as changed, which is the audit surface the doctrine names.
+
+`internal/orch/pyrender.go` is the correct renderer — ordered objects,
+ensure_ascii, Python's separators, `indent=2` and compact — and it is
+PARKED in `orch` rather than merged into `pyjson` because pyjson was under
+review when the project ledger needed it. Moving a file someone is
+reviewing is how a round's findings stop landing against the thing that
+was reviewed. `pids.go` had already rolled its own indent renderer, so
+this is the second instance; all three fold together once r4 lands, and
+every pin asserting the compact spelling has to be rewritten then, which
+is why this gets more expensive the longer it waits.
+
+**Not in this slice:** `decompose_mission`, `_validate_milestone`,
+`run_mission` and `_run_milestone_dag` (all LLM- or loop-dependent),
+`drain_next_mission`, and the Telegram milestone notification.
+
 ## Running
 
 ```sh
