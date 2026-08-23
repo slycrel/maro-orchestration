@@ -168,12 +168,19 @@ var userSurfacedEvents = map[string]bool{
 // Event appends one captain's-log entry. audience comes from the
 // event-type registry above, matching Python log_event's stamping.
 func (r *Recorder) Event(eventType, subject, summary string, context map[string]any, loopID string) error {
+	return r.EventRelated(eventType, subject, summary, context, loopID, nil)
+}
+
+// EventRelated is Event with log_event's related_ids — the linkage a reader
+// uses to find every row about one subject ("skill:<id>", "lesson:<id>").
+// It is a SEPARATE field from loop_id: passing a subject linkage as the
+// loop id would file the row under a run that does not exist, and the
+// linkage itself would be lost.
+func (r *Recorder) EventRelated(eventType, subject, summary string, context map[string]any,
+	loopID string, relatedIDs []string) error {
 	dir, err := r.memoryDir()
 	if err != nil {
 		return err
-	}
-	if context == nil {
-		context = map[string]any{}
 	}
 	audience := "system"
 	if userSurfacedEvents[eventType] {
@@ -185,10 +192,17 @@ func (r *Recorder) Event(eventType, subject, summary string, context map[string]
 		"subject":    subject,
 		"summary":    summary,
 		"audience":   audience,
-		"context":    context,
+	}
+	// Python writes `if context:` — an EMPTY context is omitted, not
+	// emitted as {}. Same for the optional linkages.
+	if len(context) > 0 {
+		entry["context"] = context
 	}
 	if loopID != "" {
 		entry["loop_id"] = loopID
+	}
+	if len(relatedIDs) > 0 {
+		entry["related_ids"] = relatedIDs
 	}
 	return r.appendJSONL(filepath.Join(dir, "captains_log.jsonl"), entry)
 }
@@ -226,6 +240,13 @@ func (r *Recorder) appendJSONL(path string, row any) error {
 // Go always fails closed. Corollary: mutual exclusion with a Python
 // writer holds only while the Python side is not configured fail-open,
 // which is outside this runtime's control.
+// Locked runs fn while holding the store's advisory lock.
+//
+// NOT REENTRANT. It flocks a FRESH descriptor per call, and flock is
+// per-open-file-description, so a nested Locked on the same path from the
+// same process blocks against ITSELF until the lock deadline and then
+// fails. A caller that needs one critical section spanning several locked
+// helpers must take the lock once and call their in-lock cores.
 func Locked(path string, fn func() error) error {
 	lockPath := path + ".lock"
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o644)

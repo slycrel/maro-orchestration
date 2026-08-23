@@ -80,10 +80,61 @@ func LockedRMW(path string, fn func(old string) string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
+		if err := AtomicWrite(path, []byte(out)); err != nil {
 			return fmt.Errorf("rmw write %s: %w", path, err)
 		}
-		return os.Rename(tmp, path)
+		return nil
 	})
+}
+
+// AtomicWrite replaces a file's whole contents crash-safely: write to a
+// temp beside it, FSYNC, rename.
+//
+// The fsync is the point, and it is what Python's file_lock.atomic_write
+// does ("mkstemp in path's dir, write, fsync, os.replace"). Without it, a
+// rename can be durable while the data behind it is not, so a power loss in
+// that window truncates the file to zero — and every caller here is a
+// DESTRUCTIVE whole-store rewrite, so what is lost is the whole store, not
+// one appended line. Three copies of the unsynced temp+rename had grown
+// across this port before they were collapsed here.
+//
+// An existing file's mode is preserved, again matching Python: a store an
+// operator chmod'd stays chmod'd across a rewrite.
+//
+// Residual, recorded: the DIRECTORY entry is not fsynced, so a crash can
+// lose the rename itself even though the data is durable. Python does not
+// fsync the directory either, and the failure mode is "the old file is
+// still there", not a corrupt one.
+func AtomicWrite(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // don't strand the temp beside the intact store
+		return err
+	}
+	return nil
 }

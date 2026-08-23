@@ -57,7 +57,7 @@ var splitNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 // drop short tokens and stop words, stem what remains.
 func skillTokens(text string) []string {
 	var out []string
-	for _, t := range splitNonAlnum.Split(strings.ToLower(text), -1) {
+	for _, t := range splitNonAlnum.Split(pyLower(text), -1) {
 		if len(t) >= 3 && !skillStopWords[t] {
 			out = append(out, stem(t))
 		}
@@ -88,7 +88,7 @@ var islandKeywords = map[string][]string{
 // the best-scoring island, or "" when nothing matched. Inlined the same way
 // Python inlines it inside _tfidf_skill_rank (goal text only, not a skill).
 func goalIsland(goal string) string {
-	lower := strings.ToLower(goal)
+	lower := pyLower(goal)
 	best, bestScore := "", 0
 	for _, isl := range islandOrder {
 		score := 0
@@ -154,31 +154,55 @@ func tfidfSkillRank(goal string, pool []Skill, topK int) []Skill {
 	for t, c := range df {
 		idf[t] = math.Log((n + 1) / (1 + float64(c)))
 	}
-	vec := func(tokens []string) map[string]float64 {
+	// A vector carries its keys in FIRST-OCCURRENCE order, and every sum
+	// below walks that slice rather than ranging the map.
+	//
+	// Float addition is not associative, so summation order decides the low
+	// bits. Go randomizes map iteration per range, which made dot, na and nb
+	// differ between two calls on the SAME inputs — and since the ranking
+	// sort is stable, an ulp difference flips which of two tied skills sorts
+	// first. Measured over 3000 identical calls on one pool: the same goal
+	// injected s0 2302 times and dup 698 times. Every injected-outcome
+	// counter and every A/B conclusion built on them was attributing
+	// verdicts to a coin flip.
+	//
+	// First-occurrence order is exactly Python's: tfidf_vec builds its dict
+	// by comprehension over a Counter, which holds insertion order, and
+	// cosine sums over `for t in a` and `a.values()`. Walking the same order
+	// gives bit-exact parity, not merely determinism.
+	type tfidfVec struct {
+		keys []string
+		w    map[string]float64
+	}
+	vec := func(tokens []string) tfidfVec {
 		tf := map[string]int{}
+		order := make([]string, 0, len(tokens))
 		for _, t := range tokens {
+			if _, seen := tf[t]; !seen {
+				order = append(order, t)
+			}
 			tf[t]++
 		}
 		total := float64(len(tokens))
 		if total == 0 {
 			total = 1
 		}
-		out := make(map[string]float64, len(tf))
-		for t, c := range tf {
-			out[t] = (float64(c) / total) * idf[t]
+		out := tfidfVec{keys: order, w: make(map[string]float64, len(tf))}
+		for _, t := range order {
+			out.w[t] = (float64(tf[t]) / total) * idf[t]
 		}
 		return out
 	}
-	cosine := func(a, b map[string]float64) float64 {
+	cosine := func(a, b tfidfVec) float64 {
 		var dot, na, nb float64
-		for t, av := range a {
-			dot += av * b[t]
+		for _, t := range a.keys { // Python: sum(... for t in a)
+			dot += a.w[t] * b.w[t]
 		}
-		for _, v := range a {
-			na += v * v
+		for _, t := range a.keys { // Python: sum(v*v for v in a.values())
+			na += a.w[t] * a.w[t]
 		}
-		for _, v := range b {
-			nb += v * v
+		for _, t := range b.keys {
+			nb += b.w[t] * b.w[t]
 		}
 		na, nb = math.Sqrt(na), math.Sqrt(nb)
 		if na == 0 {
@@ -360,7 +384,7 @@ func FindMatchingSkillsIn(pool []Skill, goal string, o MatchOptions) ([]Skill, M
 	// Keyword tier: exact trigger-pattern overlap, either direction, plus
 	// tags as substring-in-goal only (a tag is a short keyword — the
 	// reverse goal-in-tag test would be noise).
-	goalLower := strings.ToLower(goal)
+	goalLower := pyLower(goal)
 	type kwHit struct {
 		score int
 		skill Skill
@@ -369,13 +393,13 @@ func FindMatchingSkillsIn(pool []Skill, goal string, o MatchOptions) ([]Skill, M
 	for _, s := range pool {
 		score := 0
 		for _, p := range s.TriggerPatterns {
-			pl := strings.ToLower(p)
+			pl := pyLower(p)
 			if strings.Contains(goalLower, pl) || strings.Contains(pl, goalLower) {
 				score++
 			}
 		}
 		for _, t := range s.Tags {
-			if t != "" && strings.Contains(goalLower, strings.ToLower(t)) {
+			if t != "" && strings.Contains(goalLower, pyLower(t)) {
 				score++
 			}
 		}

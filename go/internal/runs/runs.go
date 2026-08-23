@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
@@ -261,11 +262,44 @@ func AppendSkillsManifest(runDir string, entries []SkillManifestEntry,
 	if entries == nil {
 		entries = []SkillManifestEntry{}
 	}
-	rec := map[string]any{"ts": now, "stage": stage, "skills": entries}
-	if meta != nil {
-		rec["match"] = meta
+	// Every field is rendered through pyjson, entries included. Go structs
+	// reach the generic encoder, which spells a whole float without its
+	// ".0" — so a match_score of 2.0 landed as 2 next to Python's 2.0 on a
+	// file whose entire job is cross-runtime attribution.
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var variant any
+		if e.VariantOf != nil {
+			variant = *e.VariantOf
+		}
+		items = append(items, map[string]any{
+			"id": e.ID, "name": e.Name, "content_hash": e.ContentHash,
+			"variant_of": variant, "tier": e.Tier, "routing_key": e.RoutingKey,
+			"match_method": e.MatchMethod, "match_score": e.MatchScore,
+		})
 	}
-	raw, err := json.Marshal(rec)
+	skills, err := pyjson.Array(items, []string{"id", "name", "content_hash",
+		"variant_of", "tier", "routing_key", "match_method", "match_score"})
+	if err != nil {
+		return err
+	}
+	rec := map[string]any{"ts": now, "stage": stage, "skills": skills}
+	if meta != nil {
+		m, err := pyjson.Ordered(map[string]any{"method": meta.Method,
+			"n_candidates": meta.NCandidates, "top_score": meta.TopScore},
+			[]string{"method", "n_candidates", "top_score"})
+		if err != nil {
+			return err
+		}
+		rec["match"] = pyjson.Raw(m)
+	}
+	// Key ORDER and HTML escaping are set explicitly, the way every other
+	// emitter on this rail does. Plain json.Marshal sorts map keys
+	// alphabetically and escapes < > & as \u003c-style sequences, so this
+	// one writer produced "match" before "stage" and turned a skill named
+	// `Report <x>` into `Report \u003cx\u003e` — values identical, bytes
+	// not, on a file whose whole job is cross-runtime attribution.
+	raw, err := pyjson.Ordered(rec, []string{"ts", "stage", "skills", "match"})
 	if err != nil {
 		return err
 	}
@@ -273,5 +307,5 @@ func AppendSkillsManifest(runDir string, entries []SkillManifestEntry,
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
-	return record.AppendRawLine(out, raw)
+	return record.AppendRawLine(out, []byte(raw))
 }

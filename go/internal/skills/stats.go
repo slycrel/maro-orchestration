@@ -1,15 +1,14 @@
 package skills
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -162,12 +161,16 @@ func validateStatsRow(d map[string]any) error {
 // instead of deleting them), plus the count of older same-id duplicates the
 // keyed read excluded.
 type statsRead struct {
-	records   map[string]map[string]any
-	order     []string // first-seen id order, so a rewrite is deterministic
-	stranded  []string
-	compacted int
-	tainted   int
-	keyless   int
+	records map[string]map[string]any
+	order   []string // first-seen id order, so a rewrite is deterministic
+	// strandedIDs are ids whose row is PRESENT but unprovable. Recovering
+	// them is what lets a write refuse to mint over evidence it cannot read
+	// — see statsFor.
+	strandedIDs map[string]bool
+	stranded    []string
+	compacted   int
+	tainted     int
+	keyless     int
 }
 
 // readSkillStats is the announced read of skill-stats.jsonl.
@@ -181,7 +184,8 @@ type statsRead struct {
 // rebuild from nothing leaves the file intact, which is the safe direction
 // when the alternative is a wipe. Pure readers degrade to empty themselves.
 func readSkillStats(path string) (statsRead, error) {
-	res := statsRead{records: map[string]map[string]any{}}
+	res := statsRead{records: map[string]map[string]any{},
+		strandedIDs: map[string]bool{}}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -211,6 +215,13 @@ func readSkillStats(path string) (statsRead, error) {
 			if err := validateStatsRow(d); err != nil {
 				res.tainted++
 				res.stranded = append(res.stranded, line)
+				// The row failed the proof, but its id is readable. Hold it:
+				// without this, the next counter bump minted a fresh zeroed
+				// record for the same id and — because strandees ride FIRST
+				// — the reset row landed last and won the last-row-wins read
+				// in BOTH runtimes. A row this reader cannot prove is not a
+				// row whose evidence may be replaced.
+				res.strandedIDs[sid] = true
 				continue
 			}
 		} else {
@@ -278,14 +289,7 @@ func writeSkillStats(path string, r statsRead) error {
 		sb.WriteString(l)
 		sb.WriteByte('\n')
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return record.AtomicWrite(path, []byte(sb.String()))
 }
 
 // writeAnnouncement is what the WRITE did, said only after its commit: the
@@ -335,93 +339,15 @@ func marshalStatsRow(d map[string]any) (string, error) {
 	return marshalOrdered(d, statsKeyOrder)
 }
 
-// marshalOrdered emits a row with the model's key ORDER (not Go's map
-// ordering, which json.Marshal sorts alphabetically) so a row rewritten by
-// either runtime reads the same way. Unknown keys — an operator's note, a
-// forward-version field — ride AFTER the modeled ones, sorted, so they
-// survive a rewrite deterministically.
+// marshalOrdered and marshalValue are pyjson's, kept as local names so the
+// emitters in this package read as one family. The implementation is shared
+// because the three ways encoding/json differs from json.dumps (sorted keys,
+// HTML escaping, bare whole floats) kept reappearing one package at a time.
 func marshalOrdered(d map[string]any, modeled []string) (string, error) {
-	seen := map[string]bool{}
-	var extras []string
-	for k := range d {
-		seen[k] = true
-	}
-	for _, k := range modeled {
-		delete(seen, k)
-	}
-	for k := range seen {
-		extras = append(extras, k)
-	}
-	sortStrings(extras)
-
-	var sb strings.Builder
-	sb.WriteByte('{')
-	first := true
-	emit := func(k string) error {
-		v, present := d[k]
-		if !present {
-			return nil
-		}
-		if !first {
-			sb.WriteByte(',')
-		}
-		first = false
-		key, err := jsonString(k)
-		if err != nil {
-			return err
-		}
-		sb.WriteString(key)
-		sb.WriteByte(':')
-		val, err := marshalValue(v)
-		if err != nil {
-			return err
-		}
-		sb.WriteString(val)
-		return nil
-	}
-	for _, k := range append(modeled, extras...) {
-		if err := emit(k); err != nil {
-			return "", err
-		}
-	}
-	sb.WriteByte('}')
-	return sb.String(), nil
+	return pyjson.Ordered(d, modeled)
 }
 
-func marshalValue(v any) (string, error) {
-	if s, ok := v.(string); ok {
-		return jsonString(s)
-	}
-	if n, ok := v.(json.Number); ok {
-		return n.String(), nil // keep the source literal (7 stays 7)
-	}
-	if f, ok := v.(float64); ok {
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return "", fmt.Errorf("non-finite number refused")
-		}
-		// Python's json.dumps spells a float with float.__repr__, so a
-		// whole-valued one keeps its ".0" — Go's encoder writes a bare
-		// "1". Both readers admit both spellings, but success_rate is IN
-		// Python's doctor dedup identity, so a Go-written row and a
-		// Python-written row describing the same skill stopped comparing
-		// equal and the dedup quietly stopped collapsing them. Narrow
-		// known gap: at magnitudes where Go's shortest-'g' and Python's
-		// repr pick different exponent thresholds the spellings still
-		// differ; every field emitted here is a rate or a small counter.
-		out := strconv.FormatFloat(f, 'g', -1, 64)
-		if !strings.ContainsAny(out, ".e") {
-			out += ".0"
-		}
-		return out, nil
-	}
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return "", err
-	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
-}
+func marshalValue(v any) (string, error) { return pyjson.Value(v) }
 
 // StatsLoad is what a read of the stats store returned AND what it had to
 // leave out — mirroring LoadResult for the skill library. The excluded
@@ -532,7 +458,10 @@ func RecordSkillOutcome(ws, skillID string, success bool, tel OutcomeTelemetry) 
 		if err != nil {
 			return err
 		}
-		stats, existed := statsFor(ws, r, skillID)
+		stats, existed, err := statsFor(ws, r, skillID)
+		if err != nil {
+			return err
+		}
 
 		prevUses := stats.TotalUses
 		stats.TotalUses++
@@ -578,12 +507,26 @@ func RecordSkillOutcome(ws, skillID string, success bool, tel OutcomeTelemetry) 
 func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved bool) ([]string, error) {
 	var ids []string
 	seen := map[string]bool{}
+	dup := 0
 	for _, id := range skillIDs {
-		if id == "" || seen[id] {
-			continue
+		// The shared id door, and it REFUSES rather than skipping: an empty
+		// id in a manifest means the caller's manifest is wrong, and
+		// recording the rest of the batch hides that while writing a
+		// verdict set that does not match the run. Python's
+		// _require_recordable_id raises here and nothing is recorded.
+		if id == "" {
+			return nil, fmt.Errorf("skill_id must be a non-empty string, got ''")
 		}
 		if !isCleanText(id) {
 			return nil, fmt.Errorf("skill_id is not encodable text: %q", id)
+		}
+		// One verdict per skill per batch: a duplicated id would credit one
+		// injected run twice. First-seen order is kept; the collapse is
+		// ANNOUNCED, because a silently smaller denominator is exactly the
+		// kind of quiet arithmetic that makes A/B evidence untrustworthy.
+		if seen[id] {
+			dup++
+			continue
 		}
 		seen[id] = true
 		ids = append(ids, id)
@@ -591,11 +534,16 @@ func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved boo
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	var doorWarns []string
+	if dup > 0 {
+		doorWarns = append(doorWarns, fmt.Sprintf("skill-stats: %d duplicate "+
+			"id(s) collapsed — one verdict per skill per batch", dup))
+	}
 	path := skillStatsPath(ws)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	var warns []string
+	warns := doorWarns
 	err := record.Locked(path, func() error {
 		r, err := readSkillStats(path)
 		if err != nil {
@@ -603,7 +551,13 @@ func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved boo
 		}
 		now := nowISO()
 		for _, id := range ids {
-			stats, existed := statsFor(ws, r, id)
+			// A batch is ONE transaction: a refusal aborts the whole batch
+			// with the store untouched, rather than recording some verdicts
+			// and leaving a retry to double-count the rest.
+			stats, existed, err := statsFor(ws, r, id)
+			if err != nil {
+				return err
+			}
 			stats.InjectedRuns++
 			if goalAchieved {
 				stats.InjectedSuccesses++
@@ -627,9 +581,21 @@ func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved boo
 
 // statsFor finds or creates the record for one id, naming it from the skill
 // library when the row is new.
-func statsFor(ws string, r statsRead, skillID string) (SkillStats, bool) {
+// statsFor returns the stored record for an id, or a fresh one to mint.
+//
+// It REFUSES when the store holds an unprovable row for that id: minting
+// there is not a create, it is a silent overwrite of evidence, and the
+// reset row wins the keyed read. The honest answer is to say the store
+// needs repair.
+func statsFor(ws string, r statsRead, skillID string) (SkillStats, bool, error) {
 	if row, ok := r.records[skillID]; ok {
-		return statsFromRow(row), true
+		return statsFromRow(row), true, nil
+	}
+	if r.strandedIDs[skillID] {
+		return SkillStats{}, false, fmt.Errorf("skill-stats: %s has a live row "+
+			"that cannot be proven — refusing to mint a fresh record over it, "+
+			"which would reset its evidence; repair the row, then retry",
+			pyRepr(skillID))
 	}
 	name := skillID
 	for _, sk := range LoadSkills(ws).Skills {
@@ -638,7 +604,7 @@ func statsFor(ws string, r statsRead, skillID string) (SkillStats, bool) {
 			break
 		}
 	}
-	return newStats(skillID, name), false
+	return newStats(skillID, name), false, nil
 }
 
 // mergeStats writes the updated stats OVER the stored row rather than

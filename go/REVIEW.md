@@ -3186,3 +3186,60 @@ across three corpora diffing ids, tier, score and telemetry — 0 diffs).
 
 NEXT: r2 over the WHOLE chunk (3a + 3b + these fixes) per the
 whole-chunk directive.
+
+## r2 — Go skill library, WHOLE chunk (2026-08-23)
+
+Reviewer: opus, whole-chunk per the standing directive, run against a
+pristine `git archive 107ffb06` extract because the worktree was dirty
+with slice-3c work. Method was differential EXECUTION in both runtimes,
+not reading: a 6,186-line `LoadsClean` corpus, a 13,810-line duplicate-
+name fuzz, a 516-row validator/emitted-line corpus, a 1,200-case matcher
+corpus, and live cross-runtime store drives over a shared seeded
+workspace. Verdict: NOT at fixpoint — one HIGH, five MED, seven LOW.
+
+Every finding was verified against the code before any fix; none were
+hallucinated this round, which is itself worth recording against the
+usual 30–50% rate — the difference is that this reviewer executed each
+claim before writing it down.
+
+HIGH fixed: the TF-IDF tier summed vectors by ranging Go MAPS, so the
+same store and the same goal injected a different skill run to run
+(2302/698 over 3000 identical calls). Float addition is not associative
+and the ranking sort is stable, so an ulp of map-order noise decided
+ties. Every injected-outcome counter built on that was recording a coin
+flip.
+
+MEDs fixed: `SkillsNeedingEscalation` read the stored flag where Python
+recomputes from the rate, returning a DISJOINT set on the same store;
+`FrontierSkills` had lost the frontier band, the open-circuit skip and
+the sort, and had gained a challenger exclusion Python does not have
+(its old test pinned the divergence, so the test was replaced);
+a counter bump minted a fresh zeroed record over a stranded row, and
+because strandees ride first the reset row won the keyed read in BOTH
+runtimes — evidence destroyed by a routine bump; `TrimSpace` admitted
+U+001C–U+001F where Python's `strip()` refuses, the unsafe direction;
+and the destructive whole-store rewrites were not fsynced where Python's
+`atomic_write` is (three copies of the pattern, now one
+`record.AtomicWrite`).
+
+LOWs fixed: an empty id skipped instead of refusing a batch; collapsed
+duplicates unannounced; nested non-finite numbers admitted where
+`allow_nan=False` refuses; the manifest writer alphabetizing and
+HTML-escaping on the attribution rail; U+0130 lowercasing. Three
+documented instead: `success_rate`'s uncoerced int (the inverse of r1's
+float fix), `ensure_ascii` and nested-`imported` key order (values
+identical, no consumer), and the Unicode-table version skew.
+
+The reviewer also attacked and confirmed solid: the iterative duplicate-
+name walker (0 divergences on 13,810 fuzz lines), the 4300-digit integer
+boundary exactly, U+FFFD admission, the announce/unreadable rails,
+`RestrictToIDs`, 511/516 byte-identical emitted skill lines, the extras
+order, `getInt`'s precision path, all 9 A/B routing combinations,
+200,000 rounding cases, a 22-op cross-runtime stats lifecycle with every
+value identical, the stats store's strandee half byte-identical between
+runtimes, and the lock posture. One hypothesis was falsified in our
+favour (`ParseFloat("1e-400")` does not `ErrRange`).
+
+NEXT: r3 over the whole chunk including slice 3c and these fixes. The
+reviewer's own recommendation — make the lifecycle decision functions
+the focus rather than re-reviewing the JSONL door — stands.

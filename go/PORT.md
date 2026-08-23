@@ -1995,11 +1995,16 @@ port-wide question for a pass over every emitter, not a skills one.
    graduation, V2 verify lifecycle~~ — slice 2 DONE (self-improvement
    slice 2 above); ~~skills store + retrieval~~ — slice 3a DONE;
    ~~outcome recording, utility/circuit updates, A/B variants,
-   frontier gate, provenance~~ — slice 3b DONE (both skill-library
-   slices above). Remaining from skills.py: promote/demote and the mint
-   path, island culls, the test gate. Then sub_mission (with the goal
-   queue), playbook.md port (unblocks guidance-only guardrails +
-   graduation playbook appends).
+   frontier gate, provenance~~ — slice 3b DONE; ~~promote/demote,
+   island culls, the destructive pool rewrite~~ — slice 3c DONE (all
+   three skill-library slices above). Remaining from skills.py: the LLM
+   mint path (`extract_skills`, `create_skill_variant`,
+   `retire_losing_variants`, `attribute_failure_to_skills`,
+   `load_skill_provenance`) and the Phase-14 test gate
+   (`generate_skill_tests`, `run_skill_tests`,
+   `validate_skill_mutation`). Then sub_mission (with the goal queue),
+   playbook.md port (unblocks guidance-only guardrails + graduation
+   playbook appends).
 5. Heartbeat, projects, escalation, notifications, viz.
 
 **Named smaller gaps, accepted for v0** (adversarial round 2026-08-22 —
@@ -2024,6 +2029,160 @@ fixed or parked here honestly):
 - `jsonx` with NO fence present still takes the first balanced bracket
   in prose — shared verbatim with Python `_find_json_bounds`; fixing it
   is a cross-runtime change, not a Go patch.
+
+### Skill library — slice 3c: selection pressure + tier lifecycle (2026-08-23)
+
+`pool.go`, `island.go`, `promote.go`. The whole slice hangs off one
+primitive, `SaveSkills` — the destructive rewrite of the skill pool —
+which carries six adversarial rounds of Python's arc (r16–r21). The
+contract is the slice:
+
+- **A deliberate DROP must be NAMED.** Every caller builds its list from
+  an UNLOCKED load, so reading "proven row absent from the list" as
+  "deliberately deleted" destroyed any skill a concurrent process saved
+  in between, with no archive copy. Absence now means CARRY.
+- **A deliberate WRITE must be NAMED too.** Naming only drops still let a
+  row from the caller's STALE snapshot replace the live row wholesale, so
+  a concurrent save was reverted by any unrelated caller that loaded
+  before it and saved after it.
+- **Naming is not creation.** A named id with no live row is a lost race
+  with a deliberate drop; appending it resurrected a retired skill with
+  none of the retirement's reasoning. It is dropped and ANNOUNCED.
+- **The caller's list cannot represent a row it could not parse**, so a
+  naive rewrite from that list DELETES every torn line. The store is
+  re-read under the lock and every unaccountable line rides through
+  verbatim, holding its ordinal (this store is read last-row-wins by id,
+  so moving a row promotes it).
+- **Contradictory intent is refused before the lock**, store untouched.
+
+Islands are the FunSearch diversity mechanism: keyword assignment into
+research/build/analysis/general, then a cull of the bottom half of each
+island's OPEN-CIRCUIT skills by compactness-adjusted utility. The archive
+lands BEFORE the pool rewrite and its error ABORTS the cull — a crash
+between the two leaves a harmless duplicate; the other order loses the
+skill. Promote/demote gate on live `SkillStats` (the legacy `use_count`
+writer was removed in Python as dead code, which left the gate reading a
+permanently-zero counter — no skill promoted for eight weeks while the
+store grew to 376 provisionals). Verdict-grounded injected evidence can
+VETO a promotion whose inflated legacy counters look good.
+
+Two self-inflicted bugs found while wiring it, both worth recording:
+`Recorder.Event`'s last parameter is `loopID`, so passing `"skill:<id>"`
+there wrote a fabricated run id AND lost the linkage — `EventRelated`
+now takes `relatedIDs` explicitly. And `record.Locked` is NOT reentrant
+(flock is per-open-file-description, so a nested call from the same
+process blocks against ITSELF until the deadline); the promotion sweep
+needs one critical section spanning reload→rewrite, so `SaveSkills` was
+split into a public locked wrapper plus a `saveSkillsInLock` core, and
+the hazard is documented on `Locked` itself.
+
+**Store-shape divergence found and fixed while porting**: this port was
+appending provenance rows to `memory/skill_provenance.jsonl`, a file no
+Python reader ever opens — `load_skill_provenance` globs SIDECAR files at
+`memory/skill_provenance/{skill_name}_{stamp}.json`. Every Go cull and
+demotion was filing its reasoning where the other runtime could not see
+it, while Python's audit answered "no provenance" for skills this runtime
+had retired with a documented reason. Now byte-identical to Python's
+`json.dumps(record, indent=2)` output, verified by live differential in
+both directions (Go writes → `load_skill_provenance` reads it; Python
+writes → identical bytes modulo the timestamp).
+
+46 mutations derived from the three files, all killed.
+
+### Skill library — r2 review fixes (2026-08-23)
+
+Whole-chunk round (3a + 3b + r1 fixes), per the whole-chunk directive.
+One HIGH, five MED, seven LOW; every claim verified before any fix.
+
+**H1 — the TF-IDF tier was nondeterministic (fixed).** `vec()` and
+`cosine()` summed by ranging over Go MAPS. Go randomizes map iteration
+per range and float addition is not associative, so `dot`, `na` and `nb`
+differed between two calls on the SAME inputs. The ranking sort is
+stable, so an ulp flipped which of two tied skills was injected —
+measured at 2302/698 over 3000 identical calls on one pool. Every
+injected-outcome counter and every A/B conclusion built on them was
+attributing verdicts to a coin flip. Vectors now carry their keys in
+FIRST-OCCURRENCE order and every sum walks that slice, which is exactly
+Python's dict insertion order — bit-exact parity, not merely
+determinism. The regression test's corpus was chosen by falsifier: the
+obvious one flipped on 3 of 400 pre-fix calls and would have passed by
+luck, so the shipped one (varied `tf`, twelve overlapping documents
+varying `idf`) flips on 128 of 400.
+
+**M1 — `SkillsNeedingEscalation` returned a set DISJOINT from Python's
+(fixed).** Go read the STORED `needs_escalation` flag; Python recomputes
+from `success_rate`. The flag and the rate drift apart by design — the
+injection recorder deliberately does not recompute it, and a legacy row
+predating the field defaults to false — so Go missed exactly the
+low-rate legacy rows the redesign bar exists for, and flagged a
+stale-true row with a healthy rate.
+
+**M2 — `FrontierSkills` was missing the frontier (fixed).** It kept only
+the `injected_runs` gate, so it handed the evolver every skill with
+enough runs including 100%-success ones, in map order. Three further
+halves were missing with the band: the open-circuit skip (those belong
+to `SkillsNeedingRewrite`), the ascending sort, and the fact that a
+challenger IS eligible — excluding it looked principled and is not what
+Python does. The old test pinned the divergent behaviour, so it was
+replaced rather than patched.
+
+**M3 — a counter bump silently RESET a skill's evidence (fixed).** When
+a stats row is present but unprovable it is stranded — and strandees ride
+FIRST in the rewrite. So minting a fresh zeroed record for that id put
+the reset row LAST, where it won the last-row-wins keyed read in BOTH
+runtimes: `injected_runs` 5 → 1 from one routine bump. The read now
+recovers stranded ids and the mint REFUSES over one, naming the repair.
+A batch aborts whole rather than recording part of a verdict set.
+
+**M4 — the validator admitted rows Python strands (fixed).**
+`strings.TrimSpace` uses `unicode.IsSpace`, which omits U+001C–U+001F;
+Python's `str.strip()` counts them (measured: the only difference between
+the two sets over the whole rune range). The strip drives a REFUSAL, so
+this was the unsafe direction — a row Go admits becomes eligible to be
+matched, replaced and archived-and-removed while Python carries it
+verbatim forever. Now `pyStrip`.
+
+**M5 — the destructive rewrites were not fsynced (fixed).** Python's
+twin goes through `file_lock.atomic_write` (mkstemp, write, FSYNC,
+replace, mode preserved). Three unsynced temp+rename copies had grown
+across this port, and every one of them replaces a WHOLE store, so a
+power loss in the rename window loses the store rather than one appended
+line. Collapsed into `record.AtomicWrite`. Residual, recorded: the
+directory entry is not fsynced — Python does not either, and the failure
+mode there is "the old file is still there".
+
+**Lows fixed:** an empty id in an injection batch now refuses the whole
+batch instead of silently skipping it (Python raises; recording the rest
+writes a verdict set that does not match the run); collapsed duplicate
+ids are announced rather than shrinking the denominator in silence;
+nested non-finite numbers in the free-form `imported` blob are refused,
+matching `json.dumps(allow_nan=False)`, where before only the TOP level
+was checked; `AppendSkillsManifest` was the one writer still on plain
+`json.Marshal`, so it alphabetized keys, HTML-escaped `< > &`, and
+spelled `2.0` as `2` on the cross-runtime attribution rail; and
+`pyLower` handles U+0130, the only unconditional multi-rune lowercase
+mapping in Unicode, which changes both a stored tag and the matching
+corpus.
+
+The emitter family moved into a new `internal/pyjson` package for that
+last fix — the three ways `encoding/json` differs from `json.dumps`
+(sorted keys, HTML escaping, bare whole floats) kept reappearing one
+package at a time, and `Ordered` also no longer appends into the
+caller's key-order slice (safe today only because every literal happens
+to have `len == cap`).
+
+**Lows documented rather than fixed:** `success_rate` is the one float
+Python does NOT coerce in `dict_to_skill`, so a stored int `1`
+round-trips as `1` there and widens to `1.0` here — the inverse of the
+r1 float-spelling fix, hitting the same dedup consumer, and unreachable
+without a hand-edited or pack-imported row. Non-ASCII escaping
+(`ensure_ascii=True` in Python) and nested `imported` key order remain
+byte-level differences that no consumer reads. 27 further runes
+lowercase differently purely because Go's and CPython's Unicode tables
+are at different revisions; those move with the toolchains.
+
+13 further mutations derived from the fixed files, all killed — 59 for
+the chunk.
 
 ## Running
 

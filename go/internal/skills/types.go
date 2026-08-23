@@ -85,11 +85,11 @@ func NormalizeTags(raw any, cap int) []string {
 	}
 	out := []string{}
 	for _, t := range list {
-		s := strings.TrimSpace(pyStr(t))
+		s := pyStrip(pyStr(t))
 		if s == "" {
 			continue
 		}
-		out = append(out, strings.ToLower(s))
+		out = append(out, pyLower(s))
 	}
 	if cap >= 0 && len(out) > cap {
 		out = out[:cap]
@@ -263,7 +263,7 @@ func ValidateSkillRow(d map[string]any) (Skill, error) {
 	}
 	for _, name := range []string{"id", "name", "content_hash"} {
 		if v, ok := d[name]; ok {
-			if strings.TrimSpace(v.(string)) == "" {
+			if pyStrip(v.(string)) == "" {
 				return Skill{}, fmt.Errorf("%s must not be empty", name)
 			}
 		}

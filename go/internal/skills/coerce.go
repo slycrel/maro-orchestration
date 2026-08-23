@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 )
 
 // Coercion helpers reproducing what dict_to_skill's constructors do to a
@@ -106,7 +108,7 @@ func getInt(d map[string]any, key string, dst *int) {
 			return
 		}
 	case string: // Python int("7")
-		if n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
+		if n, err := strconv.ParseInt(pyStrip(t), 10, 64); err == nil {
 			*dst = int(n)
 		}
 		return
@@ -130,7 +132,7 @@ func getFloat(d map[string]any, key string, dst *float64) {
 			return
 		}
 		if s, isStr := v.(string); isStr { // Python float("0.5")
-			if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			if f, err := strconv.ParseFloat(pyStrip(s), 64); err == nil {
 				*dst = f
 			}
 		}
@@ -157,9 +159,7 @@ func strList(d map[string]any, key string, dst *[]string) {
 	*dst = out
 }
 
-// isCleanText reports whether a string may be written to the store: valid
-// UTF-8 with no surrogate code points. Go strings can carry arbitrary
-// bytes, so this is the writer-side twin of LoadsClean's reader-side check.
+// isCleanText is pyjson.IsCleanText: valid UTF-8, no surrogate code points.
 //
 // It deliberately ADMITS a literal U+FFFD. An earlier version refused it on
 // the grounds that the store has no legitimate producer of a replacement
@@ -171,17 +171,7 @@ func strList(d map[string]any, key string, dst *[]string) {
 // because archiving is all-or-nothing, one of them blocks an entire cull.
 // The refusals that remain — raw non-UTF-8 and surrogate code points — are
 // for text that cannot round-trip at all, which is a different thing.
-func isCleanText(s string) bool {
-	if !utf8.ValidString(s) {
-		return false
-	}
-	for _, r := range s {
-		if r >= 0xD800 && r <= 0xDFFF {
-			return false
-		}
-	}
-	return true
-}
+func isCleanText(s string) bool { return pyjson.IsCleanText(s) }
 
 // isISOTimestamp is datetime.fromisoformat's acceptance, used only as a
 // validity PREDICATE (the value is never re-rendered from the parse).
@@ -215,20 +205,9 @@ func isISOTimestamp(s string) bool {
 	return false
 }
 
-// jsonString encodes one string as a JSON literal with Python-compatible
-// escaping (HTML escaping off — Python's json.dumps does not escape < > &).
-func jsonString(s string) (string, error) {
-	if !isCleanText(s) {
-		return "", fmt.Errorf("byte-tainted text refused")
-	}
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(s); err != nil {
-		return "", err
-	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
-}
+// jsonString is pyjson.String: Python-compatible escaping, HTML escaping
+// off (json.dumps does not escape < > &).
+func jsonString(s string) (string, error) { return pyjson.String(s) }
 
 // orEmpty turns a nil slice into an empty one so JSON emits [] not null —
 // Python's dataclass default_factory=list semantics.
@@ -265,3 +244,59 @@ func pyBool(v any) bool {
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
+
+// pyIsSpace is Python's str.isspace() for one rune. Go's unicode.IsSpace
+// omits the four ASCII information separators (U+001C–U+001F) that Python
+// counts as whitespace — the ONLY difference between the two sets over the
+// whole rune range, measured.
+//
+// It matters because .strip() drives a REFUSAL: Python's validate_skill_row
+// refuses an id, name or content_hash that is empty after stripping, so a
+// row whose id is a lone U+001C is stranded there. With TrimSpace it was
+// ADMITTED here — the unsafe direction, and squarely in this validator's
+// threat model: an admitted row becomes eligible to be matched, replaced by
+// SaveSkill, and archived-and-removed by a cull, while the other runtime
+// carries it verbatim forever as unprovable.
+func pyIsSpace(r rune) bool {
+	return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f)
+}
+
+// pyStrip is Python's str.strip() — whitespace by pyIsSpace, both ends.
+func pyStrip(s string) string { return strings.TrimFunc(s, pyIsSpace) }
+
+// pyLower is Python's str.lower(). Go's strings.ToLower applies SIMPLE case
+// mapping (one rune in, one rune out); Python applies the full mapping,
+// where U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) lowercases to TWO
+// runes, "i" + U+0307. Swept over the whole rune range, that is the only
+// unconditional multi-rune lowercase mapping there is, so handling it
+// outright is the whole fix — no case-folding dependency needed.
+//
+// It matters because this feeds both a STORED value (a normalized tag lands
+// in a shared file) and the matching corpus: "İstanbul" tokenized one way
+// in Go and another in Python meant the same skill scored differently in
+// the two runtimes.
+//
+// NAMED DIVERGENCE, version-dependent and unfixable from here: 27 further
+// runes disagree purely because Go's and CPython's Unicode tables are at
+// different revisions (Garay, recent Latin Extended-D additions). Those
+// move with the toolchains, not with this code, and nothing either runtime
+// mints uses them.
+func pyLower(s string) string {
+	if !strings.ContainsRune(s, 0x0130) {
+		return strings.ToLower(s)
+	}
+	return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307"))
+}
+
+// pyRepr renders a string the way Python's !r does — single quotes unless
+// the value contains one and no double quote. Provenance reasons are stored
+// prose in a shared file, so a differently-spelled reason is a differently
+// stored row (the content-key prose divergence family).
+func pyRepr(s string) string {
+	if strings.Contains(s, "'") && !strings.Contains(s, "\"") {
+		return "\"" + s + "\""
+	}
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "'", "\\'")
+	return "'" + escaped + "'"
+}

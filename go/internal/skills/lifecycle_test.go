@@ -448,44 +448,74 @@ func TestRecordVariantOutcomeOnlyCountsChallengers(t *testing.T) {
 // The frontier gate reads the HONEST injected counters — use_count is
 // legacy-frozen and sat at 0 for 312 of 314 live Python skills, silently
 // starving this gate and the whole variant subsystem behind it.
-func TestFrontierSkillsGateOnInjectedRuns(t *testing.T) {
+func TestFrontierSkillsSelectsTheBandHardestFirst(t *testing.T) {
 	ws := t.TempDir()
+	// hot: legacy use_count only — the dead gate must not qualify it.
 	hot := base("hot", "Hot")
-	hot.UseCount = 99 // legacy field: must NOT qualify a skill
-	cold := base("cold", "Cold")
-	for _, s := range []Skill{hot, cold} {
-		if err := SaveSkill(ws, &s); err != nil {
+	hot.UseCount = 99
+	// solved: enough runs, but a perfect record — nothing to experiment on.
+	solved := base("solved", "Solved")
+	// mid / harder: inside the band, at different rates.
+	mid := base("mid", "Mid")
+	harder := base("harder", "Harder")
+	// broken: inside the band by rate, but its circuit is open — that is
+	// skills_needing_rewrite's job, not a variant experiment's.
+	broken := base("broken", "Broken")
+	broken.CircuitState = "open"
+	for _, s := range []Skill{hot, solved, mid, harder, broken} {
+		sk := s
+		if err := SaveSkill(ws, &sk); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := FrontierSkills(ws, LoadSkills(ws).Skills, 3); len(got) != 0 {
 		t.Fatalf("use_count must not qualify: %+v", got)
 	}
-	for i := 0; i < 3; i++ {
-		if _, err := RecordSkillInjectionOutcomes(ws, []string{"cold"}, true); err != nil {
-			t.Fatal(err)
+	// 4 runs each: solved 4/4 = 1.00 (above HIGH), mid 2/4 = 0.50,
+	// harder 2/4 = 0.50 then dropped to 0.25 below — see the verdicts.
+	verdicts := map[string][]bool{
+		"solved": {true, true, true, true},
+		"mid":    {true, true, false, false},  // 0.50
+		"harder": {true, false, false, false}, // 0.25 — still >= LOW? no: 0.25 < 0.40
+		"broken": {true, true, false, false},  // 0.50, but open circuit
+	}
+	for id, vs := range verdicts {
+		for _, v := range vs {
+			if _, err := RecordSkillInjectionOutcomes(ws, []string{id}, v); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	got := FrontierSkills(ws, LoadSkills(ws).Skills, 3)
-	if len(got) != 1 || got[0].ID != "cold" {
-		t.Fatalf("injected_runs must qualify: %+v", got)
+	if len(got) != 1 || got[0].ID != "mid" {
+		var ids []string
+		for _, s := range got {
+			ids = append(ids, s.ID)
+		}
+		t.Fatalf("only the in-band, non-open skill qualifies: %v", ids)
 	}
-	// A challenger is an ARM of an experiment, not a candidate to start a
-	// new one against itself — however much evidence it has accrued.
+
+	// A challenger IS eligible: one that lands mid-band is exactly the thing
+	// worth splitting again. Excluding it looked principled and diverged.
 	child := base("child", "Challenger")
-	pid := "cold"
+	pid := "mid"
 	child.VariantOf = &pid
 	if err := SaveSkill(ws, &child); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 5; i++ {
-		if _, err := RecordSkillInjectionOutcomes(ws, []string{"child"}, true); err != nil {
+	// 2/5 = 0.40, exactly at LOW (inclusive) and BELOW mid's 0.50.
+	for _, v := range []bool{true, true, false, false, false} {
+		if _, err := RecordSkillInjectionOutcomes(ws, []string{"child"}, v); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got = FrontierSkills(ws, LoadSkills(ws).Skills, 3)
-	if len(got) != 1 || got[0].ID != "cold" {
-		t.Fatalf("a challenger must not be a frontier candidate: %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("a challenger is a frontier candidate: %+v", got)
+	}
+	// Hardest first: the evolver spends its budget in this order.
+	if got[0].ID != "child" || got[1].ID != "mid" {
+		t.Fatalf("must sort ascending by injected rate: %s, %s", got[0].ID, got[1].ID)
 	}
 }
 
