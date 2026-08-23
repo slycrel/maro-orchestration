@@ -1242,6 +1242,52 @@ first of two new consecutive clean rounds.** Standing lesson recorded: on
 same-model fallback, escalate the tier after round 1 (feedback_reviewer_tier_
 escalation) — r12 is the datapoint (one opus round > six sonnet rounds).
 
+**r13 round (2026-08-22, skeptic+qa, opus-5 medium) — ONE HIGH; the two lenses
+SPLIT on severity, adjudicated by coverage.** The higher tier again found a new
+class one layer under: the exfil shape's payload anchor was a literal `.tld/`,
+so a non-`/` delimiter or a percent-encoded structural char pushed a NON-
+allowlisted `.com/.io/.net` host past the shape (the `||` short-circuit then
+skipped urlHostAllowed). All verify-before-fix confirmed live from source
+`"internal"`:
+  - query string `https://evil.com?data=SECRET` (the canonical exfil carrier),
+    fragment `#data=`, root-anchored FQDN `evil.com./leak`, `%2E`-encoded host
+    dot, and `%3A%2F%2F`-encoded nested scheme laundered through r.jina.ai — all
+    scanned CLEAN.
+The lenses split: skeptic HIGH (these are within the detector's CLAIMED
+`.com/.io/.net` coverage); qa MEDIUM (the whole reach is a bounded heuristic,
+Python-parity, document don't chase). **Adjudication: FIX what's within claimed
+coverage, DOCUMENT the inherent reach limits.** FIXES: (1) payload anchor
+`/[^\s]{5,}` → `\.?[/?#][^\s]{5,}` (accept `?`/`#` delimiters + trailing FQDN
+dot); (2) a whole-string percent-decode of structural delimiters (`%2e`→`.`,
+`%2f`→`/`, `%5c`→`\`, `%3a`→`:`) in the URL normalizer, matching what a WHATWG
+client does before parsing (the r8 "normalize once" precedent) — this restores
+the r2 per-scheme catch on encoded nested URLs; (3) urlHostAllowed strips a
+trailing FQDN dot so the allowlisted `.com.` form still clears. Mutation-
+verified (M115 anchor revert, M116 decode removal both fail the new pins).
+DOCUMENTED as inherent heuristic limits (candidate #14, shared with Python,
+pinned by `TestURLExfilHeuristicReachKnownGap`): IP-literal hosts, TLDs outside
+com/io/net, ≤2-char labels, <5-byte payloads — a host-allowlist exfil detector
+cannot be complete, and the ledger now says so.
+
+Also this round, from findings #2/#3: **the r12 userinfo-window known-gap is now
+CLOSED**, not accepted. My r12 rationale ("closing needs an unbounded O(n²)
+scan") was WRONG — a truncated candidate whose window holds no authority
+terminator is O(1)-detectable and flagged FAIL-CLOSED (an oversized delimiter-
+free authority is never a real URL; DNS caps at 253 bytes). Pinned by
+`TestURLExfilOversizedAuthorityFlagged` (M117); the vacuous r12 negative control
+(a 600×A allowlisted apex that "passed" only via that starvation) was removed —
+it correctly flags now. Test-honesty fixes from qa: pinned the asciiLower
+SCHEME-prefix and sourceIsAllowed sites (uppercase-scheme passes, homoglyph
+source rejected — M118), corrected the http:-fixture comment (it pins schemeRe
+coverage, not the O(1) skip), and gave Revert's missing-constraint-file branch
+the same honest detail as the row-absent branch. The `pattern`-field MEDIUM
+(candidate #13) remains HELD/named, re-confirmed by both lenses. **Fixpoint
+clock RESETS again: r14 is the first of two new consecutive clean rounds.**
+Meta-note: opus has now found a real HIGH three rounds running (r12 ×2, r13),
+each inside the prior fix — the flagship pattern is unbroken and the regex-shape
+detector is visibly at its brittleness limit; if r14/r15 keep surfacing anchor/
+encoding gaps, the spec-grounded parse (deferred at r10) should be reconsidered.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

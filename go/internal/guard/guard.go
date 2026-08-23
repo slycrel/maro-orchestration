@@ -98,7 +98,17 @@ var exfilPatterns = []*regexp.Regexp{
 // review; Python's {3,50} bound has the SAME blind spot — backport #11. The
 // residual >512-byte-userinfo case is a documented known-gap, since resolving
 // it needs an unbounded authority scan = the O(n²) the cap exists to prevent.)
-var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)/[^\s]{5,}`)
+// The payload anchor is a DELIMITER `[/?#]` (optionally after a trailing FQDN
+// dot `\.?`), not a bare `/` (r13 opus review): a real client terminates the
+// authority on `?` and `#` too, so `https://evil.com?data=SECRET` (query) and
+// `https://evil.com#data=SECRET` (fragment) — the canonical exfil carriers —
+// and `https://evil.com./leak` (root-anchored FQDN) all fetch to a non-
+// allowlisted host but scanned CLEAN under the old `.tld/` anchor. Requiring
+// 5+ payload bytes after the delimiter keeps bare `https://github.com[/]`
+// clean. (Reach the shape does NOT cover — IP-literal hosts, TLDs outside
+// com/io/net, ≤2-char labels, <5-byte payloads — is a documented heuristic
+// limit shared with Python, pinned by TestURLExfilHeuristicReachKnownGap.)
+var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)\.?[/?#][^\s]{5,}`)
 
 // schemeRe locates every URL scheme occurrence (slash count irrelevant —
 // the shape and host parser handle the slashes). Python's re.search scans
@@ -111,12 +121,27 @@ var schemeRe = regexp.MustCompile(`(?i)https?:`)
 
 var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 
-// urlControlStripper removes ASCII tab/CR/LF (the WHATWG normalization
-// step) so they can't hide inside a hostname. Applied ONCE over a URL-only
-// copy of the scanned text before per-scheme slicing — WHATWG removes them
-// whole-string, and doing it per-candidate after the byte cap left a
-// starvation hole (r8; see the scan loop).
-var urlControlStripper = strings.NewReplacer("\t", "", "\r", "", "\n", "")
+// urlNormalizer applies the WHATWG preprocessing a real client does before
+// parsing, ONCE over a URL-only copy of the scanned text before per-scheme
+// slicing (whole-string, not per-candidate — doing it after the byte cap left
+// a starvation hole, r8):
+//   - remove ASCII tab/CR/LF (they can't hide inside a hostname);
+//   - percent-decode the STRUCTURAL delimiters `%2e`→`.`, `%2f`→`/`,
+//     `%5c`→`\`, `%3a`→`:` (r13 opus review). A WHATWG client percent-decodes
+//     these before host/scheme parsing, so without this an attacker hid the
+//     TLD dot (`evil-collector%2Ecom/leak` → clean) or laundered a nested
+//     scheme past the r2 per-scheme scan (`r.jina.ai/https%3A%2F%2Fevil.com`
+//     → only the allowlisted outer scheme was seen). Decoding is safe-
+//     direction: it only ever reveals MORE structure (more scheme positions,
+//     a real host boundary), and urlHostAllowed's exact match still protects
+//     allowlisted hosts. Hex letters are case-insensitive, digits fixed.
+var urlNormalizer = strings.NewReplacer(
+	"\t", "", "\r", "", "\n", "",
+	"%2e", ".", "%2E", ".",
+	"%2f", "/", "%2F", "/",
+	"%5c", "\\", "%5C", "\\",
+	"%3a", ":", "%3A", ":",
+)
 
 // urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
 // — a byte slice is deliberate so a huge candidate is never rune-copied
@@ -252,7 +277,7 @@ func ScanContent(content, source string) ScanReport {
 	// bounds per-candidate work, so total URL-scan work is linear in
 	// content. It is a SEPARATE copy so the override/tool-call/keyword loops
 	// above keep reading `target` with original offsets and evidence.
-	urlTarget := urlControlStripper.Replace(content)
+	urlTarget := urlNormalizer.Replace(content)
 	for _, loc := range schemeRe.FindAllStringIndex(urlTarget, -1) {
 		cand := urlTarget[loc[0]:]
 		// Skip the scheme + the WHATWG "special authority ignore slashes"
@@ -285,9 +310,9 @@ func ScanContent(content, source string) ScanReport {
 		// (r4 review DoS). The exfil shape needs a scheme, an authority that
 		// fits the window (host plus any userinfo/subdomain padding, up to
 		// urlCandidateMax — r12), a TLD, and a short path, so the window past
-		// the slash run is enough to decide a match. Userinfo padding beyond
-		// the window is the documented known-gap (see exfilURLShape).
-		if len(cand) > skip+urlCandidateMax {
+		// the slash run is enough to decide a match.
+		truncated := len(cand) > skip+urlCandidateMax
+		if truncated {
 			cand = cand[:skip+urlCandidateMax]
 		}
 		// Candidate ends at the next SPACE (tab/CR/LF already stripped, so a
@@ -295,6 +320,25 @@ func ScanContent(content, source string) ScanReport {
 		// how a real client normalizes it).
 		if i := strings.IndexByte(cand, ' '); i >= 0 {
 			cand = cand[:i]
+			truncated = false // a space bounded it; the authority is whole
+		}
+		// Oversized unresolvable authority (r13 opus review, closing the r12
+		// known-gap). If the candidate was truncated by the byte cap AND the
+		// window holds NO authority terminator (`/ \ ? #`), the real host sits
+		// past the window — e.g. `https://<600×A>@evil-collector.com/leak`,
+		// where the host hides behind >512 bytes of userinfo. No legitimate
+		// URL has a >512-byte delimiter-free authority (DNS names cap at 253),
+		// so flag it FAIL-CLOSED rather than clear it. This is O(1) on already-
+		// bounded data (one IndexAny over the window), NOT the unbounded scan
+		// the earlier rationale wrongly claimed was required. It also flags a
+		// pathological scheme-only/giant-token blob (`https:`×N) — a safe over-
+		// flag on input no real suggestion carries; TestURLScanStaysLinear
+		// pins only the timing, which is unaffected.
+		if truncated && strings.IndexAny(cand[skip:], "/\\?#") < 0 {
+			findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
+			blocked = append(blocked, "oversized-unresolvable-authority")
+			hasExfil = true
+			break
 		}
 		if !exfilURLShape.MatchString(cand) || urlHostAllowed(cand) {
 			continue
@@ -403,6 +447,10 @@ func urlHostAllowed(url string) bool {
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
+	// Strip a single trailing FQDN dot: `api.anthropic.com.` is the same host
+	// as `api.anthropic.com` to every client (r13 — the shape now matches the
+	// root-anchored form, so this keeps the allowlisted variant clearing).
+	host = strings.TrimSuffix(host, ".")
 	for _, h := range allowedURLHosts {
 		if host == h {
 			return true

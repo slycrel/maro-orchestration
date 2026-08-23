@@ -882,6 +882,11 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 			} else {
 				detail = "dynamic constraint not found (may have expired)"
 			}
+		} else {
+			// The constraints file is gone entirely (never written, or the
+			// whole lane pruned). Same honest detail as the row-absent branch
+			// rather than a silent empty-detail success (r13 QA #8).
+			detail = "dynamic constraint not found (may have expired)"
 		}
 	case "prompt_tweak":
 		detail = "prompt_tweak lessons are append-only; lesson will decay naturally"

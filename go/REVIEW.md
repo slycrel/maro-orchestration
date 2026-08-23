@@ -2696,3 +2696,55 @@ round; the fixpoint count resets.
 Full suite green (22 packages), gofmt/vet clean. Fix commit is scoped to the
 guard parser (guard.go + guard_test.go pins). **The fixpoint clock RESETS — r13
 is the first of two new consecutive clean rounds, to run at the escalated tier.**
+
+---
+
+## r13 review (2026-08-22, skeptic+qa) — TIER ESCALATION continued
+
+### Verdict: REJECT — ONE HIGH (severity split, adjudicated) (SAME-MODEL FALLBACK: opus-5 medium). Verification Ledger:
+
+The two opus lenses agreed on the FACTS, split on severity: skeptic HIGH #1
+(payload-anchor gaps), qa MEDIUM #4 (same class, framed as heuristic reach).
+Adjudicated by coverage: fix within-claimed-coverage, document inherent limits.
+
+- **HIGH — VERIFIED — exfil-shape payload-anchor gaps (within claimed
+  coverage).** Trace (all `IsClean==true` pre-fix, from source `"internal"`):
+  `https://evil-collector.com?data=SECRET` (query), `…#data=SECRET` (fragment),
+  `https://evil-collector.com./leak…` (trailing-dot FQDN),
+  `https://evil-collector%2Ecom/leak…` (%2E host dot),
+  `https://r.jina.ai/https%3A%2F%2Fevil-collector.com%2Fleak…` (%3A/%2F nested
+  launder past the r2 per-scheme scan). All are non-allowlisted `.com` hosts the
+  detector claims to cover. FIX: anchor `/[^\s]{5,}` → `\.?[/?#][^\s]{5,}`;
+  whole-string percent-decode of `%2e/%2f/%5c/%3a` in the URL normalizer;
+  trailing-dot strip in urlHostAllowed. Mutation M115 (anchor revert) and M116
+  (decode removal) each fail the new pins. Reachable on the literal evolver-
+  suggestion path.
+
+- **MEDIUM→DOCUMENTED — VERIFIED — heuristic reach limits.** IP-literal host,
+  `.xyz`/`.co.uk` TLDs, ≤2-char labels, <5-byte payloads all scan clean —
+  Python-parity ({3,50}+(com|io|net)), inherent to a host-allowlist heuristic.
+  Documented, not closed: `TestURLExfilHeuristicReachKnownGap` + PORT.md
+  candidate #14. This is the honest scope the ledger was over-implying.
+
+- **MEDIUM→CLOSED — VERIFIED — r12 userinfo-window known-gap.** Both lenses
+  (skeptic #2, qa #3) refuted the r12 "unclosable without O(n²)" rationale
+  correctly: truncated + no in-window authority terminator is O(1)-detectable.
+  CLOSED with a fail-closed oversized-authority flag (M117). The r12 vacuous
+  negative control (600×A allowlisted apex, "passed" via starvation) removed —
+  it flags now, which is correct.
+
+- **Test-honesty (qa #2/#5/#8) — all FIXED:** asciiLower scheme-prefix +
+  sourceIsAllowed sites now pinned (uppercase-scheme passes, homoglyph source
+  rejected — M118); http:-fixture comment corrected to what it pins; Revert
+  missing-file branch gets the honest "not found" detail.
+
+- **MEDIUM (pattern field, candidate #13) — re-CONFIRMED, still HELD.** Both
+  lenses re-verified it; default-HELD; unchanged this round.
+
+- **LOWs** (schemeRe `\b` divergence, `(?i)` vs asciiLower asymmetry, space-in-
+  path, sub-2-char label): safe-direction, noted, held.
+
+Full suite green (22 packages), gofmt/vet clean. Four new pins mutation-verified
+(M115–M118). **Fixpoint clock RESETS — r14 is the first of two new consecutive
+clean rounds. Meta: opus found a real HIGH three rounds running; if the anchor/
+encoding gaps keep coming, reconsider the spec-grounded parse deferred at r10.**
