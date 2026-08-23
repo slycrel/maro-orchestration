@@ -38,9 +38,11 @@ package scans
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -226,14 +228,14 @@ func ScanCalibrationLog(ws string, o CalibrationOptions) []CalibrationFinding {
 		if overrideRate > o.HighOverrideThreshold {
 			reasons = append(reasons, fmt.Sprintf(
 				"override rate %.0f%% (>%.0f%%) — LLM action is being overridden by "+
-					"guardrails too often; add clearer '%s' examples to the escalation prompt",
-				overrideRate*100, o.HighOverrideThreshold*100, dc))
+					"guardrails too often; add clearer %s examples to the escalation prompt",
+				overrideRate*100, o.HighOverrideThreshold*100, pyRepr(dc)))
 		}
 		if meanConf < o.LowConfidenceThreshold {
 			reasons = append(reasons, fmt.Sprintf(
 				"mean confidence %.1f/10 (<%g) — LLM is systematically uncertain on "+
-					"'%s' decisions; consider adding explicit criteria or worked examples",
-				meanConf, o.LowConfidenceThreshold, dc))
+					"%s decisions; consider adding explicit criteria or worked examples",
+				meanConf, o.LowConfidenceThreshold, pyRepr(dc)))
 		}
 		if len(reasons) > 0 {
 			findings = append(findings, CalibrationFinding{
@@ -532,11 +534,41 @@ func ScanQualityDrift(ws string, outcomes []map[string]any,
 
 func round4(f float64) float64 { return roundN(f, 1e4) }
 func round6(f float64) float64 { return roundN(f, 1e6) }
+
+// roundN rounds half-to-even, matching Python round() — these values land
+// in SHARED files (evolver-baselines.jsonl, verdict rates), and exact
+// binary ties (5/32 → 0.1562 vs 0.1563) must not differ by runtime.
 func roundN(f, scale float64) float64 {
-	if f >= 0 {
-		return float64(int64(f*scale+0.5)) / scale
+	return math.RoundToEven(f*scale) / scale
+}
+
+// pyRepr quotes a string the way Python repr does — single quotes, except
+// a string containing ' (and no ") switches to double quotes. Calibration
+// prose embeds decision classes with !r, and the text is a cross-runtime
+// dedup key: divergent quoting mints duplicate suggestion rows.
+func pyRepr(s string) string {
+	if strings.Contains(s, "'") && !strings.Contains(s, "\"") {
+		return "\"" + s + "\""
 	}
-	return float64(int64(f*scale-0.5)) / scale
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "'", "\\'")
+	return "'" + escaped + "'"
+}
+
+// pyVal renders a rate value the way a Python f-string does: nil → None,
+// whole floats keep their ".0". Shared-ledger prose parity.
+func pyVal(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "None"
+	case float64:
+		s := strconv.FormatFloat(t, 'g', -1, 64)
+		if !strings.ContainsAny(s, ".e") {
+			s += ".0"
+		}
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +607,16 @@ func ScanCanonCandidates(ws string, minHits, minTaskTypes int) []evolver.Suggest
 	for lid := range stats {
 		lids = append(lids, lid)
 	}
-	sort.Strings(lids) // deterministic order (Python dict order is insertion; ours must at least be stable)
+	// Python sorts candidates by times_applied desc (stable over insertion
+	// order); lesson_id ascending is our deterministic tiebreak in place of
+	// insertion order — same row set, matching primary order.
+	sort.Slice(lids, func(i, j int) bool {
+		hi, hj := stats[lids[i]].totalHits, stats[lids[j]].totalHits
+		if hi != hj {
+			return hi > hj
+		}
+		return lids[i] < lids[j]
+	})
 
 	var out []evolver.Suggestion
 	for _, lid := range lids {
@@ -847,8 +888,8 @@ func RunStatisticalScans(ws string, outcomes []map[string]any, o StatScanOptions
 					Target:       "escalation",
 					Suggestion:   cf.Suggestion,
 					FailurePattern: fmt.Sprintf(
-						"calibration: class='%s' override_rate=%.0f%% mean_confidence=%.1f/10 n=%d",
-						cf.DecisionClass, cf.OverrideRate*100, cf.MeanConfidence, cf.EntryCount),
+						"calibration: class=%s override_rate=%.0f%% mean_confidence=%.1f/10 n=%d",
+						pyRepr(cf.DecisionClass), cf.OverrideRate*100, cf.MeanConfidence, cf.EntryCount),
 					Confidence:       0.75,
 					OutcomesAnalyzed: cf.EntryCount,
 					GeneratedAt:      nowISO(),

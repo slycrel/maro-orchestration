@@ -1518,6 +1518,68 @@ Mutations M119–M126: 7 DETECTED outright; M123 (drift 3-consecutive
 never-reverted property is doubly guarded (case arm + re-read), so
 M121 is a deliberate two-line mutant defeating both.
 
+**r1 adversarial review (2026-08-22, 3 serialized lenses:
+security/parity/QA-concurrency) — 2 HIGHs + 6 MEDs fixed; the headline
+invariant (embedded-only pattern execution) probed airtight.**
+(1) HIGH parity: Go's verdict notify wrote only the events.jsonl half —
+`self_improvement_verdict` is in Python's ESCALATION_FILE_EVENTS, so a
+degraded_needs_review verdict never reached output/escalations.jsonl,
+the decreed headless escalation surface; the authority-asymmetry
+design's "surface for review" half silently didn't surface. Ported the
+escalation-file writer (full payload, 2000-char field bounds).
+(2) HIGH QA: two overlapping verify cadences (Go+Go or Go+Python) let
+the losing revert overwrite a truthful `degraded` stamp with
+`degraded_revert_failed` and fire a false BLOCKING alarm. Terminal
+verification stamps are now FIRST-WRITER-WINS inside the store lock
+(`StampVerificationChanged`), every side-effect append (calibration
+outcome, EVOLVER_VERDICT event, escalation) fires only from the pass
+that landed the stamp, and `Revert` returns a typed `NothingToRevert`
+the verify pass treats as handled-elsewhere, never as failure. Extension
+bumps are now an atomic RMW (`BumpExtensionOrPark`) — two concurrent
+passes yield 1 then 2, park included in the same locked write.
+Also fixed: captain's-log audience registry ported (EVOLVER_* /
+GRADUATION_* rows now `audience:"user"` per Python's
+USER_SURFACED_EVENTS — they were filtered out of the user lane);
+numeric-STRING goal_verdict_confidence now parses like Python float()
+(a "0.5" classified full-trust and flipped V2 window membership);
+graduation's `tailLines` byte-bounded at 8MB (matching the scans
+reader — it silently reopened the unbounded-read hole for
+attacker-adjacent ledgers); empty-repoRoot cadences no longer touch the
+claim/ack state file (they routinely wiped Python's dedup baseline to
+`{}`, forcing GRADUATION_VERIFIED re-emits); RunGraduation's dedup
+re-check moved inside the append lock (concurrent cadences
+double-proposed a class) with GRADUATION_PROPOSED events fired only for
+rows that actually landed; SaveSuggestions' content dedup moved inside
+one locked RMW (the 81-duplicate bug reopened under concurrency);
+malformed `applied_manually` now coerces with Python bool() truthiness
+(a present-but-non-bool value zeroed to false and routed a HUMAN-applied
+row into the auto-revert branch — the unsafe direction); rounding is
+half-to-even (exact binary ties wrote 0.1563 Go vs 0.1562 Python into
+shared files); pyRepr/pyVal give Python repr quoting (apostrophe classes
+defeated cross-runtime content dedup) and None/0.0 prose parity; canon
+candidates sort times_applied-desc; graduation candidate ties break by
+first-seen class order.
+NEW backport candidates: (12) the concurrency read-decide-act family —
+Python's verify/graduation/save share every one of these windows
+byte-for-byte (double-revert false alarm, double-propose, double-append,
+lost extension bump, dedup TOCTOU), newly consequential because Go+Python
+cadence overlap on one workspace is now a supported deployment; Go is
+the reference fix. (13) Python `verdict_trust` — shared, no fix needed
+(float() already parses strings); the Go side was the divergence.
+Accepted residuals, named honestly: the `NothingToRevert` skip arm
+guards an interleaving no deterministic test can force (loser's revert
+completing before the winner's stamp) — its typed input is pinned and
+the stamp half is closed by first-writer-wins; drift's prior-window
+same-interval contamination under concurrent cycles and the >300s
+claim-lease stall double-delivery remain SUSPECTED-unreproduced
+(fork-point-shared shapes).
+Fix-layer mutations M127, M129–M139 all DETECTED with compiling mutants
+(M129's first form didn't compile and was rebuilt semantic; M134's first
+run mutated the WRONG of two identical guards — VerifyGraduationRules'
+own gate instead of the fix's — and was re-run against the fix site;
+M128 deliberately not minted, see the residual above). Race detector
+clean over scans/graduation/evolver.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

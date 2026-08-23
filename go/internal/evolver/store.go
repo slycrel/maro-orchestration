@@ -202,7 +202,38 @@ func rowToSuggestion(m map[string]any) Suggestion {
 	raw, _ := json.Marshal(m)
 	var s Suggestion
 	_ = json.Unmarshal(raw, &s)
+	// applied_manually guards the never-auto-revert invariant, and Python
+	// reads it with bool() truthiness — a present-but-malformed value
+	// ("true", 1) is truthy there and PROTECTS the row. Go's typed decode
+	// zeroed it to false, routing a human-applied row into the auto-revert
+	// branch (r1 security review) — the unsafe direction. Coerce like
+	// Python; same for applied (the same failure shape, lower stakes).
+	if v, present := m["applied_manually"]; present {
+		s.AppliedManually = pyTruthy(v)
+	}
+	if v, present := m["applied"]; present {
+		s.Applied = pyTruthy(v)
+	}
 	return s
+}
+
+// pyTruthy mirrors Python bool(): non-empty string, non-zero number, true.
+func pyTruthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t != ""
+	case float64:
+		return t != 0
+	case nil:
+		return false
+	case []any:
+		return len(t) > 0
+	case map[string]any:
+		return len(t) > 0
+	}
+	return true
 }
 
 // LoadSuggestions returns up to limit suggestions, newest first.
@@ -246,34 +277,56 @@ func contentKey(category, target, suggestion string) string {
 // suggestion someone already reviewed.
 func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	p := suggestionsPath(workspaceDir)
-	seen := map[string]bool{}
-	for _, m := range readRows(p) {
-		cat, _ := m["category"].(string)
-		tgt, _ := m["target"].(string)
-		sug, _ := m["suggestion"].(string)
-		seen[contentKey(cat, tgt, sug)] = true
-	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	for _, s := range suggestions {
-		key := contentKey(s.Category, s.Target, s.Suggestion)
-		if seen[key] {
-			continue
+	// The dedup read and the appends happen under ONE lock: a `seen` set
+	// built outside it reopens the 81-duplicate bug whenever two cadences
+	// derive the same finding concurrently (r1 QA review — repro'd on the
+	// first attempt). Save is cadence-rare; the whole-file RMW is fine.
+	var marshalErr error
+	err := record.LockedRMW(p, func(old string) string {
+		seen := map[string]bool{}
+		for _, line := range strings.Split(old, "\n") {
+			s := strings.TrimSpace(line)
+			if s == "" {
+				continue
+			}
+			var m map[string]any
+			if json.Unmarshal([]byte(s), &m) != nil {
+				continue
+			}
+			cat, _ := m["category"].(string)
+			tgt, _ := m["target"].(string)
+			sug, _ := m["suggestion"].(string)
+			seen[contentKey(cat, tgt, sug)] = true
 		}
-		seen[key] = true
-		if s.ExpectedSignal == nil {
-			s.ExpectedSignal = []map[string]any{}
+		out := old
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n" // frame a torn tail before appending
 		}
-		raw, err := json.Marshal(s)
-		if err != nil {
-			return err
+		for _, s := range suggestions {
+			key := contentKey(s.Category, s.Target, s.Suggestion)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			if s.ExpectedSignal == nil {
+				s.ExpectedSignal = []map[string]any{}
+			}
+			raw, err := json.Marshal(s)
+			if err != nil {
+				marshalErr = err
+				continue
+			}
+			out += string(raw) + "\n"
 		}
-		if err := record.AppendRawLine(p, raw); err != nil {
-			return err
-		}
+		return out
+	})
+	if err != nil {
+		return err
 	}
-	return nil
+	return marshalErr
 }
 
 // ListPending returns suggestions awaiting a decision, newest first
@@ -371,11 +424,23 @@ type VerificationStamp struct {
 // `applied` — a degraded row is reverted by Revert; the verdict is a
 // separate, orthogonal stamp. Returns true if the row was found.
 func StampVerification(workspaceDir, suggestionID string, stamp VerificationStamp) bool {
+	found, _ := StampVerificationChanged(workspaceDir, suggestionID, stamp)
+	return found
+}
+
+// StampVerificationChanged is StampVerification reporting whether the row
+// actually mutated. A TERMINAL stamp (stamp.Verdict set) is first-writer-
+// wins: a row that already carries a verify_verdict is left untouched and
+// reported changed=false. That is the concurrency contract the cadence
+// side effects hang off (r1 QA review: two overlapping verify passes
+// double-appended calibration outcomes and EVOLVER_VERDICT events, and
+// the losing revert overwrote a truthful terminal stamp) — a verdict is
+// rendered once, and only the renderer that landed it emits the record.
+func StampVerificationChanged(workspaceDir, suggestionID string, stamp VerificationStamp) (found, changed bool) {
 	p := suggestionsPath(workspaceDir)
 	if _, err := os.Stat(p); err != nil {
-		return false
+		return false, false
 	}
-	found := false
 	_ = record.LockedRMW(p, func(old string) string {
 		var out []string
 		for _, line := range strings.Split(old, "\n") {
@@ -390,14 +455,22 @@ func StampVerification(workspaceDir, suggestionID string, stamp VerificationStam
 			}
 			if row["suggestion_id"] == suggestionID {
 				found = true
+				prior, _ := row["verify_verdict"].(string)
+				if stamp.Verdict != nil && prior != "" {
+					out = append(out, s) // terminal stamp already rendered
+					continue
+				}
 				if stamp.Verdict != nil {
 					row["verify_verdict"] = *stamp.Verdict
+					changed = true
 				}
 				if stamp.VerifiedAt != nil {
 					row["verified_at"] = *stamp.VerifiedAt
+					changed = true
 				}
 				if stamp.Extensions != nil {
 					row["verify_extensions"] = *stamp.Extensions
+					changed = true
 				}
 				enc, _ := json.Marshal(row)
 				out = append(out, string(enc))
@@ -410,7 +483,61 @@ func StampVerification(workspaceDir, suggestionID string, stamp VerificationStam
 		}
 		return strings.Join(out, "\n") + "\n"
 	})
-	return found
+	return found, changed
+}
+
+// BumpExtensionOrPark atomically increments a row's verify_extensions
+// inside the store lock and, when the incremented value reaches max,
+// parks the row terminal ("unverifiable" + verified_at) in the same
+// write. The pre-fix shape — compute ext from a pre-lock snapshot, stamp
+// it absolute — lost concurrent bumps (two passes both stamping 1; r1 QA
+// review). changed=false means another pass already parked the row.
+func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string) (ext int, parked, changed bool) {
+	p := suggestionsPath(workspaceDir)
+	if _, err := os.Stat(p); err != nil {
+		return 0, false, false
+	}
+	_ = record.LockedRMW(p, func(old string) string {
+		var out []string
+		for _, line := range strings.Split(old, "\n") {
+			s := strings.TrimSpace(line)
+			if s == "" {
+				continue
+			}
+			var row map[string]any
+			if json.Unmarshal([]byte(s), &row) != nil {
+				out = append(out, s)
+				continue
+			}
+			if row["suggestion_id"] == suggestionID {
+				if prior, _ := row["verify_verdict"].(string); prior != "" {
+					out = append(out, s) // already terminal
+					continue
+				}
+				cur := 0
+				if f, ok := row["verify_extensions"].(float64); ok {
+					cur = int(f)
+				}
+				ext = cur + 1
+				row["verify_extensions"] = ext
+				if ext >= max {
+					row["verify_verdict"] = "unverifiable"
+					row["verified_at"] = now
+					parked = true
+				}
+				changed = true
+				enc, _ := json.Marshal(row)
+				out = append(out, string(enc))
+			} else {
+				out = append(out, s)
+			}
+		}
+		if len(out) == 0 {
+			return ""
+		}
+		return strings.Join(out, "\n") + "\n"
+	})
+	return ext, parked, changed
 }
 
 // changeLogAppend writes the audit row BEFORE a mutation happens so
@@ -864,6 +991,12 @@ type RevertResult struct {
 	Behavioral bool   `json:"behavioral"`
 	Category   string `json:"category"`
 	Detail     string `json:"detail"`
+	// NothingToRevert = the row was not applied when we looked — usually
+	// because a concurrent cadence already reverted it. Callers must treat
+	// this as "handled elsewhere", NEVER as a failed revert (r1 QA review:
+	// the losing cadence stamped degraded_revert_failed and fired a false
+	// BLOCKING escalation over a revert that had in fact succeeded).
+	NothingToRevert bool `json:"-"`
 }
 
 // Revert reverses a previously applied suggestion via the change_log
@@ -879,7 +1012,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 	// over an honest held_for_review/action_failed status (r2 review: a
 	// record that lies). Guard on the durable applied flag instead.
 	if !IsApplied(workspaceDir, suggestionID) {
-		return RevertResult{Category: "",
+		return RevertResult{Category: "", NothingToRevert: true,
 			Detail: fmt.Sprintf("suggestion_id %s is not applied — nothing to revert", suggestionID)}
 	}
 	entries := readRows(changeLogPath(workspaceDir))

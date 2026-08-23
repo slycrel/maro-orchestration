@@ -120,3 +120,18 @@ func TestScanEvolverImpactCaptainsLogFallback(t *testing.T) {
 		t.Fatalf("captains-log fallback: %+v", records)
 	}
 }
+
+// A NUMERIC STRING confidence must classify like Python float() parses it:
+// "0.5" < floor → directional → dropped from both tallies (r1 parity F3 —
+// Go read it as unparseable and counted the row full-trust).
+func TestVerifyCountsStringConfidenceDirectional(t *testing.T) {
+	outcomes := []map[string]any{
+		{"status": "done", "goal_achieved": false, "goal_verdict_confidence": "0.5"},
+		// Non-numeric string keeps the TypeError/ValueError pass → full.
+		{"status": "done", "goal_achieved": false, "goal_verdict_confidence": "high"},
+	}
+	counted, failing := verifyCounts(outcomes)
+	if counted != 1 || failing != 1 {
+		t.Fatalf("counted=%d failing=%d (want 1/1)", counted, failing)
+	}
+}

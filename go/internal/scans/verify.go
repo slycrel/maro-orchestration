@@ -341,8 +341,16 @@ func VerifyAppliedSuggestions(ws string, rec *record.Recorder, cfg map[string]an
 		switch {
 		case verdict == "confirmed":
 			if !o.DryRun {
-				evolver.StampVerification(ws, s.SuggestionID,
+				// Terminal stamps are first-writer-wins; the side-effect
+				// appends (calibration outcome, EVOLVER_VERDICT) belong to
+				// whichever pass actually landed the stamp — otherwise two
+				// overlapping cadences double-count the denominator the
+				// calibration scanner reads (r1 QA review).
+				_, changed := evolver.StampVerificationChanged(ws, s.SuggestionID,
 					evolver.VerificationStamp{Verdict: strPtr("confirmed"), VerifiedAt: &now})
+				if !changed {
+					continue
+				}
 				RecordSuggestionOutcomes(ws, []string{s.SuggestionID}, true, runID)
 				logVerdictEvent(rec, s, "confirmed", "confirmed", manual, rates)
 			}
@@ -351,8 +359,11 @@ func VerifyAppliedSuggestions(ws string, rec *record.Recorder, cfg map[string]an
 		case verdict == "degraded" && manual:
 			// Authority asymmetry: a human applied it — surface, never revert.
 			if !o.DryRun {
-				evolver.StampVerification(ws, s.SuggestionID,
+				_, changed := evolver.StampVerificationChanged(ws, s.SuggestionID,
 					evolver.VerificationStamp{Verdict: strPtr("degraded_needs_review"), VerifiedAt: &now})
+				if !changed {
+					continue
+				}
 				RecordSuggestionOutcomes(ws, []string{s.SuggestionID}, false, runID)
 				logVerdictEvent(rec, s, "degraded", "review_required", manual, rates)
 				notifyVerdict(ws, s, "review_required", true, rates)
@@ -388,20 +399,35 @@ func VerifyAppliedSuggestions(ws string, rec *record.Recorder, cfg map[string]an
 				continue
 			}
 			rv := evolver.Revert(ws, rec, s.SuggestionID)
-			if rv.Behavioral {
-				evolver.StampVerification(ws, s.SuggestionID,
+			switch {
+			case rv.Behavioral:
+				_, changed := evolver.StampVerificationChanged(ws, s.SuggestionID,
 					evolver.VerificationStamp{Verdict: strPtr("degraded"), VerifiedAt: &now})
+				if !changed {
+					continue
+				}
 				RecordSuggestionOutcomes(ws, []string{s.SuggestionID}, false, runID)
 				withRev := merged(rates, map[string]any{"reverted": true})
 				logVerdictEvent(rec, s, "degraded", "reverted", manual, withRev)
 				notifyVerdict(ws, s, "reverted", false, withRev)
 				summary.Reverted++
-			} else {
-				// Could NOT behaviorally undo it. Stamp terminal (an impossible
-				// revert isn't retried every cadence) but surface it BLOCKING —
-				// never claimed as success, never silently invisible.
-				evolver.StampVerification(ws, s.SuggestionID,
+			case rv.NothingToRevert:
+				// A concurrent cadence got there first: its revert flipped
+				// applied before ours ran. That pass owns the stamp and the
+				// record — stamping degraded_revert_failed here would falsify
+				// a revert that SUCCEEDED and fire a false BLOCKING alarm
+				// (r1 QA review's HIGH, repro'd on the first attempt).
+				continue
+			default:
+				// Genuinely could NOT behaviorally undo it. Stamp terminal
+				// (an impossible revert isn't retried every cadence) but
+				// surface it BLOCKING — never claimed as success, never
+				// silently invisible. First-writer-wins like every terminal.
+				_, changed := evolver.StampVerificationChanged(ws, s.SuggestionID,
 					evolver.VerificationStamp{Verdict: strPtr("degraded_revert_failed"), VerifiedAt: &now})
+				if !changed {
+					continue
+				}
 				RecordSuggestionOutcomes(ws, []string{s.SuggestionID}, false, runID)
 				withRev := merged(rates, map[string]any{
 					"reverted": rv.Reverted, "revert_detail": rv.Detail})
@@ -411,19 +437,27 @@ func VerifyAppliedSuggestions(ws string, rec *record.Recorder, cfg map[string]an
 			}
 
 		default: // inconclusive
-			ext := s.VerifyExtensions + 1
-			if ext >= maxExtensions {
-				if !o.DryRun {
-					evolver.StampVerification(ws, s.SuggestionID, evolver.VerificationStamp{
-						Verdict: strPtr("unverifiable"), VerifiedAt: &now, Extensions: &ext})
-					logVerdictEvent(rec, s, "unverifiable", "parked", manual, rates)
+			if o.DryRun {
+				if s.VerifyExtensions+1 >= maxExtensions {
+					summary.Unverifiable++
+				} else {
+					summary.Pending++
 				}
+				continue
+			}
+			// Atomic bump: the increment and the possible park happen in one
+			// locked write off the CURRENT stored value — an absolute stamp
+			// computed from the pre-lock snapshot lost concurrent bumps
+			// (both passes stamping 1; r1 QA review).
+			_, parked, changed := evolver.BumpExtensionOrPark(
+				ws, s.SuggestionID, maxExtensions, now)
+			if !changed {
+				continue
+			}
+			if parked {
+				logVerdictEvent(rec, s, "unverifiable", "parked", manual, rates)
 				summary.Unverifiable++
 			} else {
-				if !o.DryRun {
-					evolver.StampVerification(ws, s.SuggestionID,
-						evolver.VerificationStamp{Extensions: &ext})
-				}
 				summary.Pending++
 			}
 		}
@@ -470,9 +504,13 @@ func logVerdictEvent(rec *record.Recorder, s evolver.Suggestion,
 		"suggestion_id": s.SuggestionID, "category": s.Category,
 		"verdict": verdict, "action": action, "applied_manually": manual,
 	})
+	// pyVal: rates can be nil (parked/insufficient-data rows) — the shared
+	// captains_log prose must read "None→None" as Python writes it, not
+	// Go's "<nil>" (r1 parity review).
 	_ = rec.Event("EVOLVER_VERDICT", s.SuggestionID,
-		fmt.Sprintf("Cadence verdict %s (%s) for %s '%s': stuck %v→%v over %v post-apply runs.",
+		fmt.Sprintf("Cadence verdict %s (%s) for %s '%s': stuck %s→%s over %s post-apply runs.",
 			verdict, action, s.Category, s.Target,
-			rates["stuck_rate_before"], rates["stuck_rate_after"], rates["n_after"]),
+			pyVal(rates["stuck_rate_before"]), pyVal(rates["stuck_rate_after"]),
+			pyVal(rates["n_after"])),
 		ctx, "")
 }

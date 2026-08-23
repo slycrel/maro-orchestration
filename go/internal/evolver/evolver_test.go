@@ -869,3 +869,49 @@ func TestRunEvolverSkipsBelowMinAndDryRun(t *testing.T) {
 		t.Fatal("dry run wrote suggestions")
 	}
 }
+
+// Two concurrent saves of the SAME finding (identical content key, fresh
+// ids — how every statistical scanner mints rows) must land one row: the
+// dedup read and the append ride one lock (r1 QA finding 5, the
+// 81-duplicate calibration bug reopened under concurrency).
+func TestSaveSuggestionsConcurrentContentDedup(t *testing.T) {
+	ws := t.TempDir()
+	mk := func(id string) []Suggestion {
+		return []Suggestion{{
+			SuggestionID: id, Category: "prompt_tweak", Target: "escalation",
+			Suggestion: "same finding text", GeneratedAt: "2026-08-22T00:00:00+00:00",
+		}}
+	}
+	done := make(chan error, 2)
+	go func() { done <- SaveSuggestions(ws, mk("cal-aaaa")) }()
+	go func() { done <- SaveSuggestions(ws, mk("cal-bbbb")) }()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(suggestionsPath(ws))
+	if len(rows) != 1 {
+		t.Fatalf("concurrent identical findings must dedup to 1 row, got %d", len(rows))
+	}
+}
+
+// A malformed applied_manually survives rehydration as PROTECTED (Python
+// bool() truthiness), and applied gets the same coercion.
+func TestRowToSuggestionPyTruthyCoercion(t *testing.T) {
+	ws := t.TempDir()
+	p := suggestionsPath(ws)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	row := `{"suggestion_id":"m1","category":"new_guardrail","target":"all",` +
+		`"suggestion":"x","applied":true,"applied_manually":"true"}` + "\n"
+	if err := os.WriteFile(p, []byte(row), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := GetSuggestion(ws, "m1")
+	if s == nil || !s.AppliedManually || !s.Applied {
+		t.Fatalf("truthy-string coercion: %+v", s)
+	}
+}

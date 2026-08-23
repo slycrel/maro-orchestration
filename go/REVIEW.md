@@ -2992,3 +2992,52 @@ FILES per the standing rule:
 All mutants reverted; final gate green. NEXT: adversarial review r1
 (cross-model, 4 lenses; escalate reviewer tier after round 1 on same-model
 fallback per the 2026-08-22 rule).
+
+## Self-improvement slice 2 — r1 (2026-08-22): 2 HIGHs + 6 MEDs fixed
+
+Three serialized lenses (box OOM rule): security skeptic, Python-parity
+(executed fixture comparisons), QA/concurrency (goroutine repros + race
+detector). Every reported finding was re-verified against the sources before
+fixing; all survived — 0% hallucination this round, against the usual 30-50%.
+
+**Security lens:** headline invariant AIRTIGHT (embedded-only verify_pattern
+execution probed via override smuggling, unicode/dup-key tricks, path
+traversal, crafted state files — all clean; claim/ack machine "the
+best-engineered concurrency surface in the slice", 30-iteration two-driver
+probe exactly-once). Found: unbounded tailLines (FIXED, 8MB bound + torn-line
+drop), applied_manually non-bool → unsafe direction (FIXED, pyTruthy),
+empty-repoRoot state wipe (FIXED, gate before state touch; wipe shape is
+fork-point-shared but only Go routinely lacks a repoRoot).
+
+**Parity lens (11 executed side-by-side comparisons):** F1 HIGH missing
+escalations.jsonl writer (FIXED — ported, full payload, 2000-char bounds);
+F2 audience registry (FIXED); F3 string-confidence trust flip (FIXED);
+F4 rounding ties (FIXED, half-to-even); F5 None/<nil> prose (FIXED, pyVal);
+F6 apostrophe repr defeating cross-runtime dedup (FIXED, pyRepr); F7
+order-only divergences (canon sort + graduation tiebreak FIXED; group-
+iteration row order accepted, row SET identical); F8 events for unwritten
+rows (FIXED, events fire per landed row); F9 double-clip markers (FIXED,
+300→200 chain). Templates JSON, all numerics, verdict lifecycle strings,
+row shapes, Cycle ordering: verified clean by execution.
+
+**QA lens (all repro'd attempt-0, -race clean):** HIGH double-revert stamp
+corruption + false BLOCKING alarm (FIXED: first-writer-wins terminal stamps,
+side effects gated on `changed`, typed NothingToRevert); double-propose
+(FIXED: in-lock re-check); double side-effect appends skewing calibration
+denominators (FIXED: changed-gate); lost extension bump (FIXED: atomic
+BumpExtensionOrPark); SaveSuggestions dedup TOCTOU (FIXED: one locked RMW).
+Clean: lock discipline (no unlocked workspace writes), torn-tail framing,
+crash-recovery probes, test integrity (no tautologies).
+
+New pins: 15 tests (concurrent single-side-effect, first-writer-wins,
+atomic bump, escalation row, audience stamps, byte-bound, state
+preservation, concurrent propose-once, concurrent save-dedup, truthiness,
+repr/val/rounding parity, string-confidence). Fix-layer mutations M127,
+M129–M139 all DETECTED (M128 not minted — race-window arm, documented);
+M134 lesson: with two IDENTICAL guard expressions in one file, a
+pattern-matched mutant can hit the wrong one and report a false survivor —
+assert WHICH site the mutation landed on. Backport candidate (12): the
+whole concurrency window family is byte-identical in fork-point Python.
+
+Gate: build/vet/full-suite/-race/gofmt green. NEXT: r2 re-review of the
+fix layer (flagship pattern says the new HIGHs live in r1's own fixes).

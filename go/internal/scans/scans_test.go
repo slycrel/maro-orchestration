@@ -418,3 +418,60 @@ func TestRunStatisticalScansDriftWrapper(t *testing.T) {
 		t.Fatalf("failure_pattern: %q", s.FailurePattern)
 	}
 }
+
+// --- r1 fix-layer pins (2026-08-22) ---
+
+// Python-parity string helpers: repr quoting (the text is a cross-runtime
+// dedup key) and f-string value rendering in shared prose.
+func TestPyReprAndPyVal(t *testing.T) {
+	if got := pyRepr("escalate"); got != "'escalate'" {
+		t.Fatalf("pyRepr plain: %q", got)
+	}
+	// Python repr switches to double quotes on an apostrophe.
+	if got := pyRepr("don't_know"); got != `"don't_know"` {
+		t.Fatalf("pyRepr apostrophe: %q", got)
+	}
+	if got := pyVal(nil); got != "None" {
+		t.Fatalf("pyVal nil: %q", got)
+	}
+	if got := pyVal(0.0); got != "0.0" {
+		t.Fatalf("pyVal whole float: %q", got)
+	}
+	if got := pyVal(0.75); got != "0.75" {
+		t.Fatalf("pyVal: %q", got)
+	}
+	if got := pyVal(7); got != "7" {
+		t.Fatalf("pyVal int: %q", got)
+	}
+}
+
+// Exact binary ties round half-to-even like Python round() — these values
+// land in shared files (r1 parity F4: 5/32 wrote 0.1563 Go / 0.1562 Py).
+func TestRoundHalfEvenTieParity(t *testing.T) {
+	if got := round4(5.0 / 32.0); got != 0.1562 {
+		t.Fatalf("round4(5/32) = %v, want 0.1562", got)
+	}
+	if got := roundN(1.0/16.0, 1e3); got != 0.062 {
+		t.Fatalf("round3(1/16) = %v, want 0.062", got)
+	}
+}
+
+// An apostrophe-bearing decision class must produce the same suggestion
+// text both runtimes write, or the content-key dedup mints duplicates.
+func TestCalibrationApostropheClassParity(t *testing.T) {
+	ws := t.TempDir()
+	var cal []map[string]any
+	for i := 0; i < 5; i++ {
+		cal = append(cal, map[string]any{
+			"decision_class": "don't_know", "confidence": 3,
+			"action_raw": "a", "action_final": "a"})
+	}
+	writeJSONL(t, memPath(ws, "calibration.jsonl"), cal)
+	findings := ScanCalibrationLog(ws, CalibrationOptions{})
+	if len(findings) != 1 {
+		t.Fatalf("findings: %+v", findings)
+	}
+	if !strings.Contains(findings[0].Suggestion, `"don't_know" decisions`) {
+		t.Fatalf("prose must use Python repr quoting: %q", findings[0].Suggestion)
+	}
+}

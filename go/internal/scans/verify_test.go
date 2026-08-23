@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -452,4 +453,175 @@ func TestStampVerificationKeyedMerge(t *testing.T) {
 	if evolver.StampVerification(ws, "missing", evolver.VerificationStamp{}) {
 		t.Fatal("missing id must report not-found")
 	}
+}
+
+// --- r1 fix-layer pins (2026-08-22) ---
+
+// Two overlapping verify cadences on the same confirmed row: terminal
+// stamps are first-writer-wins, and the side-effect appends belong only to
+// the pass that landed the stamp — exactly one calibration outcome and one
+// EVOLVER_VERDICT event regardless of interleaving (r1 QA finding 3).
+func TestVerifyConcurrentPassesSingleSideEffect(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, nil)
+	seedOutcomes(t, ws, applyTime, 10, 8, 1)
+	rec := record.New(ws)
+
+	done := make(chan VerifySummary, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			done <- VerifyAppliedSuggestions(ws, rec, map[string]any{}, "run-c", VerifyOptions{})
+		}()
+	}
+	confirmed := 0
+	for i := 0; i < 2; i++ {
+		confirmed += (<-done).Confirmed
+	}
+	if confirmed != 1 {
+		t.Fatalf("exactly one pass may claim the verdict, got %d", confirmed)
+	}
+	outs := readJSONLTail(suggestionOutcomesPath(ws), 0)
+	if len(outs) != 1 {
+		t.Fatalf("calibration outcomes double-appended: %d rows", len(outs))
+	}
+	events := 0
+	for _, e := range readJSONLTail(memPath(ws, "captains_log.jsonl"), 0) {
+		if e["event_type"] == "EVOLVER_VERDICT" {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Fatalf("EVOLVER_VERDICT double-emitted: %d", events)
+	}
+}
+
+// A terminal stamp never overwrites an existing one: the losing cadence's
+// degraded_revert_failed cannot falsify a truthful degraded stamp (r1 QA
+// finding 1's corruption half).
+func TestStampVerificationFirstWriterWins(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, nil)
+	now := "2026-08-20T13:00:00+00:00"
+	_, changed := evolver.StampVerificationChanged(ws, "v1",
+		evolver.VerificationStamp{Verdict: strPtr("degraded"), VerifiedAt: &now})
+	if !changed {
+		t.Fatal("first stamp must land")
+	}
+	later := "2026-08-20T13:00:01+00:00"
+	_, changed = evolver.StampVerificationChanged(ws, "v1",
+		evolver.VerificationStamp{Verdict: strPtr("degraded_revert_failed"), VerifiedAt: &later})
+	if changed {
+		t.Fatal("second terminal stamp must be refused")
+	}
+	row := loadSuggestionRow(t, ws, "v1")
+	if row["verify_verdict"] != "degraded" || row["verified_at"] != now {
+		t.Fatalf("stamp was overwritten: %+v", row)
+	}
+}
+
+// Revert on an already-reverted row reports NothingToRevert — the verify
+// pass must treat that as handled-elsewhere, never as revert_failed (r1 QA
+// finding 1's false-alarm half).
+func TestRevertNothingToRevertIsTyped(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, map[string]any{"applied": false})
+	rv := evolver.Revert(ws, record.New(ws), "v1")
+	if !rv.NothingToRevert || rv.Behavioral {
+		t.Fatalf("want typed nothing-to-revert: %+v", rv)
+	}
+}
+
+// Extension bumps are atomic read-modify-writes off the stored value: two
+// sequential (or interleaved) passes yield 1 then 2, never 1 twice, and
+// the park at max happens in the same locked write (r1 QA finding 4).
+func TestBumpExtensionOrParkAtomic(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, nil)
+	now := "2026-08-20T13:00:00+00:00"
+	ext, parked, changed := evolver.BumpExtensionOrPark(ws, "v1", 3, now)
+	if ext != 1 || parked || !changed {
+		t.Fatalf("first bump: ext=%d parked=%v changed=%v", ext, parked, changed)
+	}
+	ext, parked, changed = evolver.BumpExtensionOrPark(ws, "v1", 3, now)
+	if ext != 2 || parked || !changed {
+		t.Fatalf("second bump lost the first: ext=%d", ext)
+	}
+	ext, parked, changed = evolver.BumpExtensionOrPark(ws, "v1", 3, now)
+	if ext != 3 || !parked || !changed {
+		t.Fatalf("third bump must park: ext=%d parked=%v", ext, parked)
+	}
+	row := loadSuggestionRow(t, ws, "v1")
+	if row["verify_verdict"] != "unverifiable" || row["verify_extensions"] != float64(3) {
+		t.Fatalf("park stamp: %+v", row)
+	}
+	// Terminal now — further bumps are refused.
+	if _, _, changed := evolver.BumpExtensionOrPark(ws, "v1", 3, now); changed {
+		t.Fatal("bump after park must be refused")
+	}
+}
+
+// A malformed applied_manually value must PROTECT the row (Python bool()
+// truthiness), never route it into the auto-revert branch (r1 security
+// finding 2).
+func TestVerifyMalformedAppliedManuallyNeverReverted(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, map[string]any{
+		"category": "new_guardrail", "applied_manually": "true"})
+	seedOutcomes(t, ws, applyTime, 10, 1, 8) // degraded hard
+	rec := record.New(ws)
+	sum := VerifyAppliedSuggestions(ws, rec, map[string]any{}, "run-m", VerifyOptions{})
+	if sum.Reverted != 0 || sum.ReviewQueued != 1 {
+		t.Fatalf("malformed applied_manually must review, not revert: %+v", sum)
+	}
+	row := loadSuggestionRow(t, ws, "v1")
+	if row["verify_verdict"] != "degraded_needs_review" || row["applied"] != true {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+// A review-required verdict must reach the durable escalation surface —
+// output/escalations.jsonl, the file operators and Python pollers check
+// (r1 parity finding F1, the HIGH).
+func TestVerifyReviewRequiredWritesEscalationFile(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, map[string]any{"applied_manually": true})
+	seedOutcomes(t, ws, applyTime, 10, 1, 8)
+	rec := record.New(ws)
+	VerifyAppliedSuggestions(ws, rec, map[string]any{}, "run-e", VerifyOptions{})
+
+	rows := readJSONLTail(filepath.Join(ws, "output", "escalations.jsonl"), 0)
+	if len(rows) != 1 {
+		t.Fatalf("want 1 escalation row, got %d", len(rows))
+	}
+	e := rows[0]
+	if e["event_type"] != "self_improvement_verdict" || e["action"] != "review_required" ||
+		e["blocking"] != true || e["suggestion_id"] != "v1" {
+		t.Fatalf("escalation row: %+v", e)
+	}
+	reason, _ := e["reason"].(string)
+	if !strings.Contains(reason, "NOT auto-reverted (authority asymmetry)") {
+		t.Fatalf("reason prose: %q", reason)
+	}
+	if _, ok := e["stuck_rate_before"]; !ok {
+		t.Fatalf("rates must ride the escalation payload: %+v", e)
+	}
+}
+
+// EVOLVER_VERDICT is audience:"user" in Python's registry — the Go row
+// must carry the same stamp or the user lane filters it out (r1 parity
+// finding F2).
+func TestVerdictEventAudienceIsUser(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, nil)
+	seedOutcomes(t, ws, applyTime, 10, 8, 1)
+	VerifyAppliedSuggestions(ws, record.New(ws), map[string]any{}, "run-a", VerifyOptions{})
+	for _, e := range readJSONLTail(memPath(ws, "captains_log.jsonl"), 0) {
+		if e["event_type"] == "EVOLVER_VERDICT" {
+			if e["audience"] != "user" {
+				t.Fatalf("audience: %+v", e)
+			}
+			return
+		}
+	}
+	t.Fatal("EVOLVER_VERDICT event missing")
 }

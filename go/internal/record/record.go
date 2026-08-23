@@ -147,12 +147,24 @@ func (r *Recorder) WriteOutcome(o Outcome) (string, error) {
 	return id, nil
 }
 
-// Event appends one captain's-log entry. audience is "system" always in
-// v0: the only event types Go emits are system-lane in Python's
-// USER_SURFACED_EVENTS registry too. When a later tranche adds a
-// user-surfaced event type, port that registry — do not add a bare
-// audience parameter (the Python rule keys on event_type, not caller
-// discretion).
+// userSurfacedEvents is the Go-emitted subset of Python's
+// USER_SURFACED_EVENTS registry (captains_log.py): event types stamped
+// audience:"user" so the curated user lane (viz, maro-log --audience
+// user, health-lane rendering) surfaces them. Keep this synced with
+// Python's frozenset whenever a tranche adds an event type — the
+// self-improvement slice-2 events below were mislabeled "system" until
+// the r1 parity review caught it. Audience keys on event_type, never on
+// caller discretion (the Python rule).
+var userSurfacedEvents = map[string]bool{
+	"EVOLVER_APPLIED":     true,
+	"EVOLVER_REVERTED":    true,
+	"EVOLVER_VERDICT":     true,
+	"GRADUATION_PROPOSED": true,
+	"GRADUATION_VERIFIED": true,
+}
+
+// Event appends one captain's-log entry. audience comes from the
+// event-type registry above, matching Python log_event's stamping.
 func (r *Recorder) Event(eventType, subject, summary string, context map[string]any, loopID string) error {
 	dir, err := r.memoryDir()
 	if err != nil {
@@ -161,12 +173,16 @@ func (r *Recorder) Event(eventType, subject, summary string, context map[string]
 	if context == nil {
 		context = map[string]any{}
 	}
+	audience := "system"
+	if userSurfacedEvents[eventType] {
+		audience = "user"
+	}
 	entry := map[string]any{
 		"timestamp":  nowISO(),
 		"event_type": eventType,
 		"subject":    subject,
 		"summary":    summary,
-		"audience":   "system",
+		"audience":   audience,
 		"context":    context,
 	}
 	if loopID != "" {

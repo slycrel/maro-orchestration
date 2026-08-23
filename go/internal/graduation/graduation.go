@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,13 +30,42 @@ func nowISO() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00")
 }
 
-// tailLines returns the last n non-empty trimmed lines of a file (Python's
-// read-then-slice; these ledgers are small enough that byte-bounding is the
-// jsonl reader's job elsewhere — diagnoses/suggestions stay well under it).
+// tailBytes is the byte bound on graduation's ledger reads — the same 8MB
+// cap scans.readJSONLTail enforces, for the same reason: these files are
+// shared with (and growable by) any co-resident process, so an unbounded
+// os.ReadFile is an OOM lever (r1 security review: a 9MB suggestions.jsonl
+// came back whole). Python reads these files unbounded; the cap is the
+// port's read_jsonl_tail lesson applied consistently.
+const tailBytes = 8 << 20
+
+// tailLines returns the last n non-empty trimmed lines of a file, reading
+// at most the final tailBytes bytes (a partial first line from mid-file
+// entry is dropped).
 func tailLines(path string, n int) []string {
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	offset := int64(0)
+	if info.Size() > tailBytes {
+		offset = info.Size() - tailBytes
+	}
+	if _, err := f.Seek(offset, 0); err != nil {
+		return nil
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil
+	}
+	if offset > 0 {
+		if i := strings.IndexByte(string(raw), '\n'); i >= 0 {
+			raw = raw[i+1:] // drop the torn first line
+		}
 	}
 	all := strings.Split(string(raw), "\n")
 	if n > 0 && len(all) > n {
@@ -70,6 +100,7 @@ func ScanCandidates(ws string, minCount, lookback int) []Candidate {
 	}
 	templates := LoadTemplates(ws)
 	byClass := map[string][]map[string]any{}
+	var classOrder []string
 	for _, line := range tailLines(diagnosesPath(ws), lookback) {
 		var d map[string]any
 		if json.Unmarshal([]byte(line), &d) != nil {
@@ -82,11 +113,17 @@ func ScanCandidates(ws string, minCount, lookback int) []Candidate {
 		if _, known := templates[fc]; !known {
 			continue
 		}
+		if _, present := byClass[fc]; !present {
+			classOrder = append(classOrder, fc)
+		}
 		byClass[fc] = append(byClass[fc], d)
 	}
 
 	var candidates []Candidate
-	for fc, diags := range byClass {
+	// First-seen class order (Python dict-grouping insertion order), so the
+	// count-desc stable sort below tie-breaks exactly as Python does.
+	for _, fc := range classOrder {
+		diags := byClass[fc]
 		if len(diags) < minCount {
 			continue
 		}
@@ -126,10 +163,7 @@ func ScanCandidates(ws string, minCount, lookback int) []Candidate {
 		})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].Count != candidates[j].Count {
-			return candidates[i].Count > candidates[j].Count
-		}
-		return candidates[i].FailureClass < candidates[j].FailureClass
+		return candidates[i].Count > candidates[j].Count
 	})
 	return candidates
 }
@@ -238,28 +272,51 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 
 	path := suggestionsPath(ws)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "[graduation] cannot create memory dir: %v\n", err)
 		return 0
 	}
-	written := 0
-	for _, row := range newRows {
-		raw, err := json.Marshal(row)
-		if err != nil {
-			continue
+	// The dedup re-check and the appends happen inside ONE locked RMW: the
+	// pre-check above raced (two concurrent cadences both saw not-proposed
+	// and both appended — r1 QA review, repro'd on the first attempt), and
+	// content-dedup can't catch it because each row carries a fresh grad-id.
+	// landed collects the rows the write actually persisted — events fire
+	// for exactly those, never a count-prefix of intent (r1 F8).
+	var landed []map[string]any
+	err := record.LockedRMW(path, func(old string) string {
+		landed = landed[:0]
+		out := old
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n" // frame a torn tail before appending
 		}
-		if record.AppendRawLine(path, raw) == nil {
-			written++
+		for _, row := range newRows {
+			fp, _ := row["failure_pattern"].(string)
+			if strings.Contains(old, fp) {
+				continue // a concurrent cadence proposed this class first
+			}
+			raw, merr := json.Marshal(row)
+			if merr != nil {
+				fmt.Fprintf(os.Stderr, "[graduation] row marshal failed: %v\n", merr)
+				continue
+			}
+			out += string(raw) + "\n"
+			landed = append(landed, row)
 		}
+		return out
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[graduation] suggestion write failed: %v\n", err)
+		return 0
 	}
 	if rec != nil {
-		for _, row := range newRows[:written] {
+		for _, row := range landed {
 			sug, _ := row["suggestion"].(string)
-			_ = rec.Event("GRADUATION_PROPOSED",
-				row["failure_pattern"].(string),
+			fp, _ := row["failure_pattern"].(string)
+			_ = rec.Event("GRADUATION_PROPOSED", fp,
 				"Graduation proposed: "+clipRunes(sug, 120),
 				map[string]any{"category": row["category"], "confidence": row["confidence"]}, "")
 		}
 	}
-	return written
+	return len(landed)
 }
 
 func firstN(s []string, n int) []string {
@@ -392,6 +449,15 @@ func runPattern(repoRoot, pattern string) (bool, string) {
 // remains false on failing rows until a runtime with a deliverer picks
 // them up (the state file is shared data; Python can).
 func RunGraduationVerification(ws, repoRoot string, rec *record.Recorder) []VerifyResult {
+	// No repoRoot → structural verification is honestly UNAVAILABLE, and an
+	// unavailable pass must not touch shared state: falling through with
+	// empty results rewrites the state file to {} and erases the dedup
+	// baseline a Python runtime built, making it re-emit GRADUATION_VERIFIED
+	// per class (r1 security review — the wipe-on-empty shape is fork-point-
+	// shared, but only Go routinely runs with no repoRoot resolved).
+	if repoRoot == "" {
+		return nil
+	}
 	results := VerifyGraduationRules(ws, repoRoot, 200)
 	statePath := verificationStatePath(ws)
 	if len(results) == 0 {

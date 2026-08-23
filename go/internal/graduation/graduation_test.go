@@ -382,3 +382,118 @@ func TestRunGraduationVerificationClaimAckLifecycle(t *testing.T) {
 		t.Fatalf("identity change must re-deliver: %d events", countEvents())
 	}
 }
+
+// --- r1 fix-layer pins (2026-08-22) ---
+
+// Ledger tail reads are byte-bounded at 8MB — a co-resident process growing
+// suggestions.jsonl/diagnoses.jsonl must cost a bounded read, matching the
+// scans reader (r1 security finding 1: a 9MB file came back whole).
+func TestTailLinesByteBounded(t *testing.T) {
+	ws := t.TempDir()
+	p := filepath.Join(ws, "big.jsonl")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ~9MB of filler rows, then a sentinel tail row.
+	filler := `{"pad":"` + strings.Repeat("x", 1000) + `"}` + "\n"
+	f.WriteString(`{"first":"line-beyond-the-bound"}` + "\n")
+	for written := 0; written < 9<<20; written += len(filler) {
+		f.WriteString(filler)
+	}
+	f.WriteString(`{"last":"sentinel"}` + "\n")
+	f.Close()
+
+	lines := tailLines(p, 0)
+	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], "sentinel") {
+		t.Fatalf("tail must include the newest line (got %d lines)", len(lines))
+	}
+	if strings.Contains(lines[0], "line-beyond-the-bound") {
+		t.Fatal("read reached back past the 8MB bound")
+	}
+	// The torn first line at the seek point must have been dropped whole —
+	// every returned line parses.
+	var m map[string]any
+	if json.Unmarshal([]byte(lines[0]), &m) != nil {
+		t.Fatalf("torn first line leaked: %q", lines[0][:60])
+	}
+}
+
+// With no repoRoot, structural verification is unavailable — and an
+// unavailable pass must not touch the shared claim/ack state file (r1
+// security finding 3: routine Go cadences wiped Python's dedup baseline).
+func TestRunGraduationVerificationNoRepoRootPreservesState(t *testing.T) {
+	ws := t.TempDir()
+	statePath := verificationStatePath(ws)
+	seed := `{"token_explosion":{"suggestion_id":"g1","event_delivered":true}}` + "\n"
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := RunGraduationVerification(ws, "", record.New(ws)); got != nil {
+		t.Fatalf("no repoRoot must return nil, got %+v", got)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || string(after) != seed {
+		t.Fatalf("state file touched: %q err=%v", after, err)
+	}
+}
+
+// Two concurrent propose cadences must land ONE row and ONE event per
+// failure class — the dedup re-check rides inside the same lock as the
+// append (r1 QA finding 2: both cadences saw not-proposed and both wrote).
+func TestRunGraduationConcurrentProposeOnce(t *testing.T) {
+	ws := t.TempDir()
+	writeJSONL(t, diagnosesPath(ws), []map[string]any{
+		diag("token_explosion", "l1", "grew 4x"),
+		diag("token_explosion", "l2", "grew 5x"),
+		diag("token_explosion", "l3"),
+	})
+	rec := record.New(ws)
+	done := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() { done <- RunGraduation(ws, rec, 3, 100, false, false) }()
+	}
+	total := <-done + <-done
+	if total != 1 {
+		t.Fatalf("exactly one cadence may propose, wrote %d", total)
+	}
+	rows := tailLines(suggestionsPath(ws), 0)
+	if len(rows) != 1 {
+		t.Fatalf("duplicate proposal rows: %d", len(rows))
+	}
+	events := 0
+	for _, line := range tailLines(filepath.Join(ws, "memory", "captains_log.jsonl"), 0) {
+		if strings.Contains(line, "GRADUATION_PROPOSED") {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Fatalf("duplicate GRADUATION_PROPOSED events: %d", events)
+	}
+}
+
+// GRADUATION_PROPOSED rows are audience:"user" (Python registry parity).
+func TestGraduationEventAudienceIsUser(t *testing.T) {
+	ws := t.TempDir()
+	writeJSONL(t, diagnosesPath(ws), []map[string]any{
+		diag("token_explosion", "l1"), diag("token_explosion", "l2"),
+		diag("token_explosion", "l3"),
+	})
+	RunGraduation(ws, record.New(ws), 3, 100, false, false)
+	for _, line := range tailLines(filepath.Join(ws, "memory", "captains_log.jsonl"), 0) {
+		var e map[string]any
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		if e["event_type"] == "GRADUATION_PROPOSED" {
+			if e["audience"] != "user" {
+				t.Fatalf("audience: %+v", e)
+			}
+			return
+		}
+	}
+	t.Fatal("GRADUATION_PROPOSED event missing")
+}
