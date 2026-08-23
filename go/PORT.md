@@ -2229,6 +2229,32 @@ differences), because `Lower` emits ς and the table folds ς to σ. The
 per-rune path is kept anyway: the alternative rests correctness on one
 table entry silently repairing a rule that should not have run.
 
+### `pytext.SpaceClass` / `DigitClass` (2026-08-23) — regex classes
+
+A separate hazard from `Strip`/`IsSpace`, and the one a transcribed
+pattern walks straight into. Go's `regexp` reads `\s` as five code points
+and `\d` as ten; Python's `re` on a str pattern reads them as 29 and 760.
+A pattern copied character-for-character from Python therefore matches a
+different language in Go, silently — and playbook.py's alarm and
+attribution patterns decide whether an entry is replaced in place or
+appended beside its twin.
+
+Both classes are swept against CPython at every code point, both
+directions. `\s` is measured identical to `str.isspace()`, so `IsSpace`
+and `SpaceClass` are one set in two notations. `DigitClass` is
+`\p{Nd}` plus the same 80-code-point, 7-range unicode 15-vs-16 skew
+`record.digitSupplement` carries — deliberately NOT shared with it, since
+that table folds digits to their values and this one only decides
+membership, and one table serving both would hide which behaviour a
+caller was getting. Both sweeps re-derive from CPython, so they fail
+together if the skew moves.
+
+Three tripwires beyond the sweeps: the supplement fails when Go's own
+`\p{Nd}` catches up (so the literal gets deleted, not left to rot), the
+classes fail if Go's defaults ever agree with them (dead weight), and
+`NotClass` — which splices a caller's literals into a negated class —
+pins its own escaping. Six mutations, six killed.
+
 ### Project ledger — slice 1: NEXT.md and its neighbours (2026-08-23)
 
 `internal/orch` ports Python `orch_items.py`'s ledger half: the NEXT.md
