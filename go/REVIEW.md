@@ -2851,3 +2851,53 @@ stem-floor-0, no-FQDN-trim, unparseable-fail-open, payload-floor-0), file
 restored byte-identical after each. Full suite green (22 packages), guard
 race-clean. Adversarial re-review of the swap = the next round; fixpoint
 clock unchanged (r15 is a rewrite, not a clean round).
+
+## Guard slice — r16 (2026-08-22): adversarial review of the r15 swap → fixed to green
+
+An adversarial skeptic (opus, background fork) reviewed the r15 parser swap.
+**Net read: the parser core is sound** — a 400k-case differential fuzz found
+zero counterexamples to the prefilter's soundness, and every r10–r14 evasion
+re-fired was caught. The findings were all in r15's NEW nested-rescan code, and
+the flagship pattern held once more: the fresh bugs were in the fresh code, and
+their shared root was the review's structural catch — **`evalURLCandidate` had
+two callers (top-level loop + `scanNestedCandidates`) with invariants written
+for only the first.** Every finding was executed, not reasoned; I reproduced
+HIGH-1 (83s), HIGH-2, and MED-4 before fixing (verify-before-fix).
+
+Fix is STRUCTURAL, not per-symptom: collapsed both callers into ONE entry
+point `evalRawCandidate` (all safety properties live there, so they hold for
+both paths) + a shared per-scan work budget.
+
+- **HIGH-1 (DoS, O(k³) nested fan-out — 32KB→83s)**: `scanBudget` caps total
+  whatwg.Parse calls (4096) and decode bytes (1MB) per ScanContent, fail-closed
+  on exhaustion. 32KB now 92ms. Pin TestURLNestedLaunderDoSBounded drives the
+  ALLOWLISTED-proxy path the old TestURLScanStaysLinear (`https:x/`, no
+  allowlisted host) could never reach — the review's "vacuous pin" catch, now
+  covered by BOTH pins.
+- **HIGH-2 (truncation false-ALLOW)**: the nested rescan now reads the FULL raw
+  payload (not the 512-capped candidate), so an inner authority pushed past the
+  cap by encoded padding is resolved — literally the r13 oversized attack
+  wrapped in the proxy + %-encoding. Pin TestURLNestedLaunderPastCapFlagged.
+- **MED-4 (launder through non-allowlisted/out-of-reach proxy)**: the additive
+  rescan runs for EVERY host that clears the direct check, not only allowlisted.
+  Pin TestURLLaunderAnyProxyHostFlagged.
+- **MED-3 (space-starved payload floor)**: payload measured on the PARSED
+  path/query/fragment, not the raw space-delimited tail. Pin
+  TestURLNestedPayloadFloorOnParsedComponents.
+- **LOW-5 (false invariant prose)**: corrected the "non-ASCII can never collapse
+  into the allowlist" comment — the parser applies the same UTS-46 mapping a
+  client does, so a host mapping ONTO an allowlisted host is a genuine
+  allowlisted fetch (clean, pinned TestURLIDNMappedAllowlistedStaysClean); the
+  safety property is "the host we compare is the host a client fetches," and
+  both directions are pinned.
+
+Attacks the reviewer confirmed HELD: prefilter soundness (400k differential
+fuzz + directed punycode/IPv4-shorthand/IPv6/uppercase probes), tab/CR/LF
+splits, userinfo `@` bypasses, control-char hosts, `:443`/trailing-dot/userinfo
+on the proxy, single/triple-encoded inner schemes, 220k-case panic fuzz.
+
+Mutations M103–M107 all DETECTED (budget-off, nested-not-full-raw,
+launder-allowlist-only, payload-empty, no-progressive-decode), file restored
+byte-identical. Full suite green (22 pkgs), guard race-clean. Net line count
+dropped vs r15 (two code paths → one). **Re-review of r16 is the next round;
+the fixpoint clock stays reset (r16 is a rewrite of the nested path).**

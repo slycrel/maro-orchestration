@@ -220,78 +220,26 @@ func ScanContent(content, source string) ScanReport {
 	// bounds per-candidate work, so total URL-scan work is linear in
 	// content. It is a SEPARATE copy so the override/tool-call/keyword loops
 	// above keep reading `target` with original offsets and evidence.
+	// Each candidate runs from its scheme to the next space (a space ends a
+	// URL per WHATWG; tab/CR/LF are already gone from the whole-string strip
+	// above). Its verdict — parse, host resolution, allowlist/reach/payload
+	// policy, oversized/unparseable fail-closed, and bounded nested-launder
+	// rescan — is decided by the single entry point evalRawCandidate
+	// (urlscan.go), shared with the nested rescan so both carry identical
+	// invariants. A shared work budget bounds total parse/decode effort across
+	// all candidates and their nested layers (r16, fail-closed on exhaustion).
 	urlTarget := urlNormalizer.Replace(content)
+	budget := newScanBudget()
 	for _, loc := range schemeRe.FindAllStringIndex(urlTarget, -1) {
-		cand := urlTarget[loc[0]:]
-		// Skip the scheme + the WHATWG "special authority ignore slashes"
-		// run BEFORE capping. That run (`/` and `\`, UNBOUNDED since r6) is
-		// position-dependent and is NOT globally removed, so a long slash-
-		// pad — `https:` + 600×`/` + `evil.com/leak` — could still fill the
-		// whole 512-byte window and truncate the host away if the cap were
-		// applied from the scheme (r6/r7; both Go and Python missed this —
-		// Python's `{3,50}` host bound has the same blind spot, so closing
-		// it makes Go MORE correct than Python — backport candidate #11).
-		// Capping AFTER the run guarantees the window holds the authority.
-		// tab/CR/LF are already gone (global strip above), so the run is
-		// just slashes now. The skip is O(run) and each run belongs to one
-		// scheme, so total work stays linear in the content.
-		//
-		// The scheme length comes from schemeRe's OWN match bounds
-		// (loc[1]-loc[0], i.e. len("http:")|len("https:")), NOT a
-		// strings.ToLower(cand)+HasPrefix — that lowercased the WHOLE
-		// unbounded suffix before the cap, so `https:`×N with no whitespace
-		// was O(N) matches × O(len) each = O(n²) CPU+alloc once r8 scanned
-		// the full content (r9 review; this falsified r8's "no new DoS
-		// class" note). loc[1]-loc[0] is O(1) and exact.
-		skip := loc[1] - loc[0]
-		for skip < len(cand) && (cand[skip] == '/' || cand[skip] == '\\') {
-			skip++
+		raw := urlTarget[loc[0]:]
+		if i := strings.IndexByte(raw, ' '); i >= 0 {
+			raw = raw[:i]
 		}
-		// Bound the AUTHORITY window (in BYTES). Without this, a blob of
-		// `https://` repeated with no whitespace is O(schemes × tail) per
-		// ScanContent — each candidate would be the whole remaining target
-		// (r4 review DoS). The exfil shape needs a scheme, an authority that
-		// fits the window (host plus any userinfo/subdomain padding, up to
-		// urlCandidateMax — r12), a TLD, and a short path, so the window past
-		// the slash run is enough to decide a match.
-		truncated := len(cand) > skip+urlCandidateMax
-		if truncated {
-			cand = cand[:skip+urlCandidateMax]
-		}
-		// Candidate ends at the next SPACE (tab/CR/LF already stripped, so a
-		// bare line-end host has been glued to whatever followed — matching
-		// how a real client normalizes it).
-		if i := strings.IndexByte(cand, ' '); i >= 0 {
-			cand = cand[:i]
-			truncated = false // a space bounded it; the authority is whole
-		}
-		// Oversized unresolvable authority (r13 opus review, closing the r12
-		// known-gap). If the candidate was truncated by the byte cap AND the
-		// window holds NO authority terminator (`/ \ ? #`), the real host sits
-		// past the window — e.g. `https://<600×A>@evil-collector.com/leak`,
-		// where the host hides behind >512 bytes of userinfo. No legitimate
-		// URL has a >512-byte delimiter-free authority (DNS names cap at 253),
-		// so flag it FAIL-CLOSED rather than clear it. This is O(1) on already-
-		// bounded data (one IndexAny over the window), NOT the unbounded scan
-		// the earlier rationale wrongly claimed was required. It also flags a
-		// pathological scheme-only/giant-token blob (`https:`×N) — a safe over-
-		// flag on input no real suggestion carries; TestURLOversizedAuthority-
-		// ShortCircuits pins that. Note the `break`: this path terminates the
-		// scan on the first oversized candidate, so it is NOT a valid linearity
-		// fixture — TestURLScanStaysLinear must use a blob whose candidates each
-		// hold an in-window `/` so this branch never fires and all iterations
-		// run (r14: the old `https:`×N linearity fixture went vacuous here).
-		if truncated && strings.IndexAny(cand[skip:], "/\\?#") < 0 {
-			findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
-			blocked = append(blocked, "oversized-unresolvable-authority")
-			hasExfil = true
-			break
-		}
-		rule := evalURLCandidate(cand, skip, truncated, nestedDecodeDepth)
+		rule := evalRawCandidate(raw, budget, nestedDecodeDepth)
 		if rule == "" {
 			continue
 		}
-		findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
+		findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(raw)))
 		blocked = append(blocked, rule)
 		hasExfil = true
 		break

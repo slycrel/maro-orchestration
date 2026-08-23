@@ -1380,6 +1380,38 @@ the shape regex it referred to is deleted; #14 heuristic-reach limits STAND
 literals — is now a one-line policy decision rather than a parser project,
 flagged as such for Jeremy); #15 CLOSED (pin flipped to must-detect).
 
+**r16 — adversarial review of the swap, fixed to green (2026-08-22, opus
+skeptic fork).** The review confirmed the parser CORE sound (400k-case
+differential fuzz on the prefilter: zero counterexamples; every r10–r14
+evasion re-fired caught) but found two HIGHs + two MEDs + one LOW, ALL in
+r15's new nested-rescan code, sharing one root: `evalURLCandidate` had two
+callers with invariants written for only one (the flagship pattern's
+Nth instance — fresh bugs in fresh code). Fixed STRUCTURALLY: one entry
+point `evalRawCandidate` used by both the top-level scan and the nested
+rescan (so every safety property holds for both), plus a shared per-scan
+work budget (`scanBudget`: 4096 parses + 1MB decode, fail-closed on
+exhaustion). HIGH-1 = O(k³) nested-fan-out DoS (32KB → 83s → 92ms); HIGH-2 =
+nested rescan read the 512-capped candidate not the full raw payload
+(truncation false-ALLOW — the r13 oversized attack wrapped in the proxy);
+MED-4 = launder through non-allowlisted/out-of-reach proxy (rescan now runs
+for any cleared host); MED-3 = payload floor measured on the PARSED
+components, not the raw space-delimited tail; LOW-5 = corrected the false
+"non-ASCII can never collapse into the allowlist" comment (the parser applies
+a client's UTS-46 mapping — a host mapping onto an allowlisted host is a
+genuine allowlisted fetch). Five new pins + M103–M107 all DETECTED; net line
+count DROPPED (two paths → one). Verify-before-fix honored (reproduced the
+two HIGHs + MED-4 before fixing). Re-review of r16 is the next round.
+
+**Standing lesson banked (feeds [[feedback-review-to-fixpoint]]):** the r15→r16
+step is the churn lesson's mirror image done right — r15 was a *design* change
+(regex → parser) that retired the whole regex defect class, so its review found
+bugs only in the small NEW surface it added, and those converged structurally in
+ONE round instead of minting the next round's HIGH. The tell that separates
+"grind more rounds" from "reconsider the design": are the new HIGHs in the same
+brittle mechanism (churn — stop, redesign) or in a bounded new surface (normal
+convergence — fix and re-review)? The dep swap moved the hard part into a
+WPT-tested library; what's left is ours and small.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
