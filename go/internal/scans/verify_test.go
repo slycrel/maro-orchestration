@@ -625,3 +625,51 @@ func TestVerdictEventAudienceIsUser(t *testing.T) {
 	}
 	t.Fatal("EVOLVER_VERDICT event missing")
 }
+
+// --- r2 fix-layer pins (2026-08-22) ---
+
+// A malformed applied:"true" must be read the SAME way by candidate
+// selection AND the revert guard: the r1 split (pyTruthy candidates,
+// typed-assert IsApplied) made a degraded revertible row a silent forever-
+// candidate — Revert said NothingToRevert, the arm skipped, nothing ever
+// surfaced (r2 review HIGH-2).
+func TestVerifyMalformedAppliedStillReverts(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, map[string]any{
+		"category": "new_guardrail", "applied": "true"})
+	writeJSONL(t, memPath(ws, "change_log.jsonl"), []map[string]any{
+		{"suggestion_id": "v1", "category": "new_guardrail", "target": "all",
+			"suggestion_text": "test change"},
+	})
+	writeJSONL(t, memPath(ws, "dynamic-constraints.jsonl"), []map[string]any{
+		{"source": "v1", "pattern": "test change"},
+	})
+	seedOutcomes(t, ws, applyTime, 10, 1, 8)
+	sum := VerifyAppliedSuggestions(ws, record.New(ws), map[string]any{}, "run-h2", VerifyOptions{})
+	if sum.Reverted != 1 {
+		t.Fatalf("malformed applied must still revert, not silently loop: %+v", sum)
+	}
+	row := loadSuggestionRow(t, ws, "v1")
+	if row["verify_verdict"] != "degraded" {
+		t.Fatalf("terminal stamp missing: %+v", row)
+	}
+}
+
+// A terminal row refuses EVERY further stamp, including VerifiedAt-only
+// (r2 review LOW-2 — the refusal keyed on Verdict presence and left an
+// overwrite edge open).
+func TestStampVerificationTerminalRefusesAllStamps(t *testing.T) {
+	ws := t.TempDir()
+	seedSuggestion(t, ws, nil)
+	now := "2026-08-20T13:00:00+00:00"
+	evolver.StampVerificationChanged(ws, "v1",
+		evolver.VerificationStamp{Verdict: strPtr("confirmed"), VerifiedAt: &now})
+	later := "2026-08-21T00:00:00+00:00"
+	if _, changed := evolver.StampVerificationChanged(ws, "v1",
+		evolver.VerificationStamp{VerifiedAt: &later}); changed {
+		t.Fatal("VerifiedAt-only stamp must be refused on a terminal row")
+	}
+	if row := loadSuggestionRow(t, ws, "v1"); row["verified_at"] != now {
+		t.Fatalf("verified_at overwritten: %+v", row)
+	}
+}

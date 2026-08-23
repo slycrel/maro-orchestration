@@ -23,10 +23,12 @@
 package record
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -460,4 +462,68 @@ func stampOutcomeVerdictLocked(path, loopID string, achieved *bool,
 		return err
 	}
 	return nil
+}
+
+// LockedTailAppend holds the file's flock while fn inspects a BOUNDED tail
+// of the current content and returns the rows to append; the rows land
+// under the same lock with torn-tail framing. It exists for check-then-
+// append flows (graduation propose) where the check must be atomic with
+// the append but the file may be grown without bound by a co-resident
+// process — a whole-file LockedRMW read there is the exact OOM lever the
+// 8MB tail-read bound closes (r2 review MED-2). tailBytes <= 0 reads the
+// whole file. A partial first line from mid-file entry is dropped before
+// fn sees the tail.
+func LockedTailAppend(path string, tailBytes int64, fn func(tail string) [][]byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return Locked(path, func() error {
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		off := int64(0)
+		if tailBytes > 0 && st.Size() > tailBytes {
+			off = st.Size() - tailBytes
+		}
+		if _, err := f.Seek(off, 0); err != nil {
+			return err
+		}
+		raw, err := io.ReadAll(f)
+		if err != nil {
+			return err
+		}
+		// The framing decision reads the file's TRUE last byte — taken from
+		// the raw suffix before the torn-first-line trim below.
+		needsFrame := st.Size() > 0 && (len(raw) == 0 || raw[len(raw)-1] != '\n')
+		if off > 0 {
+			if i := bytes.IndexByte(raw, '\n'); i >= 0 {
+				raw = raw[i+1:]
+			}
+		}
+		rows := fn(string(raw))
+		if len(rows) == 0 {
+			return nil
+		}
+		var buf []byte
+		if needsFrame {
+			buf = append(buf, '\n')
+		}
+		for _, r := range rows {
+			buf = append(buf, r...)
+			buf = append(buf, '\n')
+		}
+		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+			return err
+		}
+		if _, err := f.Write(buf); err != nil {
+			return fmt.Errorf("append %s: %w", path, err)
+		}
+		return nil
+	})
 }

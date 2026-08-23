@@ -350,8 +350,14 @@ func ListPending(workspaceDir string, limit int) []Suggestion {
 func IsApplied(workspaceDir, suggestionID string) bool {
 	for _, m := range readRows(suggestionsPath(workspaceDir)) {
 		if m["suggestion_id"] == suggestionID {
-			applied, _ := m["applied"].(bool)
-			return applied
+			// pyTruthy, NOT a typed assert: rowToSuggestion reads applied
+			// with Python bool() truthiness, and a split read (candidate
+			// path says applied, this guard says not) turned a degraded
+			// row with a malformed applied:"true" into a silent forever-
+			// candidate — Revert reported NothingToRevert, the verify arm
+			// skipped as handled-elsewhere, and the degraded change stayed
+			// live with zero surfacing (r2 review HIGH-2).
+			return pyTruthy(m["applied"])
 		}
 	}
 	return false
@@ -380,8 +386,7 @@ func Dismiss(workspaceDir, suggestionID, reason string) (bool, error) {
 				out = append(out, s)
 				continue
 			}
-			applied, _ := row["applied"].(bool)
-			if row["suggestion_id"] == suggestionID && !applied {
+			if row["suggestion_id"] == suggestionID && !pyTruthy(row["applied"]) {
 				row["status"] = "dismissed"
 				row["dismissed_at"] = nowISO()
 				if reason != "" {
@@ -455,9 +460,13 @@ func StampVerificationChanged(workspaceDir, suggestionID string, stamp Verificat
 			}
 			if row["suggestion_id"] == suggestionID {
 				found = true
+				// A terminal row refuses EVERY further stamp — not just a
+				// second verdict. A VerifiedAt-only stamp slipping past the
+				// refusal was a latent overwrite edge (r2 review LOW-2);
+				// nothing legitimately re-stamps a rendered verdict.
 				prior, _ := row["verify_verdict"].(string)
-				if stamp.Verdict != nil && prior != "" {
-					out = append(out, s) // terminal stamp already rendered
+				if prior != "" {
+					out = append(out, s)
 					continue
 				}
 				if stamp.Verdict != nil {
@@ -817,7 +826,7 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 	// Re-applying a live row must be a no-op: besides replaying the
 	// mutation, a second apply could rewrite applied_manually and
 	// corrupt the authority provenance that decides auto-revert.
-	if applied, _ := d["applied"].(bool); applied {
+	if pyTruthy(d["applied"]) {
 		return true, nil
 	}
 

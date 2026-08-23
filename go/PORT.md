@@ -1580,6 +1580,41 @@ own gate instead of the fix's — and was re-run against the fix site;
 M128 deliberately not minted, see the residual above). Race detector
 clean over scans/graduation/evolver.
 
+**r2 fix-layer re-review (2026-08-22, skeptic+qa) — flagship pattern
+again: both HIGHs lived inside r1's own fixes.** (a) r1's in-lock
+graduation dedup used `Contains(old, fp)` over the WHOLE file where
+Python's `_already_proposed` windows to the last `lookback` rows — any
+class ever proposed was silently refused forever (executed repro: an
+aged-out proposal + fresh diagnoses wrote 0 rows where Python writes 1).
+The in-lock re-check now replays the ONE windowed field-scoped predicate
+(`proposedIn`) the pre-check uses, atop a new `record.LockedTailAppend`
+primitive (flock-held bounded-tail read + framed append) that also
+retires the whole-file LockedRMW read the same commit had introduced —
+r1 bounded `tailLines` against OOM and then re-opened the identical
+lever three functions down (r2 MED-2). (b) r1's pyTruthy fix coerced
+`applied` in `rowToSuggestion` but left `IsApplied` a typed assert, so a
+row with `applied:"true"` was read applied by candidate selection and
+not-applied by Revert's guard → `NothingToRevert` → the new skip arm
+ate it as handled-elsewhere: a degraded revertible change stayed live
+FOREVER with zero surfacing (worse than both Python, which reverts it,
+and pre-fix Go, which at least alarmed). All behavioral `applied` reads
+(IsApplied, Dismiss guard, re-apply guard) now share pyTruthy. Also:
+the FIFTH verdict arm (human-took-authority re-check branch) was never
+gated on `changed` in r1 — now gated like its four siblings; terminal
+rows refuse ALL stamps (a VerifiedAt-only stamp slipped past the
+Verdict-keyed refusal); coerceFloat rejects hex-float strings (Go
+ParseFloat reads "0x1p-2"=0.25 → directional, Python float() raises →
+full). Probed clean by execution: SaveSuggestions RMW atomicity +
+verbatim tainted-line preservation, escalation payload field parity,
+300→200 clip chain byte-identical, audience registry complete against
+every Go-emitted event type, rates rounding/prose parity. Fix-layer
+mutations M140–M141, M143–M146 all DETECTED (M142 not minted — the
+fifth-arm gate guards the same undeterminizable interleaving as M128;
+batteries now assert pattern UNIQUENESS before mutating, the M134
+lesson). Known suite caveat: guard's TestURLScanStaysLinear can blow
+its 10s wall-clock budget under -race on this box (perf-budget vs race
+instrumentation, guard-slice-owned, passes without -race).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

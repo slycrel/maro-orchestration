@@ -175,8 +175,18 @@ func AlreadyProposed(ws, failureClass string, lookback int) bool {
 	if lookback <= 0 {
 		lookback = 200
 	}
+	return proposedIn(tailLines(suggestionsPath(ws), lookback), failureClass)
+}
+
+// proposedIn is the ONE dedup predicate — windowed to the lines given,
+// field-scoped to failure_pattern (Python _already_proposed). The in-lock
+// re-check MUST replay exactly this: r1's Contains(old, fp) over the whole
+// file silently suppressed every class ever proposed, forever, where
+// Python re-proposes once the prior row ages past the lookback window
+// (r2 review HIGH-1).
+func proposedIn(lines []string, failureClass string) bool {
 	needle := "graduation:" + failureClass
-	for _, line := range tailLines(suggestionsPath(ws), lookback) {
+	for _, line := range lines {
 		var d map[string]any
 		if json.Unmarshal([]byte(line), &d) != nil {
 			continue
@@ -186,6 +196,20 @@ func AlreadyProposed(ws, failureClass string, lookback int) bool {
 		}
 	}
 	return false
+}
+
+// lastLines returns the last n non-empty trimmed lines of text.
+func lastLines(text string, n int) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			out = append(out, s)
+		}
+	}
+	if n > 0 && len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
 }
 
 func clipRunes(s string, n int) string {
@@ -275,22 +299,22 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 		fmt.Fprintf(os.Stderr, "[graduation] cannot create memory dir: %v\n", err)
 		return 0
 	}
-	// The dedup re-check and the appends happen inside ONE locked RMW: the
-	// pre-check above raced (two concurrent cadences both saw not-proposed
-	// and both appended — r1 QA review, repro'd on the first attempt), and
-	// content-dedup can't catch it because each row carries a fresh grad-id.
-	// landed collects the rows the write actually persisted — events fire
-	// for exactly those, never a count-prefix of intent (r1 F8).
+	// The dedup re-check and the appends happen atomically under one lock
+	// (two concurrent cadences both saw not-proposed and both appended —
+	// r1 QA review), the tail read is byte-bounded (a whole-file RMW read
+	// here was the OOM lever r1 closed elsewhere in this same file — r2
+	// MED-2), and the re-check replays the SAME windowed field-scoped
+	// predicate as the pre-check (r2 HIGH-1). landed collects the rows the
+	// write actually persisted — events fire for exactly those (r1 F8).
 	var landed []map[string]any
-	err := record.LockedRMW(path, func(old string) string {
+	err := record.LockedTailAppend(path, tailBytes, func(tail string) [][]byte {
 		landed = landed[:0]
-		out := old
-		if out != "" && !strings.HasSuffix(out, "\n") {
-			out += "\n" // frame a torn tail before appending
-		}
+		window := lastLines(tail, lookback)
+		var out [][]byte
 		for _, row := range newRows {
 			fp, _ := row["failure_pattern"].(string)
-			if strings.Contains(old, fp) {
+			fc := strings.TrimPrefix(fp, "graduation:")
+			if proposedIn(window, fc) {
 				continue // a concurrent cadence proposed this class first
 			}
 			raw, merr := json.Marshal(row)
@@ -298,7 +322,7 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 				fmt.Fprintf(os.Stderr, "[graduation] row marshal failed: %v\n", merr)
 				continue
 			}
-			out += string(raw) + "\n"
+			out = append(out, raw)
 			landed = append(landed, row)
 		}
 		return out

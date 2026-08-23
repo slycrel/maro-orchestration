@@ -383,10 +383,15 @@ func VerifyAppliedSuggestions(ws string, rec *record.Recorder, cfg map[string]an
 				continue // already terminal / reverted by another pass
 			}
 			if fresh.AppliedManually {
-				// A human took authority since the snapshot.
+				// A human took authority since the snapshot. Same changed-
+				// gate as every other arm — this fifth one was missed in r1
+				// and still double-emitted under cadence overlap (r2 MED-1).
 				if !o.DryRun {
-					evolver.StampVerification(ws, s.SuggestionID,
+					_, changed := evolver.StampVerificationChanged(ws, s.SuggestionID,
 						evolver.VerificationStamp{Verdict: strPtr("degraded_needs_review"), VerifiedAt: &now})
+					if !changed {
+						continue
+					}
 					RecordSuggestionOutcomes(ws, []string{s.SuggestionID}, false, runID)
 					logVerdictEvent(rec, s, "degraded", "review_required", true, rates)
 					notifyVerdict(ws, s, "review_required", true, rates)

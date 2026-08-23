@@ -80,7 +80,15 @@ func coerceFloat(v any) (float64, bool) {
 	case int64:
 		return float64(n), true
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		t := strings.TrimSpace(n)
+		// Go ParseFloat accepts hex floats ("0x1p-2"); Python float()
+		// raises on them and classifies FULL via the error pass — reject
+		// hex so both runtimes agree (r2 review LOW-1).
+		low := strings.TrimLeft(strings.ToLower(t), "+-")
+		if strings.HasPrefix(low, "0x") {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(t, 64)
 		return f, err == nil
 	case interface{ Float64() (float64, error) }: // json.Number
 		f, err := n.Float64()

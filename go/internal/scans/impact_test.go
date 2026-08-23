@@ -135,3 +135,16 @@ func TestVerifyCountsStringConfidenceDirectional(t *testing.T) {
 		t.Fatalf("counted=%d failing=%d (want 1/1)", counted, failing)
 	}
 }
+
+// Hex-float strings must classify like Python float() (which raises →
+// TypeError/ValueError pass → FULL); Go ParseFloat would have read
+// "0x1p-2"=0.25 → directional → row dropped (r2 review LOW-1).
+func TestVerifyCountsHexConfidenceStaysFull(t *testing.T) {
+	outcomes := []map[string]any{
+		{"status": "done", "goal_achieved": false, "goal_verdict_confidence": "0x1p-2"},
+	}
+	counted, failing := verifyCounts(outcomes)
+	if counted != 1 || failing != 1 {
+		t.Fatalf("counted=%d failing=%d (want 1/1 — hex is unparseable, full trust)", counted, failing)
+	}
+}

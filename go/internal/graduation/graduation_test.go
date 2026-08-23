@@ -2,6 +2,7 @@ package graduation
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -496,4 +497,52 @@ func TestGraduationEventAudienceIsUser(t *testing.T) {
 		}
 	}
 	t.Fatal("GRADUATION_PROPOSED event missing")
+}
+
+// --- r2 fix-layer pins (2026-08-22) ---
+
+// The dedup window is Python's: a proposal that aged past `lookback` rows
+// must NOT suppress a re-proposal of a recurring class. r1's in-lock
+// Contains(old, fp) checked the WHOLE file and silently refused forever
+// (r2 review HIGH-1).
+func TestRunGraduationReproposesAfterWindowAges(t *testing.T) {
+	ws := t.TempDir()
+	// An old proposal, then 250 filler rows pushing it past lookback=200.
+	rows := []map[string]any{{
+		"suggestion_id": "grad-old-token_explos", "category": "process_improvement",
+		"target": "all", "suggestion": "old proposal",
+		"failure_pattern": "graduation:token_explosion", "applied": false,
+	}}
+	for i := 0; i < 250; i++ {
+		rows = append(rows, map[string]any{
+			"suggestion_id": fmt.Sprintf("fill-%03d", i), "category": "observation",
+			"target": "all", "suggestion": fmt.Sprintf("filler %d", i),
+		})
+	}
+	writeJSONL(t, suggestionsPath(ws), rows)
+	writeJSONL(t, diagnosesPath(ws), []map[string]any{
+		diag("token_explosion", "l1"), diag("token_explosion", "l2"),
+		diag("token_explosion", "l3"),
+	})
+	n := RunGraduation(ws, record.New(ws), 3, 200, false, false)
+	if n != 1 {
+		t.Fatalf("aged-out class must re-propose (Python window parity), wrote %d", n)
+	}
+}
+
+// Inside the window the dedup still holds (and stays field-scoped).
+func TestRunGraduationDedupsInsideWindow(t *testing.T) {
+	ws := t.TempDir()
+	writeJSONL(t, suggestionsPath(ws), []map[string]any{{
+		"suggestion_id": "grad-new-token_explos", "category": "process_improvement",
+		"target": "all", "suggestion": "recent proposal",
+		"failure_pattern": "graduation:token_explosion", "applied": false,
+	}})
+	writeJSONL(t, diagnosesPath(ws), []map[string]any{
+		diag("token_explosion", "l1"), diag("token_explosion", "l2"),
+		diag("token_explosion", "l3"),
+	})
+	if n := RunGraduation(ws, record.New(ws), 3, 200, false, false); n != 0 {
+		t.Fatalf("in-window class must dedup, wrote %d", n)
+	}
 }

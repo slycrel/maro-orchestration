@@ -361,3 +361,42 @@ func TestStampOutcomeVerdictNullGoalAchievedIsUnjudged(t *testing.T) {
 		t.Fatalf("stamp must still land the new verdict: %v", row)
 	}
 }
+
+// LockedTailAppend: the check-then-append primitive frames a torn tail,
+// bounds the read, and hands fn only whole lines.
+func TestLockedTailAppendFramesAndBounds(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "ledger.jsonl")
+	// Torn tail: last line has no newline.
+	if err := os.WriteFile(p, []byte("{\"a\":1}\n{\"torn\":tr"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sawTail string
+	err := LockedTailAppend(p, 1<<20, func(tail string) [][]byte {
+		sawTail = tail
+		return [][]byte{[]byte(`{"b":2}`)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	want := "{\"a\":1}\n{\"torn\":tr\n{\"b\":2}\n"
+	if string(raw) != want {
+		t.Fatalf("framing: %q", raw)
+	}
+	if sawTail != "{\"a\":1}\n{\"torn\":tr" {
+		t.Fatalf("fn tail: %q", sawTail)
+	}
+	// Bounded read: a small cap must hand fn only the file's suffix, whole
+	// lines only.
+	err = LockedTailAppend(p, 10, func(tail string) [][]byte {
+		sawTail = tail
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sawTail != "{\"b\":2}\n" {
+		t.Fatalf("bounded tail must drop the torn first line: %q", sawTail)
+	}
+}

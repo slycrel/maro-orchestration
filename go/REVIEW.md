@@ -3041,3 +3041,29 @@ whole concurrency window family is byte-identical in fork-point Python.
 
 Gate: build/vet/full-suite/-race/gofmt green. NEXT: r2 re-review of the
 fix layer (flagship pattern says the new HIGHs live in r1's own fixes).
+
+## Self-improvement slice 2 — r2 (2026-08-22): 2 HIGHs (both inside r1's fixes) + 2 MED + 2 LOW, all fixed
+
+Combined skeptic+qa lens over the r1 diff (b4e58544). Flagship pattern held:
+HIGH-1 = r1's in-lock dedup silently changed scope from Python's 200-row
+window to whole-file → permanent suppression of recurring-class proposals
+(executed repro). HIGH-2 = r1's pyTruthy fix split the `applied` read
+(candidates truthy, IsApplied strict) → malformed applied:"true" degraded
+row became a silent forever-candidate via the NothingToRevert skip arm —
+worse than both baselines. MED-1 fifth verdict arm ungated on `changed`;
+MED-2 the propose path's whole-file RMW read re-opened the OOM lever the
+same commit closed in tailLines; LOW-1 hex-float confidence divergence;
+LOW-2 VerifiedAt-only stamp bypassing first-writer-wins.
+
+Fixes: shared windowed `proposedIn` predicate + new `record.LockedTailAppend`
+(flock-held bounded-tail check-then-append, framed); pyTruthy unified across
+IsApplied/Dismiss/re-apply guards; fifth arm gated; terminal rows refuse all
+stamps; hex strings rejected in coerceFloat. 6 new pins. Mutations M140-M141,
+M143-M146 DETECTED (M142 not minted, race-window arm like M128; batteries now
+assert mutation-site uniqueness — the M134 lesson operationalized).
+
+Gate: build/vet/full-suite/-race (fix packages)/gofmt green. Suite caveat
+noted: guard TestURLScanStaysLinear perf budget can trip under -race on this
+box (guard-slice-owned, not this tranche). NEXT: r3 — expect convergence
+(r2's fixes are narrow: one predicate extraction, one read-path unification,
+one primitive with its own pin).
