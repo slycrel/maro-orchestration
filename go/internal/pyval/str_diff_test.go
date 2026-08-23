@@ -42,6 +42,38 @@ var strCorpus = []string{
 	`{"key with space":[1.0,"x"]}`,
 	`[{"features":null}]`,
 	`{"":""}`,
+
+	// The non-finite family, which crosses the boundary TWICE: CPython's
+	// json.loads accepts the bare tokens and Go's decoder rejects them
+	// (killing the whole document, not one field), and an out-of-range
+	// literal comes back from Number.Float64 as ±Inf TOGETHER WITH a
+	// range error. The corpus used to stop at 1e308 and a 3000-document
+	// fuzz found 46 mismatches, all of this one family (mission-r1).
+	`1e309`, `-1e309`, `-4e323`, `1e-400`, `-1e-400`,
+	`NaN`, `Infinity`, `-Infinity`,
+	`[NaN,1.0]`, `[Infinity,-Infinity]`,
+	`{"a":NaN,"b":1}`,
+	`{"a":Infinity}`,
+
+	// ...and the strings that merely LOOK like them. Masking must respect
+	// string boundaries in both directions, or a milestone titled "NaN"
+	// becomes a float.
+	`"NaN"`, `"Infinity"`, `"-Infinity"`,
+	`{"NaN":"Infinity"}`,
+	`"a NaN inside a sentence"`,
+	`"escaped \" then Infinity"`,
+	`["NaN",NaN]`,
+
+	// The masking markers themselves, supplied by the input — plainly,
+	// and spelled with \uXXXX escapes so that the marker is present in
+	// the DECODED string while absent from the raw text. Both must stay
+	// strings, including alongside a real masked token in the same
+	// document. This is what the two-decode scheme buys.
+	`"__pyval_nonfiniteA__NaN"`,
+	`"__pyval_nonfiniteB__Infinity"`,
+	`{"a":NaN,"b":"__pyval_nonfiniteA__Infinity"}`,
+	`["__pyval_nonfiniteA__NaN",NaN,Infinity]`,
+	`{"a":NaN,"b":"\u005f\u005fpyval_nonfiniteA__Infinity"}`,
 }
 
 func pythonStrRepr(t *testing.T, docs []string) (strs, reprs []string) {

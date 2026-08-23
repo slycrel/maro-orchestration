@@ -2,6 +2,7 @@ package pyval
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -78,6 +79,19 @@ func Repr(v any) string {
 // value past int64 must not be forced through one.
 func reprNumber(n json.Number) string {
 	s := string(n)
+	// The three literals unmaskPaired produces for CPython's bare NaN /
+	// Infinity / -Infinity tokens. None of them contains '.', 'e' or 'E',
+	// so without this they fall into the INTEGER arm below, fail
+	// ParseInt, and get echoed verbatim — `NaN` and `Inf` where Python
+	// prints `nan` and `inf`, straight into a milestone title.
+	switch s {
+	case "NaN", "Inf", "-Inf":
+		f, err := n.Float64()
+		if err == nil {
+			return pyjson.FloatRepr(f)
+		}
+		return s
+	}
 	if !strings.ContainsAny(s, ".eE") {
 		// An integer literal. It is NOT the same string Python prints:
 		// json.loads("-0") is the int 0, whose repr is "0". Round-trip
@@ -95,6 +109,20 @@ func reprNumber(n json.Number) string {
 	}
 	f, err := n.Float64()
 	if err != nil {
+		// A RANGE error is not a parse failure: strconv has already
+		// produced the correctly-signed ±Inf, which is exactly what
+		// CPython's json.loads yields for an overflowing literal. Falling
+		// back to the source text printed `1e309` where Python prints
+		// `inf` — and that string becomes a milestone title in a shared
+		// mission.json (adversarial mission-r1 MEDIUM).
+		//
+		//	json.loads("1e309")  -> inf     json.loads("-4e323") -> -inf
+		//
+		// Any OTHER error means the literal is not a float at all, and
+		// returning it verbatim stays the right answer there.
+		if errors.Is(err, strconv.ErrRange) {
+			return pyjson.FloatRepr(f)
+		}
 		return s
 	}
 	return pyjson.FloatRepr(f)
@@ -123,6 +151,29 @@ func reprList(l List) string {
 			b.WriteString(", ")
 		}
 		b.WriteString(Repr(v))
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// ReprStrings is str()/repr() of a Python list of strings — the rendering
+// a `"%s" % some_list` in a log line produces.
+//
+// It exists because Go's %v on a []string prints [a b], which is not a
+// spelling Python can produce for any list: Python quotes each element
+// and separates with ", ". Log lines that both runtimes write into the
+// same operator-facing stream have to agree character for character, or
+// a grep keyed on one silently misses the other's rows.
+//
+// A nil slice renders "[]", matching Python's empty list — not "null".
+func ReprStrings(ss []string) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, s := range ss {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(pytext.Repr(s))
 	}
 	b.WriteByte(']')
 	return b.String()

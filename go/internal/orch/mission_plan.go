@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
@@ -74,6 +75,19 @@ Respond ONLY with JSON: {"passed": true or false, "reason": "one sentence"}`
 // larger divergence of the two.
 var ErrMalformedPlan = errors.New("mission: malformed decomposition")
 
+// ErrNoAdapter is what Python's AttributeError becomes here.
+//
+// decompose_mission has NO nil-adapter guard: it calls
+// `adapter.complete(...)` unconditionally, and the surrounding `except
+// ImportError` does not catch an AttributeError, so a None adapter kills
+// the caller. This port used to guard with `if a != nil` and fall
+// through to the heuristic, which hands back a WORKING mission where
+// Python hands back none — the same class of divergence ErrMalformedPlan
+// exists to prevent (adversarial mission-r1 LOW). Callers that want the
+// heuristic must ask for it; they cannot get it by passing nothing.
+var ErrNoAdapter = errors.New(
+	"mission: AttributeError: 'NoneType' object has no attribute 'complete'")
+
 // DecomposeMission is decompose_mission: one LLM call, a heuristic
 // fallback, and the depends_on resolution in between.
 func DecomposeMission(
@@ -87,15 +101,11 @@ func DecomposeMission(
 	missionID := newID()
 	createdAt := now()
 
-	var milestones []Milestone
-
-	if a != nil {
-		parsed, err := decomposeViaLLM(ctx, goal, a,
-			maxMilestones, maxFeaturesPerMilestone, newID)
-		if err != nil {
-			return nil, err
-		}
-		milestones = parsed
+	// Unconditional, exactly as Python calls it — see ErrNoAdapter.
+	milestones, err := decomposeViaLLM(ctx, goal, a,
+		maxMilestones, maxFeaturesPerMilestone, newID)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(milestones) == 0 {
@@ -123,6 +133,9 @@ func decomposeViaLLM(
 	maxMilestones, maxFeaturesPerMilestone int,
 	newID func() string,
 ) ([]Milestone, error) {
+	if a == nil {
+		return nil, ErrNoAdapter
+	}
 	resp, err := a.Complete(ctx, []llm.Message{
 		{Role: "system", Content: decomposeSystem},
 		{Role: "user", Content: fmt.Sprintf(
@@ -265,17 +278,46 @@ func decomposeViaLLM(
 // follows iterates it CHARACTER by character, so `"features": "abc"` with
 // n=3 produces three features named `a`, `b` and `c` (measured). A dict
 // raises KeyError and null raises TypeError; both leave the function.
+// pySliceLen is the length of `seq[:n]` for a Python sequence of length
+// size. Python clamps rather than raising: a non-negative n is capped at
+// size, and a NEGATIVE n counts back from the end and floors at zero.
+//
+//	[a,b,c][:5]  -> 3      [a,b,c][:-1] -> 2
+//	[a,b,c][:0]  -> 0      [a,b,c][:-9] -> 0
+//
+// Go's t[:n] panics on both out-of-range ends, so every slice built from
+// a caller-supplied bound goes through here.
+func pySliceLen(size, n int) int {
+	if n < 0 {
+		if size+n < 0 {
+			return 0
+		}
+		return size + n
+	}
+	if n > size {
+		return size
+	}
+	return n
+}
+
 func sliceForFeatures(v any, n int) ([]any, error) {
 	switch t := v.(type) {
 	case pyval.List:
-		if len(t) > n {
-			t = t[:n]
-		}
+		// pySliceLen, not `if len(t) > n`: a NEGATIVE n made this evaluate
+		// t[:-1] and PANIC, taking the whole process down where Python's
+		// [:-1] simply drops the last element (adversarial mission-r1
+		// MEDIUM). Both bounds are plain ints on an exported function.
+		t = t[:pySliceLen(len(t), n)]
 		return []any(t), nil
 	case string:
+		// The string arm slices too, and it had the mirror of the list
+		// arm's bug: `len(out) == n` never fires for a negative n, so Go
+		// returned every character where Python's "abc"[:-1] returns "ab".
+		// Counting RUNES, because Python slices a str by code point.
+		limit := pySliceLen(utf8.RuneCountInString(t), n)
 		var out []any
 		for _, r := range t {
-			if len(out) == n {
+			if len(out) == limit {
 				break
 			}
 			out = append(out, string(r))
@@ -351,20 +393,35 @@ func safeListOfObjects(data pyval.Obj, key string, n int) []pyval.Obj {
 	}
 	list, ok := raw.(pyval.List)
 	if !ok {
+		// EQUIVALENT-MUTANT NOTE: returning an empty non-nil slice here
+		// is indistinguishable — the only caller ranges over the result
+		// and never asks whether it is nil. The mutant survives and
+		// should; no fixture can or should pin the difference.
 		return nil // `if not isinstance(value, list): return []`
 	}
+	// safe_list is `[v for v in value if isinstance(...)][:max_items]`
+	// (llm_parse.py:238-240): it filters the WHOLE list, then slices. The
+	// early-break version here was equivalent only for n > 0.
+	//
+	// For n == 0, `len(out) == n` could never hold — the counter starts at
+	// 1 — so Go returned the model's ENTIRE plan where Python returns
+	// nothing and falls through to the heuristic: two different missions
+	// in the same mission.json (adversarial mission-r1 MEDIUM). For n < 0
+	// the break never fired either, where Python's [:-1] drops the LAST
+	// kept object. Filtering in full and slicing once reproduces both.
 	var out []pyval.Obj
 	for _, v := range list {
-		o, ok := v.(pyval.Obj)
-		if !ok {
-			continue
-		}
-		out = append(out, o)
-		if len(out) == n {
-			break // filter-then-slice; see above
+		if o, ok := v.(pyval.Obj); ok {
+			out = append(out, o) // filter-then-slice; see above
 		}
 	}
-	return out
+	//
+	// EQUIVALENT-MUTANT NOTE: re-adding the early `if len(out) == n {
+	// break }` now changes nothing, because the slice below applies
+	// either way — for n > 0 the break stops at exactly n, and for n <= 0
+	// it never fires. That mutant survives the suite and is meant to.
+	// The break was only ever wrong when it was the ONLY bound.
+	return out[:pySliceLen(len(out), n)]
 }
 
 // heuristicMilestones is the fallback: split the goal's WORDS in half and
@@ -423,9 +480,19 @@ func heuristicMilestones(goal string, newID func() string) []Milestone {
 // takes the literal sequential path, because the scheduler would buy it
 // zero concurrency and change failure semantics for nothing in return.
 func IsChainShaped(m *Mission) bool {
+	// Python's sentinel is `prev_id = None`, which is distinct from a
+	// milestone id of "". Go's "" was not, and LoadMission accepts
+	// `"id": ""` (requiredString only checks presence and type), so a
+	// hand-edited or foreign-written mission.json reaches it. The two
+	// runtimes then chose DIFFERENT EXECUTION LANES for the same file —
+	// sequential vs DAG, with different failure and context semantics
+	// (adversarial mission-r1 MEDIUM). A separate flag restores the
+	// three-valued distinction Python gets for free.
+	first := true
 	prevID := ""
 	for _, ms := range m.Milestones {
-		if prevID == "" {
+		if first {
+			first = false
 			if len(ms.DependsOn) != 0 {
 				return false
 			}

@@ -3365,3 +3365,245 @@ newline. Twelve differentials, one call-level above where it mattered.
 
 The corollary now applied to every new pin here: a differential that
 enters through a helper needs a sibling that enters through the **file**.
+
+---
+
+## The mission slice (`internal/orch/mission_plan.go`, `mission_dag.go`)
+
+Decompose → milestone DAG → validation gate: mission.py's planning half.
+`run_one` stays a parameter, which is what makes the scheduler portable
+ahead of the agent loop — its contract is entirely about ORDER and
+TERMINALITY, and a fake `run_one` exercises all of it. `run_mission`
+itself lands in slice 3.
+
+### The two slice orders, four lines apart in the Python
+
+```python
+raw_milestones = safe_list(data.get("milestones", []), element_type=dict, max_items=max_milestones)
+...
+    for f in rm.get("features", [])[:max_features_per_milestone] if str(f).strip()
+```
+
+`safe_list` is `[v for v in value if isinstance(...)][:max_items]` —
+**filter the whole list, then slice**. The features comprehension does the
+opposite: **slice, then filter**. A milestone list whose first element is
+a string still yields `max_milestones` milestones; a feature list whose
+first element is blank yields `max_features - 1` features. Both orders are
+reproduced verbatim. Making them uniform would be a divergence in one
+direction or the other.
+
+### Every caller-supplied slice bound goes through `pySliceLen`
+
+Python clamps where Go panics. `[a,b,c][:5]` is 3, `[:-1]` is 2, `[:-9]`
+is 0; `t[:5]` and `t[:-1]` are both runtime panics in Go. `maxMilestones`
+and `maxFeaturesPerMilestone` are plain `int` parameters on an exported
+function and nothing validates them.
+
+The trap on the way out: flooring a negative bound at 0 looks like the
+safe fix and is the **mirror** divergence — `[:-1]` drops the last
+element, it does not drop everything. The rule is to port the clamp, not
+to invent one.
+
+### Rule — a hardening is a divergence
+
+This is the rule the whole round produced, and it inverts a habit every
+earlier chunk of this port had.
+
+Two "Go is stricter than Python here" improvements — a `carve` that
+tracked JSON string literals, and a nil-adapter guard on
+`DecomposeMission` — each changed which bytes reach a store the Python
+runtime also reads:
+
+```
+{"passed": false, "reason": "the } thing is broken"}
+  CPython -> unparseable -> _validate_milestone defaults to PASS
+  Go      -> parses      -> milestone FAILS
+```
+
+Same reply, same `~/.maro/workspace/`, two different `mission.json`
+files. Both were removed. `carve` is now a transcription of
+`llm_parse._find_json_bounds` — naive depth counter, blind to strings,
+scanning from index 0 so that a stray CLOSE ahead of the payload drives
+depth negative and finds no bounds at all — and the package doc carries a
+REJECTED HARDENING block naming the measured fork, so the next reader does
+not re-improve it.
+
+The generalization:
+
+**A hardening that changes which record gets written to a shared store is
+not a hardening, it is a fork. If the naive behaviour is worth fixing, fix
+it in the Python first and let both runtimes inherit the fix.**
+
+This is narrower than "match Python exactly". Go may be strictly better
+wherever the difference cannot reach the store — `stripThinkBlocks` on a
+prose surface, an error where Python returns a sentinel the caller treats
+identically. The test is not *is Go's behaviour better*, it is *does a
+byte of the difference survive to disk*.
+
+#### The rule's second catch, found by applying it to the same file
+
+Writing the rule down was worth more than the fix that produced it. Read
+back over `internal/jsonx` with the rule in hand, a **second fork** was
+sitting four lines from the first, and r1 had waved it through as an
+"already-documented deliberate hardening":
+
+```go
+for _, m := range fenceRe.FindAllStringSubmatch(text, -1) {   // find a fence ANYWHERE
+    if payload, err := carve(m[1], open, close); err == nil { // and carve inside it
+        return payload, nil
+    }
+}
+```
+
+`llm_parse.strip_markdown_fences` does not hunt for fences. Its regex is
+anchored — `re.match(r"^```[a-zA-Z]*\n?(.*?)\n?```$", stripped, DOTALL)` —
+so it unwraps a fence that is the **entire** message and otherwise leaves
+the text completely alone. Measured 2026-08-23:
+
+```
+See the docs [here](url) for context.
+```json
+["step one", "step two"]
+```
+  CPython -> nothing stripped -> carve hits [here] -> [] (the default)
+  Go      -> reads the fence  -> ["step one", "step two"]
+```
+
+Ten non-test files call into this package and every one of them writes
+what it parses into the shared workspace. Go now runs
+`carve(stripMarkdownFences(stripThinkBlocks(text)))` — `extract_json`'s
+three verbs, in order.
+
+Three things this second catch taught that the first did not:
+
+- **The case that hides a fork is the one where both runtimes agree by
+  different routes.** `"Sure! Here are the steps:\n```json\n[...]\n```\nLet
+  me know."` returns the right list on both — Go via the fence, CPython
+  via a carve over prose that happens to contain no bracket. That test
+  passed before and after the change and proved nothing either time. The
+  corpus now carries it *labelled as such*, next to the one-character
+  variant (`[here](url)` in the prose) where the two split.
+- **A regex port is worth pinning as a string, not as a parsed value.**
+  Three cases would have survived comparison of the decoded JSON:
+  ```` ```json5 ```` leaves a stray `5` inside the payload (`[a-zA-Z]*`
+  will not eat a digit, and the `\n?` then cannot either); a two-fence
+  document captures everything between the *outermost* pair, inner
+  backticks included, because `(.*?)` is lazy but `$` is anchored; and a
+  `<think>` block ahead of a fence blocks the strip outright yet still
+  parses, which is the only evidence that think-stripping runs *first*.
+  `fence_diff_test.go` compares CPython's and Go's strip output byte for
+  byte, and a second column compares `strip(think(x))` so the ordering is
+  pinned rather than assumed.
+- **"Already documented" is not "already decided".** The old package doc
+  described the fence-first scan as a deliberate hardening, in a comment
+  written in the same round that introduced it. That sentence is exactly
+  what let r1 skip past it. A doc comment asserting a divergence is safe
+  is a claim, and it needs the same measurement as the code.
+
+The residual is now the honest one and it is **shared**: with prose either
+side of a fence, neither runtime finds it, and the first balanced bracket
+in the message wins on both. That is worth fixing — in
+`llm_parse.strip_markdown_fences`, where both runtimes inherit it. It is
+not worth fixing here, alone.
+
+### `None` is not `""`, and a bool is not an index
+
+Two sentinel collisions, both reachable from a hand-edited `mission.json`:
+
+- `_is_chain_shaped` walks with `prev_id = None`, which is distinct from a
+  milestone id of `""`. Go's `prevID == ""` was not, and `LoadMission`
+  accepts `"id": ""`. The two runtimes then picked **different execution
+  lanes** — sequential vs DAG — for the same file. A separate `first bool`
+  restores the three-valued distinction Python gets for free.
+- `isinstance(j, bool)` is checked *before* `isinstance(j, int)` in the
+  `depends_on` resolver, because in Python a bool **is** an int. Pinning
+  that needs a fixture where accepting and rejecting reach *different*
+  milestones: `depends_on: [true]` on the milestone at raw index 2
+  resolves to index 1 either way, since the predecessor *is* milestone 1.
+
+### The log line is part of the contract
+
+`log.warning("... deps=%s", ms.depends_on)` renders a Python list:
+`['m1']`. Go's `%v` on a `[]string` renders `[m1]`. `pyval.ReprStrings`
+exists for exactly this. The warning channel is the *durable* half of the
+DAG's stall evidence — Python calls `log.warning` beside every verbose
+`log_fn` line precisely because a verbose-gated line is not evidence — so
+a log parser keyed on the Python spelling missed every Go row.
+
+### Non-finite floats cross the boundary twice
+
+`json.loads` accepts bare `NaN` / `Infinity` / `-Infinity`; Go's
+`encoding/json` rejects them and the rejection kills the **whole**
+document, not one field. And `json.Number.Float64()` on `1e309` returns
+`+Inf` *together with* `strconv.ErrRange`, so treating the error as
+"unrenderable" echoes the source literal where CPython prints `inf`.
+`pyval` masks the bare tokens before decoding (refusing outright if the
+sentinel is already present in the input) and range-checks on the way
+back out.
+
+### Concurrency, stated honestly
+
+The scheduler mutates only terminal milestones and only from its own
+goroutine, so it needs no lock — Python's `_mark_crashed` takes none
+either. The mutex that used to be here was never contended and its
+`-race`-proves-it comment was false.
+
+The residual it *claimed* to close is real and stays NAMED in the package
+doc: a `PersistFn` that reads milestones the scheduler has not yet marked
+terminal races with those milestones' own bodies. Python has the same
+logical tearing under the GIL but no undefined behaviour; Go has both. It
+cannot close at this layer, because `runOne` is an injected seam and
+locking around it would serialise the concurrency the DAG exists to buy.
+It closes in slice 3, where `run_mission` supplies the real persist and
+can snapshot under the same lock the milestone bodies write under. Until
+then the contract is stated at the seam: do not pass a `PersistFn` that
+reads non-terminal milestones.
+
+### The non-finite family, and why it took three tries
+
+`json.loads` accepts the bare tokens `NaN`, `Infinity` and `-Infinity`;
+Go's `encoding/json` rejects them, and the rejection kills the **whole**
+document rather than one field. One stray non-finite anywhere in a model
+reply — including in a key nobody reads — turns the model's plan into the
+two-phase heuristic on the Go side only.
+
+The first fix masked the token with a NUL-prefixed sentinel. Go's decoder
+rejects a raw NUL inside a string literal, so **the masking never worked
+at all** — and no test covered a non-finite token, so deleting the fix
+changed nothing and the suite stayed green. The second fix used ordinary
+text and lengthened the sentinel until it did not occur in the raw text,
+which misses the spelling that matters: a string can encode the marker
+with `\uXXXX` escapes, so the DECODED value carries it while the raw text
+does not.
+
+What settles it exactly is **two markers of the same length and two
+decodes**. A string that came from the input decodes identically both
+times; a string this package substituted differs in exactly the marker. So
+the pair of trees names the masked positions with no guessing and no
+residual, at the cost of one extra decode on the rare document that
+contains a bare non-finite token.
+
+One layer further down: `reprNumber` routed `json.Number("NaN")` into its
+INTEGER arm, because "NaN" contains no `.`, `e` or `E` — printing `NaN`
+where CPython prints `nan`, straight into a milestone title. And
+`Number.Float64()` on `1e309` returns `+Inf` *together with*
+`strconv.ErrRange`, so treating that error as "unrenderable" echoed the
+source literal. Three defects stacked in one value's path.
+
+### Rule — a fix arrives with no coverage by construction
+
+The corpus that missed the bug is the corpus the fix inherits. Nine of the
+first battery's nineteen survivors were mutants of lines written in that
+same round, each in the exact dimension the finding was about:
+
+- a bounds fix, against 38 payloads that all drove `maxMilestones=4,
+  maxFeatures=3`;
+- a blank-id sentinel fix, reachable only through a decomposer whose ids
+  come from a generator and are never blank;
+- a log-rendering fix, on a channel the differential harness never
+  connected.
+
+Reviewing the fix is not the same as covering it, and the mutation battery
+is what tells them apart. Every fix in this port now gets mutants derived
+from the FILE it landed in — and a survivor is either a missing fixture or
+an equivalence worth writing down, never something to leave unexplained.

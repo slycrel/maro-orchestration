@@ -3,7 +3,6 @@ package orch
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
@@ -18,14 +17,35 @@ import (
 // is entirely about ORDER and TERMINALITY, and a fake run_one exercises
 // all of it.
 //
-// WHERE GO CANNOT COPY PYTHON. CPython's GIL makes `ms.status = "failed"`
-// and a persist callback that walks the whole mission mutually safe by
-// accident. Go has no such accident, and `go test -race` says so. The
-// mutex below is therefore NOT a port of anything in the Python — it is
-// the price of the same behaviour in a language that means it. It is
-// deliberately coarse: it covers exactly the crash-marking and the
-// persist callback, never the milestone body, so it cannot serialise the
-// concurrency the scheduler exists to buy.
+// CONCURRENCY, STATED HONESTLY (rewritten after adversarial mission-r1
+// MEDIUM; the previous version of this paragraph was wrong in three
+// separate ways and is worth recording as a caution).
+//
+// It claimed a mutex here was "the price of the same behaviour in a
+// language that means it", that `go test -race` proved it necessary, and
+// that PersistFn was "called under the lock". In fact:
+//
+//   - Python's _mark_crashed takes NO lock (mission.py:386-396). There
+//     was no Python behaviour being paid for.
+//   - markCrashed's only callers are the scheduler's own goroutine — the
+//     stall lane and the completion drain — so the mutex was never once
+//     contended. Deleting it outright left `-race` green.
+//   - The race it was described as closing was still open: PersistFn
+//     walks EVERY milestone, including ones whose runOne is still
+//     writing to them, and runOne never took the lock.
+//
+// What is actually true: the scheduler mutates only terminal milestones
+// and only from its own goroutine, so it needs no lock of its own.
+//
+// NAMED RESIDUAL — a PersistFn that reads milestones the scheduler has
+// not yet marked terminal races with those milestones' own bodies. Python
+// has the same LOGICAL tearing (a whole-mission snapshot is not atomic
+// under the GIL either) but no undefined behaviour; Go has both. It
+// cannot be closed at this layer, because runOne is an injected seam and
+// locking around it would serialise the concurrency the DAG exists to
+// buy. It closes in slice 3, where run_mission supplies the real persist
+// and can snapshot under the same lock its milestone bodies write under.
+// Until then: do not pass a PersistFn that reads non-terminal milestones.
 
 // RunOne executes one milestone. It returns an error where the Python
 // callable would raise; the scheduler's backstop treats the two the same.
@@ -37,7 +57,9 @@ type DAGOptions struct {
 	// LogFn is the verbose-gated operator line. Python's log_fn.
 	LogFn func(string)
 	// PersistFn saves the mission mid-flight. Optional in Python and
-	// optional here; called under the lock.
+	// optional here. Called on the SCHEDULER's goroutine, never a
+	// milestone's — see the package doc's named residual for what that
+	// does and does not make safe.
 	PersistFn func()
 	// WarnFn is the module logger's warning channel — the DURABLE half.
 	// Python calls log.warning beside every log_fn here precisely because
@@ -84,14 +106,14 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 	terminal := map[string]bool{}
 	submitted := map[string]bool{}
 
-	var mu sync.Mutex
+	// No mutex: every call below is on this goroutine, and the milestone
+	// it touches has already returned from runOne. See the concurrency
+	// note in the package doc for the residual this does NOT cover.
 	markCrashed := func(ms *Milestone, err error) {
 		// Backstop for anything the milestone body's own guards miss:
 		// fail the ONE milestone, leave durable evidence, keep the
 		// mission going. A verbose-gated log_fn alone is not evidence,
 		// which is why warnFn fires too.
-		mu.Lock()
-		defer mu.Unlock()
 		ms.Status = "failed"
 		res := fmt.Sprintf("error: %v", err)
 		ms.ValidationResult = &res
@@ -150,8 +172,14 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 				logFn(fmt.Sprintf(
 					"milestone DAG stall (malformed depends_on) — running %s in list order",
 					pyval.Repr(ms.Title)))
-				warnFn(fmt.Sprintf("mission_dag_stall id=%s milestone=%s deps=%v",
-					m.ID, ms.ID, ms.DependsOn))
+				// deps is rendered with Python's str() of a LIST, not Go's
+				// %v: log.warning("... deps=%s", ms.depends_on) prints
+				// ['m1'], and %v on a []string prints [m1]. WarnFn is the
+				// durable half of this evidence, so a log parser keyed on
+				// the Python spelling missed every Go row (adversarial
+				// mission-r1 MEDIUM).
+				warnFn(fmt.Sprintf("mission_dag_stall id=%s milestone=%s deps=%s",
+					m.ID, ms.ID, pyval.ReprStrings(ms.DependsOn)))
 				if err := runOne(ctx, i, ms); err != nil {
 					markCrashed(ms, err)
 				}

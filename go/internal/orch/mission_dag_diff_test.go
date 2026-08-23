@@ -31,6 +31,19 @@ type dagRun struct {
 	Statuses []string   `json:"statuses"` // per milestone, in list order
 	Results  []string   `json:"results"`  // validation_result, "" for null
 	Overlaps [][]string `json:"overlaps"` // sorted pairs seen concurrently
+	// The scheduler's three OTHER outputs, none of which this harness
+	// looked at until mutants that deleted the durable warning, deleted
+	// the mid-flight persist, and rendered `deps=` with Go's %v instead
+	// of Python's str() all survived the whole suite (adversarial
+	// mission-r1 MEDIUM and its battery). goDAG passed neither LogFn nor
+	// WarnFn nor PersistFn, so the entire operator surface was invisible.
+	//
+	// Messages are compared as SORTED sets: Python emits them from
+	// whichever thread got there first, which is not a promise either
+	// runtime makes.
+	Logs     []string `json:"logs"`
+	Warns    []string `json:"warns"`
+	Persists int      `json:"persists"`
 }
 
 // pyDAGSnippet builds a mission from a spec, runs it through CPython's
@@ -40,20 +53,31 @@ type dagRun struct {
 // `slow`, which is how overlap is OBSERVED rather than inferred from
 // timing: two milestones overlap iff both can sit in the barrier at once.
 const pyDAGSnippet = `
-import json, sys, threading, mission
+import json, sys, threading, logging, mission
+
+logs, warns, persists = [], [], []
+
+class _Capture(logging.Handler):
+    def emit(self, record):
+        warns.append(record.getMessage())
+
+mission.log.addHandler(_Capture())
+mission.log.setLevel(logging.WARNING)
 
 spec = json.loads(sys.argv[1])
 ms = []
 for i, s in enumerate(spec['milestones']):
     ms.append(mission.Milestone(
-        id='m%d' % i, title=s['title'], features=[], validation_criteria=[],
+        id=s.get('id') or ('m%d' % i), title=s['title'], features=[],
+        validation_criteria=[],
         status='pending', depends_on=list(s.get('depends_on', []))))
 m = mission.Mission(id='mi', goal='g', project='p', milestones=ms,
                     status='running', created_at='t')
 
 lock = threading.Lock()
 active, overlaps, order = set(), set(), []
-gate = threading.Barrier(spec['barrier'], timeout=1) if spec['barrier'] > 1 else None
+gate = (threading.Barrier(spec['barrier'], timeout=spec['barrier_timeout_s'])
+        if spec['barrier'] > 1 else None)
 fail = set(spec.get('fail', []))
 
 def run_one(idx, milestone):
@@ -71,29 +95,46 @@ def run_one(idx, milestone):
         raise RuntimeError('boom')
     milestone.status = 'done'
 
-mission._run_milestone_dag(m, run_one, lambda s: None,
-                           max_workers=spec['max_workers'])
+# max_workers 0 means "let the default apply", which is the only way to
+# compare Python's default kwarg against Go's zero-value floor.
+kw = {} if spec['max_workers'] == 0 else {'max_workers': spec['max_workers']}
+mission._run_milestone_dag(m, run_one, logs.append,
+                           persist_fn=lambda: persists.append(1), **kw)
 print(json.dumps({
     'ran': order,
     'statuses': [x.status for x in m.milestones],
     'results': [x.validation_result or '' for x in m.milestones],
     'overlaps': sorted([list(p) for p in overlaps]),
+    'logs': sorted(logs),
+    'warns': sorted(warns),
+    'persists': len(persists),
 }))
 `
 
+// dagMS is the per-milestone spec. The ID is normally left blank and
+// filled in as m0, m1, ... on both sides; naming it explicitly is how
+// DUPLICATE ids get pinned, and load_mission does not check uniqueness.
+type dagMS struct {
+	ID        string   `json:"id,omitempty"`
+	Title     string   `json:"title"`
+	DependsOn []string `json:"depends_on,omitempty"`
+}
+
 type dagSpec struct {
-	Milestones []struct {
-		Title     string   `json:"title"`
-		DependsOn []string `json:"depends_on,omitempty"`
-	} `json:"milestones"`
-	MaxWorkers int      `json:"max_workers"`
-	Barrier    int      `json:"barrier"`
-	Slow       []string `json:"slow,omitempty"`
-	Fail       []string `json:"fail,omitempty"`
+	Milestones []dagMS `json:"milestones"`
+	MaxWorkers int     `json:"max_workers"`
+	Barrier    int     `json:"barrier"`
+	// BarrierTimeoutS is stamped by pyDAG from barrierTimeout — which is
+	// also what the Go barrier waits — so the two runtimes cannot drift
+	// apart on it. It is not part of any case literal.
+	BarrierTimeoutS float64  `json:"barrier_timeout_s"`
+	Slow            []string `json:"slow,omitempty"`
+	Fail            []string `json:"fail,omitempty"`
 }
 
 func pyDAG(t *testing.T, spec dagSpec) dagRun {
 	t.Helper()
+	spec.BarrierTimeoutS = barrierTimeout.Seconds()
 	b, err := json.Marshal(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +163,12 @@ func goDAG(t *testing.T, spec dagSpec) dagRun {
 	t.Helper()
 	m := &Mission{ID: "mi", Goal: "g", Project: "p", Status: "running"}
 	for i, s := range spec.Milestones {
+		id := s.ID
+		if id == "" {
+			id = "m" + strconv.Itoa(i)
+		}
 		m.Milestones = append(m.Milestones, Milestone{
-			ID: "m" + strconv.Itoa(i), Title: s.Title, Status: "pending",
+			ID: id, Title: s.Title, Status: "pending",
 			DependsOn: s.DependsOn,
 		})
 	}
@@ -168,10 +213,40 @@ func goDAG(t *testing.T, spec dagSpec) dagRun {
 		return nil
 	}
 
-	RunMilestoneDAG(context.Background(), m, runOne,
-		DAGOptions{MaxWorkers: spec.MaxWorkers})
+	var logMu sync.Mutex
+	var logs, warns []string
+	persists := 0
+	RunMilestoneDAG(context.Background(), m, runOne, DAGOptions{
+		MaxWorkers: spec.MaxWorkers,
+		LogFn: func(line string) {
+			logMu.Lock()
+			logs = append(logs, line)
+			logMu.Unlock()
+		},
+		WarnFn: func(line string) {
+			logMu.Lock()
+			warns = append(warns, line)
+			logMu.Unlock()
+		},
+		// Counts only; it must not READ milestones — see the named
+		// residual in mission_dag.go's package doc.
+		PersistFn: func() {
+			logMu.Lock()
+			persists++
+			logMu.Unlock()
+		},
+	})
+	sort.Strings(logs)
+	sort.Strings(warns)
 
-	r := dagRun{Ran: order, Overlaps: [][]string{}}
+	r := dagRun{Ran: order, Overlaps: [][]string{},
+		Logs: logs, Warns: warns, Persists: persists}
+	if r.Logs == nil {
+		r.Logs = []string{}
+	}
+	if r.Warns == nil {
+		r.Warns = []string{}
+	}
 	if r.Ran == nil {
 		r.Ran = []string{}
 	}
@@ -196,8 +271,21 @@ func goDAG(t *testing.T, spec dagSpec) dagRun {
 }
 
 // barrier is a rendezvous for n goroutines that RELEASES ON TIMEOUT
-// rather than hanging, matching threading.Barrier(timeout=5). A test
-// harness that can deadlock is worse than one that can fail.
+// rather than hanging, matching threading.Barrier(timeout=...) — the same
+// number the Python snippet uses, threaded through the spec JSON from the
+// constant below so the two cannot drift. A test harness that can deadlock
+// is worse than one that can fail.
+//
+// It was 1s and that was too tight. Under full-suite load on this box the
+// "DEFAULT worker count" case flaked (go: [] py: [[A B]]): both runners
+// were genuinely admitted, but the second took over a second to be
+// scheduled, the guard fired, and the case read as "could not overlap".
+// It passed 6/6 in isolation, which is the signature of a load flake and
+// not of a port defect. The cost of a longer wait is paid only by the
+// cases that are SUPPOSED to time out (a chain, a cycle, a 1-worker cap),
+// so 4s buys 4x the scheduling headroom for a few seconds of suite time.
+const barrierTimeout = 4 * time.Second
+
 type barrier struct {
 	n    int
 	mu   sync.Mutex
@@ -224,14 +312,14 @@ func (b *barrier) wait() {
 		b.cond.Broadcast()
 		return
 	}
-	// A one-shot timeout guard matching threading.Barrier(timeout=1):
+	// A one-shot timeout guard matching threading.Barrier(timeout=...):
 	// if the barrier can never fill — fewer concurrent runners than n,
 	// which is exactly what a NON-concurrent port produces, and also what
 	// a max_workers cap produces on purpose — release rather than hang, so
 	// the test FAILS on the overlap comparison instead of timing out with
 	// no diagnosis.
 	go func() {
-		<-time.After(1 * time.Second)
+		<-time.After(barrierTimeout)
 		b.mu.Lock()
 		b.open = true
 		b.cond.Broadcast()
@@ -242,7 +330,7 @@ func (b *barrier) wait() {
 	}
 }
 
-func assertDAGRunsAgree(t *testing.T, got, want dagRun) {
+func assertDAGRunsAgree(t *testing.T, spec dagSpec, got, want dagRun) {
 	t.Helper()
 	// Completion ORDER is not a promise either runtime makes when two
 	// milestones run concurrently, so it is compared as a SET. What
@@ -256,38 +344,72 @@ func assertDAGRunsAgree(t *testing.T, got, want dagRun) {
 	if fmt.Sprint(got.Statuses) != fmt.Sprint(want.Statuses) {
 		t.Errorf("statuses differ\n go: %v\n py: %v", got.Statuses, want.Statuses)
 	}
+	// The operator lines are BYTES, not decoration: Python renders a
+	// title with !r and a depends_on list with str() of a LIST, and the
+	// warning channel is the DURABLE half of the stall/crash evidence.
+	if fmt.Sprint(got.Logs) != fmt.Sprint(want.Logs) {
+		t.Errorf("log_fn lines differ\n go: %q\n py: %q", got.Logs, want.Logs)
+	}
+	if fmt.Sprint(got.Warns) != fmt.Sprint(want.Warns) {
+		t.Errorf("warnings differ\n go: %q\n py: %q", got.Warns, want.Warns)
+	}
+	if got.Persists != want.Persists {
+		t.Errorf("persist_fn calls: go %d, py %d", got.Persists, want.Persists)
+	}
 	if fmt.Sprint(got.Results) != fmt.Sprint(want.Results) {
 		t.Errorf("validation_result differs\n go: %v\n py: %v",
 			got.Results, want.Results)
 	}
-	if fmt.Sprint(got.Overlaps) != fmt.Sprint(want.Overlaps) {
+	// Overlap is only comparable when a BARRIER forces the question.
+	// With Barrier 1 nothing blocks, so whether two ready milestones are
+	// in run_one at the same instant is pure timing on both runtimes —
+	// CPython's GIL makes it rare for a body this short and Go's
+	// goroutines make it likely, and `-race` shifts the odds again. The
+	// harness caught itself here: "a crash marks one milestone and the
+	// mission continues" reported `go [[A B] [A C]]  py []` under -race
+	// and agreed without it. Neither answer is wrong; the comparison was.
+	//
+	// A barrier turns it into an OBSERVATION: two milestones overlap iff
+	// both can sit in the barrier at once, and a barrier that cannot fill
+	// releases on its timeout so the case fails rather than hangs. Cases
+	// whose non-overlap is structural (a chain, a stall lane) carry a
+	// barrier for exactly this reason.
+	if spec.Barrier > 1 && fmt.Sprint(got.Overlaps) != fmt.Sprint(want.Overlaps) {
 		t.Errorf("the set of milestones allowed to overlap differs\n go: %v\n py: %v",
 			got.Overlaps, want.Overlaps)
 	}
 }
 
-func ms(title string, deps ...string) struct {
-	Title     string   `json:"title"`
-	DependsOn []string `json:"depends_on,omitempty"`
-} {
-	return struct {
-		Title     string   `json:"title"`
-		DependsOn []string `json:"depends_on,omitempty"`
-	}{title, deps}
+func ms(title string, deps ...string) dagMS {
+	return dagMS{Title: title, DependsOn: deps}
 }
 
-func TestTheMilestoneDAGMatchesCPythons(t *testing.T) {
-	type mst = struct {
-		Title     string   `json:"title"`
-		DependsOn []string `json:"depends_on,omitempty"`
-	}
-	for _, tc := range []struct {
-		name string
-		spec dagSpec
-	}{
+// msID gives a milestone an explicit id, which is only interesting when
+// two of them share one.
+func msID(title, id string, deps ...string) dagMS {
+	return dagMS{ID: id, Title: title, DependsOn: deps}
+}
+
+type dagCase struct {
+	name string
+	spec dagSpec
+}
+
+// dagCorpus is hoisted out of the test so the concurrency guard below can
+// READ it. The guard used to build its own two-milestone spec, so it
+// could not notice the corpus losing every case that actually overlaps —
+// the one thing it exists to catch (adversarial mission-r1 HIGH).
+func dagCorpus() []dagCase {
+	type mst = dagMS
+	return []dagCase{
+		// The barrier is what makes "one at a time" an assertion rather
+		// than an accident: all three are slow, so a port that ignored
+		// depends_on would fill it and the overlap set would be
+		// non-empty. It can never fill here, so both sides release on
+		// the timeout with an empty set.
 		{"a chain runs one at a time", dagSpec{
 			Milestones: []mst{ms("A"), ms("B", "m0"), ms("C", "m1")},
-			MaxWorkers: 2, Barrier: 1}},
+			MaxWorkers: 2, Barrier: 2, Slow: []string{"A", "B", "C"}}},
 
 		{"two independent roots OVERLAP", dagSpec{
 			Milestones: []mst{ms("A"), ms("B")},
@@ -344,9 +466,12 @@ func TestTheMilestoneDAGMatchesCPythons(t *testing.T) {
 
 		// Cycles cannot deadlock: the stall lane runs the remainder in
 		// LIST order and returns.
+		// The stall lane runs on the scheduler's own thread, so its
+		// milestones cannot overlap either — again only assertable with
+		// a barrier in play.
 		{"a two-cycle stalls into list order", dagSpec{
 			Milestones: []mst{ms("A", "m1"), ms("B", "m0")},
-			MaxWorkers: 2, Barrier: 1}},
+			MaxWorkers: 2, Barrier: 2, Slow: []string{"A", "B"}}},
 
 		{"a self-cycle stalls", dagSpec{
 			Milestones: []mst{ms("A", "m0"), ms("B", "m0")},
@@ -360,15 +485,57 @@ func TestTheMilestoneDAGMatchesCPythons(t *testing.T) {
 			Milestones: []mst{ms("A", "m1"), ms("B", "m0")},
 			MaxWorkers: 2, Barrier: 1, Fail: []string{"A"}}},
 
+		// The stall lane's two evidence lines are BYTES. Every other
+		// case here has a bare-alphabetic title and at most one
+		// dependency, so nothing saw Python's !r quote flip or the
+		// ", " join inside str() of a list.
+		{"a stalled milestone with a quoted title and TWO deps", dagSpec{
+			Milestones: []mst{ms("A'B", "m1", "m2"), ms("C", "m0"), ms("D", "m0")},
+			MaxWorkers: 2, Barrier: 1}},
+
+		// A dependency ID with a quote in it: str() of a LIST renders
+		// each element with repr(), so one quote-bearing id flips that
+		// element to double quotes while its siblings stay single.
+		{"a stalled milestone whose dep id contains a quote", dagSpec{
+			Milestones: []mst{ms("A", "it's", "m1"), ms("B", "m0")},
+			MaxWorkers: 2, Barrier: 1}},
+
+		{"a crash line renders the title with Python's !r", dagSpec{
+			Milestones: []mst{ms("A'B"), ms("C")},
+			MaxWorkers: 2, Barrier: 1, Fail: []string{"A'B"}}},
+
+		// max_workers 0 = "apply the default on both sides". Python's is
+		// the kwarg default of 2 and Go's is the zero-value floor; a
+		// floor of 1 would silently serialise every mission whose caller
+		// left the field alone. Barrier 2 is what makes the difference
+		// observable.
+		{"the DEFAULT worker count admits an overlap", dagSpec{
+			Milestones: []mst{ms("A"), ms("B")},
+			MaxWorkers: 0, Barrier: 2, Slow: []string{"A", "B"}}},
+
+		// Duplicate ids are reachable from a hand-edited mission.json —
+		// load_mission does not check uniqueness. The stall lane keys on
+		// `submitted`, so the second copy is skipped and `terminal` never
+		// reaches len(milestones); Python RETURNS out of the stall lane
+		// rather than re-entering the scheduling loop, and a port that
+		// merely `continue`d would spin forever here.
+		{"duplicate milestone ids still terminate", dagSpec{
+			Milestones: []mst{msID("A", "dup"), msID("B", "dup", "ghost")},
+			MaxWorkers: 2, Barrier: 1}},
+
 		{"an empty mission terminates", dagSpec{
 			Milestones: []mst{}, MaxWorkers: 2, Barrier: 1}},
 
 		{"one milestone", dagSpec{
 			Milestones: []mst{ms("A")}, MaxWorkers: 2, Barrier: 1}},
-	} {
+	}
+}
+
+func TestTheMilestoneDAGMatchesCPythons(t *testing.T) {
+	for _, tc := range dagCorpus() {
 		t.Run(tc.name, func(t *testing.T) {
 			want := pyDAG(t, tc.spec)
-			assertDAGRunsAgree(t, goDAG(t, tc.spec), want)
+			assertDAGRunsAgree(t, tc.spec, goDAG(t, tc.spec), want)
 		})
 	}
 }
@@ -378,22 +545,28 @@ func TestTheMilestoneDAGMatchesCPythons(t *testing.T) {
 // "nothing overlapped == nothing overlapped", which a port that ran
 // everything sequentially would pass.
 func TestTheDAGCorpusActuallyObservesConcurrency(t *testing.T) {
-	spec := dagSpec{
-		Milestones: []struct {
-			Title     string   `json:"title"`
-			DependsOn []string `json:"depends_on,omitempty"`
-		}{ms("A"), ms("B")},
-		MaxWorkers: 2, Barrier: 2, Slow: []string{"A", "B"},
+	// The REAL corpus. A private spec proved only that SOME spec overlaps,
+	// which stays true no matter what the corpus degrades into.
+	pyOverlapping, goOverlapping := 0, 0
+	for _, tc := range dagCorpus() {
+		if len(pyDAG(t, tc.spec).Overlaps) > 0 {
+			pyOverlapping++
+		}
+		if len(goDAG(t, tc.spec).Overlaps) > 0 {
+			goOverlapping++
+		}
 	}
-	want := pyDAG(t, spec)
-	if len(want.Overlaps) == 0 {
-		t.Fatal("CPython's own scheduler never overlapped two independent " +
-			"roots; the overlap comparison in every other case is vacuous")
+	if pyOverlapping == 0 {
+		t.Fatal("no case in the corpus makes CPython's own scheduler " +
+			"overlap two milestones; every overlap comparison in " +
+			"TestTheMilestoneDAGMatchesCPythons is then " +
+			"\"nothing == nothing\", which a sequential port passes")
 	}
-	got := goDAG(t, spec)
-	if len(got.Overlaps) == 0 {
-		t.Fatal("the Go scheduler ran two independent roots sequentially — " +
-			"it produces the same mission and buys none of the concurrency " +
-			"the DAG exists for")
+	if goOverlapping == 0 {
+		t.Fatal("the Go scheduler never overlapped anything across the " +
+			"whole corpus — it produces the same missions and buys none " +
+			"of the concurrency the DAG exists for")
 	}
+	t.Logf("cases observing overlap: py=%d go=%d of %d",
+		pyOverlapping, goOverlapping, len(dagCorpus()))
 }

@@ -101,7 +101,18 @@ func pyValidate(t *testing.T, spec validateSpec, reply string) validateResult {
 	return r
 }
 
-func TestValidateMilestoneMatchesCPython(t *testing.T) {
+type validateCase struct {
+	name  string
+	spec  validateSpec
+	reply string
+}
+
+// validateCorpus is hoisted out of the test so the anti-vacuity guard
+// below can READ it. It used to be an inline literal and the guard drove
+// its own private five-reply list, so it could not notice the corpus
+// losing its only false-verdict case — the single thing it exists to
+// catch (adversarial mission-r1 HIGH).
+func validateCorpus() []validateCase {
 	sum := func(s string) *string { return &s }
 	type feat = struct {
 		Title   string  `json:"title"`
@@ -119,11 +130,7 @@ func TestValidateMilestoneMatchesCPython(t *testing.T) {
 		},
 	}
 
-	for _, tc := range []struct {
-		name  string
-		spec  validateSpec
-		reply string
-	}{
+	return []validateCase{
 		{"an explicit pass", base, `{"passed": true, "reason": "ok"}`},
 		{"an explicit fail", base, `{"passed": false, "reason": "no"}`},
 
@@ -138,6 +145,22 @@ func TestValidateMilestoneMatchesCPython(t *testing.T) {
 		{"a non-empty list is truthy", base, `{"passed": [0]}`},
 		{"an empty dict is falsy", base, `{"passed": {}}`},
 		{"a non-empty dict is truthy", base, `{"passed": {"a":1}}`},
+
+		// The non-finite family, which Go's decoder rejects outright and
+		// CPython's accepts. Rejection defaults to PASS at the
+		// unparseable exit, so `NaN` alone cannot discriminate — the
+		// zero and the string cases below are what separate "parsed and
+		// truthy" from "did not parse".
+		{"NaN is truthy and passes", base, `{"passed": NaN}`},
+		{"Infinity is truthy and passes", base, `{"passed": Infinity}`},
+		{"-Infinity is truthy and passes", base, `{"passed": -Infinity}`},
+		{"an overflowing literal is truthy and passes", base,
+			`{"passed": 1e309}`},
+		{"a document with NaN ELSEWHERE still reads passed", base,
+			`{"passed": false, "score": NaN}`},
+		{"a document with Infinity elsewhere still reads passed", base,
+			`{"passed": 0, "score": [Infinity]}`},
+		{"the STRING NaN is not a float", base, `{"passed": "NaN"}`},
 
 		// The four default-to-pass exits.
 		{"an absent passed key defaults to true", base, `{"reason": "shrug"}`},
@@ -178,7 +201,11 @@ func TestValidateMilestoneMatchesCPython(t *testing.T) {
 		{"no features at all", validateSpec{
 			Title: "T", Criteria: []string{"c"}, Features: []feat{}},
 			`{"passed": true}`},
-	} {
+	}
+}
+
+func TestValidateMilestoneMatchesCPython(t *testing.T) {
+	for _, tc := range validateCorpus() {
 		t.Run(tc.name, func(t *testing.T) {
 			want := pyValidate(t, tc.spec, tc.reply)
 
@@ -242,18 +269,12 @@ func TestValidateMilestoneMatchesCPython(t *testing.T) {
 // FALSE verdict would pass against a ValidateMilestone that is `return
 // true`.
 func TestTheValidationCorpusProducesBothVerdicts(t *testing.T) {
-	spec := validateSpec{Title: "T", Criteria: []string{"c"},
-		Features: []struct {
-			Title   string  `json:"title"`
-			Status  string  `json:"status"`
-			Summary *string `json:"summary"`
-		}{{Title: "f", Status: "done"}}}
+	// The REAL corpus, not a private reply list. The private list could
+	// not see the corpus losing its false-verdict cases, which is the only
+	// failure this guard exists to catch.
 	passes, fails := 0, 0
-	for _, reply := range []string{
-		`{"passed": true}`, `{"passed": false}`, `{"passed": ""}`,
-		`{"passed": "false"}`, `{}`,
-	} {
-		if pyValidate(t, spec, reply).Passed {
+	for _, tc := range validateCorpus() {
+		if pyValidate(t, tc.spec, tc.reply).Passed {
 			passes++
 		} else {
 			fails++

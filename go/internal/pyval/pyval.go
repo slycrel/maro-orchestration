@@ -283,11 +283,29 @@ func encodeString(s string, ea bool) (string, error) {
 // stored `1.0` does not come back `1` and a counter does not come back
 // `42.0`.
 func LoadsOrdered(text string) (any, error) {
-	dec := json.NewDecoder(strings.NewReader(text))
+	// CPython's json.loads accepts the bare tokens NaN, Infinity and
+	// -Infinity by default; Go's decoder rejects them, and the rejection
+	// kills the ENTIRE document rather than one field. One stray
+	// non-finite float anywhere in a model reply — including in a key
+	// nobody reads — turned the model's plan into the two-phase heuristic
+	// on the Go side only (adversarial mission-r1 MEDIUM).
+	maskedA, found := maskNonFinite(text, nonFiniteMarkerA)
+
+	dec := json.NewDecoder(strings.NewReader(maskedA))
 	dec.UseNumber()
 	v, err := decodeOrdered(dec)
 	if err != nil {
 		return nil, err
+	}
+	if found {
+		maskedB, _ := maskNonFinite(text, nonFiniteMarkerB)
+		decB := json.NewDecoder(strings.NewReader(maskedB))
+		decB.UseNumber()
+		vb, errB := decodeOrdered(decB)
+		if errB != nil {
+			return nil, errB
+		}
+		v = unmaskPaired(v, vb)
 	}
 	// Refuse trailing content the way json.loads does — `{}{}` is an
 	// error there, and accepting it would let a torn write parse.
@@ -426,4 +444,152 @@ func NowISO(t time.Time) string {
 		return t.Format("2006-01-02T15:04:05-07:00")
 	}
 	return t.Format("2006-01-02T15:04:05.000000-07:00")
+}
+
+// Non-finite literals: CPython's json.loads accepts the bare tokens NaN,
+// Infinity and -Infinity, and Go's decoder does not.
+//
+// The masking pass replaces those tokens — only where they appear OUTSIDE
+// a string literal, so a milestone titled "NaN" is untouched — with a
+// sentinel string the decoder accepts, then a walk over the decoded tree
+// turns the sentinels back into json.Number values whose Float64 is the
+// right non-finite. json.Number("NaN").Float64() is ParseFloat("NaN"),
+// which succeeds, so Repr renders "nan"/"inf"/"-inf" the way Python does.
+//
+// The markers are ORDINARY JSON-safe text, and there are two of them.
+//
+// The first attempt used a NUL-prefixed sentinel, which Go's decoder
+// rejects inside a string literal ("invalid character '\x00' in string
+// literal") — so the masking never worked at all, and no test noticed
+// because none covered a non-finite token. The second attempt lengthened
+// a single sentinel until it did not occur in the raw text, which misses
+// the spelling that matters: a string can encode the marker with \uXXXX
+// escapes, so the DECODED value carries it even though the raw text does
+// not.
+//
+// Two markers of the SAME LENGTH settle it exactly. The document is
+// decoded twice, once masked with each; a string that came from the input
+// decodes identically both times, and a string this package substituted
+// differs in exactly the marker. So the pair of trees names the masked
+// positions with no guessing and no collision, at the cost of one extra
+// decode on the rare document that contains a bare non-finite token.
+const (
+	nonFiniteMarkerA = "__pyval_nonfiniteA__"
+	nonFiniteMarkerB = "__pyval_nonfiniteB__"
+)
+
+// maskNonFinite rewrites bare non-finite tokens with marker + the token,
+// leaving anything inside a string literal alone, and reports whether it
+// changed anything.
+func maskNonFinite(text, marker string) (masked string, found bool) {
+	// Cheap reject: none of the three tokens can appear without an
+	// uppercase N or I somewhere.
+	if !strings.ContainsAny(text, "NI") {
+		return text, false
+	}
+
+	var b strings.Builder
+	b.Grow(len(text))
+	inString, escaped := false, false
+	for i := 0; i < len(text); {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '"' {
+			inString = true
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		// EQUIVALENT-MUTANT NOTE: this list used to be ordered "longest
+		// first" under a comment claiming that otherwise "the leading
+		// minus would be emitted and the token read as positive". That
+		// is false, and the mutant which swaps the first two entries
+		// survives: the scan reaches the '-' byte first, and
+		// HasPrefix("-Infinity...", "Infinity") is false there, so both
+		// orders match -Infinity at the same index. The order is kept
+		// for readability, not for correctness.
+		matched := ""
+		for _, tok := range [...]string{"-Infinity", "Infinity", "NaN"} {
+			if strings.HasPrefix(text[i:], tok) {
+				matched = tok
+				break
+			}
+		}
+		if matched == "" {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		b.WriteString(`"` + marker + matched + `"`)
+		i += len(matched)
+		found = true
+	}
+	return b.String(), found
+}
+
+// unmaskPaired walks the two decodes together and turns the positions
+// where they DIFFER — which are exactly the ones this package
+// substituted — back into the json.Number literals CPython would have
+// produced. json.Number("NaN").Float64() is ParseFloat("NaN"), which
+// succeeds, so Repr renders "nan"/"inf"/"-inf" the way Python does.
+func unmaskPaired(a, b any) any {
+	switch ta := a.(type) {
+	case string:
+		tb, ok := b.(string)
+		// EQUIVALENT-MUTANT NOTE: the `ta == tb` half is a fast path,
+		// not a correctness requirement, and its mutant survives. A
+		// string carrying BOTH markers is impossible — they differ at
+		// one byte in the same position — so the marker-B check below
+		// already rejects everything this line rejects. It stays because
+		// it is the invariant in one line: agreement means the value
+		// came from the input.
+		if !ok || ta == tb {
+			return a
+		}
+		restA, okA := strings.CutPrefix(ta, nonFiniteMarkerA)
+		restB, okB := strings.CutPrefix(tb, nonFiniteMarkerB)
+		if !okA || !okB || restA != restB {
+			return a
+		}
+		switch restA {
+		case "NaN":
+			return json.Number("NaN")
+		case "Infinity":
+			return json.Number("Inf")
+		case "-Infinity":
+			return json.Number("-Inf")
+		}
+		return a
+	case List:
+		tb, ok := b.(List)
+		if !ok || len(tb) != len(ta) {
+			return a
+		}
+		for i := range ta {
+			ta[i] = unmaskPaired(ta[i], tb[i])
+		}
+		return ta
+	case Obj:
+		tb, ok := b.(Obj)
+		if !ok || len(tb) != len(ta) {
+			return a
+		}
+		for i := range ta {
+			ta[i].Val = unmaskPaired(ta[i].Val, tb[i].Val)
+		}
+		return ta
+	}
+	return a
 }

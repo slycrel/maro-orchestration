@@ -4619,3 +4619,334 @@ document never exercises what that base cannot produce. r10's is narrower
 and sharper: **a corpus that only ever enters through a helper cannot see
 what the file boundary does.** The CR was in the fixtures the whole time,
 one call-level below where it mattered.
+
+---
+
+## Adversarial mission-r1 — the mission planning slice, whole (opus tier)
+
+The first review of the mission slice (`internal/orch/mission_plan.go`,
+`mission_dag.go`, and the `internal/jsonx` + `internal/pyval` layer they
+sit on). **12 findings — 2 HIGH, 8 MEDIUM, 2 LOW.** All twelve verified
+against CPython before any fix; **none was hallucinated**, which is a
+first for this port and worth recording next to the standing ~30–50%
+rate.
+
+Two of the twelve were fixed by *deleting a hardening*. That is the
+round's headline.
+
+### HIGH — a brace inside a model-supplied string forked the mission
+
+`llm_parse._find_json_bounds` (`src/llm_parse.py:68-85`) is a naive depth
+counter with **no knowledge of string literals**. Go's `carve` tracked
+quotes and escapes. On the same model reply:
+
+```
+{"passed": false, "reason": "the } thing is broken"}
+  CPython -> bounds end at the } INSIDE the string -> unparseable
+             -> extract_json returns its default -> _validate_milestone PASSES
+  Go (old) -> carves the whole object -> passed=false -> milestone FAILS
+```
+
+One reply, one shared `~/.maro/workspace/`, two different `mission.json`
+files. Decompose forked the same way: heuristic two-phase plan on one
+side, the model's real plan on the other.
+
+The fix was to make `carve` a transcription — *worse* code, by any
+standalone reading. The package doc now carries a REJECTED HARDENING
+block saying why: **a hardening that changes which record gets written to
+a shared store is not a hardening, it is a fork.** If the naive scan is
+ever to be fixed it has to be fixed in the Python first.
+
+Writing the CPython differential for `carve` (`internal/jsonx/carve_diff_test.go`)
+then immediately caught a **second** divergence the finding had not
+named, in the replacement I had just written. Python scans from index 0
+and lets its own `depth == 0` bookkeeping choose the start; jumping
+straight to the first `open` byte is not the same thing, because a stray
+CLOSE ahead of the payload drives `depth` negative and CPython then finds
+**no bounds at all**:
+
+```
+x } y {"b":2} z    CPython -> (-1, -1)      IndexByte start -> {"b":2}
+```
+
+I had shipped that with a comment asserting the two were equivalent. The
+differential is the only reason it did not become the third fork in the
+same function.
+
+### HIGH — three anti-vacuity guards that could not fail
+
+`TestTheDecomposeCorpusReachesEveryOutcome` opened with *"The corpus above
+is only worth its runtime if it reaches every outcome"* and then walked its
+own private four-payload list. Proof: deleting the three raising fixtures
+**and** the entire `ErrMalformedPlan` branch from `sliceForFeatures` /
+`criteriaOf` left the suite green. The same shape held for
+`TestTheValidationCorpusProducesBothVerdicts` and
+`TestTheDAGCorpusActuallyObservesConcurrency`.
+
+All three corpora are now package-level vars (or funcs) that the guard and
+the differential both read. This is r10's lesson in a second spelling: the
+guard was not lying about the *code*, it was lying about the *corpus*.
+
+### The MEDIUMs
+
+- **`t[:n]` with a negative `n` panicked** where Python's `[:-1]` drops the
+  last element — on an exported function whose bounds are plain `int`s.
+  Now every caller-supplied bound goes through `pySliceLen`. My first fix
+  floored a negative `n` at 0, which traded the panic for the *mirror*
+  divergence; re-reading `safe_list` (`llm_parse.py:238-240`) caught it.
+- **`maxMilestones <= 0` returned the model's whole plan.** The early
+  `break` on `len(out) == n` could never fire with `n == 0` (the counter
+  starts at 1), where Python's `[:0]` yields nothing and falls to the
+  heuristic. `safe_list` also filters the WHOLE list before slicing; the
+  features list four lines away in the same Python does the opposite.
+  Both orders are now reproduced verbatim.
+- **The DAG mutex protected nothing and its stated `-race` proof was
+  wrong.** `markCrashed` is the only holder and only ever runs on the
+  scheduler's goroutine; deleting the mutex outright left `-race` green.
+  Meanwhile the race the comment claimed to close — `PersistFn` walking
+  milestones whose bodies are still being written — was never covered,
+  because `runOne` never took the lock. Replaced with a NAMED RESIDUAL
+  that closes in slice 3, where `run_mission` owns the real persist.
+- **`json.loads("1e309")` is `inf`.** `json.Number.Float64()` returns
+  `+Inf` *and* a range error, and the code read the error as
+  "unrenderable" and echoed the source literal. A 3000-document `Str`/`Repr`
+  fuzz found 46 mismatches, **all** of this one family.
+- **Bare `NaN` / `Infinity` killed the whole document** in Go and parse
+  fine in CPython — one stray non-finite anywhere in the reply, including
+  a key nobody reads, turned the model's plan into the heuristic on the Go
+  side only.
+- **`str(x).strip()` was pinned at one of three sites.** The code was
+  correct; the corpus held a padded milestone *title* and no padded
+  criterion and no padded feature title.
+- **`IsChainShaped` overloaded `""` as "no predecessor"** where Python
+  uses `None`, and `LoadMission` accepts `"id": ""`. The two runtimes then
+  chose *different execution lanes* — sequential vs DAG — for the same file.
+- **The durable stall warning spelled a list Go's way.** `log.warning("...
+  deps=%s", ms.depends_on)` prints `['m1']`; `%v` on a `[]string` prints
+  `[m1]`. `WarnFn` is documented as the durable evidence channel and the
+  test harness passed neither `LogFn` nor `WarnFn`, so the whole message
+  surface was unverified.
+- **The `[true]` `depends_on` fixture could not discriminate.** With
+  `[true]` on the milestone at raw index 2, rejecting `true` chains to the
+  predecessor B and wrongly accepting it as `1` also lands on B. Moved to
+  raw index 3, where the two answers differ.
+
+### The LOWs
+
+- `DecomposeMission` guarded a nil adapter and fell through to the
+  heuristic; Python has no such guard and lets the `AttributeError`
+  propagate (`except ImportError` does not catch it). Now `ErrNoAdapter`,
+  pinned by its own CPython differential.
+- Two comments in one test type disagreed about the barrier timeout the
+  fixture's entire discrimination depends on.
+
+### What r1 checked and found clean
+
+1500 randomized payloads through real CPython `decompose_mission`, 600
+fuzzed `_validate_milestone` cases (verdict *and* byte-exact prompt), 250
+random DAG shapes under `-race`, a 3000-document `Str`/`Repr`/`Truthy`
+fuzz, both system prompts and request envelopes byte-compared, and all
+four `t.Skip` hatches confirmed to fire only on a missing interpreter.
+**0 divergences** outside the findings above.
+
+### The lesson this round adds
+
+**A hardening is a divergence.** Every one of this port's earlier rounds
+treated "Go is stricter than Python here" as a win worth a comment. Two of
+this round's findings — the string-aware carve and the nil-adapter guard —
+were exactly that, written proudly, and both changed which bytes reach a
+store the Python runtime also reads. Lessons are data; so are missions.
+The rule that follows is in PORT.md.
+
+### The battery on r1's own fixes: 19 survivors out of 57
+
+The mutation battery was derived from the FILES after the fixes landed,
+not from the diff, and the first run killed 34 of 57. **Nineteen
+survived**, and the distribution is the story: almost every survivor was a
+mutant of code r1's fixes had *just added*.
+
+- **Four bounds mutants** — `pySliceLen` flooring a negative `n` at zero,
+  letting `size+n` go negative, the list arm skipping the clamp, and the
+  old never-fires early break in `safe_list`. Every one of the 38 corpus
+  payloads drove `maxMilestones=4, maxFeatures=3`, so the whole corpus
+  asked the two bounds exactly one question: *is a positive, roomy cap
+  applied?* The fix for a bounds bug had no bounds coverage. An 18-case
+  sweep across `0`, `-1`, `-2`, `-9`, `99` on both caps, plus the string
+  and multi-byte arms, closes it.
+- **Six scheduler-surface mutants** — the durable warning deleted, the
+  mid-flight persist deleted, `deps=` rendered Go's way, the stall lane
+  re-entering the loop, and both worker-count defaults. `goDAG` passed
+  neither `LogFn` nor `WarnFn` nor `PersistFn`, so three of the
+  scheduler's five outputs were invisible to a differential that
+  advertised itself as covering it.
+- **Two sentinel-collision mutants** — `IsChainShaped`'s `first` flag and
+  its two-dependency check. Every existing pin reached it through
+  `DecomposeMission`, whose ids come from a generator and are never blank,
+  so the very collision r1 found could not be seen from there.
+- **Two numbering mutants** — a dict `validation_criteria` (the corpus had
+  none) and a `depends_on` index resolved against the kept list instead of
+  the raw one. The existing "ref to a DROPPED milestone" case cannot see
+  the second: raw 0 is the dropped milestone, so a correct lookup and a
+  kept-list lookup both end up chaining to the same predecessor.
+
+### The masking that never worked
+
+Two survivors — "bare NaN/Infinity are no longer masked" and "the
+sentinel-already-present refusal is dropped" — turned out to share one
+cause. The mask r1's fix inserted was `"\x00__pyval_nonfinite_NaN"`, and
+Go's decoder rejects a raw NUL inside a string literal. **The fix was
+inert.** Deleting it changed nothing because it had never done anything,
+and no test covered a non-finite token, so it shipped green.
+
+Replacing the NUL with ordinary text raises the collision question the
+original sentinel tried to answer by refusing: a document can spell the
+marker with `\uXXXX` escapes, so the DECODED string carries it while the
+raw text does not — which the refusal check would have missed anyway.
+
+The scheme that settles it exactly: **two markers of the same length, two
+decodes.** A string that came from the input decodes identically both
+times; a string this package substituted differs in exactly the marker. So
+the pair of trees names the masked positions with no guessing and no
+residual, at the cost of one extra decode on the rare document that
+contains a bare non-finite token.
+
+And one more layer down: `reprNumber` sent `json.Number("NaN")` into its
+INTEGER arm, because "NaN" contains no `.`, `e` or `E`. It printed `NaN`
+where CPython prints `nan`. Three defects stacked in one value's path, all
+under a green suite.
+
+### The lesson the battery adds
+
+r10's was *a corpus that only ever enters through a helper cannot see what
+the file boundary does*. This one is its sibling, and it is about fixes
+rather than code:
+
+**A fix arrives with no coverage by construction — the corpus that missed
+the bug is the corpus the fix inherits.** Nine of nineteen survivors were
+mutants of lines written *in this round*, in the exact dimension the
+finding was about: a bounds fix with no bounds sweep, a sentinel fix
+reachable only through a generator that cannot produce the sentinel, a log
+fix on a channel the harness never connected. Reviewing the fix is not the
+same as covering it, and the mutation battery is what tells them apart.
+
+### The three survivors that stayed
+
+The second battery — 66 mutants, respelled where the compiler had killed
+them — ends at **62 killed, 3 survivors, all three genuinely equivalent
+and now labelled as such in the source:**
+
+- `safe_list`'s early `break` is redundant once the slice always applies.
+  It was only ever wrong when it was the ONLY bound.
+- `nil` versus an empty slice out of `safeListOfObjects` is unobservable:
+  the one caller ranges over the result.
+- The token list's "longest first" ordering — and this one is a *finding*,
+  not just an equivalence. The comment claimed that otherwise "the leading
+  minus would be emitted and the token read as positive". That is false:
+  the scan reaches the `-` byte first, and `HasPrefix("-Infinity…",
+  "Infinity")` is false there, so both orders match `-Infinity` at the
+  same index. A comment asserting a cause the code does not have, in the
+  same round whose lesson is about exactly that.
+
+A fourth survivor from the first battery, `unmaskPaired`'s `ta == tb`
+fast path, is equivalent for a structural reason worth stating: a string
+carrying BOTH markers is impossible, since they differ at one byte in the
+same position, so the marker-B check already rejects everything that line
+rejects.
+
+### And the harness caught itself
+
+Running the suite under `-race` after the fixes turned up a flake the
+comparison had been getting away with: `a crash marks one milestone and
+the mission continues` reported `go [[A B] [A C]] py []` under `-race`
+and agreed without it. Neither answer is wrong — the case has `Barrier: 1`,
+so nothing blocks, and whether two ready milestones sit in `run_one` at
+the same instant is pure timing. CPython's GIL makes it rare for a body
+that short; Go's goroutines make it likely; `-race` shifts the odds again.
+
+Overlap is now compared only when a barrier forces the question, and the
+two cases whose non-overlap is *structural* — a chain, and the stall lane
+— carry a barrier so the claim stays an assertion rather than an accident.
+
+### A postscript the fixture earned
+
+Re-running a subset of the battery afterwards came back **BASELINE IS
+RED**: `duplicate milestone ids still terminate` hung for the full
+ten-minute panic timeout. The cause was not the port. An earlier battery
+run had been killed by a wrapper timeout while a mutant was applied, and
+Python's default `SIGTERM` handler terminates the process without running
+`finally` — so the `continue`-instead-of-`return` mutant was left sitting
+in `mission_dag.go`. Three green full-suite runs and a `-race` run had
+already passed over it.
+
+They passed because the duplicate-ids fixture was the *only* case that
+could tell `continue` from `return`, and it was added in this same pass —
+for exactly that mutant. Without it the tree would have been committed
+with a live infinite loop in the scheduler's stall lane.
+
+Two things follow. The battery now installs a signal handler so an
+interrupted run restores the originals. And the general form: **a mutation
+harness edits production files, so its failure modes are production
+failure modes.** A battery that dies badly is not a lost test run, it is
+an uncommitted defect.
+
+### The finding r1 waved through, and the rule that caught it
+
+Reviewing the production diff before landing, one of r1's own findings
+turned out to be half-closed. The HIGH about `carve`'s string-literal
+tracking named `internal/jsonx` as having *two* Go-only behaviours; the
+fix addressed one and treated the other — `extract` scanning for a
+```json fence anywhere in the reply — as already-documented and
+deliberate. It was documented. In a comment written in the round that
+introduced it.
+
+The rule that round produced ("a hardening is a divergence") says
+plainly that it is a fork, and it is a wider one than the HIGH it rode
+in with: **ten non-test files call this package**, and every one of them
+writes what it parses into the shared workspace. Measured against
+CPython 3.14.3:
+
+```
+'See the docs [here](url) for context.\n```json\n["step one", "step two"]\n```'
+  strip_markdown_fences -> unchanged (the fence is not the whole message)
+  extract_json(list)    -> []            Go -> ["step one","step two"]
+
+'Prose with {a} inline.\n```json\n{"real":1}\n```'
+  extract_json(dict)    -> {}            Go -> {"real":1}
+```
+
+`extract` is now `carve(stripMarkdownFences(stripThinkBlocks(text)))` and
+`stripMarkdownFences` is a transcription of `_FENCE_RE.match`, anchored
+at both ends. `fence_diff_test.go` pins 22 cases against CPython as
+**exact strings** rather than parsed values — three of them (a digit in
+the language tag, a two-fence document, a think block ahead of a fence)
+diverge in ways the JSON decode would have hidden — with a second column
+comparing `strip(think(x))` so the verb ORDER is pinned too.
+
+The generalizable part is not the fix. It is that a doc comment asserting
+a divergence is safe is a *claim*, and it needs the same measurement as
+the code it sits above. "Already documented" is not "already decided".
+
+### The one test that changed sides
+
+`TestStringArrayStrayBracketBeforeFence` asserted the Go-only answer, so
+the fix turned it red — as it should have. Its sibling
+`TestStringArrayFencedWithProse` stayed green through the whole change,
+and that is the more interesting one: prose on both sides, but no bracket
+in the prose, so both runtimes reach the same list by different routes.
+It passed before the fix and after it and proved nothing either time.
+**The case that hides a fork is the case where the two runtimes agree
+accidentally.** It is now in the corpus labelled as exactly that, one
+character away from the variant where they split.
+
+### A flake, correctly diagnosed as a flake
+
+The full suite then failed on `the DEFAULT worker count admits an
+overlap` (`go: [] py: [[A B]]`) — a DAG case the jsonx change cannot
+touch. It passed 6/6 in isolation, which is the signature of load and
+not of a port defect: the harness's `threading.Barrier(timeout=1)` guard
+fired because the second runner took over a second to be *scheduled*, not
+because it was never admitted. The timeout is now a single Go constant
+threaded to the Python probe through the spec JSON so the two cannot
+drift, and it is 4s. Worth naming because the tempting read — "the port
+does not really run milestones concurrently" — would have sent the next
+hour somewhere useless.

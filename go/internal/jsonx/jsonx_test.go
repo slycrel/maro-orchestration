@@ -17,6 +17,10 @@ func TestStringArrayFencedWithProse(t *testing.T) {
 	}
 }
 
+// A BALANCED bracket pair inside a string is carved identically by the
+// naive scan and by a quote-aware one — which is precisely why the old
+// quote-tracking carve looked correct for months. The unbalanced case,
+// where the two disagree, is pinned against CPython in carve_diff_test.go.
 func TestStringArrayBracketInsideStringDoesNotEndCarve(t *testing.T) {
 	got, err := StringArray(`["use x[0] to index", "done"]`)
 	if err != nil || len(got) != 2 || got[0] != "use x[0] to index" {
@@ -50,7 +54,7 @@ func TestStringArrayUnbalancedErrors(t *testing.T) {
 }
 
 func TestObjectFenced(t *testing.T) {
-	got, err := Object("```json\n{\"on_course\": true, \"note\": \"has } inside\"}\n```")
+	got, err := Object("```json\n{\"on_course\": true, \"note\": \"all clear\"}\n```")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +63,38 @@ func TestObjectFenced(t *testing.T) {
 	}
 }
 
+// This case used to live inside TestObjectFenced asserting the OPPOSITE —
+// that the object parsed — which is a behaviour CPython does not have.
+// _find_json_bounds is blind to string literals, so the `}` inside the
+// value ends the span, json.loads raises, and extract_json returns its
+// default. The port must fail here too; the alternative is that the same
+// model reply writes `on_course: true` in Go and nothing in Python.
+// See the REJECTED HARDENING note at the top of jsonx.go.
+func TestObjectWithAnUnbalancedBraceInAStringFailsAsPythonDoes(t *testing.T) {
+	if _, err := Object("```json\n{\"on_course\": true, \"note\": \"has } inside\"}\n```"); err == nil {
+		t.Fatal("the object parsed; CPython's bounds end inside the string")
+	}
+}
+
 // A stray bracket in prose ahead of the fenced answer must not misdirect
 // the carve (adversarial round 2026-08-22; the Python sibling shares the
 // no-fence weakness, so the fence path is where Go can be strictly better).
-func TestStringArrayStrayBracketBeforeFence(t *testing.T) {
+// A stray bracket in prose ahead of a fence WINS, because
+// strip_markdown_fences only unwraps a fence that is the whole message
+// and this one is not. Go used to hunt for the fence and return
+// ["step one", "step two"]; CPython returns the [] default. Measured
+// 2026-08-23, and the fork is pinned as a corpus case in
+// fence_diff_test.go -- this test names the consequence at the surface.
+//
+// This is not the behaviour anyone wants. It is the behaviour the store
+// is shaped by, and it belongs to llm_parse.strip_markdown_fences to fix
+// for both runtimes at once. See the second rejected hardening in
+// jsonx.go.
+func TestStringArrayStrayBracketBeforeFenceLosesTheFenceAsPythonDoes(t *testing.T) {
 	text := "See the docs [here](url) for context.\n```json\n[\"step one\", \"step two\"]\n```"
 	got, err := StringArray(text)
-	if err != nil || len(got) != 2 || got[0] != "step one" {
-		t.Fatalf("got %v err %v", got, err)
+	if err == nil {
+		t.Fatalf("expected the carve to grab [here] and fail to parse; got %v", got)
 	}
 }
 

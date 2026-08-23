@@ -3,19 +3,55 @@
 // their JSON; the parser's job is to find the payload without ever
 // guessing content that isn't there.
 //
-// Two hardenings ride ahead of the bracket search (adversarial round
-// 2026-08-22):
-//   - <think>...</think> reasoning traces are stripped first, porting
-//     llm_parse.strip_think_blocks — the trace routinely contains
-//     hypothetical example JSON the bracket search would grab.
-//   - Fenced code blocks are tried before the raw text, so a stray
-//     bracket in prose ("see [here](url)") ahead of a ```json fence
-//     cannot misdirect the carve.
+// The pipeline is llm_parse.extract_json's, verb for verb:
+// strip_think_blocks, then strip_markdown_fences, then the bracket
+// search. <think>...</think> traces go first because they routinely
+// contain hypothetical example JSON the bracket search would grab.
 //
-// Honest residual, shared with the Python sibling (llm_parse
-// ._find_json_bounds): with NO fence present, the first balanced bracket
-// in the text wins — prose containing an incidental well-formed bracket
-// pair before the real payload returns the wrong span on both runtimes.
+// Honest residual, shared with the Python sibling: the fence strip only
+// fires when the fence is the WHOLE message, and with prose either side
+// of it the first balanced bracket in the text wins — so "see the docs
+// [here](url)" ahead of a ```json fence returns the wrong span. On both
+// runtimes. That is worth fixing; it is not worth fixing HERE, alone.
+//
+// TWO REJECTED HARDENINGS, and the reason is the whole doctrine of this
+// port (adversarial mission-r1 HIGH).
+//
+// The first: carve used to track string literals, so a brace inside a
+// quoted value could not end the span. Python's depth counter does NOT,
+// and the comment above claimed the residual was "shared" when the two
+// had in fact diverged. Measured, on the same model reply:
+//
+//	{"passed": false, "reason": "the } thing is broken"}
+//	  CPython -> bounds end at the } INSIDE the string -> unparseable
+//	             -> _validate_milestone defaults to PASS
+//	  Go (old) -> carves the whole object -> passes=false -> FAIL
+//
+// The same input produced a passed milestone under one runtime and a
+// failed one under the other, both persisted to the same mission.json;
+// decompose forked the same way, heuristic vs the model's real plan. A
+// hardening that changes which record gets written to a shared store is
+// not a hardening, it is a fork. Parity wins; if the naive scan is ever
+// to be fixed it has to be fixed on BOTH sides, in the Python first.
+//
+// The second, found by applying that rule to the rest of this file:
+// extract used to try each fenced block BEFORE the raw text, so a stray
+// bracket in prose could not misdirect the carve. Python's
+// strip_markdown_fences only strips a fence that is the ENTIRE stripped
+// message (_FENCE_RE.match), and does nothing at all when prose
+// surrounds it. Measured 2026-08-23:
+//
+//	See the docs [here](url) for context.
+//	```json
+//	["step one", "step two"]
+//	```
+//	  CPython -> no fence stripped -> carve hits [here] -> [] (the default)
+//	  Go (old) -> reads the fence -> ["step one", "step two"]
+//
+// Ten production callers reach this function and every one of them writes
+// what it parses into the shared workspace. The better behaviour belongs
+// in llm_parse.strip_markdown_fences, where both runtimes inherit it;
+// until then this matches. Pinned case-by-case in fence_diff_test.go.
 package jsonx
 
 import (
@@ -24,6 +60,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -69,7 +107,12 @@ var (
 	// so the caller's error/default is the fail-safe direction.
 	thinkRe     = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think\s*>`)
 	thinkOpenRe = regexp.MustCompile(`(?i)<think\b[^>]*>`)
-	fenceRe     = regexp.MustCompile("(?s)```[a-zA-Z]*[ \t]*\n(.*?)```")
+	// llm_parse._FENCE_RE verbatim: r"^```[a-zA-Z]*\n?(.*?)\n?```$" with
+	// DOTALL, applied with .match() — so it fires only when the fence is
+	// the whole (stripped) message. Python's `$` also matches before a
+	// trailing newline where Go's does not, which cannot separate them
+	// here: the subject is stripped first, so it never ends in one.
+	fenceRe = regexp.MustCompile("(?s)^```[a-zA-Z]*\n?(.*?)\n?```$")
 )
 
 func stripThinkBlocks(text string) string {
@@ -80,54 +123,69 @@ func stripThinkBlocks(text string) string {
 	return strings.TrimSpace(cleaned)
 }
 
-// extract strips reasoning traces, then tries each fenced code block in
-// order before falling back to the whole text.
-func extract(text string, open, close byte) (string, error) {
-	text = stripThinkBlocks(text)
-	for _, m := range fenceRe.FindAllStringSubmatch(text, -1) {
-		if payload, err := carve(m[1], open, close); err == nil {
-			return payload, nil
-		}
+// stripMarkdownFences is llm_parse.strip_markdown_fences: unwrap a fence
+// that is the ENTIRE message, and otherwise leave the text alone.
+func stripMarkdownFences(text string) string {
+	stripped := pytext.Strip(text)
+	if m := fenceRe.FindStringSubmatch(stripped); m != nil {
+		return pytext.Strip(m[1])
 	}
-	return carve(text, open, close)
+	return stripped
 }
 
-// carve returns the substring from the first `open` to its matching
-// `close`, respecting JSON string literals and escapes — a bracket
-// inside a quoted step ("use x[0]") must not end the carve, which is
-// why this isn't a first-index/last-index slice.
+// extract is extract_json's preamble: strip traces, unwrap a whole-message
+// fence, carve. See the second rejected hardening at the top of this file
+// for why it does not go looking for fences inside prose.
+func extract(text string, open, close byte) (string, error) {
+	return carve(stripMarkdownFences(stripThinkBlocks(text)), open, close)
+}
+
+// carve returns the substring from the first `open` to the `close` that
+// returns the depth counter to zero — a TRANSCRIPTION of Python's
+// llm_parse._find_json_bounds, deliberately including its blindness to
+// string literals.
+//
+// Do not "fix" this by tracking quotes. It used to, and the divergence it
+// caused is written up at the top of this file: a brace inside a quoted
+// value ends the span in Python and did not in Go, so the two runtimes
+// wrote different missions from the same model reply. A BALANCED bracket
+// pair inside a string ("use x[0] to index") is carved identically by
+// both algorithms, which is why the difference hid for so long — only an
+// UNBALANCED one separates them.
+//
+// The ONE remaining difference from Python is the failure spelling:
+// _find_json_bounds returns (-1, -1) where this returns an error, and
+// every caller treats the two the same (default / fall through).
+//
+// The scan starts at index 0 and lets `depth == 0` pick the start, which
+// is NOT the same as jumping to the first `open`: a stray CLOSE ahead of
+// the payload drives depth negative and Python then finds no bounds at
+// all. `x } y {"b":2} z` is (-1, -1) in CPython; an IndexByte start
+// carves `{"b":2}` out of it. That is exactly the mismatched-mission fork
+// described above, in a second spelling, and it lived in this function
+// under a comment asserting the two were equivalent (adversarial
+// mission-r1 follow-up, caught by the CPython differential).
 func carve(text string, open, close byte) (string, error) {
-	start := strings.IndexByte(text, open)
-	if start < 0 {
-		return "", fmt.Errorf("no %q found in output", string(open))
-	}
 	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(text); i++ {
-		c := text[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
+	start := -1
+	sawOpen := false
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
 		case open:
+			sawOpen = true
+			if depth == 0 {
+				start = i
+			}
 			depth++
 		case close:
 			depth--
-			if depth == 0 {
+			if depth == 0 && start >= 0 {
 				return text[start : i+1], nil
 			}
 		}
+	}
+	if !sawOpen {
+		return "", fmt.Errorf("no %q found in output", string(open))
 	}
 	return "", fmt.Errorf("unbalanced %q...%q in output", string(open), string(close))
 }
