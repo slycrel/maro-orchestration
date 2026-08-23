@@ -1288,6 +1288,52 @@ each inside the prior fix — the flagship pattern is unbroken and the regex-sha
 detector is visibly at its brittleness limit; if r14/r15 keep surfacing anchor/
 encoding gaps, the spec-grounded parse (deferred at r10) should be reconsidered.
 
+**r14 adversarial round (2026-08-22, opus-5 medium fallback) — the decisive
+self-regression round.** Every finding lived inside r13's OWN fix. The flagship
+"HIGH is inside the previous fix" pattern held, but for the first time the
+previous fix was mine (one round old), and r13 closed three gaps while opening
+three:
+
+1. **HIGH — r13's whole-string `%2f/%5c/%3a` decode was a false-ALLOW
+   regression.** WHATWG percent-decodes only INSIDE the host, after literal
+   `/\?#` delimit the authority — never whole-string. Decoding `%2f/%5c` whole-
+   string invents an authority terminator, so a raw-flagged exfil
+   (`https://r.jina.ai%2f@evil-collector.com/…`) normalized to a false-ALLOW.
+   FIX: revert to `%2e`-only decode (a host-internal dot-encode that can't move
+   the authority boundary). Standing invariant added: **normalization must be
+   ADDITIVE — never clear a shape the raw text flags.**
+2. **HIGH — r13's own anchor widening was out of lockstep with urlHostAllowed.**
+   The host-check already terminated on `\` and stripped a `:port`, but the r13
+   anchor (`\.?[/?#]`) covered neither. `evil-collector.com\leak` and
+   `evil-collector.com:8080/leak` scanned clean. FIX: anchor →
+   `\.?(:[0-9]{1,5})?[/\\?#][^\s]{5,}`.
+3. **HIGH (safety-pin disabled) — r13's oversized-authority `break` silently
+   made the 13-round r9 linearity pin VACUOUS.** The old fixture
+   `strings.Repeat("https:", 200000)` is exactly the oversized-unresolvable
+   shape → short-circuits after ONE iteration, so the r9 quadratic mutant PASSED
+   it. FIX: surviving fixture `strings.Repeat("https:x/", 150000)` (every
+   candidate carries an in-window `/`, so all iterations run and the mutant
+   blows the 10s ceiling); old blob repinned for its SECURITY behavior; the
+   false in-code "pins only the timing" comment corrected.
+
+Trade accepted: the proxy-nested encoded launder r13 chased is REOPENED as
+**candidate #15** (`TestURLExfilProxyNestedEncodedKnownGap`) — the decode that
+caught it was the source of HIGH #1, so documenting the narrow gap beats a
+whole-string substitution that breaks the common case. Four compiling mutants
+verified (regression decode; anchor-`\`; anchor-`:port`; quadratic-per-
+candidate), each failing on its exact intended pin; full suite green (22 pkgs).
+**Fixpoint clock RESETS again: r15 is the first of two new consecutive clean
+rounds.**
+
+**STRATEGIC FORK (raised to Jeremy, not decided here).** Four consecutive opus
+rounds found real HIGHs (r12 ×2, r13 ×1, r14 ×2), and r14's were all self-
+inflicted by r13. The hand-rolled shape-regex + string-substitution approach is
+now generating defects as fast as it closes them, and both lenses (twice)
+recommend the spec-grounded authority parse deferred at r10. The current state
+is CORRECT and stronger than r12 — but the next move is an architecture decision
+(keep patching the heuristic vs. port a real WHATWG-ish authority parse), and
+that is Jeremy's call.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

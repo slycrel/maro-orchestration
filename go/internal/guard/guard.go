@@ -98,17 +98,21 @@ var exfilPatterns = []*regexp.Regexp{
 // review; Python's {3,50} bound has the SAME blind spot — backport #11. The
 // residual >512-byte-userinfo case is a documented known-gap, since resolving
 // it needs an unbounded authority scan = the O(n²) the cap exists to prevent.)
-// The payload anchor is a DELIMITER `[/?#]` (optionally after a trailing FQDN
-// dot `\.?`), not a bare `/` (r13 opus review): a real client terminates the
-// authority on `?` and `#` too, so `https://evil.com?data=SECRET` (query) and
-// `https://evil.com#data=SECRET` (fragment) — the canonical exfil carriers —
-// and `https://evil.com./leak` (root-anchored FQDN) all fetch to a non-
-// allowlisted host but scanned CLEAN under the old `.tld/` anchor. Requiring
-// 5+ payload bytes after the delimiter keeps bare `https://github.com[/]`
-// clean. (Reach the shape does NOT cover — IP-literal hosts, TLDs outside
-// com/io/net, ≤2-char labels, <5-byte payloads — is a documented heuristic
-// limit shared with Python, pinned by TestURLExfilHeuristicReachKnownGap.)
-var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)\.?[/?#][^\s]{5,}`)
+// The payload anchor is the authority-terminator set `[/\\?#]` (r13: `?`/`#`
+// carriers + r14: backslash), optionally after a trailing FQDN dot `\.?` and
+// an explicit `:port`, NOT a bare `/`. It must stay in LOCKSTEP with
+// urlHostAllowed's terminator set `"/\\?#"` and its `:port` strip — otherwise a
+// client terminates the authority somewhere the shape can't, and a non-
+// allowlisted `.com` host scans clean: `evil.com?data=` (query), `evil.com#…`
+// (fragment), `evil.com./leak` (root-anchored FQDN), `evil.com\leak`
+// (backslash, which WHATWG normalizes to `/`), `evil.com:8080/leak` (port) all
+// fetch to an attacker but were CLEAN under a narrower anchor (r13/r14 opus).
+// Requiring 5+ payload bytes keeps bare `https://github.com[/]` clean. (Reach
+// the shape does NOT cover — IP-literal hosts, TLDs outside com/io/net,
+// ≤2-char labels, <5-byte payloads, and the fully-encoded proxy-nested scheme
+// — is a documented heuristic limit, pinned by
+// TestURLExfilHeuristicReachKnownGap.)
+var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)\.?(:[0-9]{1,5})?[/\\?#][^\s]{5,}`)
 
 // schemeRe locates every URL scheme occurrence (slash count irrelevant —
 // the shape and host parser handle the slashes). Python's re.search scans
@@ -126,21 +130,28 @@ var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
 // slicing (whole-string, not per-candidate — doing it after the byte cap left
 // a starvation hole, r8):
 //   - remove ASCII tab/CR/LF (they can't hide inside a hostname);
-//   - percent-decode the STRUCTURAL delimiters `%2e`→`.`, `%2f`→`/`,
-//     `%5c`→`\`, `%3a`→`:` (r13 opus review). A WHATWG client percent-decodes
-//     these before host/scheme parsing, so without this an attacker hid the
-//     TLD dot (`evil-collector%2Ecom/leak` → clean) or laundered a nested
-//     scheme past the r2 per-scheme scan (`r.jina.ai/https%3A%2F%2Fevil.com`
-//     → only the allowlisted outer scheme was seen). Decoding is safe-
-//     direction: it only ever reveals MORE structure (more scheme positions,
-//     a real host boundary), and urlHostAllowed's exact match still protects
-//     allowlisted hosts. Hex letters are case-insensitive, digits fixed.
+//   - percent-decode the host dot `%2e`→`.` (r13). WHATWG percent-decodes the
+//     HOST component, so `evil-collector%2Ecom/leak` resolves to
+//     `evil-collector.com` — decoding the dot lets the shape see the TLD.
+//
+// IMPORTANT (r14 opus review — a regression r13 introduced and this reverts):
+// do NOT decode the authority DELIMITERS `%2f`/`%5c`/`%3a` here. WHATWG
+// delimits the authority by scanning for a LITERAL `/ \ ? #`; percent-
+// sequences are opaque there and are only decoded INSIDE the host, after the
+// authority boundary is fixed. Decoding them whole-string INVENTS an authority
+// terminator no client honors, which moved urlHostAllowed's boundary strictly
+// earlier — toward the allowlisted prefix — turning
+// `https://r.jina.ai%2f@evil-collector.com/leak` into a false-ALLOW (we read
+// `r.jina.ai`; a client fetches `evil-collector.com`). `%2e` is the only
+// safe decode (host-internal, and it can only make a host MORE specific under
+// exact match, never collapse a non-allowlisted host into an allowlisted one).
+// Consequence: a nested scheme laundered through the allowlisted proxy in
+// FULLY-encoded form (`r.jina.ai/https%3A%2F%2Fevil.com`) is now a documented
+// known-gap (candidate #14), not caught — the correct place to close it is the
+// spec-grounded authority parse, not another whole-string decode.
 var urlNormalizer = strings.NewReplacer(
 	"\t", "", "\r", "", "\n", "",
 	"%2e", ".", "%2E", ".",
-	"%2f", "/", "%2F", "/",
-	"%5c", "\\", "%5C", "\\",
-	"%3a", ":", "%3A", ":",
 )
 
 // urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
@@ -332,8 +343,12 @@ func ScanContent(content, source string) ScanReport {
 		// bounded data (one IndexAny over the window), NOT the unbounded scan
 		// the earlier rationale wrongly claimed was required. It also flags a
 		// pathological scheme-only/giant-token blob (`https:`×N) — a safe over-
-		// flag on input no real suggestion carries; TestURLScanStaysLinear
-		// pins only the timing, which is unaffected.
+		// flag on input no real suggestion carries; TestURLOversizedAuthority-
+		// ShortCircuits pins that. Note the `break`: this path terminates the
+		// scan on the first oversized candidate, so it is NOT a valid linearity
+		// fixture — TestURLScanStaysLinear must use a blob whose candidates each
+		// hold an in-window `/` so this branch never fires and all iterations
+		// run (r14: the old `https:`×N linearity fixture went vacuous here).
 		if truncated && strings.IndexAny(cand[skip:], "/\\?#") < 0 {
 			findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
 			blocked = append(blocked, "oversized-unresolvable-authority")

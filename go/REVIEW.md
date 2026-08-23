@@ -2748,3 +2748,71 @@ Full suite green (22 packages), gofmt/vet clean. Four new pins mutation-verified
 (M115–M118). **Fixpoint clock RESETS — r14 is the first of two new consecutive
 clean rounds. Meta: opus found a real HIGH three rounds running; if the anchor/
 encoding gaps keep coming, reconsider the spec-grounded parse deferred at r10.**
+
+## r14 review (2026-08-22, skeptic+qa) — TIER ESCALATION, self-regression round
+
+### Verdict: REJECT — TWO HIGH + one disabled-pin (SAME-MODEL FALLBACK: opus-5 medium). Verification Ledger:
+
+**The decisive round: every finding this round lived inside r13's OWN fix.**
+r13 closed the anchor/encoding gaps but its three mechanisms each introduced a
+new defect. The flagship "each round's HIGH is inside the previous fix" pattern
+held — but this time the previous fix was mine, one round old.
+
+- **HIGH — VERIFIED — r13 whole-string %2f/%5c/%3a decode is a false-ALLOW
+  regression.** r13 added `%2f→/ %5c→\ %3a→:` to urlNormalizer to catch the
+  proxy-nested encoded launder. But WHATWG percent-decodes ONLY inside the host
+  component, AFTER literal `/\?#` delimit the authority — never whole-string.
+  Decoding `%2f/%5c` whole-string INVENTS an authority terminator: trace (post-
+  r13, pre-fix) `https://r.jina.ai%2f@evil-collector.com/leak` normalizes to
+  `https://r.jina.ai/@evil-collector.com/leak`, whose authority now terminates
+  at the injected `/` → urlHostAllowed reads `r.jina.ai` → ALLOW. A real exfil
+  the RAW text flags became clean after "hardening". FIX: revert to `%2e`-only
+  decode (a host-internal dot-encode that cannot move the authority boundary).
+  Invariant added: normalization must be ADDITIVE — never clear a shape the raw
+  text flags. Mutant (re-add %2f/%5c decode) fails the two new `%2f@`/`%5c@`
+  pins in TestURLExfilAuthorityBypassesFlagged.
+
+- **HIGH — VERIFIED — r13's own anchor widening was incomplete (missing `\`
+  and `:port`).** r13 widened the payload anchor to `\.?[/?#]` but
+  urlHostAllowed already terminated the authority on `\` too and stripped a
+  `:port`. So the anchor and the host-check were out of lockstep: trace (pre-
+  fix, IsClean==true) `https://evil-collector.com\leak-data-here` (backslash
+  terminator) and `https://evil-collector.com:8080/leak-data-here` (port before
+  path). FIX: anchor → `\.(com|io|net)\.?(:[0-9]{1,5})?[/\\?#][^\s]{5,}`.
+  Mutants (drop `\` from the class; drop the `:port` group) each fail on exactly
+  the backslash / port pin. Allowlisted `\`- and `:port`-reached controls added
+  to mustPass and stay clean.
+
+- **HIGH (safety-pin disabled) — VERIFIED — r13's oversized-authority branch
+  silently made the 13-round r9 linearity pin VACUOUS.** The r13 branch flags a
+  candidate that is truncated (>512) with no in-window `/\?#` and `break`s the
+  scan. The original linearity fixture `strings.Repeat("https:", 200000)` is
+  exactly that shape → it now short-circuits after ONE iteration, so the loop
+  never runs enough times to expose a quadratic per-iteration cost. Proof: the
+  r9 quadratic mutant (`strings.ToLower(cand)` per candidate) PASSED the old
+  fixture. FIX: new surviving fixture `strings.Repeat("https:x/", 150000)` —
+  every candidate carries an in-window `/` so the oversized branch never fires,
+  all ~150k iterations run; the r9 mutant now blows the 10s ceiling (verified,
+  FAIL @ 10.01s). The old blob is repinned for its SECURITY behavior as
+  TestURLOversizedAuthorityShortCircuits. The false in-code comment ("pins only
+  the timing, which is unaffected") corrected.
+
+- **MEDIUM→DOCUMENTED — proxy-nested encoded launder REOPENED as known-gap
+  #14.** The shape r13 tried to catch (`https://r.jina.ai/https%3A%2F%2Fevil-
+  collector.com/…`) scans CLEAN again after the safe %2e-only revert. This is
+  the correct trade: the decode that caught it was the source of the HIGH #1
+  regression. Documented in TestURLExfilProxyNestedEncodedKnownGap + PORT.md
+  #14; closing it correctly needs the deferred spec-grounded authority parse.
+
+Full suite green (22 packages), build clean. Four compiling mutants verified
+(regression decode; anchor-`\`; anchor-`:port`; quadratic-per-candidate), each
+failing on its exact intended pin. **Fixpoint clock RESETS AGAIN — r15 is the
+first of two new consecutive clean rounds.**
+
+**META — strategic signal, surfaced to Jeremy.** Four consecutive opus rounds
+found real HIGHs (r12 ×2, r13 ×1, r14 ×2), and r14's were all self-inflicted by
+r13's fixes — the hand-rolled shape-regex + string-substitution approach is now
+generating defects as fast as it closes them. Both lenses (again) recommend the
+spec-grounded authority parse deferred at r10. The current state is CORRECT and
+stronger than r12, but this is a genuine architecture fork, not another patch —
+raised to Jeremy as a decision, not decided unilaterally.
