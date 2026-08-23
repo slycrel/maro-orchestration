@@ -2929,3 +2929,78 @@ same character — so the two spellings carry the same string VALUE and only
 the bytes differ. A consumer that hashes this output rather than parsing it
 sees two keys. A test asserts the direction and FAILS if the skew ever
 closes, so the note cannot rot silently.
+
+---
+
+## The playbook (`internal/playbook`)
+
+`src/playbook.py`'s append half — `append_to_playbook`, `inject_playbook`,
+`expire_stale_alarms`, `_archive`, the seed, and the parsing verbs the
+three share. `curate_playbook` (the LLM compression path) is not ported
+yet; the file it writes is the same file, so the two halves must agree
+about its shape before that lands.
+
+**The playbook is not a log — it is a document both runtimes rewrite in
+place.** Every other store in this port appends; this one reads the whole
+markdown file, edits it, and writes it back atomically. That inverts where
+the risk sits. An append that drifts by a byte writes one odd row. A
+rewrite that drifts by a byte rewrites the operator's whole document, and
+the next process to read it — in either language — sees the drift as
+content.
+
+Five hazards were measured before any Go was written, and each one is now
+pinned by a whole-file differential against CPython rather than by a
+unit test over the Go side alone:
+
+**1. The patterns are Python regexes, and Go reads them as a different
+language.** `_ALARM_RE` and the attribution pattern both use `\s` and
+`\d`. Go's `regexp` reads `\s` as five code points and `\d` as ten;
+Python's `re` reads them as 29 and 760 on this box. Transcribing the
+patterns character-for-character compiles and passes every ASCII test.
+`internal/pytext.SpaceClass`, `DigitClass`, and `NotClass` carry the
+measured spellings, and the patterns here are built from them — there is
+no literal `\s` in this package.
+
+**2. The dedup key casefolds, and `casefold` is not `lower`.**
+`entryCore` strips the attribution suffix and casefolds; two entries with
+the same core are the same entry. `strings.ToLower` differs from CPython's
+`str.casefold()` on 297 code points, 103 of which expand past one rune —
+so a German or Greek entry would dedup in one runtime and duplicate in the
+other. `internal/pytext.CaseFold` is a measured table, swept against
+CPython at every code point.
+
+**3. Clipping is by code point, not byte.** Python's `s[:n]` counts
+characters. `s[:n]` in Go counts bytes and can split a rune in half. The
+budget arithmetic in `Inject` is the same shape, so the divergence only
+appears where a multi-byte character straddles the boundary — which no
+hand-picked budget reliably hits. The differential sweeps 137 budgets.
+
+**4. `str.split()` splits on 29 code points; `strings.Fields` on 25.**
+The four that differ are U+001C..U+001F, which arrive through pasted
+terminal output more often than their obscurity suggests. `collapseSpace`
+uses the measured set.
+
+**5. The alarm marker's spacing is part of a key.** `_ALARM_RE` requires
+`\s+@` before the date. An alarm written without that space never matches
+its own key lookup — **in either runtime** — so alarms accrete beside each
+other forever instead of being replaced in place. The first Go spelling
+had exactly that defect (`key+"@"+date`), it passed every unit test, and
+the whole-file differential is what caught it. This is the port's recurring
+bug family in its purest form: correct logic, one wrong character, in a
+string that turns out to be a key.
+
+### On the harness
+
+The differential compares the two runtimes' finished files byte for byte,
+which means it must tolerate the two runs straddling midnight. The first
+version of that allowance normalized *every* date to a placeholder — and
+so it also swallowed a mutant that stopped refreshing the `Last updated`
+stamp entirely, reporting a SKIP where the defect was exactly a wrong
+date. The escape hatch now only excuses a today-vs-yesterday difference.
+
+That was the second time this chunk that a green test was hiding rather
+than proving something, and both were found the same way: mutate the
+production code and watch for red. An 11-mutant battery over the append
+path kills all 11 as of this commit; the corpus additions that killed A6
+and A11 were both *fixtures the base document could not produce*, not
+finer assertions.
