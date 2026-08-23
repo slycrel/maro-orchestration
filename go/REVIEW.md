@@ -2816,3 +2816,38 @@ generating defects as fast as it closes them. Both lenses (again) recommend the
 spec-grounded authority parse deferred at r10. The current state is CORRECT and
 stronger than r12, but this is a genuine architecture fork, not another patch —
 raised to Jeremy as a decision, not decided unilaterally.
+
+## Guard slice — r15 (2026-08-22): the fork decided — spec-grounded parse
+
+Jeremy chose the parser (and issued the seams-strict/internals-free decree —
+see PORT.md r15). `internal/guard/urlscan.go` replaces the shape-regex +
+hand-rolled authority parser with github.com/nlnwa/whatwg-url v0.6.2 (WPT-
+conformant). Policy unchanged; the r10–r14 corpus (all 17 tests) passed the
+swapped internals on the FIRST run — the accumulated fixtures did exactly the
+acceptance-contract job the review arc built them for. Diffs from r14:
+
+- **Known-gap #15 CLOSED** (encoded proxy-nested launder): bounded
+  decode-and-rescan, additive by construction — runs only after the outer
+  candidate parses to an allowlisted host with its authority untouched, so
+  the r13/r14 whole-string-decode false-ALLOW class is unreachable. Pin
+  flipped to TestURLExfilProxyNestedEncodedFlagged (incl. double-encoded +
+  negative controls).
+- **New reach the regex could never have**: IDNA/UTS-46 host mapping
+  (`evil-collector。com`, fullwidth `ｃｏｍ`) — TestURLExfilIDNMappedDotFlagged.
+  Python's regex misses these: the Go file is now the backport REFERENCE, not
+  a parity port.
+- **Unparseable-truncated fail-closed** pinned both directions
+  (TestURLUnparseableTruncatedFailsClosed).
+- **Perf**: parse costs ~65µs/candidate vs ~1µs for the regex; a provably-
+  additive prefilter (urlCandidateNeedsParse — soundness argument in its
+  comment; non-ASCII or percent-bearing candidates ALWAYS parse) keeps the
+  linearity blob at 0.26s where parse-everything consumed the full 10s
+  ceiling on this box.
+- Candidate #13 MOOT (its regex is deleted); #14 reach limits STAND (now a
+  one-line POLICY decision, no longer a parser project).
+
+Mutations M97–M102 all DETECTED (prefilter-always-skip, nested-decode-off,
+stem-floor-0, no-FQDN-trim, unparseable-fail-open, payload-floor-0), file
+restored byte-identical after each. Full suite green (22 packages), guard
+race-clean. Adversarial re-review of the swap = the next round; fixpoint
+clock unchanged (r15 is a rewrite, not a clean round).

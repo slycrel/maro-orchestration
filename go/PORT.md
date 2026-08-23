@@ -1334,6 +1334,52 @@ is CORRECT and stronger than r12 — but the next move is an architecture decisi
 (keep patching the heuristic vs. port a real WHATWG-ish authority parse), and
 that is Jeremy's call.
 
+**r15 — FORK DECIDED 2026-08-22: spec-grounded parse via a conformant
+library.** Jeremy's call, with a decree-class correction on port philosophy
+that now governs the remaining tranches: **seams-strict, internals-free.**
+Data parity (shared ledgers, pack digests, import/export) is the contract —
+"at the end, not along the way"; internals need not mirror Python's
+implementation, and refactoring during the port is explicitly welcome.
+Interface over strict equivalent types. (His same-session observation, recorded
+for the maro roadmap: the port revealed that much of the "portable learning"
+is reified as CODE — thresholds, gates, fix-history invariants — not data,
+which is why lessons are being ported instead of imported.)
+
+The swap: `internal/guard/urlscan.go` replaces the r10–r14 shape-regex +
+hand-rolled authority parser with **github.com/nlnwa/whatwg-url v0.6.2**
+(pure Go, passes web-platform-tests; module deps now yaml.v3 + whatwg-url —
+the swipe-over-deps rule's security-parsing exception, invoked by Jeremy).
+"What host would a real client fetch" is now answered by the fetch
+standard's own algorithm; POLICY stays ours and unchanged (http/https only,
+exact-match allowlist, .com/.io/.net + ≥3-char-stem + 5-byte-payload reach,
+fail-closed on oversized/unparseable-truncated). Kept from the review arc,
+because the corpus proved each is load-bearing: the whole-string tab/CR/LF
+strip (r8), per-scheme candidate loop (r2), skip-then-cap window (r7), and
+the oversized-authority branch (r13). The ENTIRE r10–r14 adversarial corpus
+passed the swapped internals on the first run; the only diff was known-gap
+**#15 flipping CLOSED** — encoded proxy-nested laundering is now caught by a
+bounded decode-and-rescan that is additive by construction (it runs only
+after the outer candidate parses to an allowlisted host with its authority
+untouched, so the r13/r14 whole-string-decode false-ALLOW class is
+unreachable). New coverage the regex could never reach, pinned:
+IDNA/UTS-46 mapped hosts (`evil-collector。com`, fullwidth `ｃｏｍ` —
+`TestURLExfilIDNMappedDotFlagged`; Python's regex misses these, so the Go
+file is now the **backport reference implementation**, not a parity port),
+double-encoded nesting, and the unparseable-truncated fail-closed posture
+(`TestURLUnparseableTruncatedFailsClosed`). Perf: the parser costs ~65µs vs
+~1µs per candidate, so a provably-additive prefilter
+(`urlCandidateNeedsParse` — pure-ASCII/percent-free candidates whose bytes
+cannot contain a reach TLD or allowlisted host skip the parse; soundness
+argument in its comment) keeps the 150k-candidate linearity blob at 0.26s
+(the parse-everything version consumed the pin's full 10s ceiling on this
+box). Mutations **M97–M102** (prefilter-always-skip, nested-decode-off,
+stem-floor, FQDN-trim, unparseable-fail-open, payload-floor) all DETECTED.
+Candidate ledger after the swap: #13 (backtracking-engine follow-up) MOOT —
+the shape regex it referred to is deleted; #14 heuristic-reach limits STAND
+(deliberate policy, reach pin unchanged; widening reach — other TLDs, IP
+literals — is now a one-line policy decision rather than a parser project,
+flagged as such for Jeremy); #15 CLOSED (pin flipped to must-detect).
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +

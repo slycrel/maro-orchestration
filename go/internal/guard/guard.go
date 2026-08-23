@@ -61,98 +61,30 @@ var exfilPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bleak\s+(the\s+)?(credentials?|api\s*keys?|tokens?)\b`),
 }
 
-// exfilURLShape is the URL half without Python's lookahead, ANCHORED so
-// it can be tested at each scheme occurrence (see the scan loop). Matches
-// are re-checked against allowedURLHosts before they count as findings.
-// The scheme tolerates ANY run of leading slashes/backslashes
-// (`https:host/x`, `https:/host/x`, `https://host/x`, `https:///host/x`,
-// `https:/\host/x`, …) because WHATWG special schemes do: after the colon
-// the parser enters the "special authority ignore slashes state", which
-// consumes an UNBOUNDED run of `/` and `\` before the authority. A real
-// client fetches all of them identically, so the run must be `[/\\]*`, not
-// a fixed count. r5 capped it at `/{0,2}`, which SILENTLY un-matched the
-// 3+-slash forms — a parity regression that made Go WEAKER than Python
-// (whose `://`-anchored regex absorbs the extra slashes into its host
-// group and still flags them). r6 restores the unbounded grammar and the
-// Python parity. (Python still misses the 0/1-slash forms — backport
-// candidate #10 stands.) The candidate is 512-byte-bounded before matching
-// and RE2 is linear-time, so the unbounded `*` carries no DoS risk.
-// The host group's first char is [^/\\\s] so the `[/\\]*` prefix consumes
-// the whole slash/backslash run, never leaving one absorbed into the host
-// — otherwise a nested `https://x.com/...` would match with a slash as a
-// host char, defeating the short-inner-host exclusion that keeps the legit
-// r.jina.ai proxy shape clean (r5 regression guard, kept in r6).
-// The host-span upper bound is urlCandidateMax (512), NOT a short ~50 (r12):
-// the span between the first host char and the TLD also covers USERINFO
-// (`user@`, discarded by every client) and long subdomain labels. A ~50 cap
-// let an attacker starve the real registrable host out of the shape's window
-// with free padding — `https://r.jina.ai:tok<23×A>@evil-collector.com/leak`
-// (userinfo) or `https://<60×a>.evil-collector.com/leak` (subdomain) — so the
-// shape missed it and `urlHostAllowed` (which DOES parse userinfo, via the
-// last `@`) was never consulted because of the `||` short-circuit. Widening
-// the MAX to the candidate window lets the shape match the padded span and
-// hand off to urlHostAllowed for the authoritative allowlist decision; the
-// MIN stays {2} so the short-inner-host exclusion (`https://x.com/...` clean)
-// is untouched. RE2's bounded repeat is still linear, and the cand is already
-// capped to skip+512, so the shape can never scan past the window. (r12 opus
-// review; Python's {3,50} bound has the SAME blind spot — backport #11. The
-// residual >512-byte-userinfo case is a documented known-gap, since resolving
-// it needs an unbounded authority scan = the O(n²) the cap exists to prevent.)
-// The payload anchor is the authority-terminator set `[/\\?#]` (r13: `?`/`#`
-// carriers + r14: backslash), optionally after a trailing FQDN dot `\.?` and
-// an explicit `:port`, NOT a bare `/`. It must stay in LOCKSTEP with
-// urlHostAllowed's terminator set `"/\\?#"` and its `:port` strip — otherwise a
-// client terminates the authority somewhere the shape can't, and a non-
-// allowlisted `.com` host scans clean: `evil.com?data=` (query), `evil.com#…`
-// (fragment), `evil.com./leak` (root-anchored FQDN), `evil.com\leak`
-// (backslash, which WHATWG normalizes to `/`), `evil.com:8080/leak` (port) all
-// fetch to an attacker but were CLEAN under a narrower anchor (r13/r14 opus).
-// Requiring 5+ payload bytes keeps bare `https://github.com[/]` clean. (Reach
-// the shape does NOT cover — IP-literal hosts, TLDs outside com/io/net,
-// ≤2-char labels, <5-byte payloads, and the fully-encoded proxy-nested scheme
-// — is a documented heuristic limit, pinned by
-// TestURLExfilHeuristicReachKnownGap.)
-var exfilURLShape = regexp.MustCompile(`(?i)^https?:[/\\]*[^/\\\s][^\s]{2,512}\.(com|io|net)\.?(:[0-9]{1,5})?[/\\?#][^\s]{5,}`)
-
-// schemeRe locates every URL scheme occurrence (slash count irrelevant —
-// the shape and host parser handle the slashes). Python's re.search scans
+// schemeRe locates every URL scheme occurrence. Python's re.search scans
 // ALL start positions, so a nested URL like
 // `https://r.jina.ai/https://evil.com/leak` is flagged on its INNER host
 // even though the outer host is allowlisted; Go's FindAllString returns
 // one leftmost-longest match and would allowlist on the outer host (the
 // r2-review bypass). Testing each scheme position restores the parity.
+//
+// Each candidate's VERDICT comes from the spec-grounded evaluation in
+// urlscan.go (WHATWG parse → true host → allowlist/reach/payload policy).
+// The r10–r14 shape-regex detector this replaces, and the fix history that
+// motivated the replacement, live in go/REVIEW.md.
 var schemeRe = regexp.MustCompile(`(?i)https?:`)
 
-var allowedURLHosts = []string{"r.jina.ai", "api.anthropic.com"}
-
-// urlNormalizer applies the WHATWG preprocessing a real client does before
-// parsing, ONCE over a URL-only copy of the scanned text before per-scheme
-// slicing (whole-string, not per-candidate — doing it after the byte cap left
-// a starvation hole, r8):
-//   - remove ASCII tab/CR/LF (they can't hide inside a hostname);
-//   - percent-decode the host dot `%2e`→`.` (r13). WHATWG percent-decodes the
-//     HOST component, so `evil-collector%2Ecom/leak` resolves to
-//     `evil-collector.com` — decoding the dot lets the shape see the TLD.
-//
-// IMPORTANT (r14 opus review — a regression r13 introduced and this reverts):
-// do NOT decode the authority DELIMITERS `%2f`/`%5c`/`%3a` here. WHATWG
-// delimits the authority by scanning for a LITERAL `/ \ ? #`; percent-
-// sequences are opaque there and are only decoded INSIDE the host, after the
-// authority boundary is fixed. Decoding them whole-string INVENTS an authority
-// terminator no client honors, which moved urlHostAllowed's boundary strictly
-// earlier — toward the allowlisted prefix — turning
-// `https://r.jina.ai%2f@evil-collector.com/leak` into a false-ALLOW (we read
-// `r.jina.ai`; a client fetches `evil-collector.com`). `%2e` is the only
-// safe decode (host-internal, and it can only make a host MORE specific under
-// exact match, never collapse a non-allowlisted host into an allowlisted one).
-// Consequence: a nested scheme laundered through the allowlisted proxy in
-// FULLY-encoded form (`r.jina.ai/https%3A%2F%2Fevil.com`) is now a documented
-// known-gap (candidate #14), not caught — the correct place to close it is the
-// spec-grounded authority parse, not another whole-string decode.
-var urlNormalizer = strings.NewReplacer(
-	"\t", "", "\r", "", "\n", "",
-	"%2e", ".", "%2E", ".",
-)
+// urlNormalizer removes ASCII tab/CR/LF ONCE over a URL-only copy of the
+// scanned text, before per-scheme slicing (whole-string, not
+// per-candidate — doing it after the byte cap left a starvation hole,
+// r8). WHATWG strips these whole-string too, but the strip must happen
+// HERE, before the space-delimit and the byte cap, so a mid-host pad
+// larger than the candidate window (`evil<600×TAB>collector.com`) cannot
+// end the candidate or starve the window before the parser would have
+// glued the host back together. No percent-decoding happens here (the
+// r13/r14 lesson): the parser decodes the host component itself, after
+// literal delimiters fix the authority boundary.
+var urlNormalizer = strings.NewReplacer("\t", "", "\r", "", "\n", "")
 
 // urlCandidateMax bounds per-scheme candidate work (DoS guard), in BYTES
 // — a byte slice is deliberate so a huge candidate is never rune-copied
@@ -355,11 +287,12 @@ func ScanContent(content, source string) ScanReport {
 			hasExfil = true
 			break
 		}
-		if !exfilURLShape.MatchString(cand) || urlHostAllowed(cand) {
+		rule := evalURLCandidate(cand, skip, truncated, nestedDecodeDepth)
+		if rule == "" {
 			continue
 		}
 		findings = append(findings, "exfiltration pattern: "+strconv(clipMatch(cand)))
-		blocked = append(blocked, exfilURLShape.String())
+		blocked = append(blocked, rule)
 		hasExfil = true
 		break
 	}
@@ -381,23 +314,6 @@ func ScanContent(content, source string) ScanReport {
 	}
 }
 
-// urlHostAllowed reports whether the URL's true host is EXACTLY an
-// allowlisted host. It parses the RFC-3986 authority correctly, which
-// closes two bypasses of Python's literal-prefix lookahead
-// `(?!r\.jina\.ai|api\.anthropic\.com)` — both DELIBERATE HARDENING
-// DIVERGENCES, flagged as backport-correction candidates in PORT.md:
-//
-//   - Lookalike domain: `https://r.jina.ai.evil.com/leak` — host merely
-//     STARTS WITH the allowlisted string but is attacker-owned. Exact
-//     match rejects it.
-//   - Userinfo confusion: `https://r.jina.ai:tok@evil.com/leak` — the
-//     real host is `evil.com` (everything before the last '@' in the
-//     authority is userinfo, discarded by every HTTP client). Splitting
-//     on '@' before reading the host rejects it.
-//
-// Exact-match (no subdomain acceptance) is deliberate: it keeps the
-// accept set aligned with Python (whose lookahead also flags subdomains
-// of an allowlisted apex) and still closes the lookalike bypass.
 // asciiLower lowercases ASCII A-Z byte-wise and leaves every other byte
 // (including all bytes >= 0x80) untouched. It deliberately does NOT use
 // strings.ToLower, whose Unicode simple case-folding maps non-ASCII runes
@@ -423,55 +339,6 @@ func asciiLower(s string) string {
 		return s
 	}
 	return string(b)
-}
-
-func urlHostAllowed(url string) bool {
-	rest := url
-	for _, p := range []string{"https:", "http:"} {
-		if strings.HasPrefix(asciiLower(rest), p) {
-			rest = rest[len(p):]
-			break
-		}
-	}
-	// Strip the entire leading run of slashes/backslashes — WHATWG's
-	// "special authority ignore slashes state" consumes an UNBOUNDED run of
-	// `/` and `\` before the authority, so this loop must match exfilURLShape's
-	// `[/\\]*` prefix exactly (r6: an `n < 2` cap here would mis-read the host
-	// of a 3+-slash URL that the widened shape now lets through).
-	for len(rest) > 0 && (rest[0] == '/' || rest[0] == '\\') {
-		rest = rest[1:]
-	}
-	// Authority ends at the first '/', '\', '?', or '#'. Backslash is an
-	// authority terminator for special schemes (http/https) in the WHATWG
-	// URL Standard — a real client fetches `https://evil.com\@host/x` with
-	// host `evil.com` (the '\' ends the authority BEFORE the '@'), so a
-	// parser that split only on '@' would read the trailing host as the
-	// target and wave it through (r4 review; Python's prefix-check happens
-	// to flag this because the real host sits right after the scheme).
-	authority := rest
-	if i := strings.IndexAny(authority, "/\\?#"); i >= 0 {
-		authority = authority[:i]
-	}
-	// Strip userinfo: everything up to and including the LAST '@'.
-	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
-		authority = authority[at+1:]
-	}
-	// Strip an optional :port. ASCII-only fold (see asciiLower) — a Unicode
-	// fold here would let an IDN homoglyph collapse into the allowlist.
-	host := asciiLower(authority)
-	if i := strings.IndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	// Strip a single trailing FQDN dot: `api.anthropic.com.` is the same host
-	// as `api.anthropic.com` to every client (r13 — the shape now matches the
-	// root-anchored form, so this keeps the allowlisted variant clearing).
-	host = strings.TrimSuffix(host, ".")
-	for _, h := range allowedURLHosts {
-		if host == h {
-			return true
-		}
-	}
-	return false
 }
 
 // strconv mirrors Python's %r finding rendering closely enough for the
