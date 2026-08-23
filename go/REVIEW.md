@@ -3352,3 +3352,85 @@ Python uses `mkstemp`, so two concurrent UNLOCKED writers to one path
 could rename a partial file. Every current caller holds the store lock.
 Not touched while `record` was under review; it belongs to whichever
 round opens that file next.
+
+### r4 — whole chunk, adversarial (2026-08-23)
+
+Fourth round over the same chunk (`internal/skills`, `internal/record`,
+`internal/pyjson`, `internal/pytext`) plus the r3 fixes, per the
+standing whole-chunk rule. Method was execution in both runtimes over
+the same seeded stores, from a copy of the tree — 90 randomized
+cross-runtime lifecycle drives, a 13-row captain's-log comparison
+against live Python, provenance sidecars byte-for-byte, `pyRound` at
+204,001 values, and a concurrency sweep at 18 lock sites.
+
+**Verdict: 1 HIGH, 2 MED, 6 LOW.** All nine verified against both
+sources before anything was touched; **all nine confirmed, none
+hallucinated** — r4, like r3, executed each claim rather than reading it.
+The ~30–50% hallucination rate applies to rounds that reason from
+source; it does not apply to a round that runs the code.
+
+The store surface itself is converged: 90 randomized drives produced
+zero divergence in any of the three JSONL stores. Every finding below is
+something a store diff cannot see — a missing emitter, a missing sidecar
+file, or bytes Python tolerates and Go does not.
+
+| # | Fix |
+|---|-----|
+| H1 | `pyjson.Ordered` now emits a key named twice in `modeled` ONCE, at its first position. `StampOutcomeVerdict` appends the verdict keys onto the row's on-disk key list, which already names them on any row carrying a prior verdict — so the row grew ~2× per stamp (497 → 886 → 1729 bytes) until Go's own `LoadsClean`, which refuses duplicate names by design, could no longer read what Go had written. Python's `json.loads` silently keeps the last value, which is what made it invisible from that side. Fixed in the renderer, not the call site: a dict cannot hold a key twice, so no caller should be able to ask for it. |
+| M2 | `INPUT_MISMATCH` had no Go twin, and `UpdateSkillUtility` could not receive the input it needs. Added `record.ClassifyInputType` (Python's `\w`/`\s` are Unicode; Go's are ASCII, and the URL scan's terminator set decides the URL COUNT the classifier thresholds on) and `skills.logInputMismatch`, wired through a new `stepText` argument. Python's guard is (just opened) ∧ (failed) ∧ (had step text) ∧ (vocabulary disagrees with input). |
+| M3 | A Go promotion never wrote the `SKILL.md` workspace overlay Python's loader reads. Added `ExportSkillAsMarkdown` + `Slugify` + `pyPercent0`, called from `MaybeAutoPromoteSkills` after the lock is released. The divergence was permanent by construction: the promotion sweep only considers `provisional` skills, so Python would never create the missing file later. |
+| L1 | `VariantOf` — a `*string`, and the one string field missing from the writer's clean-text enumeration — now rides in it. `pyjson.Value` has no `*string` case, so it fell through to `encoding/json`, which launders invalid UTF-8 to U+FFFD and writes the row where Python refuses it. |
+| L2 | New `record.NewFileMode`/`NewDirMode`: new files and directories get `0666 &^ umask` / `0777 &^ umask` like a plain `open()`/`mkdir()`, not a hardcoded `0644`/`0755`. Indistinguishable from correct under umask 022 and silently narrowing under umask 002, which is why it survived this box. The umask is read ONCE and cached — Python's read-back briefly sets the process umask to 0, and Go's runtime is threaded, so that window is a real world-writable-file race here where it is not there. |
+| L3 | The non-finite telemetry check ranges a SLICE in Python's tuple order instead of a map (3 distinct messages over 200 identical calls), and spells the value through `FloatRepr` so `nan`/`inf` read as Python's `repr` rather than Go's `NaN`/`+Inf`. |
+| L4 | A rewrite that empties the pool writes `"\n"`, matching Python's `"\n".join(live) + "\n"`, not `""`. |
+| L5 | New `pyjson.FloatRepr` implements CPython's `float.__repr__` threshold (fixed notation while `-4 < decpt <= 16`) instead of Go's shortest-`'g'`. The old comment justified the gap with "every field emitted through here is a rate or a small counter"; `avg_latency_ms` is milliseconds and crosses 1e6 at a ~16-minute average step. Verified at **103,771 values against CPython, 0 mismatches** — denormals, ±0, MaxFloat64, and every power-of-ten boundary from 1e-320 to 1e308. |
+| L6 | `AtomicWrite` uses `os.CreateTemp` rather than a fixed `path + ".tmp"`, and sets the mode with `Chmod` after create rather than through `OpenFile` (where the umask would narrow a deliberately-widened ledger on every rewrite). The r3 note deferred this claiming every caller holds the store lock; six do not. |
+
+**Pins, and their falsifiers.** The whole suite passed unchanged after the
+fixes were written — again — so nothing pinned any of them. Pins were added
+in `record/r4fixes_test.go` and `skills/r4fixes_test.go`, then a 36-mutant
+battery reverted each fix to the shape r4 found, derived from the FILES
+rather than the diff. **36 killed, 0 survived**, tree restored green.
+
+Four mutants survived the first pass, and all four were worth the round:
+
+- **Two were equivalent under the caller.** `logInputMismatch`'s
+  "circuit was already open" and "this outcome succeeded" guards cannot be
+  reached through `LogCircuitTransition`, whose `Changed()` check already
+  excludes both states. The guards are still the function's contract, so
+  they are now pinned by calling it DIRECTLY rather than through the one
+  caller that happens never to present that input.
+- **One found a false claim in my own code.** `pyPercent0` had been written
+  as a decimal-string shift with a hand-rolled half-even rounder, justified
+  in its own comment by "0.855 * 100 is 85.49999999999999". That was
+  asserted from memory and never measured, and it is FALSE — the product is
+  exactly 85.5. The mutant replacing 60 lines with
+  `FormatFloat(f*100, 'f', 0, 64)` survived because the two are equivalent.
+  Measured before replacing: 201,810 values across [0,1] render identically
+  in Go and CPython, 0 mismatches. The simple form shipped, with the
+  measured basis and its domain in the comment, and the pin was rewritten
+  to test half-to-even against half-away-from-zero — which a re-run
+  mutant confirms it now catches.
+- **One was a real gap.** Nothing pinned `triggers[:8]`; every fixture had
+  two triggers. Now pinned with twelve.
+
+**Cross-runtime differential** (`scratchpad/r4diff/`). Unit pins assert the
+shape this runtime produces; only Python can confirm it is the shape Python
+produces, and neither M2 nor M3 is visible to a store-level diff because
+the stores agree. Both runtimes drive the same seeded skill: the two
+captain's-log rows are **identical** (INPUT_MISMATCH included, field for
+field), and the promoted `SKILL.md` is **byte-identical across 23 lines**.
+The one difference is normalized and NAMED — backport candidate #14, where
+Python reads `old_utility` after applying the EMA — and the harness was
+itself falsified by perturbing each fix and confirming both sections report
+DIFFERS.
+
+Deferred item CLOSED: r3's `AtomicWrite` `mkstemp` note is fixed here (L6),
+along with its false premise about caller locking.
+
+Still deferred, named: `record.AppendRawLine` and `record.Locked` do not
+create their parent directory where Python's `locked_append` does — the
+mission-log caller works around it. It belongs to whichever round opens
+`record`'s append path next.
+
+NEXT: r5 over the whole chunk again.

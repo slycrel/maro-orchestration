@@ -385,9 +385,22 @@ func proveRecordLine(s Skill) (string, map[string]any, error) {
 	if s.Imported == nil {
 		s.Imported = map[string]any{}
 	}
-	for _, v := range []string{s.ID, s.Name, s.Description, s.Tier,
+	// VariantOf is a *string, so it rides here via a deref rather than in
+	// the literal above. It was the ONE string field missing from this
+	// enumeration, and because pyjson.Value has no *string case it fell
+	// through to encoding/json, which launders invalid UTF-8 to U+FFFD and
+	// writes the row — where Python refuses it (adversarial r4, L1). No
+	// in-tree Go writer can populate it with tainted text today, since
+	// every VariantOf originates from a LoadsClean-gated row; the hole is
+	// in an explicitly enumerated safety list, and create_skill_variant,
+	// the writer that WOULD populate it, is next to port.
+	checked := []string{s.ID, s.Name, s.Description, s.Tier,
 		s.CircuitState, s.OptimizationObjective, s.Island, s.Domain,
-		s.Project, s.Origin, s.CreatedAt, s.ContentHash} {
+		s.Project, s.Origin, s.CreatedAt, s.ContentHash}
+	if s.VariantOf != nil {
+		checked = append(checked, *s.VariantOf)
+	}
+	for _, v := range checked {
 		if !isCleanText(v) {
 			return "", nil, fmt.Errorf("skill %s carries byte-tainted text — refusing to write", s.ID)
 		}

@@ -103,7 +103,7 @@ func SaveSkills(ws string, skills []Skill, droppedIDs, updatedIDs IDSet) ([]stri
 		byID[s.ID] = s
 	}
 	path := skillsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return nil, err
 	}
 
@@ -262,14 +262,25 @@ func saveSkillsInLock(path string, skills []Skill, byID map[string]Skill,
 			}
 		}
 
+		// Python writes `"\n".join(live) + "\n"`, so a rewrite that drops
+		// the LAST skill leaves a store holding a single newline, not an
+		// empty file (adversarial r4, L4). Both read back as an empty
+		// pool, but the bytes are what a cross-runtime differential
+		// compares, and a one-byte diff on an empty store is the kind of
+		// thing that gets chased for an hour on the day it appears.
 		var sb strings.Builder
+		wrote := false
 		for _, l := range out {
 			if l == nil {
 				continue // a named write with no live row: the deletion stands
 			}
+			if wrote {
+				sb.WriteByte('\n')
+			}
 			sb.WriteString(*l)
-			sb.WriteByte('\n')
+			wrote = true
 		}
+		sb.WriteByte('\n')
 		if err := record.AtomicWrite(path, []byte(sb.String())); err != nil {
 			return err
 		}

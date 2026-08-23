@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -80,15 +79,8 @@ func Value(v any) (string, error) {
 		// readers admit both spellings, but success_rate is IN Python's
 		// doctor dedup identity, so a Go-written row and a Python-written
 		// row describing the same skill stopped comparing equal and the
-		// dedup quietly stopped collapsing them. Narrow known gap: at
-		// magnitudes where Go's shortest-'g' and Python's repr pick
-		// different exponent thresholds the spellings still differ; every
-		// field emitted through here is a rate or a small counter.
-		out := strconv.FormatFloat(f, 'g', -1, 64)
-		if !strings.ContainsAny(out, ".e") {
-			out += ".0"
-		}
-		return out, nil
+		// dedup quietly stopped collapsing them.
+		return FloatRepr(f), nil
 	}
 	if err := RefuseNonFinite(v); err != nil {
 		return "", err
@@ -198,6 +190,18 @@ func Array(items []map[string]any, modeled []string) (Raw, error) {
 // same way. Unknown keys — an operator's note, a forward-version field —
 // ride AFTER the modeled ones, sorted, so they survive a rewrite
 // deterministically. A modeled key absent from d is skipped.
+//
+// A key named TWICE in `modeled` is emitted ONCE, at its first position.
+// The thing being modeled is a Python dict, and a dict cannot hold a key
+// twice; emitting it twice produces a row that `json.loads` silently
+// collapses but LoadsClean — this port's own admission predicate —
+// refuses outright, so the row strands on the Go side while looking fine
+// on the Python side. That is not hypothetical: StampOutcomeVerdict
+// appends the verdict keys onto the row's on-disk key list, which already
+// names them on any row that carries a prior verdict, and the row doubled
+// in size on every re-stamp until Go could no longer read it
+// (adversarial r4, H1). De-duplicating at the CALLER would have fixed
+// that one site; de-duplicating here is what stops the next one.
 func Ordered(d map[string]any, modeled []string) (string, error) {
 	seen := map[string]bool{}
 	var extras []string
@@ -216,7 +220,14 @@ func Ordered(d map[string]any, modeled []string) (string, error) {
 	// its backing array whenever it has spare capacity, corrupting a shared
 	// key-order literal across concurrent marshals.
 	keys := make([]string, 0, len(modeled)+len(extras))
-	keys = append(keys, modeled...)
+	emitted := make(map[string]bool, len(modeled))
+	for _, k := range modeled {
+		if emitted[k] {
+			continue // first position wins, as a dict's insertion order does
+		}
+		emitted[k] = true
+		keys = append(keys, k)
+	}
 	keys = append(keys, extras...)
 
 	var sb strings.Builder

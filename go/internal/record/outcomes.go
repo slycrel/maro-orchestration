@@ -66,7 +66,7 @@ func LoadOutcomes(workspaceDir string, limit int) ([]map[string]any, error) {
 func LockedRMW(path string, fn func(old string) string) error {
 	// The lock file lives beside the data file — its parent must exist
 	// before Locked can open it (first tick on a fresh workspace).
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), NewDirMode); err != nil {
 		return err
 	}
 	return Locked(path, func() error {
@@ -77,7 +77,7 @@ func LockedRMW(path string, fn func(old string) string) error {
 			return fmt.Errorf("rmw read %s: %w", path, err)
 		}
 		out := fn(old)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), NewDirMode); err != nil {
 			return err
 		}
 		if err := AtomicWrite(path, []byte(out)); err != nil {
@@ -106,16 +106,35 @@ func LockedRMW(path string, fn func(old string) string) error {
 // fsync the directory either, and the failure mode is "the old file is
 // still there", not a corrupt one.
 func AtomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, NewDirMode); err != nil {
 		return err
 	}
-	mode := os.FileMode(0o644)
+	// An existing file keeps its exact mode; a new one gets what a plain
+	// open() would give it. Both are set with Chmod AFTER create rather
+	// than through OpenFile's mode argument, because the kernel applies
+	// the umask to that argument — which would silently narrow an
+	// operator's deliberately-widened 0666 ledger back to 0664 on every
+	// rewrite. Python uses mkstemp + fchmod for exactly this reason.
+	mode := NewFileMode()
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	// A UNIQUE temp name, not path+".tmp". Two concurrent writers of the
+	// same store shared that one name: both opened it O_TRUNC, both wrote,
+	// and whichever renamed second published a file the other had already
+	// truncated under it. The r3 notes deferred this on the grounds that
+	// every caller holds the store lock — six of them do not
+	// (adversarial r4, L6), and the ones that do not are whole-store
+	// rewrites, so what a lost race costs is the whole store.
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp")
 	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return err
 	}
 	if _, err := f.Write(data); err != nil {

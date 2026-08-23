@@ -442,14 +442,25 @@ func RecordSkillOutcome(ws, skillID string, success bool, tel OutcomeTelemetry) 
 	if !isCleanText(skillID) {
 		return nil, fmt.Errorf("skill_id is not encodable text: %q", skillID)
 	}
-	for name, v := range map[string]float64{"cost_usd": tel.CostUSD,
-		"latency_ms": tel.LatencyMS, "confidence": tel.Confidence} {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, fmt.Errorf("%s must be a finite number, got %v", name, v)
+	// A SLICE, not a map: Python checks these three in a fixed tuple order,
+	// so when a caller passes more than one non-finite value it always
+	// names cost_usd first. Ranging a map named a different field on
+	// different runs of the same input — 3 distinct messages over 200
+	// identical calls (adversarial r4, L3) — and this message is returned
+	// to the caller's warning rail, which is durable. `%v` also spelled
+	// the values `NaN`/`+Inf` where Python's `!r` spells `nan`/`inf`.
+	for _, f := range []struct {
+		name string
+		v    float64
+	}{{"cost_usd", tel.CostUSD}, {"latency_ms", tel.LatencyMS},
+		{"confidence", tel.Confidence}} {
+		if math.IsNaN(f.v) || math.IsInf(f.v, 0) {
+			return nil, fmt.Errorf("%s must be a finite number, got %s",
+				f.name, pyjson.FloatRepr(f.v))
 		}
 	}
 	path := skillStatsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return nil, err
 	}
 	var warns []string
@@ -540,7 +551,7 @@ func RecordSkillInjectionOutcomes(ws string, skillIDs []string, goalAchieved boo
 			"id(s) collapsed — one verdict per skill per batch", dup))
 	}
 	path := skillStatsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return nil, err
 	}
 	warns := doorWarns

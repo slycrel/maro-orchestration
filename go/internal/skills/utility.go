@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -48,6 +49,14 @@ type UtilityUpdate struct {
 	// on the floor would make this the one destructive write in the
 	// library that rewrites the store silently.
 	Warnings []string
+	// The inputs to the INPUT_MISMATCH check, carried so the announcement
+	// half can run at the log site rather than the store site. Python does
+	// both inside update_skill_utility; this port splits store from
+	// announcement on purpose (see LogCircuitTransition), and the split is
+	// only honest if the log site has everything it needs to say.
+	StepText        string
+	TriggerPatterns []string
+	Success         bool
 }
 
 // Changed reports whether the circuit state moved — the condition Python
@@ -75,7 +84,13 @@ func (u UtilityUpdate) Changed() bool { return u.CircuitBefore != u.CircuitAfter
 // prior value. The fix is in the reporting only — the stored EMA is
 // identical — but a Python log line claiming an unchanged utility across a
 // circuit trip is misleading evidence, and evidence is the point.
-func UpdateSkillUtility(ws, skillID string, success bool, failureReason string) (UtilityUpdate, error) {
+//
+// stepText is the text the skill was invoked ON. It is what lets the
+// announcement distinguish "this skill is degrading" from "this skill was
+// handed the wrong kind of input"; pass "" when the caller genuinely does
+// not have it, which suppresses the INPUT_MISMATCH check exactly as
+// Python's `and step_text` guard does.
+func UpdateSkillUtility(ws, skillID string, success bool, failureReason, stepText string) (UtilityUpdate, error) {
 	pool := LoadSkills(ws).Skills
 	var target *Skill
 	for i := range pool {
@@ -88,7 +103,9 @@ func UpdateSkillUtility(ws, skillID string, success bool, failureReason string) 
 		return UtilityUpdate{}, nil
 	}
 	up := UtilityUpdate{Found: true, SkillName: target.Name,
-		UtilityBefore: target.UtilityScore, CircuitBefore: target.CircuitState}
+		UtilityBefore: target.UtilityScore, CircuitBefore: target.CircuitState,
+		StepText: stepText, TriggerPatterns: target.TriggerPatterns,
+		Success: success}
 
 	newObs := 0.0
 	if success {
@@ -194,8 +211,64 @@ func LogCircuitTransition(rec *record.Recorder, skillID string, u UtilityUpdate,
 	}
 	// The skill linkage is related_ids, NOT loop_id: filing a subject
 	// linkage as a run id invents a run and loses the linkage.
-	return rec.EventNoted(eventType, u.SkillName, summary, ctx, note, "",
-		[]string{"skill:" + skillID})
+	if err := rec.EventNoted(eventType, u.SkillName, summary, ctx, note, "",
+		[]string{"skill:" + skillID}); err != nil {
+		return err
+	}
+	return logInputMismatch(rec, skillID, u)
+}
+
+// logInputMismatch is the second half of the circuit-open announcement.
+//
+// When a circuit trips and the text the skill was handed contradicts the
+// skill's own trigger vocabulary — a web-fetch skill given plain prose, or
+// a prose skill given a URL — Python says so, with a note reading
+// "Inspector: treat this as INPUT_MISMATCH, not skill degradation." This
+// port opened the circuit and stopped there (adversarial r4, M2), which is
+// r3's pattern 2 again: the DECISION ports faithfully and the
+// ANNOUNCEMENT of it does not. A store-level differential cannot see it,
+// because the stores agree.
+//
+// INPUT_MISMATCH is a SYSTEM-audience event in Python (it is absent from
+// USER_SURFACED_EVENTS), and it has no automated consumer — its whole
+// value is telling a human reading `maro-log` that the trip is a domain
+// mismatch rather than skill rot.
+func logInputMismatch(rec *record.Recorder, skillID string, u UtilityUpdate) error {
+	// Python's guard: the circuit must have just moved INTO open, the
+	// outcome must be a failure, and there must be step text at all.
+	if u.CircuitAfter != "open" || u.CircuitBefore == "open" ||
+		u.Success || u.StepText == "" {
+		return nil
+	}
+	inputType := record.ClassifyInputType(u.StepText)
+	triggerText := pytext.Lower(strings.Join(u.TriggerPatterns, " "))
+	urlSkill := false
+	for _, kw := range []string{"url", "web", "http", "jina", "fetch", "scrape"} {
+		if strings.Contains(triggerText, kw) {
+			urlSkill = true
+			break
+		}
+	}
+	urlInput := inputType == "url"
+	if urlSkill == urlInput {
+		return nil // vocabulary and input agree: an ordinary degradation
+	}
+	expects := "non-url"
+	if urlSkill {
+		expects = "url"
+	}
+	summary := fmt.Sprintf("Skill '%s' expects %s input but received %s. "+
+		"Circuit opened — failures may reflect domain mismatch.",
+		u.SkillName, expects, pytext.Repr(inputType))
+	return rec.EventNoted("INPUT_MISMATCH", u.SkillName, summary,
+		map[string]any{
+			"skill_id":             skillID,
+			"input_type":           inputType,
+			"skill_url_domain":     urlSkill,
+			"consecutive_failures": u.ConsecutiveFails,
+		},
+		"Inspector: treat this as INPUT_MISMATCH, not skill degradation.",
+		"", []string{"skill:" + skillID})
 }
 
 // round3 is Python's round(f, 3).
@@ -469,7 +542,7 @@ func WriteSkillProvenance(ws string, p ProvenanceRecord) error {
 	}
 
 	dir := filepath.Join(ws, "memory", "skill_provenance")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return err
 	}
 	stamp, err := time.Parse("2006-01-02T15:04:05.000000-07:00", p.DecidedAt)

@@ -270,7 +270,7 @@ func TestUpdateSkillUtilityMatchesPythonTrace(t *testing.T) {
 		{true, 0.7425780099999999, "closed", 0, 2},
 	}
 	for i, step := range steps {
-		u, err := UpdateSkillUtility(ws, "a", step.success, "")
+		u, err := UpdateSkillUtility(ws, "a", step.success, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -299,11 +299,11 @@ func TestUpdateSkillUtilityHalfOpenFailureTripsImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, success := range []bool{false, false, false, true} {
-		if _, err := UpdateSkillUtility(ws, "a", success, ""); err != nil {
+		if _, err := UpdateSkillUtility(ws, "a", success, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	u, err := UpdateSkillUtility(ws, "a", false, "")
+	u, err := UpdateSkillUtility(ws, "a", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestUpdateSkillUtilityReportsTheRealPriorValue(t *testing.T) {
 	if err := SaveSkill(ws, &s); err != nil {
 		t.Fatal(err)
 	}
-	u, err := UpdateSkillUtility(ws, "a", false, "")
+	u, err := UpdateSkillUtility(ws, "a", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestUpdateSkillUtilityKeepsFiveNewestFailureNotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, note := range []string{"n1", "n2", "n3", "n4", "n5", "n6"} {
-		if _, err := UpdateSkillUtility(ws, "a", false, note); err != nil {
+		if _, err := UpdateSkillUtility(ws, "a", false, note, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -356,7 +356,7 @@ func TestUpdateSkillUtilityKeepsFiveNewestFailureNotes(t *testing.T) {
 	}
 	// A long reason is clipped to 200 RUNES, not bytes.
 	long := strings.Repeat("é", 300)
-	if _, err := UpdateSkillUtility(ws, "a", false, long); err != nil {
+	if _, err := UpdateSkillUtility(ws, "a", false, long, ""); err != nil {
 		t.Fatal(err)
 	}
 	got = LoadSkills(ws).Skills[0]
@@ -367,7 +367,7 @@ func TestUpdateSkillUtilityKeepsFiveNewestFailureNotes(t *testing.T) {
 
 func TestUpdateSkillUtilityMissingSkillIsNoop(t *testing.T) {
 	ws := t.TempDir()
-	u, err := UpdateSkillUtility(ws, "nope", true, "")
+	u, err := UpdateSkillUtility(ws, "nope", true, "", "")
 	if err != nil || u.Found {
 		t.Fatalf("missing skill must be a silent no-op: %+v %v", u, err)
 	}

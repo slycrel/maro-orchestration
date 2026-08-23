@@ -1,8 +1,11 @@
 package record
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -49,14 +52,124 @@ func TestAtomicWritePreservesAnExistingMode(t *testing.T) {
 	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode became %v", st.Mode().Perm())
 	}
-	// A NEW file gets the default.
-	fresh := filepath.Join(t.TempDir(), "new.jsonl")
+	// A NEW file gets whatever a plain open() would have given it — the
+	// umask-derived mode, not a hardcoded 0644 (adversarial r4, L2). The
+	// expectation is MEASURED against a real open on this host rather than
+	// written as an octal literal: an octal literal is what made the bug,
+	// since 0644 is indistinguishable from correct under umask 022 and
+	// silently narrows a group-shared workspace under umask 002.
+	dir := t.TempDir()
+	probe := filepath.Join(dir, "probe.txt")
+	pf, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf.Close()
+	pst, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := pst.Mode().Perm()
+
+	fresh := filepath.Join(dir, "new.jsonl")
 	if err := AtomicWrite(fresh, []byte("z\n")); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = os.Stat(fresh)
-	if st.Mode().Perm() != 0o644 {
-		t.Fatalf("new file mode: %v", st.Mode().Perm())
+	if st.Mode().Perm() != want {
+		t.Fatalf("new file mode: got %v, want %v (what a plain open gives here)",
+			st.Mode().Perm(), want)
+	}
+	// And a new DIRECTORY the write had to create gets the same treatment.
+	nested := filepath.Join(dir, "sub", "deep.jsonl")
+	if err := AtomicWrite(nested, []byte("q\n")); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := os.Stat(filepath.Join(dir, "sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, wantDir := dst.Mode().Perm(), os.FileMode(0o777&^processUmask()); got != wantDir {
+		t.Fatalf("new dir mode: got %v, want %v", got, wantDir)
+	}
+}
+
+// Two writers of the same store must not share one temp file. They used to
+// share `path + ".tmp"`: both opened it O_TRUNC, both wrote, and whichever
+// renamed second published a file the other had already truncated under it
+// (adversarial r4, L6 — deferred in r3 on the false premise that every
+// caller holds the store lock).
+func TestConcurrentAtomicWritesNeverPublishATornFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.jsonl")
+	const writers = 8
+	payloads := make([][]byte, writers)
+	for i := range payloads {
+		// Long enough that a partial write is detectable, and each
+		// writer's content is uniform so any MIXTURE is provably torn.
+		payloads[i] = []byte(strings.Repeat(string(rune('a'+i)), 40000) + "\n")
+	}
+	var wg sync.WaitGroup
+	// A reader racing the writers: every observation must be exactly one
+	// writer's payload, never a prefix and never a blend.
+	stop := make(chan struct{})
+	bad := make(chan string, 16)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			matched := false
+			for _, p := range payloads {
+				if string(raw) == string(p) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				select {
+				case bad <- fmt.Sprintf("torn read: %d bytes, head %q", len(raw), raw[:min(24, len(raw))]):
+				default:
+				}
+			}
+		}
+	}()
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for r := 0; r < 25; r++ {
+				if err := AtomicWrite(path, payloads[i]); err != nil {
+					select {
+					case bad <- "write failed: " + err.Error():
+					default:
+					}
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(stop)
+	select {
+	case msg := <-bad:
+		t.Fatal(msg)
+	default:
+	}
+	// No temp files stranded beside the store.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Fatalf("stranded temp file: %s", e.Name())
+		}
 	}
 }
 
@@ -68,10 +181,15 @@ func TestAtomicWriteLeavesTheStoreIntactWhenItCannotWrite(t *testing.T) {
 	if err := AtomicWrite(path, []byte("original\n")); err != nil {
 		t.Fatal(err)
 	}
-	// A directory where the temp must go.
-	if err := os.Mkdir(path+".tmp", 0o755); err != nil {
+	// Make the temp uncreatable. This used to plant a DIRECTORY at
+	// `path + ".tmp"`, which stopped injecting anything the moment the
+	// temp name became unique — the injection was coupled to the
+	// implementation it was testing. A read-only parent blocks any temp
+	// name, so the guard survives the next change to how one is picked.
+	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 	if err := AtomicWrite(path, []byte("replacement\n")); err == nil {
 		t.Fatal("the failure must be returned")
 	}

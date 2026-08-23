@@ -591,7 +591,16 @@ func TestRevertStoreWriteFailureReportsUnpersisted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Sabotage the suggestion-store write, not the constraint-store write.
-	tmpBlock := suggestionsPath(ws) + ".tmp"
+	// A DIRECTORY at the store's LOCK path: Locked opens `path + ".lock"`
+	// with O_CREATE|O_WRONLY, which is EISDIR against a directory, so the
+	// suggestions write fails at the door while the constraint store —
+	// a different file with a different lock — is untouched.
+	//
+	// This used to squat `path + ".tmp"`, which stopped injecting anything
+	// the moment AtomicWrite started picking a unique temp name (adversarial
+	// r4, L6): the test would have gone green while asserting nothing.
+	tmpBlock := suggestionsPath(ws) + ".lock"
+	os.Remove(tmpBlock) // Apply already created it as a regular file
 	if err := os.MkdirAll(tmpBlock, 0o755); err != nil {
 		t.Fatal(err)
 	}

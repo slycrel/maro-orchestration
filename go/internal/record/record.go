@@ -55,7 +55,7 @@ func New(workspaceDir string) *Recorder {
 
 func (r *Recorder) memoryDir() (string, error) {
 	dir := filepath.Join(r.WorkspaceDir, "memory")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, NewDirMode); err != nil {
 		return "", fmt.Errorf("ensure memory dir: %w", err)
 	}
 	return dir, nil
@@ -316,7 +316,7 @@ func (r *Recorder) appendJSONL(path string, row map[string]any, keyOrder []strin
 // helpers must take the lock once and call their in-lock cores.
 func Locked(path string, fn func() error) error {
 	lockPath := path + ".lock"
-	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return fmt.Errorf("open lock %s: %w", lockPath, err)
 	}
@@ -343,7 +343,7 @@ func AppendRawLine(path string, raw []byte) error {
 			needsFrame = tail != '\n'
 		}
 
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}
@@ -616,11 +616,11 @@ func orderedKeysOf(line string) []string {
 // drops one whole line, and a single line longer than tailBytes reaches
 // fn as an unparseable fragment.
 func LockedTailAppend(path string, tailBytes int64, fn func(tail string) [][]byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), NewDirMode); err != nil {
 		return err
 	}
 	return Locked(path, func() error {
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o666)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}

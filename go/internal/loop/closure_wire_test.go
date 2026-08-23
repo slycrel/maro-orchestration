@@ -286,9 +286,26 @@ func TestRunExecNoStepsRanWritesNamedSkipRow(t *testing.T) {
 // ledger's .tmp path makes the rewrite's WriteFile fail while plain
 // appends still succeed.
 func TestRunClosureRowStampFailureWritesDurableMarker(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the fault injection is a permission denial; root ignores it")
+	}
 	ws := t.TempDir()
 	t.Setenv("MARO_WORKSPACE", ws)
-	if err := os.MkdirAll(filepath.Join(ws, "memory", "outcomes.jsonl.tmp"), 0o755); err != nil {
+	// Pre-create the ledger WRITE-ONLY. Appending an outcome row opens
+	// O_APPEND|O_WRONLY and still succeeds; the verdict stamp has to READ
+	// the whole ledger back to rewrite it, and that read is denied — so the
+	// fault lands on exactly the rewrite path and nothing else.
+	//
+	// This used to squat a DIRECTORY at `outcomes.jsonl.tmp`, which stopped
+	// injecting anything the moment AtomicWrite began picking a unique temp
+	// name (adversarial r4, L6). The test would have passed while asserting
+	// nothing at all, which is the failure mode a fault-injection test can
+	// least afford.
+	if err := os.MkdirAll(filepath.Join(ws, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "memory", "outcomes.jsonl"),
+		nil, 0o222); err != nil {
 		t.Fatal(err)
 	}
 	fake := &llm.Fake{Script: []string{

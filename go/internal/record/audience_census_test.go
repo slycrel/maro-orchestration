@@ -45,6 +45,12 @@ var knownEmittedEvents = map[string]string{
 	"NOW_ANSWERED":           "system",
 	"WORKER_DELEGATION_GAP":  "system",
 	"WORKER_REPORT_OMISSION": "system",
+	// System in Python too — it is absent from USER_SURFACED_EVENTS there,
+	// checked at captains_log.py:412-435. It rides alongside a
+	// SKILL_CIRCUIT_OPEN that IS user-surfaced, and that asymmetry is the
+	// point: the trip is the decision a user should see, the mismatch is
+	// the qualifier an operator finds when they go looking at why.
+	"INPUT_MISMATCH": "system",
 }
 
 // The registry drifted silently once already: skill slices 3b and 3c

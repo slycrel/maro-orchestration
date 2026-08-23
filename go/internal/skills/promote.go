@@ -122,6 +122,12 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 		rep.PromotedIDs = append(rep.PromotedIDs, p.skill.ID)
 	}
 	path := skillsPath(ws)
+	// Captured in-lock, exported after the lock is released: the export
+	// writes a DIFFERENT file, so holding the pool lock across it would
+	// widen the store's critical section for no protection at all. Python
+	// exports outside its `with _locked_write(...)` block for the same
+	// reason, reusing the `fresh` list it built inside.
+	promotedFresh := map[string]Skill{}
 	err := record.Locked(path, func() error {
 		fresh := LoadSkills(ws).Skills
 		named := NewIDSet()
@@ -131,6 +137,7 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 				fresh[i].Tier = "established"
 				fresh[i].ContentHash = ComputeSkillHash(fresh[i])
 				named[fresh[i].ID] = true
+				promotedFresh[fresh[i].ID] = fresh[i]
 			}
 			byID[fresh[i].ID] = fresh[i]
 		}
@@ -146,6 +153,27 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 	})
 	if err != nil {
 		return rep, err
+	}
+
+	// The SKILL.md overlay export. Python runs this over the same `fresh`
+	// pool right after the tier write, and swallows every failure — the
+	// export is optional and must never block a promotion that already
+	// landed in the store. Same posture here, except the failure becomes a
+	// warning rather than nothing: a silently-absent overlay file is
+	// exactly the divergence this was added to close (adversarial r4, M3).
+	//
+	// The skill is exported at its POST-promotion tier, so the markdown
+	// reads "tier: established" — it is written from the fresh pool copy,
+	// not from the pre-promotion candidate.
+	for _, p := range chosen {
+		s, ok := promotedFresh[p.skill.ID]
+		if !ok {
+			continue
+		}
+		if _, exErr := ExportSkillAsMarkdown(ws, s, false); exErr != nil {
+			rep.Warnings = append(rep.Warnings,
+				"SKILL.md export failed for "+p.skill.ID+": "+exErr.Error())
+		}
 	}
 
 	for _, p := range chosen {

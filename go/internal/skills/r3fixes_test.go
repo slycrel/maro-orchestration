@@ -46,7 +46,7 @@ func seedPool(t *testing.T, ws string, ids ...string) {
 func TestOutcomeWritersHoldPoolOrdinals(t *testing.T) {
 	ws := t.TempDir()
 	seedPool(t, ws, "a", "b", "c", "d")
-	if _, err := UpdateSkillUtility(ws, "b", false, "boom"); err != nil {
+	if _, err := UpdateSkillUtility(ws, "b", false, "boom", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(poolOrder(ws), ","); got != "a,b,c,d" {
@@ -87,7 +87,7 @@ func TestACappedPromotionSweepIsUnmovedByAnOutcome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := UpdateSkillUtility(ws, "b", true, ""); err != nil {
+	if _, err := UpdateSkillUtility(ws, "b", true, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := MaybeAutoPromoteSkills(ws, 2, nil)
@@ -139,7 +139,7 @@ func TestAVariantOutcomeDoesNotLaunderATamperedHash(t *testing.T) {
 	}
 	// The asymmetry is the point: the OTHER writer does recompute, so a
 	// real mutation stops claiming the old content.
-	if _, err := UpdateSkillUtility(ws, "chal", true, ""); err != nil {
+	if _, err := UpdateSkillUtility(ws, "chal", true, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if containsSub(LoadSkills(ws).Announce(), "content_hash mismatch") {
@@ -334,7 +334,7 @@ func TestCircuitEventCarriesItsEvidenceInTheUserLane(t *testing.T) {
 	var u UtilityUpdate
 	for i := 0; i < CircuitOpenThreshold; i++ {
 		var err error
-		if u, err = UpdateSkillUtility(ws, "brk", false, reason); err != nil {
+		if u, err = UpdateSkillUtility(ws, "brk", false, reason, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -383,7 +383,7 @@ func TestCircuitEventCarriesItsEvidenceInTheUserLane(t *testing.T) {
 	// Half-open is deliberately NOT a user-lane event, matching Python: it
 	// is a probation STATE, and the trip and recovery bracketing it are both
 	// surfaced. An empty note writes NO key (`if note:`).
-	u2, err := UpdateSkillUtility(ws, "brk", true, "")
+	u2, err := UpdateSkillUtility(ws, "brk", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

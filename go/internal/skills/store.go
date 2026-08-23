@@ -142,7 +142,7 @@ func SaveSkill(ws string, s *Skill) error {
 		return err
 	}
 	path := skillsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.LockedRMW(path, func(old string) string {
@@ -234,7 +234,7 @@ func ArchiveSkills(ws string, toArchive []Skill, reason string) error {
 		lines = append(lines, stamped)
 	}
 	path := skillsArchivePath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.AppendRawLine(path, []byte(strings.Join(lines, "\n")))

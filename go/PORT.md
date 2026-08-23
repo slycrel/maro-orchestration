@@ -2489,6 +2489,55 @@ is why this gets more expensive the longer it waits.
 `run_mission` and `_run_milestone_dag` (all LLM- or loop-dependent),
 `drain_next_mission`, and the Telegram milestone notification.
 
+### Skill library — r4 review fixes (2026-08-23)
+
+Nine findings (1 HIGH, 2 MED, 6 LOW), all verified against both sources
+before anything was touched, **all nine real**. The fix table and the
+round's method are in `REVIEW.md`; what belongs here are the three
+lessons that outlive this round.
+
+**A renderer that can be asked for the impossible will be.** H1 was
+`pyjson.Ordered` emitting a key twice because its caller named it twice
+— `StampOutcomeVerdict` appends the verdict keys onto the row's on-disk
+key list, and any row that already carries a verdict already names them.
+The row doubled on every stamp until Go's own `LoadsClean` refused what
+Go had just written, while Python's `json.loads` kept taking the last
+value and never complained. The fix could have gone at the call site;
+it went in the renderer, because the thing being modeled is a Python
+dict and a dict cannot hold a key twice. Fixing the caller closes one
+site. Fixing the renderer closes the class.
+
+**Two hardcoded octals are not a style question.** `0644` and `0755` are
+byte-identical to correct under umask 022, which is what this box runs,
+and narrower than correct under umask 002 — so a ledger Go created first
+was not group-writable and a Python writer in the same group got EACCES.
+The bug could not be observed here at all. The pin therefore does not
+assert an octal literal; it opens a file with a plain `OpenFile(…, 0666)`
+on the same host and asserts `AtomicWrite` matches whatever THAT produced.
+An expectation written as a constant is the same mistake the code made.
+
+**The umask read-back is the one place this port should NOT copy
+Python.** `file_lock.atomic_write` reads the umask with `os.umask(0);
+os.umask(_umask)` and calls the window "momentary, and file writes here
+are multiprocess, not multithreaded, so the window is acceptable". Go's
+runtime is threaded, so during that window every other goroutine
+creating a file would see umask 0 — a world-writable secrets file is a
+real outcome of losing that race. `internal/record/filemode.go` reads it
+ONCE and caches it, and says why in the file. Faithfulness is to the
+BEHAVIOUR, not the instruction sequence; where the host language changes
+what an instruction sequence means, copying it is the unfaithful choice.
+
+**Found while porting: the float spelling gap had a wrong justification.**
+`pyjson`'s float renderer carried a comment calling the Go/Python
+exponent-threshold difference a "narrow known gap" because "every field
+emitted through here is a rate or a small counter". `SkillStats.avg_latency_ms`
+goes through it and is milliseconds, crossing the 1e6 boundary at a
+~16-minute average step. The replacement (`pyjson.FloatRepr`) implements
+CPython's actual rule — fixed notation while `-4 < decpt <= 16` — and was
+verified at 103,771 values against CPython with 0 mismatches. A named
+gap is only as good as the argument attached to it, and that argument
+had never been measured.
+
 ## Running
 
 ```sh
