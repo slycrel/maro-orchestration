@@ -1615,6 +1615,44 @@ lesson). Known suite caveat: guard's TestURLScanStaysLinear can blow
 its 10s wall-clock budget under -race on this box (perf-budget vs race
 instrumentation, guard-slice-owned, passes without -race).
 
+**r3 whole-surface review (2026-08-22) — SCOPE CHANGE by Jeremy's
+directive: from this round on, every re-review takes the ENTIRE chunk +
+accumulated fixes, not the latest diff** ("see if that helps the fixes
+be less granular to the change and more wholistic"). It did: no HIGHs —
+2 MED, 2 LOW, 3 INFO, and the lead MED was cross-cutting in exactly the
+way diff-scoped rounds can't see. (1) MED: the r2 in-lock dedup window
+was keyed to the caller's diagnoses-scan lookback where Python's
+_already_proposed is a fixed 200 — `maro graduate -lookback 300`
+re-suppressed aged-out classes and `-lookback 0` resurrected the r2
+whole-file suppression outright (executed both-runtime repro); the r2
+pins had used lookback=200, the one value where the windows coincide.
+FIXED: `proposeDedupWindow = 200` shared by pre-check and in-lock
+re-check, pinned at 300 and 0. (2) MED: the "whole-file RMW = OOM
+lever" rationale was applied to ONE path of suggestions.jsonl while
+eight sibling accessors (store merges, full-history dedup, LoadOutcomes)
+stay whole-file. RESOLVED as a deliberate rule, not a point fix:
+**bounded tail where the semantics are tail-N; whole-file where the
+semantics are whole-file** (keyed merges and full-history dedup are
+Python-parity whole-file by contract — bounding them would silently
+DROP rows, worse than the read cost; oversized ledgers degrade Python
+identically, a fork-point-shared scaling limit). Comments at all three
+sites now state this rule instead of the overstated rationale.
+(3) LOW: the r2 pyTruthy unification is a named DIVERGENCE, not parity
+— fork-point suggestion_is_applied and the re-apply guard are strict
+`is True`; Go's truthy read is the safe direction because Python's
+strict guard lets a malformed applied:"true" row REPLAY its mutation on
+re-apply (backport candidate #13). (4) LOW: VerifyGraduationRules'
+display read of applied_manually aligned to Python bool() (the applied
+GATE stays strict, matching Python's strict check there). INFO items
+recorded, no action: blank-line window slots (Python counts them, Go
+drops pre-window; abnormal input), LockedTailAppend boundary caveats
+(now in its doc), Revert's merge re-marshals rows other merges keep
+verbatim (cosmetic key reorder). Declared sound by execution: hex/inf
+coerceFloat corpus (18 cases both runtimes), LockedTailAppend edges +
+no-unlocked-writers grep, refuse-all terminal stamps vs every flow,
+audience registry vs every Go-emitted type. Fix-layer mutations
+M147–M148 DETECTED.
+
 **Deliberately NOT ported yet (next tranches, in rough order of value):**
 
 1. ~~Memory recall + knowledge injection~~ — ranked-lesson +
