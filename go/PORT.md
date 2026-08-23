@@ -1402,6 +1402,24 @@ genuine allowlisted fetch). Five new pins + M103–M107 all DETECTED; net line
 count DROPPED (two paths → one). Verify-before-fix honored (reproduced the
 two HIGHs + MED-4 before fixing). Re-review of r16 is the next round.
 
+**r17 — r16 re-review (opus fixpoint round), one HIGH fixed
+(befbd7f7).** The re-review confirmed everything in r16 held under hard
+effort — DoS bounded (520KB/10MB/3.2MB/8.8MB all ~1s), parse-budget
+fail-closed, prefilter sound (fresh 500k differential fuzz, 0 mismatches) —
+and found ONE real HIGH, again in r16's own new code: the decode-budget
+counter failed OPEN. `decode()` returned the input unchanged on exhaustion,
+which `scanNested` read as clean; a percent-encoded inner scheme is invisible
+to schemeRe until decoded, so draining the decode budget (via large no-`%`
+payloads r16 charged) then appending an encoded exfil cleared a real
+laundering URL. Fixed r17: a no-`%` payload is fully examined without charging
+the budget (kills the drain), and budget exhaustion with `%` remaining flags
+fail-closed (matching parse-budget/oversized posture). Pin
+TestURLDecodeBudgetFailsClosed; M108 detected. This is bounded convergence,
+NOT churn: across r15→r16→r17 the broken set shrank (2H+2M+1L → 1H → 1H) while
+the fuzz-confirmed-solid set grew; each HIGH sat in the previous round's new
+code, but the core retired at r15 stayed retired. r18 confirmation round
+launched.
+
 **Standing lesson banked (feeds [[feedback-review-to-fixpoint]]):** the r15→r16
 step is the churn lesson's mirror image done right — r15 was a *design* change
 (regex → parser) that retired the whole regex defect class, so its review found
