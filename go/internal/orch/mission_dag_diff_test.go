@@ -97,6 +97,15 @@ def run_one(idx, milestone):
 
 # max_workers 0 means "let the default apply", which is the only way to
 # compare Python's default kwarg against Go's zero-value floor.
+#
+# It is ALSO the harness's own limit, stated so the corpus cannot be
+# misread as coverage it does not have: 0 and negatives can never be
+# posed to Python at all, because ThreadPoolExecutor(max_workers=0)
+# raises ValueError before the scheduler is reached. So the case below
+# compares Go's floor against Python's KWARG DEFAULT, and no case here
+# asks what either runtime does when a config value of 0 reaches the
+# call site. That question belongs to slice 3 and is flagged at the
+# floor in mission_dag.go.
 kw = {} if spec['max_workers'] == 0 else {'max_workers': spec['max_workers']}
 mission._run_milestone_dag(m, run_one, logs.append,
                            persist_fn=lambda: persists.append(1), **kw)
@@ -509,6 +518,11 @@ func dagCorpus() []dagCase {
 		// floor of 1 would silently serialise every mission whose caller
 		// left the field alone. Barrier 2 is what makes the difference
 		// observable.
+		//
+		// Read this as what it is: an assertion that Go's floor equals
+		// Python's kwarg default. It is NOT an assertion about what
+		// happens when a 0 reaches either scheduler, which the harness
+		// cannot pose (see the note in the snippet above).
 		{"the DEFAULT worker count admits an overlap", dagSpec{
 			Milestones: []mst{ms("A"), ms("B")},
 			MaxWorkers: 0, Barrier: 2, Slow: []string{"A", "B"}}},

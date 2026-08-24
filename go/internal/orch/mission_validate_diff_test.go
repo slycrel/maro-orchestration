@@ -161,6 +161,23 @@ func validateCorpus() []validateCase {
 		{"a document with Infinity elsewhere still reads passed", base,
 			`{"passed": 0, "score": [Infinity]}`},
 		{"the STRING NaN is not a float", base, `{"passed": "NaN"}`},
+		// KEY position, not value position. json.loads refuses a bare
+		// token where a property name belongs, so CPython's extract_json
+		// returns its {} default and the milestone takes the
+		// no-usable-verdict path. The masker used to rewrite it anyway,
+		// which made the document parse in Go alone (r2 LOW).
+		{"a bare NaN in KEY position is refused", base,
+			`{"passed": false, NaN: 1}`},
+		{"a bare Infinity in KEY position is refused", base,
+			`{"passed": false, Infinity: 1}`},
+		{"a bare -Infinity in KEY position is refused", base,
+			`{"passed": false, -Infinity: 1}`},
+		{"a spaced NaN in KEY position is refused", base,
+			`{"passed": false, NaN : 1}`},
+		// ...and the value-position twin one character away, so the two
+		// lanes are pinned against each other rather than in isolation.
+		{"the same token in VALUE position still parses", base,
+			`{"passed": false, "score": NaN}`},
 
 		// The four default-to-pass exits.
 		{"an absent passed key defaults to true", base, `{"reason": "shrug"}`},

@@ -194,3 +194,50 @@ func TestAnUnorderedMapIsRefusedRatherThanGuessedAt(t *testing.T) {
 		t.Fatalf("the ordered path is broken too: %q", Repr(v))
 	}
 }
+
+// KNOWN DIVERGENCE, measured and named. Go's encoding/json replaces a
+// lone surrogate escape with U+FFFD; CPython's json.loads keeps it and
+// json.dumps writes it back unchanged. See the residual note on
+// LoadsOrdered for why this is documented rather than patched.
+//
+// The test asserts the CURRENT divergence in both directions, so it fails
+// the moment Go starts matching — which is the signal to delete it and
+// fold the case into strCorpus.
+func TestALoneSurrogateDivergesFromCPython(t *testing.T) {
+	const doc = `{"title":"\ud800"}`
+
+	v, err := LoadsOrdered(doc)
+	if err != nil {
+		t.Fatalf("Go now REJECTS a lone surrogate (%v) — that is a third "+
+			"behaviour, neither CPython's nor the old one; update this test "+
+			"and the residual note on LoadsOrdered", err)
+	}
+	got, _ := v.(Obj).Get("title")
+	s, _ := got.(string)
+	if s != "�" {
+		t.Fatalf("Go no longer substitutes U+FFFD (%q) — if it now preserves "+
+			"the surrogate, delete this test and fold the case into strCorpus", s)
+	}
+
+	// And CPython, measured in the same run rather than asserted from memory.
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"v=json.loads(sys.argv[1])['title']\n"+
+			"print(json.dumps([len(v), ord(v[0])]))", doc).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var row []any
+	if err := json.Unmarshal(out, &row); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+	if n, _ := row[0].(float64); n != 1 {
+		t.Fatalf("CPython no longer keeps the surrogate as one character: %v", row)
+	}
+	if cp, _ := row[1].(float64); int(cp) != 0xD800 {
+		t.Fatalf("CPython no longer keeps U+D800: %v — the divergence has moved", row)
+	}
+}

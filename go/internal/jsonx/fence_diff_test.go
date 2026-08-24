@@ -91,6 +91,21 @@ var fenceCorpus = []struct {
 	// corpus compares are what pin that order.
 	{"a think block ahead of a fence", "<think>[bad]</think>\n```json\n[\"a\", \"b\"]\n```"},
 	{"a think block ahead of bare json", "<think>{\"bad\":1}</think>\n{\"real\":1}"},
+	// The `\s` fix. A non-breaking space inside the CLOSING tag: Python's
+	// \s covers it (29 code points), RE2's does not (5), and the old
+	// pattern therefore fell through to thinkOpenRe and truncated the
+	// whole reply. One of the four separators U+001C..U+001F too, since
+	// those also split the two classes.
+	{"a non-breaking space in the closing tag",
+		"<think>musing {\"decoy\":1}</think\u00a0>\n{\"real\":2}"},
+	{"a unit separator in the closing tag",
+		"<think>musing {\"decoy\":1}</think\u001f>\n{\"real\":2}"},
+	{"an ideographic space in the closing tag",
+		"<think>musing {\"decoy\":1}</think\u3000>\n{\"real\":2}"},
+	{"an ordinary space in the closing tag still works",
+		"<think>musing {\"decoy\":1}</think >\n{\"real\":2}"},
+	{"an unclosed think really does truncate",
+		"<think>musing {\"decoy\":1}\n{\"real\":2}"},
 
 	// Whitespace, on BOTH sides of the unwrap. Each of these was added
 	// because a mutant survived without it: a body left unstripped, a
@@ -202,5 +217,43 @@ func TestTheFenceCorpusReachesBothLanes(t *testing.T) {
 	if orderSensitive == 0 {
 		t.Fatal("no case where think-stripping changes the fence strip: " +
 			"the think-then-fence ordering is not actually pinned")
+	}
+}
+
+// KNOWN DIVERGENCE, measured and named rather than silently carried. `\b`
+// is ASCII-only in RE2 and Unicode-aware in Python's re, so a letter
+// outside ASCII immediately after the tag name splits the two: CPython
+// finds no word boundary, matches NEITHER think pattern, leaves the trace
+// in place and carves the hypothetical; Go finds a boundary and strips.
+//
+// Not patched, deliberately. Expressing Python's `\w` needs a word class,
+// and Go ships Unicode 15.0 against CPython's 16.0 here — the same skew
+// pytext.digitSupplementBody exists for. A class that is NEARLY Python's
+// would read as fixed while still forking, which is the failure mode this
+// port keeps finding. See the residual note in jsonx.go.
+//
+// The test asserts the CURRENT divergence in both directions. It fails if
+// Go starts matching CPython, which is the signal to delete it and fold
+// the case into fenceCorpus.
+func TestANonASCIILetterInTheTagNameDivergesFromCPython(t *testing.T) {
+	const doc = "<think\u00e9>musing {\"decoy\":1}</think>\n{\"real\":2}"
+
+	want := pyFences(t, []string{doc})
+	if want[0][3] == nil {
+		t.Fatal("CPython found no object at all; the divergence has moved")
+	}
+	py := *want[0][3]
+	if py != `{"decoy":1}` {
+		t.Fatalf("CPython no longer carves the hypothetical (%q) — if it now "+
+			"strips the trace, delete this test and fold the case into fenceCorpus", py)
+	}
+
+	got, err := extract(doc, '{', '}')
+	if err != nil {
+		t.Fatalf("Go failed to carve anything: %v", err)
+	}
+	if got != `{"real":2}` {
+		t.Fatalf("Go no longer strips the trace (%q) — if it now matches CPython, "+
+			"delete this test and fold the case into fenceCorpus", got)
 	}
 }

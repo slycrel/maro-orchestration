@@ -5024,3 +5024,122 @@ The escaping bit generalizes too, in a small way: this anchor needs a
 real tab and a *literal* backslash-n, because the Go source spells the
 newline inside an interpreted string literal. Neither a raw string nor a
 plain one gets both. It is spelled `chr(9) + r'...'` now.
+
+## Adversarial mission-r2 — whole chunk, opus tier
+
+Whole-chunk review of the mission slice as it stands, not the r1 diff.
+Seven findings: **3 MEDIUM, 4 LOW, none hallucinated** — every code claim
+checked against the file and every CPython claim re-measured here before
+any fix was made. It also reported what it could *not* separate, which is
+the more useful half:
+
+> `mission_plan.go` has nothing above LOW — I could not separate it from
+> CPython on any input I generated. `mission_dag.go` has nothing above
+> LOW either; I checked the no-mutex reasoning against the code and it
+> holds.
+
+That is the convergence r1 was aiming at. The findings that remain are
+almost all in the two files r1 barely touched.
+
+### MEDIUM — a doc comment endorsing a fork, for the second round running
+
+`now.go` pre-stripped `<think>` traces before recovering the NOW judge's
+prose rationale, under a comment reading *"r3; Go-stricter, the Python
+sibling shares the gap"*. Measured against CPython 3.14.3:
+
+```
+'<think>maybe it failed? let me check</think> {"fulfilled": false} the file was never written'
+  CPython -> the same string back, unchanged
+  Go      -> 'the file was never written'
+```
+
+CPython's `_now_verdict_rationale` only skips a JSON prefix when the text
+*starts* with `{` or a fence, and this one starts with `<`. The result
+lands in `res.VerdictSummary` and in `outcomes.jsonl` — a durable field an
+operator reads. Same judge reply, two different summaries in one store.
+
+This is the **third** finding in two rounds whose survival is owed to a
+comment asserting a divergence was safe. r1's fence fork, r1's carve
+"shared residual", and now this. The pattern is stable enough to name:
+*a claim in a comment is load-bearing and needs the same evidence as the
+code under it.* `StripThink` had exactly one caller; removing it left the
+export dead, and it is gone.
+
+### MEDIUM — `\s` is five code points in RE2 and twenty-nine in Python
+
+`thinkRe` was transcribed from `_THINK_RE` character for character,
+`\s` included. On `<think>musing {"decoy":1}</think >` — a
+non-breaking space inside the closing tag — CPython removes the block and
+carves `{"real":2}`; Go's pattern failed to match, so `thinkOpenRe` fired
+and truncated **everything from the tag onward**, leaving `""`.
+
+The failure is destructive rather than partial, and downstream that is
+not "no answer": it is `decomposeViaLLM` writing the *heuristic* mission
+where CPython writes the model's real plan, and `ValidateMilestone`
+defaulting to PASS where CPython reads the model's actual verdict.
+
+The sharp part is that the fix already existed. `pytext.SpaceClass` is a
+measured 29-code-point class, and **its own doc opens by warning about
+exactly this hazard** — it was built for `playbook.py`'s patterns, and
+`jsonx.go` simply never used it. A hazard with a named, measured helper
+still got shipped twice, because the transcription looked right.
+Three corpus cases pin it now (NBSP, U+001F, ideographic space), and
+reverting the fix turns all three red.
+
+### MEDIUM — a lone surrogate is U+FFFD in Go and preserved in CPython
+
+A model truncating an emoji escape at a token boundary emits half a pair.
+`json.loads` keeps it as a one-character `str` and writes it back
+verbatim; Go's `encoding/json` silently substitutes U+FFFD, and
+`DumpsIndent2` then writes `�`. That is a milestone title in
+`mission.json` differing byte for byte, and `pyjson.IsCleanText` accepts
+U+FFFD because it is valid UTF-8, so nothing downstream refuses it.
+
+Documented rather than patched, and the reasoning is worth keeping:
+rejecting the document would be a **third** behaviour, diverging from
+CPython in a new direction to avoid diverging in the old one. A real fix
+needs a surrogate-preserving decoder *and* an `encodeString` that
+re-emits `\udXXX` — both ends of the file. Pinned by a test that asserts
+the current divergence in both directions and fails the moment either
+side moves.
+
+### LOW ×4, and one of them is about a test rather than the code
+
+- `\b` is ASCII-only in RE2 and Unicode-aware in Python, so a non-ASCII
+  letter inside the tag name splits the two. **Deliberately not patched**:
+  expressing Python's `\w` needs a word class, and Go ships Unicode 15.0
+  against CPython's 16.0 here — the same skew `pytext.digitSupplementBody`
+  exists for. A class that is *nearly* Python's would read as fixed while
+  still forking, which is the exact failure mode this port keeps finding.
+  Named divergence test instead.
+- `strings.TrimSpace` where `strip_think_blocks` ends `.strip()`. Invisible
+  through `extract`, which re-strips with `pytext.Strip` — but it was
+  reachable through the exported `StripThink`, whose caller re-stripped
+  with `TrimSpace` too. Now `pytext.Strip`.
+- The non-finite masker rewrote a bare `NaN` **in key position**, where
+  JSON's grammar demands a property name and CPython rejects the whole
+  document. Go alone accepted it, and `unmaskPaired` recurses into values
+  but never keys, so the marker would have survived into `mission.json` as
+  a literal key. In JSON a *value* is never followed by `:`, so the guard
+  is exact. Five corpus cases; removing the guard turns four red.
+- **A guard pinned to a value CPython can never be handed.** The DAG
+  harness translates `MaxWorkers: 0` into *omitting the kwarg*, because
+  `ThreadPoolExecutor(max_workers=0)` raises `ValueError` before the
+  scheduler is reached. So the "DEFAULT worker count" case asserts Go's
+  floor equals Python's kwarg default and never asks what a 0 does to
+  either runtime. That is an unreachable-value assertion reading as
+  coverage. It also surfaced a **slice-3 requirement**: Python's real
+  caller is `max(1, int(_cfg_get("mission.milestone_workers", 2)))`,
+  which floors at ONE, not two — port `run_mission` without it and
+  `milestone_workers: 0` gives Python one worker and Go two. Both the
+  floor and the harness now say so in place.
+
+### What r2 changes about how the rounds are run
+
+r1's lesson was *a fix arrives with no coverage by construction*. r2's is
+narrower and about review rather than testing: **three of the seven
+findings were sitting under a comment that said they were fine.** Two
+rounds of adversarial review read those comments as settled and moved on;
+the round that was told explicitly to treat them as claims found all
+three. Reviewing the whole chunk is what made it possible — the comments
+in question were not in any round's diff.

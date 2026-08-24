@@ -282,6 +282,30 @@ func encodeString(s string, ea bool) (string, error) {
 // else's data. Numbers keep their SOURCE LITERAL (json.Number), so a
 // stored `1.0` does not come back `1` and a counter does not come back
 // `42.0`.
+//
+// MEASURED RESIDUAL — lone surrogates (adversarial mission-r2 MEDIUM).
+// A model that truncates an emoji escape at a token boundary emits a
+// half pair, and the two runtimes keep DIFFERENT bytes:
+//
+//	{"title":"\ud800"}
+//	  CPython  json.loads -> a 1-character str holding U+D800, and
+//	           json.dumps writes it straight back as "\ud800"
+//	  Go       encoding/json substitutes U+FFFD (3 bytes), and
+//	           DumpsIndent2 then writes "\ufffd"
+//
+// It reaches the store: that is a milestone title in mission.json, and
+// each runtime reads the other's file back to a different string.
+// pyjson.IsCleanText accepts U+FFFD — it is valid UTF-8 — so nothing
+// downstream refuses it.
+//
+// NOT fixed here, and the reason is scope rather than doubt. A real fix
+// decodes string tokens with a surrogate-preserving decoder AND teaches
+// encodeString to re-emit `\udXXX`, which is a rewrite of this file's
+// two ends. Rejecting the document instead would be a THIRD behaviour,
+// diverging from CPython in a new direction to avoid diverging in the old
+// one. Written down and pinned by
+// TestALoneSurrogateDivergesFromCPython so it cannot be rediscovered as
+// a surprise.
 func LoadsOrdered(text string) (any, error) {
 	// CPython's json.loads accepts the bare tokens NaN, Infinity and
 	// -Infinity by default; Go's decoder rejects them, and the rejection
@@ -532,11 +556,48 @@ func maskNonFinite(text, marker string) (masked string, found bool) {
 			i++
 			continue
 		}
+		// KEY POSITION IS NOT VALUE POSITION (adversarial mission-r2
+		// LOW). In JSON's grammar a value is followed by ',', '}', ']'
+		// or end of input — never by ':'. So a bare token with a colon
+		// after it is standing where a property NAME must be, and CPython
+		// rejects the whole document there:
+		//
+		//	{"milestones":[...], NaN: 1}
+		//	  json.JSONDecodeError: Expecting property name enclosed in
+		//	  double quotes -> extract_json returns {} -> the HEURISTIC
+		//	  mission is written
+		//
+		// Masking it would quietly make the document parse, and
+		// unmaskPaired only recurses into Obj values, never keys, so the
+		// marker would survive into mission.json as a literal key. Emit
+		// the token untouched and let the decoder refuse it, as CPython
+		// does. The whole token, not its first byte: emitting just '-'
+		// would leave "Infinity" to match on the next pass.
+		if j := i + len(matched); nextNonJSONSpace(text, j) == ':' {
+			b.WriteString(matched)
+			i = j
+			continue
+		}
 		b.WriteString(`"` + marker + matched + `"`)
 		i += len(matched)
 		found = true
 	}
 	return b.String(), found
+}
+
+// nextNonJSONSpace returns the first byte at or after i that is not JSON
+// whitespace, or 0 at end of input. JSON's whitespace is exactly these
+// four bytes (RFC 8259) — deliberately NOT Python's 29-code-point set,
+// because what is being scanned here is JSON structure, not Python text.
+func nextNonJSONSpace(text string, i int) byte {
+	for ; i < len(text); i++ {
+		switch text[i] {
+		case ' ', '\t', '\n', '\r':
+		default:
+			return text[i]
+		}
+	}
+	return 0
 }
 
 // unmaskPaired walks the two decodes together and turns the positions

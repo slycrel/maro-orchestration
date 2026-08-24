@@ -8,11 +8,15 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Home resolves the user-level maro directory (default ~/.maro), which
@@ -155,6 +159,99 @@ func Get[T any](cfg map[string]any, path string, def T) T {
 		}
 	}
 	return def
+}
+
+// Python's str-normalizing boolean sets, verbatim from config.py:
+//
+//	_TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
+//	_FALSY_STRINGS  = frozenset({"false", "0", "no", "off", ""})
+//
+// Note "" is FALSY, not unrecognized — an empty quoted value is a
+// deliberate off, not a typo, and it must not fall through to the
+// default.
+var (
+	truthyStrings = map[string]bool{"true": true, "1": true, "yes": true, "on": true}
+	falsyStrings  = map[string]bool{"false": true, "0": true, "no": true, "off": true, "": true}
+)
+
+// GetBool ports config.get_bool: a boolean read that normalizes the
+// STRING forms, because a quoted YAML value arrives as a string and
+// Python's bool("false") is True. For a flag that gates behaviour — a
+// revert lever above all — that error direction silently defeats the
+// operator, so an unrecognized value falls back to the default with a
+// warning rather than to truthiness.
+//
+// The warning is RETURNED rather than logged, matching this package's own
+// idiom (Load returns its warnings too) and the no-silent-errors
+// doctrine. It is "" when Python would not have warned. Python's line is
+//
+//	logging.getLogger("maro.config").warning(
+//	    "config.get_bool: unrecognized value for %s: %r — using default %s",
+//	    key, val, default)
+//
+// so the text is reproduced exactly, %r included: a divergence in that
+// string is a divergence in a shared log.
+//
+// PARITY NOTE, and it is the sharp one here. Python reads this file with
+// PyYAML, which is YAML **1.1**, where bare `on`/`off`/`yes`/`no` are
+// BOOLEANS. Go reads it with gopkg.in/yaml.v3, which is YAML **1.2**,
+// where those same words are plain strings. The two libraries disagree
+// about the type before get_bool is ever called. It happens that both
+// runtimes reach the same answer anyway — 1.1 hands Python a real bool,
+// 1.2 hands Go a string that is in truthyStrings/falsyStrings — but they
+// reach it by different routes, and the agreement is a coincidence of
+// these particular four words being in both sets. Pinned case by case in
+// config_diff_test.go so that if either set ever changes, the test says
+// so instead of the store quietly forking.
+func GetBool(cfg map[string]any, path string, def bool) (value bool, warning string) {
+	val, present := Lookup(cfg, path)
+	if !present {
+		// Python: get(key, default) returns the default, which IS a
+		// bool, so the isinstance(val, bool) arm returns it. No warning.
+		return def, ""
+	}
+	switch v := val.(type) {
+	case bool:
+		return v, ""
+	case int:
+		// Python: bool(val) for int and float alike.
+		return v != 0, ""
+	case int64:
+		return v != 0, ""
+	case uint64:
+		// yaml.v3 promotes an integer past MaxInt64 to uint64; Python's
+		// ints are unbounded and bool() of any nonzero one is True.
+		return v != 0, ""
+	case float64:
+		// NaN != 0 is true in Go and bool(nan) is True in Python; -0.0
+		// is false in both. The naive comparison is the exact port.
+		return v != 0, ""
+	case string:
+		// EQUIVALENT-MUTANT NOTE on the Lower half only (the Strip half
+		// is separable and pinned: str.strip() removes U+001C..U+001F and
+		// strings.TrimSpace does not, which flips "\x1c" from FALSY to
+		// unrecognized). Substituting strings.ToLower here survives the
+		// battery, and provably so: both sets are pure ASCII, and across
+		// all 1,114,112 code points exactly ONE — U+0130 — has a
+		// str.lower() longer than a single character, mapping to "i" plus
+		// a combining dot, which is in neither set. The other divergence
+		// between full and simple case mapping, final sigma, is
+		// Greek-to-Greek. No case-mapping difference can land on a
+		// different ASCII answer, so the outcome cannot fork.
+		//
+		// pytext.Lower stays anyway: the equivalence is a property of
+		// these two sets being ASCII, not of the function.
+		s := pytext.Lower(pytext.Strip(v))
+		if truthyStrings[s] {
+			return true, ""
+		}
+		if falsyStrings[s] {
+			return false, ""
+		}
+	}
+	return def, fmt.Sprintf(
+		"config.get_bool: unrecognized value for %s: %s — using default %s",
+		path, pyval.Repr(val), pyval.Repr(def))
 }
 
 // Lookup is Get's presence half: it reports whether the path EXISTS,

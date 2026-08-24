@@ -420,14 +420,39 @@ func TestVerifyNowScrubBeforeClip(t *testing.T) {
 	}
 }
 
-// TestVerdictRationaleStripsThinkTrace: a reasoning trace before the
-// JSON must not become the recovered rationale (r3; jsonx.Object
-// strips it for the verdict — the prose recovery walks the same raw
-// content and needs the same strip).
-func TestVerdictRationaleStripsThinkTrace(t *testing.T) {
-	got := verdictRationale("<think>maybe it failed? let me check</think>\n" +
-		`{"fulfilled": false} the file was never written`)
+// A reasoning trace before the JSON is NOT stripped, and the whole reply
+// — trace, JSON and prose — comes back as the rationale. That is not the
+// behaviour anyone wants; it is the behaviour handle._now_verdict_rationale
+// has, and this field is durable (res.VerdictSummary, read by an operator
+// and written to outcomes.jsonl), so a Go-only strip forks the store.
+//
+// Go used to return just "the file was never written" here. Measured
+// against CPython 3.14.3 on 2026-08-23:
+//
+//	'<think>maybe it failed? let me check</think> {"fulfilled": false} the file was never written'
+//	  -> the same string back, unchanged
+//
+// The reason is structural: the recovery only skips a JSON prefix when
+// the text STARTS with `{` or a fence, and this one starts with `<`. If
+// the strip is wanted it belongs in the Python first (mission-r2 MEDIUM).
+func TestVerdictRationaleKeepsAThinkTraceAsPythonDoes(t *testing.T) {
+	raw := "<think>maybe it failed? let me check</think>\n" +
+		`{"fulfilled": false} the file was never written`
+	got := verdictRationale(raw)
+	// Python collapses runs of whitespace via " ".join(text.split()), so
+	// the newline becomes a single space; nothing else changes.
+	want := `<think>maybe it failed? let me check</think> ` +
+		`{"fulfilled": false} the file was never written`
+	if got != want {
+		t.Fatalf("rationale diverges from CPython\n    go %q\n    py %q", got, want)
+	}
+}
+
+// ...and the shape the recovery DOES handle, unchanged by the above: a
+// bare JSON prefix is skipped and only the prose survives.
+func TestVerdictRationaleSkipsABareJSONPrefix(t *testing.T) {
+	got := verdictRationale(`{"fulfilled": false} the file was never written`)
 	if got != "the file was never written" {
-		t.Fatalf("think trace must be stripped before recovery: %q", got)
+		t.Fatalf("bare-JSON prefix recovery broke: %q", got)
 	}
 }

@@ -87,6 +87,22 @@ type DAGOptions struct {
 // stall lane and the pool lane share the same crash backstop
 // (mark-failed, warn, persist, never propagate).
 func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOptions) {
+	// Python has no floor HERE — _run_milestone_dag takes
+	// `max_workers: int = 2` as a kwarg default, and
+	// ThreadPoolExecutor(max_workers=0) RAISES ValueError. The floor
+	// exists because Go's zero value is 0 and a caller that leaves the
+	// field alone must get the kwarg default, not a deadlocked pool.
+	//
+	// SLICE 3 MUST CARRY THE CALL SITE'S OWN FLOOR (mission-r2 LOW).
+	// Python's only real caller is mission.py:792,
+	//
+	//	_ms_workers = max(1, int(_cfg_get("mission.milestone_workers", 2)))
+	//
+	// which floors at ONE, not two. Port run_mission without that max(1,
+	// ...) and `mission.milestone_workers: 0` gives Python one worker and
+	// Go two — different milestones overlapping in a shared project
+	// directory. The floor here is the kwarg default and is NOT a
+	// substitute for it.
 	if opts.MaxWorkers < 1 {
 		opts.MaxWorkers = 2
 	}

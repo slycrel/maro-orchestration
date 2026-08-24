@@ -59,7 +59,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 
@@ -105,7 +104,33 @@ var (
 	// wholesale; an unclosed <think> (trace truncated by a token budget)
 	// drops everything from the tag onward — there is no answer to keep,
 	// so the caller's error/default is the fail-safe direction.
-	thinkRe     = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think\s*>`)
+	// `\s` is NOT transcribable: Go's regexp reads it as five code points
+	// and Python's re reads it as twenty-nine. pytext.SpaceClass is the
+	// measured Python set, and its own doc warns about precisely this —
+	// the helper existed and this pattern was not using it (adversarial
+	// mission-r2 MEDIUM).
+	//
+	// It matters because the failure is DESTRUCTIVE rather than partial.
+	// On `<think>musing {"decoy":1}</think\u00a0>\n{"real":2}` — a
+	// non-breaking space inside the closing tag — CPython removes the
+	// block and carves {"real":2}. Go's thinkRe failed to match, so
+	// thinkOpenRe fired and truncated EVERYTHING from the tag onward,
+	// leaving "" and an error. Downstream that is not "no answer": it is
+	// decomposeViaLLM writing the heuristic mission where CPython writes
+	// the model's real plan, and ValidateMilestone defaulting to PASS
+	// where CPython reads the model's actual verdict.
+	//
+	// RESIDUAL, measured and deliberately NOT patched: `\b` is
+	// ASCII-only in RE2 and Unicode-aware in Python. On `<thinke\u0301>`
+	// — any letter or digit outside ASCII straight after the tag name —
+	// Python finds no boundary, matches NEITHER pattern, leaves the trace
+	// in place and carves the hypothetical; Go finds a boundary and
+	// strips. Expressing Python's `\w` here needs a word class, and Go
+	// ships Unicode 15.0 against CPython's 16.0 on this box — the exact
+	// skew pytext.digitSupplementBody exists to paper over. A class that
+	// is *nearly* Python's would read as fixed while still forking, so
+	// this stays written down until a measured Word class exists.
+	thinkRe     = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think` + pytext.SpaceClass + `*>`)
 	thinkOpenRe = regexp.MustCompile(`(?i)<think\b[^>]*>`)
 	// EQUIVALENT-MUTANT NOTE. Making `(.*?)` greedy survives the whole
 	// battery, and it is genuinely equivalent HERE but not in general:
@@ -129,7 +154,12 @@ func stripThinkBlocks(text string) string {
 	if loc := thinkOpenRe.FindStringIndex(cleaned); loc != nil {
 		cleaned = cleaned[:loc[0]]
 	}
-	return strings.TrimSpace(cleaned)
+	// Python's strip_think_blocks ends `return cleaned.strip()`, and
+	// str.strip() covers four code points strings.TrimSpace does not
+	// (U+001C..U+001F). Invisible through extract, which re-strips with
+	// pytext.Strip — but StripThink used to be exported and its caller
+	// re-stripped with TrimSpace, so the gap was reachable (r2 LOW).
+	return pytext.Strip(cleaned)
 }
 
 // stripMarkdownFences is llm_parse.strip_markdown_fences: unwrap a fence
@@ -211,14 +241,6 @@ func carve(text string, open, close byte) (string, error) {
 	}
 	return "", fmt.Errorf("unbalanced %q...%q in output", string(open), string(close))
 }
-
-// StripThink exposes the <think>-trace strip for callers that recover
-// PROSE (not JSON) from a model reply — internal/now's rationale
-// recovery walks the same raw content Object does, and an un-stripped
-// trace would otherwise become a durable verdict summary (adversarial
-// routing r3; Go-stricter than Python's _now_verdict_rationale, which
-// shares the gap).
-func StripThink(text string) string { return stripThinkBlocks(text) }
 
 // ObjectOrdered is Object with the key order and the number LITERALS
 // kept — the same carve, decoded through pyval.LoadsOrdered.

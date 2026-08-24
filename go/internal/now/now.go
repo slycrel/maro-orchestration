@@ -50,6 +50,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
@@ -245,11 +246,22 @@ func verifyPayload(goal, answer string) string {
 // the judge is instructed JSON-first, and a garbled recovery on a
 // disobedient judge still beats the false "gave no rationale".
 func verdictRationale(raw string) string {
-	// Same pre-strip jsonx.Object applies: a reasoning trace before the
-	// JSON would otherwise flow through the no-prefix fallthrough and
-	// become the recovered "rationale" verbatim (r3; Go-stricter, the
-	// Python sibling shares the gap).
-	text := strings.TrimSpace(jsonx.StripThink(raw))
+	// Python: `text = (raw or "").strip()` (handle._now_verdict_rationale).
+	// pytext.Strip, not strings.TrimSpace — str.strip() covers
+	// U+001C..U+001F and TrimSpace does not.
+	//
+	// This USED TO pre-strip <think> traces, on the r3 reasoning that a
+	// trace before the JSON would otherwise flow through the no-prefix
+	// fallthrough and become the recovered "rationale" verbatim. That
+	// reasoning was right about the symptom and wrong about the remedy,
+	// and the comment saying so is what let it stand for two rounds
+	// (mission-r2 MEDIUM). Python does no such strip, and the result
+	// lands in res.VerdictSummary — a durable outcome field an operator
+	// reads. Same judge reply, two different summaries in the store.
+	//
+	// If the strip is wanted, it goes into handle._now_verdict_rationale
+	// first, where both runtimes inherit it.
+	text := pytext.Strip(raw)
 	if strings.HasPrefix(text, "```") {
 		// ```json { ... } ``` preamble: prose is after the closing fence.
 		parts := strings.Split(text, "```")
