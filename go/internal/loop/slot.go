@@ -24,8 +24,8 @@
 package loop
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -66,12 +66,18 @@ func acquireProjectSlot(memoryDir, slug, loopID, goal string) (release func(), w
 	// ("unknown holder") or a PREVIOUS holder's stale metadata. Inherited
 	// diagnostics-only imprecision, flagged not fixed (adversarial exec
 	// r3 2026-08-22, Expert QA LOW — fixing would diverge from parity).
-	meta, _ := json.Marshal(map[string]any{
-		"loop_id": loopID, "pid": os.Getpid(), "goal": goal,
-		"started": time.Now().UTC().Format(time.RFC3339),
+	// interrupt.py writes this with json.dumps, and the goal text lands
+	// in it verbatim — a goal containing `>` or a non-ASCII character was
+	// written in a spelling no CPython writer produces, in a file the
+	// Python side reads to name the holder (adversarial mission-r8).
+	meta, _ := pyval.DumpsCompactPy(pyval.Obj{
+		{Key: "loop_id", Val: loopID},
+		{Key: "pid", Val: os.Getpid()},
+		{Key: "goal", Val: goal},
+		{Key: "started", Val: time.Now().UTC().Format(time.RFC3339)},
 	})
 	_ = f.Truncate(0)
-	_, _ = f.WriteAt(meta, 0)
+	_, _ = f.WriteAt([]byte(meta), 0)
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()

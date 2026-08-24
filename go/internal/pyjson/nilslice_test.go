@@ -40,7 +40,7 @@ func TestANilSliceRendersAsAnEmptyListAndNotNull(t *testing.T) {
 			// separator spelling is a separate NAMED divergence in this
 			// port and is not what this pin is about. What is asserted
 			// here is the VALUE: `[]`, never `null`.
-			if want := `{"k":[]}`; string(got) != want {
+			if want := `{"k": []}`; string(got) != want {
 				t.Errorf("pyjson rendered %s\n got: %s\nwant: %s",
 					tc.name, got, want)
 			}

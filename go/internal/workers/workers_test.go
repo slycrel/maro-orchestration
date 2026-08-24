@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -32,14 +33,36 @@ func TestDispatchDeliverResult(t *testing.T) {
 }
 
 // TestDispatchDeliverResultNonString: a non-string result argument is
-// JSON-encoded, not dropped (Python json.dumps parity).
+// JSON-encoded, not dropped — and encoded the way Python encodes it.
+//
+// The comment on this test said "json.dumps parity" while the assertion
+// pinned `"k":"v"`, which is encoding/json's spelling and not json.dumps'.
+// The production comment said the same thing over the same wrong call.
+// This value becomes a worker RESULT and flows onward into prompts, so
+// the two runtimes were carrying different bytes (adversarial mission-r8).
 func TestDispatchDeliverResultNonString(t *testing.T) {
 	fake := &llm.Fake{Script: []string{
-		`{"tool": "deliver_result", "result": {"k": "v"}, "summary": "done"}`,
+		`{"tool": "deliver_result", "result": {"k": "a > b", "z": 1, "a": 2}, "summary": "done"}`,
 	}}
 	res := Dispatch(context.Background(), fake, General, "t", "", false)
-	if res.Status != "done" || !strings.Contains(res.Result, `"k":"v"`) {
+	if res.Status != "done" {
 		t.Fatalf("object result must arrive JSON-encoded: %+v", res)
+	}
+	// json.dumps' separators, no HTML escaping, and sorted keys — which is
+	// what FromPlain gives a decoded map, whose Python insertion order was
+	// already gone before this code saw it.
+	const want = `{"a": 2, "k": "a > b", "z": 1}`
+	if res.Result != want {
+		t.Fatalf("result is not json.dumps' bytes:\n got %s\nwant %s", res.Result, want)
+	}
+	// Anti-vacuity: the pre-fix encoder, required to lose on this fixture.
+	old, err := json.Marshal(map[string]any{"k": "a > b", "z": 1.0, "a": 2.0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(old) == want {
+		t.Fatal("encoding/json already agrees on this fixture: the test cannot " +
+			"show the fork it was written for")
 	}
 }
 

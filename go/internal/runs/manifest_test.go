@@ -12,8 +12,15 @@ import (
 // diff clean. This was the one writer in the chunk still on plain
 // json.Marshal, which sorts keys alphabetically ("match" before "stage"),
 // escapes < > & as <-style sequences, and spells a whole float without
-// its ".0". The expectation below is Python's json.dumps output for the
-// same record, minus its separator spacing.
+// its ".0".
+//
+// The expectation below USED to read "Python's json.dumps output for the
+// same record, minus its separator spacing" — on a test named
+// MatchesPythonsBytes. That parenthetical is the whole r8 finding written
+// down by the person who introduced it: the differential was known, and
+// the one axis where the two sides differed was deleted from the
+// expectation instead of from the code. json.dumps' defaults ARE spaced,
+// so the spacing is now part of what is pinned (mission-r8).
 func TestSkillsManifestMatchesPythonsBytes(t *testing.T) {
 	dir := t.TempDir()
 	parent := "parent-1"
@@ -31,11 +38,11 @@ func TestSkillsManifestMatchesPythonsBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"ts":"2026-08-23T09:19:44.401102+00:00","stage":"decompose",` +
-		`"skills":[{"id":"a&b","name":"Report <x>","content_hash":"h1",` +
-		`"variant_of":"parent-1","tier":"established","routing_key":"task-9",` +
-		`"match_method":"keyword","match_score":2.0}],` +
-		`"match":{"method":"keyword","n_candidates":3,"top_score":2.0}}` + "\n"
+	want := `{"ts": "2026-08-23T09:19:44.401102+00:00", "stage": "decompose", ` +
+		`"skills": [{"id": "a&b", "name": "Report <x>", "content_hash": "h1", ` +
+		`"variant_of": "parent-1", "tier": "established", "routing_key": "task-9", ` +
+		`"match_method": "keyword", "match_score": 2.0}], ` +
+		`"match": {"method": "keyword", "n_candidates": 3, "top_score": 2.0}}` + "\n"
 	if string(raw) != want {
 		t.Fatalf("\nwant %s\ngot  %s", want, raw)
 	}
@@ -54,8 +61,8 @@ func TestSkillsManifestRecordsAnEmptyInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal("present-and-empty is the signal; the file must exist")
 	}
-	want := `{"ts":"T","stage":"decompose","skills":[],` +
-		`"match":{"method":"none","n_candidates":0,"top_score":0.0}}` + "\n"
+	want := `{"ts": "T", "stage": "decompose", "skills": [], ` +
+		`"match": {"method": "none", "n_candidates": 0, "top_score": 0.0}}` + "\n"
 	if string(raw) != want {
 		t.Fatalf("\nwant %s\ngot  %s", want, raw)
 	}
@@ -68,7 +75,7 @@ func TestSkillsManifestRecordsAnEmptyInjection(t *testing.T) {
 	if got := string(raw); len(got) <= len(want) {
 		t.Fatal("JSONL: a second injection appends, it does not replace")
 	}
-	if !strings.Contains(string(raw), `"variant_of":null`) {
+	if !strings.Contains(string(raw), `"variant_of": null`) {
 		t.Fatalf("a nil variant must render as null: %s", raw)
 	}
 }

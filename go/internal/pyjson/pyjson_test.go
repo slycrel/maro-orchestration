@@ -6,17 +6,24 @@ import (
 	"testing"
 )
 
-// The three ways encoding/json differs from json.dumps, each of which
+// The FIVE ways encoding/json differs from json.dumps, each of which
 // produces a byte-different row for an identical value.
-func TestOrderedFixesTheThreeEncodingJSONDifferences(t *testing.T) {
+//
+// This test used to name three, and pinned the compact spelling the
+// package then emitted. Two forks — json.dumps' `, ` / `: ` separators and
+// ensure_ascii — were neither implemented nor tested, so every store
+// routed through this package wrote them wrong and this test reported
+// agreement (mission-r8). The fixture now carries a non-ASCII rune so the
+// fifth fork cannot go quiet again.
+func TestOrderedFixesTheFiveEncodingJSONDifferences(t *testing.T) {
 	d := map[string]any{
-		"z_last": "value", "a_first": 1.0, "html": `<b>&"'</b>`,
+		"z_last": "café", "a_first": 1.0, "html": `<b>&"'</b>`,
 	}
 	got, err := Ordered(d, []string{"z_last", "a_first", "html"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"z_last":"value","a_first":1.0,"html":"<b>&\"'</b>"}`
+	want := `{"z_last": "caf\u00e9", "a_first": 1.0, "html": "<b>&\"'</b>"}`
 	if got != want {
 		t.Fatalf("\nwant %s\ngot  %s", want, got)
 	}
@@ -37,7 +44,7 @@ func TestOrderedCarriesUnknownKeysSortedAtTheEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != `{"b":1.0,"a":2.0,"mm_extra":"x","zz_note":"hand"}` {
+	if got != `{"b": 1.0, "a": 2.0, "mm_extra": "x", "zz_note": "hand"}` {
 		t.Fatalf("got %s", got)
 	}
 	// A modeled key the row does not carry is skipped, not emitted as null:
@@ -46,7 +53,7 @@ func TestOrderedCarriesUnknownKeysSortedAtTheEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != `{"a":1.0}` {
+	if got != `{"a": 1.0}` {
 		t.Fatalf("an absent modeled key must be skipped: %s", got)
 	}
 }

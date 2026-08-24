@@ -260,12 +260,14 @@ func CadenceTick(workspaceDir string, cadence, deepEvery int) (string, error) {
 				mode = "normal"
 			}
 		}
-		out, _ := json.Marshal(map[string]any{
-			"runs_since_inspect": count,
-			"firings_since_deep": firings,
-			"updated_at":         time.Now().UTC().Format(time.RFC3339Nano),
+		// json.dumps, and the key order is the Python writer's
+		// (adversarial mission-r8: a shared cadence file, read by both).
+		out, _ := pyval.DumpsCompactPy(pyval.Obj{
+			{Key: "runs_since_inspect", Val: count},
+			{Key: "firings_since_deep", Val: firings},
+			{Key: "updated_at", Val: time.Now().UTC().Format(time.RFC3339Nano)},
 		})
-		return string(out)
+		return out
 	})
 	return mode, err
 }
@@ -621,11 +623,87 @@ Analyze these session quality results and identify:
 Output JSON: {"patterns": [...], "suggestions": [...], "threshold_breaches": [...]}
 `
 
+// orderedCounts is a Python `Dict[str, int]` — which is INSERTION
+// ordered, and both things inspector.py does with this particular dict
+// depend on that:
+//
+//   - `f"Signal counts: {json.dumps(signal_counts)}"` goes into the LLM
+//     prompt verbatim. A Go map renders SORTED, so the two runtimes sent
+//     the model a different string for the same fleet.
+//   - `for sig_type in signal_counts` decides `breaches`. Ranging a Go
+//     map is RANDOMISED, so that list came out in a different order on
+//     every run of the same input — and it lands in the inspection
+//     report, which is a shared store.
+//
+// A map plus a sort would fix the second and not the first: sorted is
+// deterministic but it is not Python's order. This keeps first-seen
+// order, which is what a Python dict has (adversarial mission-r8).
+type orderedCounts struct {
+	keys []string
+	m    map[string]int
+}
+
+func newOrderedCounts() *orderedCounts {
+	return &orderedCounts{m: map[string]int{}}
+}
+
+// add is `d[k] = d.get(k, 0) + n`.
+func (c *orderedCounts) add(k string, n int) {
+	if _, seen := c.m[k]; !seen {
+		c.keys = append(c.keys, k)
+	}
+	c.m[k] += n
+}
+
+func (c *orderedCounts) get(k string) int { return c.m[k] }
+func (c *orderedCounts) len() int         { return len(c.keys) }
+
+// obj renders the dict in insertion order for json.dumps.
+func (c *orderedCounts) obj() pyval.Obj {
+	o := make(pyval.Obj, 0, len(c.keys))
+	for _, k := range c.keys {
+		o = append(o, pyval.Field{Key: k, Val: c.m[k]})
+	}
+	return o
+}
+
+// render is the exact string that goes into the prompt. It exists as a
+// named function so a test can DRIVE it rather than replay it: a test that
+// rebuilds the render in its own body passes whatever production does,
+// which is a mutant-survivable guard and therefore not a guard at all
+// (mission-r8 battery, and the same lesson slice 3 paid for).
+func (c *orderedCounts) render() string {
+	out, _ := pyval.DumpsCompactPy(c.obj())
+	return out
+}
+
+// sigRow is one row of top_friction_signals.
+type sigRow struct {
+	name  string
+	count int
+}
+
+// topFrictionRows ports inspector.py:896-903 —
+// `sorted(..., key=lambda x: x["count"], reverse=True)[:5]`.
+//
+// Python's sort is STABLE and reverse=True does not reverse ties, so equal
+// counts keep the dict's insertion order. Extracted for the same reason as
+// render(): the tie-break is the whole claim, and a test that re-sorts in
+// its own body cannot catch a change here.
+func topFrictionRows(c *orderedCounts) []sigRow {
+	rows := make([]sigRow, 0, len(c.keys))
+	for _, k := range c.keys {
+		rows = append(rows, sigRow{k, c.get(k)})
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].count > rows[j].count })
+	return rows
+}
+
 // analyzePatternsWithLLM asks for cross-session patterns. Returns
 // (patterns, suggestions, breaches) — all empty without an adapter or
 // on any failure (analysis is enhancement, never a gate).
 func analyzePatternsWithLLM(ctx context.Context, qualities []SessionQuality,
-	signalCounts map[string]int, adapter llm.Adapter) ([]string, []string, []string) {
+	signalCounts *orderedCounts, adapter llm.Adapter) ([]string, []string, []string) {
 	if adapter == nil || len(qualities) == 0 {
 		return nil, nil, nil
 	}
@@ -633,11 +711,15 @@ func analyzePatternsWithLLM(ctx context.Context, qualities []SessionQuality,
 	for _, sq := range qualities {
 		dist[sq.OverallQuality]++
 	}
-	counts, _ := json.Marshal(signalCounts)
+	// json.dumps, not encoding/json: this string is PROMPT TEXT. The two
+	// runtimes were asking the model different questions about the same
+	// fleet — sorted vs insertion order, no space vs `", "`/`": "`, and
+	// HTML escaping on any signal type carrying `<`/`>`/`&`.
+	counts := signalCounts.render()
 	lines := []string{
 		fmt.Sprintf("Total sessions inspected: %d", len(qualities)),
 		fmt.Sprintf("Quality: good=%d fair=%d poor=%d", dist["good"], dist["fair"], dist["poor"]),
-		"Signal counts: " + string(counts),
+		"Signal counts: " + counts,
 		"",
 		"Sample poor sessions:",
 	}
@@ -729,30 +811,24 @@ func Run(ctx context.Context, workspaceDir string, adapter llm.Adapter,
 
 	// Aggregate friction signals: total count + max severity per type.
 	sevRank := map[string]int{"low": 0, "medium": 1, "high": 2}
-	signalCounts := map[string]int{}
+	signalCounts := newOrderedCounts()
 	signalSevMax := map[string]string{}
 	for _, sq := range qualities {
 		for _, sig := range sq.FrictionSignals {
-			signalCounts[sig.SignalType] += sig.Count
+			signalCounts.add(sig.SignalType, sig.Count)
 			if sevRank[sig.Severity] > sevRank[signalSevMax[sig.SignalType]] {
 				signalSevMax[sig.SignalType] = sig.Severity
 			}
 		}
 	}
-	type sigRow struct {
-		name  string
-		count int
-	}
-	var rows []sigRow
-	for k, v := range signalCounts {
-		rows = append(rows, sigRow{k, v})
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].count != rows[j].count {
-			return rows[i].count > rows[j].count
-		}
-		return rows[i].name < rows[j].name // deterministic tie-break (map order isn't)
-	})
+	// This used to carry an alphabetical name tie-break, added honestly
+	// because ranging a Go map is random and something had to make the
+	// output deterministic. Once the counts became insertion-ordered the
+	// hardening turned into the divergence: `top_friction_signals` is a
+	// persisted report field, and its first row is the headline
+	// (inspector.py:1030), so a tie decided alphabetically instead of
+	// first-seen renamed the finding (adversarial mission-r8).
+	rows := topFrictionRows(signalCounts)
 	for i, r := range rows {
 		if i >= 5 {
 			break
@@ -778,7 +854,8 @@ func Run(ctx context.Context, workspaceDir string, adapter llm.Adapter,
 	// count — one loud session must not flag a fleet-wide breach).
 	n := len(qualities)
 	var breaches []string
-	for sigType := range signalCounts {
+	// Insertion order, not map order: `breaches` reaches the report.
+	for _, sigType := range signalCounts.keys {
 		with := 0
 		for _, sq := range qualities {
 			for _, s := range sq.FrictionSignals {

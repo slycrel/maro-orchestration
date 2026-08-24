@@ -135,16 +135,16 @@ func TestTheAuditRowIsSpelledTheWayPythonSpellsIt(t *testing.T) {
 	// The archive NAME carries a wall-clock stamp, so each side's own name
 	// is normalized away.
 	//
-	// What this comparison can and cannot see, stated honestly because the
-	// previous version of this comment said "everything else must match
-	// exactly" and that is not what it does (adversarial r8 LOW). Both
-	// sides go through json.Marshal on a map, which SORTS keys and emits
-	// compact separators — so the comparison is deliberately blind to key
-	// order and to separator spacing, which are exactly the two ways these
-	// rows do differ, and both are named accepted divergences. What it
-	// pins is the VALUES: subject, summary prose, audience, and every
-	// context field. The raw-shape assertion below covers the one
-	// separator regression this would otherwise miss.
+	// What this comparison can and cannot see, stated honestly. Both sides
+	// go through json.Marshal on a map, which SORTS keys and emits compact
+	// separators — so the comparison is deliberately blind to key order and
+	// to separator spacing. What it pins is the VALUES: subject, summary
+	// prose, audience, and every context field.
+	//
+	// Separator spacing used to be called a "named accepted divergence"
+	// here. It was not a divergence anyone had measured — it was pyjson
+	// emitting the wrong thing — and the raw-byte assertion below now
+	// covers it against CPython directly (mission-r8).
 	norm := func(row map[string]any) map[string]any {
 		ctx, _ := row["context"].(map[string]any)
 		name, _ := ctx["archive"].(string)
@@ -180,10 +180,39 @@ func TestTheAuditRowIsSpelledTheWayPythonSpellsIt(t *testing.T) {
 	// fell back to encoding/json — the output would canonicalize to the
 	// same map. The recurring bug family in this port is an emitted string
 	// drifting by a character, so the raw bytes get their own assertion.
-	rawRow := findRotatedRawLine(t, readFileString(t, path))
-	if strings.Contains(rawRow, `", "`) || strings.Contains(rawRow, `": "`) {
-		t.Errorf("the audit row was written with Python-style separators, so "+
-			"this writer is no longer going through pyjson:\n%s", rawRow)
+	//
+	// That assertion used to read: "if the row has Python-style separators,
+	// this writer left pyjson" — which was circular. It asserted the
+	// package's behaviour rather than CPython's, and pyjson's behaviour was
+	// wrong: captains_log.py:619 is a bare `json.dumps(entry)`, whose
+	// defaults are `, ` and `: `. So a test with a real CPython-written row
+	// sitting in a variable three lines up was pinning the port to the one
+	// spelling CPython does not use (mission-r8).
+	//
+	// It now measures. Python's OWN raw line is the expectation, with the
+	// two wall-clock values normalized out — nothing else.
+	// One thing stays blind, and it is named rather than normalized away
+	// silently: the NESTED context object's key order. Python emits a dict
+	// in insertion order; the Go writer holds a map[string]any, which has
+	// none, so pyjson sorts it. That is a real residual (PORT.md), it is
+	// not fixable at this writer without an ordered-context Event API, and
+	// it is NOT the separator/escaping class this test is for. So the
+	// comparison is byte-exact up to `"context": ` and the context's own
+	// separators are checked separately.
+	pyRaw := findRotatedRawLine(t, py["active"].(string))
+	goRaw := findRotatedRawLine(t, readFileString(t, path))
+	pyHead, pyCtx := splitAtContext(t, normalizeRotatedLine(t, pyRaw))
+	goHead, goCtx := splitAtContext(t, normalizeRotatedLine(t, goRaw))
+	if pyHead != goHead {
+		t.Errorf("the audit row's BYTES differ from the one CPython wrote "+
+			"before the context\n go %s\n py %s", goHead, pyHead)
+	}
+	// The context fragment must still be spelled json.dumps' way — only its
+	// key ORDER is allowed to differ.
+	if strings.Contains(goCtx, `","`) || strings.Contains(goCtx, `":"`) ||
+		!strings.Contains(goCtx, `": `) {
+		t.Errorf("the nested context is not json.dumps-spelled:\n go %s\n py %s",
+			goCtx, pyCtx)
 	}
 
 	// The audience is already covered by the whole-row comparison above.
@@ -1243,4 +1272,43 @@ func findRotatedRawLine(t *testing.T, content string) string {
 	}
 	t.Fatal("no LOG_ROTATED row in the active file")
 	return ""
+}
+
+// normalizeRotatedLine blanks the two values that cannot match across two
+// independent rotations — the ISO timestamp and the archive filename,
+// which carries a wall-clock stamp of its own — and leaves every other
+// byte, separators included, exactly as written.
+//
+// Deliberately a STRING rewrite rather than a decode-and-re-encode: a
+// round trip through any encoder would impose that encoder's spelling on
+// both sides and re-create the blindness this replaced (mission-r8).
+func normalizeRotatedLine(t *testing.T, line string) string {
+	t.Helper()
+	row, err := LoadsClean(line)
+	if err != nil {
+		t.Fatalf("rotated line does not parse: %v\n%s", err, line)
+	}
+	out := line
+	if ts, _ := row["timestamp"].(string); ts != "" {
+		out = strings.ReplaceAll(out, ts, "<TS>")
+	}
+	ctx, _ := row["context"].(map[string]any)
+	name, _ := ctx["archive"].(string)
+	if name == "" {
+		t.Fatalf("the audit row carries no archive name:\n%s", line)
+	}
+	return strings.ReplaceAll(out, name, "<ARCHIVE>")
+}
+
+// splitAtContext returns the line up to and including `"context": ` and the
+// remainder, so a comparison can be byte-exact on everything a Go map has
+// not already reordered.
+func splitAtContext(t *testing.T, line string) (head, ctx string) {
+	t.Helper()
+	const marker = `"context": `
+	i := strings.Index(line, marker)
+	if i < 0 {
+		t.Fatalf("the audit row carries no context:\n%s", line)
+	}
+	return line[:i+len(marker)], line[i+len(marker):]
 }

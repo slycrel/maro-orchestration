@@ -17,7 +17,6 @@ package skills
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -413,16 +412,37 @@ func proveRecordLine(s Skill) (string, map[string]any, error) {
 			}
 		}
 	}
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(s); err != nil { // rejects NaN/Inf like allow_nan=False
+	// skills.py:271 is `json.dumps(_skill_to_dict(skill), allow_nan=False)`.
+	//
+	// This was the closest near-miss the r8 sweep found: someone had
+	// already noticed the HTML-escaping fork and reached for
+	// SetEscapeHTML(false), which fixes exactly one of the four. Left
+	// behind were json.dumps' `, ` / `: ` separators, ensure_ascii (a skill
+	// description is prose and non-ASCII is routine), and whole floats —
+	// and the skills store is read by the Python promotion pass.
+	//
+	// A half-converted writer is worse than an unconverted one, because it
+	// LOOKS handled.
+	//
+	// And the correct emitter was already RIGHT HERE: Skill.MarshalJSON
+	// renders through ToDict + pyjson.Ordered, which is a real json.dumps.
+	// The bug was the wrapper — encoding/json runs compact() over whatever
+	// MarshalJSON returns, and compact strips insignificant whitespace, so
+	// the `, ` and `: ` that the good emitter had just produced were
+	// deleted on the way out. Calling it directly is the fix; going through
+	// pyval.DumpsStruct instead would have re-created exactly the second,
+	// silently-drifting copy of the key order that MarshalJSON's own
+	// comment was written to prevent (mission-r8).
+	//
+	// allow_nan=False parity survives unchanged: pyjson refuses NaN/Inf.
+	raw, err := s.MarshalJSON()
+	if err != nil {
 		return "", nil, err
 	}
-	line := strings.TrimSuffix(buf.String(), "\n")
-	row, err := record.LoadsClean(line)
-	if err != nil {
-		return "", nil, fmt.Errorf("emitted line would not be admitted: %w", err)
+	line := string(raw)
+	row, lerr := record.LoadsClean(line)
+	if lerr != nil {
+		return "", nil, fmt.Errorf("emitted line would not be admitted: %w", lerr)
 	}
 	return line, row, nil
 }

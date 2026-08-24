@@ -618,9 +618,22 @@ func RunGraduationVerification(ws, repoRoot string, rec *record.Recorder) []Veri
 		}
 		var evErr error
 		if rec != nil {
+			// Struct → event context. The obvious spelling —
+			// Marshal-then-Unmarshal into map[string]any — is the INVERSE of
+			// the r8 bug and just as wrong: encoding/json decodes every
+			// number as float64, so an int field (a count, a sample size)
+			// arrived here as 3.0 and the recorder, which correctly renders
+			// through pyval, then wrote `3.0` where Python's asdict() keeps
+			// an int and writes `3`. A round-trip through encoding/json is
+			// never type-preserving in either direction.
+			//
+			// pyval.FromStruct walks the struct instead, so an int stays an
+			// int and a float keeps its `.0` (mission-r8).
 			ctxMap := map[string]any{}
-			if raw, err := json.Marshal(c.result); err == nil {
-				_ = json.Unmarshal(raw, &ctxMap)
+			if obj, err := pyval.FromStruct(c.result); err == nil {
+				for _, f := range obj {
+					ctxMap[f.Key] = f.Val
+				}
 			}
 			evErr = rec.Event("GRADUATION_VERIFIED",
 				"graduation:"+c.result.FailureClass,

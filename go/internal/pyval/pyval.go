@@ -1263,3 +1263,19 @@ func DumpsStruct(v any) (string, error) {
 	}
 	return DumpsCompactPy(o)
 }
+
+// DumpsStructIndent2 is FromStruct + DumpsIndent2: a struct rendered as
+// `json.dumps(asdict(x), indent=2)`, in declaration order.
+//
+// The third arm of the same seam. It exists because the r8 sweep found
+// that "which writers are wrong" and "which writers I listed" were
+// different sets twice running — the CLI's `-format json` and the
+// prompt-embedded schemas are the same encoder bug as the store rows,
+// and they had no widening path that preserved a struct's field order.
+func DumpsStructIndent2(v any) (string, error) {
+	o, err := FromStruct(v)
+	if err != nil {
+		return "", err
+	}
+	return DumpsIndent2(o)
+}

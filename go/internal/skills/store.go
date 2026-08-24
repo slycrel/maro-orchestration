@@ -226,8 +226,15 @@ func ArchiveSkills(ws string, toArchive []Skill, reason string) error {
 		if !strings.HasSuffix(line, "}") {
 			return fmt.Errorf("archive refused (nothing written): proven line is not an object")
 		}
+		// The separators are json.dumps', because the line being extended
+		// is. Hand-spliced fragments carry their own spelling, and this one
+		// carried encoding/json's — so every archive row read
+		// `..."tags": [],"archived_at":"..."`, spaced up to the splice and
+		// compact after it, which is a shape NEITHER runtime produces
+		// (mission-r8; it only became visible once pyjson emitted Python's
+		// separators, which is the argument for having one emitter at all).
 		stamped := line[:len(line)-1] +
-			",\"archived_at\":" + at + ",\"archived_reason\":" + why + "}"
+			", \"archived_at\": " + at + ", \"archived_reason\": " + why + "}"
 		if _, err := record.LoadsClean(stamped); err != nil {
 			return fmt.Errorf("archive refused (nothing written): %w", err)
 		}

@@ -437,17 +437,22 @@ func ScanQualityDrift(ws string, outcomes []map[string]any,
 	}
 
 	now := nowISO()
-	snapshot := map[string]any{
-		"ts":             now,
-		"success_rate":   round4(currentSuccess),
-		"avg_cost_usd":   round6(currentAvgCost),
-		"outcomes_count": total,
+	// evolver-baselines.jsonl is read back by the Python cadence, so this
+	// is json.dumps in the writer's key order — and the two rates here are
+	// exactly the values encoding/json gets wrong: a perfect run rounds to
+	// 1.0, which json.Marshal writes as `1` and json.dumps writes as `1.0`
+	// (adversarial mission-r8).
+	snapshot := pyval.Obj{
+		{Key: "ts", Val: now},
+		{Key: "success_rate", Val: round4(currentSuccess)},
+		{Key: "avg_cost_usd", Val: round6(currentAvgCost)},
+		{Key: "outcomes_count", Val: total},
 	}
-	if raw, err := json.Marshal(snapshot); err == nil {
+	if raw, err := pyval.DumpsCompactPy(snapshot); err == nil {
 		// Locked append (file_lock.locked_append parity); a failed save
 		// never blocks the scan (Python swallows it too).
 		_ = os.MkdirAll(memoryDir(ws), 0o755)
-		_ = record.AppendRawLine(baselinesPath(ws), raw)
+		_ = record.AppendRawLine(baselinesPath(ws), []byte(raw))
 	}
 
 	prior := loadBaselines(ws, 20)
@@ -754,19 +759,23 @@ func RecordSuggestionOutcomes(ws string, suggestionIDs []string, passed bool, ru
 				confidence = f
 			}
 		}
-		raw, err := json.Marshal(map[string]any{
-			"suggestion_id": sid,
-			"category":      category,
-			"confidence":    confidence,
-			"verified":      passed,
-			"run_id":        runID,
-			"verified_at":   now,
+		// json.dumps in the writer's key order — confidence is a float
+		// that is routinely whole (0.5 here, but 1.0 from a confident
+		// suggestion), and encoding/json wrote those as ints
+		// (adversarial mission-r8).
+		raw, err := pyval.DumpsCompactPy(pyval.Obj{
+			{Key: "suggestion_id", Val: sid},
+			{Key: "category", Val: category},
+			{Key: "confidence", Val: confidence},
+			{Key: "verified", Val: passed},
+			{Key: "run_id", Val: runID},
+			{Key: "verified_at", Val: now},
 		})
 		if err != nil {
 			continue
 		}
 		_ = os.MkdirAll(memoryDir(ws), 0o755)
-		_ = record.AppendRawLine(suggestionOutcomesPath(ws), raw)
+		_ = record.AppendRawLine(suggestionOutcomesPath(ws), []byte(raw))
 	}
 }
 

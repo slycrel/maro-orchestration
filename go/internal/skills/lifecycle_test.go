@@ -127,10 +127,10 @@ func TestRecordSkillOutcomeMergesOverStoredRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := statsLines(t, ws)[0]
-	if !strings.Contains(line, `"operator_note":"keep me"`) {
+	if !strings.Contains(line, `"operator_note": "keep me"`) {
 		t.Fatalf("unowned field deleted by a counter bump: %q", line)
 	}
-	if !strings.HasPrefix(line, `{"skill_id":"a","skill_name":"A","total_uses":2`) {
+	if !strings.HasPrefix(line, `{"skill_id": "a", "skill_name": "A", "total_uses": 2`) {
 		t.Fatalf("modeled keys must lead, in model order: %q", line)
 	}
 }

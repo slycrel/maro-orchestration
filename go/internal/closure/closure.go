@@ -37,7 +37,6 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -769,7 +768,12 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	}
 
 	// Phase 3: the director interprets results.
-	resultsJSON, _ := json.MarshalIndent(results, "", "  ")
+	// closure_verify.py:1289 is json.dumps(..., indent=2) and this string
+	// is PROMPT TEXT — a check detail carrying `>` (a shell redirect, an
+	// assertion) or a non-ASCII path made the two runtimes ask the
+	// director a different question about the same run (mission-r8:
+	// the content-key PROSE divergence family, now at the verdict seam).
+	resultsJSON, _ := pyval.DumpsIndent2(pyval.FromPlain(results))
 	verdictResp, err := a.Complete(ctx, []llm.Message{
 		{Role: "system", Content: closureVerdictSystem},
 		{Role: "user", Content: fmt.Sprintf(

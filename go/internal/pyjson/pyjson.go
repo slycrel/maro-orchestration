@@ -4,13 +4,33 @@
 // the same BYTES are. Two runtimes write into one shared workspace, and
 // several consumers key on the serialized text: Python's doctor dedup
 // re-serializes a parsed row and compares strings, and every cross-runtime
-// audit diffs files. encoding/json differs from json.dumps in three ways
-// that all produce a byte-different row for an identical value: it sorts
-// map keys, it escapes < > and & as <-style sequences, and it spells a
-// whole float without its ".0".
+// audit diffs files. encoding/json differs from json.dumps in FIVE ways that each produce a
+// byte-different row for an identical value:
 //
-// Emitters were being written per-package, which is how those three
-// differences kept reappearing one file at a time.
+//	sorted keys      encoding/json orders a map alphabetically; a Python
+//	                 dict emits in insertion order
+//	HTML escaping    < > & become \u003c-style sequences; json.dumps
+//	                 leaves them alone
+//	whole floats     json.Marshal(1.0) is "1"; json.dumps(1.0) is "1.0"
+//	separators       encoding/json writes `,` and `:`; json.dumps' DEFAULTS
+//	                 are `, ` and `: `
+//	ensure_ascii     encoding/json writes raw UTF-8; json.dumps escapes
+//	                 every non-ASCII rune as \uXXXX
+//
+// Emitters were being written per-package, which is how those differences
+// kept reappearing one file at a time.
+//
+// This package used to name only the first three, and implemented only
+// those three — so every store routed through it (outcomes, skills, runs,
+// the playbook) inherited the other two, compact and raw-UTF-8, in files
+// CPython writes spaced and escaped. That is the r8 finding in its
+// sharpest form: the shared emitter written to END per-package drift was
+// itself an incomplete implementation, and being shared is what spread it.
+// Verified against the real writers rather than assumed —
+// memory_ledger.py:605 and skills.py:271 are bare `json.dumps(row)`, whose
+// defaults are spaced and ensure_ascii=True. The three sites in the Python
+// tree that DO pass separators=(",", ":") are an LLM API payload and a
+// pack content hash, neither of which goes through this package.
 package pyjson
 
 import (
@@ -37,8 +57,10 @@ func IsCleanText(s string) bool {
 	return true
 }
 
-// String encodes one string as a JSON literal with Python's escaping —
-// HTML escaping OFF, since json.dumps does not escape < > or &.
+// String encodes one string as a JSON literal with Python's escaping:
+// HTML escaping OFF (json.dumps does not escape < > or &) and
+// ensure_ascii ON (json.dumps escapes every non-ASCII rune as \uXXXX,
+// which encoding/json never does at any setting).
 func String(s string) (string, error) {
 	if !IsCleanText(s) {
 		return "", fmt.Errorf("byte-tainted text refused")
@@ -49,7 +71,48 @@ func String(s string) (string, error) {
 	if err := enc.Encode(s); err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return ensureASCII(strings.TrimSuffix(buf.String(), "\n")), nil
+}
+
+// ensureASCII rewrites an already-valid JSON string literal so every
+// non-ASCII rune becomes a \uXXXX escape, which is json.dumps' default.
+//
+// It runs over the ENCODED literal rather than the raw string so the
+// escaping encoding/json already applied (quotes, backslashes, control
+// characters) is preserved untouched — re-deriving that here would be a
+// second escaper, which is the mistake this package exists to stop.
+//
+// Astral-plane runes are emitted as a SURROGATE PAIR, because that is what
+// CPython does: json.dumps("\U0001F600") is "\ud83d\ude00", not
+// "\U0001f600". A lone surrogate cannot reach here — IsCleanText refuses
+// those upstream.
+func ensureASCII(lit string) string {
+	ascii := true
+	for i := 0; i < len(lit); i++ {
+		if lit[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return lit // the overwhelmingly common case, untouched
+	}
+	var sb strings.Builder
+	sb.Grow(len(lit) + 8)
+	for _, r := range lit {
+		if r < utf8.RuneSelf {
+			sb.WriteByte(byte(r))
+			continue
+		}
+		if r > 0xFFFF {
+			r -= 0x10000
+			fmt.Fprintf(&sb, "\\u%04x\\u%04x",
+				0xD800+(r>>10), 0xDC00+(r&0x3FF))
+			continue
+		}
+		fmt.Fprintf(&sb, "\\u%04x", r)
+	}
+	return sb.String()
 }
 
 // Raw is an already-rendered fragment, emitted verbatim. It exists so a
@@ -129,7 +192,8 @@ func renderList(n int, at func(int) any) (string, error) {
 		}
 		parts = append(parts, one)
 	}
-	return "[" + strings.Join(parts, ",") + "]", nil
+	// json.dumps' default item separator carries a space.
+	return "[" + strings.Join(parts, ", ") + "]", nil
 }
 
 // RefuseNonFinite walks a decoded value for a number Python would have
@@ -182,7 +246,7 @@ func Array(items []map[string]any, modeled []string) (Raw, error) {
 		}
 		parts = append(parts, one)
 	}
-	return Raw("[" + strings.Join(parts, ",") + "]"), nil
+	return Raw("[" + strings.Join(parts, ", ") + "]"), nil
 }
 
 // Ordered emits an object with the model's key ORDER rather than Go's
@@ -239,7 +303,7 @@ func Ordered(d map[string]any, modeled []string) (string, error) {
 			continue
 		}
 		if !first {
-			sb.WriteByte(',')
+			sb.WriteString(", ") // json.dumps' default item separator
 		}
 		first = false
 		key, err := String(k)
@@ -251,7 +315,7 @@ func Ordered(d map[string]any, modeled []string) (string, error) {
 			return "", err
 		}
 		sb.WriteString(key)
-		sb.WriteByte(':')
+		sb.WriteString(": ") // json.dumps' default key separator
 		sb.WriteString(val)
 	}
 	sb.WriteByte('}')

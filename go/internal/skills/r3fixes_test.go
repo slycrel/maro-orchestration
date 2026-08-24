@@ -423,11 +423,11 @@ func TestNestedContextNumbersKeepPythonsSpelling(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.TrimSpace(string(raw))
-	if !strings.Contains(line, `"utility":1.0`) {
+	if !strings.Contains(line, `"utility": 1.0`) {
 		t.Errorf("a whole float nested in context must keep its .0 "+
 			"(json.dumps writes 1.0; the generic Go encoder writes 1):\n%s", line)
 	}
-	if !strings.Contains(line, `"use_count":5`) {
+	if !strings.Contains(line, `"use_count": 5`) {
 		t.Errorf("an int must NOT gain a .0:\n%s", line)
 	}
 	if strings.Contains(line, `\u003e`) {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"io"
 	"strings"
 	"time"
@@ -163,9 +164,16 @@ func BuildPrompt(msgs []Message, tools ...Tool) string {
 		var lines []string
 		for _, t := range tools {
 			props, _ := t.Parameters["properties"]
-			propJSON, err := json.MarshalIndent(props, "", "  ")
+			// llm.py:2269 — json.dumps(properties, indent=2), injected into
+			// the prompt for backends with no native tool protocol. A tool
+			// description carrying `>` or a non-ASCII default was escaped
+			// differently on each side, so the model saw a different tool
+			// schema (mission-r8). Key ORDER is a named loss: Parameters is
+			// a Go map, so Python's insertion order was gone upstream of
+			// here; MarshalIndent sorted too, so this changes nothing there.
+			propJSON, err := pyval.DumpsIndent2(pyval.FromPlain(props))
 			if err != nil || props == nil {
-				propJSON = []byte("{}")
+				propJSON = "{}"
 			}
 			lines = append(lines, fmt.Sprintf("- %q: %s\n  Arguments: %s",
 				t.Name, t.Description, propJSON))

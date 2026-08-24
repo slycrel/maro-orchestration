@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/graduation"
 	"github.com/slycrel/maro-orchestration/go/internal/inspector"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/scans"
 	"github.com/slycrel/maro-orchestration/go/internal/selfimprove"
@@ -80,11 +80,13 @@ func runInspect(args []string) error {
 	th := inspector.LoadThresholds(cfg)
 	report := inspector.Run(context.Background(), ws, adapter, *limit, *dry, th)
 	if *format == "json" {
-		raw, err := json.MarshalIndent(report, "", "  ")
+		// json.dumps(..., indent=2), in the report's declaration order
+		// (mission-r8).
+		raw, err := pyval.DumpsStructIndent2(report)
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(raw))
+		fmt.Println(raw)
 		return nil
 	}
 	fmt.Println(report.Summary())

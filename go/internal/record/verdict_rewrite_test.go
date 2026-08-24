@@ -60,17 +60,19 @@ func TestVerdictStampLeavesForeignRowsAlone(t *testing.T) {
 	// The patched row keeps its own disk order, with the new keys riding
 	// after it in assignment order — what a Python dict does when
 	// json.loads' order is extended by assignment.
-	wantPrefix := `{"loop_id":"mine","goal":"g","status":"done","tokens":7,` +
-		`"goal_achieved":true,"goal_verdict_source":"` + SourceClosure + `",`
+	// Spelled with json.dumps' separators: pyjson emits Python's defaults
+	// (mission-r8), and the ORDER claim this test exists for is unchanged.
+	wantPrefix := `{"loop_id": "mine", "goal": "g", "status": "done", "tokens": 7, ` +
+		`"goal_achieved": true, "goal_verdict_source": "` + SourceClosure + `", `
 	if !strings.HasPrefix(lines[1], wantPrefix) {
 		t.Errorf("patched row lost its key order (alphabetizing puts "+
 			"goal_achieved first):\n have %s\n want prefix %s", lines[1], wantPrefix)
 	}
 	// The pre-existing literal is preserved exactly — not re-typed to 7.0.
-	if !strings.Contains(lines[1], `"tokens":7,`) {
+	if !strings.Contains(lines[1], `"tokens": 7,`) {
 		t.Errorf("a stored integer was re-typed by the rewrite:\n%s", lines[1])
 	}
-	if !strings.HasSuffix(lines[1], `"goal_verdict_confidence":0.85}`) {
+	if !strings.HasSuffix(lines[1], `"goal_verdict_confidence": 0.85}`) {
 		t.Errorf("the stamped keys must ride at the tail:\n%s", lines[1])
 	}
 
@@ -108,7 +110,7 @@ func TestVerdictStampPreservesWholeFloatLiterals(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.TrimSpace(string(raw))
-	for _, lit := range []string{`"cost":1.0`, `"steps":3`, `"score":0.250`} {
+	for _, lit := range []string{`"cost": 1.0`, `"steps": 3`, `"score": 0.250`} {
 		if !strings.Contains(got, lit) {
 			t.Errorf("literal %s did not survive the rewrite:\n%s", lit, got)
 		}

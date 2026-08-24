@@ -173,11 +173,12 @@ func CadenceTick(workspaceDir string, cadence int) (bool, error) {
 			fired = true
 			count = 0
 		}
-		out, _ := json.Marshal(map[string]any{
-			"runs_since_evolve": count,
-			"updated_at":        nowISO(),
+		// json.dumps in the Python writer's key order (mission-r8).
+		out, _ := pyval.DumpsCompactPy(pyval.Obj{
+			{Key: "runs_since_evolve", Val: count},
+			{Key: "updated_at", Val: nowISO()},
 		})
-		return string(out)
+		return out
 	})
 	return fired, err
 }
@@ -324,12 +325,15 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 			if s.ExpectedSignal == nil {
 				s.ExpectedSignal = []map[string]any{}
 			}
-			raw, err := json.Marshal(s)
+			// json.dumps(asdict(s)) — the suggestions store is shared and
+			// Suggestion.Confidence is a float64 that is whole at 1.0,
+			// which json.Marshal writes as `1` (mission-r8).
+			line, err := pyval.DumpsStruct(s)
 			if err != nil {
 				marshalErr = err
 				continue
 			}
-			out += string(raw) + "\n"
+			out += line + "\n"
 		}
 		return out
 	})
@@ -405,8 +409,8 @@ func Dismiss(workspaceDir, suggestionID, reason string) (bool, error) {
 					row["block_reason"] = reason
 				}
 				found = true
-				enc, _ := json.Marshal(row)
-				out = append(out, string(enc))
+				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
@@ -493,8 +497,8 @@ func StampVerificationChanged(workspaceDir, suggestionID string, stamp Verificat
 					row["verify_extensions"] = *stamp.Extensions
 					changed = true
 				}
-				enc, _ := json.Marshal(row)
-				out = append(out, string(enc))
+				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
@@ -547,8 +551,8 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 					parked = true
 				}
 				changed = true
-				enc, _ := json.Marshal(row)
-				out = append(out, string(enc))
+				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
@@ -744,7 +748,12 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 			"added_at":     float64(time.Now().Unix()),
 			"added_at_iso": nowISO(),
 		}
-		raw, _ := json.Marshal(entry)
+		// `added_at` is float64(unix seconds): a whole float on EVERY row,
+		// which json.Marshal wrote as an int and json.dumps writes with a
+		// `.0`. This file gates constraint enforcement on both sides, so
+		// the type of that field is load-bearing (mission-r8).
+		line, _ := pyval.DumpsCompactPy(pyval.FromPlain(entry))
+		raw := []byte(line)
 		dcPath := dynamicConstraintsPath(workspaceDir)
 		if err := os.MkdirAll(filepath.Dir(dcPath), 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail apply failed: %v\n", err)
@@ -1033,7 +1042,7 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 	// Keyed merge under the lock: replace only this suggestion's line;
 	// rows appended or updated concurrently are preserved, and a line
 	// that vanished between snapshot and merge is re-added.
-	updated, err := json.Marshal(d)
+	updated, err := pyval.DumpsCompactPy(pyval.FromPlain(d))
 	if err != nil {
 		return true, err
 	}
@@ -1047,14 +1056,14 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			}
 			var row map[string]any
 			if json.Unmarshal([]byte(s), &row) == nil && row["suggestion_id"] == suggestionID {
-				out = append(out, string(updated))
+				out = append(out, updated)
 				replaced = true
 				continue
 			}
 			out = append(out, s)
 		}
 		if !replaced {
-			out = append(out, string(updated))
+			out = append(out, updated)
 		}
 		if len(out) == 0 {
 			return ""
@@ -1254,8 +1263,8 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 					row["applied"] = false
 					row["status"] = "reverted"
 				}
-				enc, _ := json.Marshal(row)
-				out = append(out, string(enc))
+				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				out = append(out, enc)
 			}
 			if len(out) == 0 {
 				return ""

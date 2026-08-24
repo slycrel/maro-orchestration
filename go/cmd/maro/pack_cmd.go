@@ -5,7 +5,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/pack"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 func runPack(args []string) error {
@@ -49,11 +49,28 @@ func resolveWorkspace(flagValue string) (string, error) {
 }
 
 func printJSON(v any) error {
-	out, err := json.MarshalIndent(v, "", "  ")
+	// json.dumps(..., indent=2): the Python CLI's shape, for whatever
+	// parses this (mission-r8).
+	//
+	// printJSON's callers pass report STRUCTS (usually by pointer), so the
+	// widening has to pick an arm. pyval.FromStruct deliberately refuses a
+	// non-struct rather than guessing — that refusal is what kept the
+	// map[string]int hole from spreading — so the guess is made HERE, once,
+	// where the two possible shapes are both known and local.
+	widened, err := pyval.FromStruct(v)
+	if err != nil {
+		out, ferr := pyval.DumpsIndent2(pyval.FromPlain(v))
+		if ferr != nil {
+			return ferr
+		}
+		fmt.Println(out)
+		return nil
+	}
+	out, err := pyval.DumpsIndent2(widened)
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(out))
+	fmt.Println(out)
 	return nil
 }
 

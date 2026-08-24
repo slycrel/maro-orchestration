@@ -348,13 +348,16 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 			}
 		}
 		if !opts.DryRun {
-			raw, err := json.Marshal(struct {
+			// pack.py:1154 — json.dumps of the report with action spread
+			// in last. Same shared audit trail as adopt (mission-r8).
+			line, err := pyval.DumpsStruct(struct {
 				*ImportReport
 				Action string `json:"action"`
 			}{report, "pack_import"})
 			if err != nil {
 				return err
 			}
+			raw := []byte(line)
 			audit := filepath.Join(ws, "memory", "imports.jsonl")
 			return record.AppendRawLine(audit, raw)
 		}

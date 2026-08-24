@@ -20,12 +20,12 @@ package workers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 const (
@@ -232,6 +232,12 @@ func Dispatch(ctx context.Context, adapter llm.Adapter, workerType, ticket, extr
 
 // stringArg extracts a string tool argument, JSON-encoding non-string
 // shapes rather than dropping them (Python json.dumps parity).
+//
+// The comment already said json.dumps and the code said encoding/json,
+// which is the whole r8 finding in one line. This value becomes PROMPT
+// TEXT — a nested tool argument reached the model sorted, unspaced and
+// with `>` HTML-escaped on this side, so the two runtimes asked the
+// worker a different question (adversarial mission-r8).
 func stringArg(args map[string]any, key, fallback string) string {
 	v, ok := args[key]
 	if !ok || v == nil {
@@ -240,11 +246,11 @@ func stringArg(args map[string]any, key, fallback string) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	b, err := json.Marshal(v)
+	b, err := pyval.DumpsCompactPy(pyval.FromPlain(v))
 	if err != nil {
 		return fallback
 	}
-	return string(b)
+	return b
 }
 
 func dryWorker(workerType, ticket string) Result {

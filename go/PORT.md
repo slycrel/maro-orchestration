@@ -4128,3 +4128,74 @@ behaviour under the name of a port:
 `s[:n]` would cut a multi-byte character in half and produce an invalid
 string where Python produces a shorter valid one, and both of those
 strings reach a durable store or a Telegram message.
+
+## json.dumps has FIVE defaults, not three
+
+The port's contract is BYTES, so this is the list that matters. A writer
+that produces a shared row must match all five, and `internal/pyjson` and
+`internal/pyval` both do as of r8:
+
+| fork | encoding/json | json.dumps |
+|---|---|---|
+| key order | sorted (maps) | insertion order |
+| `< > &` | `<`-style | untouched |
+| whole float | `1` | `1.0` |
+| separators | `,` `:` | `, ` `: ` |
+| non-ASCII | raw UTF-8 | `\uXXXX` |
+
+Two consequences that cost real time:
+
+- **An astral rune is a surrogate PAIR.** `json.dumps("\U0001F600")` is
+  `"😀"`, not `"\U0001f600"`.
+- **A struct writer looks safe** because encoding/json emits declaration
+  order — but order was never the only fork, and a struct is the ONE
+  shape that can hit the whole-float fork on a field that is always whole
+  (a confidence of 1.0, a unix timestamp cast to float64).
+
+### The rule r8 was actually about
+
+**Audit a shared helper against the SOURCE, not against its own doc
+comment.** `pyjson` existed to end per-package emitter drift and its doc
+named three of the five forks. It implemented three. Every store routed
+through it inherited the missing two, and the sharing is what spread
+them. A shared emitter with no differential test is a single point of
+silent, distributed failure.
+
+Corollary, from the same round: **a hand-spliced fragment carries its own
+spelling.** `ArchiveSkills` appended `,"archived_at":...` onto a
+correctly-spaced line and produced a row neither runtime writes. If you
+extend a rendered line instead of re-rendering it — which is often right,
+because re-rendering reorders keys — the fragment must be spelled the way
+the line is.
+
+And: **a round trip through encoding/json is not type-preserving in
+either direction.** Marshal-then-unmarshal into `map[string]any` turns
+every int into a float64, so a downstream Python-correct emitter then
+writes `3.0` where `asdict()` keeps `3`.
+
+### Test-shape rules earned in r8's battery
+
+- **Drive production, do not replay it.** Two tests written in this round
+  survived their own mutants because they rebuilt the render and the sort
+  in the test body. Extract a named production function and call it. A
+  replay is a second implementation, and it agrees with anything.
+- **A byte-level needle must SPAN the separator it pins.** A needle
+  ending at a closing quote survives a mutant that compacts only `, `.
+- **A "named accepted divergence" needs a measurement behind it.**
+  Separator spacing was recorded as accepted in two files. Nobody had
+  measured it; it was pyjson emitting the wrong thing. Nested-map key
+  order IS a real accepted divergence — a Go map has no order — and it is
+  stated at the assertion that is blind to it, not normalized away in
+  silence.
+
+### Named residuals after r8
+
+- Nested-map key order: `pyjson.Value` sorts a nested `map[string]any`
+  because a Go map has no insertion order. Fixing it needs an
+  ordered-context `Event`/writer API. Visible in the captain's log's
+  `context` object.
+- Tool-schema key order in the prompt injection (`llm.go`): `Parameters`
+  is a Go map, so Python's insertion order was gone upstream of the
+  emitter. `MarshalIndent` sorted too, so this changed nothing.
+- Escalation-ledger and event-row key order (`scans/notify.go`): the
+  entry arrives as a Go map. Escaping and ensure_ascii are recovered.

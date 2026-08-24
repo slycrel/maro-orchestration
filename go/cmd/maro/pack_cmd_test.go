@@ -69,8 +69,15 @@ func TestRunPackLifecycleThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(audit), `"action":"pack_import"`) ||
-		!strings.Contains(string(audit), `"action":"adopt"`) {
+	// json.dumps' separators — pack.py writes these rows, and this is a
+	// shared audit trail (mission-r8). The `action` key is spread in LAST
+	// on the Python side, which is what embedding reproduces here, so the
+	// suffix check is also an order check.
+	// The leading `, ` is part of the needle: a check that starts at the
+	// key survives a mutant that compacts only the item separator
+	// (mission-r8 battery).
+	if !strings.Contains(string(audit), `, "action": "pack_import"}`) ||
+		!strings.Contains(string(audit), `, "action": "adopt"}`) {
 		t.Fatalf("audit trail incomplete: %s", audit)
 	}
 

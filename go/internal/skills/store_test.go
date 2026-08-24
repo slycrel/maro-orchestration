@@ -255,12 +255,12 @@ func TestArchiveSkillsProvesEveryLineBeforeAnyAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"archived_reason":"island_cull"`) ||
-		!strings.Contains(string(raw), `"archived_at":`) {
+	if !strings.Contains(string(raw), `"archived_reason": "island_cull"`) ||
+		!strings.Contains(string(raw), `"archived_at": `) {
 		t.Fatalf("archive stamp missing: %q", raw)
 	}
 	// The stamp must EXTEND the proven line, not reorder its keys.
-	if !strings.HasPrefix(string(raw), `{"id":"a"`) {
+	if !strings.HasPrefix(string(raw), `{"id": "a"`) {
 		t.Fatalf("archive re-marshalled the row: %q", raw)
 	}
 }
@@ -339,8 +339,8 @@ func TestLargeIntegerCountersSurviveTheReadExactly(t *testing.T) {
 		{"9007199254740993", 9007199254740993},
 		{"4611686018427387903", 4611686018427387903},
 	} {
-		mutated := strings.Replace(line, `"variant_wins":0`,
-			`"variant_wins":`+c.literal, 1)
+		mutated := strings.Replace(line, `"variant_wins": 0`,
+			`"variant_wins": `+c.literal, 1)
 		if mutated == line {
 			t.Fatal("fixture anchor missing")
 		}
@@ -424,15 +424,15 @@ func TestEmittedFloatsKeepPythonsSpelling(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := string(raw)
-	if !strings.Contains(line, `"success_rate":1.0`) {
+	if !strings.Contains(line, `"success_rate": 1.0`) {
 		t.Errorf("whole float lost its .0: %s", line)
 	}
-	if !strings.Contains(line, `"utility_score":0.75`) {
+	if !strings.Contains(line, `"utility_score": 0.75`) {
 		t.Errorf("fractional float: %s", line)
 	}
 	// Integer fields stay integers — the distinction both validators read.
-	if !strings.Contains(line, `"use_count":0`) ||
-		strings.Contains(line, `"use_count":0.0`) {
+	if !strings.Contains(line, `"use_count": 0`) ||
+		strings.Contains(line, `"use_count": 0.0`) {
 		t.Errorf("int field spelled as a float: %s", line)
 	}
 	// And the same rule on the stats store.
@@ -443,8 +443,8 @@ func TestEmittedFloatsKeepPythonsSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(statsRaw), `"success_rate":1.0`) ||
-		!strings.Contains(string(statsRaw), `"total_uses":1`) {
+	if !strings.Contains(string(statsRaw), `"success_rate": 1.0`) ||
+		!strings.Contains(string(statsRaw), `"total_uses": 1`) {
 		t.Errorf("stats row spelling: %s", statsRaw)
 	}
 }

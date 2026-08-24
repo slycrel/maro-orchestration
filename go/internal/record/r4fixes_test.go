@@ -114,7 +114,8 @@ func TestOrderedEmitsARepeatedModeledKeyOnceAtItsFirstPosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != `{"a":1,"b":2,"c":3}` {
+	// json.dumps' separators (mission-r8).
+	if out != `{"a": 1, "b": 2, "c": 3}` {
 		t.Fatalf("got %s", out)
 	}
 }
@@ -130,7 +131,7 @@ func TestAForeignDuplicateKeyRowIsRewrittenWithOneCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != `{"a":3,"b":2}` {
+	if out != `{"a": 3, "b": 2}` {
 		t.Fatalf("got %s", out)
 	}
 }
@@ -225,7 +226,7 @@ func TestFloatSpellingMatchesPythonsRepr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != `{"avg_latency_ms":1234567.8}` {
+	if out != `{"avg_latency_ms": 1234567.8}` {
 		t.Fatalf("through the writer: %s", out)
 	}
 }

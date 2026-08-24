@@ -295,7 +295,7 @@ func TestSaveSkillsHoldsOrdinals(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := poolLines(t, ws)
-	if len(lines) != 3 || !strings.Contains(lines[0], `"id":"a"`) {
+	if len(lines) != 3 || !strings.Contains(lines[0], `"id": "a"`) {
 		t.Fatalf("the rewritten row must hold its ordinal: %+v", lines)
 	}
 }
@@ -471,7 +471,7 @@ func TestCullIslandBottomHalfArchivesBeforeRemoving(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retention copy missing: %v", err)
 	}
-	if !strings.Contains(string(archived), `"id":"o1"`) ||
+	if !strings.Contains(string(archived), `"id": "o1"`) ||
 		!strings.Contains(string(archived), "island_cull") {
 		t.Fatalf("archive row: %s", archived)
 	}
@@ -767,10 +767,10 @@ func TestSkillEventsCarryRelatedIDsNotLoopID(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := string(raw)
-	if !strings.Contains(line, `"related_ids":["skill:a"]`) {
+	if !strings.Contains(line, `"related_ids": ["skill:a"]`) {
 		t.Fatalf("linkage missing: %s", line)
 	}
-	if strings.Contains(line, `"loop_id":"skill:a"`) {
+	if strings.Contains(line, `"loop_id": "skill:a"`) {
 		t.Fatalf("a subject linkage was filed as a run id: %s", line)
 	}
 }

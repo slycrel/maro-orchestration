@@ -2,7 +2,6 @@ package evolver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -412,9 +411,12 @@ func MarshalReport(r EvolverReport) string {
 	if r.FailurePatterns == nil {
 		r.FailurePatterns = []string{}
 	}
-	raw, err := json.MarshalIndent(r, "", "  ")
+	// The Python CLI prints json.dumps(..., indent=2). This is a
+	// machine-readable surface — scripts parse it — and suggestion_text is
+	// LLM prose, so `>` and non-ASCII are routine (mission-r8).
+	raw, err := pyval.DumpsStructIndent2(r)
 	if err != nil {
 		return "{}"
 	}
-	return string(raw)
+	return raw
 }

@@ -6,13 +6,13 @@
 package pack
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -156,13 +156,18 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 	// Audit trail: same row Python appends — a promotion from quarantine
 	// to live must be visible to whoever reads memory/imports.jsonl.
 	if !opts.DryRun && len(report.Adopted) > 0 {
-		raw, err := json.Marshal(struct {
+		// pack.py: `locked_append(audit, json.dumps({**report, "action": ...}))`
+		// — the spread puts action LAST, which is what embedding does here.
+		// A pack label carrying `>` or a non-ASCII character was written in
+		// a spelling no CPython writer produces (mission-r8).
+		line, err := pyval.DumpsStruct(struct {
 			*AdoptReport
 			Action string `json:"action"`
 		}{report, "adopt"})
 		if err != nil {
 			return nil, err
 		}
+		raw := []byte(line)
 		audit := filepath.Join(ws, "memory", "imports.jsonl")
 		if err := os.MkdirAll(filepath.Dir(audit), 0o755); err != nil {
 			return nil, err

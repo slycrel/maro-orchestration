@@ -6245,3 +6245,102 @@ GAP it pins — an empty-text lesson gets minted — is unchanged; only the
 bytes of the row are. The pin was updated to the new spelling rather than
 relaxed, because a known-gap pin that stops asserting the gap is worse
 than no pin.
+
+### Round 8, part 2 — the emitter that was supposed to end the drift
+
+r8's lead lens was "an enumeration is not a class." Part 1 converted the
+struct writers r7 had missed. Part 2 asked the question the lens actually
+demands — *how do I find the class rather than list it?* — and the answer
+was to grep for every `json.Marshal`/`MarshalIndent` in the tree and
+classify each by DESTINATION rather than by whether it looked like a
+store. Three destinations turned out to matter and only one had been
+swept: durable rows, PROMPT TEXT, and machine-readable CLI output.
+
+Sixteen more sites converted. Then the sweep found its own floor.
+
+**The finding.** `internal/pyjson` is the package written to stop
+per-package emitter drift. Its own doc named THREE ways encoding/json
+differs from `json.dumps` — sorted keys, HTML escaping, whole floats —
+and it implemented exactly those three. `json.dumps` differs in FIVE:
+the other two are the default separators (`, ` and `: `, not `,` and
+`:`) and `ensure_ascii`.
+
+So every store routed through the shared emitter — outcomes, skills,
+runs, the playbook, the captain's log — was written compact and in raw
+UTF-8, in files CPython writes spaced and `\uXXXX`-escaped. The emitter
+built to end the drift was the drift, and being shared is what spread it.
+
+Verified before fixed, because the fix was broad: `memory_ledger.py:605`,
+`captains_log.py:619` and `skills.py:271` are all bare `json.dumps(row)`.
+The only three sites in the Python tree that pass
+`separators=(",", ":")` are an LLM API payload and a pack content hash,
+neither of which goes through this package.
+
+**Why nothing caught it.** `internal/pyjson` had no CPython differential
+at all. Every expectation in it was a Go literal transcribing what its
+author believed `json.dumps` produced, and a transcription cannot
+disagree with its author. Two tests elsewhere had the real bytes in hand
+and threw them away:
+
+- `runs/manifest_test.go`, on a test named `MatchesPythonsBytes`, said
+  the expectation was *"Python's json.dumps output for the same record,
+  minus its separator spacing."* The differential was known and the one
+  axis where the sides differed was deleted from the expectation instead
+  of from the code.
+- `record/rotate_test.go` ran real CPython, normalized separators away,
+  then asserted *"if this row has Python-style separators, it stopped
+  going through pyjson"* — pinning the port to the one spelling CPython
+  does not use. It now compares Python's own raw line byte for byte.
+
+`pyjson` now has `TestOrderedMatchesCPythonByteForByte`, six cases,
+agreeing with CPython on key order, HTML characters, BMP and astral
+`ensure_ascii` (astral runes are surrogate PAIRS, as CPython spells
+them), whole floats, `-0.0`, nested containers and control characters —
+each case required to make the stdlib LOSE.
+
+**Two bugs the fix exposed, which is the argument for one emitter.**
+`ArchiveSkills` hand-spliced `archived_at` onto a pyjson line with its
+own compact bytes, so every archive row read `..."tags": [],"archived_at"
+:"..."` — spaced up to the splice, compact after it, a shape NEITHER
+runtime produces. And `skills/types.go` wrapped an already-correct
+emitter in `json.NewEncoder`, whose `compact()` stripped the `, ` and
+`: ` the good emitter had just written; `SetEscapeHTML(false)` was set,
+which fixed one fork of four and made the site look handled. A
+half-converted writer is worse than an unconverted one.
+
+**Other finds.** The inspector held `signal_counts` as a `map[string]int`
+and rendered it into a PROMPT with `json.Marshal`, so the two runtimes
+asked the model a differently-worded question about the same fleet; the
+same map decided `breaches` by ranging it, which is randomised, so that
+list came out differently on every run of identical input. Both fixed by
+an insertion-ordered counter. Its `top_friction_signals` sort carried an
+alphabetical tie-break — added honestly, because ranging a map is random
+and the report had to be deterministic — but Python's sort is STABLE and
+`reverse=True` does not reverse ties, so once the counts were ordered the
+hardening WAS the divergence, and that row is the report headline. r1's
+lens, still paying out at r8.
+
+`graduation.go` built an event context by marshal-then-unmarshal, the
+INVERSE of the r8 bug: encoding/json decodes every number as float64, so
+ints arrived as `3.0` and the recorder faithfully wrote a float where
+`asdict()` keeps an int. A round trip through encoding/json is never
+type-preserving in either direction.
+
+**Battery: 20 killed / 0 survived / 0 unusable.** Two mutants survived
+the first run, both against tests I had just written, and both for the
+same reason: the test REPLAYED the render and the sort in its own body
+instead of driving production. A guard that re-implements what it guards
+agrees with anything. Extracted `orderedCounts.render()` and
+`topFrictionRows()` as named production functions and drove those.
+
+A third round of the battery found two needles that stopped at a closing
+quote and so survived a mutant compacting only the ITEM separator. A
+byte-level pin has to SPAN the separator it claims to pin.
+
+**Lens carried forward to r9:** *a shared helper is a claim about a
+contract, and the claim can be short.* When one helper serves many
+callers, the callers inherit whatever it got wrong — including the part
+it never knew it was responsible for. Audit the helper against the
+SOURCE, not against its own doc comment, and give it a differential of
+its own; a shared emitter with no differential is a single point of
+silent, distributed failure.
