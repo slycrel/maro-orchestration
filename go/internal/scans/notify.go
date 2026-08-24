@@ -15,13 +15,13 @@ package scans
 // package doc). Never raises — a notify must not take the cadence down.
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -91,12 +91,18 @@ func writeEscalation(ws string, entry map[string]any) {
 		fmt.Fprintf(os.Stderr, "[notify] escalation file write failed: %v\n", err)
 		return
 	}
-	raw, err := json.Marshal(entry)
+	// json.dumps(entry, default=str) over there. This ledger is the
+	// decreed headless escalation surface and Python-side pollers read
+	// it, so its bytes are shared bytes (adversarial mission-r8 HIGH).
+	// Key order is a named loss here and only here: the entry is a Go
+	// map, so Python's insertion order was gone before this function saw
+	// it — escaping and ensure_ascii are recovered.
+	line, err := pyval.DumpsCompactPy(pyval.FromPlain(entry))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[notify] escalation file write failed: %v\n", err)
 		return
 	}
-	if err := record.AppendRawLine(p, raw); err != nil {
+	if err := record.AppendRawLine(p, []byte(line)); err != nil {
 		fmt.Fprintf(os.Stderr, "[notify] escalation file write failed: %v\n", err)
 	}
 }
@@ -132,9 +138,13 @@ func writeEvent(ws, eventType, goal, detail string) {
 		// silent truncator).
 		"detail": budget.Clip(detail, 200),
 	}
-	raw, err := json.Marshal(entry)
+	// observe.write_event's own json.dumps. events.jsonl is the
+	// cross-runtime feed maro-observe tails; a detail containing `>` or
+	// a non-ASCII character was written here in a spelling no CPython
+	// writer produces (adversarial mission-r8 HIGH).
+	line, err := pyval.DumpsCompactPy(pyval.FromPlain(entry))
 	if err != nil {
 		return
 	}
-	_ = record.AppendRawLine(filepath.Join(dir, "events.jsonl"), raw)
+	_ = record.AppendRawLine(filepath.Join(dir, "events.jsonl"), []byte(line))
 }

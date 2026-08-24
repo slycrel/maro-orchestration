@@ -1082,3 +1082,184 @@ func ParseFloat(s string) (float64, bool) {
 	}
 	return f, true
 }
+
+// FromStruct converts a tagged Go struct into an Obj in DECLARATION
+// order — the missing third arm of the widening seam, beside FromPlain
+// (which takes decoded maps) and a hand-built Obj (which takes a writer
+// that knows its own field order).
+//
+// It exists because r7's writer sweep enumerated eight files and an
+// enumeration is not a class. Every remaining shared-store writer that
+// this port had was a `json.Marshal(someStruct)`, and a struct LOOKS
+// safe: encoding/json emits declaration order, so the key order those
+// writers produce is already right. The order was never the problem.
+// The other two forks are:
+//
+//   - HTML escaping. A lesson whose text contains `>` — every
+//     "A -> B" lesson this system mints — is written with `>` by
+//     encoding/json and with `>` by json.dumps.
+//   - ensure_ascii. A lesson containing an accented character is written
+//     raw by encoding/json and as `\uXXXX` by json.dumps.
+//
+// And one that only a struct has:
+//
+//   - WHOLE FLOATS. json.Marshal(float64(1)) is "1"; json.dumps(1.0) is
+//     "1.0". TieredLesson.Confidence, .Score and .Novelty are float64
+//     and are routinely whole, so the LESSONS STORE — the one file this
+//     whole port exists to keep interoperable — was writing ints where
+//     Python writes floats.
+//
+// A marshal-and-reparse would fix the first two and cement the third,
+// which is why this walks the struct instead. Rules, all matching
+// encoding/json so a converted writer emits the same SHAPE it did:
+//
+//	`json:"-"`            field skipped
+//	`json:"name"`         key is name
+//	`json:",omitempty"`   empty values dropped, Go's definition of empty
+//	no tag               key is the Go field name
+//	unexported           skipped
+//	embedded struct      fields inlined (anonymous, no name tag)
+//	nil pointer/map/slice  null, matching encoding/json and json.dumps
+//
+// A non-struct argument is an error rather than a guess: silently
+// widening the wrong thing is how the map[string]int hole got in.
+func FromStruct(v any) (Obj, error) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil, fmt.Errorf("pyval: FromStruct(nil %T)", v)
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("pyval: FromStruct wants a struct, got %T", v)
+	}
+	out := Obj{}
+	if err := appendStructFields(&out, rv); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func appendStructFields(out *Obj, rv reflect.Value) error {
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if f.PkgPath != "" && !f.Anonymous {
+			continue // unexported
+		}
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, opts, _ := strings.Cut(tag, ",")
+		fv := rv.Field(i)
+		// An embedded struct with no name contributes its fields
+		// directly, which is what encoding/json does.
+		if f.Anonymous && name == "" {
+			ev := fv
+			for ev.Kind() == reflect.Pointer {
+				if ev.IsNil() {
+					ev = reflect.Value{}
+					break
+				}
+				ev = ev.Elem()
+			}
+			if ev.IsValid() && ev.Kind() == reflect.Struct {
+				if err := appendStructFields(out, ev); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if name == "" {
+			name = f.Name
+		}
+		if strings.Contains(","+opts+",", ",omitempty,") && isEmptyValue(fv) {
+			continue
+		}
+		out.Set(name, fromValue(fv))
+	}
+	return nil
+}
+
+// fromValue widens one field. A nested struct becomes an Obj so its own
+// declaration order survives; everything else goes through FromPlain,
+// which already knows every container spelling.
+func fromValue(fv reflect.Value) any {
+	switch fv.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if fv.IsNil() {
+			return nil
+		}
+		return fromValue(fv.Elem())
+	case reflect.Struct:
+		// time.Time and anything else with its own marshaller is NOT
+		// special-cased here: this port stores timestamps as strings, so
+		// a time.Time field would be a porting bug, and turning it into
+		// an object of its unexported fields makes that loud instead of
+		// quiet.
+		nested := Obj{}
+		if err := appendStructFields(&nested, fv); err != nil {
+			return nil
+		}
+		return nested
+	case reflect.Slice:
+		if fv.IsNil() {
+			return nil // json.Marshal writes null for a nil slice
+		}
+		if fv.Type().Elem().Kind() == reflect.Uint8 {
+			return fv.Interface() // []byte keeps encoding/json's base64
+		}
+		out := make(List, fv.Len())
+		for i := 0; i < fv.Len(); i++ {
+			out[i] = fromValue(fv.Index(i))
+		}
+		return out
+	case reflect.Array:
+		out := make(List, fv.Len())
+		for i := 0; i < fv.Len(); i++ {
+			out[i] = fromValue(fv.Index(i))
+		}
+		return out
+	case reflect.Map:
+		if fv.IsNil() {
+			return nil
+		}
+		return FromPlain(fv.Interface())
+	}
+	return FromPlain(fv.Interface())
+}
+
+// isEmptyValue is encoding/json's omitempty test, verbatim in effect:
+// false, 0, a nil pointer/interface, and any empty array/slice/map/string.
+// Notably NOT a zero struct — encoding/json keeps those, and a port that
+// dropped them would change the shape.
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,
+		reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Pointer:
+		return v.IsNil()
+	}
+	return false
+}
+
+// DumpsStruct is FromStruct + DumpsCompactPy: one shared-store row, in
+// declaration order, with Python's separators and escaping.
+func DumpsStruct(v any) (string, error) {
+	o, err := FromStruct(v)
+	if err != nil {
+		return "", err
+	}
+	return DumpsCompactPy(o)
+}

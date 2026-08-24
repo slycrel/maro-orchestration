@@ -734,7 +734,10 @@ func TestApplyNonStringSuggestionIsKnownGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected an (empty-text) medium lesson to be minted: %v", err)
 	}
-	if !strings.Contains(string(raw), `"lesson":""`) {
+	// json.dumps' key separator, not encoding/json's — the lessons store
+	// moved onto pyval in r8. The GAP is unchanged; only the spelling of
+	// the row it writes is, and this pin asserts the gap.
+	if !strings.Contains(string(raw), `"lesson": ""`) {
 		t.Fatalf("known-gap #12 changed: expected an empty-text lesson, got %q", strings.TrimSpace(string(raw)))
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -346,7 +347,10 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 			if proposedIn(window, fc) {
 				continue // a concurrent cadence proposed this class first
 			}
-			raw, merr := json.Marshal(row)
+			// Python's json.dumps. A shared store: the Python cadence
+			// reads these rows back (adversarial mission-r8).
+			line, merr := pyval.DumpsCompactPy(pyval.FromPlain(row))
+			raw := []byte(line)
 			if merr != nil {
 				fmt.Fprintf(os.Stderr, "[graduation] row marshal failed: %v\n", merr)
 				continue
@@ -591,11 +595,13 @@ func RunGraduationVerification(ws, repoRoot string, rec *record.Recorder) []Veri
 			// Notify claims deliberately not taken (Telegram unported).
 			current[fc] = after
 		}
-		enc, err := json.MarshalIndent(current, "", "  ")
+		// json.dumps(..., indent=2), not MarshalIndent: same file, both
+		// runtimes (adversarial mission-r8).
+		enc, err := pyval.DumpsIndent2(pyval.FromPlain(current))
 		if err != nil {
 			return oldText
 		}
-		return string(enc) + "\n"
+		return enc + "\n"
 	}
 	if err := record.LockedRMW(statePath, update); err != nil {
 		// Results remain available to the caller, but without durable dedup
@@ -653,11 +659,11 @@ func RunGraduationVerification(ws, repoRoot string, rec *record.Recorder) []Veri
 				}
 			}
 		}
-		enc, err := json.MarshalIndent(state, "", "  ")
+		enc, err := pyval.DumpsIndent2(pyval.FromPlain(state))
 		if err != nil {
 			return oldText
 		}
-		return string(enc) + "\n"
+		return enc + "\n"
 	}
 	if err := record.LockedRMW(statePath, ack); err != nil {
 		fmt.Fprintf(os.Stderr, "[graduation] verification delivery acknowledgement failed: %v\n", err)

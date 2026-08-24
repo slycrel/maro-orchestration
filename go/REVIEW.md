@@ -6179,3 +6179,69 @@ half the time), and the mutant that drops an import now adds
 
 `gofmt`, `go vet ./...`, the full suite and `go test -race` on the fifteen
 touched packages are green.
+
+
+---
+
+## Round 8 (in progress) — an enumeration is not a class
+
+r7's HIGH was "eight files reached a shared store through
+`encoding/json`", and it fixed all eight. r8's first finding is that the
+number eight was the defect:
+
+> **A fix is evidence about its siblings — and the siblings are found by
+> SEARCHING for the class, not by listing the instances.**
+
+Found while PORTING (mission slice 3 needed `notify`), not while
+reviewing: `internal/scans/notify.go` writes **two** shared stores —
+`escalations.jsonl`, the decreed headless escalation surface, and
+`events.jsonl`, the cross-runtime feed `maro-observe` tails — and both
+were on `encoding/json`. A grep for the class then turned up the rest.
+
+### Why a struct writer looked safe and was not
+
+Most of the survivors were `json.Marshal(someStruct)`, which is exactly
+the shape that reads as already-correct: `encoding/json` emits struct
+fields in DECLARATION order, so the key order those writers produced was
+right. **Order was never the fork.** Three other things were:
+
+* `>` is HTML-escaped by `encoding/json` and plain in `json.dumps`.
+  Every "A -> B" lesson this system mints contains one.
+* a non-ASCII character is raw from `encoding/json` and `\uXXXX` from
+  `json.dumps`.
+* and the one only a STRUCT has: **whole floats**.
+  `json.Marshal(float64(1))` is `1`; `json.dumps(1.0)` is `1.0`.
+
+`TieredLesson.Confidence`, `.Score` and `.Novelty` are `float64` and
+routinely whole. So **the tiered-lessons file — the store this entire
+port exists to keep interoperable, the literal "lessons are data"
+invariant — was writing ints where the Python reader writes floats**, on
+every row, alongside a mangled `>` in every arrow-shaped lesson.
+
+`pyval.FromStruct` is the missing third arm of the widening seam, beside
+`FromPlain` (decoded maps) and a hand-built `Obj` (a writer that knows
+its own order). It walks the struct rather than marshal-and-reparsing,
+because a reparse would fix the escaping and CEMENT the float loss —
+the same trap `FromPlain`'s doc already names one level up.
+
+Converted: `knowledge.AppendMediumLesson`, `knowledge.AppendHypothesis`,
+`knowledge.UnionVariantsIntoLesson`, `scans.writeEscalation`,
+`scans.writeEvent`, and graduation's row and two state writers.
+
+### A second loss, found by fixing the first
+
+`UnionVariantsIntoLesson` rewrites whole store rows. It decoded each into
+a `map[string]any`, so by the time any renderer saw the row **its key
+order was already gone** — a row this runtime touched came back
+alphabetised where Python's `_mutate_tiered_lessons` emits dataclass
+field order. `pyval.LoadsOrdered` keeps both the order and the
+`json.Number` literals the r4 review put `UseNumber` there for. The map
+decode was carrying one of those two and silently dropping the other.
+
+### One test rewritten rather than deleted
+
+`TestApplyNonStringSuggestionIsKnownGap` failed on the new spelling. The
+GAP it pins — an empty-text lesson gets minted — is unchanged; only the
+bytes of the row are. The pin was updated to the new spelling rather than
+relaxed, because a known-gap pin that stops asserting the gap is worse
+than no pin.

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -204,23 +205,40 @@ func (s *Store) LessonSnapshot() (*DedupSnapshot, error) {
 	return snap, nil
 }
 
+// AppendHypothesis writes one hypotheses.jsonl row. Python is
+// `locked_append(path, json.dumps(asdict(h)))`, so the bytes are
+// json.dumps' — pyval, not encoding/json (adversarial mission-r8 HIGH:
+// r7 converted the eight writers it enumerated and an enumeration is not
+// a class; a struct LOOKS safe because encoding/json emits declaration
+// order, and order was never the fork).
 func (s *Store) AppendHypothesis(h Hypothesis) error {
-	raw, err := json.Marshal(h)
+	line, err := pyval.DumpsStruct(h)
 	if err != nil {
 		return err
 	}
+	raw := []byte(line)
 	if err := os.MkdirAll(s.memory(), 0o755); err != nil {
 		return err
 	}
 	return record.AppendRawLine(s.HypothesesPath(), raw)
 }
 
+// AppendMediumLesson writes one tiered-lessons row —
+// `locked_append(path, json.dumps(asdict(tl)))` over there.
+//
+// This is THE file the whole port exists to keep interoperable, and it
+// had all three forks at once: `>` HTML-escaped in every "A -> B"
+// lesson, an accented lesson written raw where json.dumps writes
+// \uXXXX, and — the one only a struct has — Confidence, Score and
+// Novelty are float64 and routinely WHOLE, so json.Marshal wrote
+// `"confidence":1` where json.dumps writes `"confidence": 1.0`.
 func (s *Store) AppendMediumLesson(tl TieredLesson) error {
 	tl.Tier = "medium"
-	raw, err := json.Marshal(tl)
+	line, err := pyval.DumpsStruct(tl)
 	if err != nil {
 		return err
 	}
+	raw := []byte(line)
 	path := s.TieredLessonsPath("medium")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -286,34 +304,44 @@ func (s *Store) UnionVariantsIntoLesson(lessonText string, variants []string) er
 			lines := splitLines(raw)
 			changed := false
 			for i, line := range lines {
-				// UseNumber: this is a read-modify-WRITE of whole store rows —
-				// a plain Unmarshal would round every >2^53 numeric field
-				// through float64 on the rewrite (r4 2026-08-22, QA: the one
-				// trust-bearing decode that missed the r3 treatment).
-				dec := json.NewDecoder(strings.NewReader(line))
-				dec.UseNumber()
-				var row map[string]any
-				if dec.Decode(&row) != nil {
+				// LoadsOrdered, not a map decode: this is a
+				// read-modify-WRITE of whole store rows, so BOTH of the
+				// things a map loses matter. It keeps json.Number, which
+				// is why a plain Unmarshal was wrong here before (a
+				// >2^53 numeric field would round through float64 on the
+				// rewrite — r4 2026-08-22, QA); and it keeps KEY ORDER,
+				// which a map had already thrown away by the time the
+				// renderer saw it. Python's _mutate_tiered_lessons
+				// rewrites a dataclass and emits its field order, so a
+				// row this runtime touched came back alphabetised
+				// (adversarial mission-r8).
+				parsed, perr := pyval.LoadsOrdered(line)
+				if perr != nil {
 					continue
 				}
-				canonical, _ := row["lesson"].(string)
-				if canonical != lessonText {
+				row, ok := parsed.(pyval.Obj)
+				if !ok {
 					continue
 				}
-				existing := stringList(row["merged_variants"])
+				canonical, _ := row.Get("lesson")
+				canonicalText, _ := canonical.(string)
+				if canonicalText != lessonText {
+					continue
+				}
+				existing := stringList(mustGetOr(row, "merged_variants"))
 				merged := existing
 				for _, v := range variants {
-					merged = AbsorbVariant(merged, v, canonical)
+					merged = AbsorbVariant(merged, v, canonicalText)
 				}
 				if len(merged) == len(existing) {
 					continue
 				}
-				row["merged_variants"] = merged
-				out, err := json.Marshal(row)
+				row.Set("merged_variants", pyval.FromPlain(merged))
+				out, err := pyval.DumpsCompactPy(row)
 				if err != nil {
 					return err
 				}
-				lines[i] = string(out)
+				lines[i] = out
 				changed = true
 			}
 			if !changed {
@@ -377,4 +405,12 @@ func atomicRewrite(path string, lines []string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// mustGetOr is pyval.Obj's `.get(key)`: the value, or nil when absent —
+// the distinction a dict makes and a two-value Go lookup obscures at a
+// call site that only wants the value.
+func mustGetOr(o pyval.Obj, key string) any {
+	v, _ := o.Get(key)
+	return v
 }

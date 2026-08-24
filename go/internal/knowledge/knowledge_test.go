@@ -66,8 +66,17 @@ func TestUnionVariantsRewritesOnlyTheTwin(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "lessons.jsonl"))
 	content := string(raw)
-	if !strings.Contains(content, `"merged_variants":["new variant"]`) {
-		t.Fatalf("variant not absorbed:\n%s", content)
+	// json.dumps' separators, not encoding/json's. A rewritten lesson row
+	// is read by the Python runtime, so `", "` and `": "` are the
+	// contract (adversarial mission-r8 HIGH).
+	if !strings.Contains(content, `"merged_variants": ["new variant"]`) {
+		t.Fatalf("variant not absorbed, or not in json.dumps' spelling:\n%s", content)
+	}
+	// And the row's KEY ORDER survived the rewrite. A map decode had
+	// already lost it before the renderer saw it, so the rewritten row
+	// came back alphabetised where Python emits dataclass field order.
+	if !strings.HasPrefix(strings.TrimSpace(content), `{"lesson_id": "a", "lesson": "twin text"`) {
+		t.Fatalf("rewrite reordered the row's keys:\n%s", content)
 	}
 	if !strings.Contains(content, "not json at all") {
 		t.Fatal("undecodable row destroyed by the rewrite — decay trust, never data")
