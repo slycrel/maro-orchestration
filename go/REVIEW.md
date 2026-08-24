@@ -6597,3 +6597,176 @@ same defect seen from two sides, and both were masked by the index's own
 resilience -- the migration and the local repair each turn a real gap
 into a slow success. Any test of a self-healing store has to disable the
 healing first, or it is testing the healing.
+
+### Round 11 — `director.handle_escalation`, and the file the harness was told to ignore
+
+r10's lens was *a name is a key the moment anything reconstructs it*.
+r11 ported `handle_escalation` (~250 Python lines: the LLM close/surface
+decision, the recursion check-in cadence, the continuation enqueue, the
+stop-verdict stamp, the operator artifact, the calibration row and the
+event row) and the differential harness carried forward from r10 covered
+every one of those surfaces — except one, by explicit exclusion.
+
+`compareWorkspaces` skipped `*.lock` files by name. The reason written
+next to it was sound: a lock's *content* is a pid and a timestamp, so
+comparing it byte-for-byte would fail on every run. The defect is that
+skipping by name also skipped the question:
+
+> **A skip by name is a claim you never re-examine.** Skipping a file's
+> CONTENT is a statement about volatility. Skipping its NAME is a
+> statement that the two runtimes lock the same things — and nobody had
+> checked that one.
+
+Including lock files in the compared SET with empty content — the name
+compared, the content not — found three bugs in a single run.
+
+#### 1. The ledger Python deliberately does not lock
+
+`memory/events.jsonl` was going through `record.Locked` here. In Python
+it does not, and `observe.write_event` states all three reasons in its
+own body:
+
+* atomicity comes from the row's capped SIZE — every field is clipped so
+  a single `O_APPEND` write stays under `PIPE_BUF` and is atomic on
+  Linux without a lock;
+* it sits on the hot path and must never block; and
+* `file_lock._report_timeout` (`file_lock.py:224`) *writes to it*, so
+  locking it would recurse into the machinery reporting the lock timeout.
+
+Go's own `record.Locked` doc already carried "NOT REENTRANT". The port
+had read that sentence and still locked the one ledger the sentence was
+about. `record.AppendUnlockedLine` is the path now, and the only visible
+difference — the absent `.lock` sidecar — is exactly what the skip hid.
+
+#### 2. A miss decided above the lock
+
+`memory/outcomes.jsonl.lock` existed after the CPython run and not after
+the Go one. `StampOutcomeStopVerdict` had an `os.Stat` short-circuit
+above the lock: no store, no work. Python's `locked_write` takes the lock
+*first* (`memory_ledger.py:921`), so a missing store is a miss decided
+UNDER the lock. Three costs, all of them real: a TOCTOU window a
+concurrent writer walks straight through; a cold workspace that comes out
+shaped differently on the two runtimes; and a comment that asserted an
+equivalence the code did not have.
+
+#### 3. The mkdir that was papered over one level up
+
+Removing that short-circuit exposed the next one. Python's acquisition
+mkdirs the lock's parent unconditionally (`file_lock.py:144`); Go's
+`Locked` did not. `orch/mission.go` had already hit this and patched it
+at ONE call site, under a comment saying the fix belonged in `Locked`
+and that *"every direct AppendRawLine caller has the same hole until it
+moves."* It had sat there for two rounds. It has moved.
+
+#### A comment can assert what the type forbids
+
+`EventFields.Project` was typed `string` under a doc comment correctly
+saying the field rides RAW into the row. `write_event` slices exactly
+three fields — `goal[:80]`, `step[:120]`, `_cb_clip(detail, 200)` — and
+the other eleven go untouched into `json.dumps`, keeping their JSON type.
+So `project=4242` is `4242` in Python and was `"4242"` here; `None` was
+`"None"`. Retyped `Project` and `LoopID` to `any`. The calibration row's
+`job_id` had the same coercion, and `job_id[:8]` — a bare slice inside
+the artifact block's own try — means a non-string id writes NO artifact
+while the decision, the calibration row and the event all still land.
+
+The type was the lie; the comment had been right the whole time. Grepping
+for comments that describe a wider contract than their type admits is a
+cheap sweep and it is not one this port has done.
+
+#### The `ts` was local time
+
+Both notify writers stamped `time.Now()`. Python uses
+`datetime.now(timezone.utc)` in both. Same instant, different spelling —
+and invisible to every differential, because every one of them masks `ts`
+as volatile. It was found by reading the two writers side by side, not by
+running anything.
+
+#### `int(str)` is not `float(str)`, and neither is `pyval.IntOf`
+
+Confidence parsing ran through `pyval.IntOf`. Python calls bare `int()`
+inside a try with a default of 5. The divergence is at the failure edge
+and it points the wrong way: `int("high")` raises → 5, the neutral
+middle, where `IntOf` answers 0 → clamps to 1, *maximum* confidence in a
+reply that said nothing. `int("7.5")` and `int("7e2")` raise where a
+float parse succeeds; `int()` does accept surrounding whitespace, a sign,
+and PEP 515 underscores strictly BETWEEN digits. `pyint.IntOrDefault`
+now spells that grammar exactly.
+
+#### The order of two writes is a claim about a message
+
+The recursion check-in enqueues a continuation and fires a check-in
+message. A check-in says *still running*. If the enqueue failed, the
+chain is dead and the message is a lie. So `AdvanceOriginWithCheckin`
+advances the ancestry and returns `shouldFire`; the caller fires only
+after the enqueue is confirmed, and a failed enqueue flips the whole
+action to `surface`.
+
+#### The r9 residual, closed
+
+r9 named it and it stayed open for two rounds: the escalation ledger
+sorted payload keys because the payload arrived as a Go map, so Python's
+insertion order was gone before the writer ever saw it. It survived
+because no payload's order was OBSERVABLE — every caller's keys happened
+to survive alphabetisation unnoticed. The check-in is a fourteen-key dict
+literal, and it made the divergence visible the instant the differential
+started comparing rows field-wise. `notify.EmitOrdered` takes a
+`pyval.Obj`; `Emit` stays for callers whose payload is genuinely a bag,
+and now its sort is an explicit documented step rather than an invisible
+property of the parameter type.
+
+#### The unit half a differential cannot reach
+
+`escalation_test.go` (~500 lines) covers what no workspace comparison
+can see: the jitter's full 4–7 range over 400 draws, a swapped 3–9
+config range asserted by COVERAGE rather than containment, the panicking
+channel, the advisory's exact triples, and the `int()` grammar.
+
+The coverage-not-containment point cost a battery round. The first
+version asserted every draw fell *inside* 3–9 — which a port that dropped
+the swap entirely and merely clamped `hi` up to `lo` also satisfies,
+because it emits the constant 9 and 9 is inside 3–9.
+
+#### Battery: 107 mutants, 107 killed, 0 survivors, 0 unusable
+
+Derived from the four files, not the diff. The arc was **80/16/9 →
+94/5/9 → 104/2/1 → 107/0/0**, and the survivors are where the value was.
+Eight of round one's sixteen were a single harness gap — `compareWorkspaces`
+compared the SET of jsonl rows but not their CONTENT, so any mutation
+that changed a field inside a row it still wrote passed unnoticed. Row-by-row
+field-wise comparison killed all eight at once.
+
+Two more were assertions that could not fail. One was the containment
+check above. The other compared a task's mutated origin against the
+fixture slice it had been handed — `pyval.Obj.Set` overwrites an existing
+key IN PLACE, so the aliasing mutant mutated the very slice the
+expectation was read out of, and the test compared a slice with itself.
+It survived a second round before the fix landed: a `before` snapshot
+taken before the port ever touches the fixture.
+
+Nine "unusable" in rounds one and two were all self-inflicted — anchors
+invalidated by my own fixes (a changed `logCalibration` signature, the
+ordered payload, comment lines inserted between paired keys). Re-deriving
+anchors from the CURRENT file each round, rather than reusing the
+previous round's, is the whole fix. Two mutants were dropped as
+semantically equivalent and recorded as comments naming why, rather than
+counted as kills.
+
+**Lens carried forward to r12:** *an exclusion is a hypothesis, and the
+oldest ones have never been tested.* Every harness in this port carries
+exclusions — masked fields, skipped names, ignored directories — and each
+was written down once, correctly, about a narrower question than the one
+it now answers. The `.lock` skip was right about content and wrong about
+existence for ten rounds. Before the next round, enumerate every mask and
+skip in the differential harnesses and ask of each: *what does this
+exclusion also stop me from seeing?* Masking a field's VALUE and dropping
+it from the compared SET are different acts, and the harness has been
+conflating them.
+
+**Its second half, from the `ts` and the `int()` finds:** *a divergence
+no differential can observe is found only by reading the two writers side
+by side.* Both were invisible to every fixture — one because `ts` is
+masked everywhere by construction, the other because it only shows at the
+parse failure edge. Neither cost anything to find once the two functions
+were open next to each other, and no amount of fixture-writing would have
+surfaced either.

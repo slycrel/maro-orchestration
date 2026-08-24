@@ -39,7 +39,17 @@ shapes:
 - Appends take the same advisory flock on the same sibling
   `<file>.lock` files as Python `file_lock.locked_append` (fail-closed,
   torn-tail framing), so both runtimes can write one workspace without
-  corrupting each other's rows.
+  corrupting each other's rows. Acquisition mkdirs the lock's parent,
+  like Python's.
+- **One ledger is deliberately unlocked on both sides:**
+  `memory/events.jsonl`. Its rows are capped field by field so a single
+  `O_APPEND` write stays under `PIPE_BUF` and is atomic on Linux without
+  a lock; it sits on the hot path and must never block; and Python's
+  own lock-timeout reporter writes to it, so locking would recurse into
+  the machinery reporting the lock timeout. `record.AppendUnlockedLine`
+  is that path. It leaves no `.lock` sidecar — which is the only visible
+  difference, and is exactly what a differential that skips `.lock`
+  files by name cannot see (r11).
 
 dev-recall, the viz server, and the learning pipeline read both
 runtimes' history through one lens.
@@ -4560,3 +4570,233 @@ again.
     `agent_loop`'s fence stamp, `loop_finalize`'s ending stamp and
     `handle`'s demotion stamp are three more Python sites that will need
     the same owner when their tranches land.
+
+## r11 — `director.handle_escalation`, and the file the harness was told to ignore
+
+`handle_escalation` is the closure mechanism for the recursion tree: a
+task that has been through several continuation passes without completing
+gets a reasoned decision from a higher layer instead of accumulating
+silently. Four actions, and each is a different KIND of durable write —
+`continue` and `narrow` enqueue, `close` stamps a stop verdict on the run
+AND its outcome row then writes an operator artifact, `surface` writes
+the artifact and stamps nothing. That last asymmetry is load-bearing: a
+judged close is the one seam where reachable-but-not-worth-it gets
+decided, and a surface means the operator has not decided anything yet,
+so recording a verdict there would put a judgment in the store that
+nobody made.
+
+The port of the decision logic was uneventful. Everything below came out
+of the tests.
+
+### A skip by name is a claim you never re-examine
+
+The r10 differential compared the whole workspace: every file the call
+wrote, the SET of names and the bytes of the deterministic ones. It
+skipped `.lock` sidecars, for the obvious reason — their contents are
+scratch, and comparing them would be comparing noise.
+
+Skipping them by NAME also skipped the question of whether the two
+runtimes lock the same things. They did not.
+
+**`memory/events.jsonl` is deliberately unlocked in Python** and the port
+had it under the flock appender. Python says why, in the function:
+
+```python
+# Deliberately UNLOCKED: every field is length-capped so the line is
+# well under PIPE_BUF (single O_APPEND write, atomic on Linux), and
+# file_lock._report_timeout calls this — locking here would recurse
+# into the lock machinery while it's reporting a timeout.
+```
+
+All three clauses are real. The atomicity comes from the row's SIZE, not
+from a lock (goal 80, step 120, detail 200, three pathologies at 40/160 —
+the line cannot approach PIPE_BUF). It must never block, because it is on
+the hot path after every step and it is the surface that reports stalls.
+And `file_lock._report_timeout` really does call `write_event`
+(`file_lock.py:224`), so taking a lock to report a lock timeout recurses
+— which Go's own `Locked` doc already says it cannot survive ("NOT
+REENTRANT ... a nested Locked on the same path from the same process
+blocks against ITSELF until the lock deadline and then fails").
+
+Go has no lock-timeout reporter yet, which is exactly why this was the
+cheap moment to fix it rather than the expensive one. `record.AppendUnlockedLine`
+is the honest shape: one O_APPEND write, no lock file, no torn-tail
+framing, errors the caller's to swallow.
+
+The visible symptom was one zero-byte file — `events.jsonl.lock` in every
+workspace Python leaves clean — and the row bytes were identical either
+way. The harness had been told not to look.
+
+### Two more finds from the same tightening
+
+Once the lock sidecars rode in the comparison by name, two more
+divergences fell out in the same run:
+
+**`StampOutcomeStopVerdict` decided its miss above the lock.** A missing
+outcomes ledger is a miss in both runtimes, but Python arrives there from
+INSIDE `locked_write` — so it leaves the `.lock` and the `memory/`
+directory behind, and its check is synchronized. The port had an
+`os.Stat` short-circuit above the lock, under a comment claiming Python
+"reads first ... before any writer is involved". Python does not; the
+lock comes first (`memory_ledger.py:921`). The no-phantom-store property
+the stat was supposedly buying is carried by the conditional
+`AtomicWrite`, which does not run on a miss on either side. The stat cost
+a TOCTOU window Python does not have — a row appended between the stat
+and the lock is one Python stamps and this did not — and bought nothing.
+
+**`record.Locked` did not create its lock's parent directory.** Python's
+acquisition mkdirs unconditionally (`file_lock.py:144`), which is the
+only reason a locked write into a cold workspace works there at all.
+`orch/mission.go` had already papered over this at ONE call site with a
+comment saying it belonged down in `record` and that "every direct
+AppendRawLine caller has the same hole until it moves". Removing the stat
+above made the hole reachable, and moving the mkdir was the fix for both.
+The by-hand copy is gone.
+
+### A comment can assert what the type forbids
+
+The event row the escalation writes carries `project` and `loop_id`, and
+the port's comment said, correctly:
+
+> `project` is the RAW parent_job_id, unsliced — a non-string value
+> reaches json.dumps here and is written as whatever it is
+
+The line under it read `Project: pyval.Str(taskGet(task, "parent_job_id",
+""))`, because `EventFields.Project` was typed `string`. The comment was
+right about Python and the type made it impossible to honour: a task with
+an integer `parent_job_id` wrote `"4242"` against CPython's `4242`, and
+one with a null wrote `"None"` against `null`.
+
+`write_event` SLICES exactly three of its fields — `goal[:80]`,
+`step[:120]`, `_cb_clip(detail, 200)` — and touches nothing else. The
+slice is what makes a non-string fatal there (it raises, the caller's
+blanket `except` swallows it, and NO ROW is written at all); the other
+eleven fields ride into `json.dumps` untouched. So the split in the Go
+struct is Python's, not a convenience: `Goal`, `Step` and `Detail` are
+`string`, `Project` and `LoopID` are `any`.
+
+The price is that `any`'s zero is nil, which spells `null` where Python's
+keyword default is `""`. There is no unset state to detect, so both
+callers state what they mean — and that is also the only way a genuine
+`None` reaches the row at all. `TestABareCallMatchesCPythonsKeywordDefaults`
+pins both halves: the Go call that reproduces a bare `write_event(type)`,
+and the fact that the zero value is not it.
+
+The same reading fixed two more sites. `job_id[:8]` is a bare slice
+inside the artifact block's own try/except, so a non-string `job_id`
+writes NO artifact while everything after that block still runs — the
+decision, the calibration row and the event all survive, and only the
+operator's file is missing. And the calibration row's `job_id` is raw in
+Python's dict literal too, which the same test case caught one ledger
+later.
+
+`depth` is the one field left coerced: this port reads
+`continuation_depth` as an int where Python holds the raw value. It only
+diverges for a non-numeric depth, where Python's `depth + 1` raises
+inside the spawn branch's own try — and the queue entries carrying that
+field are written by this port. Named, not fixed.
+
+### The r9 residual, closed
+
+r9 named it: *"The escalation ledger sorts payload keys: the payload
+arrives as a Go map, so Python's insertion order was gone before the
+writer saw it ... the fix is the same ordered-payload API."* It stayed
+open for two rounds because no payload's order was observable — every
+existing caller's keys survived alphabetization unnoticed.
+
+The recursion check-in is a fourteen-key dict literal, and it made the
+divergence visible the moment the differential compared ledger rows.
+`notify.EmitOrdered` takes a `pyval.Obj` and both positional surfaces —
+`output/escalations.jsonl` and the hook's stdin — write the caller's
+order. `Emit` stays for callers whose payload is genuinely a bag; it
+sorts, and the sort is now an explicit, documented step rather than an
+invisible property of the parameter type.
+
+### The `ts` was local time
+
+Both Python writers in `notify` stamp `datetime.now(timezone.utc)`. Both
+Go writers stamped `time.Now()`. Same instant, different string, in a
+feed whose readers sort and group on the string — and invisible in every
+test, because a `ts` is the one field two processes cannot agree on and
+every comparison in the suite masks it. Found only because a fixture's
+raw output was printed next to CPython's on an unrelated failure.
+
+The sibling sweep found the two other zone-sensitive sites in the tree
+(`orch/pids.go`'s `%z` stamp, `record/dailylog.go`'s local date filename)
+already deliberate and already documented as matching Python's LOCAL
+behaviour. It is a one-site class, not a pattern.
+
+### `int(str)` is not `float(str)`, and neither is `pyval.IntOf`
+
+`confidence` arrives from a model, so it arrives as whatever the model
+felt like, and Python's gate is `int(...)` inside a `try` with a caller
+default of 5. That is three different things away from `pyval.IntOf`:
+
+- `int("high")` RAISES, and the fallback is the CALLER's 5. `IntOf`
+  answers 0, which then clamps to 1 — maximum uncertainty, reported from
+  a reply that said nothing about confidence at all.
+- `int("7.5")` and `int("7e2")` also raise, unlike `float()`. A decimal
+  point is a ValueError to `int`.
+- `int()` DOES accept surrounding whitespace, a leading sign, and PEP 515
+  underscores between digits — `int("1_0")` is 10; `int("_7")`,
+  `int("7_")` and `int("7__0")` are all ValueError.
+
+`pyIntFromString` implements those rules. One named divergence: CPython's
+`int()` accepts every Unicode decimal digit, so `int("٣")` is 3, and this
+port refuses it and takes the default. The consequence is bounded to one
+field, and widening it would mean carrying a Unicode decimal table for a
+case no model has produced — so it is named with the cost stated, and
+`TestTheFullWidthDigitDivergenceIsDeliberate` fails if it ever changes
+silently.
+
+### The order of two writes is a claim about a message
+
+`continue` and `narrow` both enqueue a continuation and then fire a
+non-blocking check-in. The check-in says "this goal is still running in
+the background; reply to redirect or stop it". If the enqueue failed, the
+chain is dead and that message is a lie with no way for the operator to
+catch it.
+
+So the cadence is split: `AdvanceOriginWithCheckin` advances the state on
+the ancestry object and returns whether a check-in is due; the caller
+fires it only after the enqueue is confirmed. And a failed enqueue does
+not merely suppress the check-in — it flips the action to `surface`,
+because a warning log is not an operator signal.
+
+Two sharp edges under that:
+
+- `random.randint(lo, hi)` is INCLUSIVE at both ends. `rand.Intn` is not.
+  A port reaching for it directly gets a 4–7 cadence that is really 4–6,
+  and nothing anywhere would report it.
+- The origin must be COPIED, not aliased. Python builds a fresh `Origin`
+  from the task's dict, so advancing the cadence must not touch the task
+  the caller still holds — otherwise a failed enqueue leaves
+  `next_checkin_depth` advanced on a task that was never sent.
+
+And one bug the differential caught: `asOrigin` type-asserted only
+`pyval.Obj`, so an origin arriving as a plain Go map was silently
+DISCARDED and the continuation lost its whole ancestry. Every cadence
+assertion still passed, because the cadence starts from defaults when the
+ancestry is empty.
+
+### Named residuals after r11
+
+- `EventFields.Status` and `.Model` are typed `string` where Python
+  leaves them untouched like `Project` and `LoopID`. No caller in this
+  port has a non-string source for either; the day one does, they join
+  the two that are `any`.
+- A surface born from a FAILED LLM call writes nothing at all — no
+  artifact, no calibration row, no event. Python returns before the whole
+  recording block. That is a real gap on the Python side (the one surface
+  an operator most needs to see is the one nobody records) and it is
+  reproduced rather than fixed: a Go-only artifact would show up as a
+  phantom file in every differential from here on. Owed upstream.
+- `int()` refuses non-ASCII decimal digits (above).
+- The escalation's `Config` is passed in where Python reads it from the
+  config module — consistent with the rest of this port.
+- `LowConfidenceNotifier` is one method of Python's `ConversationChannel`.
+  The escalation lane files one advisory and does not converse; a fuller
+  channel port will widen it.
+- The stop-verdict rail's remaining Python callers are still unported:
+  `agent_loop`'s fence stamp, `loop_finalize`'s ending stamp, `handle`'s
+  demotion stamp. r11 closed the director-close one.

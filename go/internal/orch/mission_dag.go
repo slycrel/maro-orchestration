@@ -357,7 +357,7 @@ func ValidateMilestone(
 	if err != nil {
 		return true // Python's blanket `except Exception: pass`
 	}
-	data, jerr := jsonx.ObjectOrdered(contentOrEmpty(resp))
+	data, jerr := jsonx.ObjectOrdered(llm.ContentOrEmpty(resp))
 	if jerr != nil {
 		return true
 	}

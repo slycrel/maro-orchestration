@@ -40,15 +40,28 @@ func StampOutcomeStopVerdict(workspaceDir, loopID, stopVerdict, stopEvidence str
 		return false, nil
 	}
 	path := filepath.Join(workspaceDir, "memory", "outcomes.jsonl")
-	// A missing store is a miss, not an error, and must not CREATE the
-	// file: Python reads first and returns False on FileNotFoundError,
-	// before any writer is involved. A read-modify-write would
-	// materialize an empty outcomes.jsonl in a workspace that has none —
-	// a store appearing out of a failed lookup.
-	if _, err := os.Stat(path); err != nil {
-		return false, nil
-	}
 
+	// A missing store is a miss, not an error, and must not CREATE the
+	// store file. That property is real, and an earlier cut of this port
+	// bought it with a `os.Stat(path)` short-circuit ABOVE the lock, under
+	// a comment claiming Python "reads first ... before any writer is
+	// involved". Python does not: `with locked_write(path):` comes first,
+	// and only inside it does the read raise FileNotFoundError
+	// (memory_ledger.py:921). The no-phantom-store property was never
+	// carried by the stat — it is carried by the conditional AtomicWrite
+	// below, which does not run on a miss, in either runtime.
+	//
+	// The stat cost three things and bought nothing:
+	//   - a TOCTOU window Python does not have. The stat is unsynchronized,
+	//     so a row appended between it and the lock is a row this returns
+	//     "no such store" for and Python stamps.
+	//   - the .lock sidecar and the memory/ directory, which
+	//     locked_write creates unconditionally (file_lock.py:144). A cold
+	//     workspace ends up shaped differently on the two runtimes after
+	//     the identical call.
+	//   - the honesty of the comment above it.
+	// Found by widening the escalation differential to compare lock files
+	// by name instead of skipping them.
 	hit := false
 	// Locked plus a CONDITIONAL AtomicWrite — deliberately NOT LockedRMW.
 	//
@@ -64,9 +77,9 @@ func StampOutcomeStopVerdict(workspaceDir, loopID, stopVerdict, stopEvidence str
 	err := Locked(path, func() error {
 		raw, rerr := os.ReadFile(path)
 		if rerr != nil {
-			// Vanished between the stat above and the lock. A miss, not
-			// an error — Python's inner `except FileNotFoundError: return
-			// False` covers the identical window.
+			// No store, or it vanished under the lock. A miss, not an
+			// error — Python's inner `except FileNotFoundError: return
+			// False` is this exact branch.
 			return nil
 		}
 		out, matched := stampNewestRow(string(raw), loopID, stopVerdict, stopEvidence)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"io"
 	"strings"
@@ -245,4 +246,20 @@ func ParseToolCall(text string, tools []Tool) *ToolCall {
 		}
 	}
 	return &ToolCall{Name: name, Arguments: args}
+}
+
+// ContentOrEmpty is llm_parse.content_or_empty: the response's content,
+// stripped, or "" when there is none.
+//
+// It lives here rather than in each caller because it had already been
+// hand-written twice — once in internal/orch, once in the escalation
+// lane — and the two copies differed: one stripped, one did not. The
+// strip is not cosmetic at a JSON seam, where a leading newline is the
+// difference between a parser that carves and one that starts at the
+// wrong byte. One implementation, every caller.
+func ContentOrEmpty(r *Response) string {
+	if r == nil {
+		return ""
+	}
+	return pytext.Strip(r.Content)
 }

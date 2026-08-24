@@ -159,7 +159,14 @@ func (o *Options) fill() {
 		o.Exec = runCommand
 	}
 	if o.Now == nil {
-		o.Now = time.Now
+		// UTC, not local. Python is `datetime.now(timezone.utc)` in both
+		// writers of this package, so a Go row stamped from a box in
+		// Denver carried "-06:00" against CPython's "+00:00" — the same
+		// instant, a different string, in a feed whose readers sort and
+		// group by that string. Invisible in every test here, because a
+		// ts is the one field two processes cannot agree on and every
+		// comparison masks it.
+		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	if o.Log == nil {
 		o.Log = func(format string, args ...any) {
@@ -176,6 +183,35 @@ func (o *Options) fill() {
 // those are errors. Never panics: a notification must not be able to take
 // down the run that produced it.
 func Emit(ctx context.Context, ws, eventType string, payload map[string]any,
+	opts Options) bool {
+	// A Go map has no order, so Python's insertion order was gone before
+	// this function saw it and SORTING is the only reproducible choice.
+	// That loss is real and it reaches two surfaces — the escalation
+	// ledger's rows and the hook's stdin — so a caller that HAS an order
+	// worth keeping should call EmitOrdered instead. This entry point
+	// stays for the callers whose payload is genuinely a bag.
+	return EmitOrdered(ctx, ws, eventType, sortedObj(payload), opts)
+}
+
+// sortedObj is the documented loss: a Go map rendered in key order.
+func sortedObj(payload map[string]any) pyval.Obj {
+	out := make(pyval.Obj, 0, len(payload))
+	for _, k := range sortedKeys(payload) {
+		out = append(out, pyval.Field{Key: k, Val: payload[k]})
+	}
+	return out
+}
+
+// EmitOrdered is Emit with the payload's key ORDER preserved.
+//
+// Python builds these payloads as dict literals, and two surfaces write
+// the keys out in that order: the escalation ledger's rows
+// (`{"ts": ..., "event_type": ..., **payload}`) and the hook's stdin. A
+// row whose keys are alphabetized is still valid JSON and still parses —
+// which is exactly why the divergence sat as a named residual from r9
+// until a payload arrived whose order a differential could see (the
+// recursion check-in, r11).
+func EmitOrdered(ctx context.Context, ws, eventType string, payload pyval.Obj,
 	opts Options) (ran bool) {
 	defer func() {
 		// Python wraps the whole body in `except Exception: return False`.
@@ -189,14 +225,14 @@ func Emit(ctx context.Context, ws, eventType string, payload map[string]any,
 	}()
 	opts.fill()
 	if payload == nil {
-		payload = map[string]any{}
+		payload = pyval.Obj{}
 	}
-	handleID := pyval.Str(payload["handle_id"])
-	if _, ok := payload["handle_id"]; !ok {
-		handleID = ""
+	handleID := ""
+	if v, ok := payload.Get("handle_id"); ok {
+		handleID = pyval.Str(v)
 	}
 	status := ""
-	if v, ok := payload["status"]; ok {
+	if v, ok := payload.Get("status"); ok {
 		status = pyval.Str(v)
 	}
 
@@ -216,7 +252,7 @@ func Emit(ctx context.Context, ws, eventType string, payload map[string]any,
 }
 
 // writeEventRow is step 1: the projection every polling substrate reads.
-func writeEventRow(ws, eventType string, payload map[string]any,
+func writeEventRow(ws, eventType string, payload pyval.Obj,
 	handleID, status string, opts Options) {
 	// `str(payload.get("result_excerpt", payload.get("summary", "")))`.
 	//
@@ -225,9 +261,9 @@ func writeEventRow(ws, eventType string, payload map[string]any,
 	// what str(None) is — porting this as "falsy means fall back" would
 	// silently change which text reaches the substrate.
 	var src any = ""
-	if v, ok := payload["result_excerpt"]; ok {
+	if v, ok := payload.Get("result_excerpt"); ok {
 		src = v
-	} else if v, ok := payload["summary"]; ok {
+	} else if v, ok := payload.Get("summary"); ok {
 		src = v
 	}
 	detail := budget.Clip(pyval.Str(src), 300)
@@ -238,16 +274,17 @@ func writeEventRow(ws, eventType string, payload map[string]any,
 		// empty follow-up (review 2026-08-13). handle_id rides the detail
 		// because write_event has no field for it.
 		var b strings.Builder
-		fmt.Fprintf(&b, "[%s] goal_achieved=%s", handleID,
-			pyval.Str(payload["goal_achieved"]))
-		if src, ok := payload["goal_verdict_source"]; ok && truthy(src) {
+		ga, _ := payload.Get("goal_achieved")
+		fmt.Fprintf(&b, "[%s] goal_achieved=%s", handleID, pyval.Str(ga))
+		if src, ok := payload.Get("goal_verdict_source"); ok && truthy(src) {
 			fmt.Fprintf(&b, " source=%s", pyval.Str(src))
 		}
-		if truthy(payload["answer_changed"]) {
+		ac, _ := payload.Get("answer_changed")
+		if truthy(ac) {
 			b.WriteString(" answer_changed")
 		}
 		summary := ""
-		if v, ok := payload["goal_verdict_summary"]; ok {
+		if v, ok := payload.Get("goal_verdict_summary"); ok {
 			summary = pyval.Str(v)
 		}
 		b.WriteString("; " + summary)
@@ -257,14 +294,76 @@ func writeEventRow(ws, eventType string, payload map[string]any,
 	// `str(payload.get("goal", payload.get("reason", "")))[:200]` — a BARE
 	// Python slice, which counts RUNES and announces nothing, not a clip.
 	var goalSrc any = ""
-	if v, ok := payload["goal"]; ok {
+	if v, ok := payload.Get("goal"); ok {
 		goalSrc = v
-	} else if v, ok := payload["reason"]; ok {
+	} else if v, ok := payload.Get("reason"); ok {
 		goalSrc = v
 	}
 	goal := runeHead(pyval.Str(goalSrc), 200)
 
-	WriteEvent(ws, eventType, goal, status, detail)
+	// Project and LoopID are stated even though this projection carries
+	// neither: their Go zero is nil, which spells null, and Python's
+	// write_event default is "".
+	WriteEvent(ws, eventType, EventFields{
+		Goal: goal, Status: status, Detail: detail,
+		Project: "", LoopID: "",
+	})
+}
+
+// EventFields is observe.write_event's keyword set. Every member is
+// optional and zero-valued by default, which is what makes it the right
+// shape for a Python function whose callers pass two or three of
+// thirteen keywords — a positional Go signature would force every caller
+// to spell the ones it does not care about, and adding the fourteenth
+// would touch all of them.
+//
+// The zero values are Python's defaults for every field EXCEPT the two
+// typed `any` below, whose Go zero is nil and therefore spells `null`
+// where Python's default is "". Those two have no unset state to detect,
+// so every caller states what it means — which is also the only way a
+// genuine None (a task whose parent_job_id is present and null) can reach
+// the row at all.
+//
+// Goal, Step and Detail are typed `string` and Project and LoopID are
+// typed `any`, and the split is Python's, not a convenience. write_event
+// SLICES the first three (goal[:80], step[:120], _cb_clip(detail, 200)),
+// which raises for a non-string and — under the caller's blanket except —
+// means NO ROW AT ALL. It does not touch the other two: they ride
+// untouched into json.dumps, so a task carrying an int parent_job_id
+// writes a JSON number. A port that spelled them with str() would write
+// "4242" where Python writes 4242, and the row would compare equal to
+// nothing on the reading side.
+//
+// Status and Model are equally untouched by Python and are left as
+// strings here: no caller in this port has a non-string source for
+// either, and widening them would be a type change bought with nothing.
+// A named limit, not an oversight — the day one of them reads from a
+// task dict, it joins the two above.
+type EventFields struct {
+	Goal            string
+	Project         any
+	LoopID          any
+	Step            string
+	Status          string
+	Model           string
+	Detail          string
+	StepIdx         int
+	TokensIn        int
+	TokensOut       int
+	CacheReadTokens int
+	ElapsedMs       int
+	// ToolPathologies is the one CONDITIONAL key: Python appends it only
+	// when the list is truthy, so an empty slice must leave the key out
+	// entirely rather than writing [].
+	ToolPathologies []ToolPathology
+}
+
+// ToolPathology is one entry of write_event's tool_pathologies list.
+// Python reads it out of a dict with str(p.get(...)) defaults, so a
+// missing member is "" rather than an error.
+type ToolPathology struct {
+	Cls      string
+	Evidence string
 }
 
 // WriteEvent appends one observe.write_event-shaped row to
@@ -272,37 +371,67 @@ func writeEventRow(ws, eventType string, payload map[string]any,
 // from either runtime must rehydrate in the other, so the field set and
 // both breakers match the Python writer. Best-effort, exactly like
 // Python's never-raises contract.
-func WriteEvent(ws, eventType, goal, status, detail string) {
+//
+// Deliberately UNLOCKED, like Python: every field is length-capped so the
+// line stays well under PIPE_BUF and a single O_APPEND write is atomic on
+// Linux. Python also notes the other half of that reasoning —
+// file_lock's timeout reporter calls this, so taking a lock here would
+// recurse into the lock machinery while it reports a lock timeout.
+func WriteEvent(ws, eventType string, f EventFields) {
 	dir := filepath.Dir(eventsPath(ws))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
 	entry := pyval.Obj{
 		{Key: "event_type", Val: eventType},
-		{Key: "ts", Val: pyval.NowISO(time.Now())},
-		// write_event clips goal to 80 with a bare cut (its own contract);
-		// the notify caller pre-clips to 200 first — net effect is 80.
-		{Key: "goal", Val: runeHead(goal, 80)},
-		{Key: "project", Val: ""},
-		{Key: "loop_id", Val: ""},
-		{Key: "step", Val: ""},
-		{Key: "step_idx", Val: 0},
-		{Key: "status", Val: status},
-		{Key: "tokens_in", Val: 0},
-		{Key: "tokens_out", Val: 0},
-		{Key: "cache_read_tokens", Val: 0},
-		{Key: "model", Val: ""},
-		{Key: "elapsed_ms", Val: 0},
+		// UTC — Python is datetime.now(timezone.utc). See Options.fill.
+		{Key: "ts", Val: pyval.NowISO(time.Now().UTC())},
+		// goal[:80] and step[:120] are BARE Python slices — silent rune
+		// cuts, not breakers, and they announce nothing. Only detail gets
+		// the announcing clip.
+		{Key: "goal", Val: runeHead(f.Goal, 80)},
+		// RAW — see the note on EventFields. No slice, no str().
+		{Key: "project", Val: pyval.FromPlain(f.Project)},
+		{Key: "loop_id", Val: pyval.FromPlain(f.LoopID)},
+		{Key: "step", Val: runeHead(f.Step, 120)},
+		{Key: "step_idx", Val: f.StepIdx},
+		{Key: "status", Val: f.Status},
+		{Key: "tokens_in", Val: f.TokensIn},
+		{Key: "tokens_out", Val: f.TokensOut},
+		{Key: "cache_read_tokens", Val: f.CacheReadTokens},
+		{Key: "model", Val: f.Model},
+		{Key: "elapsed_ms", Val: f.ElapsedMs},
 		// 200 is load-bearing (PIPE_BUF row atomicity downstream), and the
 		// cut announces itself — budget.Clip is a breaker, not a silent
 		// truncator.
-		{Key: "detail", Val: budget.Clip(detail, 200)},
+		{Key: "detail", Val: budget.Clip(f.Detail, 200)},
+	}
+	if len(f.ToolPathologies) > 0 {
+		// At most 3, evidence trimmed: the same PIPE_BUF budget. The full
+		// text lives on the step outcome / transcript artifact.
+		n := len(f.ToolPathologies)
+		if n > 3 {
+			n = 3
+		}
+		rows := make(pyval.List, 0, n)
+		for _, p := range f.ToolPathologies[:n] {
+			rows = append(rows, pyval.Obj{
+				{Key: "cls", Val: runeHead(p.Cls, 40)},
+				{Key: "evidence", Val: runeHead(p.Evidence, 160)},
+			})
+		}
+		entry = append(entry, pyval.Field{Key: "tool_pathologies", Val: rows})
 	}
 	line, err := pyval.DumpsCompactPy(entry)
 	if err != nil {
 		return
 	}
-	_ = record.AppendRawLine(eventsPath(ws), []byte(line))
+	// Unlocked by contract — see record.AppendUnlockedLine. The three
+	// reasons (size-derived atomicity, must-never-block, must-never-re-enter
+	// the lock machinery) are Python's own, and they are properties of THIS
+	// ledger, not of appending in general: every other jsonl writer in this
+	// package still goes through AppendRawLine.
+	_ = record.AppendUnlockedLine(eventsPath(ws), []byte(line))
 }
 
 // writeEscalationFile is step 2: the durable ledger.
@@ -311,7 +440,7 @@ func WriteEvent(ws, eventType, goal, status, detail string) {
 // carrying its own `ts` or `event_type` OVERRIDES the value but KEEPS the
 // leading position — that is what dict-literal-plus-splat does, and the
 // two halves of that behaviour are easy to get half-right.
-func writeEscalationFile(ws, eventType string, payload map[string]any,
+func writeEscalationFile(ws, eventType string, payload pyval.Obj,
 	opts Options) error {
 	// Idempotent, and it makes the zero Options usable at this entry point
 	// too — a helper that only works when its caller remembered to fill the
@@ -321,12 +450,14 @@ func writeEscalationFile(ws, eventType string, payload map[string]any,
 		{Key: "ts", Val: pyval.NowISO(opts.Now())},
 		{Key: "event_type", Val: eventType},
 	}
-	// Payload keys ride after, in sorted order: the payload is a Go map,
-	// so Python's insertion order was gone before this function saw it.
-	// A named loss, and the only one here — escaping, ensure_ascii and
-	// float spelling are all recovered by pyval (mission-r8).
-	for _, k := range sortedKeys(payload) {
-		v := payload[k]
+	// Payload keys ride after IN THE CALLER'S ORDER, which is what
+	// `{"ts": ..., "event_type": ..., **payload}` does in Python. A caller
+	// that came through Emit with a Go map had no order to give and was
+	// alphabetized on the way in; one that came through EmitOrdered kept
+	// the dict literal's shape. Escaping, ensure_ascii and float spelling
+	// are recovered by pyval (mission-r8).
+	for _, f := range payload {
+		k, v := f.Key, f.Val
 		if clipField(k) {
 			if s, ok := v.(string); ok {
 				// The ledger owns its bounds.
@@ -357,7 +488,7 @@ func clipField(k string) bool {
 }
 
 // runHook is step 3.
-func runHook(ctx context.Context, eventType string, payload map[string]any,
+func runHook(ctx context.Context, eventType string, payload pyval.Obj,
 	handleID, status string, opts Options) bool {
 	cfg := opts.Cfg
 	if cfg == nil {
@@ -390,8 +521,8 @@ func runHook(ctx context.Context, eventType string, payload map[string]any,
 	// event_type first, payload sorted after it for the same reason the
 	// ledger sorts.
 	stdinObj := pyval.Obj{{Key: "event_type", Val: eventType}}
-	for _, k := range sortedKeys(payload) {
-		stdinObj.Set(k, pyval.FromPlain(payload[k]))
+	for _, f := range payload {
+		stdinObj.Set(f.Key, pyval.FromPlain(f.Val))
 	}
 	stdin, err := pyval.DumpsCompactPy(stdinObj)
 	if err != nil {

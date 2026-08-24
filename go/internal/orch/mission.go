@@ -773,16 +773,10 @@ func WriteMissionLog(ws string, r MissionResult, m *Mission) error {
 		return err
 	}
 	path := MissionLogPath(ws)
-	// Python's locked_append mkdirs the parent (file_lock.py:304) and so
-	// does its lock acquisition (:144); Go's AppendRawLine does neither, so
-	// the first mission log written into a COLD workspace failed on the
-	// missing memory/ directory where Python created it. Fixed here rather
-	// than in record because record was under adversarial review — it
-	// belongs down there, and every direct AppendRawLine caller has the
-	// same hole until it moves.
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
+	// The by-hand mkdir that used to sit here moved into record.Locked,
+	// where Python has it (file_lock.py:144) and where every other direct
+	// AppendRawLine caller now gets it too. The note it carried said it
+	// belonged down there; it does, and it is there.
 	return record.AppendRawLine(path, []byte(line))
 }
 

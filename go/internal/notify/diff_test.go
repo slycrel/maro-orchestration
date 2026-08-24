@@ -385,7 +385,7 @@ func TestEscalationRowMatchesCPythonByteForByte(t *testing.T) {
 	want := strings.TrimRight(runPy(t, pyEscalationSrc, pyWS, "escalation"), "\n")
 
 	goWS := t.TempDir()
-	if err := writeEscalationFile(goWS, "escalation", payload, Options{}); err != nil {
+	if err := writeEscalationFile(goWS, "escalation", sortedObj(payload), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(EscalationsPath(goWS))

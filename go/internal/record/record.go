@@ -414,6 +414,16 @@ func (r *Recorder) appendJSONL(path string, row map[string]any, keyOrder []strin
 // helpers must take the lock once and call their in-lock cores.
 func Locked(path string, fn func() error) error {
 	lockPath := path + ".lock"
+	// Python's acquisition mkdirs the lock's parent unconditionally
+	// (file_lock.py:144), which is why a locked write into a cold
+	// workspace works there. Go's did not, so the first write to any store
+	// in a fresh workspace failed on the missing directory — a hole
+	// orch/mission.go had already papered over at ONE call site with a
+	// comment saying it belonged down here and that "every direct
+	// AppendRawLine caller has the same hole until it moves". It has moved.
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return fmt.Errorf("create lock dir for %s: %w", lockPath, err)
+	}
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return fmt.Errorf("open lock %s: %w", lockPath, err)
@@ -455,6 +465,44 @@ func AppendRawLine(path string, raw []byte) error {
 		}
 		return nil
 	})
+}
+
+// AppendUnlockedLine appends one pre-serialized row with a single O_APPEND
+// write and NO lock, NO lock file, and NO torn-tail framing.
+//
+// This is not a shortcut; it is the contract of exactly one ledger.
+// observe.write_event carries the rationale in Python, and all three
+// clauses are load-bearing:
+//
+//   - Atomicity comes from the row's SIZE, not from a lock. Every field
+//     write_event emits is length-capped (goal 80, step 120, detail 200,
+//     three pathologies at 40/160), so the line stays far under PIPE_BUF
+//     and a single O_APPEND write of that size is atomic on Linux.
+//   - It must never block. It is on the hot path after every step, and a
+//     bounded-but-loud stall in the surface that REPORTS stalls is the
+//     wrong trade in the one place it is.
+//   - It must never re-enter the lock machinery. Python's file-lock
+//     timeout reporter calls write_event; taking a lock to report a lock
+//     timeout recurses. Go has no such reporter yet, which makes this the
+//     cheap moment to keep the door shut rather than the expensive one.
+//
+// The visible consequence of getting this wrong is not subtle and is also
+// not loud: routing this ledger through AppendRawLine leaves a
+// `events.jsonl.lock` sidecar in every workspace that Python never
+// creates — a file that differential harnesses tend to skip by name.
+//
+// Callers get Python's semantics: best-effort, errors are the caller's to
+// swallow.
+func AppendUnlockedLine(path string, raw []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(append([]byte{}, raw...), '\n')); err != nil {
+		return fmt.Errorf("append %s: %w", path, err)
+	}
+	return nil
 }
 
 // flockWithDeadline mirrors Python locked_write's acquisition loop:

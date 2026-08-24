@@ -174,7 +174,7 @@ func decomposeViaLLM(
 		return nil, err
 	}
 
-	data, jerr := jsonx.ObjectOrdered(contentOrEmpty(resp))
+	data, jerr := jsonx.ObjectOrdered(llm.ContentOrEmpty(resp))
 	if jerr != nil {
 		return nil, nil // no usable JSON; fall through to the heuristic
 	}
@@ -385,15 +385,6 @@ func criteriaOf(rm pyval.Obj) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// contentOrEmpty is llm_parse.content_or_empty: the response's content,
-// stripped, or "" when there is none.
-func contentOrEmpty(r *llm.Response) string {
-	if r == nil {
-		return ""
-	}
-	return pytext.Strip(r.Content)
 }
 
 // safeListOfObjects is `safe_list(data.get(key, []), element_type=dict,
