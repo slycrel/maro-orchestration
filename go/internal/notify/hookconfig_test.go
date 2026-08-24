@@ -2,9 +2,12 @@ package notify
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +78,20 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 		{"prose", "soon", false, 0},
 		{"a null", nil, false, 0},
 		{"a list", []any{45}, false, 0},
+		// subprocess.run converts the timeout to a C PyTime_t, which
+		// OVERFLOWS past ~9.2e9 seconds — an OverflowError, not a
+		// TimeoutExpired, so it escapes to emit's outer handler the same
+		// way prose does. Go's Duration wraps to MinInt64 instead: an
+		// already-expired context, the hook "timing out" instantly, and a
+		// log line claiming a timeout of -9223372037s.
+		{"a timeout past the int64 nanosecond range", 1e11, false, 0},
+		{"an infinite timeout", math.Inf(1), false, 0},
+		{"a negative infinite timeout", math.Inf(-1), false, 0},
+		{"a NaN timeout", math.NaN(), false, 0},
+		// And the bound from the side that still works, so the range
+		// check cannot be a blanket refusal.
+		{"the largest timeout that fits", 9.2e9, true,
+			time.Duration(9.2e9 * float64(time.Second))},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{}
@@ -82,9 +99,13 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 				"command":         "bash notify.sh",
 				"timeout_seconds": c.val,
 			}}
+			var logged []string
 			ran := Emit(context.Background(), t.TempDir(), "escalation",
 				map[string]any{"handle_id": "h-1"},
-				Options{Cfg: cfg, Exec: rec.fn, Env: []string{"PATH=/bin"}})
+				Options{Cfg: cfg, Exec: rec.fn, Env: []string{"PATH=/bin"},
+					Log: func(format string, a ...any) {
+						logged = append(logged, fmt.Sprintf(format, a...))
+					}})
 			if ran != c.wantRun {
 				t.Fatalf("emit reported %v, want %v (calls=%d)", ran, c.wantRun, rec.calls)
 			}
@@ -92,6 +113,16 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 				if rec.calls != 0 {
 					t.Errorf("the hook ran %d time(s); float() raises for this value "+
 						"and CPython never reaches subprocess.run", rec.calls)
+				}
+				// The LOG, because "did not run" and "reported a timeout
+				// that never happened" look identical from the return
+				// value — and the log is the only surface a headless
+				// operator sees.
+				for _, line := range logged {
+					if strings.Contains(line, "timed out") {
+						t.Errorf("the port logged a timeout CPython never "+
+							"reports: %q", line)
+					}
 				}
 				return
 			}

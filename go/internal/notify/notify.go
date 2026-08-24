@@ -42,6 +42,7 @@ package notify
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -567,6 +568,21 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 	tsec, numeric := pyval.Float(config.GetRaw(cfg, "notify.timeout_seconds", 30))
 	if !numeric {
 		opts.Log("notify.timeout_seconds is not a number; not running the hook for %s (%s)",
+			eventType, handleID)
+		return false
+	}
+	// RANGE-CHECKED before the conversion. subprocess.run converts the
+	// timeout to a C PyTime_t and raises OverflowError past ~9.2e9 seconds
+	// (ValueError for a NaN) — neither of which is TimeoutExpired, so both
+	// escape to emit's outer handler exactly the way a non-numeric setting
+	// does. Go's Duration silently WRAPS instead, producing an
+	// already-expired context and an operator-facing line claiming the
+	// hook "timed out after -9223372037s" — a timeout that never happened,
+	// on the one surface a headless operator reads (adversarial r11 round
+	// 5, LOW).
+	const maxTimeoutSecs = float64(math.MaxInt64) / float64(time.Second)
+	if math.IsNaN(tsec) || math.Abs(tsec) > maxTimeoutSecs {
+		opts.Log("notify.timeout_seconds is out of range; not running the hook for %s (%s)",
 			eventType, handleID)
 		return false
 	}

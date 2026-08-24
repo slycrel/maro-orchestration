@@ -173,7 +173,14 @@ func intFromString(s string) (int, error) {
 		i++
 	}
 	digits := 0
-	n := 0
+	// UNSIGNED, so the magnitude 2**63 — which is a valid int64 only with
+	// the sign attached — can be accumulated and range-checked once at the
+	// end. The signed accumulator it replaces guarded with
+	// `n <= (MaxInt64-9)/10`, which is conservative by a whole decade:
+	// int("9223372036854775806") is exact in CPython, fits int64, and was
+	// refused here. The string arm was the only arm that could be wrong,
+	// because a json.Number takes Int64() and reaches the true bound.
+	var mag uint64
 	tooLarge := false
 	prevUnderscore := false
 	for ; i < len(t); i++ {
@@ -189,14 +196,15 @@ func intFromString(s string) (int, error) {
 		case c >= '0' && c <= '9':
 			prevUnderscore = false
 			digits++
-			if n <= (math.MaxInt64-9)/10 {
-				n = n*10 + int(c-'0')
-			} else {
-				// Past int64. CPython keeps going with an arbitrary-
-				// precision int, so the loop keeps COUNTING — the digit
-				// limit is checked first, and only a value inside it
-				// becomes ErrIntTooLarge.
+			if !tooLarge && mag > (math.MaxUint64-9)/10 {
+				// Past even the accumulator. CPython keeps going with an
+				// arbitrary-precision int, so the loop keeps COUNTING —
+				// the digit limit is checked first, and only a value
+				// inside it becomes ErrIntTooLarge.
 				tooLarge = true
+			}
+			if !tooLarge {
+				mag = mag*10 + uint64(c-'0')
 			}
 		default:
 			return bad()
@@ -217,13 +225,19 @@ func intFromString(s string) (int, error) {
 				"value has %d digits; use sys.set_int_max_str_digits() to "+
 				"increase the limit", intMaxStrDigits, digits)}
 	}
-	if tooLarge {
+	// The bound, applied once and ASYMMETRICALLY: the negative side reaches
+	// one further than the positive side, so -9223372036854775808 parses
+	// and 9223372036854775808 does not.
+	if neg {
+		if tooLarge || mag > uint64(math.MaxInt64)+1 {
+			return 0, ErrIntTooLarge
+		}
+		return int(-int64(mag-1)) - 1, nil
+	}
+	if tooLarge || mag > uint64(math.MaxInt64) {
 		return 0, ErrIntTooLarge
 	}
-	if neg {
-		return -n, nil
-	}
-	return n, nil
+	return int(mag), nil
 }
 
 // intMaxStrDigits is CPython's sys.get_int_max_str_digits() default.

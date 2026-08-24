@@ -237,8 +237,9 @@ func Enqueue(ws string, o Options) (Task, error) {
 
 	// Python checks the cycle BEFORE taking the lock and before the file
 	// exists, so a rejected task leaves nothing behind.
-	if blocked := blockedList(task); len(blocked) > 0 {
-		if err := checkCycle(ws, jid, blocked, nil); err != nil {
+	blockedRaw, _ := task.Get("blocked_by")
+	if pyval.Truthy(blockedRaw) {
+		if err := checkCycle(ws, jid, blockedRaw, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -256,28 +257,53 @@ func Enqueue(ws string, o Options) (Task, error) {
 // `visited` tracks the nodes on the CURRENT DFS path, not every node ever
 // seen — the discard on the way back out is the whole point, and dropping
 // it would report a diamond (two paths to one dependency) as a cycle.
-func checkCycle(ws, jobID string, blockedBy []string, visited map[string]bool) error {
+func checkCycle(ws, jobID string, blockedBy any, visited map[string]bool) error {
 	if visited == nil {
-		visited = map[string]bool{jobID: true} // seed with the new task's id
+		visited = map[string]bool{"s:" + jobID: true} // seed with the new task's id
 	}
-	for _, depID := range blockedBy {
-		if visited[depID] {
+	deps, err := pyIter(blockedBy)
+	if err != nil {
+		return err
+	}
+	for _, depRaw := range deps {
+		// `dep_id in visited` and `visited.add(dep_id)` are SET
+		// operations, so an unhashable dep_id raises before either.
+		key, hashable := hashKey(depRaw)
+		if !hashable {
+			return &pyval.PyErr{Class: "TypeError",
+				Msg: "unhashable type: '" + pyval.TypeName(depRaw) + "'"}
+		}
+		depID := pyval.Str(depRaw) // task_path is an f-string
+		if visited[key] {
 			return &CycleError{msg: fmt.Sprintf(
 				"cycle detected: %s appears in dependency chain of %s", depID, jobID)}
 		}
-		visited[depID] = true
-		dep, err := readTask(TaskPath(ws, depID))
+		visited[key] = true
+		depRawRow, err := readRaw(TaskPath(ws, depID))
 		if err != nil {
 			return err
 		}
-		if dep != nil {
-			if inner := blockedList(dep); len(inner) > 0 {
+		// `if dep and dep.get("blocked_by")` — TRUTHINESS first, so a
+		// falsy junk row (0, "", []) is stepped over without the .get
+		// ever running, and only a TRUTHY one raises AttributeError.
+		if pyval.Truthy(depRawRow) {
+			dep, merr := asMapping(depRawRow)
+			if merr != nil {
+				return merr
+			}
+			// `if dep and dep.get("blocked_by")` — TRUTHINESS, not a
+			// length: a falsy blocked_by (null, 0, "", []) skips the
+			// recursion entirely and never raises, where the same value
+			// on the task being CLAIMED does raise. Two sites, two
+			// behaviours, one field.
+			inner, _ := dep.Get("blocked_by")
+			if pyval.Truthy(inner) {
 				if err := checkCycle(ws, jobID, inner, visited); err != nil {
 					return err
 				}
 			}
 		}
-		delete(visited, depID) // backtrack for other branches
+		delete(visited, key) // backtrack for other branches
 	}
 	return nil
 }
@@ -347,7 +373,16 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 			return conflictf("task %s has status '%s', expected 'queued'", jobID, s)
 		}
 
-		for _, depID := range blockedList(t) {
+		deps, derr := blockedIter(t)
+		if derr != nil {
+			return derr
+		}
+		for _, depRaw := range deps {
+			// `task_path(dep_id)` is an f-string and the message
+			// interpolates the same value, so a non-string dep_id is not
+			// dropped — it names a file that does not exist and the claim
+			// is refused with status=missing.
+			depID := pyval.Str(depRaw)
 			dep, err := readTask(TaskPath(ws, depID))
 			if err != nil {
 				return err
@@ -517,19 +552,49 @@ func resolveDependents(ws, completedJobID string) error {
 	}
 	for _, p := range paths {
 		err := locked(p, false, func() error {
-			t, err := readTask(p)
-			if err != nil || t == nil {
+			v, err := readRaw(p)
+			if err != nil || v == nil {
 				return err
 			}
-			blocked, _ := mustGet(t, "blocked_by").(pyval.List)
+			t, merr := asMapping(v)
+			if merr != nil {
+				return merr
+			}
+			// `blocked = task.get("blocked_by", [])`, then
+			// `if completed_job_id in blocked`, then `blocked.remove(...)`
+			// — three different operations on the same raw value, and
+			// each one refuses a different set of shapes. `in` is a
+			// SUBSTRING test on a str and a KEY test on a dict; `.remove`
+			// exists on neither, so a hit there is an AttributeError
+			// rather than an edit. A type assertion to List answered
+			// "not present" for all of them and silently skipped the row
+			// (adversarial r11 round 5, HIGH).
+			var blockedRaw any = pyval.List{}
+			if v, ok := t.Get("blocked_by"); ok {
+				blockedRaw = v
+			}
+			hit, cerr := pyContains(blockedRaw, completedJobID)
+			if cerr != nil {
+				return cerr
+			}
+			if !hit {
+				return nil
+			}
+			blocked, isList := blockedRaw.(pyval.List)
+			if !isList {
+				return &pyval.PyErr{Class: "AttributeError",
+					Msg: fmt.Sprintf("'%s' object has no attribute 'remove'",
+						pyval.TypeName(blockedRaw))}
+			}
+			// list.remove drops the FIRST equal element only.
 			for i, v := range blocked {
-				if s, ok := v.(string); ok && s == completedJobID {
+				if sv, ok := v.(string); ok && sv == completedJobID {
 					blocked = append(blocked[:i:i], blocked[i+1:]...)
-					t.Set("blocked_by", blocked)
-					return writeTask(p, t)
+					break
 				}
 			}
-			return nil
+			t.Set("blocked_by", blocked)
+			return writeTask(p, t)
 		})
 		if err != nil {
 			return err
@@ -553,7 +618,7 @@ func resolveDependents(ws, completedJobID string) error {
 // depends on it — none of the three is order-sensitive — except that
 // RecoverStaleClaims RETURNS its ids, so a caller diffing the two
 // runtimes' lists would see the same set in a different order.
-func List(ws, statusFilter string) ([]Task, error) {
+func List(ws, statusFilter string) ([]any, error) {
 	dir := TasksDir(ws)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
@@ -563,19 +628,31 @@ func List(ws, statusFilter string) ([]Task, error) {
 		return nil, err
 	}
 	sort.Strings(paths)
-	out := []Task{}
+	out := []any{}
 	for _, p := range paths {
-		t, err := readTask(p)
+		v, err := readRaw(p)
 		if err != nil {
 			return nil, err
 		}
-		if t == nil {
+		if v == nil {
 			continue
 		}
-		if statusFilter != "" && t.GetString("status") != statusFilter {
-			continue
+		// SHORT-CIRCUITED: `if status_filter and task.get(...) != filter`.
+		// With no filter the `.get` is never called, so an unfiltered
+		// list_tasks RETURNS a junk row rather than raising on it — and
+		// the filtered one raises AttributeError on the same row. The
+		// return type is []any for that reason: a row that is not a
+		// mapping is still a row CPython hands back.
+		if statusFilter != "" {
+			t, merr := asMapping(v)
+			if merr != nil {
+				return nil, merr
+			}
+			if t.GetString("status") != statusFilter {
+				continue
+			}
 		}
-		out = append(out, t)
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -591,14 +668,19 @@ func StatusSummary(ws string) (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	counts := map[string]int{}
+	buckets := map[string]*statusBucket{}
+	order := []*statusBucket{}
 	for _, p := range paths {
-		t, err := readTask(p)
+		v, err := readRaw(p)
 		if err != nil {
 			return nil, err
 		}
-		if t == nil {
+		if v == nil {
 			continue
+		}
+		t, merr := asMapping(v)
+		if merr != nil {
+			return nil, merr
 		}
 		// `s = task.get("status", "unknown")` — the default applies only
 		// when the KEY is absent, and the raw value becomes a dict key.
@@ -610,16 +692,35 @@ func StatusSummary(ws string) (map[string]int, error) {
 		if !ok {
 			raw = "unknown"
 		}
-		key, hashable := statusKey(raw)
+		key, hashable := hashKey(raw)
 		if !hashable {
 			return nil, &pyval.PyErr{Class: "TypeError",
 				Msg: fmt.Sprintf("cannot use '%s' as a dict key "+
 					"(unhashable type: '%s')",
 					pyval.TypeName(raw), pyval.TypeName(raw))}
 		}
-		counts[key]++
+		// Counted by IDENTITY, labelled by the FIRST spelling seen — which
+		// is Python's dict rule: a later 1.0 increments the bucket True
+		// opened without renaming it.
+		if b, ok := buckets[key]; ok {
+			b.n++
+			continue
+		}
+		display, _ := statusKey(raw)
+		b := &statusBucket{display: display, n: 1}
+		buckets[key] = b
+		order = append(order, b)
+	}
+	counts := map[string]int{}
+	for _, b := range order {
+		counts[b.display] = b.n
 	}
 	return counts, nil
+}
+
+type statusBucket struct {
+	display string
+	n       int
 }
 
 // Archive moves a done/failed task into the archive directory.
@@ -678,9 +779,13 @@ func RecoverStaleClaims(ws string) ([]string, error) {
 	recovered := []string{}
 	for _, p := range paths {
 		err := locked(p, false, func() error {
-			t, err := readTask(p)
-			if err != nil || t == nil {
+			v, err := readRaw(p)
+			if err != nil || v == nil {
 				return err
+			}
+			t, ierr := asIndexable(v)
+			if ierr != nil {
+				return ierr
 			}
 			// SUBSCRIPTS, both of them: `task["status"]` and
 			// `task["job_id"]` are indexed here, not defaulted, so a
@@ -830,18 +935,110 @@ func cmpTypeErr(v any) string {
 		pyval.TypeName(v))
 }
 
-// blockedList reads blocked_by as strings, skipping non-strings the way
-// Python's `for dep_id in task.get("blocked_by", [])` would carry them —
-// except that a non-string there could never match a job id anyway.
-func blockedList(t Task) []string {
-	raw, _ := mustGet(t, "blocked_by").(pyval.List)
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
+// pyIter is Python's `for x in v` over a decoded JSON value.
+//
+// A queue file is a document a foreign writer can produce, and `blocked_by`
+// is the field that decides whether a task may run at all — yet it was the
+// one field rounds 3 and 4 never opened, because every fixture in this
+// package spells `"blocked_by": []`. The port type-asserted it to a List,
+// which is nil for anything else: a `null`, a number or a string
+// `blocked_by` became NO DEPENDENCIES, and Go claimed and drained tasks
+// CPython refuses to claim (adversarial r11 round 5, HIGH).
+//
+// Measured, and none of these is the same as "empty": a str iterates by
+// CHARACTER, a dict iterates by KEY, and None/int/float/bool are all a
+// TypeError naming the type.
+func pyIter(v any) ([]any, error) {
+	switch t := v.(type) {
+	case string:
+		out := make([]any, 0, len(t))
+		for _, r := range t {
+			out = append(out, string(r))
+		}
+		return out, nil
+	case pyval.List:
+		return []any(t), nil
+	case []any:
+		return t, nil
+	case []string:
+		out := make([]any, 0, len(t))
+		for _, e := range t {
+			out = append(out, e)
+		}
+		return out, nil
+	case pyval.Obj:
+		out := make([]any, 0, len(t))
+		for _, f := range t {
+			out = append(out, f.Key)
+		}
+		return out, nil
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make([]any, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, k)
+		}
+		return out, nil
+	}
+	return nil, &pyval.PyErr{Class: "TypeError",
+		Msg: fmt.Sprintf("'%s' object is not iterable", pyval.TypeName(v))}
+}
+
+// pyContains is Python's `needle in v`, which is NOT iteration: it is a
+// SUBSTRING test on a str, a KEY test on a dict, and a TypeError with its
+// own wording on everything non-container.
+func pyContains(v any, needle string) (bool, error) {
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(t, needle), nil
+	case pyval.List:
+		return listHas([]any(t), needle), nil
+	case []any:
+		return listHas(t, needle), nil
+	case []string:
+		for _, e := range t {
+			if e == needle {
+				return true, nil
+			}
+		}
+		return false, nil
+	case pyval.Obj:
+		_, ok := t.Get(needle)
+		return ok, nil
+	case map[string]any:
+		_, ok := t[needle]
+		return ok, nil
+	}
+	return false, &pyval.PyErr{Class: "TypeError", Msg: fmt.Sprintf(
+		"argument of type '%s' is not a container or iterable",
+		pyval.TypeName(v))}
+}
+
+// listHas is Python's `==` between a str and each element: a str never
+// equals an int, a bool or a dict, so a non-string element is simply not a
+// match — it is NOT skipped, which matters because the same element is
+// still interpolated into a path by the caller.
+func listHas(l []any, needle string) bool {
+	for _, e := range l {
+		if s, ok := e.(string); ok && s == needle {
+			return true
 		}
 	}
-	return out
+	return false
+}
+
+// blockedIter is `for dep_id in task.get("blocked_by", [])` — a `.get` with
+// a list default, then Python's own iteration.
+func blockedIter(t Task) ([]any, error) {
+	v, ok := t.Get("blocked_by")
+	if !ok {
+		return nil, nil // the [] default; a PRESENT null is not this
+	}
+	return pyIter(v)
 }
 
 func mustGet(t Task, key string) any {
@@ -943,6 +1140,64 @@ func lockPath(path string) string {
 // statusKey is a status value as a JSON object key — what json.dumps does
 // to the counts dict CPython builds. A list or a dict is unhashable and
 // never becomes a key at all.
+// hashKey is a value's IDENTITY as a Python dict key or set member, which
+// is not the same as its spelling. Python hashes by numeric value, so
+// `True`, `1` and `1.0` are ONE key — `{True: 3}` after counting all three
+// — and a status summary that keyed by spelling reported three buckets of
+// one where CPython reports one bucket of three (adversarial r11 round 5,
+// LOW). The same rule decides membership in `_check_cycle`'s visited set.
+//
+// The second return is hashability: a list or a dict raises rather than
+// becoming a key at all.
+func hashKey(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return "s:" + t, true
+	case nil:
+		return "n:", true
+	case bool:
+		if t {
+			return "i:1", true
+		}
+		return "i:0", true
+	case int:
+		return "i:" + strconv.Itoa(t), true
+	case int64:
+		return "i:" + strconv.FormatInt(t, 10), true
+	case float64:
+		return floatHashKey(t), true
+	case json.Number:
+		if lit, ok := pyval.IntLiteral(t.String()); ok {
+			return "i:" + lit, true
+		}
+		f, err := t.Float64()
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return "s:" + t.String(), true
+		}
+		return floatHashKey(f), true
+	case pyval.Obj, pyval.List, map[string]any, []any, []string:
+		return "", false
+	}
+	return "o:" + pyval.Str(v), true
+}
+
+// floatHashKey folds a float that is exactly an integer onto the integer's
+// key, which is what makes 1.0 and 1 the same bucket. A NaN is deliberately
+// NOT folded: Python hashes every NaN alike but compares them unequal, so
+// each one is its own bucket.
+func floatHashKey(f float64) string {
+	if math.IsNaN(f) {
+		return fmt.Sprintf("nan:%p", new(int))
+	}
+	if !math.IsInf(f, 0) && f == math.Trunc(f) &&
+		f >= -9.2e18 && f <= 9.2e18 {
+		return "i:" + strconv.FormatInt(int64(f), 10)
+	}
+	return "f:" + strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// statusKey is the same value's SPELLING once json.dumps renders the
+// summary — which is what an operator reads.
 func statusKey(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:

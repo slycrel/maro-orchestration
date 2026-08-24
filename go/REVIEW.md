@@ -7348,3 +7348,129 @@ out at each call site. Two more unobservable guards were not labelled but
 DELETED this round, for the reason the C-int bound made concrete: a
 duplicated sign test is not defence in depth, it is the thing that hides
 a wrong bound.
+
+### Round 11, part 5 — Python's operators are not Go's
+
+Six findings — 1 HIGH, 2 MEDIUM, 3 LOW — against the whole r11 chunk and
+its four rounds of fixes. Five of the six code claims were verified against
+the Python source and the interpreter and held. **The sixth I first
+measured as WRONG, and my measurement was the broken one** — recorded
+below, because "verify before you fix" cuts both ways.
+
+**The HIGH is the lens from round 8 collecting its debt.** *An enumeration
+is not a class.* Rounds 3 and 4 built an entire malformed-row differential
+around the premise that a queue file is a document a foreign writer can
+produce, and enumerated `status`, `attempt`, `timestamps`,
+`artifact_paths`, `claimed_by_pid` and `job_id`. Every fixture in both
+differentials spells `"blocked_by": []`. The one field left out of the
+enumeration is the field that decides whether a task may run at all.
+
+Python iterates the raw value — `for dep_id in task.get("blocked_by", [])`
+— and the port type-asserted it to a list, which is nil for everything
+else. A `blocked_by` of `null`, `5` or `true` became NO DEPENDENCIES, so
+Go **claimed and rewrote five rows CPython refuses to touch**, defeating
+the exact property the round-3 `setTimestamp` finding was written to
+protect, one field over. And the doc comment defended the second half of
+the loss — *"a non-string there could never match a job id anyway"* — which
+is false: a non-string `dep_id` is not compared to a job id, it is
+interpolated into a path by an f-string, `_read_task` returns None, and the
+claim is refused with `status=missing`.
+
+The same field is read two more ways, and neither is iteration:
+
+- `_check_cycle` recurses on `if dep and dep.get("blocked_by")` —
+  TRUTHINESS, so a falsy `blocked_by` skips the walk and never raises,
+  where the same value on the task being *claimed* does raise. One field,
+  two sites, two behaviours.
+- `_resolve_dependents` does `completed_job_id in blocked` and then
+  `blocked.remove(...)`. `in` is a **substring test** on a str and a **key
+  test** on a dict; `.remove` exists on neither, so a hit there is an
+  AttributeError *after* the completed row was already written. The port
+  answered "not present" for all of them and skipped the row.
+
+So the port grew Python's operators rather than more type assertions:
+`pyIter` (a str by character, a dict by key, everything scalar a TypeError
+naming the type), `pyContains` (substring / key / element, with its own
+distinct TypeError wording), and `hashKey` — because the same round found
+that a dict KEY is an identity, not a spelling.
+
+**The two MEDIUMs were both "the fix was applied to a value, not to its
+class".**
+
+- `_checkin_jitter` has ONE `try` around TWO reads, so `lo` raising means
+  `hi` is **never evaluated**. Round 2 got the reset direction right and
+  round 5 found the other half: the port evaluated both reads before
+  classifying either, so a caught min beside an uncaught max
+  (`min: abc, max: .inf` — two config lines) let an OverflowError escape,
+  which flips the escalation to `surface` and kills the chain. CPython
+  draws from 4–7 and the chain lives.
+- Round 4 fixed the `null` LITERAL in `_read_task` and left its CLASS.
+  `null` is one of seven things `json.loads` can decode, and the other six
+  reach three different answers: an **unfiltered** `list_tasks` never calls
+  `.get` (the `if status_filter and …` short-circuits) so it hands the junk
+  row straight back; the filtered one raises **AttributeError**; the sweeps
+  subscript and raise **TypeError**, with three different sentences by
+  type. The port aborted on all of them — the same operator consequence
+  round 4 rated MEDIUM for `null`, reintroduced by fixing the literal.
+
+  The shape check therefore moved from `_read_task` to the callers, because
+  Python's is at the callers, and `List` now returns `[]any`: a row that is
+  not a mapping is still a row CPython hands back.
+
+**The LOWs.** A Python dict hashes by VALUE, so `True`, `1` and `1.0` are
+ONE key and `status_summary` reports one bucket of three where the port
+reported three buckets of one. `int(str)` was conservative by a whole
+decade — `n <= (MaxInt64-9)/10` refused every value from
+`922337203685477580` up, including `int("9223372036854775807")` itself; the
+accumulator is now unsigned with the bound applied once, asymmetrically
+(the negative side reaches one further). And an overflowing
+`notify.timeout_seconds` wrapped `time.Duration` to `MinInt64` and logged
+`timed out after -9223372037s` — a timeout that never happened, on the one
+surface a headless operator reads.
+
+**The claim I measured wrong.** I ran `subprocess.run(['true'],
+timeout=float('inf'))` and got no exception, and nearly recorded the
+timeout finding as a reviewer hallucination. It is not: without
+`capture_output=True` the call never consults the timeout at all, and
+`notify.py` passes `capture_output=True`. With it, `inf` and `1e11` are
+OverflowError and a NaN is a **ValueError** — neither is `TimeoutExpired`,
+so both escape the `except` and the hook does not run. The finding stood;
+my probe was the thing that was wrong. A measurement is only evidence about
+the call you actually made.
+
+**The battery: 27 mutations derived from the files, 24 caught on the
+first pass, and after closing the three gaps it stands at 26 of 26 — the
+first clean battery in this port.** Two of the three gaps were real:
+
+- `_check_cycle` is reached from `enqueue` and NOWHERE else, so its
+  truthiness guard needed its own probe verb. Nothing in the package had
+  ever driven the cycle walk over a malformed dependency row.
+- The third was not a gap but a DEAD CHOICE. The jitter fix held two
+  error variables and picked between them, and the pick had no observable
+  answer — at most one of the two can ever be non-nil, because the second
+  read does not happen when the first raised. Collapsed to one variable
+  rather than labelled as an unobservable mutation: a decision with no
+  consequence is where a wrong one hides, which is the same argument that
+  deleted the duplicated sign test in round 4.
+
+**What the battery found that the findings did not.** The fixture that
+exposed it was the new `complete` verb in the sweep differential: it writes
+a `finished_at_utc`, `normSweep` masked no timestamps, and the two runtimes
+read wall clocks a second apart on a loaded box. Green on one run and red
+on the next is lens 11 pointing at itself — a fixture whose answer depends
+on something neither runtime promises. Masked, with the key's PRESENCE
+still compared, because presence is the half that says whether the row was
+rewritten at all.
+
+A third volatile field turned up the same way: `enqueue` mints a uuid4
+`run_id`, so the new cycle-walk fixtures compared two different uuids.
+Masked by SHAPE rather than blanked — a row that lost the field, or grew
+a non-uuid there, still diverges.
+
+Two instruments were extended rather than added: the sweep probe grew a
+`list_raw` verb (its projection with `t.get("job_id")` was turning "CPython
+RETURNED a junk row" into "CPython raised", hiding half of M3), and it now
+pins the glob ORDER on the Python side — `status_summary` iterates an
+unsorted glob, so which spelling a merged status bucket ends up with is
+readdir order, and the merging is the behaviour under test while the order
+is not.

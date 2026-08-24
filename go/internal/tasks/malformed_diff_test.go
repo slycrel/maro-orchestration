@@ -118,6 +118,49 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 			"claimed_by_pid": 999999, "attempt": 1, "timestamps": {},
 			"blocked_by": []}`},
 
+		// blocked_by — the ONE field rounds 3 and 4 never opened, because
+		// every fixture in this file spells `"blocked_by": []`. Python
+		// ITERATES the raw value: a str goes by character, a dict by key,
+		// and None/int/float/bool are a TypeError. A type assertion to a
+		// list answered "no dependencies" for all of them, so the port
+		// claimed and rewrote rows CPython refuses to touch.
+		{"a claim on a row whose blocked_by is null", "claim", `{
+			"job_id": "task-mal19", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": null}`},
+		{"a claim on a row whose blocked_by is a number", "claim", `{
+			"job_id": "task-mal20", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": 5}`},
+		{"a claim on a row whose blocked_by is a bool", "claim", `{
+			"job_id": "task-mal21", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": true}`},
+		// Iterable, so no TypeError — but each CHARACTER is a dep id, and
+		// the first one names a file that does not exist.
+		{"a claim on a row whose blocked_by is a string", "claim", `{
+			"job_id": "task-mal22", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": "abc"}`},
+		{"a claim on a row whose blocked_by is a dict", "claim", `{
+			"job_id": "task-mal23", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": {"dep-x": 1}}`},
+		// A non-string ELEMENT is not skipped: it is interpolated into a
+		// path by an f-string, so it blocks the claim as a missing dep.
+		{"a claim on a row whose blocked_by holds a number", "claim", `{
+			"job_id": "task-mal24", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": [5]}`},
+		{"a claim on a row whose blocked_by holds a null", "claim", `{
+			"job_id": "task-mal25", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": [null]}`},
+		{"a claim on a row whose blocked_by holds a dict", "claim", `{
+			"job_id": "task-mal26", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": [{"a": 1}]}`},
+		// The empty container, which IS iterable and blocks nothing — so
+		// the table is not "every odd blocked_by refuses".
+		{"a claim on a row whose blocked_by is an empty string", "claim", `{
+			"job_id": "task-mal27", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": ""}`},
+		{"a claim on a row with no blocked_by key at all", "claim", `{
+			"job_id": "task-mal28", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}}`},
+
 		{"a complete on a row with no artifact_paths", "complete", `{
 			"job_id": "task-mal09", "lane": "agenda", "status": "claimed",
 			"attempt": 1, "timestamps": {}, "blocked_by": []}`},

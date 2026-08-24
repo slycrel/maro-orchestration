@@ -121,6 +121,27 @@ func TestIntMatchesCPython(t *testing.T) {
 		{"the exact negative bound as a float", -9223372036854775808.0,
 			"-(2.0**63)", false},
 
+		// The int64 boundary on the STRING arm, which the json.Number
+		// rows above cannot reach — they take Int64() and never touch the
+		// digit accumulator. It was conservative by a whole decade, so
+		// every value from 922337203685477580 up was refused (adversarial
+		// r11 round 5, LOW). Pinned from both sides and on both signs,
+		// because the negative side reaches one further than the
+		// positive one.
+		{"the exact positive bound as a string", "9223372036854775807",
+			"'9223372036854775807'", false},
+		{"one under the positive bound as a string", "9223372036854775806",
+			"'9223372036854775806'", false},
+		{"one past the positive bound as a string", "9223372036854775808",
+			"'9223372036854775808'", true},
+		{"the exact negative bound as a string", "-9223372036854775808",
+			"'-9223372036854775808'", false},
+		{"one past the negative bound as a string", "-9223372036854775809",
+			"'-9223372036854775809'", true},
+		// The decade the old guard rejected wholesale.
+		{"the first value the conservative guard refused",
+			"922337203685477580", "'922337203685477580'", false},
+
 		// CPython caps int(str) at 4300 DIGITS and raises ValueError past
 		// it — a limit that has nothing to do with the value's magnitude,
 		// so the arbitrary-precision residual cannot stand in for it: one

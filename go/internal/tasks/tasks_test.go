@@ -396,7 +396,11 @@ func TestADuplicateDependencySurvivesOneCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := blockedList(after); len(got) != 1 || got[0] != "dep" {
+	got, err := blockedIter(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "dep" {
 		t.Errorf("blocked_by = %v, want exactly one leftover copy of dep", got)
 	}
 	// The stale entry does not block: its target is done.
@@ -588,7 +592,13 @@ func TestListIsSortedAndFilterable(t *testing.T) {
 	}
 	var ids []string
 	for _, tk := range all {
-		ids = append(ids, tk.GetString("job_id"))
+		// List hands back what _read_task decoded, which for a
+		// well-formed row is a mapping.
+		m, err := asMapping(tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, m.GetString("job_id"))
 	}
 	if strings.Join(ids, ",") != "a,b,c" {
 		t.Errorf("List order = %v, want a,b,c", ids)

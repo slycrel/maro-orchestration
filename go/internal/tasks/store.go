@@ -134,7 +134,18 @@ func writeTask(path string, task Task) error {
 // here it is not, deliberately. A queue that silently under-reports its
 // own contents is how a claimed task disappears without anyone noticing,
 // and the two runtimes must agree on which rows exist.
-func readTask(path string) (Task, error) {
+// readRaw is `_read_task` exactly: bare json.loads, handing back WHATEVER
+// it decoded. `null` becomes nil and is indistinguishable from a missing
+// file — every caller tests `if task is None` — but so do six other
+// shapes, and none of them is nil. Round 4 fixed the `null` LITERAL and
+// left its class: a file holding `[]`, `5` or `"x"` still aborted every
+// sweep here, where CPython's unfiltered list_tasks RETURNS it and the
+// filtered one raises AttributeError (adversarial r11 round 5, MEDIUM).
+//
+// So the shape check moved to the callers, because Python's is at the
+// callers: `.get` and `task[...]` do not raise the same exception, and
+// `if dep and dep.get(...)` does not raise at all for a falsy row.
+func readRaw(path string) (any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -146,19 +157,43 @@ func readTask(path string) (Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read task %s: %w", path, err)
 	}
-	if v == nil {
-		// A file holding the literal `null` decodes to None, and
-		// `_read_task` hands that back — indistinguishable from a missing
-		// file to every caller, all six of which test `if task is None`.
-		// So one such row is SKIPPED by list_tasks and status_summary and
-		// is "not found" to claim; refusing it made every sweep in the
-		// package abort and stalled a queue CPython drains normally
-		// (adversarial r11 round 4, MEDIUM).
-		return nil, nil
+	return v, nil
+}
+
+// readTask is readRaw for a caller whose very next act is a SUBSCRIPT.
+func readTask(path string) (Task, error) {
+	v, err := readRaw(path)
+	if err != nil || v == nil {
+		return nil, err
 	}
-	t, ok := v.(pyval.Obj)
-	if !ok {
-		return nil, fmt.Errorf("read task %s: expected a JSON object, got %T", path, v)
+	return asIndexable(v)
+}
+
+// asIndexable is `task["status"]` on a non-mapping — three different
+// TypeError sentences depending on the type, measured on this box.
+func asIndexable(v any) (Task, error) {
+	if t, ok := v.(pyval.Obj); ok {
+		return t, nil
 	}
-	return t, nil
+	var msg string
+	switch v.(type) {
+	case pyval.List, []any, []string:
+		msg = "list indices must be integers or slices, not str"
+	case string:
+		msg = "string indices must be integers, not 'str'"
+	default:
+		msg = fmt.Sprintf("'%s' object is not subscriptable", pyval.TypeName(v))
+	}
+	return nil, &pyval.PyErr{Class: "TypeError", Msg: msg}
+}
+
+// asMapping is `task.get(...)` on a non-mapping — one AttributeError
+// sentence, and a DIFFERENT class from the subscript above, so an
+// `except TypeError` upstream catches one and not the other.
+func asMapping(v any) (Task, error) {
+	if t, ok := v.(pyval.Obj); ok {
+		return t, nil
+	}
+	return nil, &pyval.PyErr{Class: "AttributeError",
+		Msg: fmt.Sprintf("'%s' object has no attribute 'get'", pyval.TypeName(v))}
 }

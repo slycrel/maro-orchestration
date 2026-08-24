@@ -5193,6 +5193,25 @@ overflowed float" decides the exception class), and `ClassOf`/`PyClasser`,
 so a Go-typed error like `tasks.ConflictError` can name the CPython class
 it stands for without becoming a string-classed struct.
 
+### Round 11 round 5 — Python's operators
+
+`blocked_by` is ITERATED, not type-asserted: a str goes by character, a
+dict by key, and a scalar is a TypeError — so `pyIter` and `pyContains`
+now carry Python's `for x in v` and `x in v`, which are not the same
+operation and do not raise the same message. A dict KEY is an identity,
+not a spelling, so `hashKey` folds `True`/`1`/`1.0` onto one bucket the
+way Python's dict does. `_read_task` hands back whatever it decoded and
+the SHAPE check moved to the callers, because Python's is at the callers:
+`.get` is an AttributeError, `task[...]` is a TypeError with three
+different sentences by type, and an unfiltered `list_tasks` never reaches
+either — which is why `List` returns `[]any`.
+
+Also: one `try` over two reads means the second read does not happen at
+all when the first raised; `int(str)`'s int64 bound is exact and
+asymmetric (the negative side reaches one further); and an overflowing
+`notify.timeout_seconds` is refused before `time.Duration` can wrap it
+into a timeout that never happened.
+
 ### Named residuals after r11 round 3
 
 - **Arbitrary precision.** `ErrIntTooLarge` is the port refusing a value
@@ -5209,6 +5228,9 @@ it stands for without becoming a string-classed struct.
   guess at each site.
 - **`int()` refuses non-ASCII decimal digits.** `int("７")` is 7 in
   CPython and a ValueError here.
+- **`hashKey` folds by numeric value, not by Python's `hash`.** The two
+  agree on every JSON-decodable scalar, which is all a task file can
+  hold; a Decimal or a Fraction would need the real rule.
 - **`Float`'s `json.Number` overflow arm has no live caller.** It is
   pinned at the helper and labelled as such in the test: both callers hand
   it either a YAML-parsed value or a confidence `Int` has already refused

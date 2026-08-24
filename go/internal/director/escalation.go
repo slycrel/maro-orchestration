@@ -605,15 +605,25 @@ func CheckinJitter(cfg map[string]any) (int, error) {
 	// both. An UNCAUGHT class (OverflowError, from a YAML `.inf`) leaves
 	// the function instead, from whichever read reached it first; Python
 	// evaluates lo before hi.
-	lo, loErr := pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_min", 4))
-	if loErr != nil && !pyval.CaughtBy(loErr, "TypeError", "ValueError") {
-		return 0, loErr
+	// And the SECOND read does not happen at all when the first raised:
+	// `lo = int(...)` raising jumps straight to the except, so a caught
+	// min beside an UNCAUGHT max (`min: abc, max: .inf`) defaults to 4-7
+	// in CPython. Evaluating both first let the max's OverflowError
+	// escape, which flips the whole escalation to `surface` and kills the
+	// chain (adversarial r11 round 5, MEDIUM).
+	// ONE error variable, not two, because at most one read can ever
+	// produce one: the second does not happen when the first raised. Two
+	// variables invited a "which one wins" decision that has no observable
+	// answer, and dead choices are where wrong ones hide.
+	lo, raised := pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_min", 4))
+	hi := 7
+	if raised == nil {
+		hi, raised = pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_max", 7))
 	}
-	hi, hiErr := pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_max", 7))
-	if hiErr != nil && !pyval.CaughtBy(hiErr, "TypeError", "ValueError") {
-		return 0, hiErr
-	}
-	if loErr != nil || hiErr != nil {
+	if raised != nil {
+		if !pyval.CaughtBy(raised, "TypeError", "ValueError") {
+			return 0, raised
+		}
 		lo, hi = 4, 7
 	}
 	if hi < lo {

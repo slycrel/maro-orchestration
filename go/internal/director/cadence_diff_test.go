@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
@@ -77,6 +78,23 @@ func TestTheCheckinCadenceReadsConfigTheWayPythonDoes(t *testing.T) {
 		// two reads share a try. Two independent defaults draw 7..10 here.
 		{"a good min and a garbage max", "recursion:\n  checkin_jitter_min: 10\n  checkin_jitter_max: abc\n"},
 		{"a garbage min and a good max", "recursion:\n  checkin_jitter_min: abc\n  checkin_jitter_max: 10\n"},
+		// The MISSING CELL between the two rows above and the .inf row
+		// below: a CAUGHT min beside an UNCAUGHT max. One try wraps both
+		// reads, so `lo` raising jumps straight to the except and `hi` is
+		// never evaluated at all — the OverflowError that would have
+		// escaped never happens, and CPython draws from 4-7. Evaluating
+		// both reads first let it out, which flips the escalation to
+		// `surface` and kills the chain. A fixture split across two rows
+		// is a fixture that covers neither.
+		{"a caught min beside an uncaught max",
+			"recursion:\n  checkin_jitter_min: abc\n  checkin_jitter_max: .inf\n"},
+		{"a caught null min beside an uncaught max",
+			"recursion:\n  checkin_jitter_min: ~\n  checkin_jitter_max: .inf\n"},
+		// And the ORDER, from the other side: an uncaught MIN still
+		// escapes, however good the max is. With only the row above, a
+		// port that skipped the max read unconditionally would pass.
+		{"an uncaught min beside a good max",
+			"recursion:\n  checkin_jitter_min: .inf\n  checkin_jitter_max: 10\n"},
 		{"garbage first depth", "recursion:\n  checkin_first_depth: soon\n"},
 		{"null everywhere", "recursion:\n  checkin_first_depth: ~\n  checkin_jitter_min: ~\n  checkin_jitter_max: ~\n"},
 		{"a below-floor first depth", "recursion:\n  checkin_first_depth: 0\n"},
@@ -168,17 +186,24 @@ func (a pyAnswer) check(t *testing.T, what string, err error, got int) {
 	t.Helper()
 	if (err != nil) != !a.OK {
 		if err != nil {
-			t.Fatalf("%s raised %v; CPython answered %v", what, err, a.Value)
+			// a.Value is a *int, and %v of a pointer is an ADDRESS — the
+			// message read "CPython answered 0xc0002105a8" on every
+			// failure this assertion has ever produced.
+			shown := "no value"
+			if a.Value != nil {
+				shown = strconv.Itoa(*a.Value)
+			}
+			t.Fatalf("%s raised %v; CPython answered %s", what, err, shown)
 		}
 		t.Fatalf("%s answered %d; CPython raises %s: %s", what, got, a.Cls, a.Msg)
 	}
 	if !a.OK {
-		if pe, ok := err.(*pyval.PyErr); !ok {
+		if cls := pyval.ClassOf(err); cls == "" {
 			t.Errorf("%s raised %v, which carries no exception class; "+
 				"CPython raises %s", what, err, a.Cls)
-		} else if pe.Class != a.Cls {
+		} else if cls != a.Cls {
 			t.Errorf("%s raises %s, CPython raises %s — the two are caught "+
-				"by different excepts upstream", what, pe.Class, a.Cls)
+				"by different excepts upstream", what, pyval.ClassOf(err), a.Cls)
 		}
 		return
 	}
