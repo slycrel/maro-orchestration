@@ -292,7 +292,11 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 
 		// Stale-claim recovery: a dead claimer releases the task rather
 		// than parking it forever.
-		if t.GetString("status") == "claimed" {
+		claimStatus, err := indexStr(t, "status")
+		if err != nil {
+			return err
+		}
+		if claimStatus == "claimed" {
 			claimedPID := pyval.IntOf(mustGet(t, "claimed_by_pid"))
 			if claimedPID != 0 && !pidAlive(claimedPID) {
 				t.Set("status", "queued")
@@ -301,7 +305,13 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 				return conflictf("task %s already claimed by pid %v", jobID, claimedPID)
 			}
 		}
-		if s := t.GetString("status"); s != "queued" {
+		// Re-indexed rather than reused: the stale-claim branch above can
+		// have REWRITTEN it, and Python reads `task["status"]` again here.
+		s, err := indexStr(t, "status")
+		if err != nil {
+			return err
+		}
+		if s != "queued" {
 			return conflictf("task %s has status '%s', expected 'queued'", jobID, s)
 		}
 
@@ -312,7 +322,11 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 			}
 			depStatus := "missing"
 			if dep != nil {
-				depStatus = dep.GetString("status")
+				// `dep is None or dep["status"] != "done"` — a subscript,
+				// short-circuited past only when dep is None.
+				if depStatus, err = indexStr(dep, "status"); err != nil {
+					return err
+				}
 			}
 			if depStatus != "done" {
 				return conflictf("task %s blocked by %s (status=%s)", jobID, depID, depStatus)
@@ -321,8 +335,21 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 
 		t.Set("status", "claimed")
 		t.Set("claimed_by_pid", pid)
-		t.Set("attempt", pyval.IntOf(mustGet(t, "attempt"))+1)
-		setTimestamp(&t, "claimed_at_utc", UTCNow())
+		// `task["attempt"] += 1` — a subscript and Python's own `+`, so a
+		// float attempt STAYS a float (`2.0` becomes `3.0` in the file, not
+		// `3`) and a missing one raises rather than starting over at 1.
+		attempt, err := index(t, "attempt")
+		if err != nil {
+			return err
+		}
+		bumped, err := pyval.IAddOne(attempt)
+		if err != nil {
+			return err
+		}
+		t.Set("attempt", bumped)
+		if err := setTimestamp(&t, "claimed_at_utc", UTCNow()); err != nil {
+			return err
+		}
 		if err := writeTask(path, t); err != nil {
 			return err
 		}
@@ -354,14 +381,33 @@ func Complete(ws, jobID string, artifactPaths pyval.Obj, resultStatus string) (T
 		}
 		// "queued" is accepted alongside "claimed" — a task completed
 		// without ever being claimed is legal here.
-		if s := t.GetString("status"); s != "claimed" && s != "queued" {
+		s, err := indexStr(t, "status")
+		if err != nil {
+			return err
+		}
+		if s != "claimed" && s != "queued" {
 			return conflictf("task %s has status '%s', cannot complete", jobID, s)
 		}
 		t.Set("status", "done")
-		setTimestamp(&t, "finished_at_utc", UTCNow())
+		if err := setTimestamp(&t, "finished_at_utc", UTCNow()); err != nil {
+			return err
+		}
 		t.Set("claimed_by_pid", nil)
 		if len(artifactPaths) > 0 {
-			paths, _ := mustGet(t, "artifact_paths").(pyval.Obj)
+			// `task["artifact_paths"].update(...)` — a subscript AND an
+			// attribute. A null or a scalar there is an AttributeError that
+			// leaves the task claimed and its dependents blocked, where a
+			// dropped type assertion wrote it done and resolved them.
+			rawPaths, err := index(t, "artifact_paths")
+			if err != nil {
+				return err
+			}
+			paths, isObj := rawPaths.(pyval.Obj)
+			if !isObj {
+				return &pyval.PyErr{Class: "AttributeError",
+					Msg: fmt.Sprintf("'%s' object has no attribute 'update'",
+						pyval.TypeName(rawPaths))}
+			}
 			for _, f := range artifactPaths {
 				paths.Set(f.Key, f.Val) // dict.update: in place, or appended
 			}
@@ -400,7 +446,9 @@ func Fail(ws, jobID, errText string) (Task, error) {
 			return fmt.Errorf("%w: %s", ErrNotFound, jobID)
 		}
 		t.Set("status", "failed")
-		setTimestamp(&t, "finished_at_utc", UTCNow())
+		if err := setTimestamp(&t, "finished_at_utc", UTCNow()); err != nil {
+			return err
+		}
 		t.Set("claimed_by_pid", nil)
 		if errText != "" {
 			t.Set("error", errText)
@@ -649,17 +697,66 @@ func mustGet(t Task, key string) any {
 	return v
 }
 
-// setTimestamp writes into the nested timestamps object, creating it if a
-// foreign writer left it out. Python would raise KeyError there; this
-// returns a task that still has the field, which is the more useful shape
-// for a queue whose whole job is not losing rows.
-func setTimestamp(t *Task, key, val string) {
-	ts, ok := mustGet(*t, "timestamps").(pyval.Obj)
+// index is Python's `task[key]` — the SUBSCRIPT, not `.get`.
+//
+// task_store indexes six fields it never defaults, and a queue file is a
+// document a foreign writer can produce: `maro-enqueue`, a dispatch from
+// another box, a hand-edited row, an older schema. CPython raises KeyError
+// there, INSIDE the file lock and BEFORE the atomic write — so the task is
+// left exactly as it was and the caller sees the failure. Reading them
+// through GetString/IntOf instead answered ""/0, wrote the task anyway, and
+// the two runtimes disagreed on both the file's bytes and whether the task
+// was still claimable (adversarial r11 round 3, MEDIUM).
+//
+// The exception CLASS comes from pyval because Python's does: KeyError's
+// str() is the repr of the key, not a sentence.
+func index(t Task, key string) (any, error) {
+	v, ok := t.Get(key)
 	if !ok {
-		ts = pyval.Obj{}
+		return nil, &pyval.PyErr{Class: "KeyError", Msg: pyval.Repr(key)}
+	}
+	return v, nil
+}
+
+// indexStr is `task[key]` where the caller then compares it to a string.
+// The comparison itself is Python's `==`, which is False rather than an
+// error for a non-string, so only the missing-key case raises.
+func indexStr(t Task, key string) (string, error) {
+	v, err := index(t, key)
+	if err != nil {
+		return "", err
+	}
+	return pyval.Str(v), nil
+}
+
+// setTimestamp is `task["timestamps"][key] = val` — TWO subscripts, and
+// the outer one raises for a task file that has no timestamps object.
+// Synthesizing it looked like the more useful shape for a queue whose job
+// is not losing rows; what it actually did was write a task CPython leaves
+// untouched, so the two runtimes disagreed on whether the task was still
+// queued (adversarial r11 round 3, MEDIUM).
+func setTimestamp(t *Task, key, val string) error {
+	raw, err := index(*t, "timestamps")
+	if err != nil {
+		return err
+	}
+	ts, isObj := raw.(pyval.Obj)
+	if !isObj {
+		// A LIST is the one non-mapping that supports item assignment, so
+		// it fails on the INDEX instead and says so in its own words. Every
+		// other shape gets the "does not support" sentence.
+		switch raw.(type) {
+		case pyval.List, []any, []string:
+			return &pyval.PyErr{Class: "TypeError",
+				Msg: "list indices must be integers or slices, not str"}
+		}
+		return &pyval.PyErr{Class: "TypeError",
+			Msg: fmt.Sprintf("'%s' object does not support item assignment",
+				pyval.TypeName(raw))}
 	}
 	ts.Set(key, val)
 	t.Set("timestamps", ts)
+	return nil
 }
 
 // lockPath is Python's `path.with_suffix(".lock")` — the extension is

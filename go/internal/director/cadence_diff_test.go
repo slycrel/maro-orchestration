@@ -8,6 +8,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 const pyCadenceSrc = `
@@ -24,12 +25,28 @@ def _spy(lo, hi):
     _seen["lo"], _seen["hi"] = lo, hi
     return lo
 random.randint = _spy
-director._checkin_jitter()
+
+# Each helper is asked SEPARATELY, and a raise is one of its answers.
+# Python's except tuple here is (TypeError, ValueError) — so a YAML .inf
+# is an OverflowError that leaves the helper entirely, out through
+# _advance_origin_with_checkin, and turns the whole escalation into a
+# surface. A probe that died on it could not compare that at all; a probe
+# that asked for both in one expression would let the first raise hide the
+# second.
+def _try(fn):
+    try:
+        return {"ok": True, "value": fn()}
+    except BaseException as e:
+        return {"ok": False, "cls": type(e).__name__, "msg": str(e)}
+
+first = _try(director._checkin_first_depth)
+jit = _try(director._checkin_jitter)
 random.randint = _real
 
 sys.stdout.write(json.dumps({
-    "first_depth": director._checkin_first_depth(),
-    "lo": _seen["lo"], "hi": _seen["hi"],
+    "first": first,
+    "jitter": jit,
+    "lo": _seen.get("lo"), "hi": _seen.get("hi"),
 }))
 `
 
@@ -65,6 +82,17 @@ func TestTheCheckinCadenceReadsConfigTheWayPythonDoes(t *testing.T) {
 		{"a below-floor first depth", "recursion:\n  checkin_first_depth: 0\n"},
 		{"an inverted jitter pair", "recursion:\n  checkin_jitter_min: 9\n  checkin_jitter_max: 2\n"},
 		{"a below-floor jitter pair", "recursion:\n  checkin_jitter_min: 0\n  checkin_jitter_max: 0\n"},
+		// YAML has `.inf` and `.nan`, and they are the two halves of the
+		// except tuple: int(nan) is a ValueError and defaults, int(inf) is
+		// an OverflowError and does NOT. A config one character apart
+		// either keeps the cadence running or takes the escalation lane's
+		// continue branch out to a surface, and nothing here could tell
+		// them apart while both helpers returned a bare int.
+		{"an infinite first depth", "recursion:\n  checkin_first_depth: .inf\n"},
+		{"a NaN first depth", "recursion:\n  checkin_first_depth: .nan\n"},
+		{"an infinite jitter max", "recursion:\n  checkin_jitter_min: 2\n  checkin_jitter_max: .inf\n"},
+		{"an infinite jitter min", "recursion:\n  checkin_jitter_min: .inf\n  checkin_jitter_max: 9\n"},
+		{"a NaN jitter max", "recursion:\n  checkin_jitter_min: 2\n  checkin_jitter_max: .nan\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ws := t.TempDir()
@@ -80,26 +108,37 @@ func TestTheCheckinCadenceReadsConfigTheWayPythonDoes(t *testing.T) {
 				Guard:     cadenceGuard,
 			}.Run(t, pyCadenceSrc)
 			var want struct {
-				FirstDepth int `json:"first_depth"`
-				Lo         int `json:"lo"`
-				Hi         int `json:"hi"`
+				First  pyAnswer `json:"first"`
+				Jitter pyAnswer `json:"jitter"`
+				Lo     *int     `json:"lo"`
+				Hi     *int     `json:"hi"`
 			}
 			if err := json.Unmarshal([]byte(raw), &want); err != nil {
 				t.Fatalf("decoding the probe output: %v\nraw: %s", err, raw)
 			}
 
 			cfg, _ := config.LoadFor(ws)
-			if got := CheckinFirstDepth(cfg); got != want.FirstDepth {
-				t.Errorf("first depth = %d, CPython %d", got, want.FirstDepth)
-			}
+			gotFirst, firstErr := CheckinFirstDepth(cfg)
+			want.First.check(t, "first depth", firstErr, gotFirst)
+
 			var gotLo, gotHi int
+			drew := false
 			prev := checkinRandInt
-			checkinRandInt = func(lo, hi int) int { gotLo, gotHi = lo, hi; return lo }
-			CheckinJitter(cfg)
+			checkinRandInt = func(lo, hi int) int {
+				gotLo, gotHi, drew = lo, hi, true
+				return lo
+			}
+			gotJit, jitErr := CheckinJitter(cfg)
 			checkinRandInt = prev
-			if gotLo != want.Lo || gotHi != want.Hi {
+			want.Jitter.check(t, "jitter", jitErr, gotJit)
+			if want.Jitter.OK != drew {
+				t.Errorf("the jitter drew = %v, CPython drew = %v",
+					drew, want.Jitter.OK)
+			}
+			if want.Jitter.OK && want.Lo != nil && want.Hi != nil &&
+				(gotLo != *want.Lo || gotHi != *want.Hi) {
 				t.Errorf("jitter draws from %d..%d, CPython from %d..%d",
-					gotLo, gotHi, want.Lo, want.Hi)
+					gotLo, gotHi, *want.Lo, *want.Hi)
 			}
 		})
 	}
@@ -114,3 +153,36 @@ if not _r.startswith(_o.path.realpath(_o.environ["MARO_WORKSPACE"])) and \
    not _r.startswith(_o.environ["MARO_WORKSPACE"]):
     raise SystemExit("refusing to run: workspace_root() resolved to %s" % _r)
 `
+
+// pyAnswer is one helper's outcome as CPython reports it: a value, or the
+// exception CLASS it raised. The class is the comparison — the two YAML
+// spellings that fail here fail into different except tuples upstream.
+type pyAnswer struct {
+	OK    bool   `json:"ok"`
+	Value *int   `json:"value"`
+	Cls   string `json:"cls"`
+	Msg   string `json:"msg"`
+}
+
+func (a pyAnswer) check(t *testing.T, what string, err error, got int) {
+	t.Helper()
+	if (err != nil) != !a.OK {
+		if err != nil {
+			t.Fatalf("%s raised %v; CPython answered %v", what, err, a.Value)
+		}
+		t.Fatalf("%s answered %d; CPython raises %s: %s", what, got, a.Cls, a.Msg)
+	}
+	if !a.OK {
+		if pe, ok := err.(*pyval.PyErr); !ok {
+			t.Errorf("%s raised %v, which carries no exception class; "+
+				"CPython raises %s", what, err, a.Cls)
+		} else if pe.Class != a.Cls {
+			t.Errorf("%s raises %s, CPython raises %s — the two are caught "+
+				"by different excepts upstream", what, pe.Class, a.Cls)
+		}
+		return
+	}
+	if a.Value != nil && got != *a.Value {
+		t.Errorf("%s = %d, CPython %d", what, got, *a.Value)
+	}
+}

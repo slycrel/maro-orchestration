@@ -111,25 +111,51 @@ func TestEveryPackageThatCanReachTheNotifyHookIsolatesItsConfig(t *testing.T) {
 	}
 
 	const notifyPkg = "github.com/slycrel/maro-orchestration/go/internal/notify"
+
+	// Two passes, because `go list -json` reports `Deps` transitively and
+	// `TestImports`/`XTestImports` DIRECTLY. Pairing the two as if they
+	// meant the same thing let a package whose test imports a helper that
+	// imports notify go unchecked — latent when found, since every current
+	// test import is direct, but the criterion claimed a property it did
+	// not have (adversarial r11 round 3, LOW).
+	var pkgs []pkg
+	depsOf := map[string][]string{}
 	dec := json.NewDecoder(strings.NewReader(string(out)))
-	var checked, isolated int
 	for {
 		var p pkg
 		if err := dec.Decode(&p); err != nil {
 			break
 		}
+		pkgs = append(pkgs, p)
+		depsOf[p.ImportPath] = p.Deps
+	}
+
+	// reachesVia closes a DIRECT import list over the dependency graph.
+	reachesVia := func(imports []string) bool {
+		for _, imp := range imports {
+			if imp == notifyPkg || reaches(depsOf[imp], notifyPkg) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var checked, isolated int
+	for _, p := range pkgs {
 		if len(p.TestGoFiles) == 0 && len(p.XTestGoFiles) == 0 {
 			continue
 		}
-		// The package under test is notify itself: its own tests inject an
-		// Exec recorder by construction (that is what they are for), and its
-		// package doc says no test in it shells out.
-		if p.ImportPath == notifyPkg {
-			continue
-		}
-		if !reaches(p.Deps, notifyPkg) &&
-			!reaches(p.TestImports, notifyPkg) &&
-			!reaches(p.XTestImports, notifyPkg) {
+		// notify itself is NOT skipped any more. The old skip said its own
+		// tests inject an Exec recorder by construction — true, and it
+		// covers the half where a command RUNS. It says nothing about the
+		// half where the config is READ: `Emit` with no Cfg falls through
+		// to `config.LoadFor(ws)`, so notify's own tests were reading the
+		// operator's real ~/.maro/config.yml for `notify.events` and
+		// `notify.timeout_seconds`, and passed only because that file
+		// happens to set neither. An exclusion is a hypothesis, and this
+		// one had never been tested (adversarial r11 round 3, LOW).
+		if !reaches(p.Deps, notifyPkg) && p.ImportPath != notifyPkg &&
+			!reachesVia(p.TestImports) && !reachesVia(p.XTestImports) {
 			continue
 		}
 		checked++
@@ -144,10 +170,14 @@ func TestEveryPackageThatCanReachTheNotifyHookIsolatesItsConfig(t *testing.T) {
 
 	// The tripwire's own guard. A `go list` that returned nothing, or a
 	// criterion that stopped matching, would report zero failures forever.
+	if len(pkgs) == 0 {
+		t.Fatal("go list returned no packages at all")
+	}
 	if checked < 2 {
 		t.Fatalf("only %d package(s) matched the criterion; at least "+
-			"internal/director and internal/scans reach notify, so this "+
-			"tripwire is no longer looking at what it thinks it is", checked)
+			"internal/notify, internal/director and internal/scans reach "+
+			"notify, so this tripwire is no longer looking at what it "+
+			"thinks it is", checked)
 	}
 	t.Logf("%d/%d notify-reaching test packages isolated", isolated, checked)
 }

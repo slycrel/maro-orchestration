@@ -121,7 +121,7 @@ func TestTheCheckinCadenceAdvancesOnTheAncestry(t *testing.T) {
 func TestTheJitterCoversItsWholeRange(t *testing.T) {
 	seen := map[int]bool{}
 	for i := 0; i < 400; i++ {
-		seen[CheckinJitter(nil)] = true
+		seen[mustJitter(t, nil)] = true
 	}
 	for want := 4; want <= 7; want++ {
 		if !seen[want] {
@@ -144,7 +144,7 @@ func TestTheCadenceReadsConfigAndSurvivesABadRange(t *testing.T) {
 		"checkin_jitter_min":  9,
 		"checkin_jitter_max":  3,
 	}}
-	if got := CheckinFirstDepth(cfg); got != 4 {
+	if got := mustFirstDepth(t, cfg); got != 4 {
 		t.Errorf("CheckinFirstDepth = %d, want 4", got)
 	}
 	// COVERAGE, not containment. A port that dropped the swap and only
@@ -154,7 +154,7 @@ func TestTheCadenceReadsConfigAndSurvivesABadRange(t *testing.T) {
 	// battery against exactly that assertion.)
 	seen := map[int]bool{}
 	for i := 0; i < 600; i++ {
-		got := CheckinJitter(cfg)
+		got := mustJitter(t, cfg)
 		if got < 3 || got > 9 {
 			t.Fatalf("a reversed range produced %d, outside the swapped 3–9", got)
 		}
@@ -170,7 +170,7 @@ func TestTheCadenceReadsConfigAndSurvivesABadRange(t *testing.T) {
 	// the very first continuation, which is what the cadence exists to
 	// avoid.
 	zero := map[string]any{"recursion": map[string]any{"checkin_first_depth": 0}}
-	if got := CheckinFirstDepth(zero); got != 1 {
+	if got := mustFirstDepth(t, zero); got != 1 {
 		t.Errorf("CheckinFirstDepth(0) = %d, want it clamped to 1", got)
 	}
 }
@@ -464,7 +464,7 @@ func TestAFailedEnqueueSurfacesAndFiresNoCheckin(t *testing.T) {
 			body := reply(fmt.Sprintf(`"action": %q, "decision_class": "mechanical",
 				"confidence": 9, "revised_goal": "a smaller slice",
 				"reasoning": "bounded", "summary_for_user": "next pass"`, action))
-			got := HandleEscalation(context.Background(), ws, objOf(map[string]any{
+			got := mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 				"job_id": "job-fail001", "parent_job_id": "loop-parent-1",
 				"reason": "audit the escalation lane", "continuation_depth": 5,
 			}), EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}})
@@ -511,7 +511,7 @@ func TestADryRunClosesWithoutWritingAnything(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ws := t.TempDir()
-			got := HandleEscalation(context.Background(), ws, objOf(map[string]any{
+			got := mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 				"job_id": "job-dry0001", "parent_job_id": "loop-parent-1",
 				"reason": "audit the escalation lane", "continuation_depth": 2,
 			}), c.opts)
@@ -537,7 +537,7 @@ func TestADryRunClosesWithoutWritingAnything(t *testing.T) {
 // records a judgment, and a failed call has made none.
 func TestAFailedCallSurfacesRatherThanClosing(t *testing.T) {
 	ws := t.TempDir()
-	got := HandleEscalation(context.Background(), ws, objOf(map[string]any{
+	got := mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 		"job_id": "job-err00001", "parent_job_id": "loop-parent-1",
 		"reason": "audit the escalation lane", "continuation_depth": 2,
 	}), EscalationOptions{Adapter: erroringAdapter{}})
@@ -623,7 +623,7 @@ func TestTheLowConfidenceAdvisoryFiresOnlyForActedRiskyCalls(t *testing.T) {
 			body := reply(fmt.Sprintf(`"action": %q, "decision_class": %q,
 				"confidence": %d, "reasoning": "because", "summary_for_user": "so"`,
 				c.action, c.class, c.confidence))
-			HandleEscalation(context.Background(), ws, objOf(map[string]any{
+			mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 				"job_id": "job-chan0001", "parent_job_id": "loop-parent-1",
 				"reason": "audit the escalation lane", "continuation_depth": 1,
 			}), EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}, Channel: ch})
@@ -673,7 +673,7 @@ func TestTheAdvisoryArgumentsAreBounded(t *testing.T) {
 	ch := &recordingChannel{}
 	body := reply(fmt.Sprintf(`"action": "close", "decision_class": "taste",
 		"confidence": 7, "reasoning": %q, "summary_for_user": %q`, long, long))
-	HandleEscalation(context.Background(), ws, objOf(map[string]any{
+	mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 		"job_id": "job-bound001", "parent_job_id": "loop-parent-1",
 		"reason": "audit the escalation lane", "continuation_depth": 1,
 	}), EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}, Channel: ch})
@@ -720,7 +720,7 @@ func TestAnExplodingChannelDoesNotStopTheEscalation(t *testing.T) {
 	ws := t.TempDir()
 	body := reply(`"action": "close", "decision_class": "taste",
 		"confidence": 6, "reasoning": "because", "summary_for_user": "so"`)
-	got := HandleEscalation(context.Background(), ws, objOf(map[string]any{
+	got := mustEscalate(t, context.Background(), ws, objOf(map[string]any{
 		"job_id": "job-boom0001", "parent_job_id": "loop-parent-1",
 		"reason": "audit the escalation lane", "continuation_depth": 1,
 	}), EscalationOptions{
@@ -738,65 +738,6 @@ func TestAnExplodingChannelDoesNotStopTheEscalation(t *testing.T) {
 	}
 }
 
-// --- int(str) -----------------------------------------------------------
-
-// The confidence field arrives from a model, so it arrives as whatever
-// the model felt like. Python's `int(...)` inside a try/except is the
-// gate, and it is NOT the same as pyval.IntOf: int("high") RAISES and
-// falls back to the caller's default of 5, where IntOf answers 0 — which
-// then clamps to 1, i.e. maximum uncertainty, from a reply that said
-// nothing about confidence at all.
-func TestPyIntOrIsIntInsideATryNotIntOf(t *testing.T) {
-	for _, c := range []struct {
-		in   any
-		want int
-	}{
-		{7, 7},
-		{"7", 7},
-		{"  7  ", 7}, // int() strips
-		{"+7", 7},    // and takes a sign
-		{"-7", -7},   //
-		{"1_0", 10},  // PEP 515 underscores between digits
-		{7.9, 7},     // int(float) truncates toward zero
-		{-7.9, -7},   //
-		{true, 1},    // int(True) is 1, not an error
-		{false, 0},   //
-		{"high", 5},  // ValueError -> the caller's default
-		{"7.5", 5},   // int("7.5") is a ValueError, unlike float()
-		{"7e2", 5},   // so is an exponent
-		{"_7", 5},    // a leading underscore
-		{"7_", 5},    // a trailing one
-		{"7__0", 5},  // and a doubled one
-		{"", 5},      //
-		{"  ", 5},    //
-		{nil, 5},     // int(None) is a TypeError
-		{[]any{}, 5}, //
-		{"０７", 5},    // full-width digits: CPython accepts these, this
-		{"٣", 5},     // port does not — a NAMED divergence, below
-		{map[string]any{}, 5},
-	} {
-		if got := pyIntOr(c.in, 5); got != c.want {
-			t.Errorf("pyIntOr(%#v) = %d, want %d", c.in, got, c.want)
-		}
-	}
-}
-
-// The two full-width cases above are a divergence, not a match, and it is
-// recorded here rather than left for a reader to trip over: CPython's
-// int() accepts every Unicode decimal digit, so int("０７") is 7. This
-// port refuses them and takes the default.
-//
-// The consequence is bounded to one field — a model answering a
-// confidence in Eastern Arabic numerals gets 5 here and 3 in CPython —
-// and widening the parser would mean carrying a Unicode decimal table for
-// a case no model has produced. Named, with the cost stated, so a later
-// reader can price it rather than rediscover it.
-func TestTheFullWidthDigitDivergenceIsDeliberate(t *testing.T) {
-	if _, ok := pyIntFromString("٣"); ok {
-		t.Error("this port now accepts Unicode decimal digits; update the note above")
-	}
-}
-
 func mustGet(t *testing.T, o pyval.Obj, key string) any {
 	t.Helper()
 	v, ok := o.Get(key)
@@ -804,4 +745,39 @@ func mustGet(t *testing.T, o pyval.Obj, key string) any {
 		t.Fatalf("%s is absent from %v", key, o)
 	}
 	return v
+}
+
+// --- test-only wrappers over the three functions that can now raise -----
+//
+// Each asserts the CPython-uncaught classes do NOT fire on fixtures that
+// are not about them. A bare `, _ :=` would have hidden exactly the
+// divergence these wrappers exist to surface.
+
+func mustEscalate(t *testing.T, ctx context.Context, ws string, task pyval.Obj,
+	o EscalationOptions) EscalationDecision {
+	t.Helper()
+	got, err := HandleEscalation(ctx, ws, task, o)
+	if err != nil {
+		t.Fatalf("handle_escalation raised %v — CPython completes on this "+
+			"fixture, so the port is refusing something Python does not", err)
+	}
+	return got
+}
+
+func mustFirstDepth(t *testing.T, cfg map[string]any) int {
+	t.Helper()
+	got, err := CheckinFirstDepth(cfg)
+	if err != nil {
+		t.Fatalf("_checkin_first_depth raised %v", err)
+	}
+	return got
+}
+
+func mustJitter(t *testing.T, cfg map[string]any) int {
+	t.Helper()
+	got, err := CheckinJitter(cfg)
+	if err != nil {
+		t.Fatalf("_checkin_jitter raised %v", err)
+	}
+	return got
 }

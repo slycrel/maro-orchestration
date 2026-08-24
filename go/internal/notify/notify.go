@@ -301,12 +301,19 @@ func writeEventRow(ws, eventType string, payload pyval.Obj,
 	}
 	goal := runeHead(pyval.Str(goalSrc), 200)
 
-	// Project and LoopID are stated even though this projection carries
-	// neither: their Go zero is nil, which spells null, and Python's
-	// write_event default is "".
+	// Project, LoopID and Model are stated even though this projection
+	// carries none of them. Their Go zero is nil, which spells null, and
+	// Python's write_event default is "" — and the zero value CANNOT be
+	// made to mean the default, because a caller handing over a raw task
+	// field must be able to write a genuine JSON null (director.py does:
+	// `project=task.get("parent_job_id", "")` on a row whose parent is
+	// null). So every raw field is stated at every call site, and the
+	// row-shape differential enforces it: every EventFields key appears in
+	// every row, so an unstated one shows up as `null` against CPython's
+	// `""` immediately.
 	WriteEvent(ws, eventType, EventFields{
 		Goal: goal, Status: status, Detail: detail,
-		Project: "", LoopID: "",
+		Project: "", LoopID: "", Model: "",
 	})
 }
 
@@ -340,12 +347,17 @@ func writeEventRow(ws, eventType string, payload pyval.Obj,
 // A named limit, not an oversight — the day one of them reads from a
 // task dict, it joins the two above.
 type EventFields struct {
-	Goal            string
+	// Goal, Status and Model are RAW. observe.write_event slices `goal`
+	// and touches the other two not at all, so a caller handing it a
+	// non-string hands the ROW a non-string — and `goal` is the one that
+	// can raise, which write_event's own try turns into "no row at all"
+	// (adversarial r11 round 3).
+	Goal            any
 	Project         any
 	LoopID          any
 	Step            string
-	Status          string
-	Model           string
+	Status          any
+	Model           any
 	Detail          string
 	StepIdx         int
 	TokensIn        int
@@ -382,6 +394,13 @@ func WriteEvent(ws, eventType string, f EventFields) {
 	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return
 	}
+	// `goal[:80]` is INSIDE write_event's own try, so a goal that cannot
+	// be sliced means no row — the same observable as the caller's slice
+	// raising one frame up.
+	goal, sliceable := pyval.SliceHead(f.Goal, 80)
+	if !sliceable {
+		return
+	}
 	entry := pyval.Obj{
 		{Key: "event_type", Val: eventType},
 		// UTC — Python is datetime.now(timezone.utc). See Options.fill.
@@ -389,17 +408,17 @@ func WriteEvent(ws, eventType string, f EventFields) {
 		// goal[:80] and step[:120] are BARE Python slices — silent rune
 		// cuts, not breakers, and they announce nothing. Only detail gets
 		// the announcing clip.
-		{Key: "goal", Val: runeHead(f.Goal, 80)},
+		{Key: "goal", Val: pyval.FromPlain(goal)},
 		// RAW — see the note on EventFields. No slice, no str().
 		{Key: "project", Val: pyval.FromPlain(f.Project)},
 		{Key: "loop_id", Val: pyval.FromPlain(f.LoopID)},
 		{Key: "step", Val: runeHead(f.Step, 120)},
 		{Key: "step_idx", Val: f.StepIdx},
-		{Key: "status", Val: f.Status},
+		{Key: "status", Val: pyval.FromPlain(f.Status)},
 		{Key: "tokens_in", Val: f.TokensIn},
 		{Key: "tokens_out", Val: f.TokensOut},
 		{Key: "cache_read_tokens", Val: f.CacheReadTokens},
-		{Key: "model", Val: f.Model},
+		{Key: "model", Val: pyval.FromPlain(f.Model)},
 		{Key: "elapsed_ms", Val: f.ElapsedMs},
 		// 200 is load-bearing (PIPE_BUF row atomicity downstream), and the
 		// cut announces itself — budget.Clip is a breaker, not a silent
@@ -501,12 +520,33 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 		// adversarial r9's MEDIUM, in a function written after it.
 		cfg, _ = config.LoadFor(ws)
 	}
-	command := strings.TrimSpace(config.Get(cfg, "notify.command", ""))
+	// `str(_config_get("notify.command", "") or "").strip()` — no type
+	// filtering anywhere in it. Get[string] returned "" for a YAML int, so
+	// a config saying `command: 42` (an unquoted port number, a numeric
+	// script name, a templating slip) left the operator's whole
+	// notification lane DEAD on this side while CPython spawned a shell
+	// and logged the failure. The sibling read three lines down was
+	// converted in round 2 and this one was not (adversarial r11 round 3,
+	// MEDIUM).
+	command := strings.TrimSpace(
+		pyval.StrOrEmpty(config.GetRaw(cfg, "notify.command", "")))
 	if command == "" {
 		return false // no substrate registered a lane: the normal case
 	}
-	events := configEvents(cfg)
-	if !contains(events, eventType) {
+	enabled, iterable := eventEnabled(cfg, eventType)
+	if !iterable {
+		// `event_type not in events` raises TypeError for a truthy
+		// non-container, and that raise leaves _emit for emit's outer
+		// handler — which logs at debug and returns False. So the hook does
+		// NOT run, where falling back to the defaults would have run it
+		// (adversarial r11 round 3, MEDIUM; the reviewer read emit as
+		// propagating, but notify.py:135-139 catches it).
+		opts.Log("notify.events is not a container (%s); not running the "+
+			"hook for %s", pyval.TypeName(config.GetRaw(cfg, "notify.events", nil)),
+			eventType)
+		return false
+	}
+	if !enabled {
 		return false
 	}
 	// float(), not a float64 type assertion. Two things follow, and the
@@ -620,33 +660,56 @@ func truthy(v any) bool { return pyval.Truthy(v) }
 //     `notify.events: [run_completed, 5]` silently narrower on this side
 //     than on Python's.
 //
-// The one shape NOT reproduced: a config setting `notify.events` to a bare
-// STRING, where Python's `in` becomes a SUBSTRING test ("escalation" in
-// "escalation_only" is True). That is a config error either way; here it is
-// treated as a one-element list, which is stricter, and it is a named
-// divergence rather than an accident.
-func configEvents(cfg map[string]any) []string {
+// A bare STRING is a SUBSTRING test to Python's `in`, and a MAPPING tests
+// its keys. Both were previously collapsed into "treat it as a one-element
+// list" and named as a deliberate divergence — but the divergence was in the
+// remainder arm nobody named: everything else fell back to the DEFAULTS,
+// which runs the hook for a config CPython refuses to iterate at all
+// (adversarial r11 round 3).
+func eventEnabled(cfg map[string]any, eventType string) (enabled, iterable bool) {
 	raw, present := config.Lookup(cfg, "notify.events")
-	if !present {
-		return DefaultEvents
+	// `x or DEFAULT_EVENTS` — a truthiness gate, so an absent key, a null,
+	// an empty list, an empty string, 0 and False all take the defaults.
+	// `notify.events: []` therefore means "the defaults", not "silence";
+	// reading it as an opt-out would be the natural guess and it is wrong.
+	if !present || !pyval.Truthy(raw) {
+		return contains(DefaultEvents, eventType), true
 	}
-	var out []string
 	switch v := raw.(type) {
 	case []string:
-		out = v
+		return contains(v, eventType), true
 	case []any:
+		// `in` over a list is `==` against each element, and the elements
+		// are whatever YAML parsed. A non-string element never equals the
+		// event type, so it neither matches nor raises.
 		for _, e := range v {
-			out = append(out, pyval.Str(e))
+			if pyval.Eq(e, eventType) {
+				return true, true
+			}
 		}
+		return false, true
+	case pyval.List:
+		for _, e := range v {
+			if pyval.Eq(e, eventType) {
+				return true, true
+			}
+		}
+		return false, true
 	case string:
-		out = []string{v}
-	default:
-		return DefaultEvents
+		// `"escalation" in "escalation_only"` is True — a substring test,
+		// not equality. A config error either way, but reproducing it is
+		// cheaper than documenting a divergence from it.
+		return strings.Contains(v, eventType), true
+	case map[string]any:
+		// `in` over a dict tests its KEYS.
+		_, ok := v[eventType]
+		return ok, true
+	case pyval.Obj:
+		_, ok := v.Get(eventType)
+		return ok, true
 	}
-	if len(out) == 0 {
-		return DefaultEvents
-	}
-	return out
+	// A truthy int, float or bool: `in` raises TypeError.
+	return false, false
 }
 
 func contains(list []string, s string) bool {

@@ -5032,3 +5032,170 @@ cannot report success forever. `MARO_WORKSPACE` is deliberately NOT set
 here: tests pass their own workspace explicitly and `pyprobe`'s
 live-workspace refusal guards the probes, so overriding it centrally
 would paper over a caller that forgot to.
+
+## An exception's CLASS is part of its behaviour
+
+`handle_escalation` reads the model's confidence like this:
+
+```python
+try:
+    confidence = int(data.get("confidence", 5))
+except (TypeError, ValueError):
+    confidence = 5
+```
+
+The tuple is NARROW, and two values one model reply can produce fall on
+opposite sides of it:
+
+| value | CPython | what happens |
+|---|---|---|
+| `NaN` | `ValueError: cannot convert float NaN to integer` | caught — confidence is 5, the escalation completes |
+| `Infinity` | **`OverflowError`**`: cannot convert float infinity to integer` | NOT caught — leaves `handle_escalation` entirely |
+
+Both are one reply away: `json.loads` admits the bare tokens `NaN` and
+`Infinity`, and any float literal past 1e308 decodes to `inf` as well. On
+the `Infinity` path CPython writes no calibration row, no artifact, no
+stop-verdict stamp and takes no branch — and `drain_task_store` then
+FAILS the task instead of completing it. A helper that answered only
+"did the conversion work" gets the first case right by accident and the
+second one catastrophically wrong: the port wrote a full surface where
+CPython wrote nothing.
+
+So `pyval` carries the class:
+
+```go
+type PyErr struct {
+	Class string   // "TypeError" | "ValueError" | "OverflowError" | "KeyError" | …
+	Msg   string
+}
+func (e *PyErr) Error() string { return e.Msg }
+```
+
+`Error()` is Python's `str(e)` — the **message alone**. That is not a
+stylistic call: every `except Exception as exc: log(..., exc)` in the
+ported source renders `%s` of the exception, so an `Error()` that
+prepended the class would write log lines CPython never writes. `repr(e)`
+is the spelling that carries the class, and nothing needs it yet.
+
+Three helpers sit on top, and the reason there are three is that the
+CALLERS differ:
+
+- **`Int(v)`** — the bare `int(v)`, class and all.
+- **`IntCaught(v, def)`** — Python's `except (TypeError, ValueError)`
+  exactly: it defaults for those two and returns everything else as
+  `raised`, for the caller to propagate.
+- **`CaughtBy(err, classes...)`** — the `except` tuple written out. It
+  exists because `_checkin_jitter` has ONE shared `try` across TWO reads,
+  so a bad `checkin_jitter_max` resets the MINIMUM too. `IntCaught`
+  cannot express that — it answers each read on its own — so the jitter
+  classifies both and makes the reset one decision over both.
+
+A fourth, `ErrIntTooLarge`, is **not** a Python exception. CPython's `int`
+is arbitrary precision, so `int(1e19)` is `10000000000000000000` and
+nothing raises; Go's `int` cannot hold it, and a bare conversion yields
+`MinInt64` — which is how a magnitude of 1e19 became a durable
+`"depth": -9223372036854775808`. The two callers decide differently, on
+purpose:
+
+- the confidence read may **saturate**, because its very next operation
+  is `max(1, min(10, confidence))` and the clamp erases the difference
+  provably (`IntClamped` does this, recovering the sign from the value
+  because `Int` discarded it);
+- the reopen payload's depth may **not**. It refuses and skips the write
+  rather than emitting a number CPython would never produce.
+
+## A slice is not a string operation
+
+`write_event(goal=task.get("reason", "")[:80])`. The port had a string
+helper behind that, so a queue row whose `reason` is a list dropped the
+whole event row — where CPython writes a JSON array. Python does not care
+what it is slicing; it cares whether the object supports it, and the
+shapes that do not are not interchangeable either:
+
+| `v[:80]` where v is | CPython |
+|---|---|
+| `str`, `list` | the head, same type |
+| `dict` | **`KeyError: slice(None, 80, None)`** — a lookup with a slice for a key |
+| `int`, `float`, `bool`, `None` | `TypeError: '<t>' object is not subscriptable` |
+
+`pyval.SliceHead(v, n) (any, bool)` answers the head and whether the
+slice would have raised. Every call site swallows the raise, so only the
+FACT of it is reproduced — but the fact decides whether a row exists.
+
+## A subscript is not a `.get`
+
+A task file is not a shape this package controls: it arrives from another
+box, from an older schema, from a hand-edit during an incident. Python
+reads it with subscripts —
+
+```python
+task["status"]; task["attempt"] += 1; task["timestamps"][key] = value
+```
+
+— and every one of those raises for a row that lacks the key. The raise
+is the contract: the verb fails, the file is left byte-identical, and the
+caller sees the task still queued. The port had `.get`-shaped reads with
+Go zero values behind them, which turns a malformed row into a silently
+DIFFERENT one — a missing status read as `""`, a missing attempt
+restarted at 1, a missing `timestamps` object synthesised **and written**.
+The last is the worst: it writes a task CPython leaves untouched, so the
+two runtimes disagree about whether the row is still claimable.
+
+`index`/`indexStr`/`setTimestamp` raise instead, with CPython's own
+messages — `KeyError`'s `str()` is the **repr** of the key, not a
+sentence — and three details had to be measured rather than guessed:
+
+- a `list` under `timestamps` says `list indices must be integers or
+  slices, not str`, because a list *does* support item assignment and
+  fails on the index; every other shape says `'<t>' object does not
+  support item assignment`;
+- `task["attempt"] += 1` is an AUGMENTED assignment, and its unsupported-
+  operand message names `+=` where `depth + 1` names `+` (hence
+  `pyval.IAddOne` alongside `AddOne`);
+- `+=` on a string CONCATENATES-or-raises rather than coercing, and on a
+  float stays a float, so `2.0` becomes `3.0` in the file, not `3`.
+
+## `in` is not "is it in the list"
+
+`notify.events` gates whether an operator hears anything, and Python's
+`event_type in (config_value or DEFAULT_EVENTS)` does five different
+things depending on what the YAML parsed to:
+
+| `notify.events` | `in` does |
+|---|---|
+| a list | `==` against each element (a non-string member never matches, never raises) |
+| an EMPTY list, `null`, `0`, `false` | falsy → the DEFAULTS, not silence |
+| a bare string | a **substring** test: `"escalation" in "escalation_only"` is True |
+| a mapping | tests its KEYS |
+| an int, float or truthy bool | **`TypeError`** — swallowed by `emit`'s outer handler, so no hook and `emit` returns False |
+
+The port had named the bare-string case as a deliberate divergence and
+implemented everything else as "fall back to the defaults" — which runs a
+command CPython declines to run. The divergence that mattered was in the
+remainder arm nobody had named.
+
+### Named residuals after r11 round 3
+
+- **Arbitrary precision.** `ErrIntTooLarge` is the port refusing a value
+  CPython computes. Two call sites decide it differently (saturate where a
+  clamp erases the difference; refuse where the value is written), and the
+  reopen payload's `depth` is the visible site: CPython writes
+  `"depth": 10000000000000000000` and this port writes no metadata half at
+  all. Closing it means a big-int type through `pyval`, which nothing else
+  needs yet.
+- **`PyErr` carries a class NAME, not a hierarchy.** Python's
+  `except ValueError` also catches `EnvelopeError`, which subclasses it;
+  `CaughtBy(err, "ValueError")` does not. No ported call site mixes the
+  two today, and the honest fix is a parent-class table rather than a
+  guess at each site.
+- **`int()` refuses non-ASCII decimal digits.** `int("７")` is 7 in
+  CPython and a ValueError here.
+- **`Float`'s `json.Number` overflow arm has no live caller.** It is
+  pinned at the helper and labelled as such in the test: both callers hand
+  it either a YAML-parsed value or a confidence `Int` has already refused
+  with an OverflowError before the sign recovery runs.
+- **Two guards the battery scores as misses, on purpose.** The escalation
+  lane's slice check is redundant with `WriteEvent`'s own, and
+  `_fire_checkin`'s `int(checkins_sent)` is unreachable with a non-numeric
+  value because `_advance_origin_with_checkin` bumped it first. Both say
+  so in the source; neither was removed.

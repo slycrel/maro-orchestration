@@ -116,20 +116,35 @@ func GE(lhs, rhs any) (bool, error) {
 // AddOne is Python's `v + 1`, keeping the operand's type: an int stays an
 // int, a float stays a float (so `2.0 + 1` is `3.0` and is written back into
 // the queue row as `3.0`), and a bool becomes an int.
-func AddOne(v any) (any, error) { return AddN(v, 1) }
+func AddOne(v any) (any, error) { return addN(v, 1, "+") }
+
+// IAddOne is Python's `v += 1`.
+//
+// It is a separate spelling because the ERROR is: an unsupported operand
+// under an augmented assignment names the augmented operator, so
+// `task["attempt"] += 1` on a null row says "for +=" where `depth + 1`
+// says "for +". Both messages reach a log line, and one of them is a queue
+// row's only explanation for why a task would not claim.
+func IAddOne(v any) (any, error) { return addN(v, 1, "+=") }
 
 // AddN is Python's `v + n` for an integer n, with AddOne's typing rules.
-func AddN(v any, n int) (any, error) {
+func AddN(v any, n int) (any, error) { return addN(v, n, "+") }
+
+func addN(v any, n int, op string) (any, error) {
 	switch v.(type) {
 	case string:
-		return nil, fmt.Errorf(`can only concatenate str (not "int") to str`)
+		return nil, &PyErr{Class: "TypeError",
+			Msg: `can only concatenate str (not "int") to str`}
 	case List, []any, []string:
-		return nil, fmt.Errorf(`can only concatenate list (not "int") to list`)
+		return nil, &PyErr{Class: "TypeError",
+			Msg: `can only concatenate list (not "int") to list`}
 	}
 	i, f, isFloat, ok := numOf(v)
 	if !ok {
-		return nil, fmt.Errorf(
-			"unsupported operand type(s) for +: '%s' and 'int'", TypeName(v))
+		return nil, &PyErr{Class: "TypeError",
+			Msg: fmt.Sprintf(
+				"unsupported operand type(s) for %s: '%s' and 'int'",
+				op, TypeName(v))}
 	}
 	if isFloat {
 		return f + float64(n), nil
@@ -406,7 +421,14 @@ func Float(v any) (float64, bool) {
 		return t, true
 	case json.Number:
 		f, err := t.Float64()
-		return f, err == nil
+		// ErrRange is the SAME case numOf tolerates twenty lines up:
+		// strconv has already produced the correctly-signed ±Inf, and
+		// CPython's float("1e400") is inf rather than a raise. The two arms
+		// were written apart and only one was fixed (adversarial r11 round
+		// 3, LOW) — latent, since Float's only non-test caller is fed by
+		// yaml.v3 and never sees a json.Number, but it is the third
+		// instance of the same pattern in this file.
+		return f, err == nil || errors.Is(err, strconv.ErrRange)
 	case string:
 		// float() strips surrounding whitespace and accepts the spellings
 		// Python accepts, which is what ParseFloat already reproduces.

@@ -7087,3 +7087,137 @@ reaches for the most permissive spelling of a helper to recover Python's
 behaviour, check what the permissive spelling still refuses. `Get[any]`
 looked like "no filtering" and was in fact "filtering out exactly the
 value we were trying to see."
+
+### Round 11, part 3 — the exception nobody caught
+
+Nine findings — 3 HIGH, 4 MEDIUM, 2 LOW — against the whole r11 chunk and
+its round-2 fixes, not just the latest diff. **Every code claim was
+verified against the Python source before any fix; none was hallucinated.**
+One reasoning claim was inverted and is recorded below, because a
+reviewer who is right about the code and wrong about the consequence is
+the case a "verify before you fix" rule exists for.
+
+**The three HIGHs were one shape, and it is a shape a boolean cannot
+hold.** `handle_escalation` reads the confidence inside
+`except (TypeError, ValueError)` — a NARROW tuple — and two values one
+model reply can produce fall on opposite sides of it. `int(nan)` is a
+ValueError: caught, confidence 5, escalation completes. `int(inf)` is an
+**OverflowError**: not caught, out of `handle_escalation` entirely, no
+calibration row, no artifact, no stamp, no branch, and `drain_task_store`
+fails the task instead of completing it. Both are one `json.loads` away —
+it admits the bare tokens `NaN` and `Infinity`, and any float literal past
+1e308 decodes to `inf`. The port had a helper that answered "did the
+conversion work", which gets the first right by accident and the second
+one exactly backwards: it wrote a full surface where CPython wrote
+nothing.
+
+So the fix was not a branch, it was a layer: `pyval.PyErr` carries the
+CLASS, `IntCaught` is the narrow tuple written out, and `CaughtBy` is an
+`except` tuple a caller can spell for itself — which `_checkin_jitter`
+needs, because it has ONE shared `try` across TWO reads and no
+tuple-swallowing helper can express that. The same root produced the
+second HIGH one function over: a config saying `checkin_first_depth: .inf`
+is a float in YAML, `int(inf)` is an OverflowError, and it raises out
+through `_advance_origin_with_checkin` into the continue branch — turning
+the whole escalation into a surface. A config one character apart from
+`.nan` does something completely different, and nothing here could tell
+them apart while both helpers returned a bare `int`.
+
+The third HIGH is the residual that layer exposed rather than fixed.
+CPython's `int` is arbitrary precision: `int(1e19)` is
+`10000000000000000000` and nothing raises, while Go's `int` cannot hold it
+and a bare conversion yields `MinInt64` — a durable
+`"depth": -9223372036854775808` in the reopen payload. `ErrIntTooLarge`
+is not a Python exception and is deliberately not treated as one: the
+confidence read may **saturate**, because the clamp to `[1, 10]` erases
+the difference provably; the payload depth may **not**, and refuses the
+write instead of emitting a number CPython would never produce.
+
+**The reviewer's one wrong claim.** M5 said Python's TypeError from
+`event_type not in events` propagates to `emit`'s caller. It does not —
+`emit` wraps `_emit` in `try/except Exception: return False`
+(`src/notify.py:135-139`), so the hook simply does not run. The FIX still
+stands, for the opposite reason: the port was RUNNING a hook Python
+declines to run. Same edit, different truth, and taking the reasoning at
+face value would have put a wrong sentence in a doc comment that outlives
+the round.
+
+**What the battery found that the findings did not.** Thirty-one
+mutations derived from the FILES, and the first pass caught 14 and MISSED
+17 — the worst ratio of any round in this port. Every miss was the same
+omission: the round-3 fixes had been written but not *measured*, because
+none of the existing fixtures could reach them. Closing them meant four
+new differentials rather than four new assertions (and the fixes those
+differentials forced added four more mutations, so the final battery
+stands at **33 of 35**, with both remaining misses labelled in the
+source):
+
+- **the escalation probe learned that a raise is an outcome.** It died on
+  an exception, so the case that matters most — an escalation that raises
+  after writing a PREFIX of its artifacts — could not be compared at all.
+  Now it reports the class and the files, and four fixtures drive it:
+  `NaN` (caught, completes), `Infinity` (not caught, writes nothing), and
+  the arbitrary-precision boundary from both directions.
+- **the cadence probe learned to ask each helper separately.** One
+  expression would let the first raise hide the second.
+- **`notify.events` got a differential at all.** Its expectations were
+  hand-written, and by hand is exactly where this read goes wrong:
+  `"escalation" in "escalation_only"` is a substring test that returns
+  True, and `"escalation" in 5` is a TypeError that stops the hook. The
+  probe measures the only thing that cannot be argued with — whether the
+  command actually ran — and carries its own floor: if `emit` returned
+  True while the command never fired, the probe is measuring the return
+  value and not the hook, and every row would still "pass".
+- **the log lines became a compared surface.** Python spells two of them
+  with `%r`, Go's `%q` is not `repr`, and nothing had ever diffed a log
+  line. Writing it forced a decision that reached back into `pyval`:
+  `PyErr.Error()` must be Python's `str(e)` — the message ALONE — because
+  every `except Exception as exc: log(..., exc)` renders `%s` of the
+  exception, and an `Error()` that prepended the class would write lines
+  CPython never writes.
+
+**And the differential that had never existed found real bugs the review
+did not.** Every fixture in `internal/tasks` is built by `Enqueue`, which
+cannot produce a row missing a key — so the whole subscript-vs-`.get`
+question was untested by construction. Thirteen hand-written malformed
+rows later: three verbs were still SYNTHESISING a missing `timestamps`
+object and writing it, where CPython raises and leaves the file
+byte-identical; the augmented `+=` names a different operator in its error
+message than `+` does; and a `list` under `timestamps` says `list indices
+must be integers or slices, not str` rather than the "does not support
+item assignment" sentence every other shape gets. None of the three was a
+finding. All three change whether a queue row is still claimable.
+
+**Two misses are left standing, and both are labelled in the source.**
+The escalation lane's own slice guard is REDUNDANT — Python slices at the
+call site inside a bare `except Exception: pass`, so an unsliceable reason
+skips the whole `write_event` call, and `WriteEvent` refuses the same value
+on its own. And `_fire_checkin`'s `int(origin["checkins_sent"])` is
+UNREACHABLE with a non-numeric value, because
+`_advance_origin_with_checkin` has already written `… + 1` into that key
+before it runs; a bad value raises THERE, in the continue branch's try,
+which flips the action to surface. The fixture drives the real site
+instead. Neither guard was removed — a mutation that cannot be observed is
+not the same as code that cannot matter — but both now say in the source
+why the battery scores them as misses, so a later round does not
+rediscover them as gaps.
+
+Chasing the third supposed miss is what found the actual bug in this
+round's own test. `notify.command`'s read looked unobservable — the
+default is `""` and `StrOrEmpty(nil)` is `""` — and then the mutation was
+caught anyway, by every row. The reason was a flaw I had written into the
+new gate differential twenty minutes earlier: the Go side's config said
+`command: true` as a harmless no-op, YAML parsed it as a BOOLEAN, and the
+two runtimes were quietly reading different types. Fixing the asymmetry
+made the read genuinely unobservable — and then made it observable again
+for a REAL reason, because `command: true` is exactly the config slip that
+motivated the finding, and it deserved its own differential:
+`str(x or "").strip()` spawns `"True"`, `"42"`, `"['a', 'b']"`, while a
+typed lookup leaves the operator's whole notification lane silent.
+
+**Lens carried forward:** *an exception's class is part of its behaviour,
+and a helper that answers "did it fail" has already thrown that away.* The
+general form: when Python catches a NARROW tuple, the set of classes it
+does not catch is as much a part of the contract as the ones it does — and
+a port that collapses them will be most confidently wrong on the value the
+tuple was written to let through.

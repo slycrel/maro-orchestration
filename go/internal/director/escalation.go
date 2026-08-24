@@ -2,7 +2,7 @@ package director
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -172,7 +172,7 @@ func (o EscalationOptions) logf(format string, args ...any) {
 // choice the rest of this port makes, and for the same reason (one
 // resolution order, passed in).
 func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
-	o EscalationOptions) EscalationDecision {
+	o EscalationOptions) (EscalationDecision, error) {
 
 	// Bare `.get` with a default, NOT safe_str: Python does no coercion
 	// on these four, so a non-string field survives as whatever it is and
@@ -218,7 +218,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			SummaryForUser: fmt.Sprintf("Dry-run escalation for job %s at depth %s", jobID, depthStr),
 			DecisionClass:  "mechanical",
 			Confidence:     5,
-		}
+		}, nil
 	}
 
 	// ObjectOrdered, not Object. `Object` flattens through pyval.Plain, so a
@@ -261,7 +261,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 				jobID, depthStr),
 			DecisionClass: "mechanical",
 			Confidence:    5,
-		}
+		}, nil
 	}
 
 	action := pytext.Lower(pytext.Strip(pyval.SafeStr(dataGet(data, "action", "surface"), "")))
@@ -276,7 +276,27 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	if !escalationClasses[decisionClass] {
 		decisionClass = "mechanical"
 	}
-	confidence := pyIntOr(dataGet(data, "confidence", 5), 5)
+	// `except (TypeError, ValueError)` — the NARROW tuple, which is the
+	// whole reason this is not a boolean helper. int(nan) is a ValueError
+	// and lands on 5; int(inf) is an **OverflowError** and is not caught at
+	// all, so it leaves handle_escalation with nothing written: no
+	// calibration row, no artifact, no stamp, no branch. `json.loads`
+	// admits the bare tokens `NaN` and `Infinity`, and any float literal
+	// past 1e308 decodes to inf, so one LLM reply reaches both
+	// (adversarial r11 round 3, HIGH).
+	confidence, raised := pyval.IntCaught(dataGet(data, "confidence", 5), 5)
+	if errors.Is(raised, pyval.ErrIntTooLarge) {
+		// CPython's int is arbitrary precision and succeeds here; the very
+		// next operation clamps to [1, 10], so saturating is not an
+		// approximation — the clamp erases the difference entirely.
+		confidence, raised = 10, nil
+		if f, ok := pyval.Float(dataGet(data, "confidence", 5)); ok && f < 0 {
+			confidence = 1
+		}
+	}
+	if raised != nil {
+		return EscalationDecision{}, raised
+	}
 	if confidence < 1 {
 		confidence = 1
 	}
@@ -320,8 +340,11 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 
 	logCalibration(ws, jobIDRaw, depth, action, decisionClass, confidence, o)
 
-	o.logf("escalation_decision job_id=%s action=%s reasoning=%q", jobID, action,
-		pyval.Clip(reasoning, 80))
+	// %r, not %q: Python's repr uses single quotes and its own escape
+	// table, and this line is the one an operator greps side by side with
+	// the CPython log while debugging the port (adversarial r11 round 3).
+	o.logf("escalation_decision job_id=%s action=%s reasoning=%s", jobID, action,
+		pyval.Repr(pyval.Clip(reasoning, 80)))
 
 	followupTaskID := ""
 
@@ -426,8 +449,8 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			break
 		}
 		followupTaskID = t.GetString("job_id")
-		o.logf("escalation_narrow: enqueued %s with revised goal %q",
-			followupTaskID, pyval.Clip(revisedGoal, 60))
+		o.logf("escalation_narrow: enqueued %s with revised goal %s",
+			followupTaskID, pyval.Repr(pyval.Clip(revisedGoal, 60)))
 		if shouldCheckin {
 			FireCheckin(ws, task, newDepth, action, reasoning, summaryForUser, origin, o)
 		}
@@ -463,7 +486,17 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	// written at all. That is a real observable difference (a missing row
 	// in the feed maro-observe tails), so it is reproduced rather than
 	// smoothed over with str().
-	if eventGoal, sliceable := pySliceHead(taskGet(task, "reason", ""), 80); sliceable {
+	// Python slices at the CALL SITE — `goal=task.get("reason", "")[:80]`
+	// inside a bare `except Exception: pass` — so an unsliceable reason
+	// skips the whole write_event call. WriteEvent refuses the same value
+	// on its own, which makes this check redundant TODAY: a mutation that
+	// removes it changes nothing observable, and the r11 round-3 battery
+	// records it as a justified miss rather than a gap. It stays because
+	// the two guards answer different questions — this one is "Python
+	// never reached write_event", the other is "write_event's own try
+	// caught it" — and the day a caller slices something WriteEvent would
+	// accept, only this one is right.
+	if eventGoal, sliceable := pyval.SliceHead(taskGet(task, "reason", ""), 80); sliceable {
 		notify.WriteEvent(ws, "escalation_processed", notify.EventFields{
 			Goal: eventGoal,
 			// project and loop_id are the RAW task values, unsliced and
@@ -480,6 +513,9 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			Project: taskGet(task, "parent_job_id", ""),
 			LoopID:  jobIDRaw,
 			Status:  action,
+			// Stated because its Go zero is nil and Python's default is
+			// "" — see the note at notify.EventFields.
+			Model: "",
 			Detail: fmt.Sprintf("depth=%s followup=%s | %s",
 				depthStr, followupLabel, pyval.Clip(reasoning, 100)),
 		})
@@ -492,7 +528,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		SummaryForUser: summaryForUser,
 		DecisionClass:  decisionClass,
 		Confidence:     confidence,
-	}
+	}, nil
 }
 
 var escalationActions = map[string]bool{
@@ -520,15 +556,23 @@ var escalationClasses = map[string]bool{
 // `"3"` is 3 to Python and would have been the default 2 to a float64/int
 // type assertion, and `3.7` is 3 there and 2 here. This function decides
 // whether an operator is notified at all (adversarial r11 round 2, MEDIUM).
-func CheckinFirstDepth(cfg map[string]any) int {
-	val, ok := pyInt(config.GetRaw(cfg, "recursion.checkin_first_depth", 2))
-	if !ok {
-		return 2
+//
+// It returns an error for the classes Python does NOT catch. `.inf` is a
+// float in YAML, `int(inf)` is an OverflowError, and the tuple here is
+// (TypeError, ValueError) — so a config saying `checkin_first_depth: .inf`
+// raises out of _advance_origin_with_checkin, into handle_escalation's
+// continue branch, and turns the whole escalation into a surface
+// (adversarial r11 round 3, HIGH — the same root as the confidence read).
+func CheckinFirstDepth(cfg map[string]any) (int, error) {
+	val, raised := pyval.IntCaught(
+		config.GetRaw(cfg, "recursion.checkin_first_depth", 2), 2)
+	if raised != nil {
+		return 0, raised
 	}
 	if val < 1 {
-		return 1
+		return 1, nil
 	}
-	return val
+	return val, nil
 }
 
 // checkinRandInt is random.randint(lo, hi) — INCLUSIVE at both ends,
@@ -540,14 +584,26 @@ var checkinRandInt = func(lo, hi int) int {
 
 // CheckinJitter is the random 4–7-goal cadence for check-ins after the
 // first (jittered, not fixed).
-func CheckinJitter(cfg map[string]any) int {
+func CheckinJitter(cfg map[string]any) (int, error) {
 	// ONE try around BOTH reads in Python, which is not the same as two
 	// independent defaults: a bad `checkin_jitter_max` resets the MINIMUM
 	// too, so `min: 10, max: "abc"` draws from 4–7 there and would draw
 	// from 7–10 here if each read defaulted on its own.
-	lo, okLo := pyInt(config.GetRaw(cfg, "recursion.checkin_jitter_min", 4))
-	hi, okHi := pyInt(config.GetRaw(cfg, "recursion.checkin_jitter_max", 7))
-	if !okLo || !okHi {
+	//
+	// IntCaught cannot express that — it answers each read on its own —
+	// so the two are classified here and the reset is one decision over
+	// both. An UNCAUGHT class (OverflowError, from a YAML `.inf`) leaves
+	// the function instead, from whichever read reached it first; Python
+	// evaluates lo before hi.
+	lo, loErr := pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_min", 4))
+	if loErr != nil && !pyval.CaughtBy(loErr, "TypeError", "ValueError") {
+		return 0, loErr
+	}
+	hi, hiErr := pyval.Int(config.GetRaw(cfg, "recursion.checkin_jitter_max", 7))
+	if hiErr != nil && !pyval.CaughtBy(hiErr, "TypeError", "ValueError") {
+		return 0, hiErr
+	}
+	if loErr != nil || hiErr != nil {
 		lo, hi = 4, 7
 	}
 	if hi < lo {
@@ -559,7 +615,7 @@ func CheckinJitter(cfg map[string]any) int {
 	if hi < lo {
 		hi = lo
 	}
-	return checkinRandInt(lo, hi)
+	return checkinRandInt(lo, hi), nil
 }
 
 // AdvanceOriginWithCheckin returns (origin, shouldFire) — it advances the
@@ -597,7 +653,15 @@ func AdvanceOriginWithCheckin(task pyval.Obj, newDepth any, cfg map[string]any) 
 	}
 	// The default is evaluated EAGERLY — it is an argument to .get(), so the
 	// config read and its clamp happen even when the key is present.
-	var nextCheckin any = CheckinFirstDepth(cfg)
+	// The default argument is a CALL, and Python evaluates it eagerly —
+	// before the .get, whether or not the key is present. So a config that
+	// makes _checkin_first_depth raise takes this path down even for an
+	// origin that already carries next_checkin_depth.
+	firstDepth, raised := CheckinFirstDepth(cfg)
+	if raised != nil {
+		return nil, false, raised
+	}
+	var nextCheckin any = firstDepth
 	if v, ok := origin.Get("next_checkin_depth"); ok {
 		nextCheckin = v
 	}
@@ -606,7 +670,11 @@ func AdvanceOriginWithCheckin(task pyval.Obj, newDepth any, cfg map[string]any) 
 		return nil, false, err
 	}
 	if shouldFire {
-		jittered, err := pyval.AddN(newDepth, CheckinJitter(cfg))
+		jitter, raised := CheckinJitter(cfg)
+		if raised != nil {
+			return nil, false, raised
+		}
+		jittered, err := pyval.AddN(newDepth, jitter)
 		if err != nil {
 			return nil, false, err
 		}
@@ -658,13 +726,22 @@ func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 	// into the blanket except wrapping this whole function: no notify at
 	// all, no ledger row, no hook. Answering 0 instead would emit a row
 	// CPython never writes.
+	//
+	// UNREACHABLE with a non-numeric value today, and deliberately kept:
+	// _advance_origin_with_checkin has already written
+	// `origin["checkins_sent"] = origin.get("checkins_sent", 0) + 1`
+	// before this runs, so a non-numeric one raised THERE — in the continue
+	// branch's try, which flips the action to surface. The r11 round-3
+	// battery records the mutation as a justified miss for that reason. The
+	// fixture that drives the real path ("a non-numeric checkins_sent emits
+	// no check-in") pins the raise at its actual site.
 	sentRaw := any(0)
 	if v, ok := origin.Get("checkins_sent"); ok {
 		sentRaw = v
 	}
-	checkinNumber, ok := pyInt(sentRaw)
-	if !ok {
-		o.logf("recursion check-in emit failed (non-fatal): int(%s)", pyval.Repr(sentRaw))
+	checkinNumber, raised := pyval.Int(sentRaw)
+	if raised != nil {
+		o.logf("recursion check-in emit failed (non-fatal): %v", raised)
 		return
 	}
 	// An ORDERED payload, in Python's dict-literal order, because two
@@ -750,10 +827,16 @@ func StampCloseStopVerdict(ws string, loopIDRaw, depth any, confidence int,
 			// `2` in the payload while the evidence string beside it says
 			// "2.0", from the same variable. This is the one place `depth`
 			// is NOT raw, which is precisely why it needed spelling out.
-			depthInt, depthOK := pyInt(depth)
-			if !depthOK {
-				o.logf("close stop-verdict metadata stamp failed: %s",
-					pyIntError(depth))
+			depthInt, depthRaised := pyval.Int(depth)
+			if depthRaised != nil {
+				// A blanket `except Exception` here, so the class does not
+				// matter — but ErrIntTooLarge is NOT a Python raise, and
+				// this is the site where the difference is visible: CPython
+				// writes an arbitrary-precision `"depth": 10000000000000000000`
+				// and this port cannot. It refuses rather than writing the
+				// int64 wraparound that a bare Go conversion produces
+				// (adversarial r11 round 3, HIGH — falsifier C).
+				o.logf("close stop-verdict metadata stamp failed: %v", depthRaised)
 			} else {
 				var evOut string
 				_, err := runs.StampRunStopVerdict(runs.StopTupleOptions{
@@ -799,11 +882,16 @@ func writeEscalationSummary(ws string, jobIDRaw any, action string, depth any,
 	// `job_id[:8]` is a BARE slice inside the artifact's own try/except:
 	// a non-string job_id raises there, so CPython writes no artifact and
 	// logs a warning. Everything after this block still runs.
-	short, sliceable := pySliceHead(jobIDRaw, 8)
+	// The slice result rides into an f-string, so a LIST job_id gives a
+	// directory named `escalation-[1, 2]` rather than no artifact — only
+	// the shapes that RAISE skip it.
+	shortRaw, sliceable := pyval.SliceHead(jobIDRaw, 8)
 	if !sliceable {
-		o.logf("escalation %s: failed to write summary: job_id is not a string", action)
+		o.logf("escalation %s: failed to write summary: job_id is not sliceable",
+			action)
 		return
 	}
+	short := pyval.Str(shortRaw)
 	jobID := pyval.Str(jobIDRaw)
 	artDir := filepath.Join(orch.ProjectDir(ws, "escalation-"+short), "artifacts")
 	if err := os.MkdirAll(artDir, record.NewDirMode); err != nil {
@@ -880,149 +968,4 @@ func dataGet(d pyval.Obj, key string, def any) any {
 		return v
 	}
 	return def
-}
-
-// pyIntOr is `try: int(v) except (TypeError, ValueError): def`.
-//
-// It is NOT pyval.IntOf, which is int() after a .get with a numeric
-// default and answers 0 for everything it cannot read. The difference is
-// visible on exactly the values a model reply produces: int("7") is 7 on
-// both sides, but int("high") raises and must fall back to the CALLER's
-// default of 5, where IntOf would silently answer 0 — and 0 then clamps
-// to 1, i.e. maximum uncertainty, from a reply that said nothing about
-// confidence at all.
-func pyIntOr(v any, def int) int {
-	if n, ok := pyInt(v); ok {
-		return n
-	}
-	return def
-}
-
-// pyInt is bare `int(v)`: the value, or false where CPython raises.
-//
-// The two spellings are not interchangeable and both are live in this file.
-// `confidence` wraps int() in its own try with a default of 5, so it wants
-// pyIntOr. `checkin_number` does NOT — its int() is bare, and the raise
-// travels to the blanket except around the whole check-in, which means no
-// notification at all rather than a notification carrying a substituted
-// number.
-func pyInt(v any) (int, bool) {
-	switch t := v.(type) {
-	case nil:
-		return 0, false // int(None) raises TypeError
-	case bool:
-		if t {
-			return 1, true
-		}
-		return 0, true
-	case int:
-		return t, true
-	case float64:
-		if t != t || t > 1e18 || t < -1e18 {
-			// int(nan) and int(inf) raise; a magnitude past int64 would
-			// be an arbitrary-precision int in CPython, which this port
-			// does not carry (named residual, shared with pyval.Plain).
-			return 0, false
-		}
-		return int(t), true
-	case json.Number:
-		if i, err := t.Int64(); err == nil {
-			return int(i), true
-		}
-		if f, err := t.Float64(); err == nil {
-			return int(f), true
-		}
-		return 0, false
-	case string:
-		return pyIntFromString(t)
-	}
-	return 0, false
-}
-
-// pyIntFromString is int(str): surrounding whitespace is stripped, an
-// optional sign is allowed, PEP 515 underscores may separate digits — and
-// a decimal point or an exponent is a ValueError, unlike float(). A model
-// that answers "7" is read as 7; one that answers "7.5" or "high" is not
-// read at all, and the caller's default stands.
-func pyIntFromString(s string) (int, bool) {
-	s = pytext.Strip(s)
-	if s == "" {
-		return 0, false
-	}
-	i := 0
-	neg := false
-	if s[0] == '+' || s[0] == '-' {
-		neg = s[0] == '-'
-		i++
-	}
-	digits := 0
-	n := 0
-	prevUnderscore := false
-	for ; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '_':
-			// An underscore must sit BETWEEN digits: leading, trailing and
-			// doubled underscores are all ValueError in CPython.
-			if digits == 0 || prevUnderscore {
-				return 0, false
-			}
-			prevUnderscore = true
-		case c >= '0' && c <= '9':
-			prevUnderscore = false
-			digits++
-			if n > (1<<62)/10 {
-				// Past what this port carries. CPython would keep going
-				// with an arbitrary-precision int; refusing is the safe
-				// direction here, since the caller clamps to 1..10 anyway.
-				return 0, false
-			}
-			n = n*10 + int(c-'0')
-		default:
-			return 0, false
-		}
-	}
-	if digits == 0 || prevUnderscore {
-		return 0, false
-	}
-	if neg {
-		n = -n
-	}
-	return n, true
-}
-
-// pySliceHead is `value[:n]` on a RAW value: it succeeds only for a
-// string, because Python raises TypeError slicing an int, a dict or None.
-// The bool reports whether the slice would have raised — which matters at
-// the one call site that has it, where the raise is caught by a blanket
-// except that swallows the whole event write.
-func pySliceHead(v any, n int) (string, bool) {
-	s, ok := v.(string)
-	if !ok {
-		return "", false
-	}
-	return pyval.Clip(s, n), true
-}
-
-// pyIntError is the message CPython's `int(v)` raises with, for the two
-// places this file logs a failed conversion.
-//
-// It is a LOG line, not a store, so the text is not load-bearing the way
-// pyops' messages are. It is written out anyway because the alternative —
-// a Go-shaped "cannot convert" — reads as a port bug to whoever greps the
-// two runtimes' logs side by side, which is the exact comparison this
-// port's debugging depends on.
-func pyIntError(v any) string {
-	if s, ok := v.(string); ok {
-		return fmt.Sprintf("invalid literal for int() with base 10: %s",
-			pyval.Repr(s))
-	}
-	if f, ok := v.(float64); ok {
-		if f != f {
-			return "cannot convert float NaN to integer"
-		}
-		return "cannot convert float infinity to integer"
-	}
-	return fmt.Sprintf("int() argument must be a string, a bytes-like object "+
-		"or a real number, not '%s'", pyval.TypeName(v))
 }

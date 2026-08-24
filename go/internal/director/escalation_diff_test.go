@@ -3,9 +3,11 @@ package director
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -93,7 +95,16 @@ class _Scripted:
 
 director._checkin_jitter = lambda: freeze
 
-d = director.handle_escalation(task, adapter=_Scripted())
+# handle_escalation's excepts are NARROW in two places, so "it raised" is
+# one of its observable outcomes and not a probe failure. A harness that
+# died here could not compare the case that matters most: an escalation
+# that raises has written a PREFIX of its artifacts, and which prefix is
+# the contract.
+d, raised = None, None
+try:
+    d = director.handle_escalation(task, adapter=_Scripted())
+except BaseException as e:
+    raised = {"cls": type(e).__name__, "msg": str(e)}
 
 ws = Path(os.environ["MARO_WORKSPACE"])
 
@@ -124,12 +135,13 @@ _msgs = [{"role": m.role, "content": m.content}
 _kw = {k: v for k, v in getattr(_Scripted, "kwargs", {}).items()}
 
 sys.stdout.write(json.dumps({
-    "action": d.action,
-    "reasoning": d.reasoning,
-    "followup_task_id": d.followup_task_id,
-    "summary_for_user": d.summary_for_user,
-    "decision_class": d.decision_class,
-    "confidence": d.confidence,
+    "raised": raised,
+    "action": d.action if d else "",
+    "reasoning": d.reasoning if d else "",
+    "followup_task_id": d.followup_task_id if d else None,
+    "summary_for_user": d.summary_for_user if d else "",
+    "decision_class": d.decision_class if d else "",
+    "confidence": d.confidence if d else 0,
     "files": files,
     "messages": _msgs,
     "kwargs": _kw,
@@ -565,6 +577,69 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 		}, reply(`"action": "close", "decision_class": "mechanical",
 			"confidence": 9, "reasoning": "done here",
 			"summary_for_user": "closed"`)},
+
+		// The confidence read's except tuple is (TypeError, ValueError),
+		// and `json.loads` admits the bare tokens NaN and Infinity — so one
+		// model reply reaches BOTH sides of that tuple. These four are a
+		// matched set on purpose: a port that answered only "int() failed"
+		// gets the first right by accident and the second catastrophically
+		// wrong, and the two that follow are the same read at the arbitrary-
+		// precision boundary, where CPython succeeds and clamps.
+		{"a NaN confidence is caught and defaults", map[string]any{
+			"job_id": "job-nanc01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": NaN, "reasoning": "the work answers it",
+			"summary_for_user": "closing"`)},
+
+		{"an Infinity confidence is NOT caught", map[string]any{
+			"job_id": "job-infc01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": Infinity, "reasoning": "the work answers it",
+			"summary_for_user": "closing"`)},
+
+		{"a confidence past int64 clamps high", map[string]any{
+			"job_id": "job-bigc01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 99999999999999999999,
+			"reasoning": "the work answers it",
+			"summary_for_user": "closing"`)},
+
+		{"a confidence past int64 the other way clamps low", map[string]any{
+			"job_id": "job-negc01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": -99999999999999999999,
+			"reasoning": "the work answers it",
+			"summary_for_user": "closing"`)},
+
+		// `write_event(goal=task.get("reason", "")[:80])`. A queue row's
+		// reason is whatever the enqueuing side put there, and this lane
+		// enqueues its own: an escalation that carries a structured ask
+		// writes a reason that is a dict, and `{...}[:80]` is a KeyError —
+		// a dict lookup with a slice for a key. The event row is skipped
+		// and everything else still happens.
+		{"an unsliceable reason drops only the event row", map[string]any{
+			"job_id": "job-dictr1", "parent_job_id": "loop-parent-1",
+			"reason":             map[string]any{"ask": "why", "of": "the lane"},
+			"continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closed"`)},
+
+		// The check-in's `int(origin.get("checkins_sent", 0))` is BARE —
+		// no local try — so a non-numeric count raises into the blanket
+		// except around the whole emit: no notify, no ledger row, no hook,
+		// and the escalation itself completes regardless.
+		{"a non-numeric checkins_sent emits no check-in", map[string]any{
+			"job_id": "job-badck01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 3,
+			"origin": map[string]any{"checkins_sent": "two"},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
 	}
 
 	for _, c := range cases {
@@ -578,14 +653,18 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 			defer func() { checkinRandInt = prev }()
 
 			fake := &llm.Fake{Script: []string{c.reply}}
-			got := HandleEscalation(context.Background(), goWS, objOf(c.task),
-				EscalationOptions{Adapter: fake})
+			got, gotErr := HandleEscalation(context.Background(), goWS,
+				objOf(c.task), EscalationOptions{Adapter: fake})
 
 			arg, err := json.Marshal([]any{c.task, c.reply, frozenJitter})
 			if err != nil {
 				t.Fatal(err)
 			}
 			var want struct {
+				Raised *struct {
+					Cls string `json:"cls"`
+					Msg string `json:"msg"`
+				} `json:"raised"`
 				Action         string            `json:"action"`
 				Reasoning      string            `json:"reasoning"`
 				FollowupTaskID *string           `json:"followup_task_id"`
@@ -601,6 +680,31 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 			}
 			if err := json.Unmarshal([]byte(runPyIn(t, pyWS, pyEscalationSrc, string(arg))), &want); err != nil {
 				t.Fatal(err)
+			}
+
+			// Whether it raised at all comes first: the fields below are
+			// meaningless for a call that never returned one, and the FILES
+			// still are not — a raise leaves a prefix of the writes behind,
+			// and comparing that prefix is the point of the case.
+			if (gotErr != nil) != (want.Raised != nil) {
+				if gotErr != nil {
+					t.Fatalf("raised %v; CPython returned a decision", gotErr)
+				}
+				t.Fatalf("returned a decision; CPython raises %s: %s",
+					want.Raised.Cls, want.Raised.Msg)
+			}
+			if want.Raised != nil {
+				pe, ok := gotErr.(*pyval.PyErr)
+				if !ok {
+					t.Errorf("raised %v, which carries no exception class; "+
+						"CPython raises %s", gotErr, want.Raised.Cls)
+				} else if pe.Class != want.Raised.Cls {
+					t.Errorf("raised %s, CPython raises %s — the two are "+
+						"caught by different excepts upstream",
+						pe.Class, want.Raised.Cls)
+				}
+				compareWorkspaces(t, goWS, want.Files)
+				return
 			}
 
 			if got.Action != want.Action {
@@ -974,9 +1078,29 @@ func sameRow(t *testing.T, what string, got, want pyval.Obj, volatile ...string)
 		if skip[f.Key] {
 			continue
 		}
-		g, _ := json.Marshal(pyval.Plain(got[i].Val))
-		w, _ := json.Marshal(pyval.Plain(f.Val))
-		if string(g) != string(w) {
+		// DumpsCompactPy, NOT json.Marshal(pyval.Plain(v)).
+		//
+		// Plain maps json.Number("3") to int(3) and json.Number("3.0") to
+		// float64(3), and encoding/json then writes `3` for both — so the
+		// comparison DESTROYED the int/float distinction at the exact point
+		// it was supposed to check it. Plain's own doc says why that
+		// matters: str(42) is "42" while str(42.0) is "42.0". Every .json
+		// and .jsonl file in this differential goes through here, and only
+		// the .md files were compared byte for byte, so seeding a fixture
+		// with `"attempt": 2.0` and letting the port write `3` PASSED
+		// (adversarial r11 round 3, MEDIUM).
+		//
+		// It also fixes the nested half: json.Marshal over a map
+		// alphabetizes, so a nested object's key ORDER was compared
+		// nowhere, while the top-level order two lines up was compared
+		// explicitly. DumpsCompactPy walks pyval.Obj in its own order.
+		g, gerr := pyval.DumpsCompactPy(got[i].Val)
+		w, werr := pyval.DumpsCompactPy(f.Val)
+		if gerr != nil || werr != nil {
+			t.Fatalf("%s[%s] could not be rendered for comparison: %v / %v",
+				what, f.Key, gerr, werr)
+		}
+		if g != w {
 			t.Errorf("%s[%s] = %s, CPython says %s", what, f.Key, g, w)
 		}
 	}
@@ -1065,7 +1189,7 @@ func TestTheCalibrationAndEventRowsMatchCPython(t *testing.T) {
 			checkinRandInt = func(lo, hi int) int { return frozenJitter }
 			defer func() { checkinRandInt = prev }()
 
-			HandleEscalation(context.Background(), goWS, objOf(c.task),
+			mustEscalate(t, context.Background(), goWS, objOf(c.task),
 				EscalationOptions{Adapter: &llm.Fake{Script: []string{c.reply}}})
 
 			arg, err := json.Marshal([]any{c.task, c.reply, frozenJitter})
@@ -1197,7 +1321,7 @@ func TestTheEnqueuedTaskMatchesCPython(t *testing.T) {
 			checkinRandInt = func(lo, hi int) int { return frozenJitter }
 			defer func() { checkinRandInt = prev }()
 
-			HandleEscalation(context.Background(), goWS, objOf(c.task),
+			mustEscalate(t, context.Background(), goWS, objOf(c.task),
 				EscalationOptions{Adapter: &llm.Fake{Script: []string{c.reply}}})
 			arg, err := json.Marshal([]any{c.task, c.reply, frozenJitter})
 			if err != nil {
@@ -1299,7 +1423,7 @@ func TestACloseStampsBothStoresAndASurfaceStampsNeither(t *testing.T) {
 			checkinRandInt = func(lo, hi int) int { return frozenJitter }
 			defer func() { checkinRandInt = prev }()
 
-			HandleEscalation(context.Background(), goWS, objOf(task),
+			mustEscalate(t, context.Background(), goWS, objOf(task),
 				EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}})
 			arg, err := json.Marshal([]any{task, body, frozenJitter})
 			if err != nil {
@@ -1455,7 +1579,7 @@ func TestTheCloseStampIsGovernedByTheRawParentIdAndAnIntDepth(t *testing.T) {
 			checkinRandInt = func(lo, hi int) int { return frozenJitter }
 			defer func() { checkinRandInt = prev }()
 
-			HandleEscalation(context.Background(), goWS, objOf(task),
+			mustEscalate(t, context.Background(), goWS, objOf(task),
 				EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}})
 			arg, err := json.Marshal([]any{task, body, frozenJitter})
 			if err != nil {
@@ -1514,3 +1638,143 @@ func TestTheCloseStampIsGovernedByTheRawParentIdAndAnIntDepth(t *testing.T) {
 		})
 	}
 }
+
+// The log lines are a surface too. They are what an operator reads when a
+// run went sideways, and Python spells two of them with %r — the escalation
+// decision's reasoning and the narrow's revised goal.
+//
+// Go's %q is NOT Python's repr: repr prefers single quotes, leaves printable
+// non-ASCII literal, and escapes a different set. A line reading
+// reasoning='the café path → ok' on one runtime and "the caf\u00e9 path
+// \u2192 ok" on the other is the same divergence class as a differing
+// artifact, and nothing here compared logs at all.
+const pyEscalationLogSrc = `
+import json, os, sys, logging
+from pathlib import Path
+
+task, reply = json.loads(sys.argv[1])
+
+import director
+from llm import LLMResponse
+
+class _Scripted:
+    def complete(self, messages, **kwargs):
+        return LLMResponse(content=reply)
+
+lines = []
+
+class _Cap(logging.Handler):
+    def emit(self, record):
+        lines.append(record.getMessage())
+
+_root = logging.getLogger()
+_root.addHandler(_Cap())
+_root.setLevel(logging.DEBUG)
+
+director._checkin_jitter = lambda: 5
+director.handle_escalation(task, adapter=_Scripted())
+
+sys.stdout.write(json.dumps(lines))
+`
+
+func TestTheDecisionLogLineMatchesCPython(t *testing.T) {
+	for _, c := range []escalationCase{
+		// Non-ASCII and a quote, because those are the two places repr and
+		// %q part company. A plain ASCII reasoning renders identically
+		// under both and would pin nothing.
+		{"a reasoning with non-ASCII and a quote", map[string]any{
+			"job_id": "job-log001", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9,
+			"reasoning": "the caf\u00e9 path \u2192 they said \"fine\"",
+			"summary_for_user": "closing"`)},
+
+		{"a revised goal with non-ASCII", map[string]any{
+			"job_id": "job-log002", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "narrow", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "one thread left",
+			"revised_goal": "chase the caf\u00e9 \u2192 na\u00efve case",
+			"summary_for_user": "narrowing"`)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			goWS, pyWS := t.TempDir(), t.TempDir()
+
+			prev := checkinRandInt
+			checkinRandInt = func(lo, hi int) int { return 5 }
+			defer func() { checkinRandInt = prev }()
+
+			var got []string
+			fake := &llm.Fake{Script: []string{c.reply}}
+			if _, err := HandleEscalation(context.Background(), goWS,
+				objOf(c.task), EscalationOptions{
+					Adapter: fake,
+					Log: func(format string, args ...any) {
+						got = append(got, fmt.Sprintf(format, args...))
+					},
+				}); err != nil {
+				t.Fatal(err)
+			}
+
+			arg, err := json.Marshal([]any{c.task, c.reply})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			if err := json.Unmarshal(
+				[]byte(runPyIn(t, pyWS, pyEscalationLogSrc, string(arg))),
+				&want); err != nil {
+				t.Fatal(err)
+			}
+
+			// Two lines carry content no differential can compare: the
+			// workspace each runtime was given, and the fresh uuid a
+			// continuation gets. Both are masked rather than skipped — the
+			// REST of those lines is exactly the rendering under test, and
+			// skipping them by name would drop the narrow's %r goal, which
+			// is one of the two sites this test exists for.
+			norm := func(ws string) func(string) string {
+				return func(line string) string {
+					line = strings.ReplaceAll(line, ws, "<ws>")
+					return taskIDRe.ReplaceAllString(line, "task-<id>")
+				}
+			}
+			goNorm, pyNorm := norm(goWS), norm(pyWS)
+
+			// Only the lines this port emits are compared: Python logs from
+			// modules the port has not reached (task_store, runs), and a
+			// set comparison would fail on those rather than on the
+			// rendering under test. The PREFIX is the join key, because the
+			// tail is exactly what differs when the rendering is wrong.
+			for _, raw := range got {
+				g := goNorm(raw)
+				head, _, _ := strings.Cut(g, " ")
+				var match string
+				for _, w := range want {
+					w = pyNorm(w)
+					if wh, _, _ := strings.Cut(w, " "); wh == head {
+						match = w
+						break
+					}
+				}
+				if match == "" {
+					t.Errorf("the port logs %q and CPython logs no line "+
+						"starting %q:\n  python: %q", g, head, want)
+					continue
+				}
+				if match != g {
+					t.Errorf("log line diverges:\n  go: %q\n  py: %q", g, match)
+				}
+			}
+			if len(got) == 0 {
+				t.Fatal("the port logged nothing; this test compares nothing")
+			}
+		})
+	}
+}
+
+// taskIDRe matches the ids handle_escalation mints, which carry a uuid
+// tail. Anchored on the whole shape rather than on "task-" alone, so a
+// line that merely mentions a configured id keeps it.
+var taskIDRe = regexp.MustCompile(`task-\d{8}T\d{6}Z-[0-9a-f]{8}`)
