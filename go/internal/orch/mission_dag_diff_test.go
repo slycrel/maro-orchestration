@@ -752,3 +752,79 @@ func TestAPanickingMilestoneFailsOnlyItself(t *testing.T) {
 		t.Errorf("no mission_dag_thread_crash warning was emitted: %v", warns)
 	}
 }
+
+// The STALL lane is the path r5's own fix did not cover: it called
+// runOne directly, so a panicking body there took the whole process down
+// — losing every other milestone, completed_at, and the final status,
+// where CPython's try/except (mission.py:416-419) fails that one
+// milestone and continues. r5's test could not have caught it: its
+// mission had no depends_on at all, so every milestone went through the
+// pool (adversarial mission-r6 MEDIUM, and the sibling lens again — a
+// fix is evidence about its siblings).
+func TestAPanickingMilestoneInTheSTALLLaneFailsOnlyItself(t *testing.T) {
+	// A cycle: neither a nor b is ever ready, so the scheduler falls
+	// through to the stall lane and runs them in list order.
+	m := &Mission{ID: "m", Milestones: []Milestone{
+		{ID: "a", Title: "A", DependsOn: []string{"b"}},
+		{ID: "b", Title: "B", DependsOn: []string{"a"}},
+		{ID: "c", Title: "C"},
+	}}
+	var warns []string
+	var mu sync.Mutex
+
+	RunMilestoneDAG(context.Background(), m,
+		func(_ context.Context, _ int, ms *Milestone) error {
+			if ms.ID == "b" {
+				panic("the stalled milestone body exploded")
+			}
+			ms.Status = "completed"
+			return nil
+		},
+		DAGOptions{
+			MaxWorkers: 2,
+			LogFn:      func(string) {},
+			WarnFn: func(s string) {
+				mu.Lock()
+				warns = append(warns, s)
+				mu.Unlock()
+			},
+		})
+
+	byID := map[string]*Milestone{}
+	for i := range m.Milestones {
+		byID[m.Milestones[i].ID] = &m.Milestones[i]
+	}
+	if got := byID["b"].Status; got != "failed" {
+		t.Errorf("the panicking stalled milestone must be marked failed, got %q", got)
+	}
+	if byID["b"].ValidationResult == nil ||
+		!strings.Contains(*byID["b"].ValidationResult, "panic") {
+		t.Errorf("the panic must leave durable evidence, got %v",
+			byID["b"].ValidationResult)
+	}
+	for _, id := range []string{"a", "c"} {
+		if got := byID[id].Status; got != "completed" {
+			t.Errorf("milestone %s must still complete, got %q", id, got)
+		}
+	}
+
+	var sawCrash, sawStall bool
+	for _, w := range warns {
+		if strings.Contains(w, "mission_dag_thread_crash") {
+			sawCrash = true
+		}
+		if strings.Contains(w, "mission_dag_stall") {
+			sawStall = true
+		}
+	}
+	// Anti-vacuity: without this, a scheduler change that quietly stopped
+	// stalling would leave the test passing while testing the pool lane
+	// twice — LENS 1 head 3 in the shape it would actually appear here.
+	if !sawStall {
+		t.Fatal("no mission_dag_stall warning: the cycle did not reach the " +
+			"stall lane, so this test is a second copy of the pool-lane one")
+	}
+	if !sawCrash {
+		t.Errorf("no mission_dag_thread_crash warning was emitted: %v", warns)
+	}
+}

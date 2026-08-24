@@ -426,6 +426,24 @@ func TestSafeFloatMatchesCPython(t *testing.T) {
 		{"a string spelling of Infinity", "Infinity", 0.7},
 		{"an overflowing literal", "__INF__", 0.7},
 		{"an overflowing string literal", "1e309", 0.7},
+		// mission-r6: the corpus above could not reach any of these.
+		// float()'s whitespace set is str.strip()'s MINUS U+001C..U+001F,
+		// so pre-stripping with pytext.Strip parsed values CPython refuses.
+		{"a leading file separator", "\u001c0.9", 0.5},
+		{"a trailing unit separator", "0.9\u001f", 0.5},
+		{"a leading group separator", "\u001e0.9", 0.5},
+		{"a leading non-breaking space", "\u00a00.9", 0.5},
+		// float() accepts any Unicode decimal digit; ParseFloat is
+		// ASCII-only.
+		{"an Arabic-Indic decimal", "\u0660.\u0665", 0.9},
+		{"an Arabic-Indic integer", "\u0661\u0662\u0663", 0.9},
+		{"a Devanagari decimal", "\u0966.\u096b", 0.9},
+		// PEP 515 underscores: BOTH accept them, and the doc comment used
+		// to claim both refused.
+		{"an underscore literal", "1_000", 0.5},
+		// The clamp is max()/min(), which normalises signed zero where a
+		// `<` comparison does not.
+		{"negative zero", "__NEGZERO__", 0.5},
 	}
 
 	in, err := json.Marshal(cases)
@@ -437,7 +455,7 @@ func TestSafeFloatMatchesCPython(t *testing.T) {
 			"sys.path.insert(0, sys.argv[2])\n"+
 			"from llm_parse import safe_float\n"+
 			"S={'__NAN__':float('nan'),'__INF__':float('inf'),"+
-			"'__NEGINF__':float('-inf')}\n"+
+			"'__NEGINF__':float('-inf'),'__NEGZERO__':-0.0}\n"+
 			"r=[]\n"+
 			"for c in json.loads(sys.argv[1]):\n"+
 			"    v=c['v']\n"+
@@ -467,6 +485,11 @@ func TestSafeFloatMatchesCPython(t *testing.T) {
 				v = math.Inf(1)
 			case "__NEGINF__":
 				v = math.Inf(-1)
+			case "__NEGZERO__":
+				// math.Copysign, not the literal -0.0: a Go constant
+				// expression folds -0.0 to +0, so a literal fixture
+				// here would test nothing at all.
+				v = math.Copysign(0, -1)
 			}
 			got := SafeFloatUnit(v, c.Def)
 			if got != want[i] {
@@ -488,6 +511,73 @@ func TestSafeFloatMatchesCPython(t *testing.T) {
 	}
 	if coerced == 0 {
 		t.Fatal("no non-float value coerces: safe_float's float() conversion is not pinned")
+	}
+
+	// Signed zero is invisible to ==, so it needs its own assertion: the
+	// clamp must return +0, which is what max(0.0, -0.0) gives. Both
+	// writers spell the difference ("-0.0" vs "0.0") into the store.
+	if z := SafeFloatUnit(math.Copysign(0, -1), 0.5); math.Signbit(z) {
+		t.Errorf("the min clamp must normalise negative zero the way "+
+			"max(min_val, result) does; Repr gives %q", Repr(z))
+	}
+}
+
+// The corpus above hands Go a Go value and Python a JSON value, so
+// toFloat's json.Number arm -- the one every real caller reaches, since
+// every confidence arrives through a decoder -- was never entered
+// (adversarial mission-r6, LENS 1: a corpus that cannot separate).
+func TestSafeFloatOnDecodedNumbersMatchesCPython(t *testing.T) {
+	docs := []string{
+		`{"c": 0.9}`, `{"c": 3}`, `{"c": -2.5}`, `{"c": 0}`,
+		`{"c": 1e309}`, `{"c": -1e309}`, `{"c": 1e-400}`,
+		`{"c": NaN}`, `{"c": Infinity}`, `{"c": -Infinity}`,
+		`{"c": "0.9"}`, `{"c": "\u001c0.9"}`, `{"c": true}`, `{"c": null}`,
+		`{"c": 123456789012345678901234567890}`,
+	}
+	in, err := json.Marshal(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"sys.path.insert(0, sys.argv[2])\n"+
+			"from llm_parse import safe_float\n"+
+			"r=[]\n"+
+			"for d in json.loads(sys.argv[1]):\n"+
+			"    v = json.loads(d).get('c')\n"+
+			"    r.append(safe_float(v, default=0.7, min_val=0.0, max_val=1.0))\n"+
+			"print(json.dumps(r))",
+		string(in), srcDirPyval(t)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []float64
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+
+	var defaulted int
+	for i, d := range docs {
+		v, derr := LoadsOrdered(d)
+		if derr != nil {
+			t.Fatalf("LoadsOrdered(%s): %v", d, derr)
+		}
+		m, _ := Plain(v).(map[string]any)
+		got := SafeFloatUnit(m["c"], 0.7)
+		if got != want[i] {
+			t.Errorf("a DECODED confidence diverges\n  in %s\n  go %v\n  py %v",
+				d, got, want[i])
+		}
+		if got == 0.7 {
+			defaulted++
+		}
+	}
+	if defaulted == 0 {
+		t.Fatal("no decoded document falls back to the default: the " +
+			"non-finite guard is unreachable through this path")
 	}
 }
 

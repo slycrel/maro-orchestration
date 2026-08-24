@@ -104,10 +104,22 @@ Respond ONLY with a JSON object:
 
 // fileOutputRe ports _FILE_OUTPUT_RE: the goal explicitly asks for
 // output on disk (path, artifacts/, "to a file").
-var fileOutputRe = regexp.MustCompile(`(?i)(\bartifacts?/|` +
-	`\b(?:save|write|output|export)\b[^.;` + "\n" + `]{0,40}\bto\s+\S*[\w-]+\.[a-z]{1,6}\b|` +
-	`\bto\s+(?:a\s+)?file\b|` +
-	`\bas\s+(?:its\s+own\s+)?(?:markdown|csv|json|yaml|text)\s+files?\b)`)
+//
+// Every `\b`, `\s` and `\w` here is rebuilt from pytext: Go's are ASCII
+// and five-code-point where Python's are Unicode and 29. Measured, the
+// verbatim transcription missed `save the summary to café.md` — CPython
+// forces lane="agenda" ("Names a file deliverable") and Go left it "now",
+// which is a different execution path, not a different field
+// (adversarial mission-r6 MEDIUM).
+var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|` +
+	pytext.WordStart + `(?:save|write|output|export)` + pytext.WordEnd +
+	`[^.;` + "\n" + `]{0,40}` + pytext.WordStart + `to` + pytext.SpaceClass +
+	`+\S*[` + pytext.WordClassBody + `-]+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
+	pytext.WordStart + `to` + pytext.SpaceClass + `+(?:a` + pytext.SpaceClass +
+	`+)?file` + pytext.WordEnd + `|` +
+	pytext.WordStart + `as` + pytext.SpaceClass + `+(?:its` + pytext.SpaceClass +
+	`+own` + pytext.SpaceClass + `+)?(?:markdown|csv|json|yaml|text)` +
+	pytext.SpaceClass + `+files?` + pytext.WordEnd + `)`)
 
 // RequiresFileOutput is exported for the NOW lane's own honesty checks.
 func RequiresFileOutput(message string) bool {
@@ -193,7 +205,15 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 	}
 	r := Result{TokensIn: resp.TokensIn, TokensOut: resp.TokensOut}
 	obj, jerr := jsonx.Object(resp.Content)
-	if jerr != nil || obj == nil {
+	// len(obj) == 0, not obj == nil. Python guards on `if data:` and an
+	// empty dict is FALSY, so `{}` falls through to _heuristic_classify;
+	// jsonx.Object returns a non-nil empty map for the same input, and Go
+	// took the well-formed-verdict path with lane="agenda" 0.7 where
+	// CPython returns ('now', 0.65, ...). Same lane-flip blast radius as
+	// the regex classes above (adversarial mission-r6 MEDIUM).
+	// mission_dag.go:360 already carries the correct port of this exact
+	// Python idiom — this site was its unswept sibling.
+	if jerr != nil || len(obj) == 0 {
 		return r, false
 	}
 	lane := "agenda"
@@ -217,7 +237,13 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 	// bearing, and that is exactly how the r4 and r5 HIGHs both started.
 	conf := pyval.SafeFloatUnit(obj["confidence"], 0.7)
 	conf = math.Min(math.Max(conf, 0), 1)
-	reason, _ := obj["reason"].(string)
+	// safe_str, not a bare assertion: Python strips and coerces, so
+	// {"reason": 42} is "42" there and "" here. Result.Reason is
+	// consumed only by the terminal print today and cannot reach disk
+	// — fixed anyway because "cannot reach disk" is a property of
+	// today's callers, and the confidence field one line up carries
+	// the same argument while being the r5 HIGH's twin (mission-r6 LOW).
+	reason := pyval.SafeStr(obj["reason"], "")
 	r.Lane = lane
 	r.Confidence = conf
 	r.Reason = reason
@@ -228,23 +254,31 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 
 // --- heuristic fallback (Python regexes verbatim) -----------------------
 
+// Every `\b` below is pytext.WordStart/WordEnd, not Go's ASCII `\b`.
+// These decide the LANE, and Go's boundary fires between a non-ASCII
+// letter and an ASCII keyword where Python's does not: measured,
+// "研究plan for the week" is ('now', 0.65) in CPython and agenda 0.65
+// here (adversarial mission-r6 MEDIUM). The `\s` inside "how much" etc.
+// is a literal space in the Python source, so it stays a literal space.
 var nowPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\b(what|who|when|where|how much|how many)\b.{0,60}\?`),
-	regexp.MustCompile(`\b(write a? (haiku|poem|joke|summary|headline|tweet|caption))\b`),
-	regexp.MustCompile(`\b(translate|convert|format|calculate)\b`),
-	regexp.MustCompile(`\b(summarize|tldr|give me a summary)\b`),
-	regexp.MustCompile(`\b(quick(ly)?|fast|one-?line|brief)\b`),
+	regexp.MustCompile(pytext.WordStart + `(what|who|when|where|how much|how many)` +
+		pytext.WordEnd + `.{0,60}\?`),
+	regexp.MustCompile(pytext.WordStart +
+		`(write a? (haiku|poem|joke|summary|headline|tweet|caption))` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(translate|convert|format|calculate)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(summarize|tldr|give me a summary)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(quick(ly)?|fast|one-?line|brief)` + pytext.WordEnd),
 }
 
 var agendaPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\b(research|investigate|analyze|study|explore)\b`),
-	regexp.MustCompile(`\b(build|create|develop|implement|design|architect)\b`),
-	regexp.MustCompile(`\b(report|analysis|strategy|plan|roadmap)\b`),
-	regexp.MustCompile(`\b(monitor|track|watch|follow)\b`),
-	regexp.MustCompile(`\b(compare|evaluate|benchmark|assess)\b`),
-	regexp.MustCompile(`\b(deep (dive|research|analysis))\b`),
-	regexp.MustCompile(`\b(step[- ]by[- ]step|multi[- ]step|phase)\b`),
-	regexp.MustCompile(`\b(and then|first.*then|multiple|several)\b`),
+	regexp.MustCompile(pytext.WordStart + `(research|investigate|analyze|study|explore)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(build|create|develop|implement|design|architect)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(report|analysis|strategy|plan|roadmap)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(monitor|track|watch|follow)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(compare|evaluate|benchmark|assess)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(deep (dive|research|analysis))` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(step[- ]by[- ]step|multi[- ]step|phase)` + pytext.WordEnd),
+	regexp.MustCompile(pytext.WordStart + `(and then|first.*then|multiple|several)` + pytext.WordEnd),
 }
 
 // liveDataRe is the deliberately-narrow lexical approximation of
@@ -253,7 +287,8 @@ var agendaPatterns = []*regexp.Regexp{
 // an ACCEPTED residual of the fallback, confirmed by three independent
 // reviewers 2026-07-12, not a gap to chase (the real signal is the LLM
 // path's needs_live_data).
-var liveDataRe = regexp.MustCompile(`(?i)\b(what('s| is) (the |a |an )?(current|latest|today'?s?))\b`)
+var liveDataRe = regexp.MustCompile(`(?i)` + pytext.WordStart +
+	`(what('s| is) (the |a |an )?(current|latest|today'?s?))` + pytext.WordEnd)
 
 const shortThreshold = 8 // words — very short messages tend to be NOW
 

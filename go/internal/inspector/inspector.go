@@ -53,6 +53,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -406,10 +408,30 @@ func AssessGoalAlignment(ctx context.Context, adapter llm.Adapter, goal, resultS
 	if err != nil || resp == nil {
 		return &half
 	}
-	f, perr := strconv.ParseFloat(strings.TrimSpace(resp.Content), 64)
-	if perr != nil {
-		return &half
-	}
+	// Python is `float(resp.content.strip())` inside a try that returns
+	// 0.5 on ValueError/TypeError. ParseFloat(TrimSpace(...)) is not that
+	// function, three ways, all measured:
+	//
+	//	"\u001c0.8"  py 0.8  (str.strip covers U+001C..U+001F)  go was 0.5
+	//	"٠.٨"        py 0.8  (float() takes any Unicode digit)   go was 0.5
+	//	"1e400"      py inf  (no exception)                      go was 0.5
+	//
+	// and one that is worse than a wrong number: ParseFloat ACCEPTS
+	// "nan"/"inf"/"-inf" with a nil error, so a judge reply of "nan"
+	// became the report's AlignmentScoreAvg, and saveReport's
+	// json.Marshal then returns "json: unsupported value: NaN" — the
+	// whole batch's inspection row never written. That is verbatim the
+	// mission-r5 HIGH (StampVerdict + NaN) at a site the r5 sweep did not
+	// reach (adversarial mission-r6 MEDIUM).
+	//
+	// SafeFloat is float()-parity plus this port's standing non-finite
+	// stance (pyjson.RefuseNonFinite's), so every FINITE input now agrees
+	// with CPython exactly. The non-finite case is a NAMED divergence:
+	// CPython stores NaN/Infinity in inspection-log.jsonl and its own
+	// reader accepts them, Go stores the 0.5 default. Owed to the Python
+	// side, where a safe_float here would make both runtimes agree — and
+	// far better than losing the row.
+	f := pyval.SafeFloat(pytext.Strip(resp.Content), 0.5, nil, nil)
 	return &f
 }
 
@@ -802,9 +824,13 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-func round3(f float64) float64 {
-	return float64(int64(f*1000+0.5)) / 1000
-}
+// round3 was float64(int64(f*1000+0.5))/1000 — round half-UP, which is
+// not even Python's round-half-to-even, let alone its exact-value
+// rounding. Measured: round(0.6675, 3) is 0.667 in CPython and was 0.668
+// here; same for 0.0625, 0.8885, 0.1235. The value is written as
+// alignment_score_avg into inspection-log.jsonl, which both runtimes
+// read (adversarial mission-r6 MEDIUM).
+func round3(f float64) float64 { return pyval.Round(f, 3) }
 
 func saveReport(workspaceDir string, report InspectionReport) error {
 	raw, err := json.Marshal(report)

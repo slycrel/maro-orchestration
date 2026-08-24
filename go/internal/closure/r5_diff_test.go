@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Three r5 findings landed in this file and none of them had coverage.
@@ -44,6 +46,19 @@ func TestVerdictFirstSummaryMatchesCPython(t *testing.T) {
 		{"an ideographic space before", "　Goal achieved. done.", true, true},
 		{"a file separator before", "\x1cGoal achieved. done.", true, true},
 		{"a line separator inside", "Goal achieved. done.", true, true},
+
+		// mission-r6: every r5 case put its separator BEFORE or INSIDE
+		// the opener, where the rebuilt REGEX eats it — so the corpus
+		// could not see that the `.strip()` one line below the regex was
+		// still strings.TrimSpace, on the stdlib's narrower set. These
+		// reach the strip and not the regex.
+		{"a trailing file separator, no opener", "the file exists.\x1c", true, true},
+		{"a leading file separator, no opener", "\x1cthe file exists.", true, true},
+		{"a trailing separator after a stripped opener",
+			"Goal achieved. the file exists.\x1f", true, true},
+		{"a trailing separator, not achieved",
+			"Goal achieved. the file exists.\x1e", false, true},
+		{"only separators", "\x1c\x1d", true, true},
 
 		// The ordinary ASCII lane, which already agreed.
 		{"a plain opener", "Goal achieved. the file exists.", true, true},
@@ -106,6 +121,27 @@ func TestVerdictFirstSummaryMatchesCPython(t *testing.T) {
 		t.Fatal("no complete=false case with an achievement opener: the " +
 			"regression this function exists to stop is not pinned")
 	}
+
+	// mission-r6 anti-vacuity: the regex and the strip are two separate
+	// whitespace decisions one line apart, and r5 rebuilt only the first.
+	// Prove the corpus reaches the SECOND by running the pre-fix spelling
+	// of it — counting fixtures would not have caught this, since r5's
+	// fixtures all carried separators the regex happens to eat.
+	var stripDiffers int
+	for i, c := range cases {
+		body := strings.TrimSpace(verdictOpenerRe.ReplaceAllString(c.Summary, ""))
+		if !strings.Contains(want[i], body) || body != pytext.Strip(
+			verdictOpenerRe.ReplaceAllString(c.Summary, "")) {
+			stripDiffers++
+		}
+	}
+	if stripDiffers == 0 {
+		t.Fatal("no case where the trailing strip does any work the regex " +
+			"has not already done: the second whitespace decision in this " +
+			"function is unpinned")
+	}
+	t.Logf("the strip (not the regex) is decisive on %d of %d cases",
+		stripDiffers, len(cases))
 }
 
 // Fingerprint's doc claims BYTE-PARITY with CPython closure_fingerprint.
@@ -178,14 +214,101 @@ func TestFingerprintMatchesCPython(t *testing.T) {
 }
 
 // closure_verify skips a check whose command strips to empty
-// (safe_str is str(value).strip()). Reading the field raw let "   "
+// (safe_str is str(value).strip()), and reading the field raw let "   "
 // reach sh -c, which exits 0 — a PASSING check CPython never ran
 // (adversarial mission-r5 MEDIUM).
-func TestAWhitespaceOnlyCheckCommandIsSkippedLikeCPython(t *testing.T) {
+//
+// The r5 fix dropped those entries inside parsePlanChecks, and THAT was
+// a second divergence: Python slices the RAW list with checks[:5] and
+// then skips empties inside the loop, so filtering first silently moved
+// the cap onto the filtered list (mission-r6 HIGH). Both facts are
+// pinned here, against the real CPython slice-then-skip order.
+func TestPlanCheckCapAppliesBeforeTheEmptySkipLikeCPython(t *testing.T) {
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys; sys.path.insert(0, sys.argv[1])\n"+
+			"from llm_parse import safe_str, safe_list\n"+
+			"checks = json.loads(sys.argv[2])['checks']\n"+
+			"checks = safe_list(checks, element_type=dict)\n"+
+			"ran = []\n"+
+			"for _i, c in enumerate(checks[:5]):\n"+
+			"    cmd = safe_str(c.get('command', ''))\n"+
+			"    if not cmd: continue\n"+
+			"    ran.append(cmd)\n"+
+			"print(json.dumps([ran, len(checks)]))",
+		srcDirClosure(t), sixCheckPlan).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []json.RawMessage
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+	var pyRan []string
+	var pyLen int
+	if err := json.Unmarshal(want[0], &pyRan); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(want[1], &pyLen); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture must actually separate the two orders, or this test
+	// passes while pinning nothing: it needs MORE than five entries and
+	// a blank command inside the first five.
+	if len(pyRan) != 4 {
+		t.Fatalf("the fixture no longer separates the two cap orders: "+
+			"CPython ran %d commands, want 4 (%v)", len(pyRan), pyRan)
+	}
+
+	parsed, err := parsePlanChecks(sixCheckPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != pyLen {
+		t.Errorf("parsePlanChecks must return what safe_list returns "+
+			"(the no_checks_generated gate counts it): go %d, py %d",
+			len(parsed), pyLen)
+	}
+
+	// Replay the run loop's own cap-then-skip over the parsed list.
+	capped := parsed
+	if len(capped) > 5 {
+		capped = capped[:5]
+	}
+	var goRan []string
+	for _, c := range capped {
+		if c.command == "" {
+			continue
+		}
+		goRan = append(goRan, c.command)
+	}
+	if strings.Join(goRan, "|") != strings.Join(pyRan, "|") {
+		t.Errorf("a different set of LLM-authored shell commands runs\n"+
+			"  go %v\n  py %v", goRan, pyRan)
+	}
+}
+
+// sixCheckPlan has a blank command FIRST and six checks total, which is
+// the only shape where cap-then-skip and skip-then-cap disagree.
+const sixCheckPlan = `{"checks":[
+	{"description":"blank","command":"   "},
+	{"description":"  padded  ","command":"  echo 1  "},
+	{"description":"two","command":"echo 2"},
+	{"description":"three","command":"echo 3"},
+	{"description":"four","command":"echo 4"},
+	{"description":"five","command":"echo 5"}]}`
+
+// The strip half of the same Python line, still load-bearing: an
+// unstripped command changes the stored failed_checks signature and
+// therefore Fingerprint.
+func TestPlanCheckFieldsStripLikeCPython(t *testing.T) {
 	out, perr := exec.Command("python3", "-c",
 		"import sys; sys.path.insert(0, sys.argv[1])\n"+
 			"from llm_parse import safe_str\n"+
-			"print(repr(safe_str('   ')), repr(safe_str('  pytest -q  ')))",
+			"print(repr(safe_str('   ')), repr(safe_str('  pytest -q  ')),"+
+			" repr(safe_str(42)))",
 		srcDirClosure(t)).Output()
 	if perr != nil {
 		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
@@ -193,31 +316,31 @@ func TestAWhitespaceOnlyCheckCommandIsSkippedLikeCPython(t *testing.T) {
 		}
 		t.Fatalf("the CPython probe could not run: %v", perr)
 	}
-	if got := strings.TrimSpace(string(out)); got != `'' 'pytest -q'` {
-		t.Fatalf("safe_str no longer strips (%s) — the premise has moved", got)
+	if got := strings.TrimSpace(string(out)); got != `'' 'pytest -q' '42'` {
+		t.Fatalf("safe_str has moved (%s) — the premise of this test is gone", got)
 	}
 
-	checks, _ := parsePlanChecks(`{"checks":[
+	checks, err := parsePlanChecks(`{"checks":[
 		{"description":"blank","command":"   "},
 		{"description":"  padded  ","command":"  pytest -q  "},
-		{"description":"real","command":"true"}]}`)
-
-	for _, c := range checks {
-		if c.command == "" {
-			t.Fatalf("a command that strips to empty must not survive parsing: %+v", c)
-		}
-		if c.command != strings.TrimSpace(c.command) {
-			t.Errorf("command kept surrounding whitespace: %q — it would be "+
-				"stored verbatim in failed_checks and change the signature",
-				c.command)
-		}
-		if c.description != strings.TrimSpace(c.description) {
-			t.Errorf("description kept surrounding whitespace: %q", c.description)
-		}
+		{"description":42,"command":"true"}]}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(checks) != 2 {
-		t.Fatalf("expected the blank check to be dropped, got %d: %+v",
-			len(checks), checks)
+	if len(checks) != 3 {
+		t.Fatalf("nothing may be dropped at parse time: got %d %+v", len(checks), checks)
+	}
+	if checks[0].command != "" {
+		t.Errorf("a whitespace-only command must strip to empty so the run "+
+			"loop's skip fires; got %q", checks[0].command)
+	}
+	if checks[1].command != "pytest -q" || checks[1].description != "padded" {
+		t.Errorf("safe_str strips both fields: %+v", checks[1])
+	}
+	if checks[2].description != "42" {
+		t.Errorf("safe_str coerces a non-string description: %q — a bare "+
+			"Go assertion gives \"\" and that string is persisted in "+
+			"check_results", checks[2].description)
 	}
 }
 

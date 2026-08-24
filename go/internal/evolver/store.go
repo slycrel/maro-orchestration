@@ -57,6 +57,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/playbook"
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -563,18 +564,23 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 // changeLogAppend writes the audit row BEFORE a mutation happens so
 // changes are recoverable; failure never blocks execution (Python
 // parity — the trail is best-effort, the action is not).
-func changeLogAppend(workspaceDir string, d map[string]any, beforeState map[string]any) {
-	text, _ := d["suggestion"].(string)
-	sum := sha256.Sum256([]byte(text))
+// It takes the COERCED fields, not the raw map. Python builds this row
+// from the same locals _apply_suggestion_action already computed, and
+// reading `d` again here wrote a different row: an absent confidence
+// became `null` where CPython writes 0.5, and an absent category became
+// `null` where CPython writes "observation" (adversarial mission-r6
+// MEDIUM). Two readings of one dict is the defect; there is now one.
+func changeLogAppend(workspaceDir string, f applyFields, beforeState map[string]any) {
+	sum := sha256.Sum256([]byte(f.text))
 	entry := map[string]any{
 		"ts":              nowISO(),
 		"module":          "evolver",
 		"action":          "_apply_suggestion_action",
-		"category":        d["category"],
-		"suggestion_id":   d["suggestion_id"],
-		"target":          d["target"],
-		"confidence":      d["confidence"],
-		"suggestion_text": clipRunes(text, 500),
+		"category":        f.category,
+		"suggestion_id":   f.suggestionID,
+		"target":          f.target,
+		"confidence":      f.confidence,
+		"suggestion_text": clipRunes(f.text, 500),
 		"suggestion_hash": hex.EncodeToString(sum[:])[:12],
 		"before_state":    beforeState,
 	}
@@ -609,17 +615,9 @@ const (
 )
 
 func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) actionOutcome {
-	category, _ := d["category"].(string)
-	if category == "" {
-		category = "observation"
-	}
-	text, _ := d["suggestion"].(string)
-	target, _ := d["target"].(string)
-	if target == "" {
-		target = "all"
-	}
-	suggestionID, _ := d["suggestion_id"].(string)
-	confidence, _ := d["confidence"].(float64)
+	f := readApplyFields(d)
+	category, text, suggestionID := f.category, f.text, f.suggestionID
+	target, confidence := f.target, f.confidence
 
 	var beforeState map[string]any
 	switch category {
@@ -628,7 +626,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 	case "prompt_tweak":
 		beforeState = map[string]any{"type": "lesson_add"}
 	}
-	changeLogAppend(workspaceDir, d, beforeState)
+	changeLogAppend(workspaceDir, f, beforeState)
 
 	outcome := actionApplied
 	switch category {
@@ -1095,8 +1093,8 @@ func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 		// confidence and category are read off `d` with the same
 		// coercions applyAction uses (store.go:612, :622), so this cannot
 		// drift into a second source of truth for the gate.
-		confidence, _ := d["confidence"].(float64)
-		category, _ := d["category"].(string)
+		gate := readApplyFields(d)
+		confidence, category := gate.confidence, gate.category
 		reason := "new_guardrail has no matchable regex pattern — guidance only, " +
 			"and the prose did not reach the playbook, so it has no durable home"
 		switch {
@@ -1278,4 +1276,55 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 	// Reverted:true over a non-persisted revert is a record that lies,
 	// and would also let a second Revert past the IsApplied guard).
 	return RevertResult{Reverted: storePersisted, Behavioral: behavioral, Category: category, Detail: detail}
+}
+
+// applyFields holds the five suggestion fields _apply_suggestion_action
+// coerces once and then uses everywhere — the action, the audit row, and
+// the operator-facing block reason.
+type applyFields struct {
+	category     string
+	text         string
+	target       string
+	suggestionID string
+	confidence   float64
+}
+
+// readApplyFields is Python's five lines at the top of
+// _apply_suggestion_action, coercion for coercion:
+//
+//	category      = d.get("category", "observation")
+//	suggestion_text = d.get("suggestion", "")
+//	target        = d.get("target", "all")
+//	suggestion_id = d.get("suggestion_id", "")
+//	confidence    = float(d.get("confidence", 0.5))
+//
+// Every one of those is `.get`, which keys on PRESENCE. The Go idiom it
+// replaces defaulted on an EMPTY stored value too, so `"category": ""`
+// was written to change_log.jsonl as "observation" here and as "" there.
+//
+// The confidence line is the one place this deliberately does NOT match:
+// Python's bare float() raises TypeError on a stored null and ValueError
+// on "abc", straight out of a function whose docstring says "Never
+// raises" — so a null confidence crashes the Python apply path and
+// returns 0.5 here. That is a Python bug and the fix belongs there
+// (a safe_float makes both runtimes agree); refusing to crash is not a
+// divergence worth porting backwards. For every value float() ACCEPTS,
+// including the numeric strings a bare .(float64) used to zero, SafeFloat
+// agrees with it exactly.
+func readApplyFields(d map[string]any) applyFields {
+	str := func(key, def string) string {
+		s, ok := pyval.GetOr(d, key, def).(string)
+		if !ok {
+			return ""
+		}
+		return s
+	}
+	return applyFields{
+		category:     str("category", "observation"),
+		text:         str("suggestion", ""),
+		target:       str("target", "all"),
+		suggestionID: str("suggestion_id", ""),
+		confidence: pyval.SafeFloat(
+			pyval.GetOr(d, "confidence", 0.5), 0.5, nil, nil),
+	}
 }

@@ -49,6 +49,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -539,14 +540,19 @@ func ScanQualityDrift(ws string, outcomes []map[string]any,
 	return findings
 }
 
-func round4(f float64) float64 { return roundN(f, 1e4) }
-func round6(f float64) float64 { return roundN(f, 1e6) }
+func round4(f float64) float64 { return pyval.Round(f, 4) }
+func round6(f float64) float64 { return pyval.Round(f, 6) }
 
-// roundN rounds half-to-even, matching Python round() — these values land
-// in SHARED files (evolver-baselines.jsonl, verdict rates), and exact
-// binary ties (5/32 → 0.1562 vs 0.1563) must not differ by runtime.
+// roundN keeps its old signature for verify.go's one caller. The comment
+// it used to carry claimed math.RoundToEven(f*scale)/scale "rounds
+// half-to-even, matching Python round()" — a comment that STATES a
+// measurement, and re-measuring falsified it: 682 divergences over
+// round4(done/total) for every total <= 2000, with 1/160 giving 0.0063
+// in CPython and 0.0062 here. These values land in evolver-baselines.jsonl
+// and the drift detector compares current against baseline, so a
+// mixed-runtime series produces fabricated deltas (mission-r6 MEDIUM).
 func roundN(f, scale float64) float64 {
-	return math.RoundToEven(f*scale) / scale
+	return pyval.Round(f, int(math.Round(math.Log10(scale))))
 }
 
 // pyRepr quotes a string the way Python repr does. Calibration prose

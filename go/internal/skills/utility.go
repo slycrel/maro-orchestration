@@ -3,16 +3,15 @@ package skills
 import (
 	"crypto/sha1"
 	"fmt"
-	"math"
 	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -292,17 +291,12 @@ func logInputMismatch(rec *record.Recorder, skillID string, u UtilityUpdate) err
 // promotion and demotion events.
 func round3(f float64) float64 { return pyRound(f, 3) }
 
-// pyRound is round(f, n) for the digit counts this package uses.
-func pyRound(f float64, n int) float64 {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return f
-	}
-	out, err := strconv.ParseFloat(strconv.FormatFloat(f, 'f', n, 64), 64)
-	if err != nil {
-		return f
-	}
-	return out
-}
+// pyRound is round(f, n). The implementation moved to pyval.Round when
+// mission-r6 found two OTHER spellings of the same function elsewhere in
+// the port, both wrong and both writing to shared files — the
+// hand-ported-helper family again. This name stays as the package's
+// local spelling; there is only one implementation.
+func pyRound(f float64, n int) float64 { return pyval.Round(f, n) }
 
 func clipRunes(s string, n int) string {
 	r := []rune(s)

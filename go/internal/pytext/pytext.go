@@ -39,6 +39,26 @@ func IsSpace(r rune) bool {
 // Strip is Python's str.strip() — whitespace by IsSpace, both ends.
 func Strip(s string) string { return strings.TrimFunc(s, IsSpace) }
 
+// IsFloatSpace is the whitespace set Python's float() strips, which is
+// NOT str.strip()'s set. Swept over the full rune range on this box:
+//
+//	str.strip() strips 29    float() strips 25
+//	str.strip strips but float() does NOT: 0x1C 0x1D 0x1E 0x1F
+//	float() strips but str.strip does NOT: (none)
+//
+// So the four ASCII information separators — the exact code points this
+// port has been chasing since round 3 — are the whole difference, and
+// here they run the OTHER way: stripping them is what diverges.
+// float("0.9") is a ValueError, so safe_float returns its default;
+// a port that pre-strips with Strip parses 0.9 instead (adversarial
+// mission-r6 HIGH).
+func IsFloatSpace(r rune) bool { return IsSpace(r) && !(r >= 0x1c && r <= 0x1f) }
+
+// FloatStrip trims what Python's float() trims. Use it before ParseFloat
+// on any string that came from a model reply or the shared store; use
+// Strip everywhere str.strip() is what the Python actually calls.
+func FloatStrip(s string) string { return strings.TrimFunc(s, IsFloatSpace) }
+
 // TrimRight is Python's str.rstrip() — trailing whitespace only. Note
 // that on a joined multi-line document this removes trailing BLANK LINES
 // as well as trailing spaces, which is how the NEXT.md writer normalizes

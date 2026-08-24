@@ -38,6 +38,8 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Phase 62 thresholds (zoom-metacognition research) — Python verbatim.
@@ -75,12 +77,17 @@ type blockDecision struct {
 // truncation: tails vary with noise and would make identical failures
 // look like progress.
 func errorFingerprint(stuckReason, result string) string {
+	// pytext.Split and a RUNE slice, matching
+	// `" ".join(reason.split())[:200]`. This was strings.Fields (25 code
+	// points where str.split() reads 29) and a BYTE slice, so a captured
+	// stderr carrying U+001C..U+001F, or 120 accented characters, hashed
+	// differently on the two runtimes. It is the unswept sibling of the
+	// mission-r5 closure.Fingerprint MEDIUM, and it forks more than bytes:
+	// the fingerprints are written into the captain's-log
+	// METACOGNITIVE_DECISION event, and isConverging reads them to choose
+	// retry vs split vs replan (adversarial mission-r6 MEDIUM).
 	norm := func(s string) string {
-		s = strings.Join(strings.Fields(s), " ")
-		if len(s) > 200 {
-			s = s[:200]
-		}
-		return s
+		return pyval.Clip(strings.Join(pytext.Split(s), " "), 200)
 	}
 	sum := md5.Sum([]byte(norm(stuckReason) + "|" + norm(result)))
 	return fmt.Sprintf("%x", sum)[:12]
@@ -265,8 +272,13 @@ func shapeSteps(steps []string) []string {
 // lookahead (`\band\b\s*(?=[A-Z])`); Go's RE2 has no lookahead, so the
 // bare-"and" boundary (split only before a Capitalized clause) is
 // emulated in heuristicSplitParts — same accepted boundaries.
-var timeoutSplitSeps = regexp.MustCompile(`\s*;\s*|\s+and\s+then\s+`)
-var bareAndSep = regexp.MustCompile(`\s*\band\b\s*`)
+// pytext.SpaceClass, not Go's `\s`. These split a stuck step's text into
+// the sub-steps a split-and-retry re-plans from, so the two runtimes
+// produced a DIFFERENT NUMBER of sub-steps for the same reason string
+// (adversarial mission-r6, priced in the sibling sweep).
+var timeoutSplitSeps = regexp.MustCompile(pytext.SpaceClass + `*;` + pytext.SpaceClass +
+	`*|` + pytext.SpaceClass + `+and` + pytext.SpaceClass + `+then` + pytext.SpaceClass + `+`)
+var bareAndSep = regexp.MustCompile(pytext.SpaceClass + `*\band\b` + pytext.SpaceClass + `*`)
 
 func heuristicSplitParts(stepText string) []string {
 	var parts []string

@@ -106,7 +106,14 @@ func CheckOutcome(exitCode int, stderr string) string {
 	if exitCode == 0 {
 		return "pass"
 	}
-	err := strings.ToLower(stderr)
+	// pytext.Lower, not strings.ToLower: Python is `(stderr or "").lower()`,
+	// and str.lower() expands U+0130 to two runes where Go's simple
+	// mapping gives one. Measured: "TIMED OUT" spelled with a dotted
+	// capital I lowers to text containing "timed out" in Go and NOT in
+	// CPython, so the two runtimes classify the same stderr as
+	// inconclusive vs fail — which moves checks_passed,
+	// inconclusive_count and failed_checks (adversarial mission-r6 LOW).
+	err := pytext.Lower(stderr)
 	if exitCode == -1 || exitCode == 126 || exitCode == 127 {
 		return "inconclusive"
 	}
@@ -241,7 +248,14 @@ func VerdictFirstSummary(summary string, complete, judged bool) string {
 	if strings.HasPrefix(summary, "Downgraded to not-achieved") {
 		return summary
 	}
-	body := strings.TrimSpace(verdictOpenerRe.ReplaceAllString(summary, ""))
+	// pytext.Strip, not strings.TrimSpace: Python is
+	// `_VERDICT_OPENER_RE.sub("", summary).strip()`, and r5 rebuilt the
+	// REGEX from SpaceClass while leaving the strip one line below it
+	// on the stdlib's narrower set. A trailing U+001C survived here
+	// and reached goal_verdict_summary in metadata.json (adversarial
+	// mission-r6 MEDIUM) — the r5 corpus put its separators only
+	// BEFORE the opener, where the regex now eats them.
+	body := pytext.Strip(verdictOpenerRe.ReplaceAllString(summary, ""))
 	prefix := "Not achieved"
 	if !judged {
 		prefix = "Not judged (verification evidence inconclusive)"
@@ -546,15 +560,30 @@ func parsePlanChecks(content string) ([]planCheck, error) {
 		if !ok {
 			continue
 		}
-		desc, _ := m["description"].(string)
-		cmdRaw, _ := m["command"].(string)
-		cmd := pytext.Strip(cmdRaw)
-		if cmd == "" {
-			// Python's `if not cmd: continue`. Dropping it HERE rather
-			// than at the run site is what keeps checks_run aligned.
-			continue
-		}
-		out = append(out, planCheck{pytext.Strip(desc), cmd})
+		// safe_str on both, and NOTHING is dropped here. An earlier
+		// version skipped the empty-command entries at this point, which
+		// silently moved Python's `checks[:5]` cap from the RAW list to
+		// the filtered one: a six-check plan whose first command was
+		// blank ran five commands in Go and four in CPython, the fifth
+		// being an LLM-authored shell command no CPython run executes.
+		// It also made `len(planChecks) == 0` — the no_checks_generated
+		// gate — count the wrong list, so a plan whose only check had a
+		// blank command wrote a different `skipped` literal to
+		// closure_verdicts.jsonl (adversarial mission-r6 HIGH).
+		//
+		// The lesson is the one r5 wrote down and then broke: an
+		// extraction is a refactor only if the ORDER of the operations
+		// it moves is preserved.
+		//
+		// SafeStr, not a `.(string)` assertion: Python coerces, so a
+		// numeric description is "42" there and "" here, and description
+		// rides the persisted check_results rows (adversarial mission-r6
+		// LOW). SafeStr also carries safe_str's None-not-falsy rule, so a
+		// missing key is "" and not str(None).
+		out = append(out, planCheck{
+			pyval.SafeStr(m["description"], ""),
+			pyval.SafeStr(m["command"], ""),
+		})
 	}
 	return out, nil
 }
@@ -778,23 +807,28 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// `{"confidence": 1e999}` is the quiet half: CPython 0.7, Go +Inf
 	// clamped to 1.0 — maximum confidence from a garbage literal.
 	confidence := pyval.SafeFloatUnit(vdObj["confidence"], 0.7)
+	// Python is `[safe_str(g) for g in safe_list(gaps) if g]`, and every
+	// clause of that matters:
+	//
+	//   - safe_list's DEFAULT element_type is str, so a bare string is
+	//     not a list and yields [] — not a one-element list. Carrying it
+	//     used to be a named hardening here ("a bare string is drift, not
+	//     absence"), and under this port's doctrine a hardening that
+	//     changes which bytes reach closure_verdicts.jsonl is a FORK. It
+	//     also feeds DetectBehavioralGap, which can flip `complete`. If
+	//     the hardening is right it belongs in closure_verify.py first,
+	//     where both runtimes inherit it (adversarial mission-r6 MEDIUM).
+	//   - `if g` drops the empty string BEFORE safe_str, so a
+	//     whitespace-only gap survives the filter and lands as "" after
+	//     the strip. Filtering after would drop it.
 	var gaps []string
-	switch raw := vdObj["gaps"].(type) {
-	case []any:
-		for _, g := range raw {
-			if gs, ok := g.(string); ok && gs != "" {
-				gaps = append(gaps, gs)
-			}
+	for _, g := range pyval.SafeStrList(vdObj["gaps"]) {
+		if g == "" {
+			continue
 		}
-	case string:
-		// A bare string is drift, not absence — carry it rather than
-		// silently reading a stated gap as a clean verdict (the
-		// evidence-coercion direction the recall tranche pinned).
-		if raw != "" {
-			gaps = append(gaps, raw)
-		}
+		gaps = append(gaps, pyval.SafeStr(g, ""))
 	}
-	summary, _ := vdObj["summary"].(string)
+	summary := pyval.SafeStr(vdObj["summary"], "")
 
 	// Ungrounded-False cap: a complete=false that contradicts EVERY
 	// executed probe has no evidence of failure behind it — only the work
@@ -808,7 +842,7 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	allPassed := checksPassed == checksRun
 	if !complete && checksRun > 0 && allPassed && confidence >= ungroundedFalseFloor {
 		confidence = ungroundedFalseConfidence
-		summary = strings.TrimSpace(fmt.Sprintf(
+		summary = pytext.Strip(fmt.Sprintf(
 			"%s [verdict confidence capped: all %d checks passed and no file content was in evidence, so this not-achieved rests on the work summary's narration rather than on probe output]",
 			summary, checksRun))
 	}

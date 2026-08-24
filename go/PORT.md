@@ -3754,3 +3754,171 @@ named tests that did not exist — a nonexistent test cannot fail, so every
 mutant read as a survivor. `NO-SUCH-TEST` is now its own reported
 outcome, distinct from `SURVIVED`, alongside `ANCHOR-MISS` and
 `COMPILE-BROKEN`. Four ways to get a false green, four named outcomes.
+
+### Rule — an extraction is a refactor only if the ORDER survives
+
+mission-r5 extracted a parse loop out of a run loop, and carried one line
+across the boundary with it:
+
+```python
+# Python
+if not checks:                                    # the RAW list
+    ...
+for _plan_index, check in enumerate(checks[:5]):  # cap on the RAW list
+    if not cmd:
+        continue                                  # skip INSIDE the loop
+```
+
+```go
+// what the extraction produced
+for ... {
+    if cmd == "" { continue }   // <- now BEFORE the cap
+    out = append(out, ...)
+}
+...
+for i, c := range checks[:5] { ... }
+```
+
+Every value is still right. Every line is still there. The program is
+different: the cap now counts a different list, and a six-check plan
+whose first command is blank runs five commands in Go and four in
+CPython.
+
+An extraction is judged by what it MOVES, not by what it renames. Before
+lifting a loop body into a function, write down the order of the
+operations that cross the new boundary — filter, cap, gate, side effect —
+and check the order is the same on the far side. A filter that moves
+across a cap is not a reorganisation; it is a different program.
+
+The corollary for review: **when a round's fix is an extraction, the next
+round should re-read the extraction against the Python, not against the
+diff.** r4's fix unlocked r5's HIGH and r5's fix introduced r6's. Two
+rounds running, the sharpest finding was in the previous round's own
+work.
+
+### Rule — a test that reports AGREEMENT may be testing nothing
+
+The false-green family is now four, and they are worth naming together
+because a green suite made of them reads exactly like a green suite:
+
+| head | shape | what it cannot see |
+|---|---|---|
+| frozen snapshot | `if got != "3f2a1b0c9d8e"` under a `MatchesCPython` name | either runtime moving |
+| vacuous fixture | both sides refuse the input | any implementation at all |
+| corpus that cannot separate | every case in the agreeing region | the actual divergence |
+| assertion that cannot fire | `f(x) == f(x)` | anything |
+
+Head 3 is the subtle one, because such a test looks completely correct:
+it runs `python3`, it compares real values, it passes. Thirteen all-ASCII
+stderr strings cannot tell `strings.ToLower` from `str.lower()`. Every
+case sits where the two implementations already agree, so the test is a
+measurement of nothing taken very carefully.
+
+**The fix is not to count fixture shapes.** mission-r6 first wrote guards
+like "at least one case must be multi-byte and longer than 190 runes",
+and one of them was simply wrong about its own threshold while the
+comparisons underneath it all passed. Counting the right SHAPE of fixture
+does not prove a corpus discriminates.
+
+> **Keep the pre-fix implementation in the test file and run it over the
+> corpus. Fail if it does not lose.**
+
+```go
+var oldDiffers int
+for i, c := range cases {
+    if oldErrorFingerprint(c.Reason, c.Result) != want[i] { oldDiffers++ }
+}
+if oldDiffers < 2 {
+    t.Fatalf("the pre-fix implementation matches CPython on all but %d of "+
+        "%d cases: this corpus could not have caught the finding",
+        oldDiffers, len(cases))
+}
+```
+
+It costs a dozen lines, it is exact rather than heuristic, and it makes
+the test self-falsifying: the day someone narrows the corpus, the guard
+fires. Two genuine survivors in r6's battery were found this way and
+nowhere else. The kept copy carries a comment saying it must never return
+to production.
+
+The census that prompted this: **130 tests in this tree carry a
+`...MatchesCPython`-style name and 65 never invoke `python3`.** The name
+is a promise about the mechanism. Nine were walked in r6; the rest are
+bounded, mechanical follow-up.
+
+### Rule — `float()` and `str.strip()` do not strip the same set
+
+Related to *a claim in a comment is load-bearing*, but worth its own
+entry because the shape recurs: two CPython builtins that both "strip
+whitespace" and disagree about which whitespace.
+
+```
+str.strip() strips 29 code points
+float()     strips 25
+the difference: U+001C U+001D U+001E U+001F, in that direction only
+```
+
+So `pytext.Strip` before `strconv.ParseFloat` is not `float()`. It parses
+values CPython refuses outright, and the parsed value reaches the shared
+store while CPython's default does not. `pytext.FloatStrip` names the
+narrower set.
+
+The generalisation: **do not reach for the nearest already-ported helper
+because its name is close.** `Strip` was right for `str.strip()` and
+wrong one call site over. When a port needs "the whitespace set", ask
+which function's whitespace set, and measure it.
+
+Two more measured on the same pass, both cheap and both worth having
+written down:
+
+- `float()` accepts any Unicode decimal digit (`float("٠.٥")` is `0.5`);
+  `strconv.ParseFloat` is ASCII-only.
+- `strconv.ParseFloat` accepts `"nan"`, `"inf"` and `"-inf"` **with a nil
+  error**. Any port that treats "parsed successfully" as "safe to store"
+  can put a NaN into a `json.Marshal` and lose the entire row. This is
+  the second time in two rounds that a non-finite value cost a whole
+  record.
+
+### Rule — Go's `\b` is ASCII and Python's is not
+
+Alongside `\s` (5 vs 29) and `\w` (ASCII vs `str.isalnum()`), the word
+BOUNDARY differs too, and it is the one that is invisible in a pattern
+because it has no character class to inspect. Measured: `\bplan\b`
+matches `"研究plan"` in Go and not in CPython.
+
+`pytext.WordStart` / `WordEnd` stand in. They **consume** the boundary
+character, because RE2 has no lookaround — correct for a boolean
+predicate, wrong for match offsets or for two adjacent matches sharing a
+boundary. That constraint lives in their doc comment, not in a reviewer's
+head.
+
+The `\w` class itself measured clean: 0 false positives against CPython's
+142940 code points, 5004 false negatives, all of them the same
+Go-15.0-vs-CPython-16.0 table skew the digit class already documents.
+Named residual; the fix is a newer toolchain, not a hand-copied list.
+
+### Rule — one dict, one reading
+
+`_apply_suggestion_action` coerces five fields at the top and uses them
+in three places: the action, the audit row, and the operator-facing block
+reason. The Go port coerced them at the top and then re-read the raw map
+in the audit row, so the row disagreed with the action it was auditing —
+an absent confidence audited as `null` where CPython writes `0.5`.
+
+This is the same defect as the r18 finding in the Python (capture and
+action each calling `load_skills()` independently), one layer down. When
+a function reads a dict more than once, the second read is a second
+source of truth, and the two drift the moment one of them gains a
+default. Read once into a typed struct; pass the struct.
+
+The Go idiom that invites the drift is worth naming, because it is not
+obviously wrong:
+
+```go
+category, _ := d["category"].(string)
+if category == "" { category = "observation" }
+```
+
+`d.get(key, default)` keys on **presence**. That Go spelling defaults on
+an empty stored value too, so `"category": ""` is written as
+`"observation"` here and as `""` there. `pyval.GetOr` is the honest port.

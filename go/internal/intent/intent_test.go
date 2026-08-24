@@ -19,26 +19,17 @@ import (
 // on a Turkish dotted capital I. All ten of its cases were folded into
 // heuristicCorpus, which runs the real _heuristic_classify.
 
-// TestRequiresFileOutputMatchesCPython pins the capability override's
-// trigger regex.
-func TestRequiresFileOutputMatchesCPython(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want bool
-	}{
-		{"save the summary to notes.md", true},
-		{"write it to a file", true},
-		{"export results as csv files", true},
-		{"put it in artifacts/report.md", true},
-		{"summarize the article", false},
-		{"review the file handling code", false},
-	}
-	for _, c := range cases {
-		if got := RequiresFileOutput(c.msg); got != c.want {
-			t.Errorf("RequiresFileOutput(%q) = %v, want CPython %v", c.msg, got, c.want)
-		}
-	}
-}
+// TestRequiresFileOutputMatchesCPython used to live here with six
+// all-ASCII fixtures and hardcoded booleans. It could not fail: Go's
+// ASCII `\w`/`\b` and Python's Unicode classes agree on every ASCII
+// input, so the corpus could not separate the two engines — and the
+// name told three review rounds the boundary was covered while
+// `save the summary to caf\u00e9.md` routed to a different LANE on the
+// two runtimes (adversarial mission-r6 MEDIUM, found by the LENS-1
+// census of tests that cannot fail).
+//
+// The real differential is TestRequiresFileOutputMatchesCPython in
+// r6_diff_test.go, which drives _requires_file_output itself.
 
 // TestFileOutputOverrideWinsOverNowClassification: capability beats
 // opinion — the burn-in batch-3 lesson (a file-deliverable goal

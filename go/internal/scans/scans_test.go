@@ -1,8 +1,11 @@
 package scans
 
 import (
+	"bytes"
 	"encoding/json"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -534,4 +537,69 @@ func TestScanCanonCandidatesEmptyTaskTypeTargetVerbatim(t *testing.T) {
 	if got[0].Target != "" {
 		t.Fatalf("empty task_type must stay verbatim, got %q", got[0].Target)
 	}
+}
+
+// TestRoundHalfEvenTieParity above asserts two hand-picked constants.
+// Both are values math.RoundToEven(f*scale)/scale happens to get right,
+// so it could not fail on the finding that replaced it — a frozen
+// snapshot wearing a differential's name (adversarial mission-r6, LENS 1
+// head 1). The 682 divergences the finding reports live at OTHER rates.
+//
+// success_rate rides evolver-baselines.jsonl and the drift detector
+// compares current against baseline, so a mixed-runtime series produces
+// deltas neither engine's data supports.
+func TestSuccessRateRoundingMatchesCPython(t *testing.T) {
+	// Every rate a scan can actually produce for a run count up to 200 —
+	// not a sample. A sampled corpus found only three divergences; the
+	// finding reports 682 over the full sweep, and the ones it misses are
+	// exactly the rates a real workspace hits.
+	var rates []float64
+	for total := 1; total <= 200; total++ {
+		for done := 0; done <= total; done++ {
+			rates = append(rates, float64(done)/float64(total))
+		}
+	}
+	in, err := json.Marshal(rates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The corpus is far past ARG_MAX at this size, so it rides stdin.
+	cmd := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"print(json.dumps([round(v, 4) for v in json.load(sys.stdin)]))")
+	cmd.Stdin = bytes.NewReader(in)
+	out, perr := cmd.Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []float64
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+
+	var diffs, oldDiffers int
+	for i, v := range rates {
+		if got := round4(v); got != want[i] {
+			if diffs < 5 {
+				t.Errorf("success_rate diverges: round4(%v) = %v, CPython "+
+					"round(v, 4) = %v", v, got, want[i])
+			}
+			diffs++
+		}
+		// Anti-vacuity by running the pre-fix spelling, not by counting
+		// fixture shapes.
+		if math.RoundToEven(v*1e4)/1e4 != want[i] {
+			oldDiffers++
+		}
+	}
+	if oldDiffers < 5 {
+		t.Fatalf("the pre-fix scaled spelling matches CPython on all but %d "+
+			"of %d rates: this corpus could not have caught the finding",
+			oldDiffers, len(rates))
+	}
+	t.Logf("corpus separates the pre-fix scaled spelling on %d of %d rates",
+		oldDiffers, len(rates))
 }

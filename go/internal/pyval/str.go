@@ -275,3 +275,76 @@ func IsInt(v any) (int, bool) {
 	}
 	return int(i), true
 }
+
+// SafeStr is llm_parse.safe_str(value, default=def).
+//
+// Read the Python, not its docstring: the docstring says "returning
+// default if value is None/falsy", but the body is `if value is None`,
+// so safe_str(0) is "0" and safe_str(False) is "False". Falsy is NOT
+// the gate — only None is. A port that reads the docstring writes ""
+// where CPython writes "0", into the same store row.
+//
+// Everything else goes through str(value).strip(), which is why a
+// numeric or boolean field in a model reply survives as text on the
+// Python side while a bare Go `.(string)` assertion turns it into ""
+// (adversarial mission-r6 MEDIUM and LOW, several sites).
+func SafeStr(v any, def string) string {
+	if v == nil {
+		return def
+	}
+	return pytext.Strip(Str(v))
+}
+
+// SafeStrList is llm_parse.safe_list with its DEFAULT element_type=str:
+// a non-list is [], and non-string elements are DROPPED rather than
+// coerced or rejecting the whole list. Each surviving element then goes
+// through safe_str at the call sites that need it.
+//
+// The str default is the trap safe_list's own docstring warns about —
+// a caller parsing a list of JSON objects must use SafeDictList or
+// every item disappears.
+func SafeStrList(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// SafeDictList is llm_parse.safe_list(value, element_type=dict).
+func SafeDictList(v any) []map[string]any {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []map[string]any
+	for _, e := range raw {
+		if m, ok := e.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// GetOr is Python's `d.get(key, default)`: PRESENCE decides, not
+// truthiness and not type. A key holding "" or 0 or nil returns that
+// value, never the default.
+//
+// The Go idiom it replaces — `s, _ := d[k].(string); if s == "" { s =
+// def }` — differs on two inputs at once: a present-but-empty value
+// (Python keeps "", Go substituted the default) and a present-but-wrong
+// type (Python keeps it for the caller's own coercion, Go silently
+// zeroed it). Both reached change_log.jsonl through the evolver's apply
+// path (adversarial mission-r6 MEDIUM).
+func GetOr(d map[string]any, key string, def any) any {
+	if v, ok := d[key]; ok {
+		return v
+	}
+	return def
+}

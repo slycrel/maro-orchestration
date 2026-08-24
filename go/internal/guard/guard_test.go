@@ -31,8 +31,9 @@ func TestURLScanStaysLinear(t *testing.T) {
 	go func() { ScanContent(blob, "internal"); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("URL scan didn't finish in 10s on a %d-byte repeated-scheme blob — quadratic regression", len(blob))
+	case <-time.After(urlScanCeiling):
+		t.Fatalf("URL scan didn't finish in %s on a %d-byte repeated-scheme "+
+			"blob — quadratic regression", urlScanCeiling, len(blob))
 	}
 }
 

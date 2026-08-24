@@ -3,6 +3,8 @@ package closure
 import (
 	"regexp"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Probe-modality classification, ported from closure_verify.py
@@ -29,7 +31,14 @@ var modalityPatterns = []struct {
 	// the artifact without network. First char after `./` must be
 	// alphanumeric/underscore/dash — rules out the go wildcard `./...`
 	// (as in `go build ./...`), a package pattern, not a binary.
-	{"process", regexp.MustCompile(`(?i)(^|[\s;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[\s;&|])(go run|node |python[0-9.]* |timeout [0-9]+\s+\S+\s*&)`)},
+	// The three `\s`/`\S` here are pytext's, not Go's: this pattern
+	// decides a check's MODALITY, which is recorded on every check_results
+	// row and read by the behavioral-gap branch, so a command separated by
+	// a non-breaking space classified differently on the two runtimes
+	// (adversarial mission-r6, priced in the sibling sweep).
+	{"process", regexp.MustCompile(`(?i)(^|[` + pytext.SpaceClassBody + `;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[` +
+		pytext.SpaceClassBody + `;&|])(go run|node |python[0-9.]* |timeout [0-9]+` +
+		pytext.SpaceClass + `+` + pytext.NotClass("") + `+` + pytext.SpaceClass + `*&)`)},
 }
 
 // Test runners execute the artifact — classifying them "static" made
@@ -40,7 +49,8 @@ var modalityPatterns = []struct {
 // semantics, and a generic `python3 smoke.py --dry-run` still executes
 // the program.
 var testRunnerRe = regexp.MustCompile(`(?i)\b(pytest|go test|cargo test|(npm|pnpm|yarn) (run )?test|make test|tox)\b`)
-var nonExecRunnerFlagsRe = regexp.MustCompile(`(?i)(^|\s)--?(no-run|collect-only|co|list-?tests?|dry-run|list)\b`)
+var nonExecRunnerFlagsRe = regexp.MustCompile(`(?i)(^|` + pytext.SpaceClass +
+	`)--?(no-run|collect-only|co|list-?tests?|dry-run|list)\b`)
 
 var staticHintsRe = regexp.MustCompile(`(?i)\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|tsc --noEmit|ruff|flake8|mypy)\b`)
 

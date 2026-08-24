@@ -258,7 +258,16 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 				// mission-r1 MEDIUM).
 				warnFn(fmt.Sprintf("mission_dag_stall id=%s milestone=%s deps=%s",
 					m.ID, ms.ID, pyval.ReprStrings(ms.DependsOn)))
-				if err := runOne(ctx, i, ms); err != nil {
+				// runWithRecover, like the pool lane. Python wraps THIS
+				// call in `try/except Exception: _mark_crashed` too
+				// (mission.py:416-419) — identical protection on both
+				// lanes. Going direct here meant a cycle in depends_on plus
+				// a panicking milestone body took the whole process down,
+				// losing every other milestone, completed_at and the final
+				// status, where CPython fails that one milestone and
+				// continues (adversarial mission-r6 MEDIUM — the one path
+				// r5's own fix did not cover).
+				if err := runWithRecover(ctx, runOne, i, ms); err != nil {
 					markCrashed(ms, err)
 				}
 				submitted[ms.ID] = true

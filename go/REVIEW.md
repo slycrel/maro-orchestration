@@ -5683,3 +5683,331 @@ Unmeasured `\s` siblings: `internal/closure/modality.go:32,43`,
 `internal/guard/guard.go:32-61`. The `TrimSpace`/`Fields`/`ToLower`
 sites outside the files touched here are listed in full in the round's
 raw output. None is claimed safe; none is claimed broken.
+
+## Adversarial mission-r6
+
+Whole chunk, opus tier. r5's lead lens was *a fix is evidence about its
+SIBLINGS*; r6's is one level up:
+
+> **A test that reports AGREEMENT may be testing nothing.**
+
+Every round of this port has ended with a green suite and a mutation
+battery, and every round has then found live forks in code the previous
+round's tests covered by name. So r6 audited the tests themselves, and
+named four ways a differential test can be a false green:
+
+1. **A frozen snapshot wearing a differential's name.** Two md5 constants
+   with `// computed with CPython` above them are not a differential.
+   They are a record of what CPython said once, on a corpus somebody
+   chose, and they cannot see a change in either runtime.
+2. **A vacuous fixture.** Both sides refuse the input, so both return the
+   default, so the test passes under every implementation.
+3. **A corpus that cannot separate.** Every case sits in the region where
+   the two implementations already agree — thirteen all-ASCII stderr
+   strings cannot tell `strings.ToLower` from `str.lower()`.
+4. **An assertion that cannot fire.** `errorFingerprint("a","b") ==
+   errorFingerprint("a","b")` compares a pure function with itself.
+
+Census over the Go tree: **130 tests carry a `...MatchesCPython`-style
+name and 65 of them never invoke `python3`.** Not all 65 are wrong — some
+port a value the Python computes offline — but the name promises a live
+comparison that two-thirds of them do not make. Nine were walked in this
+round; the remaining ~56 are named as bounded, mechanical follow-up work.
+
+**Twenty findings — three HIGH, nine MEDIUM, eight LOW. All twenty
+verified against the source and re-measured on both runtimes before any
+fix. Zero hallucinated, the fifth round running.** Two more findings were
+produced by the coverage work itself and are recorded with the findings
+they sit next to.
+
+### HIGH — r5's own extraction moved Python's `[:5]` cap
+
+`parsePlanChecks` was extracted in r5, and the extraction moved one line
+across a boundary:
+
+```go
+cmd := pytext.Strip(cmdRaw)
+if cmd == "" {
+    continue          // <- moved OUT of the run loop and INTO the parse
+}
+```
+
+Python (`closure_verify.py:1158`, `:1169`) reads
+
+```python
+if not checks:                       # the RAW list
+    ...no_checks_generated
+for _plan_index, check in enumerate(checks[:5]):   # cap on the RAW list
+    cmd = (check.get("command") or "").strip()
+    if not cmd:
+        continue                     # skip INSIDE the loop
+```
+
+so the cap counts entries CPython later skips. A six-check plan whose
+first command is blank runs **five** commands in Go and **four** in
+CPython — the fifth being an LLM-authored shell command no CPython run
+executes. The same move made `len(planChecks) == 0` count the filtered
+list, so a plan whose only check had a blank command wrote a different
+`skipped` literal into `closure_verdicts.jsonl`.
+
+This is the round's sharpest result and it is the mirror image of r5's
+own: r5's HIGH was a regression **r4's** fix unlocked, and r6's is a
+regression **r5's** fix introduced. Two consecutive rounds where a
+round's fix opened the next round's HIGH. The rule that follows:
+
+> **An extraction is a refactor only if the ORDER of the operations it
+> moves is preserved.** Moving a filter across a cap is not a
+> reorganisation; it is a different program.
+
+### HIGH — `float()` does not strip what `str.strip()` strips
+
+`toFloat` pre-stripped with `pytext.Strip` before `strconv.ParseFloat`,
+on the reasoning that Python's `float()` strips surrounding whitespace
+and its set is wider than Go's. The first half is true. The second half
+is true of `str.strip()` and **not** of `float()`. Swept over the full
+rune range on this box:
+
+```
+str.strip() strips 29 code points
+float()     strips 25
+str.strip strips but float() does NOT: U+001C U+001D U+001E U+001F
+float() strips but str.strip does NOT: (none)
+```
+
+The four ASCII information separators — the same code points this port
+has been chasing since round 3 — are the entire difference, and here they
+run the **other** way. `float("\x1c0.9")` is a `ValueError`, so
+`safe_float` returns its default; the Go port stripped the separator and
+parsed `0.9`. That value is `metadata.json`'s
+`goal_verdict_confidence`.
+
+Two more measurements while in there:
+
+* `float("٠.٥")` is `0.5` — CPython accepts any Unicode decimal digit,
+  `ParseFloat` is ASCII-only. `pytext.FoldDecimals` already existed for
+  exactly this and was not being called.
+* `ParseFloat("1_000")` is `1000, nil` and `float("1_000")` is `1000.0`.
+  **Both accept.** The doc comment above `toFloat` claimed both refused,
+  citing the Go docs' base-prefix wording. Both halves of the claim were
+  false and the outcome agreed anyway — *a claim in a comment is
+  load-bearing*, r2's rule, fired again.
+
+`pytext.IsFloatSpace` / `FloatStrip` now name the narrower set, and the
+sweep that found it re-derives both sets from CPython on every run rather
+than asserting a count.
+
+### HIGH — the guard's patterns and its finding strings
+
+`internal/guard/guard.go` held **thirteen** patterns still spelled with
+RE2's `\s`, which is five code points where Python's `re` reads
+twenty-nine. Prompt-injection guards are the one place in this port where
+a missed match is a security outcome and not a data one: `ignore\s+all\s+
+previous\s+instructions` written with a U+00A0 is caught by CPython and
+was not caught here.
+
+The second half is smaller and shipped in the same file. Findings are
+built with Python's `f"{...!r}"`, and the Go spelling was
+
+```go
+func strconv(s string) string { return "'" + s + "'" }
+```
+
+which escapes nothing. `repr()` escapes quotes, backslashes and
+non-printables, and the finding STRING is stored. Replaced by
+`pytext.Repr` at all six call sites — the same delegate-don't-reimplement
+resolution r5 applied to three copies of the same helper in `scans`.
+
+### MEDIUM — `\b` is ASCII in Go and Unicode in Python
+
+`intent.py`'s classifier patterns use `\b`. Go's `\b` is ASCII-only, so
+it fires between a non-ASCII letter and an ASCII word where Python's does
+not: measured, `\bplan\b` matches `"研究plan"` in Go and **not** in
+CPython, which flips the classifier's LANE — NOW vs AGENDA, a different
+execution path entirely.
+
+`pytext.WordClass` / `WordStart` / `WordEnd` now stand in. Measured
+against CPython over the full rune range:
+
+```
+CPython \w:                    142940 code points
+matched by Go but NOT CPython:      0
+matched by CPython but not Go:   5004
+```
+
+Zero false positives — the class is exactly right — and the 5004 are the
+same Go-15.0-vs-CPython-16.0 Unicode table skew `digitSupplementBody`
+already documents, in its letter half. Named residual, not a silent one;
+the honest fix is a newer toolchain, not a hand-copied list that rots.
+
+RE2 has no lookaround, so `WordStart`/`WordEnd` **consume** the boundary
+character. That is correct for a boolean predicate and wrong if a caller
+needs match offsets — written into their doc, because the next person to
+reach for them will not re-derive it.
+
+### MEDIUM — three spellings of `round(x, n)`, two of them wrong
+
+```go
+math.RoundToEven(f*1e4) / 1e4        // scans.go, under a comment
+                                     // claiming it matched round()
+float64(int64(f*1000+0.5)) / 1000    // inspector.go — round half-UP
+```
+
+Neither is `round()`. CPython rounds half-to-even on the **exact** value
+of the double, which no arithmetic spelling reproduces:
+
+```
+round(1/160, 4)  = 0.0063   scaled RoundToEven gives 0.0062
+round(0.6675, 3) = 0.667    half-up gives 0.668
+```
+
+682 divergences over `round4(done/total)` for every `total <= 2000`.
+These land in `evolver-baselines.jsonl` and `inspection-log.jsonl`, and
+the drift detector compares current against baseline — so a
+mixed-runtime series produces deltas neither engine's data supports.
+`pyval.Round` formats and re-parses, which is exact; `scans`,
+`inspector` and `skills` all delegate to it.
+
+Again a comment that stated a measurement and was wrong.
+
+### MEDIUM — the alignment score, and a second way to lose a whole row
+
+`inspector.AssessGoalAlignment` parsed the judge's reply with
+`strconv.ParseFloat(strings.TrimSpace(...))` under Python's
+`float(resp.content.strip())`. Three finite divergences, all measured
+(`"\x1c0.8"`, `"٠.٨"`, `"1e400"`), and one that is worse than a wrong
+number: **`ParseFloat` accepts `"nan"`, `"inf"` and `"-inf"` with a nil
+error.** A judge reply of `nan` became the report's
+`AlignmentScoreAvg`, and `saveReport`'s `json.Marshal` then returns
+`json: unsupported value: NaN` — the entire inspection row never
+written.
+
+That is verbatim the r5 HIGH (`StampVerdict` + NaN), at a site the r5
+sweep did not reach. *A fix is evidence about its siblings* — and a
+sibling sweep is only as good as the set of siblings you enumerate.
+
+### MEDIUM — the rest
+
+* **`VerdictFirstSummary`'s strip.** r5 rebuilt the opener REGEX from
+  `SpaceClass` and left the `.strip()` one line below it on
+  `strings.TrimSpace`. r5's own corpus put every separator BEFORE the
+  opener, where the rebuilt regex eats it, so it could not see the second
+  decision. Two whitespace decisions one line apart, one fixed.
+* **`errorFingerprint`.** `strings.Fields` for `str.split()` (25 vs 29
+  code points) and a **byte** slice for Python's `[:200]` **code
+  points**. This fingerprint is the §9.3 convergence identity: a
+  divergence means one runtime declares thesis-refuted while the other
+  keeps restarting on identical evidence.
+* **`safe_str` / `safe_list` on the verdict.** `gaps` and `summary` were
+  read with bare `.(string)` assertions. Python is `[safe_str(g) for g in
+  safe_list(vd.get("gaps")) if g]`, and every clause matters:
+  `safe_list`'s default `element_type` is `str`, so a bare string is not
+  a list and yields `[]`; `if g` drops `""` BEFORE the strip, so a
+  whitespace-only gap survives the filter and lands as `""`. The Go port
+  carried a bare string deliberately, as a named hardening. **A hardening
+  is a divergence** — r1's rule — and this one feeds
+  `DetectBehavioralGap`, which can flip `complete`. Reverted; if the
+  hardening is right it belongs in `closure_verify.py` first.
+* **`changeLogAppend` read the dict twice.** Python builds the audit row
+  from the locals `_apply_suggestion_action` already coerced. The Go port
+  re-read the raw map, so an absent confidence audited as `null` where
+  CPython writes `0.5`, and an absent category as `null` where CPython
+  writes `"observation"`. One dict, two readings, is the defect.
+  `readApplyFields` makes it one.
+* **The DAG's stall lane had no crash guard.** r5 wrapped the pool lane
+  in `runWithRecover`; the stall lane called `runOne` directly. Python
+  wraps both (`mission.py:416-419`). A cycle in `depends_on` plus a
+  panicking milestone body took the whole process down — losing every
+  other milestone, `completed_at`, and the final status. r5's test could
+  not have caught it: its mission had no `depends_on` at all, so every
+  milestone went through the pool. The sibling lens, one lane over.
+
+### LOW
+
+* `SafeFloat` clamped with `<`/`>` where Python uses `max()`/`min()`.
+  These differ on **signed zero**: `-0.0 < 0.0` is false, so a comparison
+  keeps the negative zero, while `max(0.0, -0.0)` returns `+0.0`. Both
+  writers spell the difference (`-0.0` vs `0.0`) into the shared store.
+* `CheckOutcome` lowercased with `strings.ToLower`. `str.lower()` expands
+  U+0130 to two runes, which BREAKS an ASCII substring match that Go's
+  simple mapping preserves: `"TİMED OUT".lower()` does not contain
+  `"timed out"` in CPython and does in Go, so the two runtimes classify
+  the same stderr as `fail` vs `inconclusive` — moving `checks_passed`,
+  `inconclusive_count` and `failed_checks`.
+* `secret_scrub`'s sixth pattern used `\s`/`\S`. Go's `\S` is the
+  complement of five code points, so `"token: abcdefg"` is untouched
+  by CPython and becomes `[REDACTED]` here — **Go destroying content
+  CPython keeps.** A redaction that fires on only one side is a fork in
+  the direction that loses evidence.
+* A check `description` was read with `.(string)`; Python coerces, so a
+  numeric description is `"42"` there and `""` here, and description
+  rides the persisted `check_results` rows.
+* An empty decoded object did not fall through: `bool({})` is False, so
+  Python's `if data:` takes the fallback path, while `jsonx.Object("{}")`
+  returns a non-nil empty map.
+* The named `\s` siblings in `closure/modality.go` and `loop/blocked.go`,
+  priced and rebuilt.
+* The `toFloat` PEP-515 comment, above.
+* `evolver_store.py:403` calls a bare `float()` inside a function whose
+  docstring says "Never raises" — a null confidence crashes the Python
+  apply path. **Owed to the Python side.** Go returns the default; that
+  is a divergence this port declines to port backwards, and it is pinned
+  as such.
+
+### Two findings the coverage work produced
+
+Writing the tests found two more, which is the argument for writing them:
+
+* **`pyval.Plain` lost int-ness.** It was written to mimic Go's
+  `json.Unmarshal`-into-`any` (everything `float64`) and the loss was
+  pinned as known for two rounds. It stopped being inert the moment a
+  check description could be a number: `str(42)` is `"42"` and
+  `str(42.0)` is `"42.0"`. Fixed for everything up to `int64`; arbitrary
+  precision past that is a named residual. The fix broke exactly two
+  tests, both of which existed to pin the loss.
+* **The guard's finding-string `repr()`**, above.
+
+### Falsification
+
+Twenty-five mutants, one per fix, each reverting the fix and asserting a
+NAMED test goes red. **25 killed, 0 survived, 0 unusable.**
+
+The battery reports the four false-green classes separately from
+survivors, because each means the battery learned nothing rather than
+that the fix is covered: `ANCHOR-MISS` (`count(old) != 1`),
+`COMPILE-BROKEN`, `NO-SUCH-TEST` (`-run` naming a test that does not
+exist), and `VACUOUS` (the test skipped, so it asserted nothing). The
+first run scored 18/2/5 and every one of the seven was worth having:
+
+* two ANCHOR-MISSes were stale anchors,
+* two COMPILE-BROKENs were mutants that dropped a package's last use of
+  an import,
+* one ANCHOR-MISS matched twice because the same three lines appear in
+  two decoders,
+* and **two genuine survivors** — `VerdictFirstSummary`'s strip and
+  `scans`' `round4` — each of which had a test whose corpus could not
+  separate the implementations. Both now run the **pre-fix spelling** over
+  their own corpus and fail if it does not lose. That is the general
+  form of the fix for head 3, and it is now in every r6 test:
+
+> Counting the right SHAPE of fixture does not prove a corpus
+> discriminates. Running the old implementation over it does.
+
+The `scans` corpus needed widening from a sample (3 divergences, under
+the threshold) to every rate a scan can produce for `total <= 200`
+(34 of 20300). It is past `ARG_MAX`, so it rides stdin.
+
+### Side-find: a `-race` ceiling that was not a ceiling
+
+`TestURLScanStaysLinear` gives a 1.2MB blob a 10-second wall clock as a
+quadratic-regression alarm. Measured here: 0.71s before this round's
+changes, 0.74s after — and **10.000s under `-race`**, which is
+instrumentation overhead, not a regression. It was already sitting on the
+ceiling; r6's 4% pushed it over. The alarm is real and worth keeping, so
+the ceiling is now build-tagged (`race_on_test.go` / `race_off_test.go`)
+rather than deleted or loosened globally. A flake that reads exactly like
+the alarm it is supposed to raise is worse than no alarm.
+
+### State
+
+`gofmt`, `go vet ./...`, the full suite (32 packages) and `go test -race`
+on the fourteen touched packages are all green.

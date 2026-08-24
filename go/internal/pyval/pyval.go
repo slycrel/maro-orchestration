@@ -374,6 +374,21 @@ func Plain(v any) any {
 		}
 		return out
 	case json.Number:
+		// int for an integral literal, float otherwise — which is what
+		// CPython's json.loads produces, and the reason matters: these
+		// values are str()'d into persisted rows, and str(42) is "42"
+		// while str(42.0) is "42.0". Plain was written to mimic Go's
+		// json.Unmarshal-into-any (everything float64) and that shape was
+		// pinned as a known loss for two rounds; it stopped being inert
+		// the moment a check description could be a number (adversarial
+		// mission-r6, found by its own new test).
+		//
+		// An integer too large for int64 still falls through to float64,
+		// where CPython has arbitrary precision. That residual is real
+		// and unfixed — named here, not silent.
+		if i, err := t.Int64(); err == nil {
+			return int(i)
+		}
 		f, _ := t.Float64()
 		return f
 	}
@@ -767,11 +782,18 @@ func SafeFloat(v any, def float64, min, max *float64) float64 {
 	if !ok || math.IsNaN(result) || math.IsInf(result, 0) {
 		return def
 	}
-	if min != nil && result < *min {
-		result = *min
+	// math.Max/Min, not `<`/`>`, because Python's clamp is
+	// `max(min_val, result)` / `min(max_val, result)` and those differ
+	// from a comparison on SIGNED ZERO: -0.0 < 0.0 is false, so a
+	// comparison keeps the negative zero, while max(0.0, -0.0) returns
+	// +0.0 (the first of two equal arguments). Both writers spell the
+	// difference — json.dumps gives "-0.0", FloatRepr gives "-0.0" —
+	// so it reaches the shared store (adversarial mission-r6 LOW).
+	if min != nil {
+		result = math.Max(*min, result)
 	}
-	if max != nil && result > *max {
-		result = *max
+	if max != nil {
+		result = math.Min(*max, result)
 	}
 	return result
 }
@@ -790,10 +812,14 @@ func SafeFloatUnit(v any, def float64) float64 {
 // ParseFloat accepts spellings Python's float() also accepts —
 // "inf", "infinity", "nan", case-insensitively, with an optional sign —
 // and every one of them is then refused by the non-finite guard in
-// SafeFloat, exactly as Python refuses them one line later. It also
-// accepts Go's underscore separators ONLY with a base prefix, which a
-// JSON string cannot carry, so PEP 515's `1_0` stays a ValueError on
-// both sides.
+// SafeFloat, exactly as Python refuses them one line later.
+//
+// Measured on this box, both runtimes accept PEP 515 underscores in a
+// decimal literal: ParseFloat("1_000") is 1000 with a nil error and
+// float("1_000") is 1000.0. (An earlier version of this comment claimed
+// both REFUSED it, on the strength of the Go docs' base-prefix wording.
+// Both halves were false and the outcome agreed anyway — a comment that
+// states a measurement, adversarial mission-r6 LOW.)
 func toFloat(v any) (float64, bool) {
 	switch t := v.(type) {
 	case nil:
@@ -823,9 +849,14 @@ func toFloat(v any) (float64, bool) {
 		}
 		return f, true
 	case string:
-		// Python's float() strips surrounding whitespace, and its set is
-		// wider than Go's ParseFloat tolerates.
-		f, err := strconv.ParseFloat(pytext.Strip(t), 64)
+		// FloatStrip, not Strip: float()'s whitespace set is str.strip()'s
+		// set MINUS U+001C–U+001F, so a leading U+001C makes
+		// float() raise ValueError, and it must do the same here.
+		// FoldDecimals because float() accepts any Unicode decimal
+		// digit where ParseFloat is ASCII-only
+		// — measured, float("٠.٥") is 0.5 (both adversarial mission-r6).
+		f, err := strconv.ParseFloat(
+			pytext.FoldDecimals(pytext.FloatStrip(t)), 64)
 		if err != nil {
 			// ParseFloat reports ErrRange with ±Inf for an overflowing
 			// literal; float("1e309") is inf, so keep the value.
@@ -837,4 +868,39 @@ func toFloat(v any) (float64, bool) {
 		return f, true
 	}
 	return 0, false
+}
+
+// Round is Python's round(f, n) for a float — half-to-even on the EXACT
+// value of the double, which is what CPython's _Py_dg_dtoa does and what
+// no arithmetic spelling reproduces.
+//
+// The two wrong spellings both shipped in this port and both wrote to
+// files the two runtimes share:
+//
+//	math.RoundToEven(f*1e4)/1e4      scans.go, under a comment claiming
+//	                                 it matched round(); 682 divergences
+//	                                 over round4(done/total) for every
+//	                                 total <= 2000, e.g. 1/160 -> 0.0063
+//	                                 in CPython and 0.0062 here
+//	float64(int64(f*1000+0.5))/1000  inspector.go; half-UP, not even, so
+//	                                 round(0.6675,3) is 0.667 there and
+//	                                 0.668 here
+//
+// Scaling by 10^n carries the scaled value's own representation error
+// into the decision, which is why RoundToEven-after-multiply is not
+// round(). Formatting to n decimals and parsing back is: strconv's
+// FormatFloat rounds the decimal expansion of the exact double, the same
+// thing CPython does (adversarial mission-r6 MEDIUM).
+//
+// NaN and ±Inf are returned unchanged, matching round()'s behaviour of
+// leaving them alone rather than raising.
+func Round(f float64, n int) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	out, err := strconv.ParseFloat(strconv.FormatFloat(f, 'f', n, 64), 64)
+	if err != nil {
+		return f
+	}
+	return out
 }

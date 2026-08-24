@@ -13,6 +13,8 @@ import (
 	"os"
 	"regexp"
 	"sort"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Patterns ported one-for-one from secret_scrub._SECRET_RES; keep the two
@@ -23,7 +25,18 @@ var secretRes = []*regexp.Regexp{
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9\-]{10,}`),
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	regexp.MustCompile(`(?i)(bearer|authorization|api[_-]?key|token|secret|password)\s*[:=]\s*\S{8,}`),
+	// SpaceClass and its negation, not Go's `\s`/`\S`. Go reads `\S` as
+	// the complement of five code points, so U+00A0 and U+000B count as
+	// NON-space and feed the {8,} run: measured, "token:<U+00A0>abcdefg"
+	// is untouched by CPython and becomes "[REDACTED]" here — Go
+	// DESTROYING content CPython keeps, at every site both runtimes
+	// scrub (closure summary/gaps/downgrade_reason reach
+	// closure_verdicts.jsonl and metadata.json). A redaction that fires
+	// where the other runtime's does not is a fork in the direction that
+	// loses evidence (adversarial mission-r6 LOW).
+	regexp.MustCompile(`(?i)(bearer|authorization|api[_-]?key|token|secret|password)` +
+		pytext.SpaceClass + `*[:=]` + pytext.SpaceClass + `*` +
+		pytext.NotClass("") + `{8,}`),
 }
 
 // Secrets redacts secret-shaped substrings from s.

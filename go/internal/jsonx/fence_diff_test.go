@@ -320,26 +320,19 @@ for text, kind in json.loads(sys.argv[1]):
     v = extract_json(text, dict if kind == 'dict' else list)
     # repr() is the comparable rendering: it spells nan/inf the way
     # pyval.Repr does, and json.dumps cannot carry them at all.
-    # Coerce int -> float recursively. json.Unmarshal into a plain Go any
-    # has always made every JSON number a float64, so Object cannot
-    # tell 1 from 1.0 and never could; that gap is named in
-    # pyval.Plain's doc and is why ObjectOrdered exists. Normalising it
-    # HERE, loudly, is what lets this test compare everything else
-    # exactly -- and TestObjectLosesIntNessAsItAlwaysHas pins the gap
-    # itself so it is not silently absorbed.
-    def f(x):
-        if isinstance(x, bool):
-            return x
-        if isinstance(x, int):
-            return float(x)
-        if isinstance(x, list):
-            return [f(e) for e in x]
-        if isinstance(x, dict):
-            return {k: f(e) for k, e in x.items()}
-        return x
+    #
+    # NOTHING is normalised here any more. This snippet used to coerce
+    # int -> float recursively, because pyval.Plain rendered every JSON
+    # number as a float64 the way json.Unmarshal-into-any does. That was
+    # a real divergence wearing a normalisation: str(42) is "42" and
+    # str(42.0) is "42.0", and both reach persisted rows through any
+    # caller that renders a decoded value as text -- which a check
+    # description does (adversarial mission-r6). Plain now returns an int
+    # for an integral literal, exactly as json.loads does, so the
+    # comparison is exact and the coercion is gone.
     ordered = dict(sorted(v.items())) if kind == 'dict' else v
     out.append([sorted(v.keys()) if kind == 'dict' else None,
-                repr(f(ordered)), bool(v)])
+                repr(ordered), bool(v)])
 print(json.dumps(out))
 `
 
@@ -528,29 +521,33 @@ func sortedObj(m map[string]any) pyval.Obj {
 // The one difference TestObjectDecodesWhatCPythonDecodes normalises away,
 // pinned on its own so the normalisation cannot quietly grow.
 //
-// jsonx.Object returns map[string]any with every number a float64,
-// because that is what encoding/json into an `any` has always produced
-// and eleven call sites type-assert it. CPython's json.loads gives a
-// real int. ObjectOrdered exists precisely for the two callers that need
-// to tell 1 from 1.0 (rendering through Python's str(), and int-vs-float
-// checks), and it keeps the source literal as a json.Number.
-//
-// This is a NAMED, pre-existing divergence, not a finding. It reaches
-// disk only through a caller that renders an Object value into stored
-// text — and pyval.Plain's doc carries the same warning at the other end.
-func TestObjectLosesIntNessAsItAlwaysHas(t *testing.T) {
-	obj, err := Object(`{"n": 3}`)
+// Object now yields a real int for an integral literal, matching
+// CPython json.loads. It did not always: pyval.Plain used to flatten
+// every number to float64, mimicking encoding/json-into-any, and that
+// was carried for two rounds as a named loss. It reached disk the first
+// time a decoded number was rendered as TEXT — str(42) vs str(42.0) —
+// which is what a non-string check description does (mission-r6).
+func TestObjectPreservesIntNessLikeJSONLoads(t *testing.T) {
+	obj, err := Object(`{"n": 3, "f": 3.0, "big": 1e400}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, isFloat := obj["n"].(float64); !isFloat {
-		t.Fatalf("Object no longer yields float64 for an integer literal "+
-			"(%T) — if it now preserves int-ness, delete the int coercion "+
-			"in pyDecodeSnippet and this test", obj["n"])
+	if got := pyval.Repr(obj["n"]); got != "3" {
+		t.Errorf("an integral literal must decode as an int, like "+
+			"json.loads: got %s (%T)", got, obj["n"])
+	}
+	if got := pyval.Repr(obj["f"]); got != "3.0" {
+		t.Errorf("a decimal literal must stay a float: got %s", got)
+	}
+	// The residual, stated rather than hidden: CPython's int is
+	// arbitrary-precision and Go's is not, so an integer past int64
+	// still falls through to float64.
+	if got := pyval.Repr(obj["big"]); got != "inf" {
+		t.Errorf("1e400 should overflow to inf: got %s", got)
 	}
 
 	// ...and the ordered decoder, which is the answer for callers that
-	// need the distinction, still keeps the literal.
+	// need the source literal itself, still keeps it.
 	o, err := ObjectOrdered(`{"n": 3, "f": 3.0}`)
 	if err != nil {
 		t.Fatal(err)

@@ -491,15 +491,28 @@ func TestVerifyConfidenceStringCoerced(t *testing.T) {
 // TestVerifyGapsBareStringCoerced: a bare-string gaps field is drift,
 // not absence — carrying it beats silently reading a stated gap as a
 // clean verdict (the recall tranche's evidence-coercion direction).
-func TestVerifyGapsBareStringCoerced(t *testing.T) {
+// A bare string in `gaps` is DROPPED, because Python's
+// safe_list(value) defaults to element_type=str and a str is not a list
+// — measured, safe_list("one gap") is []. This test used to assert the
+// opposite as a named hardening ("a bare string is drift, not absence").
+// Under this port's doctrine that was a fork: gaps is written verbatim
+// into closure_verdicts.jsonl and feeds DetectBehavioralGap, which can
+// flip `complete`. If the hardening is right it belongs in
+// closure_verify.py, where both runtimes inherit it (mission-r6 MEDIUM).
+//
+// The differential that covers the whole coercion is
+// TestVerdictGapsAndSummaryMatchCPython in r6_diff_test.go; this one
+// stays as the named pin on the reverted hardening, so re-adding it
+// fails here with the reason attached.
+func TestVerifyGapsBareStringIsDroppedLikeCPython(t *testing.T) {
 	fake := &llm.Fake{Script: []string{
 		planJSON("true"),
 		`{"complete":false,"confidence":0.9,"gaps":"the one gap","summary":"no"}`,
 	}}
 	v := Verify(context.Background(), fake, "goal", nil,
 		Options{WorkspacePath: t.TempDir()})
-	if len(v.Gaps) != 1 || v.Gaps[0] != "the one gap" {
-		t.Fatalf("bare-string gaps must coerce to one-element slice: %+v", v.Gaps)
+	if len(v.Gaps) != 0 {
+		t.Fatalf("safe_list's str default drops a bare string; got %+v", v.Gaps)
 	}
 }
 
