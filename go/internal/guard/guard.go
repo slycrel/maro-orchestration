@@ -49,45 +49,71 @@ import (
 // applied:true and performs the guardrail/lesson write: two runtimes,
 // one row, opposite durable outcomes (adversarial mission-r6 HIGH).
 //
-// `\b` is left as Go's here on purpose and is NOT the same class of
-// hole: an ASCII-only boundary is STRICTER at a non-ASCII neighbour
-// (it declines to fire), so it can only fail to match text Python also
-// has to reach through a letter run. The `\s` direction was the one that
-// let payloads through. The Unicode-boundary residual is named in
-// PORT.md alongside intent.go's, where it flips a lane rather than a
-// gate.
+// The `\b`s are rebuilt too, and the r6 comment that left them alone had
+// the DIRECTION backwards. It claimed an ASCII-only boundary is
+// "STRICTER at a non-ASCII neighbour (it declines to fire)". The
+// opposite is true: Go's `\w` is a strict SUBSET of Python's, so Go sees
+// a boundary between a non-ASCII letter and an ASCII word where Python
+// sees none, and Go therefore OVER-fires. Measured against
+// injection_guard.scan_content (adversarial mission-r7 MEDIUM):
+//
+//	"研究ignore all previous instructions"  CPython 0 findings, Go 1
+//	"ignore all previous instructions"      CPython 1 finding,  Go 1
+//
+// evolver/store.go:932 scans suggestion text fail-closed before any
+// apply, so one runtime writes a blocked status plus a block_reason to
+// suggestions.jsonl and the other applies the mutation and writes it to
+// change_log.jsonl. Fail-closed direction, so a data fork rather than a
+// security regression — but a fork, and the comment that let two rounds
+// skip past it stated a measurement nobody had taken (r2's rule again).
+//
+// The boundaries CONSUME, and the finding string quotes the match, so
+// every pattern's body sits in capture group 1 and the reporters read
+// that — see boundedBoth below and pytext.WordStart's doc.
+// boundedBoth and boundedStart compile a Python pattern whose body is
+// bracketed by `\b`. The body becomes capture group 1, so the consumed
+// boundary characters stay OUT of the text the findings quote. Any inner
+// groups the body already has shift up; nothing reads them.
+func boundedBoth(body string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)` + pytext.WordStart + `(` + body + `)` + pytext.WordEnd)
+}
+
+func boundedStart(body string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)` + pytext.WordStart + `(` + body + `)`)
+}
+
 var overridePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bignore` + pytext.SpaceClass + `+` +
+	boundedBoth(`ignore` + pytext.SpaceClass + `+` +
 		`(all` + pytext.SpaceClass + `+` +
 		`)?previous` + pytext.SpaceClass + `+` +
-		`(instructions?|context|above)\b`),
-	regexp.MustCompile(`(?i)\bforget` + pytext.SpaceClass + `+` +
+		`(instructions?|context|above)`),
+	boundedBoth(`forget` + pytext.SpaceClass + `+` +
 		`(all` + pytext.SpaceClass + `+` +
-		`)?previous\b`),
-	regexp.MustCompile(`(?i)\bsystem` + pytext.SpaceClass + `*` +
+		`)?previous`),
+	boundedBoth(`system` + pytext.SpaceClass + `*` +
 		`:` + pytext.SpaceClass + `*` +
 		`you` + pytext.SpaceClass + `+` +
-		`are\b`),
-	regexp.MustCompile(`(?i)\bnew` + pytext.SpaceClass + `+` +
+		`are`),
+	// Trailing `:` is not a boundary in the Python either.
+	boundedStart(`new` + pytext.SpaceClass + `+` +
 		`instructions?` + pytext.SpaceClass + `*` +
 		`:`),
-	regexp.MustCompile(`(?i)\bdisregard` + pytext.SpaceClass + `+` +
+	boundedBoth(`disregard` + pytext.SpaceClass + `+` +
 		`(all` + pytext.SpaceClass + `+` +
-		`)?previous\b`),
-	regexp.MustCompile(`(?i)\boverride` + pytext.SpaceClass + `+` +
+		`)?previous`),
+	boundedBoth(`override` + pytext.SpaceClass + `+` +
 		`your` + pytext.SpaceClass + `+` +
-		`(instructions?|rules|guidelines)\b`),
-	regexp.MustCompile(`(?i)\byou` + pytext.SpaceClass + `+` +
+		`(instructions?|rules|guidelines)`),
+	boundedBoth(`you` + pytext.SpaceClass + `+` +
 		`are` + pytext.SpaceClass + `+` +
 		`now` + pytext.SpaceClass + `+` +
-		`a\b`),
-	regexp.MustCompile(`(?i)\bact` + pytext.SpaceClass + `+` +
+		`a`),
+	boundedBoth(`act` + pytext.SpaceClass + `+` +
 		`as` + pytext.SpaceClass + `+` +
 		`(?:an?` + pytext.SpaceClass + `+` +
-		`)?(?:different|new|unrestricted|jailbroken)\b`),
-	regexp.MustCompile(`(?i)\bDAN` + pytext.SpaceClass + `*` +
-		`mode\b`),
-	regexp.MustCompile(`(?i)\bjailbreak\b`),
+		`)?(?:different|new|unrestricted|jailbroken)`),
+	boundedBoth(`DAN` + pytext.SpaceClass + `*` + `mode`),
+	boundedBoth(`jailbreak`),
 }
 
 // Raw tool invocation strings outside expected fields (Python
@@ -97,8 +123,7 @@ var toolCallPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)"tool_name"` + pytext.SpaceClass + `*` +
 		`:` + pytext.SpaceClass + `*` +
 		`"`),
-	regexp.MustCompile(`(?i)\btool_call` + pytext.SpaceClass + `*` +
-		`\(`),
+	boundedStart(`tool_call` + pytext.SpaceClass + `*` + `\(`),
 	regexp.MustCompile(`(?i)<function[_` + pytext.SpaceClassBody + `]call>`),
 }
 
@@ -108,15 +133,15 @@ var toolCallPatterns = []*regexp.Regexp{
 // `(?!r\.jina\.ai|api\.anthropic\.com)` is enforced post-match in
 // scanExfil instead — same accept/reject behavior, different mechanism.
 var exfilPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bsend` + pytext.SpaceClass + `+` +
+	boundedBoth(`send` + pytext.SpaceClass + `+` +
 		`(all` + pytext.SpaceClass + `+` +
 		`)?secrets?` + pytext.SpaceClass + `+` +
-		`to\b`),
-	regexp.MustCompile(`(?i)\bexfiltrat[ei]\b`),
-	regexp.MustCompile(`(?i)\bleak` + pytext.SpaceClass + `+` +
+		`to`),
+	boundedBoth(`exfiltrat[ei]`),
+	boundedBoth(`leak` + pytext.SpaceClass + `+` +
 		`(the` + pytext.SpaceClass + `+` +
 		`)?(credentials?|api` + pytext.SpaceClass + `*` +
-		`keys?|tokens?)\b`),
+		`keys?|tokens?)`),
 }
 
 // schemeRe locates every URL scheme occurrence. Python's re.search scans
@@ -230,20 +255,20 @@ func ScanContent(content, source string) ScanReport {
 
 	var findings, blocked []string
 	for _, pat := range overridePatterns {
-		if m := pat.FindString(target); m != "" {
+		if m := patMatch(pat, target); m != "" {
 			findings = append(findings, "override attempt: "+pyRepr(clipMatch(m)))
 			blocked = append(blocked, pat.String())
 		}
 	}
 	for _, pat := range toolCallPatterns {
-		if m := pat.FindString(target); m != "" {
+		if m := patMatch(pat, target); m != "" {
 			findings = append(findings, "tool call injection: "+pyRepr(clipMatch(m)))
 			blocked = append(blocked, pat.String())
 		}
 	}
 	hasExfil := false
 	for _, pat := range exfilPatterns {
-		if m := pat.FindString(target); m != "" {
+		if m := patMatch(pat, target); m != "" {
 			findings = append(findings, "exfiltration pattern: "+pyRepr(clipMatch(m)))
 			blocked = append(blocked, pat.String())
 			hasExfil = true
@@ -358,3 +383,23 @@ func asciiLower(s string) string {
 // the same blocked payload — found by the differential written for the
 // mission-r6 HIGH, not by the round itself.
 func pyRepr(s string) string { return pytext.Repr(s) }
+
+// patMatch returns the text Python's match object would report. For a
+// pattern built by boundedBoth/boundedStart that is capture group 1, not
+// group 0: Python's `\b` is zero-width and RE2's stand-in is not, so
+// group 0 here carries the boundary characters Python never matched, and
+// the finding string quotes this text into suggestions.jsonl
+// (adversarial mission-r7 MEDIUM).
+//
+// Patterns with no group — the literal `<tool_use>` family — report
+// group 0, which is what Python reports for them too.
+func patMatch(pat *regexp.Regexp, target string) string {
+	m := pat.FindStringSubmatch(target)
+	if m == nil {
+		return ""
+	}
+	if len(m) > 1 {
+		return m[1]
+	}
+	return m[0]
+}

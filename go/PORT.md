@@ -3922,3 +3922,108 @@ if category == "" { category = "observation" }
 `d.get(key, default)` keys on **presence**. That Go spelling defaults on
 an empty stored value too, so `"category": ""` is written as
 `"observation"` here and as `""` there. `pyval.GetOr` is the honest port.
+
+
+### Rule — the store's shape is the contract, so the port owns the writer
+
+Eight files reached a shared store through `encoding/json`. It disagrees
+with `json.dumps` three ways at once — **sorted** keys vs insertion order,
+**HTML-escaped** `<>&`, and **raw UTF-8** vs `ensure_ascii` — and no test
+saw it, because every test decoded the bytes first and a decode erases all
+three.
+
+Every durable writer now renders through `pyval`. The measurable case:
+`FailedCheckSignature` is `"%s => exit %d: %s"`, so every failed-check
+entry this port had ever written carried `=>`.
+
+Two hazards found while building it, both of which read exactly like a
+real divergence:
+
+* **`FromPlain` must not round-trip through `encoding/json`.**
+  `json.Marshal(3.0)` is `"3"` and `json.dumps(3.0)` is `"3.0"`, so the
+  reparse silently converts whole floats to ints — and `confidence`,
+  `alignment_score_avg` and every success rate are floats that are often
+  whole.
+* **The same hazard applies to a CPython probe's TRANSPORT.** An untagged
+  whole float arrives at Python as an int and the probe answers `"3"`.
+  The differential tests carry tagged transports (`{"__float__": ...}`,
+  `{"__obj__": [[k, v], ...]}`) for exactly this reason; the second also
+  keeps `encoding/json` from sorting the key order the test exists to
+  check.
+
+**Named residual:** `pack.json`'s key ORDER. The manifest is a
+`map[string]any` across ~15 call sites including a foreign-file decode,
+so `FromPlain` sorts it. Escaping and indent are Python's; order is not.
+Nothing hashes those bytes (the payload hash is separate), and the fix is
+a typed manifest, not a renderer change.
+
+### Rule — an extraction is a refactor only if ORDER is preserved
+
+`write_metadata` is a read-merge-write, not a write. It preserves the
+ordinals of keys already on disk, pops a key written as `None`, and fills
+`started_at` first-writer-wins **after** the merge. The port had it as a
+whole-file overwrite, which is right for every value and wrong for the
+file.
+
+### Rule — the boundary stand-ins have two ends and one direction
+
+`pytext.WordStart` / `WordEnd` **consume**. Three consequences, all of
+which cost a fix this round:
+
+1. They are safe only at the two **ends** of a pattern, in a boolean
+   predicate. An INTERIOR boundary must be folded into what follows —
+   `NotWordClassPlus(x)` is that fold.
+2. They are wrong wherever the caller needs match OFFSETS or the matched
+   TEXT (`FindString`, `FindAllStringIndex`, `ReplaceAllString`). Use a
+   capture group, or leave the ASCII `\b` and name the residual.
+3. **A trailing `\b` after a non-word character means the OPPOSITE of
+   `WordEnd`.** `\bhttps?://\b` matches `https://x` and not a bare
+   `https://`: the position after `/` is a boundary only when a WORD
+   character follows. `urlBounded` is that spelling; substituting
+   `WordEnd` inverts the test.
+
+Rule 3 also covers every alternation branch that ends in a SPACE — `ls `,
+`find `, `jq ` in the static hints.
+
+**Named residual:** `scrub`'s Identifier patterns keep Go's ASCII `\b`,
+and the reason is rule 2. Their consumer is `ReplaceAllString`; writing
+the consumed boundary back through `${1}` fails on ADJACENT occurrences
+("clawd clawd" shares one space, the first replacement eats it), and a
+replace-until-stable loop is a third behaviour rather than a port. The fix
+is an index-walking replacer.
+
+**Named residual:** `budget.markerRe`'s ASCII `\d`. `Clip` writes those
+digits itself with `%d`, so a genuine marker is always ASCII and the two
+classes agree on every marker this code can produce. They differ only on a
+FORGED one, and there the Go behaviour leaves content alone — the safe
+direction.
+
+### Measured — `str.lower()` is not `strings.ToLower`
+
+`str.lower()` EXPANDS U+0130 to two code points; Go's folds it to one.
+Measured through the real tokenizer:
+
+```
+_tokenize("DIFFİCULT case")  -> ['diffi', 'cult', 'case']
+_tokenize("DİFFICULT stdin") -> ['fficult', 'stdin']
+_tokenize("ΣΟΦΟΣ answers")   -> ['answers']      # [^a-z0-9]+ strips it
+```
+
+`pytext.Lower` is the port. The third line is the one worth keeping in
+view: the non-ASCII token does not become a Latin token, it disappears.
+
+### Measured — `float(str)` is not `strconv.ParseFloat`
+
+`pyval.ParseFloat` is the single implementation, and it differs from
+`strconv.ParseFloat` in three places:
+
+* `strconv` accepts **hex** float literals (`0x1p-2` -> 0.25); `float()`
+  raises.
+* `float()` accepts **Unicode** decimal digits (`float("٠.٥")` == 0.5);
+  `strconv` is ASCII-only.
+* CPython raises on overflow; `strconv` returns `ErrRange` **with** ±Inf.
+
+Both accept `"1_000"`, and both accept `"nan"`/`"inf"` — so does
+`float()`, which is not a bug in either. The strip set is
+`strings.TrimSpace` exactly: `float()`'s whitespace set is `str.strip()`'s
+MINUS U+001C–U+001F (25 code points vs 29).

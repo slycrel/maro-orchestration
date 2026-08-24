@@ -278,13 +278,41 @@ func shapeSteps(steps []string) []string {
 // (adversarial mission-r6, priced in the sibling sweep).
 var timeoutSplitSeps = regexp.MustCompile(pytext.SpaceClass + `*;` + pytext.SpaceClass +
 	`*|` + pytext.SpaceClass + `+and` + pytext.SpaceClass + `+then` + pytext.SpaceClass + `+`)
-var bareAndSep = regexp.MustCompile(pytext.SpaceClass + `*\band\b` + pytext.SpaceClass + `*`)
+
+// bareAndSep is Python's `\s*\band\b\s*` from that same split, with the
+// boundaries rebuilt — and it cannot use WordStart/WordEnd, because the
+// caller reads OFFSETS out of it and those stand-ins CONSUME. The
+// separator therefore lives in a capture group, and there are two
+// branches because the leading whitespace is part of the separator in
+// Python and a consumed boundary character here would not be:
+//
+//	group 1  no leading space: the boundary is `^` or a non-word,
+//	         NON-space character (a space would have been eaten by \s*)
+//	group 2  one or more leading spaces, which ARE the boundary
+//
+// The trailing side needs no alternation: the caller requires the next
+// character after the separator to be A-Z, which is a word character, so
+// Python's closing `\b` can only hold when at least one space follows —
+// hence SpaceClass+ rather than *. (adversarial mission-r7 LOW: this is
+// the sibling of the patterns r6 converted in this file, skipped because
+// its consumer is FindAllStringIndex.)
+var bareAndSep = regexp.MustCompile(
+	`(?:^|[^` + pytext.WordClassBody + pytext.SpaceClassBody + `])(and` +
+		pytext.SpaceClass + `+)|(` + pytext.SpaceClass + `+and` +
+		pytext.SpaceClass + `+)`)
 
 func heuristicSplitParts(stepText string) []string {
 	var parts []string
 	for _, seg := range timeoutSplitSeps.Split(stepText, -1) {
 		start := 0
-		for _, lc := range bareAndSep.FindAllStringIndex(seg, -1) {
+		for _, m := range bareAndSep.FindAllStringSubmatchIndex(seg, -1) {
+			// Whichever branch fired carries the separator span; the
+			// boundary character outside it belongs to the PREVIOUS part,
+			// exactly as Python's zero-width \b leaves it.
+			lc := m[2:4]
+			if lc[0] < 0 {
+				lc = m[4:6]
+			}
 			rest := seg[lc[1]:]
 			if rest != "" && rest[0] >= 'A' && rest[0] <= 'Z' {
 				parts = append(parts, seg[start:lc[0]])

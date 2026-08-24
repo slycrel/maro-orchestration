@@ -12,6 +12,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Coercion helpers reproducing what dict_to_skill's constructors do to a
@@ -133,7 +134,14 @@ func getFloat(d map[string]any, key string, dst *float64) {
 			return
 		}
 		if s, isStr := v.(string); isStr { // Python float("0.5")
-			if f, err := strconv.ParseFloat(pyStrip(s), 64); err == nil {
+			// pyval.ParseFloat, not pyStrip + strconv: pyStrip is
+			// str.strip()'s 29 code points and float() strips 25, so
+			// getFloat("\x1c0.5") set 0.5 where CPython raises — verbatim
+			// the mission-r6 HIGH at a site its sweep did not reach. It
+			// also took hex literals and refused Unicode digits. The value
+			// lands in skills.jsonl as utility_score / success_rate
+			// (adversarial mission-r7 MEDIUM).
+			if f, ok := pyval.ParseFloat(s); ok {
 				*dst = f
 			}
 		}

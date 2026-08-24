@@ -786,24 +786,17 @@ func TestFailureChainEntriesRespectBudget(t *testing.T) {
 	}
 }
 
-func TestErrorFingerprintPythonParity(t *testing.T) {
-	// Fixtures computed with CPython hashlib.md5 — the fingerprint is
-	// convergence EVIDENCE and must read identically across runtimes.
-	got := errorFingerprint("failed to fetch: connection refused", "partial output text")
-	if got != "5c93203e028a" {
-		t.Fatalf("fingerprint parity broken: %s", got)
-	}
-	// Head-normalization: >200 chars truncate, whitespace collapses.
-	long := strings.Repeat("x", 300) + "   tail"
-	if got := errorFingerprint(long, ""); got != "d13dd2657c95" {
-		t.Fatalf("normalized fingerprint parity broken: %s", got)
-	}
-	// Same failure → same fingerprint; different → different.
-	if errorFingerprint("a", "b") != errorFingerprint("a", "b") ||
-		errorFingerprint("a", "b") == errorFingerprint("a", "c") {
-		t.Fatal("fingerprint stability broken")
-	}
-}
+// TestErrorFingerprintPythonParity is GONE. Its two frozen md5 literals
+// are a strict subset of what r6_diff_test.go's
+// TestErrorFingerprintMatchesCPython now derives live from CPython over a
+// corpus that includes the multi-byte cases the literals could not
+// contain — and its last assertion was
+//
+//	errorFingerprint("a", "b") != errorFingerprint("a", "b")
+//
+// which is a pure function compared with itself: it cannot fail, and r6
+// cited it as the worked example of "an assertion that cannot fire"
+// while leaving it in place (adversarial mission-r7 LOW).
 
 func TestIsConvergingThresholds(t *testing.T) {
 	cases := []struct {

@@ -6011,3 +6011,171 @@ the alarm it is supposed to raise is worse than no alarm.
 
 `gofmt`, `go vet ./...`, the full suite (32 packages) and `go test -race`
 on the fourteen touched packages are all green.
+
+
+---
+
+## Round 7 — the writers
+
+r6 ended on "a test that reports AGREEMENT may be testing nothing." r7's
+lead lens is one layer under that:
+
+> **A writer that is not the port's own writer is a divergence you cannot
+> see**, because both sides produce valid JSON and every value in it is
+> right.
+
+Eight files still reached a shared store through `encoding/json`. That
+package disagrees with `json.dumps` in three ways at once — it **sorts**
+keys where Python keeps insertion order, it **HTML-escapes** `<`, `>` and
+`&`, and it emits **raw UTF-8** where `ensure_ascii` writes `\uXXXX`. No
+test read those bytes, because every test decoded them first, and a
+decode is exactly the step that makes the three differences invisible.
+
+The concrete size of it: `FailedCheckSignature` is `"%s => exit %d: %s"`,
+so **every** failed-check entry this port has ever written carried
+`=>` where the Python runtime writes `=>`. Lessons are data, and the
+store's SHAPE is the interop contract — different bytes in the place the
+Python reader looks is a broken contract even when every value is right.
+
+### HIGH — the eight writers
+
+`runs`, `closure`, `loop`, `inspector` (×2), `evolver`, `director` and
+`pack` now render through this port's own `pyval`. Three things came out
+of doing it rather than out of reading the diffs:
+
+* **`runs.WriteMetadata` was a whole-file overwrite** where
+  `write_metadata` is a read-merge-write that PRESERVES the ordinals of
+  keys already on disk, pops a key written as `None`, and fills
+  `started_at` first-writer-wins **after** the merge. Four call sites now
+  pass `pyval.Obj` in `write_metadata`'s own field order.
+* **The verdict row had no `loop_id`** and the check rows had no
+  `plan_index`. `plan_index` is the PLAN's index, not the results index —
+  they diverge the moment a check is skipped, and the row is what a
+  replay re-anchors on.
+* **`scrub.Walk` did not descend `pyval.Obj`.** Building rows as ordered
+  objects to fix the key order silently reopened the durable-sink hole
+  closure r1 found: an Obj fell through to `default` and was returned
+  **unscrubbed**. The fix for one defect created another, one line away,
+  and only a secret-shaped fixture in a `runs` test caught it.
+
+`pyval.FromPlain` is the widening seam. Its first draft enumerated the
+container spellings by name and a `map[string]int` — `modality_distribution`
+— fell through to `return v`, which `render` then refused, so the entire
+verdict row was **dropped**. A named-spelling list does not close a
+type-shaped hole; the reflection arm does.
+
+One residual stays and is named rather than claimed: `pack.json`'s key
+ORDER. The manifest is a `map[string]any` across ~15 call sites including
+a foreign-file decode, so `FromPlain` sorts it. Escaping and indent are
+now Python's; order is not, nothing hashes those bytes, and the fix is a
+typed manifest.
+
+### MEDIUM — the tokenizer, and a snapshot wearing a differential's name
+
+`knowledge.Tokenize` used `strings.ToLower`. Python's `str.lower()`
+EXPANDS U+0130 to two code points; Go's folds it to one. Measured,
+`_tokenize("DIFFİCULT case")` is `['diffi', 'cult', 'case']` in CPython
+and one token here — a different lesson wins the recall.
+
+`TestTFIDFRankScoredMatchesCPython` never ran `python3`. It is a frozen
+snapshot over an all-ASCII corpus, and it is now named
+`...FrozenSnapshot` with the live differential beside it.
+
+Writing that differential produced the round's sharpest result. Its first
+draft **failed its own anti-vacuity guard**:
+
+> cosine similarity is INVARIANT under renaming a token consistently
+> across query and corpus.
+
+A ranking differential whose only non-ASCII text is the query cannot
+separate on a tokenizer fork however differently it splits. The corpus
+needs a lesson containing the literal post-split text. The guard caught
+the draft; a reviewer would not have.
+
+### LOW — the siblings
+
+r3's rule was "a fork is evidence about the FILE." r4/r5's was "a fix is
+evidence about its SIBLINGS." r7 spent a batch on siblings r6 converted
+around and left, and found the rule has an exception worth writing down:
+
+> `WordStart`/`WordEnd` are safe ONLY at the two **ends** of a pattern, in
+> a boolean predicate. An INTERIOR boundary must be folded into what
+> follows. They are wrong wherever the caller needs match offsets or the
+> matched TEXT.
+
+And a trap inside the exception:
+
+> A trailing `\b` after a NON-word character means the OPPOSITE of
+> `WordEnd`. `\bhttps?://\b` matches `https://x` and NOT a bare
+> `https://` — the position after `/` is a boundary only when a WORD
+> character FOLLOWS.
+
+Hence `urlBounded` (a following word character) beside `wordBounded` (a
+following non-word one). The same shape covers the three static-hint
+branches that end in a space — `ls `, `find `, `jq `. Substituting
+`WordEnd` there inverts the test rather than approximating it.
+
+`loop.blocked`'s `bareAndSep` could take neither, because its caller reads
+OFFSETS: the separator moved into a capture group with two branches, and
+`jsonx`'s `<think\b` folded into `NotWordClassPlus(">")`. Both of the
+fence tests that pinned `<think\b` as a KNOWN DIVERGENCE now agree with
+CPython, so they are gone and their documents are agreement cases.
+
+Two residuals are named instead of fixed, each with the reason in the
+code: `budget.markerRe`'s ASCII `\d` (differs only on a FORGED marker,
+and in the safe direction) and `scrub`'s ASCII `\b` (its consumer is
+`ReplaceAllString`, the stand-ins consume, and writing the boundary back
+through `${1}` fails on adjacent occurrences — the fix is an
+index-walking replacer, not a regex).
+
+### Three tests deleted
+
+* `TestErrorFingerprintPythonParity` — r6 cited its
+  `errorFingerprint("a","b") != errorFingerprint("a","b")` as the worked
+  example of "an assertion that cannot fire", and left it in place.
+* `TestRuntimeGapAdmissionMatchesCPython` — five ASCII strings against
+  hand-written booleans under a name claiming CPython parity, over a
+  corpus that could not show either fork it was guarding.
+* A duplicated summary assertion in `r6_diff_test.go`.
+
+Each leaves a tombstone comment naming what supersedes it. A test that
+cannot fail is worse than no test, because it is counted.
+
+### Falsification
+
+Thirty mutants. **30 killed, 0 survived, 0 unusable** — after two repair
+passes, both of which were the point.
+
+The first run scored 20 killed / 6 survived / 4 unusable, and all ten
+were actionable. The four unusable were the battery's own defects (a
+`sort.Strings(keys)` anchor matching in two arms; a mutant that renamed a
+`case` label into a duplicate; one referencing an undefined helper; one
+dropping a package's last use of an import). The six survivors were six
+real coverage holes, and every one of them is a place where the fix was
+right and nothing read the result: `ParseFloat`'s hex rejection, the
+behavioral-gap REASON string, the file-output window's CAP, the
+suggestion row's bytes, `pack.json`'s bytes, the director log's indent.
+
+Repairing the battery then surfaced two more, which is the argument for
+repairing it rather than deleting the entries:
+
+* `FromPlain`'s explicit `map[string]any` arm had **only single-key
+  fixtures**, so its sort was never exercised — the multi-key cases all
+  went through the reflect arm.
+* `staticHintsRe`'s new cases (`ls src`, `find src -name x`) still could
+  not separate, because the hint only CHANGES the answer when it preempts
+  a later pattern. `ls src ./app` does; `ls src` does not.
+
+Both of those are head 3 again — a corpus that cannot separate — reached
+from a direction no reading of the corpus would have suggested.
+
+Two deterministic-mutation notes, because a nondeterministic mutant is a
+false green with extra steps: "unsort the keys" was replaced with "sort
+them BACKWARDS" (Go's randomised map range would let the first pass about
+half the time), and the mutant that drops an import now adds
+`_ = pytext.Lower` so it compiles.
+
+### State
+
+`gofmt`, `go vet ./...`, the full suite and `go test -race` on the fifteen
+touched packages are green.

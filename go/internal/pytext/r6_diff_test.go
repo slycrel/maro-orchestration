@@ -149,6 +149,13 @@ func TestWordBoundaryStandInsMatchPythonsBoundary(t *testing.T) {
 		"plan for the week", "研究plan for the week", "üplan", "aplan",
 		"the plan", "the plan.", "plan", "", "replan the work",
 		"a plan\u00a0b", "x研究plan",
+		// A quantifier AFTER the closing boundary. WordEnd consumes, so
+		// `plan\b?` and `plan\b{2}` do not mean what they read as — and
+		// every case above puts the boundary at the very end of the
+		// pattern, which is the only position where it is safe. A corpus
+		// that only ever builds the safe shape cannot separate on the
+		// unsafe one (adversarial mission-r7 MEDIUM).
+		"plans", "plan-b", "plan_b", "plan9",
 	}
 	in, err := json.Marshal(corpus)
 	if err != nil {

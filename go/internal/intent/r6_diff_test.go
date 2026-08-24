@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,33 @@ var fileOutputCorpus = []string{
 	// fires and Python's does not.
 	"füsave the summary to notes.md",
 	"研究save the summary to notes.md",
+
+	// THE r7 HIGH, and it is ASCII. Every case above has at least two
+	// words between the keyword and "to", so the {0,40} window was never
+	// asked to match ZERO characters — which is exactly what r6's
+	// `\bsave\b[^.;\n]{0,40}\bto` translation could no longer do once
+	// both `\b`s became consuming stand-ins. A differential that runs
+	// python3, compares real values and passes can still be blind: the
+	// blindness is in the FIXTURES, not the plumbing.
+	"write to out.json",
+	"save to notes.md",
+	"export to data.csv",
+	// One character of window, and two: the boundary either side of the
+	// zero case, so an off-by-one in the {0,38} arithmetic shows.
+	"write x to out.json",
+	"write xy to out.json",
+	// The CAP, either side of it. Python's window is 40 characters between
+	// two ZERO-WIDTH boundaries; the Go composition spends one character on
+	// each consuming stand-in, so the middle quantifier must be 38. Keeping
+	// r6's 40 buys a 42-character window and matches text CPython does not
+	// — and no fixture sat anywhere near the cap, so r7's battery restored
+	// the 40 with every case still passing.
+	"write " + strings.Repeat("x", 37) + " to out.json",
+	"write " + strings.Repeat("x", 38) + " to out.json",
+	"write " + strings.Repeat("x", 39) + " to out.json",
+	"write " + strings.Repeat("x", 40) + " to out.json",
+	"write " + strings.Repeat("x", 41) + " to out.json",
+	"write " + strings.Repeat("x", 42) + " to out.json",
 
 	// The ordinary lanes, ASCII, which already agreed.
 	"write it to a file",

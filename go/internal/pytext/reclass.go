@@ -87,13 +87,56 @@ const NotWordClass = `[^` + WordClassBody + `]`
 // measured, `\bplan\b` matches "研究plan" in Go and NOT in CPython, which
 // flips the classifier's LANE (adversarial mission-r6 MEDIUM).
 //
-// RE2 has no lookaround, so these CONSUME the boundary character. That
-// is correct for a MatchString/FindString predicate and wrong if the
-// caller needs the match OFFSETS or wants two adjacent matches to share
-// one boundary character. Use them only where a boolean answer is what
-// the Python asks for.
+// RE2 has no lookaround, so these CONSUME the boundary character, and
+// that is a much sharper constraint than the first version of this
+// comment said. It listed match OFFSETS and two adjacent matches sharing
+// a boundary. It missed the case that actually broke, and the very first
+// call site was an instance of it (adversarial mission-r7 HIGH):
+//
+//	\b(?:save|write)\b[^.;\n]{0,40}\bto\s+
+//
+// Two of those \b are INTERIOR. Python's are zero-width, so the space in
+// "write to out.json" is available to the {0,40} window. A consuming
+// WordEnd eats it, the window then starts at "to", and the WordStart
+// before "to" has nothing left to consume -- so the whole pattern fails
+// on the most ordinary input it exists to match. Measured:
+// _requires_file_output("write to out.json") is True in CPython and was
+// False here, which routes the message to a different LANE.
+//
+// The rule, stated properly:
+//
+//	WordStart/WordEnd are safe ONLY at the two ENDS of a pattern, in a
+//	boolean predicate. An interior boundary -- one with more pattern
+//	after it -- must be folded into whatever follows, using
+//	NotWordClassPlus. They are also wrong wherever the caller needs
+//	match offsets or the matched TEXT (FindString, FindAllStringIndex,
+//	ReplaceAllString), because the consumed character is part of the
+//	match.
+//
+// Folding an interior boundary into a following {0,n} window looks like
+// this, and there is no shortcut for it -- the arithmetic on n is part
+// of the translation:
+//
+//	Python  \bKEYWORD\b[^.;\n]{0,40}\bto
+//	RE2     WordStart KEYWORD (?:NW|NW [^.;\n]{0,38} NW) to
+//	        where NW = NotWordClassPlus(".;\n")
+//
+// The window must be non-empty (KEYWORD immediately followed by "to" has
+// no boundary between them), its first character carries the boundary
+// after KEYWORD, and its last carries the boundary before "to" -- the
+// same character when the window is one wide.
 const WordStart = `(?:^|` + NotWordClass + `)`
 const WordEnd = `(?:$|` + NotWordClass + `)`
+
+// NotWordClassPlus builds a NEGATED character class excluding Python's
+// `\w` plus whatever extra characters the caller names -- the shape a
+// pattern needs when it must express "this position is a word boundary"
+// INSIDE a window it is also consuming.
+//
+// See WordStart/WordEnd's doc for why that case cannot use them.
+func NotWordClassPlus(extra string) string {
+	return `[^` + WordClassBody + escapeInClass(extra) + `]`
+}
 
 // NotClass builds a NEGATED character class that excludes Python's `\s`
 // plus whatever extra characters the caller names, which is the shape

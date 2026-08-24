@@ -30,6 +30,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/closure"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/planner"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
@@ -711,8 +712,9 @@ stepLoop:
 		// 2026-08-22, Skeptic: every OTHER early return got a Finalize;
 		// this one, directly above the closure block, had none).
 		if runDir != "" {
-			_ = runs.AppendVerdictRow(runDir, map[string]any{
-				"skipped": "outcome_record_failed", "skip_detail": err.Error()})
+			_ = runs.AppendVerdictRow(runDir, loopID, pyval.Obj{
+				{Key: "skipped", Val: "outcome_record_failed"},
+				{Key: "skip_detail", Val: err.Error()}})
 			_ = runs.Finalize(runDir, res.Status)
 		}
 		return res, fmt.Errorf("run finished (%s) but outcome recording failed: %w",
@@ -748,8 +750,8 @@ stepLoop:
 				WorkspacePath: res.ProjectDir,
 				LoopID:        loopID,
 				DryRun:        opts.DryRun,
-				PersistRow: func(row map[string]any) {
-					if perr := runs.AppendVerdictRow(runDir, row); perr != nil {
+				PersistRow: func(row pyval.Obj) {
+					if perr := runs.AppendVerdictRow(runDir, loopID, row); perr != nil {
 						res.Warnings = append(res.Warnings,
 							"closure verdict row write failed: "+perr.Error())
 					}
@@ -799,9 +801,9 @@ stepLoop:
 				// recreates the round's headline bug (row reads unjudged
 				// forever) behind a rarer trigger — it must be
 				// discoverable off-terminal (adversarial routing r3).
-				if merr := runs.AppendVerdictRow(runDir, map[string]any{
-					"skipped":     "outcome_row_stamp_failed",
-					"skip_detail": budget.Clip(soErr.Error(), 300)}); merr != nil {
+				if merr := runs.AppendVerdictRow(runDir, loopID, pyval.Obj{
+					{Key: "skipped", Val: "outcome_row_stamp_failed"},
+					{Key: "skip_detail", Val: budget.Clip(soErr.Error(), 300)}}); merr != nil {
 					// The fallback channel failing too must be NAMED —
 					// otherwise the doubly-failed case silently degrades
 					// to pre-marker behavior (adversarial routing r5).
@@ -833,8 +835,8 @@ stepLoop:
 			if execMode && !ranAnyStep {
 				reason = "no_steps_ran"
 			}
-			if perr := runs.AppendVerdictRow(runDir, map[string]any{
-				"skipped": reason}); perr != nil {
+			if perr := runs.AppendVerdictRow(runDir, loopID, pyval.Obj{
+				{Key: "skipped", Val: reason}}); perr != nil {
 				res.Warnings = append(res.Warnings,
 					"closure verdict row write failed: "+perr.Error())
 			}

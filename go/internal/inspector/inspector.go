@@ -425,8 +425,12 @@ func AssessGoalAlignment(ctx context.Context, adapter llm.Adapter, goal, resultS
 	// reach (adversarial mission-r6 MEDIUM).
 	//
 	// SafeFloat is float()-parity plus this port's standing non-finite
-	// stance (pyjson.RefuseNonFinite's), so every FINITE input now agrees
-	// with CPython exactly. The non-finite case is a NAMED divergence:
+	// stance (pyjson.RefuseNonFinite's). "Every FINITE input now agrees
+	// with CPython exactly" is what this comment said for one round, and
+	// mission-r7 falsified it with "0x1p-2" — finite, accepted by
+	// ParseFloat, refused by float(). The hex rejection now lives in
+	// pyval.toFloat, so the claim holds, but it is a MEASUREMENT and the
+	// next round should re-run it rather than read it. The non-finite case is a NAMED divergence:
 	// CPython stores NaN/Infinity in inspection-log.jsonl and its own
 	// reader accepts them, Go stores the 0.5 default. Owed to the Python
 	// side, where a safe_float here would make both runtimes agree — and
@@ -832,11 +836,39 @@ func dedupeStrings(in []string) []string {
 // read (adversarial mission-r6 MEDIUM).
 func round3(f float64) float64 { return pyval.Round(f, 3) }
 
+// reportRow is InspectionReport as json.dumps writes it: to_dict()'s key
+// order, `", "`/`": "` separators, no HTML escaping, ensure_ascii on.
+// json.Marshal of the struct gets the ORDER right (declaration order
+// matches to_dict) and the other three wrong — and quality_distribution
+// is a Go map, whose "good"/"fair"/"poor" came back sorted as
+// fair/good/poor. Both runtimes read inspection-log.jsonl (adversarial
+// mission-r7 HIGH).
+func reportRow(report InspectionReport) pyval.Obj {
+	d := report.QualityDistribution
+	return pyval.Obj{
+		{Key: "run_id", Val: report.RunID},
+		{Key: "inspected_sessions", Val: report.InspectedSessions},
+		{Key: "quality_distribution", Val: pyval.Obj{
+			{Key: "good", Val: d["good"]},
+			{Key: "fair", Val: d["fair"]},
+			{Key: "poor", Val: d["poor"]},
+		}},
+		{Key: "top_friction_signals", Val: pyval.FromPlain(report.TopFrictionSignals)},
+		{Key: "alignment_score_avg", Val: report.AlignmentScoreAvg},
+		{Key: "patterns", Val: pyval.FromPlain(report.Patterns)},
+		{Key: "suggestions", Val: pyval.FromPlain(report.Suggestions)},
+		{Key: "threshold_breaches", Val: pyval.FromPlain(report.ThresholdBreaches)},
+		{Key: "elapsed_ms", Val: report.ElapsedMS},
+		{Key: "generated_at", Val: report.GeneratedAt},
+	}
+}
+
 func saveReport(workspaceDir string, report InspectionReport) error {
-	raw, err := json.Marshal(report)
+	line, err := pyval.DumpsCompactPy(reportRow(report))
 	if err != nil {
 		return err
 	}
+	raw := []byte(line)
 	path := inspectionLogPath(workspaceDir)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -856,22 +888,25 @@ func saveSuggestions(workspaceDir string, suggestions []string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	var lines []string
 	for i, text := range suggestions {
-		row := map[string]any{
-			"suggestion_id":     fmt.Sprintf("insp-%s-%02d", record.NewID()[:6], i),
-			"category":          "inspection_finding",
-			"target":            "all",
-			"suggestion":        text,
-			"failure_pattern":   "inspector cross-session analysis",
-			"confidence":        0.7,
-			"outcomes_analyzed": 0,
-			"generated_at":      now,
-			"applied":           false,
+		row := pyval.Obj{
+			{Key: "suggestion_id", Val: fmt.Sprintf("insp-%s-%02d", record.NewID()[:6], i)},
+			{Key: "category", Val: "inspection_finding"},
+			{Key: "target", Val: "all"},
+			{Key: "suggestion", Val: text},
+			{Key: "failure_pattern", Val: "inspector cross-session analysis"},
+			{Key: "confidence", Val: 0.7},
+			{Key: "outcomes_analyzed", Val: 0},
+			{Key: "generated_at", Val: now},
+			{Key: "applied", Val: false},
 		}
-		raw, err := json.Marshal(row)
+		// The evolver reads this file in BOTH runtimes; a suggestion
+		// containing "->" or a non-ASCII character was written here in a
+		// spelling no CPython writer produces (mission-r7 HIGH).
+		line, err := pyval.DumpsCompactPy(row)
 		if err != nil {
 			return err
 		}
-		lines = append(lines, string(raw))
+		lines = append(lines, line)
 	}
 	// The dir must exist before Locked can open the lock file beside p.
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

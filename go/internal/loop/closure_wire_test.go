@@ -12,6 +12,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/recall"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // TestRunWritesRunMetadataAndFeedsNextRecall pins the closure tranche's
@@ -97,7 +99,9 @@ func TestRunClosureStampsGoalAchieved(t *testing.T) {
 		t.Fatalf("verdict stamp: %v", meta)
 	}
 	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
-	if rerr != nil || !strings.Contains(string(rows), `"checks_run":1`) {
+	// `": "`, not `":"` — this file is written with json.dumps' DEFAULT
+	// separators, which carry a space. The literal is the assertion.
+	if rerr != nil || !strings.Contains(string(rows), `"checks_run": 1`) {
 		t.Fatalf("durable verdict row: %v %s", rerr, rows)
 	}
 	events, _ := os.ReadFile(filepath.Join(ws, "memory", "captains_log.jsonl"))
@@ -207,7 +211,7 @@ func TestRunToolLessLaneWritesNamedSkipRow(t *testing.T) {
 		t.Fatalf("tool-less lane ran closure: %+v", res.Closure)
 	}
 	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
-	if rerr != nil || !strings.Contains(string(rows), `"skipped":"tool_less_lane"`) {
+	if rerr != nil || !strings.Contains(string(rows), `"skipped": "tool_less_lane"`) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
 }
@@ -273,7 +277,7 @@ func TestRunExecNoStepsRanWritesNamedSkipRow(t *testing.T) {
 		t.Fatalf("expected stuck run without closure: %s %+v", res.Status, res.Closure)
 	}
 	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
-	if rerr != nil || !strings.Contains(string(rows), `"skipped":"no_steps_ran"`) {
+	if rerr != nil || !strings.Contains(string(rows), `"skipped": "no_steps_ran"`) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
 }
@@ -354,7 +358,8 @@ func TestAppendVerdictRowFailsOnPoisonedPath(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(badRun, "build", "closure_verdicts.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := runs.AppendVerdictRow(badRun, map[string]any{"skipped": "outcome_row_stamp_failed"}); err == nil {
+	if err := runs.AppendVerdictRow(badRun, "loop-poisoned",
+		pyval.Obj{{Key: "skipped", Val: "outcome_row_stamp_failed"}}); err == nil {
 		t.Fatalf("poisoned verdicts path must error — the loop's marker-failure warning depends on it")
 	}
 }

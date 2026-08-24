@@ -110,9 +110,6 @@ func TestVerdictGapsAndSummaryMatchCPython(t *testing.T) {
 			t.Errorf("the coerced summary is missing from the stored one\n"+
 				"  in %s\n  go %q\n  py %q", vd, v.Summary, want[i].Summary)
 		}
-		if want[i].Summary != "" && !strings.Contains(v.Summary, want[i].Summary) {
-			t.Errorf("summary coercion diverges for %s", vd)
-		}
 		if len(want[i].Gaps) == 0 {
 			emptyGaps++
 		} else {

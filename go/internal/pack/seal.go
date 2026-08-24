@@ -4,7 +4,6 @@
 package pack
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -103,7 +102,7 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 		"review_payload_sha256":  payloadSHA,
 	}
 
-	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	manifestJSON, err := manifestBytes(manifest)
 	if err != nil {
 		return nil, err
 	}

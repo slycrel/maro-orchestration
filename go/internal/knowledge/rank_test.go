@@ -38,6 +38,19 @@ func TestTokenizeMatchesCPython(t *testing.T) {
 			[]string{"subprocess", "adapter", "cli", "backend", "stdin"}},
 		{"the and of to a is", nil},
 		{"", nil},
+		// str.lower() EXPANDS U+0130 to i + U+0307 and Go's ToLower folds
+		// it to a single 'i'. The combining mark is not [a-z0-9], so
+		// CPython SPLITS the word and Go does not. The whole corpus above
+		// is ASCII, where the two agree by construction — a differential
+		// whose fixtures cannot separate reports agreement and tests
+		// nothing (adversarial mission-r7 MEDIUM).
+		{"DIFFİCULT case", []string{"diffi", "cult", "case"}},
+		// Non-ASCII letters are stripped outright by the [^a-z0-9]+
+		// substitution in BOTH runtimes — measured, not assumed: CPython
+		// _tokenize("ΣΟΦΟΣ answers") is ["answers"]. Kept as the control
+		// for the case above: U+0130 is special because it expands into
+		// an ASCII letter plus a mark, not because it is non-ASCII.
+		{"ΣΟΦΟΣ answers", []string{"answers"}},
 		// Hyphen split, apostrophe split, len<=2 drop ("re", "x9", "ab"),
 		// stopword drop, and "before" NOT being a stopword.
 		{"Re-Verify: the workspace's PATH (before) memory-store writes!! x9 ab abc",
@@ -50,11 +63,17 @@ func TestTokenizeMatchesCPython(t *testing.T) {
 	}
 }
 
-// TestTFIDFRankScoredMatchesCPython pins ordering AND scores against
-// CPython _tfidf_rank_scored output on the same corpus. The tolerance
-// absorbs summation-order differences (Go map iteration vs dict order)
-// — anything past 1e-9 is a formula divergence, not float noise.
-func TestTFIDFRankScoredMatchesCPython(t *testing.T) {
+// TestTFIDFRankScoredFrozenSnapshot is a FROZEN SNAPSHOT, and the name
+// now says so. It carried "MatchesCPython" while never running python3,
+// over an all-ASCII corpus that could not separate on the tokenizer fork
+// r7 found — a snapshot wearing a differential's name (adversarial
+// mission-r7 MEDIUM). r7_diff_test.go's ...Live is the differential; this
+// stays because a cheap in-process pin on the original five-lesson corpus
+// still catches a formula change without shelling out.
+//
+// The tolerance absorbs summation-order differences (Go map iteration vs
+// dict order) — anything past 1e-9 is a formula divergence, not noise.
+func TestTFIDFRankScoredFrozenSnapshot(t *testing.T) {
 	type want struct {
 		id    string
 		score float64

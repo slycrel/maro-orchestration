@@ -299,7 +299,7 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 	reviewMD := buildReviewMD(manifest, sections)
 
 	packPath := filepath.Join(out, opts.Name+ArchiveSuffix)
-	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	manifestJSON, err := manifestBytes(manifest)
 	if err != nil {
 		return nil, err
 	}

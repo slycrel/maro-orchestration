@@ -15,6 +15,7 @@ import (
 	"sort"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Patterns ported one-for-one from secret_scrub._SECRET_RES; keep the two
@@ -114,13 +115,24 @@ func BuildIdentifiers(home, hostname string, denylist []string) *Identifiers {
 			token string
 		}{regexp.MustCompile(regexp.QuoteMeta(p.needle)), p.token})
 	}
-	// Named residual (adversarial round 2026-08-22): RE2's \b is
-	// ASCII-only where Python's re is unicode-aware, so a needle with
-	// non-ASCII letters can bound differently across runtimes — a
-	// potential export-side leak for non-ASCII usernames/hostnames. The
-	// identifiers on this box are ASCII, and the human review gate is the
-	// real backstop (package doc); revisit if a non-ASCII identifier ever
-	// enters the denylist.
+	// Named residual, and r7 re-examined it rather than re-asserting it.
+	// RE2's `\b` is ASCII-only where Python's re is Unicode-aware, so a
+	// needle with non-ASCII letters bounds differently across runtimes —
+	// a potential export-side leak for a non-ASCII username or hostname.
+	//
+	// WHY IT IS NOT FIXED HERE, which the old note did not say: these
+	// patterns are consumed by ReplaceAllString (Apply, below), and
+	// pytext's WordStart/WordEnd CONSUME. Capturing the boundary
+	// characters and writing them back through `${1}`/`${3}` fails on
+	// ADJACENT occurrences — "clawd clawd" shares one space, the first
+	// replacement eats it, and the second needle no longer has a leading
+	// boundary. Python's zero-width \b has no such problem, and a
+	// replace-until-stable loop is a THIRD behaviour, not a port.
+	//
+	// The identifiers on this box are ASCII, and the mandatory human
+	// review gate is the real backstop (package doc). Revisit if a
+	// non-ASCII identifier ever enters the denylist — the fix is an
+	// index-walking replacer, not a regex.
 	for _, p := range bounded {
 		id.patterns = append(id.patterns, struct {
 			rx    *regexp.Regexp
@@ -156,6 +168,23 @@ func Walk(v any, fn func(string) string) any {
 		out := make(map[string]any, len(t))
 		for k, e := range t {
 			out[fn(k)] = Walk(e, fn)
+		}
+		return out
+	case pyval.Obj:
+		// The ordered spellings are walked too. Without these, a row
+		// built as an Obj so it would keep Python's key order fell
+		// through to `default` and was returned UNSCRUBBED — the
+		// durable-sink hole closure r1 found, reopened by the very
+		// change that fixed the key order (adversarial mission-r7 HIGH).
+		out := make(pyval.Obj, len(t))
+		for i, f := range t {
+			out[i] = pyval.Field{Key: fn(f.Key), Val: Walk(f.Val, fn)}
+		}
+		return out
+	case pyval.List:
+		out := make(pyval.List, len(t))
+		for i, e := range t {
+			out[i] = Walk(e, fn)
 		}
 		return out
 	default:

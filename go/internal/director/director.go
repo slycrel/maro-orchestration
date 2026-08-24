@@ -34,7 +34,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -49,6 +48,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 	"github.com/slycrel/maro-orchestration/go/internal/workers"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // maxReviewRounds: the Director reviews each worker output up to this
@@ -883,21 +884,30 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 	for _, w := range res.Warnings {
 		warns = append(warns, scrub.Secrets(w))
 	}
-	payload := map[string]any{
-		"director_id":      res.DirectorID,
-		"directive":        scrub.Secrets(res.Directive),
-		"spec":             scrub.Secrets(res.Spec),
-		"status":           res.Status,
-		"elapsed_ms":       res.Elapsed.Milliseconds(),
-		"tickets":          tickets,
-		"worker_results":   wrows,
-		"review_decisions": drows,
-		"warnings":         warns,
+	payload := pyval.Obj{
+		{Key: "director_id", Val: res.DirectorID},
+		{Key: "directive", Val: scrub.Secrets(res.Directive)},
+		{Key: "spec", Val: scrub.Secrets(res.Spec)},
+		{Key: "status", Val: res.Status},
+		{Key: "elapsed_ms", Val: res.Elapsed.Milliseconds()},
+		{Key: "tickets", Val: pyval.FromPlain(tickets)},
+		{Key: "worker_results", Val: pyval.FromPlain(wrows)},
+		{Key: "review_decisions", Val: pyval.FromPlain(drows)},
+		{Key: "warnings", Val: pyval.FromPlain(warns)},
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
+	// json.dumps(payload, indent=2), not json.MarshalIndent: the
+	// directive, the spec and every worker result are prose, so `>` and
+	// non-ASCII are routine, and MarshalIndent also sorted the keys —
+	// three divergences in one call on a durable artifact (adversarial
+	// mission-r7 HIGH). Python persists no director log at all, so there
+	// is no CPython writer to match; the rule is that a Go-stricter
+	// artifact still gets written in the port's ONE JSON spelling, or
+	// two spellings live in one workspace.
+	text, err := pyval.DumpsIndent2(payload)
 	if err != nil {
 		return "", err
 	}
+	data := []byte(text)
 	path := filepath.Join(dir, fmt.Sprintf("director-%s-log.json", res.DirectorID))
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {

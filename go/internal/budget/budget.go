@@ -233,6 +233,15 @@ var Registry = []Budget{
 // with an unbounded \d+ and a bare suffix match, any text merely ENDING
 // in a marker-shaped string passed through every cap unbounded
 // (adversarial round on this port, all four lenses, 2026-08-22).
+// `\d`, not pytext.DigitClass, and that is deliberate rather than
+// overlooked. Clip writes these digits itself with %d, so a GENUINE
+// marker is always ASCII and the two classes agree on every marker this
+// code can produce. They differ only on a FORGED one — "… [truncated:
+// first ١٢ of ٣٤ characters]" — which CPython's Unicode `\d` would strip
+// and this leaves alone. That is the safe direction (content survives),
+// and StripMarker's callers must gate on ClipInfo's did-we-actually-cut
+// bit anyway, so neither runtime strips it in practice (adversarial
+// mission-r7 LOW: named, not silent).
 var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]$`)
 
 // StripMarker removes Clip's own marker from the true END of s — the

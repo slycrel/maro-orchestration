@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // stopWords is knowledge_web._STOP_WORDS verbatim.
@@ -34,9 +36,18 @@ var nonAlnumRe = regexp.MustCompile(`[^a-z0-9]+`)
 // Tokenize ports _tokenize: lowercase, split on non-alphanumeric runs,
 // drop stop words and tokens of length <= 2. Post-substitution tokens
 // are pure ASCII [a-z0-9], so byte length == Python's rune length.
+//
+// pytext.Lower, not strings.ToLower: str.lower() EXPANDS U+0130 to two
+// runes (i + U+0307) and Go's folds it to one. The combining mark is not
+// [a-z0-9], so the regex below turns it into a SPLIT — measured,
+// knowledge_web._tokenize("DIFFİCULT case") is ['diffi', 'cult', 'case']
+// and this returned ["difficult", "case"]. Different tokens are
+// different TF-IDF vectors, so the same query ranked lessons differently
+// in the two runtimes off one dotted capital (adversarial mission-r7
+// MEDIUM).
 func Tokenize(text string) []string {
 	var out []string
-	for _, t := range strings.Fields(nonAlnumRe.ReplaceAllString(strings.ToLower(text), " ")) {
+	for _, t := range strings.Fields(nonAlnumRe.ReplaceAllString(pytext.Lower(text), " ")) {
 		if len(t) > 2 && !stopWords[t] {
 			out = append(out, t)
 		}

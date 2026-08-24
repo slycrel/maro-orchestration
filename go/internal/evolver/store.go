@@ -572,22 +572,29 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 // MEDIUM). Two readings of one dict is the defect; there is now one.
 func changeLogAppend(workspaceDir string, f applyFields, beforeState map[string]any) {
 	sum := sha256.Sum256([]byte(f.text))
-	entry := map[string]any{
-		"ts":              nowISO(),
-		"module":          "evolver",
-		"action":          "_apply_suggestion_action",
-		"category":        f.category,
-		"suggestion_id":   f.suggestionID,
-		"target":          f.target,
-		"confidence":      f.confidence,
-		"suggestion_text": clipRunes(f.text, 500),
-		"suggestion_hash": hex.EncodeToString(sum[:])[:12],
-		"before_state":    beforeState,
+	entry := pyval.Obj{
+		{Key: "ts", Val: nowISO()},
+		{Key: "module", Val: "evolver"},
+		{Key: "action", Val: "_apply_suggestion_action"},
+		{Key: "category", Val: f.category},
+		{Key: "suggestion_id", Val: f.suggestionID},
+		{Key: "target", Val: f.target},
+		{Key: "confidence", Val: f.confidence},
+		{Key: "suggestion_text", Val: clipRunes(f.text, 500)},
+		{Key: "suggestion_hash", Val: hex.EncodeToString(sum[:])[:12]},
+		// before_state is a Go map and comes out key-sorted; Python's
+		// order is its own dict's. Nothing joins on it — it is read as a
+		// whole for recovery — so the loss is named, not chased.
+		{Key: "before_state", Val: pyval.FromPlain(beforeState)},
 	}
-	raw, err := json.Marshal(entry)
+	// json.dumps, not json.Marshal: suggestion_text is LLM prose and
+	// carries "->" and non-ASCII routinely, and change_log.jsonl is read
+	// by both runtimes (adversarial mission-r7 HIGH).
+	line, err := pyval.DumpsCompactPy(entry)
 	if err != nil {
 		return
 	}
+	raw := []byte(line)
 	path := changeLogPath(workspaceDir)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -1310,7 +1317,9 @@ type applyFields struct {
 // (a safe_float makes both runtimes agree); refusing to crash is not a
 // divergence worth porting backwards. For every value float() ACCEPTS,
 // including the numeric strings a bare .(float64) used to zero, SafeFloat
-// agrees with it exactly.
+// agrees with it exactly — a claim mission-r7 falsified once ("0x1p-2",
+// which ParseFloat took and float() refuses) and which holds again now
+// that toFloat rejects hex. Re-measure it; do not read it.
 func readApplyFields(d map[string]any) applyFields {
 	str := func(key, def string) string {
 		s, ok := pyval.GetOr(d, key, def).(string)

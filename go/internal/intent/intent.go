@@ -111,9 +111,18 @@ Respond ONLY with a JSON object:
 // forces lane="agenda" ("Names a file deliverable") and Go left it "now",
 // which is a different execution path, not a different field
 // (adversarial mission-r6 MEDIUM).
+//
+// The middle arm's two INTERIOR boundaries are folded into the {0,40}
+// window with NotWordClassPlus, because a consuming WordEnd there ate the
+// window's first character and broke "write to out.json" outright
+// (adversarial mission-r7 HIGH -- r6's own fix, on its most ordinary
+// input). See pytext.WordStart's doc for the translation.
+var fileOutWindow = pytext.NotWordClassPlus(".;\n")
+
 var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|` +
-	pytext.WordStart + `(?:save|write|output|export)` + pytext.WordEnd +
-	`[^.;` + "\n" + `]{0,40}` + pytext.WordStart + `to` + pytext.SpaceClass +
+	pytext.WordStart + `(?:save|write|output|export)` +
+	`(?:` + fileOutWindow + `|` + fileOutWindow + `[^.;` + "\n" + `]{0,38}` +
+	fileOutWindow + `)` + `to` + pytext.SpaceClass +
 	`+\S*[` + pytext.WordClassBody + `-]+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
 	pytext.WordStart + `to` + pytext.SpaceClass + `+(?:a` + pytext.SpaceClass +
 	`+)?file` + pytext.WordEnd + `|` +
@@ -261,8 +270,13 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 // here (adversarial mission-r6 MEDIUM). The `\s` inside "how much" etc.
 // is a literal space in the Python source, so it stays a literal space.
 var nowPatterns = []*regexp.Regexp{
+	// The boundary after the keyword is INTERIOR -- `.{0,60}\?` follows it
+	// -- so it is folded into the window rather than consumed. A consuming
+	// WordEnd ate the `?` and "what?" stopped matching (mission-r7 HIGH).
+	// The window is optional because an EMPTY one leaves `?` immediately
+	// after the keyword, which is itself a word boundary.
 	regexp.MustCompile(pytext.WordStart + `(what|who|when|where|how much|how many)` +
-		pytext.WordEnd + `.{0,60}\?`),
+		`(?:` + pytext.NotWordClassPlus("\n") + `.{0,59})?\?`),
 	regexp.MustCompile(pytext.WordStart +
 		`(write a? (haiku|poem|joke|summary|headline|tweet|caption))` + pytext.WordEnd),
 	regexp.MustCompile(pytext.WordStart + `(translate|convert|format|calculate)` + pytext.WordEnd),

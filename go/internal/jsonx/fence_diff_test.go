@@ -53,6 +53,19 @@ var fenceCorpus = []struct {
 	name string
 	text string
 }{
+	// The two documents that used to be KNOWN-DIVERGENCE pins, now
+	// agreement cases. `<think\b` was Go's ASCII `\b` for three rounds:
+	// the first document strips here and not in CPython (Go loses a
+	// hypothetical, harmless), the second — where (?i) folds `k` to
+	// U+212A KELVIN SIGN, which only Python's `\w` counts as a word
+	// character — had GO carving the model's musing and CPython carving
+	// the real answer. That is the destructive direction, and it is
+	// closed (adversarial mission-r7 LOW).
+	{"a non-ASCII letter after the tag name",
+		"<think\u00e9>musing {\"decoy\":1}</think>\n{\"real\":2}"},
+	{"a folded non-ASCII letter inside the tag name",
+		"<thin\u212a>musing {\"decoy\":1}</think>\n{\"real\":2}"},
+
 	// The plain shapes the strip exists for.
 	{"a whole-message fence", "```json\n[\"a\", \"b\"]\n```"},
 	{"a fence with no language tag", "```\n[\"a\", \"b\"]\n```"},
@@ -224,81 +237,13 @@ func TestTheFenceCorpusReachesBothLanes(t *testing.T) {
 	}
 }
 
-// KNOWN DIVERGENCE, measured and named rather than silently carried. `\b`
-// is ASCII-only in RE2 and Unicode-aware in Python's re, so a letter
-// outside ASCII immediately after the tag name splits the two: CPython
-// finds no word boundary, matches NEITHER think pattern, leaves the trace
-// in place and carves the hypothetical; Go finds a boundary and strips.
-//
-// Not patched, deliberately. Expressing Python's `\w` needs a word class,
-// and Go ships Unicode 15.0 against CPython's 16.0 here — the same skew
-// pytext.digitSupplementBody exists for. A class that is NEARLY Python's
-// would read as fixed while still forking, which is the failure mode this
-// port keeps finding. See the residual note in jsonx.go.
-//
-// The test asserts the CURRENT divergence in both directions. It fails if
-// Go starts matching CPython, which is the signal to delete it and fold
-// the case into fenceCorpus.
-func TestANonASCIILetterAfterTheTagNameDivergesFromCPython(t *testing.T) {
-	const doc = "<think\u00e9>musing {\"decoy\":1}</think>\n{\"real\":2}"
-
-	want := pyFences(t, []string{doc})
-	if want[0][3] == nil {
-		t.Fatal("CPython found no object at all; the divergence has moved")
-	}
-	py := *want[0][3]
-	if py != `{"decoy":1}` {
-		t.Fatalf("CPython no longer carves the hypothetical (%q) — if it now "+
-			"strips the trace, delete this test and fold the case into fenceCorpus", py)
-	}
-
-	got, err := extract(doc, '{', '}')
-	if err != nil {
-		t.Fatalf("Go failed to carve anything: %v", err)
-	}
-	if got != `{"real":2}` {
-		t.Fatalf("Go no longer strips the trace (%q) — if it now matches CPython, "+
-			"delete this test and fold the case into fenceCorpus", got)
-	}
-}
-
-// The MIRROR of the test above, and the direction that actually costs
-// something. The one above puts the non-ASCII letter AFTER the tag name
-// (Go strips a trace Python keeps — Go loses a hypothetical, which is
-// harmless). This one reaches a non-ASCII character INSIDE the name
-// through case folding: both engines fold `k` to U+212A KELVIN SIGN
-// under (?i), and only Python's Unicode-aware `\b` treats U+212A as a
-// word character.
-//
-// Here GO carves the model's hypothetical and CPython carves the real
-// answer — the destructive shape the `\s` fix (r2 MEDIUM) was about,
-// and the direction the residual note omitted for two rounds
-// (adversarial mission-r4 LOW). A residual stated in one direction reads
-// as fully understood.
-func TestAFoldedNonASCIILetterInsideTheTagNameDivergesDestructively(t *testing.T) {
-	const doc = "<thin\u212a>musing {\"decoy\":1}</think>\n{\"real\":2}"
-
-	want := pyFences(t, []string{doc})
-	if want[0][3] == nil {
-		t.Fatal("CPython found no object at all; the divergence has moved")
-	}
-	py := *want[0][3]
-	if py != `{"real":2}` {
-		t.Fatalf("CPython no longer strips the trace (%q) — if it now keeps it, "+
-			"delete this test and fold the case into fenceCorpus", py)
-	}
-
-	got, err := extract(doc, '{', '}')
-	if err != nil {
-		t.Fatalf("Go failed to carve anything: %v", err)
-	}
-	if got != `{"decoy":1}` {
-		t.Fatalf("Go no longer carves the hypothetical (%q) — if a measured "+
-			"Word class has landed and the two now agree, delete this test, "+
-			"fold the case into fenceCorpus, and strike the residual note in "+
-			"jsonx.go", got)
-	}
-}
+// The two KNOWN-DIVERGENCE pins that stood here — a non-ASCII letter
+// after the tag name, and U+212A folded INSIDE it — are gone because the
+// divergence is gone. r7 rebuilt `<think\b` out of pytext, both engines
+// now agree on both documents, and the tests' own instructions said so:
+// each failed with "if it now matches CPython, delete this test and fold
+// the case into fenceCorpus". Both cases are in fenceCorpus below, where
+// they are now checked as AGREEMENT rather than asserted as a fork.
 
 // jsonx.Object and jsonx.StringArray decode the carved span, and for
 // three rounds they did it with encoding/json while ObjectOrdered used

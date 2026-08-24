@@ -182,8 +182,22 @@ var (
 	// skew pytext.digitSupplementBody exists to paper over. A class that
 	// is *nearly* Python's would read as fixed while still forking, so
 	// this stays written down until a measured Word class exists.
-	thinkRe     = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think` + pytext.SpaceClass + `*>`)
-	thinkOpenRe = regexp.MustCompile(`(?i)<think\b[^>]*>`)
+	// `<think\b[^>]*>` — the boundary is INTERIOR (there is pattern after
+	// it), so it cannot be WordEnd, which consumes. Folded into what
+	// follows instead: either the tag closes immediately (`>` is itself a
+	// non-word character, so the boundary holds) or the next character is
+	// a non-word one that is not `>`. thinkBody is that fold.
+	//
+	// The residual the old comment named is real but is NOT a reason to
+	// leave Go's ASCII `\b` in place: pytext.WordClass is measured against
+	// CPython (0 false positives, 5004 false negatives, all astral or
+	// newly-added ranges), and an ASCII-only boundary forks on every Latin
+	// accent — "<thinké>" strips here and does not in CPython. Trading a
+	// 5004-code-point skew for a whole-Latin-1 skew was the wrong side of
+	// the trade (adversarial mission-r7 LOW).
+	thinkBody   = `(?:` + pytext.NotWordClassPlus(">") + `[^>]*)?>`
+	thinkRe     = regexp.MustCompile(`(?is)<think` + thinkBody + `.*?</think` + pytext.SpaceClass + `*>`)
+	thinkOpenRe = regexp.MustCompile(`(?i)<think` + thinkBody)
 	// EQUIVALENT-MUTANT NOTE. Making `(.*?)` greedy survives the whole
 	// battery, and it is genuinely equivalent HERE but not in general:
 	// over 3810 generated fence documents the two spellings never differ

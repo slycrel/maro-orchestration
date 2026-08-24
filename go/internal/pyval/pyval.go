@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +81,129 @@ func (o *Obj) Set(key string, val any) {
 		}
 	}
 	*o = append(*o, Field{Key: key, Val: val})
+}
+
+// Pop removes a key, reporting whether it was there — Python's
+// `d.pop(k, None)`. The verdict tuple's "set or pop, never merge"
+// doctrine needs the second half, and a Set(key, nil) would write a JSON
+// null instead, which reads as a judged false to a sloppy consumer.
+func (o *Obj) Pop(key string) bool {
+	for i := range *o {
+		if (*o)[i].Key == key {
+			*o = append((*o)[:i], (*o)[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// FromPlain converts the map[string]any / []any tree json.Unmarshal
+// produces into the Obj/List tree the Dumps family renders, so a caller
+// holding a decoded document can re-emit it Python's way without
+// rebuilding it field by field.
+//
+// Keys come out SORTED, and that is a named LOSS, not a choice: a Go map
+// has no insertion order to preserve, so the order Python would have
+// written is already gone by the time a value reaches here. Sorted at
+// least makes the output deterministic — encoding/json sorts too, so
+// this changes nothing about key order and everything about the other
+// two forks (HTML escaping and ensure_ascii). A caller that needs
+// Python's insertion order must build the Obj itself; the two pack.json
+// writers are the sites where this loss is live and they say so.
+//
+// Floats are NOT round-tripped through encoding/json on the way, which
+// is the whole reason this is a walker and not a marshal-and-reparse:
+// json.Marshal(3.0) is "3", so the reparse would hand back an int and
+// json.dumps(3.0) is "3.0". The leaves are passed through untouched and
+// pyjson renders them.
+func FromPlain(v any) any {
+	switch t := v.(type) {
+	case Obj:
+		out := make(Obj, len(t))
+		for i, f := range t {
+			out[i] = Field{Key: f.Key, Val: FromPlain(f.Val)}
+		}
+		return out
+	case List:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = FromPlain(e)
+		}
+		return out
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make(Obj, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, Field{Key: k, Val: FromPlain(t[k])})
+		}
+		return out
+	case []any:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = FromPlain(e)
+		}
+		return out
+	case []map[string]any:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = FromPlain(e)
+		}
+		return out
+	case []string:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = e
+		}
+		return out
+	}
+	// Reflection for every OTHER container spelling. The explicit cases
+	// above are the common ones and are faster; this arm exists because
+	// enumerating spellings is exactly the mistake that made this
+	// necessary — a modality_distribution built as map[string]int is not
+	// map[string]any, fell straight through to `return v`, and render
+	// then REFUSED it as "must be built as Obj/List". The refusal is the
+	// good outcome (a silent sorted-unspaced nest inside a Python-shaped
+	// document is the bad one), but the row was dropped, so a whole
+	// closure verdict went unpersisted. Named-spelling lists do not
+	// close a type-shaped hole.
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			break // json.dumps has no key for it either; let render refuse
+		}
+		keys := make([]string, 0, rv.Len())
+		for _, k := range rv.MapKeys() {
+			keys = append(keys, k.String())
+		}
+		sort.Strings(keys)
+		out := make(Obj, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, Field{
+				Key: k,
+				Val: FromPlain(rv.MapIndex(reflect.ValueOf(k).Convert(rv.Type().Key())).Interface()),
+			})
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		// []byte is left alone: encoding/json base64s it and json.dumps
+		// cannot serialise bytes at all, so there is no shared spelling
+		// to converge on and turning it into a list of ints would invent
+		// a third one.
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			break
+		}
+		out := make(List, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out[i] = FromPlain(rv.Index(i).Interface())
+		}
+		return out
+	}
+	return v
 }
 
 // GetString reads a string field, defaulting to "" — Python's
@@ -344,7 +469,8 @@ func LoadsOrdered(text string) (any, error) {
 
 // Plain flattens a LoadsOrdered tree into the shape `json.Unmarshal`
 // into an `any` produces: Obj -> map[string]any, List -> []any,
-// json.Number -> float64. It exists so callers that only ever wanted a
+// json.Number -> int for an integral literal, float64 otherwise. It
+// exists so callers that only ever wanted a
 // plain map can still route through LoadsOrdered and inherit its
 // non-finite masking, WITHOUT changing the types eleven call sites
 // already type-assert (adversarial mission-r4 HIGH).
@@ -355,10 +481,18 @@ func LoadsOrdered(text string) (any, error) {
 // is what matches. `json.Unmarshal` into an `any` instead REJECTS the
 // whole document there — a fork this closes on the way past.
 //
-// What it does NOT restore is int-vs-float: CPython's json.loads gives a
-// real `int` for `1` and this gives 1.0, exactly as encoding/json always
-// has. That is the pre-existing gap ObjectOrdered exists to serve, left
-// where it is rather than widened or narrowed here.
+// It DOES restore int-vs-float, as of mission-r6: CPython's json.loads
+// gives a real `int` for `1`, and so does this, up to int64. The gap was
+// pinned as known for two rounds on the reasoning that it could not
+// reach disk, and it stopped being inert the moment a plan check's
+// description could be a number — str(42) is "42" and str(42.0) is
+// "42.0", and the description rides the persisted check_results rows.
+//
+// (This paragraph said the opposite for one round after the code
+// changed under it — r2's rule, on r6's own fix, caught by mission-r7.)
+//
+// The residual that IS still open: an integer past int64 falls through to
+// float64, where CPython has arbitrary precision.
 func Plain(v any) any {
 	switch t := v.(type) {
 	case Obj:
@@ -849,23 +983,7 @@ func toFloat(v any) (float64, bool) {
 		}
 		return f, true
 	case string:
-		// FloatStrip, not Strip: float()'s whitespace set is str.strip()'s
-		// set MINUS U+001C–U+001F, so a leading U+001C makes
-		// float() raise ValueError, and it must do the same here.
-		// FoldDecimals because float() accepts any Unicode decimal
-		// digit where ParseFloat is ASCII-only
-		// — measured, float("٠.٥") is 0.5 (both adversarial mission-r6).
-		f, err := strconv.ParseFloat(
-			pytext.FoldDecimals(pytext.FloatStrip(t)), 64)
-		if err != nil {
-			// ParseFloat reports ErrRange with ±Inf for an overflowing
-			// literal; float("1e309") is inf, so keep the value.
-			if math.IsInf(f, 0) {
-				return f, true
-			}
-			return 0, false
-		}
-		return f, true
+		return ParseFloat(t)
 	}
 	return 0, false
 }
@@ -898,9 +1016,69 @@ func Round(f float64, n int) float64 {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return f
 	}
+	if n < 0 {
+		// FormatFloat reads EVERY negative precision as "shortest", so the
+		// round silently became a no-op: round(1234.5678, -2) is 1200.0 in
+		// CPython and was 1234.5678 here. No call site passes a negative n
+		// today, which is exactly why this needed fixing rather than
+		// documenting — the doc says "Python's round(f, n)" with no domain,
+		// and the next caller believes the doc (adversarial mission-r7
+		// MEDIUM, latent).
+		//
+		// Python rounds to a multiple of 10**-n, half-to-even, on the
+		// exact value. Scaling down, rounding to 0 decimals through the
+		// same format-and-reparse, and scaling back up is that.
+		scale := math.Pow(10, float64(-n))
+		scaled, err := strconv.ParseFloat(
+			strconv.FormatFloat(f/scale, 'f', 0, 64), 64)
+		if err != nil {
+			return f
+		}
+		return scaled * scale
+	}
 	out, err := strconv.ParseFloat(strconv.FormatFloat(f, 'f', n, 64), 64)
 	if err != nil {
 		return f
 	}
 	return out
+}
+
+// ParseFloat is CPython's float(str), and it is the ONE implementation of
+// it in this port. Three differences from strconv.ParseFloat, each
+// measured on this box and each previously hand-carried by a different
+// subset of the four call sites that needed all three:
+//
+//	float()'s whitespace set is str.strip()'s MINUS U+001C..U+001F, so
+//	  " 0.9" strips and "\x1c0.9" is a ValueError    (FloatStrip)
+//	float() takes any Unicode decimal digit: float("٠.٥") is 0.5
+//	  where ParseFloat is ASCII-only                 (FoldDecimals)
+//	ParseFloat accepts HEX float literals and float() raises:
+//	  float("0x1p-2") is a ValueError, ParseFloat gives 0.25
+//
+// It exists because those three lived in three places with three
+// different subsets — record/verdict.go had the hex rejection and its
+// own copy of FoldDecimals, pyval had the strip and the fold, and
+// knowledge/pack/skills had none of them. That is the hand-ported-helper
+// family, and consolidating one is only half the job if the SURVIVING
+// copy is not the one that knew the most (adversarial mission-r7
+// MEDIUM).
+//
+// The ±Inf-on-ErrRange arm is deliberate: json.loads('1e309') and
+// float("1e309") are both inf in CPython, and ParseFloat reports the
+// overflow as an error WITH the value, so ignoring the error is what
+// matches. Callers that must refuse the non-finite (SafeFloat does)
+// check after, where Python's own guard is.
+func ParseFloat(s string) (float64, bool) {
+	stripped := pytext.FoldDecimals(pytext.FloatStrip(s))
+	if low := strings.TrimLeft(strings.ToLower(stripped), "+-"); strings.HasPrefix(low, "0x") {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(stripped, 64)
+	if err != nil {
+		if math.IsInf(f, 0) {
+			return f, true
+		}
+		return 0, false
+	}
+	return f, true
 }

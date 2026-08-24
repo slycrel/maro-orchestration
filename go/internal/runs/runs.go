@@ -15,8 +15,6 @@
 package runs
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +22,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
@@ -53,11 +52,17 @@ func Create(workspaceDir, handleID, prompt string) (string, error) {
 			return "", werr
 		}
 	}
-	if err := WriteMetadata(rd, map[string]any{
-		"handle_id": handleID,
-		"prompt":    prompt,
-		"status":    "running",
-		"pid":       os.Getpid(),
+	// The order is write_metadata's, for the subset this port writes:
+	// handle_id, [nickname], prompt, [lane], [model], started_at,
+	// [ended_at], status, pid. started_at is passed explicitly rather
+	// than left to WriteMetadata's fill so it lands in ITS position and
+	// not at the tail.
+	if err := WriteMetadata(rd, pyval.Obj{
+		{Key: "handle_id", Val: handleID},
+		{Key: "prompt", Val: prompt},
+		{Key: "started_at", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "status", Val: "running"},
+		{Key: "pid", Val: os.Getpid()},
 	}); err != nil {
 		return "", err
 	}
@@ -71,39 +76,57 @@ func Create(workspaceDir, handleID, prompt string) (string, error) {
 // delete semantics, and "set to null" would read as a judged false by
 // sloppy consumers. The write is atomic so readers (FindPriorAttempts
 // in either runtime) never see a torn file.
-func WriteMetadata(runDir string, fields map[string]any) error {
+func WriteMetadata(runDir string, fields pyval.Obj) error {
 	metaPath := filepath.Join(runDir, "metadata.json")
-	existing := map[string]any{}
+	var existing pyval.Obj
 	if raw, err := os.ReadFile(metaPath); err == nil {
-		// A corrupt existing file degrades to a fresh map — the merge
-		// must not wedge the run on a torn predecessor.
-		_ = json.Unmarshal(raw, &existing)
-	}
-	if _, ok := existing["started_at"]; !ok {
-		existing["started_at"] = time.Now().UTC().Format(time.RFC3339)
-	}
-	for k, v := range fields {
-		if k == "started_at" {
-			continue // first writer wins, like Python
+		// A corrupt existing file degrades to a fresh object — the merge
+		// must not wedge the run on a torn predecessor. LoadsOrdered,
+		// not json.Unmarshal: a merge that rewrites someone else's file
+		// has to give the keys back in the order they arrived, and a Go
+		// map cannot (see the pyval.Obj doc).
+		if v, perr := pyval.LoadsOrdered(string(raw)); perr == nil {
+			if o, ok := v.(pyval.Obj); ok {
+				existing = o
+			}
 		}
-		if v == nil {
-			delete(existing, k)
+	}
+	for _, f := range fields {
+		if f.Key == "started_at" {
+			if _, ok := existing.Get("started_at"); ok {
+				continue // first writer wins, like Python
+			}
+		}
+		if f.Val == nil {
+			existing.Pop(f.Key)
 			continue
 		}
-		existing[k] = v
+		existing.Set(f.Key, f.Val)
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	if _, ok := existing.Get("started_at"); !ok {
+		existing.Set("started_at", time.Now().UTC().Format(time.RFC3339))
+	}
+	// pyval.DumpsIndent2, not json.MarshalIndent: Python writes this file
+	// with json.dumps(meta, indent=2), and encoding/json differs from it
+	// three ways at once — sorted keys (handled above), HTML-escaping
+	// `<`, `>` and `&`, and raw UTF-8 where json.dumps defaults to
+	// ensure_ascii. The prompt lands in here verbatim, so any goal
+	// containing "->" or a non-ASCII character produced a metadata.json
+	// no CPython writer would have produced (adversarial mission-r7
+	// HIGH).
+	out, err := pyval.DumpsIndent2(existing)
 	if err != nil {
 		return err
 	}
-	return atomicWrite(metaPath, out)
+	return atomicWrite(metaPath, []byte(out))
 }
 
 // Finalize stamps the run's terminal status and ended_at.
 func Finalize(runDir, status string) error {
-	return WriteMetadata(runDir, map[string]any{
-		"status":   status,
-		"ended_at": time.Now().UTC().Format(time.RFC3339),
+	// ended_at before status: write_metadata's order.
+	return WriteMetadata(runDir, pyval.Obj{
+		{Key: "ended_at", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "status", Val: status},
 	})
 }
 
@@ -116,9 +139,12 @@ func Finalize(runDir, status string) error {
 // demotes the run everywhere the stamp is read.
 func StampVerdict(runDir string, goalAchieved *bool, source, summary string,
 	confidence *float64, downgradeReason string, gaps []string) error {
-	fields := map[string]any{
-		"goal_verdict_source":  source,
-		"goal_verdict_summary": budget.VerdictProse.Clip(summary),
+	// _apply_verdict_tuple's assignment order: source, summary,
+	// confidence, downgrade_reason, gaps, goal_achieved. A popped member
+	// is a nil Val, which WriteMetadata deletes.
+	fields := pyval.Obj{
+		{Key: "goal_verdict_source", Val: source},
+		{Key: "goal_verdict_summary", Val: budget.VerdictProse.Clip(summary)},
 	}
 	// confidence == nil pops the key (Python _apply_verdict_tuple:
 	// "confidence=None pops the key — the NOW lane records no
@@ -127,14 +153,14 @@ func StampVerdict(runDir string, goalAchieved *bool, source, summary string,
 	// consumer — the opposite of what happened (adversarial routing r1
 	// 2026-08-22, Expert QA).
 	if confidence == nil {
-		fields["goal_verdict_confidence"] = nil
+		fields.Set("goal_verdict_confidence", nil)
 	} else {
-		fields["goal_verdict_confidence"] = *confidence
+		fields.Set("goal_verdict_confidence", *confidence)
 	}
 	if downgradeReason != "" {
-		fields["goal_verdict_downgrade_reason"] = budget.VerdictProse.Clip(downgradeReason)
+		fields.Set("goal_verdict_downgrade_reason", budget.VerdictProse.Clip(downgradeReason))
 	} else {
-		fields["goal_verdict_downgrade_reason"] = nil
+		fields.Set("goal_verdict_downgrade_reason", nil)
 	}
 	var kept []string
 	for _, g := range gaps {
@@ -149,14 +175,14 @@ func StampVerdict(runDir string, goalAchieved *bool, source, summary string,
 		kept = append(kept[:5], fmt.Sprintf("(+%d more gap(s) in the closure verdict artifact)", extra))
 	}
 	if len(kept) > 0 {
-		fields["goal_verdict_gaps"] = kept
+		fields.Set("goal_verdict_gaps", kept)
 	} else {
-		fields["goal_verdict_gaps"] = nil
+		fields.Set("goal_verdict_gaps", nil)
 	}
 	if goalAchieved == nil {
-		fields["goal_achieved"] = nil
+		fields.Set("goal_achieved", nil)
 	} else {
-		fields["goal_achieved"] = *goalAchieved
+		fields.Set("goal_achieved", *goalAchieved)
 	}
 	return WriteMetadata(runDir, fields)
 }
@@ -165,10 +191,20 @@ func StampVerdict(runDir string, goalAchieved *bool, source, summary string,
 // build/closure_verdicts.jsonl (persist-the-artifacts decree, Jeremy
 // 2026-07-29: every closure outcome — full verdict or named skip —
 // leaves a row). Append-only, one JSON object per line.
-func AppendVerdictRow(runDir string, row map[string]any) error {
-	full := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339)}
-	for k, v := range row {
-		full[k] = v
+func AppendVerdictRow(runDir, loopID string, row pyval.Obj) error {
+	// loop_id is Python's second key and was MISSING from every Go
+	// verdict row. _persist_verdict_row closes over `loop_id` and writes
+	// `loop_id or ""`; closure.Options.LoopID was set by the loop and
+	// read by nothing, so a restarted run's parent and child verdicts
+	// landed in one append-only file with no way to tell them apart —
+	// and that join is the §9.3 material the comment below calls the
+	// reason this file exists (adversarial mission-r7 HIGH).
+	full := pyval.Obj{
+		{Key: "ts", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "loop_id", Val: loopID},
+	}
+	for _, f := range row {
+		full.Set(f.Key, f.Val)
 	}
 	// Scrub at the single write owner (Python: `scrub({...**row})` at
 	// closure_verify.py's _persist_verdict_row) — probe stdout/stderr and
@@ -180,22 +216,21 @@ func AppendVerdictRow(runDir string, row map[string]any) error {
 	// []any/map[string]any, and callers hand this function concretely
 	// typed nests ([]map[string]any check rows) it would otherwise skip
 	// wholesale — the scrub pin test caught exactly that.
-	raw, err := json.Marshal(full)
-	if err != nil {
-		return err
-	}
-	// UseNumber keeps numerics as json.Number through the round-trip —
-	// a plain decode widens every number to float64, silently corrupting
-	// int64s past 2^53 for every future caller of this seam
-	// (adversarial closure r2 2026-08-22, Architect). json.Number is not
-	// `string` to scrub.Walk's type switch, so it passes through intact.
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var norm any
-	if err := dec.Decode(&norm); err != nil {
-		return err
-	}
-	out, err := json.Marshal(scrub.Walk(norm, scrub.Secrets))
+	// FromPlain, not a json.Marshal/Unmarshal round-trip. The round-trip
+	// was there so scrub.Walk would descend the concretely-typed nests
+	// callers hand this function ([]map[string]any check rows) instead
+	// of skipping them wholesale — the scrub pin test caught exactly
+	// that. FromPlain does the same widening without going through
+	// encoding/json, which matters because json.Marshal(3.0) is "3":
+	// the round-trip handed back an int where json.dumps writes "3.0",
+	// and confidence is a float that is often whole.
+	norm := pyval.FromPlain(full)
+	// DumpsCompactPy, not json.Marshal: Python's bare json.dumps carries
+	// `", "` and `": "` separators, does NOT HTML-escape, and DOES
+	// \uXXXX-escape non-ASCII. FailedCheckSignature is "%s => exit %d:
+	// %s", so EVERY Go failed-check entry on this rail carried
+	// `=\u003e` where CPython writes `=>` (adversarial mission-r7 HIGH).
+	out, err := pyval.DumpsCompactPy(scrub.Walk(norm, scrub.Secrets))
 	if err != nil {
 		return err
 	}
@@ -205,7 +240,7 @@ func AppendVerdictRow(runDir string, row map[string]any) error {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Write(append(out, '\n')); err != nil {
+	if _, err := f.Write([]byte(out + "\n")); err != nil {
 		return err
 	}
 	return f.Sync()

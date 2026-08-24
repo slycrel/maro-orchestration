@@ -29,6 +29,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/provenance"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -600,7 +601,11 @@ func asFloat(v any, def float64) (float64, error) {
 	case json.Number:
 		return t.Float64()
 	case string:
-		return strconv.ParseFloat(strings.TrimSpace(t), 64)
+		// float(str), not TrimSpace + strconv (mission-r7 MEDIUM).
+		if f, ok := pyval.ParseFloat(t); ok {
+			return f, nil
+		}
+		return 0, fmt.Errorf("not a number: %v", v)
 	case bool:
 		if t {
 			return 1, nil

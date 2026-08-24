@@ -94,6 +94,15 @@ type CheckResult struct {
 	Stderr      string `json:"stderr"`
 	Passed      bool   `json:"passed"`
 	Outcome     string `json:"outcome"`
+	// PlanIndex is the row's ordinal in the PLAN's checks array — the
+	// documented join key for claim_coverage.check_index
+	// (closure_verify.py: "Keyed by plan_index — the index each executed
+	// row carries from the plan"). It is the plan's index and not the
+	// results': a check with a blank command is skipped without running,
+	// so the two lists drift apart exactly when a plan is malformed.
+	// Absent on preflight rows in Python; this port runs no preflight
+	// checks, so every row here carries one.
+	PlanIndex int `json:"plan_index"`
 }
 
 // CheckOutcome classifies a probe outcome as pass, fail, or
@@ -344,7 +353,7 @@ type Options struct {
 	// full verdict or named skip — for the durable
 	// build/closure_verdicts.jsonl record (persist-the-artifacts
 	// decree). Best-effort: errors are the callback's concern.
-	PersistRow func(row map[string]any)
+	PersistRow func(row pyval.Obj)
 }
 
 const closurePlanSystem = `You are the Director performing a closure check after an agent loop completed.
@@ -594,7 +603,7 @@ func parsePlanChecks(content string) ([]planCheck, error) {
 // as verdict evidence. The caller stamps goal_achieved from
 // (Judged, Complete): unjudged verdicts stamp NOTHING.
 func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o Options) (v Verdict) {
-	persist := func(row map[string]any) {
+	persist := func(row pyval.Obj) {
 		if o.PersistRow != nil {
 			o.PersistRow(row)
 		}
@@ -615,11 +624,11 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 			// Skeptic). A dropped row beats a dead loop.
 			func() {
 				defer func() { _ = recover() }()
-				persist(map[string]any{
-					"skipped": "exception",
-					"skip_detail": budget.PanicTrace.Clip(
+				persist(pyval.Obj{
+					{Key: "skipped", Val: "exception"},
+					{Key: "skip_detail", Val: budget.PanicTrace.Clip(
 						budget.PanicValue.Clip(fmt.Sprintf("%v", r)) +
-							"\n" + string(debug.Stack())),
+							"\n" + string(debug.Stack()))},
 				})
 			}()
 			v = nullVerdict("exception")
@@ -635,9 +644,9 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 		timeout = 30 * time.Second
 	}
 	skip := func(reason string, detail string) Verdict {
-		row := map[string]any{"skipped": reason}
+		row := pyval.Obj{{Key: "skipped", Val: reason}}
 		if detail != "" {
-			row["skip_detail"] = cutRunes(detail, 300)
+			row.Set("skip_detail", cutRunes(detail, 300))
 		}
 		persist(row)
 		return nullVerdict(reason)
@@ -704,7 +713,7 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	if len(checks) > 5 {
 		checks = checks[:5]
 	}
-	for _, c := range checks {
+	for planIndex, c := range checks {
 		if c.command == "" {
 			continue
 		}
@@ -717,8 +726,9 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 			results = append(results, CheckResult{
 				Description: c.description, Command: c.command,
 				Modality: modality, ExitCode: -1,
-				Stderr:  "cwd unresolved — check not run",
-				Outcome: "inconclusive",
+				Stderr:    "cwd unresolved — check not run",
+				Outcome:   "inconclusive",
+				PlanIndex: planIndex,
 			})
 			continue
 		}
@@ -733,8 +743,9 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 			Description: c.description, Command: c.command,
 			Modality: modality, ExitCode: code,
 			Stdout: cutRunes(stdout, 500), Stderr: cutRunes(stderr, 300),
-			Passed:  code == 0,
-			Outcome: outcome,
+			Passed:    code == 0,
+			Outcome:   outcome,
+			PlanIndex: planIndex,
 		})
 	}
 	if len(results) == 0 {
@@ -890,31 +901,40 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// aggregate-only draft could not answer "why did check N fail";
 	// adversarial closure r1 2026-08-22, Expert QA: a row that cites the
 	// persist-the-artifacts decree must actually persist the artifacts).
-	checkRows := make([]map[string]any, 0, len(results))
+	checkRows := make(pyval.List, 0, len(results))
 	for _, r := range results {
-		checkRows = append(checkRows, map[string]any{
-			"description": cutRunes(r.Description, 300),
-			"command":     cutRunes(r.Command, 300),
-			"exit_code":   r.ExitCode,
-			"outcome":     r.Outcome,
-			"stdout":      r.Stdout,
-			"stderr":      r.Stderr,
+		checkRows = append(checkRows, pyval.Obj{
+			{Key: "description", Val: cutRunes(r.Description, 300)},
+			{Key: "command", Val: cutRunes(r.Command, 300)},
+			{Key: "exit_code", Val: r.ExitCode},
+			{Key: "outcome", Val: r.Outcome},
+			{Key: "stdout", Val: r.Stdout},
+			{Key: "stderr", Val: r.Stderr},
+			{Key: "plan_index", Val: r.PlanIndex},
 		})
 	}
 	clippedGaps := make([]string, 0, len(v.Gaps))
 	for _, g := range v.Gaps {
 		clippedGaps = append(clippedGaps, budget.Clip(g, 500))
 	}
-	persist(map[string]any{
-		"complete": v.Complete, "confidence": v.Confidence,
-		"gaps": clippedGaps, "summary": budget.VerdictProse.Clip(v.Summary),
-		"checks_run": v.ChecksRun, "checks_passed": v.ChecksPassed,
-		"inconclusive_count": v.InconclusiveCount, "judged": v.Judged,
-		"downgrade_reason":      v.DowngradeReason,
-		"failed_checks":         v.FailedChecks,
-		"fingerprint":           Fingerprint(v),
-		"modality_distribution": modalityDist,
-		"check_results":         checkRows,
+	// Key order is _persist_verdict_row's, minus the unported
+	// verdict_audit / claim_coverage / mh_label members and plus
+	// modality_distribution, which is this port's own and sits with the
+	// other aggregate at the tail.
+	persist(pyval.Obj{
+		{Key: "complete", Val: v.Complete},
+		{Key: "confidence", Val: v.Confidence},
+		{Key: "checks_run", Val: v.ChecksRun},
+		{Key: "checks_passed", Val: v.ChecksPassed},
+		{Key: "inconclusive_count", Val: v.InconclusiveCount},
+		{Key: "judged", Val: v.Judged},
+		{Key: "downgrade_reason", Val: v.DowngradeReason},
+		{Key: "gaps", Val: clippedGaps},
+		{Key: "summary", Val: budget.VerdictProse.Clip(v.Summary)},
+		{Key: "failed_checks", Val: v.FailedChecks},
+		{Key: "fingerprint", Val: Fingerprint(v)},
+		{Key: "modality_distribution", Val: modalityDist},
+		{Key: "check_results", Val: checkRows},
 	})
 	return v
 }

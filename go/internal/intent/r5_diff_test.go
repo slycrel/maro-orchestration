@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
@@ -52,6 +53,18 @@ var heuristicCorpus = []struct{ name, msg string }{
 		"one two three four five six seven eight nine"},
 	{"at the threshold, separator-broken",
 		"one\x1ctwo\x1cthree\x1cfour\x1cfive\x1csix\x1cseven\x1ceight"},
+
+	// The NOW question-mark lane. r5's corpus contained no "?" at all,
+	// so nowPatterns[0] — the one r7 rewrote — was never exercised by
+	// this differential: a corpus that cannot reach a pattern cannot
+	// separate on it (adversarial mission-r7 MEDIUM).
+	{"a bare interrogative", "what?"},
+	{"an interrogative with no window", "who?"},
+	{"one character of window", "what x?"},
+	{"a window at the cap", "what " + strings.Repeat("x", 59) + "?"},
+	{"a window one past the cap", "what " + strings.Repeat("x", 60) + "?"},
+	{"a newline inside the window", "what is\nthe time?"},
+	{"a non-ASCII letter right after the keyword", "what研究 is the time?"},
 
 	// The ordinary ASCII lanes, so the corpus is not all edge cases.
 	{"a plain now question", "what is the time"},

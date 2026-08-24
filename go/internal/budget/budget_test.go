@@ -50,6 +50,19 @@ func TestClipMarkerMatchesPythonRuntime(t *testing.T) {
 	if n := len([]rune(got)); n != 4045 {
 		t.Fatalf("clipped length %d, want 4045 (Python parity)", n)
 	}
+	// The same marker over a MULTI-BYTE body. With only the ASCII case,
+	// a byte-counting clip and a rune-counting one produce identical
+	// output and this test reports agreement either way — the counts in
+	// the marker are Python's rune counts, and the last kept character
+	// printed before the ellipsis is a rune, not a byte (adversarial
+	// mission-r7 LOW).
+	wide := Clip(strings.Repeat("é", 5000), 4000)
+	if !strings.HasSuffix(wide, "é … [truncated: first 4000 of 5000 characters]") {
+		t.Fatalf("multi-byte marker drifted: ...%q", wide[len(wide)-60:])
+	}
+	if n := len([]rune(wide)); n != 4045 {
+		t.Fatalf("multi-byte clipped length %d, want 4045", n)
+	}
 }
 
 func TestClipCountsRunesNotBytes(t *testing.T) {

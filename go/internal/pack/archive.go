@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 const (
@@ -283,6 +285,33 @@ func refuseLoneSurrogates(raw []byte) error {
 		i += 5 // past this \uXXXX
 	}
 	return nil
+}
+
+// manifestBytes renders pack.json the way json.dumps(manifest, indent=2)
+// does. json.MarshalIndent got three things wrong at once here — it
+// HTML-escapes `<`, `>` and `&`, it writes raw UTF-8 where json.dumps
+// defaults to ensure_ascii, and it sorts keys. pack.json is read and
+// re-written by both runtimes, and the manifest carries pack NAMES and
+// origin LABELS that are free text (adversarial mission-r7 HIGH).
+//
+// KEY ORDER IS A NAMED RESIDUAL and this is the one place it stays lost:
+// the manifest is a map[string]any everywhere in this package — decoded
+// from a foreign pack.json by decodeManifest, indexed by fifteen call
+// sites, mutated in place by Seal — so the order Python wrote is already
+// gone before it reaches here. FromPlain sorts, which is what
+// MarshalIndent did, so this changes nothing about order and everything
+// about the other two. Closing it means an ordered manifest type through
+// the whole package; it is written down rather than half-done.
+//
+// Nothing hashes these bytes: review_manifest_sha256 is over the REVIEW
+// text and review_payload_sha256 is over the artifact payloads, so a
+// re-ordered manifest cannot break a seal.
+func manifestBytes(manifest map[string]any) ([]byte, error) {
+	text, err := pyval.DumpsIndent2(pyval.FromPlain(manifest))
+	if err != nil {
+		return nil, err
+	}
+	return []byte(text), nil
 }
 
 // manifestArtifacts pulls the artifacts list as []map[string]any,

@@ -13,12 +13,19 @@ import (
 	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
-// TestClassifyProbeModalityMatchesCPython pins the per-segment
-// classifier against closure_verify._classify_probe_modality (fixtures
-// generated 2026-08-22).
-func TestClassifyProbeModalityMatchesCPython(t *testing.T) {
+// TestClassifyProbeModalityFrozenSnapshot is a FROZEN SNAPSHOT and the
+// name now says so: the fixtures were generated from
+// closure_verify._classify_probe_modality on 2026-08-22 and this test
+// has never run python3. It kept its "MatchesCPython" name through two
+// rounds while its all-ASCII corpus could not have shown the fork r7
+// found (adversarial mission-r7 LOW). r7_diff_test.go's
+// TestProbeModalityMatchesCPython is the live differential; this stays
+// as the cheap in-process pin on the segment-splitting behaviour.
+func TestClassifyProbeModalityFrozenSnapshot(t *testing.T) {
 	cases := []struct{ cmd, want string }{
 		{"grep -q 'listen' server.go", "static"},
 		{"./bin/tool --help >/tmp/tool.out && grep -q 'usage' /tmp/tool.out", "process"},
@@ -88,24 +95,13 @@ func TestCheckOutcomeMatchesCPython(t *testing.T) {
 	}
 }
 
-// TestRuntimeGapAdmissionMatchesCPython pins the self-admission regex.
-func TestRuntimeGapAdmissionMatchesCPython(t *testing.T) {
-	cases := []struct {
-		text string
-		want bool
-	}{
-		{"Gap: runtime validation (server startup + browser connection) was not performed.", true},
-		{"the server was never started", true},
-		{"all files verified present", false},
-		{"no behavioral probes ran", true},
-		{"tests were not run", true},
-	}
-	for _, c := range cases {
-		if got := runtimeGapAdmissionRe.MatchString(c.text); got != c.want {
-			t.Errorf("admission(%q) = %v, want CPython %v", c.text, got, c.want)
-		}
-	}
-}
+// TestRuntimeGapAdmissionMatchesCPython is GONE. It was five ASCII
+// strings compared against hand-written booleans under a name claiming
+// CPython parity, and every one of its cases is now in
+// r7_diff_test.go's admissionCorpus, which drives the real
+// _RUNTIME_GAP_ADMISSION and compares the matched TEXT rather than a
+// boolean (adversarial mission-r7 HIGH: the frozen table could not have
+// shown either of the two forks it was supposedly guarding).
 
 func TestRenderStepForClosureTruncationVisible(t *testing.T) {
 	short := RenderStepForClosure("do it", "done", 3)
@@ -131,8 +127,14 @@ func planJSON(cmds ...string) string {
 	return `{"checks":[` + strings.Join(checks, ",") + `]}`
 }
 
-func collectRows(rows *[]map[string]any) func(map[string]any) {
-	return func(r map[string]any) { *rows = append(*rows, r) }
+// collectRows flattens each ordered row into the plain map these
+// assertions read. The ORDER the row carries is asserted in
+// r7_diff_test.go against CPython, not here.
+func collectRows(rows *[]map[string]any) func(pyval.Obj) {
+	return func(r pyval.Obj) {
+		m, _ := pyval.Plain(r).(map[string]any)
+		*rows = append(*rows, m)
+	}
 }
 
 // TestVerifyHappyPath: plan → mechanical checks → verdict, with the
@@ -430,11 +432,15 @@ func TestVerifyRowCarriesCheckResults(t *testing.T) {
 	if _, has := rows[0]["commands"]; has {
 		t.Fatal("nonstandard bare commands list must be gone")
 	}
-	crs, ok := rows[0]["check_results"].([]map[string]any)
+	crs, ok := rows[0]["check_results"].([]any)
 	if !ok || len(crs) != 1 {
 		t.Fatalf("check_results missing: %+v", rows[0])
 	}
-	cr := crs[0]
+	cr, _ := crs[0].(map[string]any)
+	if cr["plan_index"] != 0 {
+		t.Fatalf("plan_index is the claim_coverage join key and must ride "+
+			"every row: %+v", cr)
+	}
 	if cr["exit_code"] != 3 || cr["outcome"] != "fail" ||
 		!strings.Contains(cr["stdout"].(string), "out-marker") ||
 		!strings.Contains(cr["stderr"].(string), "err-marker") {
@@ -458,8 +464,8 @@ func TestVerifyClassifiesOnFullStderr(t *testing.T) {
 	if v.InconclusiveCount != 1 || v.Judged {
 		t.Fatalf("phrase past byte 300 must still classify inconclusive: %+v", v)
 	}
-	crs := rows[0]["check_results"].([]map[string]any)
-	if got := crs[0]["stderr"].(string); len([]rune(got)) > 300 {
+	crs := rows[0]["check_results"].([]any)
+	if got := crs[0].(map[string]any)["stderr"].(string); len([]rune(got)) > 300 {
 		t.Fatalf("stored stderr must still be truncated: %d runes", len([]rune(got)))
 	}
 }
@@ -615,7 +621,7 @@ func TestVerifyPanicInPersistDoesNotCrash(t *testing.T) {
 		`{"complete":true,"confidence":0.9,"gaps":[],"summary":"ok"}`}}
 	v := Verify(context.Background(), fake, "goal", nil,
 		Options{WorkspacePath: t.TempDir(),
-			PersistRow: func(map[string]any) { panic("write path is broken") }})
+			PersistRow: func(pyval.Obj) { panic("write path is broken") }})
 	if v.SkipReason != "exception" || v.Judged {
 		t.Fatalf("persist-path panic must degrade to the exception skip: %+v", v)
 	}

@@ -35,6 +35,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Tier vocabulary and decay/ranking constants, verbatim from
@@ -310,8 +312,11 @@ func coerceFloat(v any) (float64, bool) {
 		f, err := t.Float64()
 		return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
+		// pyval.ParseFloat is float(str); TrimSpace + strconv is not.
+		// Measured here: "٠.٥" failed where CPython gives 0.5, and
+		// "0x1p-2" gave 0.25 where CPython raises (mission-r7 MEDIUM).
+		f, ok := pyval.ParseFloat(t)
+		return f, ok && !math.IsNaN(f) && !math.IsInf(f, 0)
 	case bool:
 		if t {
 			return 1, true
