@@ -146,6 +146,16 @@ func readTask(path string) (Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read task %s: %w", path, err)
 	}
+	if v == nil {
+		// A file holding the literal `null` decodes to None, and
+		// `_read_task` hands that back — indistinguishable from a missing
+		// file to every caller, all six of which test `if task is None`.
+		// So one such row is SKIPPED by list_tasks and status_summary and
+		// is "not found" to claim; refusing it made every sweep in the
+		// package abort and stalled a queue CPython drains normally
+		// (adversarial r11 round 4, MEDIUM).
+		return nil, nil
+	}
 	t, ok := v.(pyval.Obj)
 	if !ok {
 		return nil, fmt.Errorf("read task %s: expected a JSON object, got %T", path, v)

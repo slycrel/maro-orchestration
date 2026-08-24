@@ -5174,6 +5174,25 @@ implemented everything else as "fall back to the defaults" — which runs a
 command CPython declines to run. The divergence that mattered was in the
 remainder arm nobody had named.
 
+### Round 11 round 4 — the reads
+
+`%d` is not `str()`, and `logging.Handler.emit` is defined to swallow a
+`%d` that raises — so three log sites in the escalation lane now go
+through `pyval.PercentD`, which answers both the rendered text and
+whether the record survives at all. A pid is read RAW and short-circuited
+the way Python's `and` is, because `""`, `[]` and `{}` are falsy AND
+raise inside `_pid_alive`. A task file holding the literal `null` is a
+MISSING task, not a broken one. A status key is whatever the row holds.
+`str.strip()` strips four code points Go's `TrimSpace` does not. And
+CPython's 4300-digit `int(str)` limit is a ValueError, not this port's
+`ErrIntTooLarge`.
+
+`pyval` grew three pieces for it: `PercentD` (with its own 26-row
+differential), `IntLiteral` (exported — "is this wide number an int or an
+overflowed float" decides the exception class), and `ClassOf`/`PyClasser`,
+so a Go-typed error like `tasks.ConflictError` can name the CPython class
+it stands for without becoming a string-classed struct.
+
 ### Named residuals after r11 round 3
 
 - **Arbitrary precision.** `ErrIntTooLarge` is the port refusing a value
@@ -5196,6 +5215,12 @@ remainder arm nobody had named.
   with an OverflowError before the sign recovery runs.
 - **Two guards the battery scores as misses, on purpose.** The escalation
   lane's slice check is redundant with `WriteEvent`'s own, and
-  `_fire_checkin`'s `int(checkins_sent)` is unreachable with a non-numeric
-  value because `_advance_origin_with_checkin` bumped it first. Both say
-  so in the source; neither was removed.
+  `recursion_checkin`'s two `%d` arguments are `new_depth` and
+  `new_depth + 1`, so `&&` and `||` between them cannot differ for any
+  value that reaches the line. Both say so in the source; neither was
+  removed. (Round 3's third — `_fire_checkin`'s `int(checkins_sent)` — is
+  no longer a miss: `PercentD`'s own differential reaches it.)
+- **`PercentD` is `%d` as a LOGGING argument, not as an expression.** A
+  `%d` that raises deletes the record; a `%d` in a plain `"%d" % v` does
+  not. Every ported call site is the first kind. A site of the second kind
+  would need a different helper.

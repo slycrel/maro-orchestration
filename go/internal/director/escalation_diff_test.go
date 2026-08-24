@@ -1664,8 +1664,17 @@ class _Scripted:
 lines = []
 
 class _Cap(logging.Handler):
+    # The try/handleError is NOT decoration: logging.Handler.emit is
+    # DEFINED to swallow a formatting error and route it to handleError,
+    # and every stock handler (StreamHandler, FileHandler) does exactly
+    # that. A capture handler that lets the error escape measures the
+    # HARNESS, not director.py — "%d" % "deep" would abort the probe
+    # here while the deployed runtime logs nothing and carries on.
     def emit(self, record):
-        lines.append(record.getMessage())
+        try:
+            lines.append(record.getMessage())
+        except Exception:
+            self.handleError(record)
 
 _root = logging.getLogger()
 _root.addHandler(_Cap())
@@ -1697,6 +1706,75 @@ func TestTheDecisionLogLineMatchesCPython(t *testing.T) {
 			"confidence": 9, "reasoning": "one thread left",
 			"revised_goal": "chase the caf\u00e9 \u2192 na\u00efve case",
 			"summary_for_user": "narrowing"`)},
+
+		// `escalation_start` and `escalation_continue` are spelled with
+		// %d, not f-strings — the only two depth sites in this function
+		// that are. Every fixture above uses an INTEGER depth, which is
+		// the one type where %d and str() agree by construction, so the
+		// difference could not appear. A float depth is what any foreign
+		// JSON writer produces.
+		{"a float depth renders as an integer", map[string]any{
+			"job_id": "job-log003", "parent_job_id": "loop-parent-1",
+			"reason":             "audit the escalation lane",
+			"continuation_depth": json.Number("2.0"),
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
+
+		{"a fractional depth truncates toward zero", map[string]any{
+			"job_id": "job-log004", "parent_job_id": "loop-parent-1",
+			"reason":             "audit the escalation lane",
+			"continuation_depth": json.Number("2.9"),
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
+
+		// %d of a str, a None or a dict raises inside logging's own
+		// formatter, which catches it and emits NO RECORD at all.
+		{"a prose depth writes no start line", map[string]any{
+			"job_id": "job-log005", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": "deep",
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
+
+		{"a null depth writes no start line", map[string]any{
+			"job_id": "job-log006", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": nil,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
+
+		// The CONTINUE branch has two more %d sites the close fixtures
+		// never reach: `escalation_continue` and, past the check-in
+		// depth, `recursion_checkin fired`. A float depth is carried
+		// through `depth + 1` as a float, so both render it — and both
+		// are spelled %d, where str() would print "6.0".
+		{"a float depth through the continue branch", map[string]any{
+			"job_id": "job-log007", "parent_job_id": "loop-parent-1",
+			"reason":             "audit the escalation lane",
+			"continuation_depth": json.Number("5.0"),
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "one more pass",
+			"revised_goal": "a smaller slice",
+			"summary_for_user": "continuing"`)},
+
+		// The artifact write logs the EXCEPTION its slice raised, and an
+		// int and a dict do not raise the same one.
+		{"a numeric job_id logs its own slice failure", map[string]any{
+			"job_id": json.Number("4242"), "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
+
+		{"a mapping job_id logs a KeyError, not a TypeError", map[string]any{
+			"job_id":        map[string]any{"id": "x"},
+			"parent_job_id": "loop-parent-1",
+			"reason":        "audit the escalation lane", "continuation_depth": 1,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closing"`)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			goWS, pyWS := t.TempDir(), t.TempDir()

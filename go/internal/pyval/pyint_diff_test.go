@@ -2,6 +2,9 @@ package pyval_test
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -117,6 +120,24 @@ func TestIntMatchesCPython(t *testing.T) {
 			"2.0**63", true},
 		{"the exact negative bound as a float", -9223372036854775808.0,
 			"-(2.0**63)", false},
+
+		// CPython caps int(str) at 4300 DIGITS and raises ValueError past
+		// it — a limit that has nothing to do with the value's magnitude,
+		// so the arbitrary-precision residual cannot stand in for it: one
+		// is a ValueError an `except ValueError` catches and the other is
+		// this port's own sentinel, which it does not. The boundary is
+		// pinned from both sides.
+		{"a numeric string at the digit limit",
+			strings.Repeat("1", 4300), "'1'*4300", true},
+		{"a numeric string one digit past the limit",
+			strings.Repeat("1", 4301), "'1'*4301", false},
+		// The count EXCLUDES underscores and the sign: a limit counted off
+		// len(s) would report 8601 digits here and 4302 on the next row.
+		{"underscores do not count toward the digit limit",
+			strings.Join(strings.Split(strings.Repeat("1", 4301), ""), "_"),
+			`"_".join("1"*4301)`, false},
+		{"the sign does not count toward the digit limit",
+			"-" + strings.Repeat("1", 4301), "'-' + '1'*4301", false},
 	}
 
 	exprs := make([]string, len(rows))
@@ -227,6 +248,20 @@ func TestCaughtByIsTheExceptTupleAndNotAllOfThem(t *testing.T) {
 			"the port wrote a full escalation where CPython wrote nothing")
 	} else if !pyval.CaughtBy(raised, "OverflowError") {
 		t.Errorf("int(inf) raised %v, want an OverflowError", raised)
+	}
+
+	// The digit-limit ValueError is IN that tuple; the port's own
+	// arbitrary-precision sentinel is not, and a caller that folds the two
+	// together defaults on one and propagates the other.
+	if n, raised := pyval.IntCaught(strings.Repeat("1", 4301), 5); raised != nil ||
+		n != 5 {
+		t.Errorf("int('1'*4301) under (TypeError, ValueError) = (%d, %v), "+
+			"want (5, nil) — the digit limit is a ValueError", n, raised)
+	}
+	if _, raised := pyval.IntCaught(strings.Repeat("1", 4300), 5); raised == nil {
+		t.Error("int('1'*4300) was caught by (TypeError, ValueError); " +
+			"4300 digits is UNDER CPython's limit, so this is the port's " +
+			"own int64 residual and no Python except sees it")
 	}
 
 	// And the negative half: CaughtBy must not answer yes to everything.
@@ -385,15 +420,32 @@ func TestSliceHeadMatchesCPython(t *testing.T) {
 	for i, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			w := want[i]
-			got, sliceable := pyval.SliceHead(r.goVal, r.n)
-			if sliceable != w.OK {
+			got, sliceErr := pyval.SliceHead(r.goVal, r.n)
+			if (sliceErr == nil) != w.OK {
 				if w.OK {
-					t.Fatalf("SliceHead refused; CPython sliced to %s", w.Value)
+					t.Fatalf("SliceHead refused with %v; CPython sliced to %s",
+						sliceErr, w.Value)
 				}
 				t.Fatalf("SliceHead answered %#v; CPython raises %s: %s",
 					got, w.Cls, w.Msg)
 			}
 			if !w.OK {
+				// The CLASS and the MESSAGE, because one call site logs the
+				// exception rather than swallowing it — and a dict and an
+				// int do not fail the same way.
+				pe, ok := sliceErr.(*pyval.PyErr)
+				if !ok {
+					t.Fatalf("SliceHead refused with %v, which carries no "+
+						"exception class; CPython raises %s", sliceErr, w.Cls)
+				}
+				if pe.Class != w.Cls {
+					t.Errorf("v[:%d] raises %s, CPython raises %s",
+						r.n, pe.Class, w.Cls)
+				}
+				if pe.Msg != w.Msg {
+					t.Errorf("v[:%d] message = %q, CPython says %q",
+						r.n, pe.Msg, w.Msg)
+				}
 				return
 			}
 			gotJSON, err := json.Marshal(pyval.Plain(got))
@@ -450,3 +502,201 @@ func TestFloatReadsTheOverflowLiteral(t *testing.T) {
 		})
 	}
 }
+
+// pyPercentDSrc asks CPython what `logging` does with a `%d` argument —
+// which is not what `"%d" % v` alone does. `log.info("… depth=%d", v)`
+// defers the formatting into `LogRecord.getMessage`, and
+// `logging.Handler.emit` is DEFINED to route a formatting error to
+// `handleError` rather than let it out. So a `%d` that raises does not
+// crash the caller: it silently produces NO RECORD, and the operator's
+// log is missing a line nobody will ever notice is missing.
+//
+// Both halves are measured here, because the port has to reproduce both:
+// the rendered text when it works, and the vanished record when it does
+// not.
+const pyPercentDSrc = `
+import json, logging, sys
+
+lines = []
+
+class _Cap(logging.Handler):
+    def emit(self, record):
+        try:
+            lines.append(record.getMessage())
+        except Exception:
+            self.handleError(record)
+
+_log = logging.getLogger("probe")
+_log.addHandler(_Cap())
+_log.setLevel(logging.DEBUG)
+_log.propagate = False
+
+out = []
+for expr in json.loads(sys.argv[1]):
+    before = len(lines)
+    _log.info("v=%d", eval(expr))
+    if len(lines) == before:
+        out.append({"ok": False})
+    else:
+        out.append({"ok": True, "value": lines[-1][2:]})
+print(json.dumps(out))
+`
+
+// TestPercentDMatchesCPython pins pyval.PercentD against the interpreter.
+//
+// Why its own table rather than a few more escalation fixtures: the three
+// call sites can only be fed values a task file can carry, and a task file
+// is JSON — which cannot spell NaN, cannot spell Infinity through Go's
+// encoder, and reaches `-0.0` only by accident. The operator itself has no
+// such limit, and the values it gets wrong are exactly the ones the
+// round-4 battery could not reach: a nan, an inf, a negative zero, a bool,
+// and an integer literal too wide for float64.
+func TestPercentDMatchesCPython(t *testing.T) {
+	type row struct {
+		name   string
+		goVal  any
+		pyExpr string
+	}
+	rows := []row{
+		{"a small int", 7, "7"},
+		{"zero", 0, "0"},
+		{"a negative int", -7, "-7"},
+		{"an int64", int64(-9223372036854775808), "-2**63"},
+
+		// %d is not str(): a float renders as the integer it truncates to.
+		{"a float that is exactly an int", 2.0, "2.0"},
+		{"a fractional float truncates toward zero", 2.9, "2.9"},
+		{"a negative fractional float truncates toward zero", -2.9, "-2.9"},
+		// Python has no negative zero INTEGER, so `%d` of -0.5 is "0" and
+		// not "-0" — the one row that pins the sign-stripping arm.
+		{"a float that truncates to negative zero", -0.5, "-0.5"},
+		{"negative zero itself", math.Copysign(0, -1), "-0.0"},
+
+		// A bool IS an int in Python, and `%d` of True is 1. Dropping the
+		// bool arm loses the record instead.
+		{"true", true, "True"},
+		{"false", false, "False"},
+
+		// The decoded shapes. An integer literal is EXACT at any width in
+		// CPython, so routing it through float64 is not a rounding
+		// nuisance — it prints a number the source never contained.
+		{"a decoded int", json.Number("2"), "2"},
+		{"a decoded float", json.Number("2.0"), "2.0"},
+		{"a decoded int literal past float64's exact range",
+			json.Number("9007199254740993"), "9007199254740993"},
+		{"a decoded int literal past int64", json.Number("99999999999999999999"),
+			"99999999999999999999"},
+		{"a decoded float in exponent form", json.Number("1e3"), "1e3"},
+
+		// The records that never exist. Each of these raises inside
+		// getMessage, and the handler swallows it.
+		{"nan", math.NaN(), "float('nan')"},
+		{"inf", math.Inf(1), "float('inf')"},
+		{"negative inf", math.Inf(-1), "float('-inf')"},
+		{"a decoded nan", json.Number("NaN"), "float('nan')"},
+		{"a string", "deep", "'deep'"},
+		{"a numeric string", "2", "'2'"},
+		{"none", nil, "None"},
+		{"a list", []any{1}, "[1]"},
+		{"a dict", map[string]any{"a": 1}, "{'a': 1}"},
+		{"an Obj", pyval.Obj{{Key: "a", Val: 1}}, "{'a': 1}"},
+	}
+
+	exprs := make([]string, len(rows))
+	for i, r := range rows {
+		exprs[i] = r.pyExpr
+	}
+	arg, err := json.Marshal(exprs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []struct {
+		OK    bool   `json:"ok"`
+		Value string `json:"value"`
+	}
+	pyprobe.Probe{Marker: "director.py"}.RunJSON(t, pyPercentDSrc, &want, string(arg))
+	if len(want) != len(rows) {
+		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
+	}
+
+	// The table's own floor. If every row rendered, the second return
+	// value would be testing nothing — and the whole point of this
+	// operator is that some arguments DELETE the line.
+	rendered, lost := 0, 0
+	for _, w := range want {
+		if w.OK {
+			rendered++
+		} else {
+			lost++
+		}
+	}
+	if rendered == 0 || lost == 0 {
+		t.Fatalf("the table is one-sided: %d rendered, %d lost — a %%d "+
+			"differential has to exercise both", rendered, lost)
+	}
+
+	for i, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			w := want[i]
+			got, recorded := pyval.PercentD(r.goVal)
+			if recorded != w.OK {
+				if w.OK {
+					t.Fatalf("%%d of %s wrote no record; CPython logs %q",
+						r.pyExpr, w.Value)
+				}
+				t.Fatalf("%%d of %s logged %q; CPython writes NO record at all",
+					r.pyExpr, got)
+			}
+			if w.OK && got != w.Value {
+				t.Errorf("%%d of %s = %q, CPython says %q",
+					r.pyExpr, got, w.Value)
+			}
+		})
+	}
+}
+
+// TestClassOfAnswersOnlyForErrorsThatClaimAClass is the negative half of
+// the class layer. `CaughtBy` now routes through `ClassOf`, so an
+// `except (TypeError, ValueError)` that started swallowing plain Go errors
+// — a *os.PathError from a failed write, say — would be a silent widening
+// of every except tuple in the port.
+func TestClassOfAnswersOnlyForErrorsThatClaimAClass(t *testing.T) {
+	plain := errors.New("disk on fire")
+	if got := pyval.ClassOf(plain); got != "" {
+		t.Errorf("ClassOf(a plain Go error) = %q, want \"\"", got)
+	}
+	for _, c := range []string{"TypeError", "ValueError", "OverflowError", ""} {
+		if pyval.CaughtBy(plain, c) {
+			t.Errorf("a plain Go error was caught by except %q", c)
+		}
+	}
+	if pyval.CaughtBy(nil, "ValueError") {
+		t.Error("a nil error was caught by an except tuple")
+	}
+
+	// Wrapped, because that is how a class survives a call stack: Python's
+	// exception propagates unchanged, and Go's has to be found through
+	// %w.
+	wrapped := fmt.Errorf("writing the row: %w",
+		&pyval.PyErr{Class: "KeyError", Msg: "'status'"})
+	if got := pyval.ClassOf(wrapped); got != "KeyError" {
+		t.Errorf("ClassOf(a wrapped PyErr) = %q, want KeyError", got)
+	}
+	if !pyval.CaughtBy(wrapped, "TypeError", "KeyError") {
+		t.Error("a wrapped KeyError escaped except (TypeError, KeyError)")
+	}
+
+	// And a Go-typed error that names its class: the whole reason
+	// PyClasser exists rather than turning every raise into a *PyErr.
+	if got := pyval.ClassOf(&classedErr{}); got != "RuntimeError" {
+		t.Errorf("ClassOf(a PyClasser) = %q, want RuntimeError", got)
+	}
+	if !pyval.CaughtBy(fmt.Errorf("wrapped: %w", &classedErr{}), "RuntimeError") {
+		t.Error("a wrapped PyClasser escaped except RuntimeError")
+	}
+}
+
+type classedErr struct{}
+
+func (e *classedErr) Error() string   { return "already claimed" }
+func (e *classedErr) PyClass() string { return "RuntimeError" }

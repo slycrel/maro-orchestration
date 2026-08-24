@@ -203,7 +203,14 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	// row keyed on the literal string "None".
 	parentID := taskGet(task, "parent_job_id", "")
 
-	o.logf("escalation_start job_id=%s depth=%s", jobID, depthStr)
+	// `log.info("escalation_start job_id=%s depth=%d", job_id, depth)` — a
+	// %d, not an f-string, and every OTHER depth site in this function is
+	// an f-string. `%d` of 2.0 is "2" where str() says "2.0", and `%d` of a
+	// string or a null drops the RECORD: logging catches the TypeError in
+	// its own formatter and emits nothing (adversarial r11 round 4).
+	if depthD, recorded := pyval.PercentD(depth); recorded {
+		o.logf("escalation_start job_id=%s depth=%s", jobID, depthD)
+	}
 	if o.Verbose {
 		fmt.Fprintf(os.Stderr, "[maro:director:escalation] job=%s depth=%s\n", jobID, depthStr)
 	}
@@ -399,7 +406,10 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			break
 		}
 		followupTaskID = t.GetString("job_id")
-		o.logf("escalation_continue: enqueued %s depth=%v", followupTaskID, newDepth)
+		// %d again, on `depth + 1` — see escalation_start.
+		if d, recorded := pyval.PercentD(newDepth); recorded {
+			o.logf("escalation_continue: enqueued %s depth=%s", followupTaskID, d)
+		}
 		// Fire only after the continuation is CONFIRMED enqueued — a failed
 		// enqueue must never tell the user "still running".
 		if shouldCheckin {
@@ -496,7 +506,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	// never reached write_event", the other is "write_event's own try
 	// caught it" — and the day a caller slices something WriteEvent would
 	// accept, only this one is right.
-	if eventGoal, sliceable := pyval.SliceHead(taskGet(task, "reason", ""), 80); sliceable {
+	if eventGoal, sliceErr := pyval.SliceHead(taskGet(task, "reason", ""), 80); sliceErr == nil {
 		notify.WriteEvent(ws, "escalation_processed", notify.EventFields{
 			Goal: eventGoal,
 			// project and loop_id are the RAW task values, unsliced and
@@ -780,8 +790,14 @@ func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 		{Key: "status", Val: "running"},
 	}
 	notify.EmitOrdered(context.Background(), ws, "recursion_checkin", payload, o.Notify)
-	o.logf("recursion_checkin fired: depth=%v pass=%v checkin=%d action=%s",
-		newDepth, goalPass, checkinNumber, action)
+	// Two %d arguments, and BOTH must render for the record to exist —
+	// logging formats the whole message or none of it.
+	depthD, depthOK := pyval.PercentD(newDepth)
+	passD, passOK := pyval.PercentD(goalPass)
+	if depthOK && passOK {
+		o.logf("recursion_checkin fired: depth=%s pass=%s checkin=%d action=%s",
+			depthD, passD, checkinNumber, action)
+	}
 }
 
 // --- the judged close ----------------------------------------------------
@@ -885,10 +901,15 @@ func writeEscalationSummary(ws string, jobIDRaw any, action string, depth any,
 	// The slice result rides into an f-string, so a LIST job_id gives a
 	// directory named `escalation-[1, 2]` rather than no artifact — only
 	// the shapes that RAISE skip it.
-	shortRaw, sliceable := pyval.SliceHead(jobIDRaw, 8)
-	if !sliceable {
-		o.logf("escalation %s: failed to write summary: job_id is not sliceable",
-			action)
+	shortRaw, sliceErr := pyval.SliceHead(jobIDRaw, 8)
+	if sliceErr != nil {
+		// Python logs the EXCEPTION here — `log.warning("escalation %s:
+		// failed to write summary: %s", action, exc)` — so the message is
+		// CPython's own ("'int' object is not subscriptable",
+		// "slice(None, 8, None)"), not a sentence this port invented. It is
+		// the line an operator greps side by side with the Python, which is
+		// the same reason the reasoning log uses repr.
+		o.logf("escalation %s: failed to write summary: %s", action, sliceErr)
 		return
 	}
 	short := pyval.Str(shortRaw)

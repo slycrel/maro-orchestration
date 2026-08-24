@@ -7221,3 +7221,130 @@ general form: when Python catches a NARROW tuple, the set of classes it
 does not catch is as much a part of the contract as the ones it does — and
 a port that collapses them will be most confidently wrong on the value the
 tuple was written to let through.
+
+### Round 11, part 4 — a value's type has to survive the read
+
+Seven findings — 0 HIGH, 3 MEDIUM, 4 LOW — against the whole r11 chunk and
+its round-3 fixes, per the standing "review the whole chunk, not the latest
+diff" rule. **Every code claim was verified against the Python source, and
+where the claim was about the interpreter, against the interpreter itself.
+None was hallucinated** — the first round in this port where that was true
+of all seven.
+
+The findings were one shape seen seven times: **a value arrives with a
+type, something reads it, and the type does not survive the read.**
+
+- **`%d` is not `str()`.** `log.info("escalation_start job_id=%s depth=%d",
+  job_id, depth)` is not an f-string. `%d` of `2.0` is `"2"`, `%d` of a
+  bool is `"1"`, and `%d` of a str, a None or a dict **raises inside
+  logging's own formatter** — which `logging.Handler.emit` is defined to
+  catch and route to `handleError`, so the operator gets NO RECORD rather
+  than a crash. The port rendered all of them with `str()`: `depth=2.0`
+  where CPython says `depth=2`, and a line where CPython has none.
+- **A pid read through an int helper is not a pid.** `claim` reads
+  `task["claimed_by_pid"]` RAW and hands it to `_pid_alive`, whose first
+  line is `pid <= 0` — a comparison that RAISES for a string. The port
+  coerced it to an int first, answered 0, called the claim stale, and
+  **released a task CPython leaves claimed.**
+- **A task file holding the literal `null` is a missing task, not a
+  broken one.** `_read_task` is bare `json.loads`, so `null` comes back as
+  `None`, indistinguishable from a missing file to all six callers — every
+  one of which tests `if task is None`. One such row is SKIPPED. The port
+  refused it, which aborts `list_tasks`, `status_summary` and
+  `recover_stale_claims` alike: a drain loop sees an erroring queue while
+  every genuinely queued task stalls.
+- **A status key is the raw value.** `counts[status] += 1` uses whatever
+  the row holds, so `5`, `None` and `True` are three separate buckets and a
+  dict is an unhashable TypeError that destroys the whole summary. The port
+  folded all of them to `"unknown"`, merging buckets CPython keeps apart
+  and answering a number CPython never produces.
+- **`str.strip()` is not `strings.TrimSpace`.** Swept over the full rune
+  range, they agree on 25 code points and Python strips four more: the
+  ASCII information separators U+001C–U+001F. A separator-only
+  `notify.command` is EMPTY to CPython — no hook at all — and non-empty to
+  a Go trim, which spawns it.
+- **An exception's message is not the port's sentence.** The summary write
+  logged `"job_id is not sliceable"` where CPython logs the exception it
+  actually caught, and an int and a dict do not raise the same one.
+- **The 4300-digit limit is not the int64 limit.** `int(str)` past 4300
+  DIGITS is a ValueError in CPython — a limit that has nothing to do with
+  magnitude. The port answered its own `ErrIntTooLarge` sentinel, which is
+  not a Python exception and which no `except ValueError` catches.
+
+**What the battery found that the findings did not.** Twenty-nine
+mutations derived from the FILES caught 17 and MISSED 12 — and, as in
+round 3, nearly every miss was "written but not measured". The fixes were
+right; nothing could reach them. Closing them took three new instruments
+rather than twelve new assertions (and the bugs those instruments found
+added nine more mutations, so the final battery stands at **36 of 38**,
+both remaining misses labelled in the source):
+
+- **`%d` got a differential of its own.** The three call sites can only be
+  fed what a task file can carry, and a task file is JSON: it cannot spell
+  NaN, cannot spell Infinity through Go's encoder, and reaches `-0.0` only
+  by accident. So the operator is now pinned directly, against a probe
+  that reproduces logging's swallow — 26 rows including a negative zero
+  (Python has no negative zero *integer*, so `%d` of `-0.5` is `"0"`), a
+  bool, and an integer literal too wide for float64 (CPython prints it
+  exactly; a float64 round-trip prints a number the source never
+  contained). The table carries its own floor: if every row rendered, or
+  none did, it fails — a `%d` differential where nothing gets deleted is
+  measuring the wrong half.
+- **the sweep differential learned about bools and bounds.** `pid <= 0`
+  sees a bool as an int, so `False` returns early and `True` is pid 1 —
+  which answers PermissionError, caught as alive.
+- **the log differential reached the continue branch.** Two more `%d`
+  sites live past a successful enqueue, and every prior fixture closed.
+
+**And it found four more bugs, three of them in the round-4 fixes.**
+
+- A pid of `10**23` is an OverflowError in CPython — `os.kill` takes a C
+  int — and the port answered a *TypeError about floats*, because a
+  `json.Number` too wide for int64 had been routed through `Float64`. The
+  fix adds `pyval.IntLiteral` (exported, because "is this wide number an
+  int or an overflowed float" decides the exception class, and the pid
+  read is the second caller to need it).
+- The port's C-int bound was SYMMETRIC (`pid > MaxInt32 || pid <
+  MinInt32`) where CPython's is not: `pid <= 0` returns False **before**
+  `os.kill` is ever reached, so a hugely negative pid is simply dead. The
+  port raised where CPython answers. The one-sided bound is now pinned
+  from three sides — past it, at it, and below zero — and the redundant
+  second sign test was REMOVED rather than kept: duplicating it is what
+  made the wrong bound unobservable in the first place.
+- **Python's `and` short-circuits and the port's did not.**
+  `if claimed_pid and not _pid_alive(claimed_pid)` never calls
+  `_pid_alive` for a falsy pid — and three falsy values RAISE inside it:
+  `""`, `[]` and `{}` are all a TypeError at `pid <= 0`. The port
+  evaluated both sides first, so a row CPython walks straight past
+  ("already claimed by pid ") aborted the claim and the whole sweep.
+- `recover_stale_claims` indexes `task["status"]` and `task["job_id"]`,
+  and the port read both through defaulting getters — the round-3 finding
+  class, in the one function round 3 never looked at. A claimed row with
+  no `job_id` silently recovered as `""`.
+
+The class layer grew one piece to make the first of those testable.
+`ConflictError` and `CycleError` are real Go types with real `errors.As`
+call sites and should not become string-classed structs — so they now
+answer `PyClass()`, and `pyval.ClassOf` resolves a class through either
+shape (and through `%w` wrapping). `CaughtBy` routes through it, which is
+a widening of every `except` tuple in the port if it ever answered for a
+plain Go error; the negative half is pinned.
+
+**Two misses are left standing and labelled in the source.**
+`recursion_checkin`'s two `%d` arguments are `new_depth` and
+`new_depth + 1`, and the `+ 1` is computed immediately above with an early
+return on failure — so `depthOK` and `passOK` cannot differ for any value
+that reaches the log line, and `&&` versus `||` is not an observable
+difference. The mutation is recorded rather than removed. And the
+escalation lane's own slice guard is still redundant with `WriteEvent`'s,
+carried from round 3.
+
+The third round-3 miss is GONE, and not by writing a test for it: `%d` of
+`checkins_sent` now runs through `PercentD`, whose own differential
+reaches the value the escalation fixtures could not. A guard becomes
+observable when the helper under it acquires a table — which is the
+argument for pushing behaviour down into `pyval` rather than spelling it
+out at each call site. Two more unobservable guards were not labelled but
+DELETED this round, for the reason the C-int bound made concrete: a
+duplicated sign test is not defence in depth, it is the thing that hides
+a wrong bound.

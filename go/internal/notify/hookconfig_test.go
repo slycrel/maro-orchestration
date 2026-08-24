@@ -254,6 +254,15 @@ func TestTheHookCommandIsStringifiedNotAsserted(t *testing.T) {
 		{"a null", "  command: ~\n"},
 		{"an empty string", `  command: ""` + "\n"},
 		{"whitespace only", `  command: "   "` + "\n"},
+		// str.strip() and strings.TrimSpace do NOT strip the same set:
+		// Python's whitespace includes the four ASCII information
+		// separators U+001C-U+001F and Go's unicode.IsSpace does not
+		// (measured by sweeping both over the full rune range). A
+		// separator-only command is EMPTY to CPython and therefore no
+		// hook at all; a Go trim leaves it non-empty and spawns it.
+		{"separators only", `  command: "\x1c\x1d\x1e\x1f"` + "\n"},
+		{"a command wrapped in separators",
+			`  command: "\x1cbash notify.sh\x1f"` + "\n"},
 		{"a list", "  command: [a, b]\n"},
 		{"no command key at all", ""},
 	} {

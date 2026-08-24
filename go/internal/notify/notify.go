@@ -50,6 +50,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/config"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -397,8 +398,8 @@ func WriteEvent(ws, eventType string, f EventFields) {
 	// `goal[:80]` is INSIDE write_event's own try, so a goal that cannot
 	// be sliced means no row — the same observable as the caller's slice
 	// raising one frame up.
-	goal, sliceable := pyval.SliceHead(f.Goal, 80)
-	if !sliceable {
+	goal, sliceErr := pyval.SliceHead(f.Goal, 80)
+	if sliceErr != nil {
 		return
 	}
 	entry := pyval.Obj{
@@ -528,7 +529,12 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 	// and logged the failure. The sibling read three lines down was
 	// converted in round 2 and this one was not (adversarial r11 round 3,
 	// MEDIUM).
-	command := strings.TrimSpace(
+	// str.strip(), not TrimSpace: Python's whitespace set includes
+	// U+001C–U+001F and Go's unicode.White_Space does not, so a command of
+	// "\x1c" is EMPTY to CPython (no hook, emit returns False) and non-empty
+	// here — spawning a shell CPython never spawns (adversarial r11 round 4,
+	// LOW). Every sibling read in this chunk already uses pytext.Strip.
+	command := pytext.Strip(
 		pyval.StrOrEmpty(config.GetRaw(cfg, "notify.command", "")))
 	if command == "" {
 		return false // no substrate registered a lane: the normal case

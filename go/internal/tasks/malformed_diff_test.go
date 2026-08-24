@@ -93,6 +93,31 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 			"job_id": "task-mal08", "lane": "agenda", "status": "queued",
 			"attempt": null, "timestamps": {}, "blocked_by": []}`},
 
+		// The claim's OTHER read of a stale row. `claimed_by_pid` is a
+		// `.get`, so a missing key is None and falsy; the value itself is
+		// handed raw to `_pid_alive`, whose `pid <= 0` raises for a
+		// string — but only when the value is TRUTHY, because Python's
+		// `and` short-circuits.
+		{"a claim on a claimed row with a string pid", "claim", `{
+			"job_id": "task-mal14", "lane": "agenda", "status": "claimed",
+			"claimed_by_pid": "1234", "attempt": 1, "timestamps": {},
+			"blocked_by": []}`},
+		{"a claim on a claimed row with an empty-string pid", "claim", `{
+			"job_id": "task-mal15", "lane": "agenda", "status": "claimed",
+			"claimed_by_pid": "", "attempt": 1, "timestamps": {},
+			"blocked_by": []}`},
+		{"a claim on a claimed row with a dict pid", "claim", `{
+			"job_id": "task-mal16", "lane": "agenda", "status": "claimed",
+			"claimed_by_pid": {"pid": 1}, "attempt": 1, "timestamps": {},
+			"blocked_by": []}`},
+		{"a claim on a claimed row with no pid key at all", "claim", `{
+			"job_id": "task-mal17", "lane": "agenda", "status": "claimed",
+			"attempt": 1, "timestamps": {}, "blocked_by": []}`},
+		{"a claim on a claimed row whose pid is dead", "claim", `{
+			"job_id": "task-mal18", "lane": "agenda", "status": "claimed",
+			"claimed_by_pid": 999999, "attempt": 1, "timestamps": {},
+			"blocked_by": []}`},
+
 		{"a complete on a row with no artifact_paths", "complete", `{
 			"job_id": "task-mal09", "lane": "agenda", "status": "claimed",
 			"attempt": 1, "timestamps": {}, "blocked_by": []}`},
@@ -174,18 +199,18 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 			}
 
 			if !want.OK {
-				pe, ok := gotErr.(*pyval.PyErr)
-				if !ok {
+				cls := pyval.ClassOf(gotErr)
+				if cls == "" {
 					t.Errorf("%s raised %v, which carries no exception class; "+
 						"CPython raises %s: %s", c.verb, gotErr, want.Cls, want.Msg)
 				} else {
-					if pe.Class != want.Cls {
+					if cls != want.Cls {
 						t.Errorf("%s raises %s, CPython raises %s",
-							c.verb, pe.Class, want.Cls)
+							c.verb, cls, want.Cls)
 					}
-					if pe.Msg != want.Msg {
+					if gotErr.Error() != want.Msg {
 						t.Errorf("%s message = %q, CPython says %q",
-							c.verb, pe.Msg, want.Msg)
+							c.verb, gotErr.Error(), want.Msg)
 					}
 				}
 				// The FILE is the half that matters to the next reader. A

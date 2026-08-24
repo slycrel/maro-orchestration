@@ -38,11 +38,14 @@ package tasks
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -66,6 +69,10 @@ type ConflictError struct{ msg string }
 
 func (e *ConflictError) Error() string { return e.msg }
 
+// PyClass is the exception CPython raises here, so a differential can
+// compare the class and not just the sentence.
+func (e *ConflictError) PyClass() string { return "RuntimeError" }
+
 func conflictf(format string, a ...any) error {
 	return &ConflictError{msg: fmt.Sprintf(format, a...)}
 }
@@ -74,6 +81,8 @@ func conflictf(format string, a ...any) error {
 type CycleError struct{ msg string }
 
 func (e *CycleError) Error() string { return e.msg }
+
+func (e *CycleError) PyClass() string { return "ValueError" }
 
 // TasksDir and ArchiveDir resolve at CALL time, not at package init:
 // Python re-reads workspace_root() on every call so a test that moves the
@@ -297,12 +306,35 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 			return err
 		}
 		if claimStatus == "claimed" {
-			claimedPID := pyval.IntOf(mustGet(t, "claimed_by_pid"))
-			if claimedPID != 0 && !pidAlive(claimedPID) {
+			// RAW. Python's gate is `if claimed_pid and not
+			// _pid_alive(claimed_pid)` — truthiness on the stored value,
+			// and _pid_alive's own `pid <= 0` then RAISES for anything
+			// that is not a number. Reading it through IntOf answered 0
+			// for a string pid, which made the gate false, so the port
+			// reported a conflict "by pid 0" where CPython raised
+			// TypeError — and the sweep below released a task CPython
+			// never touches (adversarial r11 round 4, MEDIUM).
+			claimedPID := mustGet(t, "claimed_by_pid")
+			// SHORT-CIRCUITED, because Python's `and` is. `if claimed_pid
+			// and not _pid_alive(claimed_pid)` never calls _pid_alive for
+			// a falsy pid — and three falsy values RAISE inside it: "",
+			// [] and {} are all TypeError at `pid <= 0`. Evaluating both
+			// sides first turned "already claimed by pid " into a
+			// TypeError that aborts the claim.
+			release := false
+			if pyval.Truthy(claimedPID) {
+				alive, aerr := pidAliveRaw(claimedPID)
+				if aerr != nil {
+					return aerr
+				}
+				release = !alive
+			}
+			if release {
 				t.Set("status", "queued")
 				t.Set("claimed_by_pid", nil)
 			} else {
-				return conflictf("task %s already claimed by pid %v", jobID, claimedPID)
+				return conflictf("task %s already claimed by pid %s",
+					jobID, pyval.Str(claimedPID))
 			}
 		}
 		// Re-indexed rather than reused: the stale-claim branch above can
@@ -568,12 +600,24 @@ func StatusSummary(ws string) (map[string]int, error) {
 		if t == nil {
 			continue
 		}
-		s, ok := t.Get("status")
-		str, isStr := s.(string)
-		if !ok || !isStr {
-			str = "unknown"
+		// `s = task.get("status", "unknown")` — the default applies only
+		// when the KEY is absent, and the raw value becomes a dict key.
+		// The CLI then json.dumps that dict, which renders a non-string
+		// key by its JSON spelling: 5 is "5", None is "null", True is
+		// "true". Folding them all to "unknown" merged buckets CPython
+		// keeps apart (adversarial r11 round 4, LOW).
+		raw, ok := t.Get("status")
+		if !ok {
+			raw = "unknown"
 		}
-		counts[str]++
+		key, hashable := statusKey(raw)
+		if !hashable {
+			return nil, &pyval.PyErr{Class: "TypeError",
+				Msg: fmt.Sprintf("cannot use '%s' as a dict key "+
+					"(unhashable type: '%s')",
+					pyval.TypeName(raw), pyval.TypeName(raw))}
+		}
+		counts[key]++
 	}
 	return counts, nil
 }
@@ -638,11 +682,29 @@ func RecoverStaleClaims(ws string) ([]string, error) {
 			if err != nil || t == nil {
 				return err
 			}
-			if t.GetString("status") != "claimed" {
+			// SUBSCRIPTS, both of them: `task["status"]` and
+			// `task["job_id"]` are indexed here, not defaulted, so a
+			// claimed row missing either raises out of the whole sweep.
+			claimStatus, err := indexStr(t, "status")
+			if err != nil {
+				return err
+			}
+			if claimStatus != "claimed" {
 				return nil
 			}
-			pid := pyval.IntOf(mustGet(t, "claimed_by_pid"))
-			if pid == 0 || pidAlive(pid) {
+			// Same raw read as Claim, and the same raise: a single queue
+			// row with a string pid aborts the WHOLE sweep in CPython,
+			// which is why the error propagates instead of skipping the
+			// row.
+			pidRaw := mustGet(t, "claimed_by_pid")
+			if !pyval.Truthy(pidRaw) {
+				return nil
+			}
+			alive, aerr := pidAliveRaw(pidRaw)
+			if aerr != nil {
+				return aerr
+			}
+			if alive {
 				return nil
 			}
 			t.Set("status", "queued")
@@ -650,7 +712,11 @@ func RecoverStaleClaims(ws string) ([]string, error) {
 			if err := writeTask(p, t); err != nil {
 				return err
 			}
-			recovered = append(recovered, t.GetString("job_id"))
+			recoveredID, err := index(t, "job_id")
+			if err != nil {
+				return err
+			}
+			recovered = append(recovered, pyval.Str(recoveredID))
 			return nil
 		})
 		if err != nil {
@@ -676,6 +742,92 @@ func pidAlive(pid int) bool {
 		return true
 	}
 	return !errors.Is(err, syscall.ESRCH)
+}
+
+// pidAliveRaw is _pid_alive on the value a task file actually holds.
+//
+//	if pid is None or pid <= 0: return False
+//
+// Two raises live in that line and neither is caught anywhere up the
+// stack. `pid <= 0` for a str, a list or a dict is a TypeError naming both
+// operand types; a FLOAT compares fine and then `os.kill` refuses it; and
+// an int past a C int overflows there. True is 1 and is a real pid.
+func pidAliveRaw(v any) (bool, error) {
+	if v == nil {
+		return false, nil
+	}
+	switch t := v.(type) {
+	case bool:
+		// A bool IS an int to `pid <= 0` and to os.kill alike, so it takes
+		// the same path as one rather than a hand-written arm: False is 0
+		// and dead, True is pid 1 and answers PermissionError, which
+		// `except OSError: return True` calls alive.
+		if t {
+			return pidAliveInt(1)
+		}
+		return pidAliveInt(0)
+	case int:
+		return pidAliveInt(int64(t))
+	case int64:
+		return pidAliveInt(t)
+	case float64:
+		if t <= 0 {
+			return false, nil
+		}
+		return false, &pyval.PyErr{Class: "TypeError",
+			Msg: "'float' object cannot be interpreted as an integer"}
+	case json.Number:
+		lit, isInt := pyval.IntLiteral(t.String())
+		if !isInt {
+			f, err := t.Float64()
+			if err != nil && !errors.Is(err, strconv.ErrRange) {
+				return false, &pyval.PyErr{Class: "TypeError", Msg: cmpTypeErr(v)}
+			}
+			return pidAliveRaw(f)
+		}
+		if i, err := t.Int64(); err == nil {
+			return pidAliveInt(i)
+		}
+		// A Python int too wide for int64 — and still an INT, so `pid <= 0`
+		// answers on its sign without os.kill ever seeing it.
+		if strings.HasPrefix(lit, "-") {
+			return false, nil
+		}
+		return false, pidOverflow()
+	}
+	return false, &pyval.PyErr{Class: "TypeError", Msg: cmpTypeErr(v)}
+}
+
+// pidAliveInt is `_pid_alive` for a value that is a Python int.
+//
+// The ORDER is the contract: `pid <= 0` returns False before os.kill is
+// reached, so a hugely NEGATIVE pid is simply dead — it never overflows.
+// Only a pid past the positive C-int bound raises, and that raise is what
+// stops the sweep from releasing a claim it could not verify. Measured on
+// this box: os.kill(2**31-1, 0) is a ProcessLookupError, os.kill(2**31, 0)
+// is an OverflowError.
+func pidAliveInt(pid int64) (bool, error) {
+	// ONE-SIDED on purpose. A symmetric `|| pid < math.MinInt32` reads
+	// like the C-int range and is wrong: `pid <= 0` has already answered
+	// False by the time os.kill could overflow, so a hugely negative pid
+	// is dead, not an error. pidAlive carries that sign test, so it is
+	// not repeated here — duplicating it would make the wrong bound
+	// unobservable, which is how the symmetric version shipped.
+	if pid > math.MaxInt32 {
+		return false, pidOverflow()
+	}
+	return pidAlive(int(pid)), nil
+}
+
+func pidOverflow() error {
+	return &pyval.PyErr{Class: "OverflowError",
+		Msg: "Python int too large to convert to C int"}
+}
+
+// cmpTypeErr is CPython's message for `x <= 0` where x is not a number.
+func cmpTypeErr(v any) string {
+	return fmt.Sprintf("'<=' not supported between instances of '%s' and 'int'",
+		pyval.TypeName(v))
 }
 
 // blockedList reads blocked_by as strings, skipping non-strings the way
@@ -786,4 +938,26 @@ func lockPath(path string) string {
 		stem = name[:lead+i]
 	}
 	return filepath.Join(dir, stem+".lock")
+}
+
+// statusKey is a status value as a JSON object key — what json.dumps does
+// to the counts dict CPython builds. A list or a dict is unhashable and
+// never becomes a key at all.
+func statusKey(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return t, true
+	case nil:
+		return "null", true
+	case bool:
+		if t {
+			return "true", true
+		}
+		return "false", true
+	case pyval.Obj, pyval.List, map[string]any, []any, []string:
+		return "", false
+	}
+	// Numbers render as their Python repr, which is also their JSON key
+	// spelling: 5 is "5" and 2.0 is "2.0".
+	return pyval.Str(v), true
 }
