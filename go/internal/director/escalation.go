@@ -761,7 +761,13 @@ func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 	}
 	checkinNumber, raised := pyval.Int(sentRaw)
 	if raised != nil {
-		o.logf("recursion check-in emit failed (non-fatal): %v", raised)
+		// No format argument: Python is
+		// `log.debug("recursion check-in emit failed (non-fatal)",
+		// exc_info=True)`, so the exception rides exc_info and never
+		// reaches the message. The traceback it writes to a debug logger
+		// has no counterpart here and is not a message difference
+		// (adversarial r11 round 6, LOW).
+		o.logf("recursion check-in emit failed (non-fatal)")
 		return
 	}
 	// An ORDERED payload, in Python's dict-literal order, because two
@@ -775,7 +781,13 @@ func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 	// `depth + 1` upstream, so it is a number by construction.
 	goalPass, err := pyval.AddOne(newDepth)
 	if err != nil {
-		o.logf("recursion check-in emit failed (non-fatal): %v", err)
+		// No format argument: Python is
+		// `log.debug("recursion check-in emit failed (non-fatal)",
+		// exc_info=True)`, so the exception rides exc_info and never
+		// reaches the message. The traceback it writes to a debug logger
+		// has no counterpart here and is not a message difference
+		// (adversarial r11 round 6, LOW).
+		o.logf("recursion check-in emit failed (non-fatal)")
 		return
 	}
 	payload := pyval.Obj{

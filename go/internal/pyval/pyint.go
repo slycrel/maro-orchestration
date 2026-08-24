@@ -442,6 +442,30 @@ func percentDFloat(f float64) (string, bool) {
 	return out, true
 }
 
+// PercentF is Python's `"%.<prec>f" % f`.
+//
+// It exists for the same reason PercentD does: Go's verb agrees with
+// Python's on every finite value and disagrees on the three that are not.
+// Python spells them lowercase — "inf", "-inf", "nan" — and Go spells them
+// "+Inf", "-Inf", "NaN". One operator-facing line already reaches a
+// non-finite (notify's timed-out log, whose configured timeout may be
+// -Inf), and a rate computed as a quotient can reach NaN anywhere.
+//
+// Everything else is delegated: at a fixed precision both runtimes emit the
+// correctly-rounded decimal expansion of the same double, including the
+// 301-digit one for -1e300 and the negative zero for -0.0.
+func PercentF(f float64, prec int) string {
+	switch {
+	case math.IsNaN(f):
+		return "nan"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(f, 'f', prec, 64)
+}
+
 // IntLiteral reports whether a decoded number was written as an integer,
 // and returns it the way Python's int would print it.
 //

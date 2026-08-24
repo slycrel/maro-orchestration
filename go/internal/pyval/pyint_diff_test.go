@@ -721,3 +721,116 @@ type classedErr struct{}
 
 func (e *classedErr) Error() string   { return "already claimed" }
 func (e *classedErr) PyClass() string { return "RuntimeError" }
+
+// pyPercentFSrc asks CPython what `"%.*f" % v` renders. Unlike PercentD's
+// probe this one does NOT go through logging: every call site is a `%.0f`
+// inside a log ARGUMENT that has already been rendered by the port, and
+// float formatting does not raise for any float — so there is no vanished
+// record to model here, only text.
+//
+// The two runtimes disagree on exactly one class of input, and it is the
+// one a config file can carry: Python spells the non-finites lowercase
+// ("nan", "inf", "-inf") where Go's strconv spells them "NaN", "+Inf" and
+// "-Inf". The rest of the table is here so that agreement is a claim
+// about the whole operator rather than about three special cases.
+const pyPercentFSrc = `
+import json, sys
+args = json.loads(sys.argv[1])
+out = []
+for prec, expr in args:
+    out.append(("%." + str(prec) + "f") % eval(expr))
+print(json.dumps(out))
+`
+
+// TestPercentFMatchesCPython pins pyval.PercentF against the interpreter.
+//
+// Its own table rather than more notify fixtures, and the reason is the
+// finding that produced it: the round-6 battery mutated PercentF's NaN arm
+// and NOTHING failed. notify refuses a NaN timeout one branch BEFORE the
+// log line that would format it, so the arm is unreachable from the only
+// live caller — a helper arm with no case at it, which is the same shape
+// as Float's json.Number overflow arm. Pinned at the helper and labelled,
+// rather than left as an arm nothing can fire.
+func TestPercentFMatchesCPython(t *testing.T) {
+	type row struct {
+		name   string
+		goVal  float64
+		prec   int
+		pyExpr string
+	}
+	rows := []row{
+		{"a whole number", 3, 0, "3.0"},
+		{"a negative whole number", -3, 0, "-3.0"},
+		{"zero", 0, 0, "0.0"},
+		// Python has a negative zero FLOAT, and %.0f keeps its sign — the
+		// opposite of %d, which has no negative zero integer to print.
+		{"negative zero", math.Copysign(0, -1), 0, "-0.0"},
+
+		// Half-way cases: both runtimes round half to EVEN here, which is
+		// C printf's rule and not the schoolbook one. A port that reached
+		// for math.Round would answer 1, 2 and 3.
+		{"a half that rounds down to even", 0.5, 0, "0.5"},
+		{"a half that rounds up to even", 1.5, 0, "1.5"},
+		{"another half that rounds down to even", 2.5, 0, "2.5"},
+		{"a negative half", -0.5, 0, "-0.5"},
+
+		// The hook timeout's own boundary, at the precision the log uses.
+		{"the largest timeout poll accepts", 2147483.647, 0, "2147483.647"},
+		{"one millisecond past it", 2147483.648, 0, "2147483.648"},
+		{"the never-time-out idiom", 3e6, 0, "3e6"},
+
+		// A value with no short decimal form. Python expands it in full,
+		// and so does Go — 301 digits of agreement, which is the point.
+		{"a value with no short decimal form", -1e300, 0, "-1e300"},
+
+		// The three the port had to spell for itself.
+		{"nan", math.NaN(), 0, "float('nan')"},
+		{"inf", math.Inf(1), 0, "float('inf')"},
+		{"negative inf", math.Inf(-1), 0, "float('-inf')"},
+
+		// A precision other than zero, so the argument is not a constant
+		// the helper could ignore.
+		{"two places", 1.005, 2, "1.005"},
+		{"two places on a non-finite", math.Inf(-1), 2, "float('-inf')"},
+		{"six places", 1.0 / 3.0, 6, "1.0 / 3.0"},
+	}
+
+	args := make([][2]any, len(rows))
+	for i, r := range rows {
+		args[i] = [2]any{r.prec, r.pyExpr}
+	}
+	arg, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	pyprobe.Probe{Marker: "notify.py"}.RunJSON(t, pyPercentFSrc, &want, string(arg))
+	if len(want) != len(rows) {
+		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
+	}
+
+	// The table's own floor. Every row here renders — this operator never
+	// deletes a record — so the claim that could go quietly false is that
+	// some row is a NON-FINITE, which is the only class the two runtimes
+	// spell differently. A table of ordinary numbers would agree whatever
+	// the helper did with a nan.
+	nonFinite := 0
+	for _, r := range rows {
+		if math.IsNaN(r.goVal) || math.IsInf(r.goVal, 0) {
+			nonFinite++
+		}
+	}
+	if nonFinite < 4 {
+		t.Fatalf("only %d non-finite rows; the divergence this helper "+
+			"exists for would not be under test", nonFinite)
+	}
+
+	for i, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			if got := pyval.PercentF(r.goVal, r.prec); got != want[i] {
+				t.Errorf("PercentF(%v, %d) = %q, CPython says %q",
+					r.goVal, r.prec, got, want[i])
+			}
+		})
+	}
+}

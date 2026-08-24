@@ -69,29 +69,52 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 		val     any
 		wantRun bool
 		want    time.Duration
+		// wantLog is the timed-out line CPython writes, or "" for the
+		// values it refuses without logging anything. The two are NOT the
+		// same outcome and the return value cannot tell them apart: emit
+		// answers False either way, and the log is the only surface a
+		// headless operator reads.
+		wantLog string
 	}{
-		{"an int", 45, true, 45 * time.Second},
-		{"a float", 4.5, true, 4500 * time.Millisecond},
-		{"a quoted number", "45", true, 45 * time.Second},
-		{"a quoted float", " 4.5 ", true, 4500 * time.Millisecond},
-		{"a bool", true, true, time.Second},
-		{"prose", "soon", false, 0},
-		{"a null", nil, false, 0},
-		{"a list", []any{45}, false, 0},
-		// subprocess.run converts the timeout to a C PyTime_t, which
-		// OVERFLOWS past ~9.2e9 seconds — an OverflowError, not a
-		// TimeoutExpired, so it escapes to emit's outer handler the same
-		// way prose does. Go's Duration wraps to MinInt64 instead: an
-		// already-expired context, the hook "timing out" instantly, and a
-		// log line claiming a timeout of -9223372037s.
-		{"a timeout past the int64 nanosecond range", 1e11, false, 0},
-		{"an infinite timeout", math.Inf(1), false, 0},
-		{"a negative infinite timeout", math.Inf(-1), false, 0},
-		{"a NaN timeout", math.NaN(), false, 0},
-		// And the bound from the side that still works, so the range
-		// check cannot be a blanket refusal.
-		{"the largest timeout that fits", 9.2e9, true,
-			time.Duration(9.2e9 * float64(time.Second))},
+		{"an int", 45, true, 45 * time.Second, ""},
+		{"a float", 4.5, true, 4500 * time.Millisecond, ""},
+		{"a quoted number", "45", true, 45 * time.Second, ""},
+		{"a quoted float", " 4.5 ", true, 4500 * time.Millisecond, ""},
+		{"a bool", true, true, time.Second, ""},
+		{"prose", "soon", false, 0, ""},
+		{"a null", nil, false, 0, ""},
+		{"a list", []any{45}, false, 0, ""},
+		// The bound is poll()'s, not Go's: subprocess hands the remaining
+		// time to select/poll as a C int of MILLISECONDS, so anything past
+		// INT_MAX ms is OverflowError("timeout is too large") — an escape
+		// to emit's outer handler, not a TimeoutExpired. Measured on
+		// 3.14.3: 2147483.647 runs, 2147483.648 raises.
+		{"the largest timeout that fits", 2147483.647, true,
+			time.Duration(2147483.647 * float64(time.Second)), ""},
+		{"one millisecond past the poll bound", 2147483.648, false, 0, ""},
+		// The operator idiom this bound actually exists for. Every one of
+		// these ran the hook under the round-5 guard, which sat at Go's
+		// Duration limit — ~4300x too high.
+		{"the never-time-out idiom", 3e6, false, 0, ""},
+		{"a timeout past the int64 nanosecond range", 1e11, false, 0, ""},
+		{"an infinite timeout", math.Inf(1), false, 0, ""},
+		{"a NaN timeout", math.NaN(), false, 0, ""},
+		// A NEGATIVE is not out of range at all: poll() gets a deadline
+		// already past, so the hook is spawned, killed, and reported as
+		// timed out — with the CONFIGURED value in the line, spelled the
+		// way Python's %.0f spells it. -Inf included (measured).
+		{"a negative timeout", -1.0, false, 0,
+			"notify.command timed out after -1s for escalation (h-1)"},
+		{"a negative infinite timeout", math.Inf(-1), false, 0,
+			"notify.command timed out after -infs for escalation (h-1)"},
+		{"a hugely negative timeout", -1e9, false, 0,
+			"notify.command timed out after -1000000000s for escalation (h-1)"},
+		// Zero is a deadline already reached, so it is the same immediate
+		// timeout — and its sign survives into the line.
+		{"a zero timeout", 0.0, false, 0,
+			"notify.command timed out after 0s for escalation (h-1)"},
+		{"a negative zero timeout", math.Copysign(0, -1), false, 0,
+			"notify.command timed out after -0s for escalation (h-1)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{}
@@ -118,11 +141,22 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 				// that never happened" look identical from the return
 				// value — and the log is the only surface a headless
 				// operator sees.
+				var timedOut []string
 				for _, line := range logged {
 					if strings.Contains(line, "timed out") {
-						t.Errorf("the port logged a timeout CPython never "+
-							"reports: %q", line)
+						timedOut = append(timedOut, line)
 					}
+				}
+				if c.wantLog == "" {
+					if len(timedOut) > 0 {
+						t.Errorf("the port logged a timeout CPython never "+
+							"reports: %q", timedOut)
+					}
+					return
+				}
+				if len(timedOut) != 1 || timedOut[0] != c.wantLog {
+					t.Errorf("timed-out log:\n  got  %q\n  want %q",
+						timedOut, c.wantLog)
 				}
 				return
 			}

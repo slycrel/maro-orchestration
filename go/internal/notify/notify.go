@@ -571,19 +571,53 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 			eventType, handleID)
 		return false
 	}
-	// RANGE-CHECKED before the conversion. subprocess.run converts the
-	// timeout to a C PyTime_t and raises OverflowError past ~9.2e9 seconds
-	// (ValueError for a NaN) — neither of which is TimeoutExpired, so both
-	// escape to emit's outer handler exactly the way a non-numeric setting
-	// does. Go's Duration silently WRAPS instead, producing an
-	// already-expired context and an operator-facing line claiming the
-	// hook "timed out after -9223372037s" — a timeout that never happened,
-	// on the one surface a headless operator reads (adversarial r11 round
-	// 5, LOW).
-	const maxTimeoutSecs = float64(math.MaxInt64) / float64(time.Second)
-	if math.IsNaN(tsec) || math.Abs(tsec) > maxTimeoutSecs {
+	// RANGE-CHECKED before the conversion, at CPython's OWN bound rather
+	// than at Go's. Three answers, and they are three different Python
+	// exceptions:
+	//
+	//   - a NaN is a ValueError ("cannot convert float NaN to integer")
+	//     and +Inf is an OverflowError ("cannot convert float infinity to
+	//     integer"), both raised converting the timeout;
+	//   - a finite positive past INT_MAX MILLISECONDS is
+	//     OverflowError("timeout is too large") from poll() — measured, on
+	//     3.14: 2147483.647 runs and 2147483.648 raises. The round-5 guard
+	//     put this bound at ~9.2e9 (Go's Duration limit), which is wrong by
+	//     ~4300x, so every "effectively never time out" setting an operator
+	//     writes — 1e6, 3e6, 1e9 — ran the hook here and did not there;
+	//   - a NEGATIVE is none of those. poll() is handed a deadline already
+	//     past, so subprocess spawns the hook and kills it at once and
+	//     raises TimeoutExpired — the CAUGHT branch, which logs. Even -Inf
+	//     and -1e300 land here (measured). The round-5 guard used
+	//     math.Abs and refused them all.
+	//
+	// The first two escape `except TimeoutExpired` into emit's outer
+	// handler: no log line at all, and emit returns False.
+	//
+	// The residual is one that cannot be pinned: subprocess hands poll()
+	// the time REMAINING, so CPython's effective bound is this one plus
+	// however long the spawn took (~18ms on this box). A fixture at that
+	// edge would be measuring the wall clock, which is the one thing
+	// neither runtime promises.
+	const pollMaxSecs = 2147483.647 // INT_MAX milliseconds
+	if math.IsNaN(tsec) || tsec > pollMaxSecs {
 		opts.Log("notify.timeout_seconds is out of range; not running the hook for %s (%s)",
 			eventType, handleID)
+		return false
+	}
+	if tsec <= 0 {
+		// <=, not <. A timeout of 0.0 is a deadline already reached, so it
+		// is the SAME immediate TimeoutExpired as a negative one — and
+		// -0.0 lands here too, logged as "-0" the way Python's %.0f spells
+		// it. Reading only `< 0` would hand Go a zero Duration, whose
+		// expired context is close enough to look right and which reports
+		// the hook as having run.
+		//
+		// The hook is spawned and killed inside the same call, so nothing
+		// it would have done happens. What DOES happen is the log line,
+		// and it carries the CONFIGURED value — Python's `%.0f` of the
+		// float it was given, not of a duration.
+		opts.Log("notify.command timed out after %ss for %s (%s)",
+			pyval.PercentF(tsec, 0), eventType, handleID)
 		return false
 	}
 	timeout := time.Duration(tsec * float64(time.Second))
@@ -614,8 +648,10 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 
 	code, stderr, timedOut, err := opts.Exec(ctx, command, stdin, env, timeout)
 	if timedOut {
-		opts.Log("notify.command timed out after %.0fs for %s (%s)",
-			timeout.Seconds(), eventType, handleID)
+		// tsec, not timeout.Seconds(): Python logs the CONFIGURED float,
+		// and the two agree only while the conversion is lossless.
+		opts.Log("notify.command timed out after %ss for %s (%s)",
+			pyval.PercentF(tsec, 0), eventType, handleID)
 		return false
 	}
 	if err != nil {

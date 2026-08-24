@@ -1,4 +1,4 @@
-package dispatch
+package pypath
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// This file is CPython's `pathlib.PurePosixPath` where dispatch_envelope.py
-// leans on it, and nothing more. Go's `path/filepath` is close enough to
-// look interchangeable and is not:
+// Package pypath is CPython's `pathlib.PurePosixPath` where this port leans
+// on it, and nothing more. Go's `path/filepath` is close enough to look
+// interchangeable and is not:
 //
 //	              pathlib            filepath
 //	  Path("")      "."   name ""      Base("")  "."
@@ -22,10 +22,18 @@ import (
 // as `a` by Python and would be stored as `artifact` by a port that reached
 // for filepath.Base. These are small functions with exact twins, so they are
 // written out rather than approximated.
+//
+// It lives in its own package because it acquired a SECOND caller. It was
+// written inside `internal/dispatch` for dispatch_envelope.py's attachment
+// names; then `internal/tasks` needed Join, because task_path is
+// `_tasks_dir() / f"{job_id}.json"` and pathlib's `/` does something
+// filepath.Join will not do. Two homes for one runtime's path semantics is
+// the defect pyval.Clip's own comment names — two implementations of one
+// Python operation disagreeing is a defect even before they disagree.
 
-// pathName is PurePosixPath(s).name: the last component, with empty and
+// Name is PurePosixPath(s).name: the last component, with empty and
 // "." components dropped and ".." kept.
-func pathName(s string) string {
+func Name(s string) string {
 	parts := strings.Split(s, "/")
 	for i := len(parts) - 1; i >= 0; i-- {
 		if parts[i] == "" || parts[i] == "." {
@@ -36,13 +44,13 @@ func pathName(s string) string {
 	return ""
 }
 
-// pathStr is str(PurePosixPath(s)): components joined by single slashes,
+// Str is str(PurePosixPath(s)): components joined by single slashes,
 // "." components dropped, ".." kept, and an empty path spelled ".".
 //
 // The double-slash case is POSIX, not a quirk: a path beginning with
 // exactly two slashes is implementation-defined and pathlib preserves it,
 // while three or more collapse to one.
-func pathStr(s string) string {
+func Str(s string) string {
 	root := ""
 	switch {
 	case strings.HasPrefix(s, "///"):
@@ -69,7 +77,7 @@ func pathStr(s string) string {
 	return joined
 }
 
-// pathSuffix is PurePosixPath(name).suffix on THIS interpreter — CPython
+// Suffix is PurePosixPath(name).suffix on THIS interpreter — CPython
 // 3.14, which is what runs on this box:
 //
 //	name.lstrip('.'); i = rfind('.'); return name[i:] if i != -1 else ''
@@ -79,7 +87,7 @@ func pathStr(s string) string {
 // this code can reach: `f.` (suffix "." here, "" there) and `..f` (suffix ""
 // here, ".f" there). A port matching the older rule would disambiguate a
 // collision under a different name than the Python beside it.
-func pathSuffix(name string) string {
+func Suffix(name string) string {
 	trimmed := strings.TrimLeft(name, ".")
 	i := strings.LastIndex(trimmed, ".")
 	if i < 0 {
@@ -88,9 +96,9 @@ func pathSuffix(name string) string {
 	return trimmed[i:]
 }
 
-// pathStem is PurePosixPath(name).stem: the name with its suffix removed.
-func pathStem(name string) string {
-	return name[:len(name)-len(pathSuffix(name))]
+// Stem is PurePosixPath(name).stem: the name with its suffix removed.
+func Stem(name string) string {
+	return name[:len(name)-len(Suffix(name))]
 }
 
 // ErrNoHome is `Path.expanduser`'s RuntimeError("Could not determine home
@@ -101,16 +109,16 @@ func pathStem(name string) string {
 // widen the lane's own refusal vocabulary to cover something it does not.
 var ErrNoHome = errors.New("Could not determine home directory.")
 
-// expandUser is Path.expanduser(): a leading `~` or `~user`, and nothing
+// ExpandUser is Path.expanduser(): a leading `~` or `~user`, and nothing
 // else. A path that does not start with `~` comes back untouched. A `~user`
 // naming somebody this host has never heard of RAISES rather than passing
 // through — `Path("~nosuchuser/x").expanduser()` is a RuntimeError, and so
 // is `Path("~~")`.
 //
-// Callers pass a path that has already been through pathStr, because Python
+// Callers pass a path that has already been through Str, because Python
 // writes `Path(str(raw)).expanduser()` — the normalisation happens FIRST, so
 // `~//a` is `~/a` by the time the tilde is looked at.
-func expandUser(p string) (string, error) {
+func ExpandUser(p string) (string, error) {
 	if !strings.HasPrefix(p, "~") {
 		return p, nil
 	}
@@ -150,14 +158,14 @@ func expandUser(p string) (string, error) {
 	if rest == "" {
 		return home, nil
 	}
-	return pathStr(home + rest), nil
+	return Str(home + rest), nil
 }
 
-// realpath is os.path.realpath(strict=False): every symlink resolved, and
+// Realpath is os.path.Realpath(strict=False): every symlink resolved, and
 // a DANGLING one resolved to the path it points at rather than refused.
 // filepath.EvalSymlinks cannot be used alone for that — it fails on a
 // dangling link, which is one of the two cases this is called for.
-func realpath(p string) (string, bool) {
+func Realpath(p string) (string, bool) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", false
@@ -186,4 +194,52 @@ func realpath(p string) (string, bool) {
 		cur = filepath.Clean(t)
 	}
 	return "", false
+}
+
+// Join is pathlib's `/`, and the half of it that differs from
+// filepath.Join is the half that matters: an ABSOLUTE right-hand side
+// REPLACES the left one instead of being appended to it.
+//
+//	PurePosixPath("/ws/tasks") / "plain"       -> /ws/tasks/plain
+//	PurePosixPath("/ws/tasks") / "/etc/passwd" -> /etc/passwd
+//	PurePosixPath("/ws/tasks") / "//x/y"       -> //x/y
+//	PurePosixPath("/ws/tasks") / "../../x"     -> /ws/tasks/../../x
+//
+// filepath.Join answers /ws/tasks/etc/passwd to the second and CLEANS the
+// fourth to /ws/x. The first difference decides whether a job id written by
+// a foreign producer can name a file outside the workspace — CPython lets
+// it, so a port that refuses is a port that disagrees about which rows the
+// queue may run. The fourth is lexical only: both spellings open the same
+// file, and the cleaning is what makes them look different.
+//
+// POSIX keeps exactly two leading slashes and collapses three or more,
+// which is why "//x/y" survives as itself.
+func Join(base, rhs string) string {
+	if strings.HasPrefix(rhs, "/") || base == "" {
+		return Str(rhs)
+	}
+	if rhs == "" {
+		// PurePosixPath("/a") / "" is a ValueError in CPython, but every
+		// caller here builds the right-hand side from a format string, so
+		// the empty case only arises as `f"{''}.json"` = ".json" — a
+		// non-empty component. Answered rather than spelled as an error
+		// nothing can reach.
+		return Str(base)
+	}
+	// Str, not concatenation: pathlib PARSES the result, so a "." component
+	// disappears ("a/./b" is "a/b") while ".." survives ("a/../b" stays).
+	// Delegating is also what keeps the two rules in one place — the first
+	// cut of this function concatenated, and the `./x.json` fixture caught
+	// it immediately.
+	//
+	// The base is normalized FIRST so the separator is not inserted twice
+	// at a root. "/" + "/" + "x" reads as the POSIX double-slash root and
+	// answers "//x"; "//" + "/" + "x" reads as three slashes, which POSIX
+	// collapses, and answers "/x". Both are one character away from right
+	// and neither is caught by any non-root fixture.
+	b := Str(base)
+	if strings.HasSuffix(b, "/") {
+		return Str(b + rhs)
+	}
+	return Str(b + "/" + rhs)
 }

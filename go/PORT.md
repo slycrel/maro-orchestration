@@ -5212,6 +5212,100 @@ asymmetric (the negative side reaches one further); and an overflowing
 `notify.timeout_seconds` is refused before `time.Duration` can wrap it
 into a timeout that never happened.
 
+### Round 11 round 6 — the sites no fixture ever named
+
+`pathlib`'s `/` lets an ABSOLUTE right-hand side replace the left one, so
+`task_path("/etc/passwd")` is `/etc/passwd.json` — outside the workspace
+entirely — where `filepath.Join` answers a path inside it. `blocked_by`
+is foreign-writable and `claim` feeds every entry to `task_path`, so a
+row naming an absolute dependency is claimable under CPython and
+permanently blocked here: the two runtimes disagreeing about what the
+queue may RUN. `pypath` is now its own package (it had acquired a second
+caller) and carries `Join` with both of pathlib's rules — an absolute rhs
+wins, and the result is PARSED, so a "." component disappears while ".."
+survives.
+
+The fix was pinned at the HELPER and nowhere else until the battery said
+so: reverting `task_path` itself to `filepath.Join` failed nothing. What
+closes it is a fixture that can name an absolute path, which no constant
+can do when the two runtimes get two different temp roots — hence a
+`{{WS}}` substitution in the sweep differential, each side's own root
+folded to one token before comparison. It also needed the archive
+directory to be READ, which nothing did, and the file comparison to run
+in BOTH directions: iterating only CPython's filenames made a row the
+port wrote somewhere CPython did not completely invisible.
+
+`notify.command`'s timeout is bounded by `poll()`, not by Go: CPython
+accepts 2147483.647 seconds (INT_MAX milliseconds) and raises
+`OverflowError` one millisecond past it — which means the never-time-out
+idiom `3e6` is REFUSED there and ran here. The other end is sharper still:
+every negative value, and `0.0`, is an immediate `TimeoutExpired`, not a
+refusal, so round 5's `math.Abs` guard refused values CPython accepts.
+The log line spells its seconds with `%.0f`, and Python's non-finites are
+`-inf`/`inf`/`nan` where Go's are `-Inf`/`+Inf`/`NaN` — hence
+`pyval.PercentF`.
+
+`status_summary` returns an ORDERED result, because CPython's does and
+because two of its keys can spell alike: `5` and `'5'` are two dict
+buckets and one JSON key, so `json.dumps` emits a duplicate. A Go map
+alphabetized and silently merged them. Hashing is by value and spelling
+is by `str`, which is why `pyval.HashKey` and `statusKey` are two
+functions — and `pyval.HashKey` is now the only copy of the first,
+shared by the status summary, `_check_cycle`'s visited set, and the
+drain's job-id filter.
+
+`archive` SUBSCRIPTS `task["status"]`, so a row without the key is a
+`KeyError` and not a refusal. `ErrNotFound` is a typed sentinel that can
+answer `PyClass()` — it was the third member of that family and the only
+one that could not. And the recursion check-in's debug log takes NO
+format argument: Python's exception rides `exc_info` and never reaches
+the message.
+
+### r13 — `handle_queue.py`, and a differential that was testing nothing
+
+`internal/handlequeue` ports the drain: `drain_task_store`, `handle_task`,
+`enqueue_goal(s)`, and the surface emitted when a task terminates. Three
+things in it are not what a straight reading suggests.
+
+**`list_tasks` is called OUTSIDE the try.** Python's `try` wraps only the
+import, so a queue directory the sweep cannot read propagates rather than
+becoming a silently idle drain. `DrainTaskStore` returns the error.
+
+**The two membership tests are not the same operation, and their ORDER is
+load-bearing.** The comprehension is
+`[t for t in all if t.get("source") in sources and t.get("job_id") in job_ids]`.
+`and` short-circuits, so a hostile (unhashable) `job_id` on a row whose
+source did NOT match is never hashed — it is skipped, not raised. Hoist
+the hash above the source test and the same queue takes the drain down
+with a `TypeError`. The port carries the order and pins it.
+
+The set membership itself hashes by value: `True` matches `1`, `1.0`
+matches `1`, and `4242` does not match `"4242"`. An unhashable id raises
+`TypeError: cannot use 'list' as a set element (unhashable type: 'list')`
+— CPython's set wording, which is not the dict-subscript wording.
+`set()` is the exception: CPython retries it as a frozenset and answers
+`False`.
+
+**`max_tasks` is a SLICE bound.** `0` means zero tasks, not "unset", and a
+negative bound drops from the tail (`[1,2,3][:-1]` is `[1,2]`) rather
+than clamping to empty. Both pinned.
+
+The differential for all of this **went green on its first run while
+testing nothing.** A direct CPython probe showed every fixture failing at
+`drain_task_store: failed to claim j1: 'timestamps'` — `claim` subscripts
+`task["timestamps"]`, the seeded rows omitted it, so both sides failed the
+claim identically and the entire downstream (routing, terminal status,
+the emitted event) was never reached. The mutation battery found it
+(7 of 22 missed); the green run did not. Lens 1 says a test that reports
+AGREEMENT may be testing nothing, and this is the sharpest instance yet:
+**a differential that goes green on its first run is that shape.**
+
+Three mutations are labelled unobservable in the source rather than
+pinned: the `Eq`-vs-`Str` source comparison (no reachable value spells
+differently), the second slice guard (redundant with the first, the same
+shape as the escalation lane's), and `processed++` after a `complete()`
+that no fixture can make fail.
+
 ### Named residuals after r11 round 3
 
 - **Arbitrary precision.** `ErrIntTooLarge` is the port refusing a value
@@ -5246,3 +5340,44 @@ into a timeout that never happened.
   `%d` that raises deletes the record; a `%d` in a plain `"%d" % v` does
   not. Every ported call site is the first kind. A site of the second kind
   would need a different helper.
+- **CPython's hook-timeout ceiling is not a constant.** `poll()` refuses
+  anything past INT_MAX milliseconds, but `subprocess.run` hands it the
+  time REMAINING after the fork, so the observed boundary was
+  2147483.6470185518 — the documented bound plus however long the machine
+  took to spawn the child. The port pins 2147483.647 and the ~18ms is
+  unpinnable by construction: a fixture asserting on it would be
+  asserting on this box's process-creation latency.
+- **About twenty other `%.Nf` sites are not yet routed through
+  `pyval.PercentF`.** Deliberately deferred rather than swept: each needs
+  a per-site check of whether a non-finite can actually reach it, and a
+  blanket rewrite would be the kind of change that looks like a fix and
+  proves nothing. The timeout site is the one where a non-finite is
+  reachable from a config file.
+- **Three `handlequeue` mutations are labelled unobservable.** The
+  source comparison (`pyval.Eq` vs `pyval.Str`) has no reachable value
+  that spells differently; the second slice guard is redundant with the
+  first, which is the same shape the escalation lane already carries; and
+  `processed++` sits after a `complete()` that nothing in the harness can
+  make fail. All three say so in the source.
+- **The `pathlib`-join class is not fully swept.** `task_path` and
+  archive's destination are fixed and pinned; they are two of the sites,
+  not the class. The rule is: a `filepath.Join` whose right-hand side is
+  NOT a string literal, standing where Python has `pathlib`'s `/`, answers
+  differently for an absolute right-hand side and for a "." component.
+  The port has 177 `filepath.Join` calls; the great majority take literal
+  components and cannot diverge. The reachable siblings found so far, all
+  in `orch_items.py`:
+  `project_dir(slug)` (`projects_root() / slug` — the project name comes
+  from the CLI and from stored records), `_run_record_path(run_id)`
+  (`runs_root() / f"{run_id}.json"` — the same shape as `task_path`
+  exactly), `_run_artifact_root` (`runs_root() / run.run_id`), and
+  `resolve_artifact_path`'s `workspace_root() / s[len("~workspace/"):]`,
+  where a stored `~workspace//etc/passwd` strips to an absolute remainder.
+  `orch_items.py` is not a reviewed tranche yet and `internal/orch` has no
+  CPython differential harness at all, so a fix there today would be
+  pinned at the helper and nowhere else — which is the exact trap round 6
+  named. Carried as a named residual for that tranche rather than
+  half-closed here.
+- **`enqueue_goal` / `enqueue_goals` have a probe but no differential.**
+  `pyDrainSrc` carries both verbs and `maskMinted` is written; no Go test
+  drives them yet.

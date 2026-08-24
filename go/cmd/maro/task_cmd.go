@@ -114,10 +114,8 @@ func runTask(args []string) error {
 			return err
 		}
 		total := 0
-		keys := make([]string, 0, len(counts))
-		for k, v := range counts {
-			total += v
-			keys = append(keys, k)
+		for _, f := range counts {
+			total += f.Val.(int)
 		}
 		// Python emits `{"total": N, **counts}`, and counts is built by
 		// iterating an UNSORTED glob — so its key order is filesystem
@@ -125,11 +123,16 @@ func runTask(args []string) error {
 		// order here to be faithful to, so this one sorts. Named rather
 		// than silently matched, because "the orders differ" is a real
 		// difference a byte comparison will show.
-		sort.Strings(keys)
+		//
+		// SortStable, and over the fields rather than over a key set: two
+		// distinct statuses can share a spelling, and both rows have to
+		// survive the sort the way they survive json.dumps.
+		sorted := append(pyval.Obj{}, counts...)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return sorted[i].Key < sorted[j].Key
+		})
 		out := pyval.Obj{{Key: "total", Val: total}}
-		for _, k := range keys {
-			out = append(out, pyval.Field{Key: k, Val: counts[k]})
-		}
+		out = append(out, sorted...)
 		return emit(out)
 
 	case "recover":

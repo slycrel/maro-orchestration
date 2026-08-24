@@ -44,15 +44,23 @@ try:
         task_store.complete(job_id, {"a": "/x/y"}, "success")
     elif verb == "fail":
         task_store.fail(job_id, "boom")
+    elif verb == "archive":
+        task_store.archive(job_id)
     out["ok"] = True
 except BaseException as e:
     out["ok"] = False
     out["cls"] = type(e).__name__
     out["msg"] = str(e)
 
-after = p.read_bytes()
-out["unchanged"] = before == after
-out["after"] = after.decode("utf-8")
+# archive UNLINKS the row on success, so "the file is gone" is one of the
+# outcomes this verb can produce and not a probe failure.
+if p.exists():
+    after = p.read_bytes()
+    out["unchanged"] = before == after
+    out["after"] = after.decode("utf-8")
+else:
+    out["unchanged"] = False
+    out["after"] = None
 print(json.dumps(out))
 `
 
@@ -183,6 +191,50 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 			"job_id": "task-mal13", "lane": "agenda", "status": "queued",
 			"attempt": 0, "artifact_paths": {}, "timestamps": {},
 			"blocked_by": []}`},
+		// archive was the sibling rounds 3 to 5 never enumerated. It
+		// subscripts `task["status"]` and interpolates the RAW value into
+		// its message, and the port read both through GetString — which
+		// answers "" for a missing key and for every non-string, so a
+		// foreign row got a message naming no status at all and a
+		// RuntimeError where CPython raises KeyError (adversarial r11
+		// round 6, MEDIUM).
+		{"an archive on a row with no status", "archive", `{
+			"job_id": "task-mal29", "lane": "agenda",
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is a number", "archive", `{
+			"job_id": "task-mal30", "lane": "agenda", "status": 5,
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is null", "archive", `{
+			"job_id": "task-mal31", "lane": "agenda", "status": null,
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is a bool", "archive", `{
+			"job_id": "task-mal32", "lane": "agenda", "status": true,
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is a list", "archive", `{
+			"job_id": "task-mal33", "lane": "agenda", "status": ["done"],
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is a float", "archive", `{
+			"job_id": "task-mal34", "lane": "agenda", "status": 2.0,
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a row whose status is a dict", "archive", `{
+			"job_id": "task-mal35", "lane": "agenda", "status": {"a": 1},
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		// The queued case, which is the ordinary refusal, and the two the
+		// verb ACCEPTS — a table where every row raises never proves the
+		// accepting arm still accepts.
+		{"an archive on a queued row", "archive", `{
+			"job_id": "task-mal36", "lane": "agenda", "status": "queued",
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a done row", "archive", `{
+			"job_id": "task-mal37", "lane": "agenda", "status": "done",
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		{"an archive on a failed row", "archive", `{
+			"job_id": "task-mal38", "lane": "agenda", "status": "failed",
+			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
+		// A row that is not a mapping AT ALL belongs to the sweep
+		// differential's archive verb, not here: this harness reads the
+		// fixture's own job_id out of the JSON to name the file, so a
+		// fixture with no mapping has no name.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var row map[string]any
@@ -212,7 +264,10 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 				Cls       string `json:"cls"`
 				Msg       string `json:"msg"`
 				Unchanged bool   `json:"unchanged"`
-				After     string `json:"after"`
+				// A POINTER: archive's success removes the file, and the
+				// probe answers null for it. A plain string would read
+				// that as "" and compare it against real bytes.
+				After *string `json:"after"`
 			}
 			pyprobe.Probe{
 				Marker:    "task_store.py",
@@ -229,6 +284,8 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 					pyval.Obj{{Key: "a", Val: "/x/y"}}, "success")
 			case "fail":
 				_, gotErr = Fail(goWS, jobID, "boom")
+			case "archive":
+				_, gotErr = Archive(goWS, jobID)
 			default:
 				t.Fatalf("unknown verb %q", c.verb)
 			}
@@ -277,13 +334,31 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 
 			// The success half is compared by BYTES, minus the two fields
 			// that cannot match across runtimes.
+			//
+			// archive UNLINKS the row it accepted, so "gone" is a real
+			// success outcome. The probe reports it as a null `after`, and
+			// the two runtimes have to agree about the DISAPPEARANCE as
+			// well as about the bytes — a port that archived without
+			// removing would otherwise pass here.
+			_, statErr := os.Stat(TaskPath(goWS, jobID))
+			if want.After == nil {
+				if statErr == nil {
+					t.Fatalf("%s left the row in place; CPython removed it",
+						c.verb)
+				}
+				return
+			}
+			if statErr != nil {
+				t.Fatalf("%s removed the row; CPython left it: %v",
+					c.verb, statErr)
+			}
 			raw, err := os.ReadFile(TaskPath(goWS, jobID))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if normTask(t, string(raw)) != normTask(t, want.After) {
+			if normTask(t, string(raw)) != normTask(t, *want.After) {
 				t.Errorf("the written row is not CPython's:\n go: %s\n py: %s",
-					normTask(t, string(raw)), normTask(t, want.After))
+					normTask(t, string(raw)), normTask(t, *want.After))
 			}
 		})
 	}

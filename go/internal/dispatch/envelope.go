@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -221,7 +222,7 @@ var nonNameRe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 // the 120 cap. The cap is a BYTE slice here and a codepoint slice in Python,
 // which agree only because the substitution above it guarantees pure ASCII.
 func safeName(name string) string {
-	base := pathName(strings.ReplaceAll(name, "\\", "/"))
+	base := pypath.Name(strings.ReplaceAll(name, "\\", "/"))
 	base = strings.Trim(nonNameRe.ReplaceAllString(base, "_"), "._")
 	if base == "" {
 		base = "artifact"
@@ -345,7 +346,7 @@ func StoreOperatorAttachments(ws string, paths []string, key any) ([]OperatorSto
 	}
 	var out []OperatorStored
 	for _, raw := range paths {
-		src, err := expandUser(pathStr(raw))
+		src, err := pypath.ExpandUser(pypath.Str(raw))
 		if err != nil {
 			return nil, err
 		}
@@ -356,7 +357,7 @@ func StoreOperatorAttachments(ws string, paths []string, key any) ([]OperatorSto
 		// operator who meant it can pass the real path.
 		if fi, lerr := os.Lstat(src); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 			target := "<unresolvable>"
-			if r, ok := realpath(src); ok {
+			if r, ok := pypath.Realpath(src); ok {
 				target = r
 			}
 			return nil, errorf("attachment is a symlink: %s -> %s. Pass the "+
@@ -369,13 +370,13 @@ func StoreOperatorAttachments(ws string, paths []string, key any) ([]OperatorSto
 		}
 		if size := st.Size(); size > MaxAttachmentBytes {
 			return nil, errorf("attachment %s is %d bytes, over the "+
-				"%d-byte limit", pathName(src), size, MaxAttachmentBytes)
+				"%d-byte limit", pypath.Name(src), size, MaxAttachmentBytes)
 		}
 		data, rerr := os.ReadFile(src)
 		if rerr != nil {
 			return nil, errorf("attachment unreadable: %s: %s", src, oserr(rerr))
 		}
-		base := safeName(pathName(src))
+		base := safeName(pypath.Name(src))
 		target := filepath.Join(dest, base)
 		for n := 1; ; {
 			existing, eerr := os.ReadFile(target)
@@ -384,7 +385,7 @@ func StoreOperatorAttachments(ws string, paths []string, key any) ([]OperatorSto
 			}
 			n++
 			target = filepath.Join(dest,
-				fmt.Sprintf("%s-%d%s", pathStem(base), n, pathSuffix(base)))
+				fmt.Sprintf("%s-%d%s", pypath.Stem(base), n, pypath.Suffix(base)))
 		}
 		// A write failure here (disk full, permission denied) must surface
 		// as the lane's own refusal, not a raw traceback — the CLI catches
@@ -392,7 +393,7 @@ func StoreOperatorAttachments(ws string, paths []string, key any) ([]OperatorSto
 		// `--attach` reads as "broken" rather than "fix your disk".
 		if werr := os.WriteFile(target, data, 0o666); werr != nil {
 			return nil, errorf("could not store attachment %s: %s",
-				pathName(src), oserr(werr))
+				pypath.Name(src), oserr(werr))
 		}
 		sum := sha256.Sum256(data)
 		rec := OperatorStored{
@@ -468,7 +469,7 @@ func land(ws, runDir, area string, key any, sub string) int {
 			if bytesEqual(existing, data) {
 				continue
 			}
-			stem, suffix := pathStem(name), pathSuffix(name)
+			stem, suffix := pypath.Stem(name), pypath.Suffix(name)
 			n := 2
 			for {
 				cur, err := os.ReadFile(target)

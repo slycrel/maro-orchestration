@@ -614,7 +614,7 @@ func TestListIsSortedAndFilterable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts["queued"] != 2 || counts["failed"] != 1 {
+	if countOf(counts, "queued") != 2 || countOf(counts, "failed") != 1 {
 		t.Errorf("summary = %v, want queued:2 failed:1", counts)
 	}
 }
@@ -897,14 +897,27 @@ func TestAStatuslessRowCountsAsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts["unknown"] != 1 {
+	if countOf(counts, "unknown") != 1 {
 		t.Errorf("summary = %v, want one `unknown`", counts)
 	}
 	total := 0
-	for _, v := range counts {
-		total += v
+	for _, f := range counts {
+		total += f.Val.(int)
 	}
 	if total != 2 {
 		t.Errorf("summary totals %d rows, want 2 — a row was dropped", total)
 	}
+}
+
+// countOf is a lookup into the ORDERED summary. It sums every field with
+// the spelling, because two distinct statuses can share one — which is
+// the whole reason StatusSummary does not return a map.
+func countOf(counts pyval.Obj, key string) int {
+	n := 0
+	for _, f := range counts {
+		if f.Key == key {
+			n += f.Val.(int)
+		}
+	}
+	return n
 }

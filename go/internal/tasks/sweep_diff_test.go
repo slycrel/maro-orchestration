@@ -2,9 +2,12 @@ package tasks
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
@@ -36,9 +39,21 @@ def _try(fn):
         return {"ok": False, "cls": type(e).__name__, "msg": str(e)}
 
 def _files():
+    # BOTH queue directories, and the archive one RECURSIVELY. The archive
+    # side used to go unread entirely, which meant "the row landed where
+    # CPython puts it" — archive's whole job — was asserted by nothing. A
+    # job id that is an absolute path sends the destination outside the
+    # archive directory in CPython and into a nested subtree in a port that
+    # joins the Go way, and a non-recursive glob of one directory cannot
+    # see either.
     out = {}
     for p in sorted(task_store._tasks_dir().glob("*.json")):
         out[p.name] = p.read_text(encoding="utf-8")
+    adir = task_store._archive_dir()
+    if adir.exists():
+        for p in sorted(adir.rglob("*.json")):
+            out["archive/" + str(p.relative_to(adir))] = p.read_text(
+                encoding="utf-8")
     return out
 
 # status_summary and recover_stale_claims iterate an UNSORTED glob, and
@@ -78,11 +93,24 @@ elif verb == "list":
 elif verb == "list_queued":
     ans = _try(lambda: [t.get("job_id")
                         for t in task_store.list_tasks(status_filter="queued")])
-elif verb == "summary":
-    ans = _try(lambda: {json.dumps(k): v
-                        for k, v in task_store.status_summary().items()})
 elif verb == "recover":
     ans = _try(task_store.recover_stale_claims)
+elif verb == "summary":
+    # The SERIALIZED form, not a re-keyed dict. status_summary is keyed by
+    # the RAW status, so two distinct keys can share one JSON spelling —
+    # json.dumps then writes a duplicate key, which no dict on either side
+    # can hold. The dumped string is also the observable: the CLI prints it.
+    ans = _try(lambda: json.dumps(task_store.status_summary()))
+elif verb == "archive_t1":
+    # dumps, not the dict: the Go side compares the SERIALIZED row, so a
+    # decoded object here would compare a map against a string.
+    ans = _try(lambda: json.dumps(task_store.archive("t1")))
+elif verb == "archive_arg":
+    ans = _try(lambda: json.dumps(task_store.archive(sys.argv[2])))
+elif verb == "claim_arg":
+    # pid pinned: the claimed row carries it, and two processes do not
+    # share one.
+    ans = _try(lambda: json.dumps(task_store.claim(sys.argv[2], pid=4242)))
 else:
     raise SystemExit("unknown verb " + verb)
 
@@ -95,29 +123,53 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 	// this, so the row is genuinely stale on both sides.
 	const deadPID = "999999"
 
+	// A fixture that needs to name an ABSOLUTE path cannot spell it as a
+	// constant: the two runtimes get two different temp workspaces, and the
+	// whole point of the case is that the path is absolute. `{{WS}}` is
+	// substituted with each side's own root, in the row bodies and in the
+	// verb's argument.
 	for _, c := range []struct {
 		name string
 		verb string
+		arg  string
 		rows map[string]string
 	}{
-		{"a null row is skipped by list", "list", map[string]string{
+		{"a null row is skipped by list", "list", "", map[string]string{
 			"t1": `null`,
 			"t2": `{"job_id":"t2","status":"queued","lane":"agenda",
 				"attempt":0,"timestamps":{},"blocked_by":[]}`,
 		}},
 		{"a null row is skipped by the filtered list", "list_queued",
-			map[string]string{
+			"", map[string]string{
 				"t1": `null`,
 				"t2": `{"job_id":"t2","status":"queued","lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 			}},
-		{"a null row is skipped by the summary", "summary", map[string]string{
+		// archive's SUBSCRIPT on a row that is not a mapping at all. The
+		// three sentences differ by type, and the malformed differential
+		// cannot host these: it names the file from the fixture's own
+		// job_id, which a non-mapping row does not have.
+		{"an archive on a list row", "archive_t1", "", map[string]string{
+			"t1": `[1, 2]`}},
+		{"an archive on a string row", "archive_t1", "", map[string]string{
+			"t1": `"queued"`}},
+		{"an archive on a numeric row", "archive_t1", "", map[string]string{
+			"t1": `5`}},
+		{"an archive on a null row", "archive_t1", "", map[string]string{
+			"t1": `null`}},
+		{"an archive on a missing row", "archive_t1", "", map[string]string{
+			"t2": `{"job_id":"t2","status":"done","lane":"agenda",
+				"attempt":0,"timestamps":{},"blocked_by":[]}`}},
+		{"an archive that succeeds", "archive_t1", "", map[string]string{
+			"t1": `{"job_id":"t1","status":"done","lane":"agenda",
+				"attempt":0,"timestamps":{},"blocked_by":[]}`}},
+		{"a null row is skipped by the summary", "summary", "", map[string]string{
 			"t1": `null`,
 			"t2": `{"job_id":"t2","status":"queued","lane":"agenda",
 				"attempt":0,"timestamps":{},"blocked_by":[]}`,
 		}},
 		{"a null row is skipped by the stale sweep", "recover",
-			map[string]string{
+			"", map[string]string{
 				"t1": `null`,
 				"t2": `{"job_id":"t2","status":"claimed","claimed_by_pid":` +
 					deadPID + `,"lane":"agenda","attempt":1,
@@ -127,7 +179,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// The status key is the RAW value, and json.dumps renders a
 		// non-string key by its JSON spelling. Folding them to "unknown"
 		// merges buckets CPython keeps apart.
-		{"a numeric status is its own bucket", "summary", map[string]string{
+		{"a numeric status is its own bucket", "summary", "", map[string]string{
 			"t1": `{"job_id":"t1","status":5,"lane":"agenda","attempt":0,
 				"timestamps":{},"blocked_by":[]}`,
 			"t2": `{"job_id":"t2","status":null,"lane":"agenda","attempt":0,
@@ -143,12 +195,12 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// bucket answers a number CPython never produces, on a surface an
 		// operator reads to decide whether the queue is healthy.
 		{"an unhashable status raises out of the summary", "summary",
-			map[string]string{
+			"", map[string]string{
 				"t1": `{"job_id":"t1","status":{"a":1},"lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 			}},
 		{"a list status raises out of the summary", "summary",
-			map[string]string{
+			"", map[string]string{
 				"t1": `{"job_id":"t1","status":["queued"],"lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 			}},
@@ -162,7 +214,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// one bucket of three, on the surface an operator reads to decide
 		// whether the queue is healthy.
 		{"numerically equal statuses are one bucket", "summary",
-			map[string]string{
+			"", map[string]string{
 				"t1": `{"job_id":"t1","status":true,"lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 				"t2": `{"job_id":"t2","status":1,"lane":"agenda",
@@ -172,7 +224,27 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				"t4": `{"job_id":"t4","status":"queued","lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 			}},
-		{"zero and false are one bucket", "summary", map[string]string{
+		// The other direction: two DISTINCT dict keys that share one JSON
+		// spelling. json.dumps writes both, producing an object with a
+		// duplicate key, and a port returning a map answers one bucket
+		// where CPython answers two — the queue under-reporting itself
+		// (adversarial r11 round 6, MEDIUM).
+		{"statuses that spell alike stay two buckets", "summary",
+			"", map[string]string{
+				"t1": `{"job_id":"t1","status":5,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":"5","lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t3": `{"job_id":"t3","status":null,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t4": `{"job_id":"t4","status":"null","lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t5": `{"job_id":"t5","status":true,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t6": `{"job_id":"t6","status":"true","lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+			}},
+		{"zero and false are one bucket", "summary", "", map[string]string{
 			"t1": `{"job_id":"t1","status":0,"lane":"agenda","attempt":0,
 				"timestamps":{},"blocked_by":[]}`,
 			"t2": `{"job_id":"t2","status":false,"lane":"agenda","attempt":0,
@@ -187,7 +259,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// there is an AttributeError, not an edit, and it fires AFTER the
 		// completed row was already written.
 		{"a sibling whose blocked_by is null aborts the completion",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -195,7 +267,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"attempt":0,"timestamps":{},"blocked_by":null}`,
 			}},
 		{"a sibling whose blocked_by is a matching string",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -203,7 +275,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"attempt":0,"timestamps":{},"blocked_by":"xxc1xx"}`,
 			}},
 		{"a sibling whose blocked_by is a dict keyed by the completed id",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -211,7 +283,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"attempt":0,"timestamps":{},"blocked_by":{"c1":1}}`,
 			}},
 		{"a sibling whose blocked_by is a NON-matching string",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -219,7 +291,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"attempt":0,"timestamps":{},"blocked_by":"zzz"}`,
 			}},
 		{"a sibling that really is unblocked", "complete_c1",
-			map[string]string{
+			"", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -235,48 +307,48 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// raises AttributeError and the sweeps raise TypeError — three
 		// different answers to the same file, none of them "abort".
 		{"a bare list row is returned by an unfiltered list", "list_raw",
-			map[string]string{
+			"", map[string]string{
 				"t1": `[]`,
 				"t2": `{"job_id":"t2","status":"queued","lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":[]}`,
 			}},
 		{"a bare number row is returned by an unfiltered list", "list_raw",
-			map[string]string{"t1": `5`}},
+			"", map[string]string{"t1": `5`}},
 		{"a bare string row is returned by an unfiltered list", "list_raw",
-			map[string]string{"t1": `"x"`}},
+			"", map[string]string{"t1": `"x"`}},
 		{"a bare false row is returned by an unfiltered list", "list_raw",
-			map[string]string{"t1": `false`}},
+			"", map[string]string{"t1": `false`}},
 		// ...and the same rows through the three verbs that DO reach for
 		// a key. The class differs by operation: .get is an
 		// AttributeError, a subscript is a TypeError, and an upstream
 		// `except TypeError` catches one and not the other.
 		{"a bare list row is an AttributeError to the filtered list",
-			"list_queued", map[string]string{"t1": `[]`}},
+			"list_queued", "", map[string]string{"t1": `[]`}},
 		{"a bare number row is an AttributeError to the filtered list",
-			"list_queued", map[string]string{"t1": `5`}},
+			"list_queued", "", map[string]string{"t1": `5`}},
 		{"a bare string row is an AttributeError to the summary",
-			"summary", map[string]string{"t1": `"x"`}},
+			"summary", "", map[string]string{"t1": `"x"`}},
 		{"a bare list row is an AttributeError to the summary",
-			"summary", map[string]string{"t1": `[]`}},
+			"summary", "", map[string]string{"t1": `[]`}},
 		{"a bare bool row is a TypeError to the stale sweep",
-			"recover", map[string]string{"t1": `false`}},
+			"recover", "", map[string]string{"t1": `false`}},
 		{"a bare list row is a TypeError to the stale sweep",
-			"recover", map[string]string{"t1": `[]`}},
+			"recover", "", map[string]string{"t1": `[]`}},
 		{"a bare string row is a TypeError to the stale sweep",
-			"recover", map[string]string{"t1": `"x"`}},
+			"recover", "", map[string]string{"t1": `"x"`}},
 		{"a bare number row is a TypeError to the stale sweep",
-			"recover", map[string]string{"t1": `5`}},
+			"recover", "", map[string]string{"t1": `5`}},
 		// A FALSY junk row is stepped over by the cycle walk's
 		// `if dep and dep.get(...)` without the .get ever running.
 		{"a falsy junk row is skipped by the completion walk",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
 				"c2": `0`,
 			}},
 		{"a truthy junk row is an AttributeError to the completion walk",
-			"complete_c1", map[string]string{
+			"complete_c1", "", map[string]string{
 				"c1": `{"job_id":"c1","status":"claimed","lane":"agenda",
 					"attempt":1,"artifact_paths":{},"timestamps":{},
 					"blocked_by":[]}`,
@@ -287,17 +359,17 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// TRUTHINESS before it reaches for a key, so these two junk dep
 		// rows get opposite answers out of the same line.
 		{"a falsy junk dep row is stepped over by the cycle walk",
-			"enqueue_blocked", map[string]string{"d1": `0`}},
+			"enqueue_blocked", "", map[string]string{"d1": `0`}},
 		{"an empty-list junk dep row is stepped over too",
-			"enqueue_blocked", map[string]string{"d1": `[]`}},
+			"enqueue_blocked", "", map[string]string{"d1": `[]`}},
 		{"a truthy junk dep row is an AttributeError to the cycle walk",
-			"enqueue_blocked", map[string]string{"d1": `5`}},
+			"enqueue_blocked", "", map[string]string{"d1": `5`}},
 		{"a truthy junk dep row that is a list", "enqueue_blocked",
-			map[string]string{"d1": `["x"]`}},
+			"", map[string]string{"d1": `["x"]`}},
 		{"a missing dep is not an error to the cycle walk",
-			"enqueue_blocked", map[string]string{}},
+			"enqueue_blocked", "", map[string]string{}},
 		{"a well-formed dep whose own blocked_by is junk",
-			"enqueue_blocked", map[string]string{
+			"enqueue_blocked", "", map[string]string{
 				"d1": `{"job_id":"d1","status":"queued","lane":"agenda",
 					"attempt":0,"timestamps":{},"blocked_by":5}`,
 			}},
@@ -311,16 +383,16 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// ordering, not a behaviour — it passed or failed on readdir
 		// order. A fixture whose answer depends on something neither
 		// runtime promises is a fixture that tests nothing dependable.
-		{"a string pid aborts the stale sweep", "recover", map[string]string{
+		{"a string pid aborts the stale sweep", "recover", "", map[string]string{
 			"t3": `{"job_id":"t3","status":"claimed","claimed_by_pid":"1234",
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
 		}},
-		{"a dead numeric pid alone is released", "recover", map[string]string{
+		{"a dead numeric pid alone is released", "recover", "", map[string]string{
 			"t4": `{"job_id":"t4","status":"claimed","claimed_by_pid":` +
 				deadPID + `,"lane":"agenda","attempt":1,
 				"timestamps":{},"blocked_by":[]}`,
 		}},
-		{"a falsy pid is left claimed", "recover", map[string]string{
+		{"a falsy pid is left claimed", "recover", "", map[string]string{
 			"t5": `{"job_id":"t5","status":"claimed","claimed_by_pid":0,
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
 			"t6": `{"job_id":"t6","status":"claimed","claimed_by_pid":null,
@@ -331,11 +403,11 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// answers PermissionError, caught by `except OSError: return
 		// True`. A port that handed False to os.kill(0, 0) would signal
 		// its OWN process group and call the claim live.
-		{"a false pid is left claimed", "recover", map[string]string{
+		{"a false pid is left claimed", "recover", "", map[string]string{
 			"t8": `{"job_id":"t8","status":"claimed","claimed_by_pid":false,
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
 		}},
-		{"a true pid is pid 1", "recover", map[string]string{
+		{"a true pid is pid 1", "recover", "", map[string]string{
 			"t9": `{"job_id":"t9","status":"claimed","claimed_by_pid":true,
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
 		}},
@@ -344,7 +416,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// LIVE process — the wrap is the dangerous half, because releasing
 		// a claim held by a running worker is how two workers get the same
 		// task.
-		{"a pid past C int aborts the sweep", "recover", map[string]string{
+		{"a pid past C int aborts the sweep", "recover", "", map[string]string{
 			"ta": `{"job_id":"ta","status":"claimed",
 				"claimed_by_pid":100000000000000000000000,
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
@@ -356,7 +428,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// OverflowError. A port that tested the magnitude first would
 		// abort the sweep here.
 		{"a hugely negative pid is dead, not an overflow", "recover",
-			map[string]string{
+			"", map[string]string{
 				"tb": `{"job_id":"tb","status":"claimed",
 					"claimed_by_pid":-100000000000000000000000,
 					"lane":"agenda","attempt":1,"timestamps":{},
@@ -366,7 +438,7 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// row cannot reach: it returns on its sign before pidAliveInt is
 		// called at all, so only this row can see a symmetric bound.
 		{"a negative pid inside int64 is dead, not an overflow", "recover",
-			map[string]string{
+			"", map[string]string{
 				"tj": `{"job_id":"tj","status":"claimed",
 					"claimed_by_pid":-10000000000,"lane":"agenda","attempt":1,
 					"timestamps":{},"blocked_by":[]}`,
@@ -375,12 +447,12 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// And the C-int bound itself, from the side that does NOT raise:
 		// with only the past-the-bound row, `pid >= 2**31` and
 		// `pid > 2**31` both pass.
-		{"the largest pid os.kill accepts", "recover", map[string]string{
+		{"the largest pid os.kill accepts", "recover", "", map[string]string{
 			"tc": `{"job_id":"tc","status":"claimed","claimed_by_pid":2147483647,
 				"lane":"agenda","attempt":1,"timestamps":{},"blocked_by":[]}`,
 		}},
 		{"one past the largest pid os.kill accepts", "recover",
-			map[string]string{
+			"", map[string]string{
 				"td": `{"job_id":"td","status":"claimed",
 					"claimed_by_pid":2147483648,"lane":"agenda","attempt":1,
 					"timestamps":{},"blocked_by":[]}`,
@@ -392,19 +464,19 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// evaluates both sides first aborts the sweep on a row CPython
 		// walks straight past.
 		{"an empty-string pid is falsy, not a raise", "recover",
-			map[string]string{
+			"", map[string]string{
 				"te": `{"job_id":"te","status":"claimed","claimed_by_pid":"",
 					"lane":"agenda","attempt":1,"timestamps":{},
 					"blocked_by":[]}`,
 			}},
 		{"an empty-list pid is falsy, not a raise", "recover",
-			map[string]string{
+			"", map[string]string{
 				"tf": `{"job_id":"tf","status":"claimed","claimed_by_pid":[],
 					"lane":"agenda","attempt":1,"timestamps":{},
 					"blocked_by":[]}`,
 			}},
 		{"an empty-dict pid is falsy, not a raise", "recover",
-			map[string]string{
+			"", map[string]string{
 				"tg": `{"job_id":"tg","status":"claimed","claimed_by_pid":{},
 					"lane":"agenda","attempt":1,"timestamps":{},
 					"blocked_by":[]}`,
@@ -413,34 +485,93 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 		// `task["status"]` and `task["job_id"]` are SUBSCRIPTS in the
 		// sweep, so a claimed row missing either raises out of it.
 		{"a row with no status aborts the sweep", "recover",
-			map[string]string{
+			"", map[string]string{
 				"th": `{"job_id":"th","claimed_by_pid":` + deadPID + `,
 					"lane":"agenda","attempt":1,"timestamps":{},
 					"blocked_by":[]}`,
 			}},
 		{"a releasable row with no job_id aborts the sweep", "recover",
-			map[string]string{
+			"", map[string]string{
 				"ti": `{"status":"claimed","claimed_by_pid":` + deadPID + `,
 					"lane":"agenda","attempt":1,"timestamps":{},
 					"blocked_by":[]}`,
 			}},
 
-		{"a float pid raises where os.kill refuses it", "recover",
+		{"a float pid raises where os.kill refuses it", "recover", "",
 			map[string]string{
 				"t7": `{"job_id":"t7","status":"claimed",
 					"claimed_by_pid":999999.5,"lane":"agenda","attempt":1,
 					"timestamps":{},"blocked_by":[]}`,
 			}},
+
+		// `task_path` is `_tasks_dir() / f"{job_id}.json"`, and pathlib's
+		// `/` lets an ABSOLUTE right-hand side REPLACE the left one.
+		// filepath.Join never does, so the two runtimes resolve the same
+		// queue row to two different files.
+		//
+		// `blocked_by` is the reachable site: it is foreign-writable, and
+		// claim's dependency loop feeds every entry straight to task_path.
+		// Here the dependency names its own file absolutely. CPython finds
+		// it, reads `done`, and CLAIMS the task; a Go-joined port looks
+		// under <tasks>/<ws>/output/queues/tasks/d1.json, finds nothing,
+		// and leaves the task blocked forever. That is the two runtimes
+		// disagreeing about what the queue may RUN (adversarial r11 round
+		// 6, HIGH), and until this fixture existed the fix was pinned only
+		// at the helper — reverting `task_path` itself failed nothing.
+		{"an absolute dependency resolves outside the queue directory",
+			"claim_arg", "t1", map[string]string{
+				"t1": `{"job_id":"t1","status":"queued","lane":"agenda",
+					"attempt":0,"timestamps":{},
+					"blocked_by":["{{WS}}/output/queues/tasks/d1"]}`,
+				"d1": `{"job_id":"d1","status":"done","lane":"agenda",
+					"attempt":1,"timestamps":{},"blocked_by":[]}`,
+			}},
+		// The same rule on a dependency that is absolute and MISSING. Both
+		// runtimes refuse the claim, so only the message can differ — and
+		// it names the id, not the path, so this one agrees by
+		// construction. It is here to keep the case above honest: a fixture
+		// set where every absolute path exists would pass a port that
+		// treated "absolute" as "always satisfied".
+		{"an absolute dependency that does not exist still blocks",
+			"claim_arg", "t1", map[string]string{
+				"t1": `{"job_id":"t1","status":"queued","lane":"agenda",
+					"attempt":0,"timestamps":{},
+					"blocked_by":["{{WS}}/output/queues/tasks/gone"]}`,
+			}},
+		// archive's DESTINATION is joined the same way, and it is a second
+		// join with its own bug surface. With an absolute job id CPython's
+		// destination collapses onto the source file — it writes the row
+		// over itself and then unlinks it, so the archive directory stays
+		// empty and the row is gone. A Go-joined port buries it under
+		// <archive>/<ws>/output/queues/tasks/. Neither outcome is visible
+		// in the tasks directory, which is why _files now walks the
+		// archive directory recursively.
+		{"an absolute job id sends the archive destination with it",
+			"archive_arg", "{{WS}}/output/queues/tasks/t1",
+			map[string]string{
+				"t1": `{"job_id":"t1","status":"done","lane":"agenda",
+					"attempt":1,"timestamps":{},"blocked_by":[]}`,
+			}},
+		// The ordinary archive, now that the archive directory is read: it
+		// pins that the row lands at archive/t1.json and nowhere else.
+		{"an ordinary archive lands in the archive directory",
+			"archive_arg", "t1", map[string]string{
+				"t1": `{"job_id":"t1","status":"done","lane":"agenda",
+					"attempt":1,"timestamps":{},"blocked_by":[]}`,
+			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pyWS, goWS := t.TempDir(), t.TempDir()
+			sub := func(ws, s string) string {
+				return strings.ReplaceAll(s, "{{WS}}", ws)
+			}
 			for _, ws := range []string{pyWS, goWS} {
 				if err := os.MkdirAll(TasksDir(ws), 0o755); err != nil {
 					t.Fatal(err)
 				}
 				for id, body := range c.rows {
 					if err := os.WriteFile(TaskPath(ws, id),
-						[]byte(body), 0o644); err != nil {
+						[]byte(sub(ws, body)), 0o644); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -453,11 +584,33 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				Msg   string            `json:"msg"`
 				Files map[string]string `json:"files"`
 			}
+			args := []string{c.verb}
+			if c.arg != "" {
+				args = append(args, sub(pyWS, c.arg))
+			}
 			pyprobe.Probe{
 				Marker:    "task_store.py",
 				Workspace: pyWS,
 				Guard:     tasksGuard,
-			}.RunJSON(t, pySweepSrc, &want, c.verb)
+			}.RunJSON(t, pySweepSrc, &want, args...)
+
+			// The two runtimes get two DIFFERENT temp roots, so any answer
+			// that echoes an absolute path back — the claimed row's own
+			// blocked_by, the "blocked by <path>" message, the archived
+			// row's job_id — differs by the root and nothing else. Each
+			// side's root is folded to the same token so the comparison is
+			// about the path SHAPE, which is the whole claim.
+			maskPy := func(s string) string {
+				return strings.ReplaceAll(s, pyWS, "{{WS}}")
+			}
+			maskGo := func(s string) string {
+				return strings.ReplaceAll(s, goWS, "{{WS}}")
+			}
+			want.Value = json.RawMessage(maskPy(string(want.Value)))
+			want.Msg = maskPy(want.Msg)
+			for k, v := range want.Files {
+				want.Files[k] = maskPy(v)
+			}
 
 			var got any
 			var gotErr error
@@ -502,19 +655,37 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				}
 				got = ids
 			case "summary":
-				var counts map[string]int
+				var counts pyval.Obj
 				counts, gotErr = StatusSummary(goWS)
-				// The probe keys its answer with json.dumps of the raw
-				// key, which for a string is a QUOTED string — match it.
-				out := map[string]int{}
-				for k, v := range counts {
-					out[jsonKeyOf(t, k)] = v
+				if gotErr == nil {
+					var dumped string
+					dumped, gotErr = pyval.DumpsCompactPy(counts)
+					got = dumped
 				}
-				got = out
 			case "complete_c1":
 				_, gotErr = Complete(goWS, "c1",
 					pyval.Obj{{Key: "a", Val: "/x/y"}}, "success")
 				got = nil
+			case "archive_t1", "archive_arg":
+				id := "t1"
+				if c.verb == "archive_arg" {
+					id = sub(goWS, c.arg)
+				}
+				var tk Task
+				tk, gotErr = Archive(goWS, id)
+				if gotErr == nil {
+					var dumped string
+					dumped, gotErr = pyval.DumpsCompactPy(tk)
+					got = dumped
+				}
+			case "claim_arg":
+				var tk Task
+				tk, gotErr = Claim(goWS, sub(goWS, c.arg), 4242)
+				if gotErr == nil {
+					var dumped string
+					dumped, gotErr = pyval.DumpsCompactPy(tk)
+					got = dumped
+				}
 			case "recover":
 				var ids []string
 				ids, gotErr = RecoverStaleClaims(goWS)
@@ -532,6 +703,28 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				}
 				t.Fatalf("%s answered %v; CPython raises %s: %s",
 					c.verb, got, want.Cls, want.Msg)
+			}
+
+			// claim WRITES the row it returns, so the returned string
+			// carries a fresh uuid4 and a wall clock. Masked exactly the
+			// way the on-disk comparison masks them — claimed_by_pid is
+			// pinned on both sides, so the parts that say whether the
+			// claim happened all still compare.
+			if gs, ok := got.(string); ok {
+				got = maskGo(gs)
+			}
+			if want.OK && c.verb == "claim_arg" {
+				if s, ok := got.(string); ok {
+					got = normSweep(t, s)
+				}
+				var pyRow string
+				if err := json.Unmarshal(want.Value, &pyRow); err == nil {
+					b, err := json.Marshal(normSweep(t, pyRow))
+					if err != nil {
+						t.Fatal(err)
+					}
+					want.Value = b
+				}
 			}
 
 			if want.OK {
@@ -566,9 +759,9 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 						t.Errorf("%s raises %s, CPython raises %s",
 							c.verb, cls, want.Cls)
 					}
-					if gotErr.Error() != want.Msg {
+					if maskGo(gotErr.Error()) != want.Msg {
 						t.Errorf("%s message = %q, CPython says %q",
-							c.verb, gotErr.Error(), want.Msg)
+							c.verb, maskGo(gotErr.Error()), want.Msg)
 					}
 				}
 			}
@@ -576,42 +769,56 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 			// The FILES, always. A sweep's return value says nothing about
 			// whether it released a task, and "released a row CPython left
 			// claimed" is the divergence that matters to the next claimer.
+			//
+			// Names prefixed "archive/" are relative to the archive
+			// directory, which _files walks RECURSIVELY: a destination that
+			// escaped into a nested subtree is a file at a name CPython
+			// never produced, and only the second loop below can see it.
+			goPath := func(name string) string {
+				if rest, ok := strings.CutPrefix(name, "archive/"); ok {
+					return filepath.Join(ArchiveDir(goWS), rest)
+				}
+				return filepath.Join(TasksDir(goWS), name)
+			}
 			for name, pyBody := range want.Files {
-				raw, err := os.ReadFile(TasksDir(goWS) + "/" + name)
+				raw, err := os.ReadFile(goPath(name))
 				if err != nil {
 					t.Errorf("the port removed %s: %v", name, err)
 					continue
 				}
-				if normSweep(t, string(raw)) != normSweep(t, pyBody) {
+				if normSweep(t, maskGo(string(raw))) !=
+					normSweep(t, pyBody) {
 					t.Errorf("%s diverges after %s:\n go: %s\n py: %s",
 						name, c.verb, raw, pyBody)
 				}
 			}
+			// And the other direction. Iterating only CPython's names means
+			// a row the port wrote somewhere CPython did not is invisible —
+			// which is exactly the shape an absolute archive destination
+			// takes. A file with no counterpart is a divergence even when
+			// every file that DOES have one matches.
+			for _, d := range []struct{ prefix, dir string }{
+				{"", TasksDir(goWS)}, {"archive/", ArchiveDir(goWS)},
+			} {
+				_ = filepath.WalkDir(d.dir,
+					func(p string, e fs.DirEntry, err error) error {
+						if err != nil || e.IsDir() ||
+							!strings.HasSuffix(p, ".json") {
+							return nil
+						}
+						rel, rerr := filepath.Rel(d.dir, p)
+						if rerr != nil {
+							return nil
+						}
+						if _, ok := want.Files[d.prefix+rel]; !ok {
+							t.Errorf("the port wrote %s after %s; CPython "+
+								"has no such file", d.prefix+rel, c.verb)
+						}
+						return nil
+					})
+			}
 		})
 	}
-}
-
-// jsonKeyOf renders a Go map key the way the probe rendered CPython's:
-// json.dumps of the key object. The Go side already holds the key in its
-// JSON-key spelling, so a string key is quoted and everything else is
-// passed through as the literal it already is.
-func jsonKeyOf(t *testing.T, k string) string {
-	t.Helper()
-	switch k {
-	case "null", "true", "false":
-		return k
-	}
-	if len(k) > 0 && (k[0] == '-' || (k[0] >= '0' && k[0] <= '9')) {
-		var probe any
-		if err := json.Unmarshal([]byte(k), &probe); err == nil {
-			return k
-		}
-	}
-	b, err := json.Marshal(k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }
 
 // normSweep parses and re-marshals so key order does not decide the

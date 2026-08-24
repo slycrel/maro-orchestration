@@ -50,6 +50,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -60,7 +61,20 @@ type Task = pyval.Obj
 var ValidStatuses = []string{"queued", "claimed", "done", "failed", "archived"}
 
 // ErrNotFound is Python's FileNotFoundError for a missing task file.
-var ErrNotFound = errors.New("task not found")
+//
+// A typed sentinel rather than errors.New, so it can answer PyClass the way
+// ConflictError and CycleError do. It was the third member of that family
+// and the one that could not answer: pyval.ClassOf returned "" for it, and
+// a differential comparing classes saw "*fmt.wrapError" against CPython's
+// FileNotFoundError while the message matched exactly (adversarial r11
+// round 6, LOW). `errors.Is(err, ErrNotFound)` still holds — every raise
+// site wraps it with %w.
+type notFoundError struct{ msg string }
+
+func (e *notFoundError) Error() string   { return e.msg }
+func (e *notFoundError) PyClass() string { return "FileNotFoundError" }
+
+var ErrNotFound error = &notFoundError{msg: "task not found"}
 
 // ConflictError is Python's RuntimeError: the task exists but is not in a
 // state that permits the operation. Kept distinct from ErrNotFound because
@@ -93,7 +107,25 @@ func ArchiveDir(ws string) string { return filepath.Join(ws, "output", "queues",
 
 // TaskPath is the file for one job id.
 func TaskPath(ws, jobID string) string {
-	return filepath.Join(TasksDir(ws), jobID+".json")
+	// pypath.Join, not filepath.Join. `task_path` is
+	// `_tasks_dir() / f"{job_id}.json"`, and pathlib's `/` lets an
+	// ABSOLUTE right-hand side replace the left one — so CPython's
+	// task_path("/etc/passwd") is "/etc/passwd.json", outside the
+	// workspace entirely, where filepath.Join answers
+	// "<ws>/output/queues/tasks/etc/passwd.json".
+	//
+	// That is not a hypothetical: `blocked_by` is the foreign-writable
+	// field round 5 built pyIter for, and claim's dependency loop feeds
+	// each entry straight to task_path. A queue row naming an absolute
+	// dependency is CLAIMABLE under CPython — the dep file exists and
+	// reads done — and permanently blocked here, which is the two
+	// runtimes disagreeing about what the queue may run (adversarial r11
+	// round 6, HIGH).
+	//
+	// Everything downstream inherits it: the lock path, the atomic
+	// write's temp dir, and archive's destination all derive from this
+	// one string.
+	return pypath.Join(TasksDir(ws), jobID+".json")
 }
 
 // UTCNow is task_store.utc_now(): second precision with a literal Z.
@@ -268,7 +300,7 @@ func checkCycle(ws, jobID string, blockedBy any, visited map[string]bool) error 
 	for _, depRaw := range deps {
 		// `dep_id in visited` and `visited.add(dep_id)` are SET
 		// operations, so an unhashable dep_id raises before either.
-		key, hashable := hashKey(depRaw)
+		key, hashable := pyval.HashKey(depRaw)
 		if !hashable {
 			return &pyval.PyErr{Class: "TypeError",
 				Msg: "unhashable type: '" + pyval.TypeName(depRaw) + "'"}
@@ -659,7 +691,19 @@ func List(ws, statusFilter string) ([]any, error) {
 
 // StatusSummary counts tasks by status. A row with no status counts as
 // "unknown" rather than being dropped.
-func StatusSummary(ws string) (map[string]int, error) {
+//
+// It returns an ORDERED Obj and not a map, because two distinct dict keys
+// can share one JSON spelling and a map silently drops one of them.
+// `counts` is keyed by the RAW status, so a row holding 5 and a row holding
+// "5" are two buckets — and `json.dumps` writes them both as "5", producing
+// a JSON object with a duplicate key. Measured, seven rows in, CPython:
+//
+//	{"true": 1, "null": 1, "5": 1, "1.0": 2, "None": 1, "5": 1}
+//
+// A map[string]int answered four buckets to CPython's six and a total of 4
+// against its 7 — the queue under-reporting its own contents, which is the
+// failure the read path was written to prevent (adversarial r11 round 6).
+func StatusSummary(ws string) (pyval.Obj, error) {
 	dir := TasksDir(ws)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
@@ -692,7 +736,7 @@ func StatusSummary(ws string) (map[string]int, error) {
 		if !ok {
 			raw = "unknown"
 		}
-		key, hashable := hashKey(raw)
+		key, hashable := pyval.HashKey(raw)
 		if !hashable {
 			return nil, &pyval.PyErr{Class: "TypeError",
 				Msg: fmt.Sprintf("cannot use '%s' as a dict key "+
@@ -711,9 +755,11 @@ func StatusSummary(ws string) (map[string]int, error) {
 		buckets[key] = b
 		order = append(order, b)
 	}
-	counts := map[string]int{}
+	counts := make(pyval.Obj, 0, len(order))
 	for _, b := range order {
-		counts[b.display] = b.n
+		// append, not Set: Set would dedupe by spelling and re-introduce
+		// exactly the collapse this return type exists to avoid.
+		counts = append(counts, pyval.Field{Key: b.display, Val: b.n})
 	}
 	return counts, nil
 }
@@ -735,14 +781,42 @@ func Archive(ws, jobID string) (Task, error) {
 		if t == nil {
 			return fmt.Errorf("%w: %s", ErrNotFound, jobID)
 		}
-		if s := t.GetString("status"); s != "done" && s != "failed" {
-			return conflictf("task %s has status '%s', can only archive done/failed", jobID, s)
+		// `task["status"]` is the SUBSCRIPT, and archive was the one site
+		// of that class rounds 3 to 5 never enumerated: claim, complete,
+		// fail and recover_stale_claims each got the treatment and this
+		// one kept GetString, which answers "" for a missing key AND for
+		// any non-string. A row with no status raised RuntimeError here
+		// where CPython raises KeyError, and every non-string status
+		// printed as '' where CPython prints the value — 'None', 'True',
+		// '5', "['done']" (adversarial r11 round 6, MEDIUM).
+		//
+		// The membership is `not in ("done", "failed")`, which is `==`
+		// against two strings and never raises whatever the value is; the
+		// message then subscripts the SAME key a second time, which cannot
+		// fail if the first did not.
+		//
+		// pyval.Eq rather than comparing pyval.Str(raw), and the battery
+		// scores that swap as an UNOBSERVABLE mutation on purpose: the two
+		// differ only for a value whose str() is "done" while not being
+		// the string "done", and no JSON-decodable value has that shape —
+		// a list spells "['done']", a dict spells "{...}", a number
+		// spells digits. Eq is kept because it is what `==` IS, not
+		// because a fixture can tell.
+		raw, ierr := index(t, "status")
+		if ierr != nil {
+			return ierr
+		}
+		if !pyval.Eq(raw, "done") && !pyval.Eq(raw, "failed") {
+			return conflictf("task %s has status '%s', can only archive done/failed",
+				jobID, pyval.Str(raw))
 		}
 		t.Set("status", "archived")
 		if err := os.MkdirAll(ArchiveDir(ws), 0o777); err != nil {
 			return err
 		}
-		if err := writeTask(filepath.Join(ArchiveDir(ws), jobID+".json"), t); err != nil {
+		// `_archive_dir() / f"{job_id}.json"` — the same pathlib join, so
+		// an absolute job id archives to an absolute path here too.
+		if err := writeTask(pypath.Join(ArchiveDir(ws), jobID+".json"), t); err != nil {
 			return err
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -1137,64 +1211,17 @@ func lockPath(path string) string {
 	return filepath.Join(dir, stem+".lock")
 }
 
-// statusKey is a status value as a JSON object key — what json.dumps does
-// to the counts dict CPython builds. A list or a dict is unhashable and
-// never becomes a key at all.
-// hashKey is a value's IDENTITY as a Python dict key or set member, which
-// is not the same as its spelling. Python hashes by numeric value, so
-// `True`, `1` and `1.0` are ONE key — `{True: 3}` after counting all three
-// — and a status summary that keyed by spelling reported three buckets of
-// one where CPython reports one bucket of three (adversarial r11 round 5,
-// LOW). The same rule decides membership in `_check_cycle`'s visited set.
+// A value's IDENTITY as a Python dict key or set member lives in
+// pyval.HashKey — this package used to carry its own copy, which was the
+// same Python operation implemented twice. `status_summary` buckets with
+// it, `_check_cycle` decides visited-set membership with it, and
+// `drain_task_store` filters its job-id set with it; two homes could
+// disagree and no caller would be able to see it.
 //
-// The second return is hashability: a list or a dict raises rather than
-// becoming a key at all.
-func hashKey(v any) (string, bool) {
-	switch t := v.(type) {
-	case string:
-		return "s:" + t, true
-	case nil:
-		return "n:", true
-	case bool:
-		if t {
-			return "i:1", true
-		}
-		return "i:0", true
-	case int:
-		return "i:" + strconv.Itoa(t), true
-	case int64:
-		return "i:" + strconv.FormatInt(t, 10), true
-	case float64:
-		return floatHashKey(t), true
-	case json.Number:
-		if lit, ok := pyval.IntLiteral(t.String()); ok {
-			return "i:" + lit, true
-		}
-		f, err := t.Float64()
-		if err != nil && !errors.Is(err, strconv.ErrRange) {
-			return "s:" + t.String(), true
-		}
-		return floatHashKey(f), true
-	case pyval.Obj, pyval.List, map[string]any, []any, []string:
-		return "", false
-	}
-	return "o:" + pyval.Str(v), true
-}
-
-// floatHashKey folds a float that is exactly an integer onto the integer's
-// key, which is what makes 1.0 and 1 the same bucket. A NaN is deliberately
-// NOT folded: Python hashes every NaN alike but compares them unequal, so
-// each one is its own bucket.
-func floatHashKey(f float64) string {
-	if math.IsNaN(f) {
-		return fmt.Sprintf("nan:%p", new(int))
-	}
-	if !math.IsInf(f, 0) && f == math.Trunc(f) &&
-		f >= -9.2e18 && f <= 9.2e18 {
-		return "i:" + strconv.FormatInt(int64(f), 10)
-	}
-	return "f:" + strconv.FormatFloat(f, 'g', -1, 64)
-}
+// statusKey below is the OTHER half, and the distinction is the point:
+// hashing is by numeric value (`True`, `1` and `1.0` are one key), while
+// spelling is what json.dumps writes — and two distinct keys can spell
+// alike, which is how a status summary emits a duplicate JSON key.
 
 // statusKey is the same value's SPELLING once json.dumps renders the
 // summary — which is what an operator reads.

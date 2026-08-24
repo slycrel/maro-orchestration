@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
@@ -331,21 +332,21 @@ func TestTheAttachmentSizeLimitIsExclusiveAtTheBoundary(t *testing.T) {
 		w := want[i]
 		if w.Outcome == "refused" {
 			if err == nil {
-				t.Errorf("%s: stored; CPython refused with %q", pathName(p), w.Message)
+				t.Errorf("%s: stored; CPython refused with %q", pypath.Name(p), w.Message)
 			} else if err.Error() != w.Message {
-				t.Errorf("%s refusal:\n got: %q\nwant: %q", pathName(p), err.Error(), w.Message)
+				t.Errorf("%s refusal:\n got: %q\nwant: %q", pypath.Name(p), err.Error(), w.Message)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("%s: %v; CPython stored %d bytes", pathName(p), err, w.Bytes)
+			t.Errorf("%s: %v; CPython stored %d bytes", pypath.Name(p), err, w.Bytes)
 			continue
 		}
 		if rows[0].Bytes != w.Bytes {
-			t.Errorf("%s: %d bytes, CPython %d", pathName(p), rows[0].Bytes, w.Bytes)
+			t.Errorf("%s: %d bytes, CPython %d", pypath.Name(p), rows[0].Bytes, w.Bytes)
 		}
 		if rows[0].SHA256 != w.SHA256 {
-			t.Errorf("%s: sha256 %q, CPython %q", pathName(p), rows[0].SHA256, w.SHA256)
+			t.Errorf("%s: sha256 %q, CPython %q", pypath.Name(p), rows[0].SHA256, w.SHA256)
 		}
 	}
 }

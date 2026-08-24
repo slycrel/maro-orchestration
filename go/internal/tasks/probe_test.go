@@ -78,7 +78,7 @@ func TestTaskStoreDriveProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary, err := pyval.DumpsCompactPy(sortedObj(counts))
+	summary, err := pyval.DumpsCompactPy(counts)
 	if err != nil {
 		t.Fatal(err)
 	}

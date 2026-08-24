@@ -7474,3 +7474,265 @@ pins the glob ORDER on the Python side — `status_summary` iterates an
 unsorted glob, so which spelling a merged status bucket ends up with is
 readdir order, and the merging is the behaviour under test while the order
 is not.
+
+### Round 6 — the whole chunk, and the sites no fixture ever named
+
+Reviewer: opus, whole-chunk (not the round-5 diff). Six findings: 1 HIGH,
+3 MEDIUM, 2 LOW. All six verified against `src/` and against CPython
+before any of them was fixed; all six held. Two SIBLINGS the reviewer did
+not raise were found while pinning them, and both were real.
+
+The round's shape is worth naming. Round 5 read the diff and found
+operator divergences (`in`, `[:n]`, `%`). Round 6 read the FILE and found
+something the diff could not contain: **four of the six sites had never
+been in any fixture set at all.** Not "tested wrong" — untested, in code
+that had already survived five adversarial rounds. A diff-scoped reviewer
+cannot find those, because they are not in the diff. That is the whole
+argument for Jeremy's 2026-08-22 amendment, and this is the round that
+paid it off.
+
+**H1 (HIGH) — `task_path` joins the Go way.** `task_store.task_path` is
+`_tasks_dir() / f"{job_id}.json"`, and pathlib's `/` lets an ABSOLUTE
+right-hand side REPLACE the left one. Measured:
+
+    PurePosixPath("/ws/output/queues/tasks") / X
+      "plain"       -> /ws/output/queues/tasks/plain.json
+      "/etc/passwd" -> /etc/passwd.json          <-- outside the workspace
+      "//x/y"       -> //x/y.json
+      "../../x"     -> /ws/output/queues/tasks/../../x.json   (NOT cleaned)
+      ""            -> .json
+      "."           -> ..json
+      "a/b"         -> /ws/output/queues/tasks/a/b.json
+
+pathlib DROPS "." components and KEEPS "..". `filepath.Join` does the
+opposite of both: it cleans, and it never lets the right side win.
+
+This is not hypothetical. `blocked_by` is the foreign-writable field
+round 5 built `pyIter` for, and `claim`'s dependency loop feeds each
+entry straight to `task_path`. A queue row naming an absolute dependency
+is CLAIMABLE under CPython — the dep file exists at that absolute path
+and reads `done` — and permanently blocked here. That is the two runtimes
+disagreeing about **what the queue may run**, which is the worst class of
+divergence this port can have.
+
+Everything downstream inherits the one string: the lock path, the atomic
+write's temp directory, and archive's destination.
+
+The fix hoisted `internal/dispatch/pypath.go` to its own package
+`internal/pypath` — it had acquired a second caller, which is the moment
+lens 9 ("a helper you did not look for is a helper you will write again")
+says to stop hiding it inside one consumer. `pathName`/`pathStr`/… became
+`Name`/`Str`/…, and a new `Join` carries the two rules:
+
+    func Join(base, rhs string) string {
+        if strings.HasPrefix(rhs, "/") || base == "" { return Str(rhs) }
+        if rhs == "" { return Str(base) }
+        b := Str(base)
+        if strings.HasSuffix(b, "/") { return Str(b + rhs) }
+        return Str(b + "/" + rhs)
+    }
+
+Two cuts were wrong before this one, and the fixtures caught both. The
+first concatenated, and `./x.json` failed immediately (pathlib drops "."
+). The second inserted the separator into an unnormalized base, so
+`Join("/", "x")` answered `//x` (the POSIX double-slash root, a DIFFERENT
+path) and `Join("//", "x")` answered `/x`. Normalizing the base through
+`Str` first fixes both, and the 16-pair differential now pins them.
+
+The differential also carries a FLOOR assertion, because the fixture set
+could have gone green while claiming nothing: it asserts that at least
+one fixture leaves the base directory. Without it, a `Join` that quietly
+dropped the absolute-rhs rule would pass a table full of relative
+right-hand sides.
+
+**H2 (MEDIUM) — the hook timeout bound is `poll()`'s, not Go's.**
+`notify.command`'s timeout was clamped against Go's `time.Duration` range
+(~292 years). CPython's is much smaller and much sharper. Measured
+against `subprocess.run(cmd, capture_output=True, timeout=T)`:
+
+    2147483.0      -> runs
+    2147483.647    -> runs                      <-- INT_MAX milliseconds
+    2147483.648    -> OverflowError: timeout is too large
+    3e6, 1e9       -> OverflowError (same)
+    9.3e9          -> OverflowError: timestamp too large to convert to C PyTime_t
+    +Inf           -> OverflowError: cannot convert float infinity to integer
+    NaN            -> ValueError: cannot convert float NaN to integer
+    -1.0, 0.0, -0.0, -1e9, -3e6, -9.3e9, -1e300, -Inf
+                   -> TimeoutExpired IMMEDIATELY
+
+`3e6` is the point of practical impact: it is the idiom an operator
+reaches for when they mean "never time out" (about 35 days), and CPython
+REFUSES it. The port ran the hook. So an operator who set a
+never-time-out timeout got a hook that never runs under Python and one
+that runs forever here — opposite failures from one config line.
+
+The fix is one constant and two arms:
+
+    const pollMaxSecs = 2147483.647 // INT_MAX milliseconds
+    if math.IsNaN(tsec) || tsec > pollMaxSecs { ...refuse, do not run... }
+    if tsec <= 0 { ...log the immediate timeout... }
+
+**The sibling the reviewer missed** is the second arm. Round 5 had
+guarded with `math.Abs(tsec) > bound`, which refuses hugely negative
+values — and CPython does not refuse them, it times out at once. A
+`-1e300` timeout is an immediate TimeoutExpired there and a refusal here.
+`-0.0` and `0.0` are the same arm. Lens 8 again: **a fix is evidence
+about its siblings**, and the sibling of "the upper bound is wrong" is
+"so is the lower one".
+
+The log line the timeout writes is `%.0f` of the configured seconds, and
+Python and Go do not spell non-finites alike (`-inf` vs `-Inf`, `nan` vs
+`NaN`). `pyval.PercentF` now carries that:
+
+    func PercentF(f float64, prec int) string {
+        switch {
+        case math.IsNaN(f):       return "nan"
+        case math.IsInf(f, 1):    return "inf"
+        case math.IsInf(f, -1):   return "-inf"
+        }
+        return strconv.FormatFloat(f, 'f', prec, 64)
+    }
+
+**A residual that CANNOT be pinned**, and is recorded rather than
+papered over: bisecting the real boundary gave 2147483.6470185518, not
+2147483.647. The extra ~18ms is spawn time — `subprocess.run` hands
+`poll()` the time REMAINING after the fork, so the true ceiling depends
+on how long the machine took to start the child. There is no fixture that
+can assert on that; the port pins the documented constant and names the
+gap.
+
+**H3 (MEDIUM) — two dict keys can spell alike.** `status_summary`
+returned a Go map, so its JSON came out alphabetized and deduplicated.
+CPython's comes out in first-seen order and can carry a DUPLICATE KEY.
+Measured with statuses `[5, '5', None, 'None', True, 'true', 1.0]`:
+
+    repr:        {'true': 1, None: 1, '5': 1, 1.0: 2, 'None': 1, 5: 1}
+    json.dumps:  {"true": 1, "null": 1, "5": 1, "1.0": 2, "None": 1, "5": 1}
+                                                                 ^^^^^^^^^^
+                                      "5" appears TWICE — 5 and '5' are two
+                                      keys that share one JSON spelling.
+
+That is legal JSON that most parsers silently collapse, and it is what an
+operator's tooling actually receives. The port now returns `pyval.Obj`
+and APPENDS (`counts = append(counts, ...)`) rather than `Set`ing, since
+`Set` would dedupe by spelling and drop a bucket. Hashing and spelling
+are two different operations on the same value, which is exactly why
+`hashKey` and `statusKey` are two functions.
+
+That distinction also closed a duplication: `internal/tasks` carried its
+own `hashKey`/`floatHashKey` while `pyval.HashKey` claimed in its own doc
+to be "the ONE implementation". It now is — `status_summary`,
+`_check_cycle`'s visited set, and `drain_task_store`'s job-id filter all
+route through `pyval.HashKey`. Two homes for one Python operation is the
+defect this port's own comments name.
+
+**H4 (MEDIUM) — `archive` SUBSCRIPTS its status.** `task["status"]`, not
+`task.get("status")`. A row with no `status` key is a `KeyError` in
+CPython and was a silent `""` here (which then fell through to the
+"can only archive done/failed" refusal — right outcome, wrong exception,
+and a caller catching `KeyError` sees nothing). This is the unenumerated
+sibling of the r8 lens: the enumeration of subscript sites was not the
+class. The fix routes through `index` and compares with `pyval.Eq` /
+renders with `pyval.Str`, so a non-string status is refused with the
+Python spelling of the value it actually holds.
+
+Ten archive fixtures went into the malformed differential and six into
+the sweep differential. Non-mapping rows could not live in the malformed
+harness at all — it reads the fixture's own `job_id` back out of the JSON
+to name the file — so they moved, which is itself the finding that the
+two harnesses have different reach.
+
+**H5 (LOW) — the third member of a family that could not answer.**
+`ConflictError` and `CycleError` both answer `PyClass()`; `ErrNotFound`
+was `errors.New` and could not. A differential comparing classes saw
+`*fmt.wrapError` against CPython's `FileNotFoundError` while the message
+matched exactly. Now a typed sentinel; `errors.Is(err, ErrNotFound)`
+still holds at every wrap site.
+
+**H6 (LOW) — a log line with an argument Python never writes.** Python is
+`log.debug("recursion check-in emit failed (non-fatal)", exc_info=True)`.
+The exception rides `exc_info` and never reaches the message; the port
+appended `: %v`. Both sites fixed. The traceback CPython writes to a
+debug logger has no counterpart here and is recorded as not-a-message-
+difference rather than chased.
+
+**The second sibling the reviewer missed: `"model": null`.** While adding
+the drain event I floored a nil `Model` to `""` inside
+`notify.WriteEvent`. That was wrong, and the file says so: the zero value
+CANNOT mean the default there, because a caller must be able to write a
+genuine JSON null (`project` comes from a row whose `parent_job_id` may
+be null). The convention is "state every raw field at every call site",
+enforced by the row-shape differential — which is precisely what caught
+the new caller. `notify.go` was reverted and `drainEvent` now states
+`Model: ""` explicitly. **A convention that catches its own next violator
+is worth more than the shortcut that violates it.**
+
+**The battery found that the HIGH fix was pinned at the helper and
+nowhere else.** `pypath.Join`'s own 16-pair differential caught every
+mutation of `Join`. But reverting `TaskPath` itself to `filepath.Join` —
+the actual site, the one the finding was about — **failed nothing**, and
+so did reverting archive's destination. The fix was correct and the
+fixtures were testing the helper, not the call. That is the
+"a guard that cannot fire" lens pointed at a fix rather than at ported
+code, and it is the second time in two rounds that a green suite meant
+less than it looked like.
+
+Closing it needed the fixture to name an absolute path, which no constant
+can do — the two runtimes get two different temp workspaces, and the
+whole point of the case is that the path is absolute. So the sweep
+differential gained a `{{WS}}` substitution (in row bodies and in the
+verb's argument), each side's own root folded back to one token before
+anything is compared, and two verbs that take an argument:
+
+- **`claim_arg`** with `blocked_by: ["{{WS}}/output/queues/tasks/d1"]`
+  and `d1` present and `done`. CPython resolves the absolute dependency,
+  reads `done`, and CLAIMS the task. `filepath.Join` looks under
+  `<tasks>/<ws>/output/queues/tasks/d1.json`, finds nothing, and leaves
+  the row blocked. The mutation is now caught, with the two runtimes
+  disagreeing about whether the task may run — which is what the finding
+  said.
+- A sibling fixture with the same absolute dependency MISSING, which
+  agrees by construction. It is there so the set cannot pass a port that
+  read "absolute" as "always satisfied".
+- **`archive_arg`** with an absolute job id. CPython's destination
+  collapses onto the source file: it writes the row over itself and then
+  unlinks it, so the archive directory stays EMPTY. A Go-joined port
+  buries it under `<archive>/<ws>/output/queues/tasks/`.
+
+Neither outcome is visible in the tasks directory, and **the archive
+directory was read by nothing at all** — "the row landed where CPython
+puts it", which is archive's whole job, was asserted by no fixture in the
+suite. `_files()` now walks it recursively.
+
+That was still not enough, and the reason is worth keeping: the file
+comparison iterated **CPython's** filenames only, so a row the port wrote
+somewhere CPython did not was invisible. A second loop now walks both Go
+directories and fails on any `.json` with no counterpart. That loop is
+what actually caught the archive mutation.
+
+**Mutation battery (derived from the FILES, per Jeremy 2026-08-16):**
+16 mutations over the six fixes and their two siblings. 14 caught, 2
+labelled unobservable, and every one of those four numbers is a finding:
+
+- `task_path` and archive's destination were MISSES until the fixtures
+  above were written. They are the two that mattered.
+- `PercentF`'s NaN arm was a miss because `notify` refuses a NaN timeout
+  one branch BEFORE the log line that would format it — a helper arm with
+  no live caller, the same shape as `Float`'s `json.Number` overflow arm.
+  Closed by pinning it at the helper: `TestPercentFMatchesCPython`, 18
+  rows against `"%.*f" % v`, including the half-to-even cases (`0.5`,
+  `1.5`, `2.5` — a port reaching for `math.Round` answers 1, 2 and 3),
+  the timeout boundary at the precision the log uses, and a floor
+  assertion that at least four rows are non-finite, since that is the
+  only class the two runtimes spell differently.
+- `pyval.Eq(raw, "done")` vs `pyval.Str(raw) == "done"` is UNOBSERVABLE
+  and now says so in the source: the two differ only for a value whose
+  `str()` is `"done"` while not being the string `"done"`, and no
+  JSON-decodable value has that shape.
+- The check-in log's format argument is unobservable for a different
+  reason — the branch itself cannot be entered. `_advance_origin_with_
+  checkin` has already incremented `checkins_sent` before `FireCheckin`
+  reads it, so a non-numeric count raised at that earlier site; and
+  `new_depth + 1` is a number by construction. Both sites already carried
+  that reasoning from r11 round 3; this round added a second mutation to
+  the same unreachable branch and it is a miss for the same reason.
