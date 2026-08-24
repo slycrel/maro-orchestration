@@ -746,6 +746,51 @@ func compareWorkspaces(t *testing.T, ws string, want map[string]string) {
 		}
 	}
 
+	// Every .json file the run left behind, key by key.
+	//
+	// This arm was missing and the omission was not visible: the file SET
+	// comparison above sees `task-*.json`, so a queue entry whose every
+	// field was wrong still reported present-and-correct. That is how a
+	// continuation was enqueued with a Python-repr string as its goal and
+	// a quoted number as its parent id through two review rounds
+	// (adversarial r11 round 2, HIGH) — the differential's only content
+	// check on a task file lived in a separate test whose two fixtures
+	// both used string ids and a string reason. **An exclusion is a
+	// hypothesis; this one said "task files carry nothing worth reading"
+	// and nobody had tested it.**
+	//
+	// job_id / run_id / timestamps are masked by KEY, not dropped: whether
+	// both runtimes wrote the key at all is still the claim.
+	gotByMask := map[string]string{}
+	for n, b := range got {
+		gotByMask[maskVolatileName(n)] = b
+	}
+	for name, wantBody := range want {
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		mn := maskVolatileName(name)
+		gotBody, ok := gotByMask[mn]
+		if !ok {
+			continue // the set comparison above already reported it
+		}
+		gotRow, gerr := pyval.LoadsOrdered(gotBody)
+		wantRow, werr := pyval.LoadsOrdered(wantBody)
+		if gerr != nil || werr != nil {
+			t.Errorf("%s: unreadable (%v / %v)", mn, gerr, werr)
+			continue
+		}
+		go1, ok1 := gotRow.(pyval.Obj)
+		wo1, ok2 := wantRow.(pyval.Obj)
+		if !ok1 || !ok2 {
+			t.Errorf("%s: not an object on one side", mn)
+			continue
+		}
+		sameRow(t, mn, go1, wo1,
+			"job_id", "run_id", "timestamps",
+			"started_at", "ended_at", "updated_at", "handle_id")
+	}
+
 	// And every jsonl ledger, row by row, with the two volatile things
 	// masked — the wall clock and a freshly minted task id.
 	//
@@ -995,6 +1040,23 @@ func TestTheCalibrationAndEventRowsMatchCPython(t *testing.T) {
 			"reason": "audit the escalation lane", "continuation_depth": 0,
 		}, reply(`"action": "continue", "decision_class": "mechanical",
 			"confidence": 9, "reasoning": "bounded", "summary_for_user": "next"`)},
+
+		// Every reply above answers each field with a scalar, so the ordered
+		// parse of the LLM's JSON was only ever asked to preserve TOP-level
+		// order. safe_str on a nested object is repr(), and repr walks the
+		// nested dict in ITS insertion order — so a port that round-tripped
+		// the decoded reply through an unordered map wrote
+		// `{'b': [...], 'why': ...}` into escalations.jsonl and the
+		// calibration store, and nothing could tell (adversarial r11 round 2,
+		// MEDIUM 3). The keys here are deliberately NOT in sorted order.
+		{"a nested reasoning object keeps the reply's own key order",
+			map[string]any{
+				"job_id": "job-rows006", "parent_job_id": "loop-parent-9",
+				"reason": "audit the escalation lane", "continuation_depth": 2,
+			}, reply(`"action": "close", "decision_class": "taste",
+			"confidence": 6,
+			"reasoning": {"why": "answered a > b", "b": [1, 2.0, null], "a": true},
+			"summary_for_user": "closing"`)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			const frozenJitter = 5
@@ -1106,6 +1168,27 @@ func TestTheEnqueuedTaskMatchesCPython(t *testing.T) {
 		}, reply(`"action": "narrow", "decision_class": "mechanical",
 			"confidence": 9, "revised_goal": "port only the close branch",
 			"reasoning": "too broad", "summary_for_user": "narrowing"`)},
+
+		// The two fields the enqueue passes through RAW. `reason` is only
+		// ever read into an f-string before this point and `job_id` only
+		// into log lines, so neither is spelled anywhere upstream — and the
+		// row this writes is the continuation's whole inheritance. A port
+		// that str()'d either wrote `"{'ask': 'audit the escalation lane'}"`
+		// where CPython wrote an object, and `"4242"` where it wrote 4242;
+		// every fixture above used strings for both, so both survived
+		// (adversarial r11 round 2, HIGH 1).
+		{"a reason and a job id that are not strings", map[string]any{
+			"job_id": 4242, "parent_job_id": "loop-parent-9",
+			"reason": map[string]any{
+				"ask": "audit the escalation lane", "budget": 3,
+			},
+			"continuation_depth": 4,
+			"origin": map[string]any{
+				"parent_goal": "the original ask", "parent_handle_id": "h-1",
+				"next_checkin_depth": 5, "checkins_sent": 1,
+			},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded", "summary_for_user": "next pass"`)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			const frozenJitter = 6
@@ -1285,5 +1368,149 @@ func seedLedger(t *testing.T, ws string, lines []string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "outcomes.jsonl"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestTheCloseStampIsGovernedByTheRawParentIdAndAnIntDepth drives the four
+// shapes where the close branch's two stores STOP agreeing with a port that
+// spells its inputs.
+//
+// The test above seeds a run and a ledger row, and both its fixtures use a
+// string parent id and an integer depth — so it pins that the stamp happens
+// and nothing about WHEN. Three separate decisions live in that branch and
+// none of them were covered:
+//
+//   - `resolve_run_dir(loop_id)` RAISES for a non-string (it builds
+//     `f"{ref}-{nickname(ref)}"` and nickname calls `.encode`), so the whole
+//     metadata half — the [refines: …] note included — is skipped.
+//   - the ledger match is Python's `==`, and `4242 == "4242"` is False, so a
+//     numeric parent id stamps a numeric row and skips a string one.
+//   - `int(depth)` in the reopen payload is the ONE place depth is not raw,
+//     and it is evaluated as an ARGUMENT: a non-numeric depth raises before
+//     anything is written.
+//
+// Everything is compared cross-runtime rather than against expectations
+// written here, because the expectations are the part I would get wrong.
+func TestTheCloseStampIsGovernedByTheRawParentIdAndAnIntDepth(t *testing.T) {
+	const (
+		frozenJitter = 5
+		loopID       = "loop-20260824T090000-stamped"
+		handleID     = "20260824T090000-stamped1"
+	)
+	for _, c := range []struct {
+		name        string
+		parent      any
+		depth       any
+		seedLoopID  string // the raw JSON literal in the seeded row
+		metaLoopID  string // the loop_id the seeded RUN carries
+		wantStamped bool
+		wantRefine  bool
+	}{
+		{"a numeric parent matches no string row and resolves no run",
+			4242, 3, `"4242"`, loopID, false, false},
+		{"a numeric parent DOES match a numeric row, with no metadata half",
+			4242, 3, `4242`, loopID, true, false},
+		// The two rows above leave the run unreachable under EITHER reading,
+		// so a port that spelled the id before resolving found nothing and
+		// looked correct. Here the run's own metadata says "4242": the
+		// spelling WOULD resolve it, and CPython still does not, because
+		// resolve_run_dir(4242) raises inside the try (adversarial r11
+		// round 2, HIGH 2 — the half the first two rows could not see).
+		{"a numeric parent does not resolve the run its spelling would",
+			4242, 3, `4242`, "4242", true, false},
+		{"a float depth is int()ed in the payload and not in the evidence",
+			loopID, json.Number("2.0"), `"` + loopID + `"`, loopID, true, true},
+		{"a string depth aborts the metadata half before it writes",
+			loopID, "deep", `"` + loopID + `"`, loopID, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			goWS, pyWS := t.TempDir(), t.TempDir()
+			rd, err := runs.Create(goWS, handleID, "audit the escalation lane")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runs.WriteMetadata(rd, pyval.Obj{
+				{Key: "loop_id", Val: c.metaLoopID},
+				{Key: "status", Val: "stuck"},
+				{Key: "stop_verdict", Val: "out-of-budget"},
+				{Key: "stop_evidence", Val: "iteration cap reached at 7"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			seedLedger(t, goWS, []string{
+				`{"ts": "2026-08-20T10:00:00Z", "loop_id": ` + c.seedLoopID +
+					`, "status": "stuck", "goal": "audit the escalation lane"}`,
+			})
+			copyTree(t, goWS, pyWS)
+
+			task := map[string]any{
+				"job_id": "job-stamp02", "parent_job_id": c.parent,
+				"reason": "audit the escalation lane", "continuation_depth": c.depth,
+			}
+			body := reply(`"action": "close", "decision_class": "mechanical",
+				"confidence": 9, "reasoning": "the completed work answers the core question",
+				"summary_for_user": "done enough"`)
+
+			prev := checkinRandInt
+			checkinRandInt = func(lo, hi int) int { return frozenJitter }
+			defer func() { checkinRandInt = prev }()
+
+			HandleEscalation(context.Background(), goWS, objOf(task),
+				EscalationOptions{Adapter: &llm.Fake{Script: []string{body}}})
+			arg, err := json.Marshal([]any{task, body, frozenJitter})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runPyIn(t, pyWS, pyEscalationSrc, string(arg))
+
+			gotMeta, err := os.ReadFile(filepath.Join(rd, "metadata.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMeta, err := os.ReadFile(
+				filepath.Join(pyWS, "runs", filepath.Base(rd), "metadata.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotMeta) != string(wantMeta) {
+				t.Errorf("metadata.json is not CPython's:\n--- go ---\n%s\n--- py ---\n%s",
+					gotMeta, wantMeta)
+			}
+
+			gotRows := readRows(t, filepath.Join(goWS, "memory", "outcomes.jsonl"))
+			wantRows := readRows(t, filepath.Join(pyWS, "memory", "outcomes.jsonl"))
+			if len(gotRows) != 1 || len(wantRows) != 1 {
+				t.Fatalf("outcome rows: go %d, py %d", len(gotRows), len(wantRows))
+			}
+			sameRow(t, "the outcome row", gotRows[0], wantRows[0])
+
+			// Said out loud, because two agreeing byte comparisons also
+			// agree when NEITHER side did anything, and three of these four
+			// cases are about a store deliberately left alone.
+			_, stamped := gotRows[0].Get("stop_verdict")
+			if stamped != c.wantStamped {
+				t.Errorf("the outcome row carries a stop verdict = %v, want %v: %v",
+					stamped, c.wantStamped, gotRows[0])
+			}
+			refined := strings.Contains(gotRows[0].GetString("stop_evidence"),
+				"[refines: out-of-budget]")
+			if refined != c.wantRefine {
+				t.Errorf("the ledger evidence carries the refine note = %v, want %v: %q",
+					refined, c.wantRefine, gotRows[0].GetString("stop_evidence"))
+			}
+			// The refine note only exists when the metadata half ran, so the
+			// two must move together — that IS the coupling under test.
+			metaClosed := strings.Contains(string(gotMeta), `"escalation-close"`)
+			if metaClosed != c.wantRefine {
+				t.Errorf("metadata.json carries the reopen payload = %v, want %v:\n%s",
+					metaClosed, c.wantRefine, gotMeta)
+			}
+			if metaClosed && !strings.Contains(string(gotMeta), `"depth": 2,`) {
+				t.Errorf("the reopen payload's depth is not the int()ed one:\n%s", gotMeta)
+			}
+			if metaClosed && !strings.Contains(string(gotMeta), "at depth 2.0 ") {
+				t.Errorf("the evidence string lost the raw depth:\n%s", gotMeta)
+			}
+		})
 	}
 }

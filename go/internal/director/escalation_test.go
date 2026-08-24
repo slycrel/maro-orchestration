@@ -2,6 +2,7 @@ package director
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -270,6 +271,17 @@ func TestATruthyNonMappingOriginRaisesTheWayDictDoes(t *testing.T) {
 		{"a number", 7, "'int' object is not iterable"},
 		{"a float", 2.5, "'float' object is not iterable"},
 		{"true", true, "'bool' object is not iterable"},
+		// A task read off disk decodes its numbers as json.Number, not as
+		// Go natives, and TypeName has a whole arm for deciding int from
+		// float on the LITERAL's spelling. Every fixture above uses a Go
+		// native, so deleting that arm — leaving `fmt.Sprintf("%T")` to
+		// answer "json.Number" — survived the entire suite (adversarial
+		// r11 round 2). These two are the only rows here that read the
+		// port the way production does.
+		{"a decoded integer literal", json.Number("7"),
+			"'int' object is not iterable"},
+		{"a decoded float literal", json.Number("2.0"),
+			"'float' object is not iterable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			task := pyval.Obj{{Key: "origin", Val: c.val}}
@@ -312,6 +324,19 @@ func TestAListOfPairsIsAPerfectlyGoodOrigin(t *testing.T) {
 			"checkins_sent=3,parent_goal=ask"},
 		{"a list of two-character strings",
 			pyval.List{"ab", "cd"}, "a=b,c=d"},
+		// A dict IS a sequence to dict(), and it iterates its KEYS: so a
+		// two-key object inside the list is a pair of its key names, and
+		// `dict([{"a": 1, "b": 2}])` is `{"a": "b"}`. Nothing exercised
+		// seqOf's object arm, so rewriting it to collect VALUES instead of
+		// keys survived everything.
+		{"a list containing a two-key object",
+			pyval.List{pyval.Obj{{Key: "a", Val: 1}, {Key: "b", Val: 2}}},
+			"a=b"},
+		// json.dumps spells a surviving non-string key its own way: True
+		// is "true", not str(True)'s "True".
+		{"a list of pairs with non-string keys",
+			pyval.List{pyval.List{true, 2}, pyval.List{nil, 3}, pyval.List{1.5, 4}},
+			"true=2,null=3,1.5=4"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			task := pyval.Obj{{Key: "origin", Val: c.val}}
@@ -357,11 +382,39 @@ func TestTheCadenceFieldsAreNumbersNotIntsBestEffort(t *testing.T) {
 		{"a null count, on a firing depth",
 			pyval.Obj{{Key: "checkins_sent", Val: nil}}, 9, false,
 			"unsupported operand type(s) for +: 'NoneType' and 'int'"},
+		// 2.9 against 2.5, not 1.5 against 2: the earlier fixture could not
+		// detect the truncation it was named for, because 1.5 >= 2 and
+		// 1 >= 2 are both false. These two rows disagree under truncation
+		// and agree without it (adversarial r11 round 2).
+		{"a float depth just under a float threshold",
+			pyval.Obj{{Key: "next_checkin_depth", Val: 2.5}}, 2.4, false, ""},
+		{"a float depth just over a float threshold",
+			pyval.Obj{{Key: "next_checkin_depth", Val: 2.5}}, 2.9, true, ""},
 		{"a float depth compared against the default first depth",
 			pyval.Obj{}, 1.5, false, ""},
+		// AddN has an arm per Python type and this is the only list one.
+		// Deleting it made the message "unsupported operand type(s) for +:
+		// 'list' and 'int'" where CPython says "can only concatenate list
+		// (not \"int\") to list" — a string that goes to escalations.jsonl.
+		{"a list count, on a firing depth",
+			pyval.Obj{{Key: "checkins_sent", Val: pyval.List{1}}}, 9, false,
+			`can only concatenate list (not "int") to list`},
 		{"a string depth",
 			pyval.Obj{}, "deep", false,
 			"'>=' not supported between instances of 'str' and 'int'"},
+		// json.loads("1e400") is inf, not an error and not a string: the
+		// value overflows float64 and Python keeps it. Go's ParseFloat
+		// returns ±Inf AND ErrRange, so a port that treated any parse error
+		// as "not a number" answered TypeError where CPython compares
+		// happily. Both directions, because inf >= 2 and 2 >= inf disagree
+		// (adversarial r11 round 2, LOW 1).
+		{"an overflowing depth literal is +inf and fires",
+			pyval.Obj{}, json.Number("1e400"), true, ""},
+		{"an overflowing threshold literal is +inf and holds",
+			pyval.Obj{{Key: "next_checkin_depth", Val: json.Number("1e400")}},
+			2, false, ""},
+		{"a negative overflowing depth literal is -inf and holds",
+			pyval.Obj{}, json.Number("-1e400"), false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			task := pyval.Obj{{Key: "origin", Val: c.origin}}
@@ -604,12 +657,22 @@ func TestTheAdvisoryArgumentsAreBounded(t *testing.T) {
 	// one. Every other bound in this chunk has a multi-byte fixture; this
 	// one did not, and a mutation battery found nothing because there was
 	// nothing here to find.
+	// It is also NON-PERIODIC. `strings.Repeat(unit, 200)` is the same
+	// three runes over and over, so a bound that took the TAIL — `s[len-n:]`
+	// — produced 200 runes with no replacement character and passed every
+	// assertion below. A rune counter plus a validity check is not a
+	// prefix check (adversarial r11 round 2). The digits make each
+	// position distinguishable, and the prefix is asserted outright.
 	const unit = "é😀ル" // 2 + 4 + 3 bytes, 3 runes
+	var b strings.Builder
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&b, "%s%d", unit, i%10)
+	}
+	long := b.String()
 	ws := t.TempDir()
 	ch := &recordingChannel{}
 	body := reply(fmt.Sprintf(`"action": "close", "decision_class": "taste",
-		"confidence": 7, "reasoning": %q, "summary_for_user": %q`,
-		strings.Repeat(unit, 200), strings.Repeat(unit, 200)))
+		"confidence": 7, "reasoning": %q, "summary_for_user": %q`, long, long))
 	HandleEscalation(context.Background(), ws, objOf(map[string]any{
 		"job_id": "job-bound001", "parent_job_id": "loop-parent-1",
 		"reason": "audit the escalation lane", "continuation_depth": 1,
@@ -634,6 +697,17 @@ func TestTheAdvisoryArgumentsAreBounded(t *testing.T) {
 	// at the end instead of failing.
 	if strings.ContainsRune(parts[0]+parts[2], '\uFFFD') {
 		t.Error("the advisory was cut mid-rune")
+	}
+	// The PREFIX, not just the length: `s[:n]` and `s[len(s)-n:]` are both
+	// n runes of valid text.
+	runes := []rune(long)
+	if want := "close: " + string(runes[:120]); parts[0] != want {
+		t.Errorf("decision is not the first 120 runes:\n got: %q\nwant: %q",
+			parts[0], want)
+	}
+	if want := string(runes[:200]); parts[2] != want {
+		t.Errorf("reasoning is not the first 200 runes:\n got: %q\nwant: %q",
+			parts[2], want)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
@@ -139,6 +138,23 @@ type EscalationOptions struct {
 	// documented defaults rather than a panic.
 	Config map[string]any
 
+	// Notify is handed to the recursion check-in's emit.
+	//
+	// It exists because the zero value was NOT safe: notify.Options with a
+	// nil Cfg falls back to config.Load(), which reads the OPERATOR'S
+	// ~/.maro/config.yml, and on this box that registers a notify.command
+	// that messages Telegram and ssh's to another host. `go test
+	// ./internal/director/` was firing it — five check-in cases across the
+	// differential plus the unit tests, on every round (adversarial r11
+	// round 2, HIGH).
+	//
+	// Passing it in rather than defaulting is the same choice this port
+	// makes for `ws` and `Config`: one resolution order, and it comes from
+	// the caller. A caller that genuinely wants the ambient hook passes
+	// notify.Options{} on purpose, which is a different thing from getting
+	// it by not thinking about it.
+	Notify notify.Options
+
 	// Log receives the same lines Python's `log` does. Optional.
 	Log func(format string, args ...any)
 }
@@ -205,7 +221,15 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		}
 	}
 
-	var data map[string]any
+	// ObjectOrdered, not Object. `Object` flattens through pyval.Plain, so a
+	// nested object arrives as a Go map and pyval.Str answers the
+	// "<unordered map: decode with LoadsOrdered>" sentinel — where CPython's
+	// safe_str is `str(value).strip()` and gives `{'why': '...'}`. That
+	// sentinel would land in the operator artifact, the events detail,
+	// escalations.jsonl, and both stop-evidence stores (adversarial r11
+	// round 2, MEDIUM). Ordered values render through Repr, which is the
+	// repr Python writes.
+	var data pyval.Obj
 	resp, err := o.Adapter.Complete(ctx, []llm.Message{
 		{Role: "system", Content: escalationSystem},
 		{Role: "user", Content: fmt.Sprintf(
@@ -221,7 +245,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	})
 	if err != nil {
 		o.logf("escalation LLM call failed, defaulting to surface: %v", err)
-	} else if obj, perr := jsonx.Object(llm.ContentOrEmpty(resp)); perr == nil {
+	} else if obj, perr := jsonx.ObjectOrdered(llm.ContentOrEmpty(resp)); perr == nil {
 		data = obj
 	}
 
@@ -325,9 +349,14 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 				Lane:   "agenda",
 				Source: "loop_continuation",
 				// The original escalation context becomes the continuation
-				// context.
-				Reason:            pyval.Str(reason),
-				ParentJobID:       jobID,
+				// context — RAW, both of them. Python passes the task's own
+				// `reason` and `job_id` straight into make_task, which writes
+				// what it was given. Spelling them here makes a dict reason a
+				// Python-repr string and an integer id a quoted number, and
+				// `reason` IS the continuation's goal: the next pass would
+				// read a different goal than CPython's.
+				Reason:            reason,
+				ParentJobID:       jobIDRaw,
 				ContinuationDepth: newDepth,
 				Origin:            origin,
 			})
@@ -373,10 +402,13 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		}
 		if terr == nil {
 			t, terr = tasks.Enqueue(ws, tasks.Options{
-				Lane:              "agenda",
-				Source:            "loop_continuation",
+				Lane:   "agenda",
+				Source: "loop_continuation",
+				// An f-string in Python, so a Go string is exactly right
+				// here — unlike the continue branch's raw pass-through one
+				// case up. The ID beside it is still raw.
 				Reason:            fmt.Sprintf("NARROWED from escalation %s:\n\n%s", jobID, revisedGoal),
-				ParentJobID:       jobID,
+				ParentJobID:       jobIDRaw,
 				ContinuationDepth: newDepth,
 				Origin:            origin,
 			})
@@ -482,8 +514,17 @@ var escalationClasses = map[string]bool{
 // `escalate` navigator move, which parks the goal.
 
 // CheckinFirstDepth is the depth at which the first check-in fires.
+//
+// The read is `int(config_get(...))` in a try, NOT a typed lookup. That
+// matters because config values come from YAML written by a human: a quoted
+// `"3"` is 3 to Python and would have been the default 2 to a float64/int
+// type assertion, and `3.7` is 3 there and 2 here. This function decides
+// whether an operator is notified at all (adversarial r11 round 2, MEDIUM).
 func CheckinFirstDepth(cfg map[string]any) int {
-	val := config.Get(cfg, "recursion.checkin_first_depth", 2)
+	val, ok := pyInt(config.GetRaw(cfg, "recursion.checkin_first_depth", 2))
+	if !ok {
+		return 2
+	}
 	if val < 1 {
 		return 1
 	}
@@ -500,8 +541,15 @@ var checkinRandInt = func(lo, hi int) int {
 // CheckinJitter is the random 4–7-goal cadence for check-ins after the
 // first (jittered, not fixed).
 func CheckinJitter(cfg map[string]any) int {
-	lo := config.Get(cfg, "recursion.checkin_jitter_min", 4)
-	hi := config.Get(cfg, "recursion.checkin_jitter_max", 7)
+	// ONE try around BOTH reads in Python, which is not the same as two
+	// independent defaults: a bad `checkin_jitter_max` resets the MINIMUM
+	// too, so `min: 10, max: "abc"` draws from 4–7 there and would draw
+	// from 7–10 here if each read defaulted on its own.
+	lo, okLo := pyInt(config.GetRaw(cfg, "recursion.checkin_jitter_min", 4))
+	hi, okHi := pyInt(config.GetRaw(cfg, "recursion.checkin_jitter_max", 7))
+	if !okLo || !okHi {
+		lo, hi = 4, 7
+	}
 	if hi < lo {
 		lo, hi = hi, lo
 	}
@@ -654,7 +702,7 @@ func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 		{Key: "redirect_hint", Val: checkinRedirectHint},
 		{Key: "status", Val: "running"},
 	}
-	notify.EmitOrdered(context.Background(), ws, "recursion_checkin", payload, notify.Options{})
+	notify.EmitOrdered(context.Background(), ws, "recursion_checkin", payload, o.Notify)
 	o.logf("recursion_checkin fired: depth=%v pass=%v checkin=%d action=%s",
 		newDepth, goalPass, checkinNumber, action)
 }
@@ -676,7 +724,6 @@ func StampCloseStopVerdict(ws string, loopIDRaw, depth any, confidence int,
 	if !pyval.Truthy(loopIDRaw) {
 		return
 	}
-	loopID := pyval.Str(loopIDRaw)
 	// Composed RAW here; the one clip happens after the [refines: …] note
 	// is appended. Clipping first and then appending strips the marker and
 	// usually the note with it.
@@ -686,31 +733,57 @@ func StampCloseStopVerdict(ws string, loopIDRaw, depth any, confidence int,
 	// with the note included, clipped once at the same cap.
 	rowEvidence := budget.Clip(evidence, 800)
 
-	if rd := runs.ResolveRunDir(ws, loopID); rd != "" {
-		var evOut string
-		_, err := runs.StampRunStopVerdict(runs.StopTupleOptions{
-			StopVerdict:  "reachable-but-not-worth-it",
-			StopEvidence: evidence,
-			RunDir:       rd,
-			RefineNote:   true,
-			EvidenceOut:  &evOut,
-			ReopenPayload: pyval.Obj{
-				{Key: "kind", Val: "escalation-close"},
-				{Key: "depth", Val: pyval.FromPlain(depth)},
-				{Key: "confidence", Val: confidence},
-			},
-		})
-		if err != nil {
-			o.logf("close stop-verdict metadata stamp failed: %v", err)
-		} else if evOut != "" {
-			// Python guards with `if _meta_path is not None and _ev_out`
-			// then `_ev_out[0] or row_evidence` — an empty written value
-			// keeps the fallback rather than clearing the ledger row.
-			rowEvidence = evOut
+	// `resolve_run_dir(loop_id)` is inside Python's try, and for a
+	// non-string id it RAISES rather than missing: `run_dir()` builds
+	// `f"{ref}-{nickname(ref)}"` and nickname calls `.encode`, so an
+	// integer parent_job_id gives AttributeError and `_rd` is None. The
+	// whole metadata half is skipped, and this port must skip it for the
+	// same values — not find a run dir the Python never looked for.
+	loopIDStr, loopIDIsStr := loopIDRaw.(string)
+	if rd := ""; loopIDIsStr {
+		rd = runs.ResolveRunDir(ws, loopIDStr)
+		if rd != "" {
+			// `int(depth)` is evaluated as an ARGUMENT to the stamp call,
+			// so a non-numeric depth raises BEFORE anything is written and
+			// the whole metadata half — the [refines: …] note included —
+			// never happens. And for a numeric one, `2.0` is written as
+			// `2` in the payload while the evidence string beside it says
+			// "2.0", from the same variable. This is the one place `depth`
+			// is NOT raw, which is precisely why it needed spelling out.
+			depthInt, depthOK := pyInt(depth)
+			if !depthOK {
+				o.logf("close stop-verdict metadata stamp failed: %s",
+					pyIntError(depth))
+			} else {
+				var evOut string
+				_, err := runs.StampRunStopVerdict(runs.StopTupleOptions{
+					StopVerdict:  "reachable-but-not-worth-it",
+					StopEvidence: evidence,
+					RunDir:       rd,
+					RefineNote:   true,
+					EvidenceOut:  &evOut,
+					ReopenPayload: pyval.Obj{
+						{Key: "kind", Val: "escalation-close"},
+						{Key: "depth", Val: depthInt},
+						{Key: "confidence", Val: confidence},
+					},
+				})
+				if err != nil {
+					o.logf("close stop-verdict metadata stamp failed: %v", err)
+				} else if evOut != "" {
+					// Python guards with `if _meta_path is not None and
+					// _ev_out` then `_ev_out[0] or row_evidence` — an empty
+					// written value keeps the fallback rather than clearing
+					// the ledger row.
+					rowEvidence = evOut
+				}
+			}
 		}
 	}
 
-	if _, err := record.StampOutcomeStopVerdict(ws, loopID,
+	// RAW: the ledger match is Python's `==`, so an integer id matches no
+	// row at all rather than a row whose id decoded as the string "4242".
+	if _, err := record.StampOutcomeStopVerdict(ws, loopIDRaw,
 		"reachable-but-not-worth-it", rowEvidence); err != nil {
 		o.logf("close stop-verdict outcome stamp failed: %v", err)
 	}
@@ -802,8 +875,8 @@ func taskGet(o pyval.Obj, key string, def any) any {
 	return def
 }
 
-func dataGet(d map[string]any, key string, def any) any {
-	if v, ok := d[key]; ok {
+func dataGet(d pyval.Obj, key string, def any) any {
+	if v, ok := d.Get(key); ok {
 		return v
 	}
 	return def
@@ -931,33 +1004,25 @@ func pySliceHead(v any, n int) (string, bool) {
 	return pyval.Clip(s, n), true
 }
 
-// asOrigin reads a task's `origin` as an ordered object.
+// pyIntError is the message CPython's `int(v)` raises with, for the two
+// places this file logs a failed conversion.
 //
-// Two shapes reach this. A task loaded from the queue decodes as a
-// pyval.Obj and keeps the order it was written in — that is the path
-// that matters, because the object is written straight back out. A task
-// assembled in Go from a plain map has NO order to keep, so the keys are
-// sorted; a Go map cannot answer "what order did the author write these
-// in" and inventing one at random would make the same task serialize
-// differently on two runs.
-//
-// Anything else — None, a string, a list — is a fresh empty object, which
-// is what Python's `or {}` truthiness gate produces.
-func asOrigin(v any) pyval.Obj {
-	switch t := v.(type) {
-	case pyval.Obj:
-		return append(pyval.Obj{}, t...)
-	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		out := make(pyval.Obj, 0, len(keys))
-		for _, k := range keys {
-			out = append(out, pyval.Field{Key: k, Val: t[k]})
-		}
-		return out
+// It is a LOG line, not a store, so the text is not load-bearing the way
+// pyops' messages are. It is written out anyway because the alternative —
+// a Go-shaped "cannot convert" — reads as a port bug to whoever greps the
+// two runtimes' logs side by side, which is the exact comparison this
+// port's debugging depends on.
+func pyIntError(v any) string {
+	if s, ok := v.(string); ok {
+		return fmt.Sprintf("invalid literal for int() with base 10: %s",
+			pyval.Repr(s))
 	}
-	return pyval.Obj{}
+	if f, ok := v.(float64); ok {
+		if f != f {
+			return "cannot convert float NaN to integer"
+		}
+		return "cannot convert float infinity to integer"
+	}
+	return fmt.Sprintf("int() argument must be a string, a bytes-like object "+
+		"or a real number, not '%s'", pyval.TypeName(v))
 }

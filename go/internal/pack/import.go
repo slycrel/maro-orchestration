@@ -270,7 +270,7 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 		ws: ws, store: store, packName: packName, label: opts.Label,
 		packTag: packTag, now: now, dryRun: opts.DryRun,
 		provGate: provenance.GateEnabled(
-			config.Get[any](cfg, "knowledge.provenance_gate_enabled", true)),
+			config.GetRaw(cfg, "knowledge.provenance_gate_enabled", true)),
 	}
 
 	// The per-target gate makes each import's load/check/write decisions one

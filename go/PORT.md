@@ -4965,3 +4965,70 @@ is how you get a round that reviews neither version.
 - `sortedFileNames` sorts by UTF-8 byte where Python sorts Path objects
   by code point. Those orders agree (UTF-8 preserves code-point order)
   and the agreement is the reason it is safe, not an accident.
+
+## `config.Get[any]` cannot ask "is the key present?"
+
+`config.get(path, default)` in Python returns the STORED value whenever
+the key exists — a YAML `null` included — and the default only when it is
+missing. Three callers in this port depend on that distinction, because
+Python then applies its own `int()`/`float()` to the result and the raise
+is the behaviour:
+
+```python
+timeout = float(_config_get("notify.timeout_seconds", 30))   # no try
+```
+
+The obvious Go spelling for "get with no type filter" is
+`Get[any](cfg, path, def)`. It is wrong, and wrong in the one case that
+matters:
+
+```go
+cur, ok := cur.(T)   // T = any, cur = nil interface  ->  ok is FALSE
+```
+
+A type assertion to `any` **fails for a nil interface**. So a config that
+says `notify:\n  timeout_seconds: ~` reads as *absent*, `Get[any]`
+returns `30`, and the hook runs where CPython refuses to run it. The
+generic did not remove a constraint; it swapped one constraint for
+another, and the two differ on exactly the empty value.
+
+`GetRaw(cfg, path, def any) any` is implemented over `Lookup`, which
+reports presence separately, and it is what the Python-semantics callers
+use:
+
+| site | Python then does |
+|---|---|
+| `notify.timeout_seconds` | `float(...)` with no try — a bad value stops the hook |
+| `recursion.checkin_first_depth` | `int(...)` inside a try — falls back to `2` |
+| `recursion.checkin_jitter_min` / `_max` | `int(...)` inside ONE shared try — a bad max resets the min |
+| `knowledge.provenance_gate_enabled` | truthiness, where `None` is falsy and the default is `True` |
+
+`Get[T]` keeps its meaning for every other caller: *give me a T here, or
+the default*. It is only the raw-value readers that were asking a
+different question.
+
+## The test binary reads the operator's real machine
+
+Everything in `internal/testenv` exists because `go test ./...` on this
+box was sending Telegram messages. `notify.Emit` with no config falls
+back to `config.Load()`, `config.Load()` reads `~/.maro/config.yml`, and
+that file registers a real `notify.command`. Five test packages can reach
+it.
+
+`MARO_USER_DIR` is the override — the same one `src/config.py` documents
+as existing "so the box's real config doesn't leak in", which pytest
+applies from a conftest fixture. Go's equivalent is a `TestMain` per
+package:
+
+```go
+func TestMain(m *testing.M) { os.Exit(testenv.Isolate(m)) }
+```
+
+The list of packages that need one is not maintained by hand.
+`testenv/tripwire_test.go` asks `go list -json ./...` which test packages
+transitively import `notify` and fails on any that lacks the call, with
+its own floor (`checked < 2` is fatal) so a criterion that stops matching
+cannot report success forever. `MARO_WORKSPACE` is deliberately NOT set
+here: tests pass their own workspace explicitly and `pyprobe`'s
+live-workspace refusal guards the probes, so overriding it centrally
+would paper over a caller that forgot to.

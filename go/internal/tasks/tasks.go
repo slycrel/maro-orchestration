@@ -114,11 +114,23 @@ func newRunID() string {
 // default set except for Lane and Source, which default below — Go has no
 // argument defaults, so the substitution is explicit and one place.
 type Options struct {
-	JobID       string
-	Lane        string
-	Source      string
-	Reason      string
-	ParentJobID string
+	JobID  string
+	Lane   string
+	Source string
+	// Reason and ParentJobID are `any` for the same reason
+	// ContinuationDepth below is: `make_task` writes whatever the caller
+	// passed, and the escalation's continue branch passes the task's OWN
+	// `reason` and `job_id` — values it read back off disk and deliberately
+	// keeps raw. A `string` here spells a dict reason as a Python repr and
+	// an integer id as a quoted number, and `reason` is the continuation's
+	// entire goal, so the next pass reads a different goal than CPython
+	// would (adversarial r11 round 2, HIGH).
+	//
+	// Callers whose value is an f-string in Python — the narrow branch's
+	// revised goal, for one — still pass a Go string, which is what an
+	// f-string is.
+	Reason      any
+	ParentJobID any
 	BlockedBy   []string
 	Origin      pyval.Obj
 	// ContinuationDepth is `any` rather than `int` because Python's
@@ -136,6 +148,23 @@ func (o Options) continuationDepth() any {
 		return 0
 	}
 	return o.ContinuationDepth
+}
+
+// reason and parentJobID substitute Python's "" parameter defaults. nil is
+// "not passed", which is a different thing from a caller passing nil — but
+// no Python caller passes None to either, so the two collapse safely.
+func (o Options) reason() any {
+	if o.Reason == nil {
+		return ""
+	}
+	return o.Reason
+}
+
+func (o Options) parentJobID() any {
+	if o.ParentJobID == nil {
+		return ""
+	}
+	return o.ParentJobID
 }
 
 func (o Options) lane() string {
@@ -168,10 +197,10 @@ func MakeTask(jobID string, o Options) Task {
 		{Key: "run_id", Val: newRunID()},
 		{Key: "lane", Val: o.lane()},
 		{Key: "source", Val: o.source()},
-		{Key: "reason", Val: o.Reason},
+		{Key: "reason", Val: pyval.FromPlain(o.reason())},
 		{Key: "status", Val: "queued"},
 		{Key: "attempt", Val: 0},
-		{Key: "parent_job_id", Val: o.ParentJobID},
+		{Key: "parent_job_id", Val: pyval.FromPlain(o.parentJobID())},
 		{Key: "blocked_by", Val: blocked},
 		{Key: "continuation_depth", Val: pyval.FromPlain(o.continuationDepth())},
 		// Ancestry back to the work that spawned this task. Without it a

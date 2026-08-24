@@ -20,6 +20,17 @@
 //     the live ledgers under ~/.maro, and the standing rule from it is that
 //     any probe that writes asserts its RESOLVED path first.
 //
+// A third thing none of the eight did: isolate the OPERATOR'S CONFIG. A
+// probe inherits this process's environment, so `config.get` reads the real
+// ~/.maro/config.yml — and on this box that file registers a
+// `notify.command` which shells out to Telegram and ssh's to another host.
+// Every differential that emitted a default-on event has been paging the
+// operator, from both runtimes, on every test run (adversarial r11 round 2,
+// HIGH). MARO_USER_DIR is the repo's own answer to this ("tests point this
+// at tmp so the box's real config doesn't leak in", src/config.py:124) and
+// every probe gets it, read-only ones included: an operator's config is not
+// an input any comparison here wants.
+//
 // One helper, one answer to each. Callers that write pass Workspace, and the
 // ones that write through a specific Python resolver pass Guard so the
 // resolver's own answer is asserted rather than assumed.
@@ -78,6 +89,12 @@ type Probe struct {
 	// "the resolved path is inside the workspace" assertion. It runs after
 	// the live-workspace refusal, so it can import freely.
 	Guard string
+	// UserDir overrides MARO_USER_DIR. Leave it empty and Run points it at
+	// a fresh temp dir — see the package doc. Set it only when the probe's
+	// subject IS the user-tier config, and then point it somewhere the test
+	// owns; there is no way to ask for the operator's real one, because
+	// nothing in a differential should want it.
+	UserDir string
 }
 
 // Run executes src with the probe's environment and returns its stdout.
@@ -100,8 +117,13 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	} else if p.Guard != "" {
 		src = p.Guard + src
 	}
+	userDir := p.UserDir
+	if userDir == "" {
+		userDir = t.TempDir()
+	}
 	cmd := exec.Command("python3", append([]string{"-c", src}, args...)...)
-	env := append(cmd.Environ(), "PYTHONPATH="+SrcDir(t, p.Marker))
+	env := append(cmd.Environ(), "PYTHONPATH="+SrcDir(t, p.Marker),
+		"MARO_USER_DIR="+userDir)
 	if p.Workspace != "" {
 		env = append(env, "MARO_WORKSPACE="+p.Workspace)
 	}

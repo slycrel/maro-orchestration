@@ -2,7 +2,9 @@ package pyval
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -70,9 +72,16 @@ func numOf(v any) (i int, f float64, isFloat, ok bool) {
 			return n, 0, false, true
 		}
 		g, err := t.Float64()
-		if err != nil {
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return 0, 0, false, false
 		}
+		// A RANGE error is not a parse failure — strconv has already
+		// produced the correctly-signed ±Inf, and CPython's json.loads
+		// gives `inf` for 1e400 rather than raising. Reporting it
+		// non-numeric made `2 >= inf` answer with the nonsense error
+		// "'>=' not supported between instances of 'int' and 'float'",
+		// which then goes into escalations.jsonl. reprNumber, one file
+		// over, already had this right (adversarial r11 round 2, LOW).
 		return 0, g, true, true
 	}
 	return 0, 0, false, false
@@ -175,6 +184,16 @@ func pairsOf(_ int, at func(int) any, n int) (Obj, error) {
 		items, ok := seqOf(el)
 		if !ok {
 			// CPython omits the type name here, unlike the message above.
+			//
+			// VERSION-DEPENDENT, and pyproject.toml says >=3.10: 3.13+
+			// says "object is not iterable" while 3.10-3.12 says
+			// "cannot convert dictionary update sequence element #0 to a
+			// sequence". This box runs 3.14, which is what the whole
+			// justification for this file rests on (the message reaches
+			// output/escalations.jsonl) — so a 3.10-3.12 deployment
+			// writes a different row. NAMED, not fixed: guessing the
+			// deployment's interpreter would be worse than one true
+			// answer plus this note.
 			return nil, fmt.Errorf("object is not iterable")
 		}
 		if len(items) != 2 {
@@ -182,9 +201,47 @@ func pairsOf(_ int, at func(int) any, n int) (Obj, error) {
 				"dictionary update sequence element #%d has length %d; 2 is required",
 				i, len(items))
 		}
-		out.Set(Str(items[0]), items[1])
+		key, hashable := dictKey(items[0])
+		if !hashable {
+			return nil, fmt.Errorf(
+				"cannot use '%s' as a dict key (unhashable type: '%s')",
+				TypeName(items[0]), TypeName(items[0]))
+		}
+		out.Set(key, items[1])
 	}
 	return out, nil
+}
+
+// dictKey folds two CPython steps that this port cannot keep apart, and
+// says so rather than pretending it is one.
+//
+// dict() refuses an unhashable key at CONSTRUCTION (a list or a dict), and
+// json.dumps spells a surviving non-string key at WRITE time — `True`
+// becomes "true", `None` becomes "null", `1.5` becomes "1.5". pyval.Obj's
+// keys are Go strings, so the spelling has to happen here; the only
+// consumer of an origin built this way is json.dumps, so the two agree on
+// what lands on disk. `Str` was used before and is a THIRD spelling:
+// str(True) is "True", which is neither.
+func dictKey(v any) (string, bool) {
+	switch t := v.(type) {
+	case nil:
+		return "null", true
+	case bool:
+		if t {
+			return "true", true
+		}
+		return "false", true
+	case string:
+		return t, true
+	case List, []any, Obj, map[string]any, []string:
+		return "", false
+	}
+	if _, _, _, isNum := numOf(v); isNum {
+		// json.dumps writes a numeric key with repr()'s spelling, which is
+		// what Repr already produces for both int and float.
+		return Repr(v), true
+	}
+	return Str(v), true
 }
 
 // seqOf is the elements of a value dict() would accept as a pair, or false
@@ -222,4 +279,138 @@ func seqOf(v any) ([]any, bool) {
 		return out, true
 	}
 	return nil, false
+}
+
+// Eq is Python's `==` between two JSON-derived values.
+//
+// It exists because `row.get("loop_id") == loop_id` decides whether a
+// durable ledger row gets stamped, and the two sides come from two
+// different files: one decoded from outcomes.jsonl, the other read off a
+// task. Go's `==` is not the same relation. The two that matter here:
+//
+//	5 == "5"      Python False, and a port that spells the number True
+//	5 == 5.0      Python True,  and a port comparing `any` values False
+//
+// Containers are structural because Python's are, even though nothing in
+// this port compares one yet — leaving them to Go's `==` would PANIC on a
+// slice rather than answer, which is a worse kind of wrong than a rare one.
+func Eq(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if sa, ok := a.(string); ok {
+		sb, ok := b.(string)
+		return ok && sa == sb
+	}
+	if _, ok := b.(string); ok {
+		return false
+	}
+	// Numbers, bool included: True == 1 in Python, and both sides may be
+	// any of int / float64 / bool / json.Number.
+	if ia, fa, floatA, okA := numOf(a); okA {
+		if ib, fb, floatB, okB := numOf(b); okB {
+			if floatA || floatB {
+				if !floatA {
+					fa = float64(ia)
+				}
+				if !floatB {
+					fb = float64(ib)
+				}
+				return fa == fb
+			}
+			return ia == ib
+		}
+		return false
+	}
+	if _, _, _, okB := numOf(b); okB {
+		return false
+	}
+	if la, ok := seqList(a); ok {
+		lb, ok := seqList(b)
+		if !ok || len(la) != len(lb) {
+			return false
+		}
+		for i := range la {
+			if !Eq(la[i], lb[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	if _, ok := seqList(b); ok {
+		return false
+	}
+	oa, okA := asObj(a)
+	ob, okB := asObj(b)
+	if okA && okB {
+		if len(oa) != len(ob) {
+			return false
+		}
+		for _, f := range oa {
+			v, present := ob.Get(f.Key)
+			if !present || !Eq(f.Val, v) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// seqList is Eq's list view. A dict is NOT a list to Python's `==`, which
+// is why this is separate from seqOf (whose job is dict()'s iteration).
+func seqList(v any) ([]any, bool) {
+	switch t := v.(type) {
+	case List:
+		return t, true
+	case []any:
+		return t, true
+	}
+	return nil, false
+}
+
+func asObj(v any) (Obj, bool) {
+	switch t := v.(type) {
+	case Obj:
+		return t, true
+	case map[string]any:
+		out := make(Obj, 0, len(t))
+		for k, val := range t {
+			out = append(out, Field{Key: k, Val: val})
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// Float is Python's `float(v)`: the value, or false where CPython raises.
+//
+// Distinct from SafeFloat, which is this repo's own defaulting helper. The
+// difference is not stylistic — `float(_config_get("notify.timeout_seconds",
+// 30))` has no try around it, so a non-numeric setting propagates to emit's
+// outer handler and the hook DOES NOT RUN. A defaulting read would run it at
+// 30 seconds instead, which is a different outcome for the operator's
+// substrate, not a tidier spelling of the same one.
+func Float(v any) (float64, bool) {
+	switch t := v.(type) {
+	case bool:
+		if t {
+			return 1, true
+		}
+		return 0, true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case float64:
+		return t, true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		// float() strips surrounding whitespace and accepts the spellings
+		// Python accepts, which is what ParseFloat already reproduces.
+		return ParseFloat(t)
+	}
+	return 0, false
 }

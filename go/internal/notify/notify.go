@@ -248,7 +248,7 @@ func EmitOrdered(ctx context.Context, ws, eventType string, payload pyval.Obj,
 		}
 	}
 
-	return runHook(ctx, eventType, payload, handleID, status, opts)
+	return runHook(ctx, ws, eventType, payload, handleID, status, opts)
 }
 
 // writeEventRow is step 1: the projection every polling substrate reads.
@@ -488,11 +488,18 @@ func clipField(k string) bool {
 }
 
 // runHook is step 3.
-func runHook(ctx context.Context, eventType string, payload pyval.Obj,
+func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 	handleID, status string, opts Options) bool {
 	cfg := opts.Cfg
 	if cfg == nil {
-		cfg, _ = config.Load()
+		// LoadFor, not Load: this function was handed a workspace and its
+		// caller has already written two ledgers inside it. Python cannot
+		// have this bug — config.get resolves from MARO_WORKSPACE, which is
+		// the workspace being written — but this port's verbs take `ws` as
+		// an argument, which quietly makes reading one workspace's hook
+		// config while writing another's files possible. Same finding as
+		// adversarial r9's MEDIUM, in a function written after it.
+		cfg, _ = config.LoadFor(ws)
 	}
 	command := strings.TrimSpace(config.Get(cfg, "notify.command", ""))
 	if command == "" {
@@ -502,8 +509,22 @@ func runHook(ctx context.Context, eventType string, payload pyval.Obj,
 	if !contains(events, eventType) {
 		return false
 	}
-	timeout := time.Duration(config.Get(cfg, "notify.timeout_seconds", 30.0) *
-		float64(time.Second))
+	// float(), not a float64 type assertion. Two things follow, and the
+	// second is the one a defaulting read would get wrong:
+	//
+	//   - Python COERCES, so a YAML `timeout_seconds: "45"` is 45.0 there
+	//     and would have been the 30.0 default here.
+	//   - Python's float() has no try around it, so a non-numeric setting
+	//     propagates to emit's outer handler: the hook DOES NOT RUN and
+	//     emit returns False. The two ledger writes above already happened.
+	//     Falling back to 30 would run a command Python declined to run.
+	tsec, numeric := pyval.Float(config.GetRaw(cfg, "notify.timeout_seconds", 30))
+	if !numeric {
+		opts.Log("notify.timeout_seconds is not a number; not running the hook for %s (%s)",
+			eventType, handleID)
+		return false
+	}
+	timeout := time.Duration(tsec * float64(time.Second))
 
 	env := opts.Env
 	if env == nil {

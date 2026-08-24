@@ -29,8 +29,14 @@ import (
 // Returns whether a row was actually updated. That boolean is the honest
 // answer to "is this judgment recorded?", and a caller that wants to
 // report the close as durable has to look at it.
-func StampOutcomeStopVerdict(workspaceDir, loopID, stopVerdict, stopEvidence string) (bool, error) {
-	if loopID == "" || stopVerdict == "" {
+func StampOutcomeStopVerdict(workspaceDir string, loopID any,
+	stopVerdict, stopEvidence string) (bool, error) {
+	// `any`, because Python's `if not loop_id` is a truthiness gate over
+	// whatever the caller held and the match below is Python's `==`. The
+	// escalation close hands this a task's raw `parent_job_id`, so an
+	// integer id must stay an integer and match NOTHING — which is what
+	// CPython does, and the opposite of what a spelled "4242" does.
+	if !pyval.Truthy(loopID) || stopVerdict == "" {
 		return false, nil
 	}
 	// The vocabulary gate lives HERE and not at the metadata stamp,
@@ -98,7 +104,7 @@ func StampOutcomeStopVerdict(workspaceDir, loopID, stopVerdict, stopEvidence str
 // stampNewestRow rewrites the newest row belonging to loopID and returns
 // the whole store text, plus whether anything matched. On a miss the text
 // it returns is meaningless and the caller must not write it.
-func stampNewestRow(old, loopID, stopVerdict, stopEvidence string) (string, bool) {
+func stampNewestRow(old string, loopID any, stopVerdict, stopEvidence string) (string, bool) {
 	// SplitLines, not strings.Split(old, "\n"): Python's str.splitlines()
 	// breaks on eight separators Go's does not — \v, \f, \x1c–\x1e,
 	// U+2028, U+2029, U+0085. A row is ensure_ascii-escaped so its own
@@ -133,7 +139,9 @@ func stampNewestRow(old, loopID, stopVerdict, stopEvidence string) (string, bool
 		if !present {
 			continue
 		}
-		if s, isStr := v.(string); !isStr || s != loopID {
+		// Python's `==`, not Go's: `5 == "5"` is False and `5 == 5.0` is
+		// True, and both sides here were decoded from separate files.
+		if !pyval.Eq(v, loopID) {
 			continue
 		}
 		row.Set("stop_verdict", stopVerdict)
@@ -153,9 +161,11 @@ func stampNewestRow(old, loopID, stopVerdict, stopEvidence string) (string, bool
 			return "", false
 		}
 		lines[i] = out
-		if len(lines) == 0 {
-			return "", true
-		}
+		// Python's `("\n" if lines else "")` cannot fire here — this is
+		// inside a loop over `lines`, so there is at least one. Spelling
+		// the guard out anyway read as though the empty case were handled,
+		// which is worse than not handling it (adversarial r11 round 2,
+		// LOW). The empty case returns not-found above, where it belongs.
 		return strings.Join(lines, "\n") + "\n", true
 	}
 	return "", false

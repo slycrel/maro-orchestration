@@ -6974,3 +6974,116 @@ test that is not about attachments. The general form: **when you write a
 function because it disagrees with an obvious alternative, the inputs
 where they disagree are the test — and they will not appear on their
 own.**
+
+### Round 11, part 2 (run after r12) — the config read that reached the operator's real machine
+
+Thirteen findings — 4 HIGH, 3 MEDIUM, 6 LOW — against the whole r11 chunk
+(`director.handle_escalation` and everything it pulled in), not just the
+latest diff. **Every one was confirmed against the Python source or by
+direct measurement. None was refuted.** That is the first round in this
+port with a 0% hallucination rate at HIGH *and* the first where a finding
+was about the harness rather than the port.
+
+**H4, taken first because it was not a port bug at all.** `notify.Emit`
+falls back to `config.Load()` when handed no config; `config.Load()`
+reads `~/.maro/config.yml`; and on this box that file registers a
+`notify.command` that messages Telegram and ssh's to another host. Two
+packages' tests emit default-on event types. So `go test ./...` had been
+**paging the operator on every run** — from the Go side and from the
+CPython probes that inherit the environment — through two review rounds.
+
+The Python repo already answers this: `MARO_USER_DIR` exists so "the
+box's real config doesn't leak in", and pytest applies it globally from a
+conftest fixture. Go has no conftest, so the equivalent is a `TestMain`
+per package — and *"each package that can reach the hook"* is an
+enumeration, which r8 already established is the weak form. So
+`internal/testenv` ships two things: `Isolate(m)`, five lines, and a
+tripwire that asks `go list -json ./...` which test packages
+transitively import `notify` and fails if any of them lacks the call.
+The tripwire immediately named **three more packages the reviewer had
+not** — `internal/selfimprove`, `cmd/maro`, and a second path into
+`internal/scans`. It reports 5/5 isolated and its own floor (`checked <
+2` is fatal), because a criterion that stops matching would report zero
+failures forever.
+
+The isolation test is itself two subtests, for a reason worth stating:
+one writes a scratch `config.yml` whose `notify.command` is `touch
+<marker>` and asserts the marker **appears**, proving a file outside the
+test really can execute a command through this path; only then does the
+second assert that under `Isolate` nothing resolves. A test that only
+checked "nothing fired" would pass just as happily if `Emit` had broken
+or the event type had stopped being default-on. **A guard that cannot
+fire is not evidence that the danger is gone.**
+
+**The three HIGHs in the port itself were one shape.** `handle_escalation`
+passes `reason`, `job_id` and `parent_job_id` through untouched — they
+are read into f-strings and log lines and nowhere else — and the port had
+typed all three `string`. So the continuation's whole inheritance was
+being spelled: `"{'ask': ...}"` where CPython wrote an object, `"4242"`
+where it wrote `4242`. The close stamp had the same coercion in two
+places at once, and they disagree with each other: `resolve_run_dir(4242)`
+**raises** (it builds `f"{ref}-{nickname(ref)}"` and `nickname` calls
+`.encode`), so the metadata half is skipped entirely, while the ledger
+match is Python's `==` and `4242 == "4242"` is False — so a numeric parent
+id stamps a numeric row and skips a string one. A port that spelled the id
+does the opposite of BOTH.
+
+Writing the fixture for that is where the round earned its keep. The
+first two rows — numeric parent, string row / numeric row — passed under
+the spelling mutation too, because in both the seeded run's own metadata
+said `loop-2026…`: the run was unreachable under *either* reading, so
+resolving nothing looked correct. The row that pins it is the third,
+where the run's metadata `loop_id` is `"4242"` and the spelling *would*
+have found it. **A fixture that cannot be reached by the mutation is a
+fixture that agrees with it.**
+
+**M1 is the one that taught me something about Go.** The hook's timeout
+is `float(_config_get("notify.timeout_seconds", 30))` with **no try** —
+so a non-numeric value propagates to emit's outer handler, the hook does
+not run, and `emit` returns False *after* the two ledger writes above it
+already happened. Getting that right needed the raw stored value, and the
+port was reaching for `config.Get[any]`. It cannot serve:
+
+> A Go type assertion to `any` **fails for a nil interface**. `cur.(T)`
+> with `T = any` and `cur == nil` is not ok, so a key written `k: ~`
+> reads as *absent* and the caller gets the default. Python's
+> `config.get` returns the stored `None` and the caller's own
+> `float()`/`int()` then raises.
+
+`Get[any]` is not "get with no type filter" — instantiating a type
+parameter at `any` silently changes the question from *is it present* to
+*is it non-nil*. `config.GetRaw` now answers the first one, and the four
+Python-semantics callers use it. The cadence differential's "null
+everywhere" case had been passing by coincidence: Python raises and falls
+back to `2`/`4,7`, and Go's swallowed null returned the same `2`/`4,7`.
+
+**The rest, briefly.** The reopen payload's `int(depth)` is evaluated as
+an ARGUMENT, so a non-numeric depth raises before anything is written and
+the whole metadata half — the `[refines: …]` note included — never
+happens (H3). Python's `_checkin_jitter` has ONE shared `try` across both
+reads, so a bad `checkin_jitter_max` resets the MINIMUM too (M2). The
+ordered parse of the LLM reply had only ever been asked to preserve
+*top-level* order, because every fixture answered each field with a
+scalar; `safe_str` of a nested object is `repr()`, which walks the
+nested dict in its own insertion order (M3). And `json.loads("1e400")` is
+`inf`, not an error — Go's `ParseFloat` returns ±Inf *and*
+`strconv.ErrRange`, so treating any parse error as "not a number"
+answered TypeError where CPython compares happily (L1).
+
+**The battery.** Sixteen mutations derived from the FILES, not the diff.
+Three of them — `TypeName` losing its `json.Number` arm, `AddN` losing
+its list arm, `seqOf` collecting values instead of keys — were not
+findings at all; they were arms of already-ported functions that no
+fixture reached, and each writes a string that ends up in
+`escalations.jsonl`. The `dict()` constructor's arms are the reason:
+`dict([{"a": 1, "b": 2}])` is `{"a": "b"}`, and a list of two-character
+strings is a perfectly good mapping. Nobody would write that fixture from
+the diff.
+
+**Lens carried forward:** *a generic instantiated at `any` is not the
+absence of a constraint — it is a different constraint, and the
+difference only shows on the empty value.* The general form: when a port
+reaches for the most permissive spelling of a helper to recover Python's
+behaviour, check what the permissive spelling still refuses. `Get[any]`
+looked like "no filtering" and was in fact "filtering out exactly the
+value we were trying to see."

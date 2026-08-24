@@ -194,6 +194,23 @@ func Merge(base, over map[string]any) map[string]any {
 // string-typed "false") silently falls back to def, same as Python's
 // config.get. Making that loud needs a warnings channel like Load's —
 // deferred until a caller needs it, noted in PORT.md.
+// GetRaw is config.get with no type filtering at all: the stored value when
+// the key is PRESENT — a YAML null included — and the default only when it
+// is absent.
+//
+// It exists because Get[any] cannot express that. A Go type assertion to
+// `any` FAILS for a nil interface, so `Get[any](cfg, k, 30)` answers 30 for
+// a key written `k: ~`, where Python's config.get returns None and the
+// caller's own int()/float() then raises. Three callers wanted the raw
+// value and all three were reaching for Get[any]; one of them decides
+// whether an operator's notify hook runs at all.
+func GetRaw(cfg map[string]any, path string, def any) any {
+	if v, present := Lookup(cfg, path); present {
+		return v
+	}
+	return def
+}
+
 func Get[T any](cfg map[string]any, path string, def T) T {
 	cur, present := Lookup(cfg, path)
 	if !present {
