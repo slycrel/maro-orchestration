@@ -122,10 +122,28 @@ func DecomposeMission(
 	}, nil
 }
 
-// decomposeViaLLM is the body of the `try` block. An adapter error is
-// swallowed (Python's `except ImportError` never fires for a live
-// adapter, and a failed call simply leaves `data` empty), but a MALFORMED
-// PLAN is not — see ErrMalformedPlan.
+// decomposeViaLLM is the body of the `try` block. A MALFORMED PLAN is
+// not swallowed — see ErrMalformedPlan — and neither, since r4, is an
+// ADAPTER ERROR.
+//
+// The comment that used to sit here said an adapter error was swallowed
+// because "Python's `except ImportError` never fires for a live adapter,
+// and a failed call simply leaves `data` empty". Both halves are wrong.
+// mission.py:172-242 catches ONLY ImportError, and FailoverAdapter.complete
+// ends `raise last_exc` when every backend fails — so a rate limit, an
+// outage or a BudgetRunawayError leaves decompose_mission by exception.
+// Measured with the same raising stub on both sides:
+//
+//	py: mission.decompose_mission('build a thing', <raises>, 4, 3)
+//	      -> RAISED RuntimeError: all backends failed
+//	go (old): -> RETURNED ["Phase 1: build", "Phase 2: a thing"]
+//
+// That is exactly what ErrNoAdapter was created for sixty lines above,
+// in its own words: a port that quietly fell through to the heuristic
+// would produce a working mission where Python produces none. Nothing
+// calls DecomposeMission yet, so no store has forked — but slice 3's
+// run_mission persists whatever this returns (adversarial mission-r4
+// MEDIUM).
 func decomposeViaLLM(
 	ctx context.Context,
 	goal string,
@@ -152,7 +170,8 @@ func decomposeViaLLM(
 		// as "nobody thought about it".
 	})
 	if err != nil {
-		return nil, nil // no data; fall through to the heuristic
+		// Python propagates. See the doc comment above.
+		return nil, err
 	}
 
 	data, jerr := jsonx.ObjectOrdered(contentOrEmpty(resp))

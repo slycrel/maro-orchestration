@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	osuser "os/user"
 	"path/filepath"
 	"strings"
 
@@ -78,13 +79,40 @@ func Workspace() string {
 // resolving symlinks here would make Go disagree with Python about which
 // path STRING a probe should assert — the thing that rule is for. Named
 // so the next reader knows it was a decision.
+// The `~user` form is expanded too. The first cut handled only a leading
+// `~` / `~/` under a comment asserting that "~user is a different lookup
+// and this box has no such user, so Python leaves it alone too" — false
+// twice over, measured (adversarial mission-r4 MEDIUM):
+//
+//	MARO_WORKSPACE=~clawd/.maro/workspace
+//	  py -> /home/clawd/.maro/workspace
+//	  go -> "~clawd/.maro/workspace"  (a dir named "~clawd" under cwd)
+//
+// A whole-store fork, seven lines from the r3 fix it is the second
+// spelling of, and the corpus had no `~user` case that could have said so.
+//
+// RESIDUAL, named: on an UNKNOWN user Python RAISES
+// (`RuntimeError: Could not determine home directory.`) and this returns
+// the string unexpanded. Workspace/Home have no error channel, and
+// inventing one here would be a larger change than the finding; the
+// unexpanded path at least cannot be mistaken for a real home. Pinned as
+// a divergence rather than left silent.
 func expandUser(p string) string {
+	if !strings.HasPrefix(p, "~") {
+		return p
+	}
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if h, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(h, strings.TrimPrefix(p, "~"))
 		}
+		return p
 	}
-	return p
+	name, rest, _ := strings.Cut(p[1:], "/")
+	u, err := osuser.Lookup(name)
+	if err != nil || u.HomeDir == "" {
+		return p
+	}
+	return filepath.Join(u.HomeDir, rest)
 }
 
 // Load reads and merges the two config tiers. A missing or unparseable
@@ -236,7 +264,29 @@ var (
 //	flag: 09       str "09"          float64 9        false / TRUE    FORK
 //	flag: 0o10     str "0o10"        int 8            false / TRUE    FORK
 //	flag: 1:30     int 90 (!)        string "1:30"    true  / FALSE   FORK
-//	flag: 2026-1-2 datetime.date     time.Time        both warn, differently
+//	flag: 1e2      str "1e2"         float64 100      false / TRUE    FORK
+//	flag: 1e+2     str "1e+2"        float64 100      false / TRUE    FORK
+//	flag: 1e-2     str "1e-2"        float64 0.01     false / TRUE    FORK
+//	flag: 1.0e2    str "1.0e2"       float64 100      false / TRUE    FORK
+//	flag: 010      int 8             int 8            true  / true    agree
+//	flag: 2026-01-02 datetime.date   time.Time        both warn — agree
+//	flag: 2026-1-2 str "2026-1-2"    string           both warn — agree
+//
+// The exponent family is the part this note MISSED for three rounds, and
+// it is the same "Go is the silent side" shape as 08/09: PyYAML's 1.1
+// float resolver wants both a decimal point and a SIGNED exponent, so
+// every unsigned or dotless spelling stays a string there and resolves to
+// a number in yaml.v3.
+//
+// The date row was also simply WRONG — it claimed `2026-1-2` resolves to
+// a datetime.date. It does not: PyYAML's timestamp resolver needs
+// zero-padded fields, so `2026-01-02` is a date and `2026-1-2` is the
+// string. Both spellings happen to agree across the two runtimes, so the
+// row was never a fork at all (adversarial mission-r4 LOW). Every row
+// above is now produced by running both libraries, not by reading their
+// resolvers — see the rewritten
+// TestYAML11And12DisagreeOnMoreThanTheBoolWords, which used to assert
+// only Go's side against a hardcoded table and could not have caught this.
 //
 // The four bool words agree, and that is a COINCIDENCE of those words
 // being in truthyStrings/falsyStrings under either reading — not a

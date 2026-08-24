@@ -51,6 +51,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
@@ -139,7 +140,13 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, goal string, 
 		res.TokensIn += resp.TokensIn
 		res.TokensOut += resp.TokensOut
 		res.Warnings = append(res.Warnings, resp.Warnings...)
-		res.Answer = strings.TrimSpace(resp.Content)
+		// Python handle.py:396 is `content = resp.content.strip()`, and
+		// str.strip() covers U+001C..U+001F where strings.TrimSpace does
+		// not. res.Answer becomes the outcome row's summary AND the
+		// judge's Response: window, so a content of "\x1c\x1f" stayed
+		// non-empty in Go — skipping the "[no response]" sentinel and
+		// feeding the judge a blank answer it could fail (r4 MEDIUM).
+		res.Answer = pytext.Strip(resp.Content)
 		if res.Answer == "" {
 			res.Answer = "[no response]"
 		}
@@ -343,6 +350,23 @@ func verdictRationale(raw string) string {
 // per-sink scrub that misses one sink ships the judge's quoted-back
 // secrets to exactly the surface an operator reads (adversarial
 // routing r1 2026-08-22, all three lenses independently).
+//
+// NAMED DIVERGENCE, deliberate and OWED BACK TO THE PYTHON (adversarial
+// mission-r4 MEDIUM). CPython does not scrub this field. secret_scrub
+// reaches build/calls records, the env snapshot, container exec, closure
+// verify, run_trace and pack — but neither handle._verify_now_outcome
+// nor runs._apply_verdict_tuple, which is a bare clip(). So on a judge
+// that quotes an `Authorization: Bearer sk-ant-...` back inside `why`,
+// CPython writes the token into goal_verdict_summary and this writes
+// [REDACTED]: different bytes in the run dir and the outcome row.
+//
+// Parity is the rule and this is the case where parity loses on
+// purpose: converging by DELETING the scrub would mean writing live
+// credentials to disk from the Go side to match a Python bug. The fix
+// belongs in handle._verify_now_outcome, where both runtimes inherit
+// it; until that lands this stays a divergence with a name on it rather
+// than an unmarked one, and TestTheScrubDivergesFromCPythonOnPurpose
+// pins it so it cannot be rediscovered as a surprise.
 func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
 	resp, err := a.Complete(ctx, []llm.Message{
 		{Role: "system", Content: nowVerifySystem},
@@ -365,30 +389,63 @@ func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
 	}
 	res.TokensIn += resp.TokensIn
 	res.TokensOut += resp.TokensOut
-	obj, jerr := jsonx.Object(resp.Content)
+	obj, jerr := jsonx.ObjectOrdered(resp.Content)
 	if jerr != nil || obj == nil {
 		// No clear verdict: goal achievement stays unverified — absence
 		// means "not judged", not "failed".
 		return
 	}
-	switch v := obj["fulfilled"].(type) {
+	fulfilled, _ := obj.Get("fulfilled")
+	switch v := fulfilled.(type) {
 	case bool:
 		achieved := v
 		res.GoalAchieved = &achieved
 		if !v {
 			res.Status = "incomplete"
-			why, _ := obj["why"].(string)
-			res.VerdictSummary = scrub.Secrets(strings.TrimSpace(why))
+			// Python is `str(verdict.get("why") or "").strip()`, and
+			// str() is NOT a cast — the hazard mission_plan.go is
+			// written around. A Go type assertion threw a real
+			// rationale away and replaced it with the placeholder's
+			// false claim that none was given (adversarial mission-r4
+			// MEDIUM). Measured, all three byte-for-byte:
+			//
+			//	"why": ["no write call", "no file"]
+			//	   -> ['no write call', 'no file']
+			//	"why": 42            -> 42
+			//	"why": {"missing": "out.txt"}
+			//	   -> {'missing': 'out.txt'}
+			//
+			// `or ""` fires on every FALSEY why — None, "", 0, [], {} —
+			// which pyval.Truthy reproduces, so those reach the
+			// recovery below rather than being rendered as "None".
+			why := ""
+			if w, ok := obj.Get("why"); ok && pyval.Truthy(w) {
+				why = pyval.Str(w)
+			}
+			// pytext.Strip, not strings.TrimSpace: str.strip() covers
+			// U+001C..U+001F and unicode.IsSpace does not, so a judge
+			// quoting back pasted terminal output stored different
+			// bytes on each runtime — and a why of "\x1c" alone stayed
+			// truthy in Go, skipping the recovery entirely (r4 MEDIUM).
+			res.VerdictSummary = scrub.Secrets(pytext.Strip(why))
 			if res.VerdictSummary == "" {
 				// The rationale often trails the JSON instead of riding
-				// the why key — recover it before falling back to a
-				// static placeholder that would falsely claim the judge
-				// gave no reason.
+				// the why key. Python then stops: `A or B` with both
+				// empty is "", and there is no third fallback.
 				res.VerdictSummary = scrub.Secrets(verdictRationale(resp.Content))
 			}
-			if res.VerdictSummary == "" {
-				res.VerdictSummary = "response reports non-fulfillment (judge gave no rationale)"
-			}
+			// NO static placeholder here. Go used to write "response
+			// reports non-fulfillment (judge gave no rationale)" when
+			// both lanes came up empty — the single most common
+			// non-fulfilled reply, `{"fulfilled": false}`, hits it —
+			// and CPython writes "" (handle.py:669-671). The sentence
+			// exists in the Python only as a LOG fallback one line
+			// later, never in the stored field, and
+			// runs._apply_verdict_tuple writes goal_verdict_summary
+			// unconditionally: metadata.json got "" from one runtime
+			// and prose from the other (adversarial mission-r4 HIGH).
+			// If the placeholder is wanted it goes in
+			// handle._verify_now_outcome first.
 		}
 	}
 }

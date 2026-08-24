@@ -55,7 +55,6 @@
 package jsonx
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -70,18 +69,41 @@ import (
 // contract violation and error out — a planner step that isn't text is
 // nothing this port can execute, and coercing it would hide the model's
 // drift from the caller.
+//
+// It decodes through pyval.LoadsOrdered, not encoding/json, and so does
+// Object below. The r1 MEDIUM that taught ObjectOrdered to mask bare
+// NaN/Infinity/-Infinity left both siblings on the raw decoder for three
+// more rounds, and the rejection kills the WHOLE document, not one field
+// (adversarial mission-r4 HIGH). Measured on a reply the intent
+// classifier's own prompt asks for:
+//
+//	{"lane": "now", "confidence": NaN}
+//	  CPython -> {'lane': 'now', 'confidence': nan} -> routed as NOW
+//	  Go (old) -> error -> heuristicClassify -> a DIFFERENT lane,
+//	              and a different outcome shape in the store
+//
+// Eleven production call sites reach these two functions and three of
+// them prompt the model for a float.
 func StringArray(text string) ([]string, error) {
 	payload, err := extract(text, '[', ']')
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	if err := json.Unmarshal([]byte(payload), &out); err != nil {
-		var loose []any
-		if err2 := json.Unmarshal([]byte(payload), &loose); err2 != nil {
-			return nil, fmt.Errorf("array found but unparseable: %w", err)
+	v, err := pyval.LoadsOrdered(payload)
+	if err != nil {
+		return nil, fmt.Errorf("array found but unparseable: %w", err)
+	}
+	list, ok := pyval.Plain(v).([]any)
+	if !ok {
+		return nil, fmt.Errorf("array found but it decoded as %T", v)
+	}
+	out := make([]string, len(list))
+	for i, e := range list {
+		s, ok := e.(string)
+		if !ok {
+			return nil, errors.New("array contains non-string elements")
 		}
-		return nil, errors.New("array contains non-string elements")
+		out[i] = s
 	}
 	return out, nil
 }
@@ -92,9 +114,13 @@ func Object(text string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+	v, err := pyval.LoadsOrdered(payload)
+	if err != nil {
 		return nil, fmt.Errorf("object found but unparseable: %w", err)
+	}
+	out, ok := pyval.Plain(v).(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("object found but it decoded as %T", v)
 	}
 	return out, nil
 }
@@ -120,8 +146,29 @@ var (
 	// the model's real plan, and ValidateMilestone defaulting to PASS
 	// where CPython reads the model's actual verdict.
 	//
-	// RESIDUAL, measured and deliberately NOT patched: `\b` is
-	// ASCII-only in RE2 and Unicode-aware in Python. On `<think\u00e9>`
+	// RESIDUAL, measured and deliberately NOT patched, and it runs in
+	// BOTH directions \u2014 the note used to give only the harmless one
+	// (adversarial mission-r4 LOW). `\b` is ASCII-only in RE2 and
+	// Unicode-aware in Python.
+	//
+	// The DESTRUCTIVE direction is a non-ASCII character reached INSIDE
+	// the tag name through case folding. Both engines fold `k` to
+	// U+212A KELVIN SIGN under (?i); only Python's `\b` then treats
+	// U+212A as a word character:
+	//
+	//	<thin\u212a>musing {"decoy":1}</think>\n{"real":2}
+	//	  CPython -> both patterns match -> trace stripped
+	//	             -> carves {"real":2}, the real answer
+	//	  Go      -> NEITHER matches -> trace kept
+	//	             -> carves {"decoy":1}, the model's hypothetical
+	//
+	// That is the same shape the `\s` fix above was about: Go writing
+	// the model's example JSON into the shared store where CPython
+	// writes its actual answer.
+	//
+	// The harmless direction, and the one this note originally gave
+	// alone: a non-ASCII word character AFTER the tag name. On
+	// `<think\u00e9>`
 	// — a PRECOMPOSED é, or any other letter or digit outside ASCII
 	// straight after the tag name; the decomposed spelling `<thinke\u0301>`
 	// does NOT demonstrate this, because the character right after the

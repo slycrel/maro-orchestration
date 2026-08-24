@@ -584,3 +584,70 @@ func TestTheDAGCorpusActuallyObservesConcurrency(t *testing.T) {
 	t.Logf("cases observing overlap: py=%d go=%d of %d",
 		pyOverlapping, goOverlapping, len(dagCorpus()))
 }
+
+// Which milestones are ADMITTED first is deterministic in Python and was
+// not here. Python submits every ready milestone into a
+// ThreadPoolExecutor whose SimpleQueue is FIFO, so with max_workers=2
+// and four ready milestones, milestones 0 and 1 start first, every time.
+// The old Go spawned a goroutine per milestone and let them race for a
+// buffered semaphore, so any two of the four could win (adversarial
+// mission-r4 LOW).
+//
+// It was never a data race — both runtimes run the admitted N
+// concurrently — but independent milestones share one project working
+// directory by design, so admission order decides which pair can
+// collide, and one runtime picking deterministically while the other
+// does not makes a store fork unreproducible.
+//
+// Run enough times that a scheduler-order fluke cannot pass by luck: the
+// old code failed this within a handful of iterations.
+func TestDAGAdmissionFollowsListOrderLikePythonsFIFO(t *testing.T) {
+	const iterations = 60
+	for it := 0; it < iterations; it++ {
+		m := &Mission{ID: "m", Milestones: []Milestone{
+			{ID: "a", Title: "A"}, {ID: "b", Title: "B"},
+			{ID: "c", Title: "C"}, {ID: "d", Title: "D"},
+		}}
+
+		var mu sync.Mutex
+		var started []string
+		release := make(chan struct{})
+		admitted := make(chan struct{}, len(m.Milestones))
+		// Hold the first pair until BOTH have been seen, so they cannot
+		// finish and let a later milestone in before the check. Opened
+		// by a WATCHER goroutine, not by the test body: the DAG has not
+		// returned at that point, and closing it afterwards deadlocks
+		// the scheduler against its own workers.
+		go func() {
+			<-admitted
+			<-admitted
+			close(release)
+		}()
+
+		RunMilestoneDAG(context.Background(), m,
+			func(_ context.Context, _ int, ms *Milestone) error {
+				mu.Lock()
+				started = append(started, ms.ID)
+				mu.Unlock()
+				admitted <- struct{}{}
+				<-release
+				return nil
+			},
+			DAGOptions{MaxWorkers: 2, LogFn: func(string) {}, WarnFn: func(string) {}})
+
+		mu.Lock()
+		order := append([]string(nil), started...)
+		mu.Unlock()
+		if len(order) != len(m.Milestones) {
+			t.Fatalf("iteration %d: %d milestones ran, want %d", it, len(order), len(m.Milestones))
+		}
+		// The first MaxWorkers admitted must be the first two in list
+		// order — that is what the FIFO queue guarantees.
+		first := map[string]bool{order[0]: true, order[1]: true}
+		if !first["a"] || !first["b"] {
+			t.Fatalf("iteration %d: admission order %v — the first two admitted "+
+				"were not milestones a and b, so Go is not FIFO where Python is",
+				it, order)
+		}
+	}
+}

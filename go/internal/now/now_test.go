@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -476,5 +477,75 @@ func TestVerdictRationaleSkipsABareJSONPrefix(t *testing.T) {
 	got := verdictRationale(`{"fulfilled": false} the file was never written`)
 	if got != "the file was never written" {
 		t.Fatalf("bare-JSON prefix recovery broke: %q", got)
+	}
+}
+
+// Python's handle.py:396 is `content = resp.content.strip()`, and
+// str.strip() covers U+001C..U+001F where strings.TrimSpace does not.
+// A separator-only reply therefore collapses to "" in CPython and takes
+// the "[no response]" sentinel — while a TrimSpace port kept it
+// non-empty and stored the separators as the answer (adversarial
+// mission-r4 MEDIUM).
+//
+// This matters twice over: res.Answer is the outcome row's summary AND
+// the text handed to the verify judge, so the divergence can flip the
+// verdict as well as the stored bytes. The expectation is measured, not
+// asserted — the probe runs CPython's own strip.
+func TestRunNowAnswerStripsSeparatorsAsPythonDoes(t *testing.T) {
+	const content = "\x1c\x1f"
+
+	in, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys; print(json.dumps(json.loads(sys.argv[1]).strip()))",
+		string(in)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var pyStripped string
+	if err := json.Unmarshal(out, &pyStripped); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+	if pyStripped != "" {
+		t.Fatalf("CPython no longer strips U+001C..U+001F (%q) — the premise "+
+			"of this test has moved", pyStripped)
+	}
+
+	ws := t.TempDir()
+	fake := &llm.Fake{Script: []string{content,
+		`{"fulfilled": false, "why": "empty response"}`}}
+	res, err := Run(context.Background(), fake, record.New(ws),
+		"say something", false, "", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "[no response]" {
+		t.Fatalf("a separator-only reply must strip to empty and take the "+
+			"placeholder, as CPython does; got %q", res.Answer)
+	}
+}
+
+// The same seam with real content around the separators: CPython strips
+// the edges and keeps the middle, and the stored summary must match
+// byte for byte.
+func TestRunNowAnswerKeepsInnerSeparators(t *testing.T) {
+	const content = "\x1cThe answer is 42.\x1f"
+
+	ws := t.TempDir()
+	fake := &llm.Fake{Script: []string{content,
+		`{"fulfilled": true, "why": "answered"}`}}
+	res, err := Run(context.Background(), fake, record.New(ws),
+		"say something", false, "", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "The answer is 42." {
+		t.Fatalf("leading/trailing separators must be stripped as str.strip() "+
+			"does; got %q", res.Answer)
 	}
 }

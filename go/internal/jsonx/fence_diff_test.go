@@ -3,6 +3,9 @@ package jsonx
 import (
 	"encoding/json"
 	"os/exec"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
@@ -235,7 +238,7 @@ func TestTheFenceCorpusReachesBothLanes(t *testing.T) {
 // The test asserts the CURRENT divergence in both directions. It fails if
 // Go starts matching CPython, which is the signal to delete it and fold
 // the case into fenceCorpus.
-func TestANonASCIILetterInTheTagNameDivergesFromCPython(t *testing.T) {
+func TestANonASCIILetterAfterTheTagNameDivergesFromCPython(t *testing.T) {
 	const doc = "<think\u00e9>musing {\"decoy\":1}</think>\n{\"real\":2}"
 
 	want := pyFences(t, []string{doc})
@@ -255,5 +258,214 @@ func TestANonASCIILetterInTheTagNameDivergesFromCPython(t *testing.T) {
 	if got != `{"real":2}` {
 		t.Fatalf("Go no longer strips the trace (%q) — if it now matches CPython, "+
 			"delete this test and fold the case into fenceCorpus", got)
+	}
+}
+
+// The MIRROR of the test above, and the direction that actually costs
+// something. The one above puts the non-ASCII letter AFTER the tag name
+// (Go strips a trace Python keeps — Go loses a hypothetical, which is
+// harmless). This one reaches a non-ASCII character INSIDE the name
+// through case folding: both engines fold `k` to U+212A KELVIN SIGN
+// under (?i), and only Python's Unicode-aware `\b` treats U+212A as a
+// word character.
+//
+// Here GO carves the model's hypothetical and CPython carves the real
+// answer — the destructive shape the `\s` fix (r2 MEDIUM) was about,
+// and the direction the residual note omitted for two rounds
+// (adversarial mission-r4 LOW). A residual stated in one direction reads
+// as fully understood.
+func TestAFoldedNonASCIILetterInsideTheTagNameDivergesDestructively(t *testing.T) {
+	const doc = "<thin\u212a>musing {\"decoy\":1}</think>\n{\"real\":2}"
+
+	want := pyFences(t, []string{doc})
+	if want[0][3] == nil {
+		t.Fatal("CPython found no object at all; the divergence has moved")
+	}
+	py := *want[0][3]
+	if py != `{"real":2}` {
+		t.Fatalf("CPython no longer strips the trace (%q) — if it now keeps it, "+
+			"delete this test and fold the case into fenceCorpus", py)
+	}
+
+	got, err := extract(doc, '{', '}')
+	if err != nil {
+		t.Fatalf("Go failed to carve anything: %v", err)
+	}
+	if got != `{"decoy":1}` {
+		t.Fatalf("Go no longer carves the hypothetical (%q) — if a measured "+
+			"Word class has landed and the two now agree, delete this test, "+
+			"fold the case into fenceCorpus, and strike the residual note in "+
+			"jsonx.go", got)
+	}
+}
+
+// jsonx.Object and jsonx.StringArray decode the carved span, and for
+// three rounds they did it with encoding/json while ObjectOrdered used
+// pyval.LoadsOrdered. Only the latter masks the bare NaN/Infinity
+// tokens CPython's json.loads accepts by default, so the two siblings
+// REJECTED whole documents CPython parses — and the rejection kills the
+// document, not the one field (adversarial mission-r4 HIGH).
+//
+// The existing fence differential could not see this: it compares the
+// STRIP output, deliberately, so the decode step was never handed back
+// to CPython at all. This compares the decoded value.
+const pyDecodeSnippet = `
+import json, sys
+sys.path.insert(0, sys.argv[2])
+from llm_parse import extract_json
+
+out = []
+for text, kind in json.loads(sys.argv[1]):
+    v = extract_json(text, dict if kind == 'dict' else list)
+    # repr() is the comparable rendering: it spells nan/inf the way
+    # pyval.Repr does, and json.dumps cannot carry them at all.
+    out.append([sorted(v.keys()) if kind == 'dict' else None,
+                repr(v), bool(v)])
+print(json.dumps(out))
+`
+
+var decodeCorpus = []struct{ name, text, kind string }{
+	// THE r4 HIGH. Three production prompts ask the model for a float.
+	{"a NaN confidence", `{"lane": "now", "confidence": NaN}`, "dict"},
+	{"an Infinity confidence", `{"lane": "now", "confidence": Infinity}`, "dict"},
+	{"a -Infinity confidence", `{"lane": "now", "confidence": -Infinity}`, "dict"},
+	{"a non-finite in a key nobody reads", `{"passed": true, "junk": NaN}`, "dict"},
+	{"a non-finite inside a fence",
+		"```json\n{\"passed\": false, \"score\": NaN}\n```", "dict"},
+	{"a non-finite behind a think trace",
+		"<think>hmm {\"decoy\": 1}</think>\n{\"passed\": false, \"score\": Infinity}", "dict"},
+
+	// The ordinary lane, so the corpus is not all one shape.
+	{"a plain object", `{"passed": true, "why": "ok"}`, "dict"},
+	{"an object with a real float", `{"passed": true, "confidence": 0.5}`, "dict"},
+	{"an object with an int", `{"passed": true, "n": 3}`, "dict"},
+	{"a nested object", `{"a": {"b": [1, 2]}}`, "dict"},
+	{"no object at all", `there is nothing here`, "dict"},
+}
+
+func TestObjectDecodesWhatCPythonDecodes(t *testing.T) {
+	pairs := make([][]string, len(decodeCorpus))
+	for i, c := range decodeCorpus {
+		pairs[i] = []string{c.text, c.kind}
+	}
+	in, err := json.Marshal(pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c", pyDecodeSnippet,
+		string(in), srcDir(t)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want [][]any
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+
+	var nonFiniteParsed int
+	for i, c := range decodeCorpus {
+		t.Run(c.name, func(t *testing.T) {
+			obj, gerr := Object(c.text)
+			pyNonEmpty, _ := want[i][2].(bool)
+
+			// extract_json returns the EMPTY container on failure, so
+			// "CPython got something" is `bool(v)`.
+			if pyNonEmpty && gerr != nil {
+				t.Fatalf("CPython decoded %s but Go refused it: %v\n  input %q",
+					want[i][1], gerr, c.text)
+			}
+			if !pyNonEmpty {
+				if gerr == nil && len(obj) > 0 {
+					t.Fatalf("Go decoded %v where CPython got the empty default\n  input %q",
+						obj, c.text)
+				}
+				return
+			}
+			if strings.Contains(c.text, "NaN") || strings.Contains(c.text, "Infinity") {
+				nonFiniteParsed++
+			}
+
+			var pyKeys []string
+			raw, err := json.Marshal(want[i][0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &pyKeys); err != nil {
+				t.Fatalf("decoding CPython key list: %v", err)
+			}
+			gotKeys := make([]string, 0, len(obj))
+			for k := range obj {
+				gotKeys = append(gotKeys, k)
+			}
+			sort.Strings(gotKeys)
+			if !reflect.DeepEqual(gotKeys, pyKeys) {
+				t.Errorf("key sets differ\n  input %q\n     go %v\n     py %v",
+					c.text, gotKeys, pyKeys)
+			}
+		})
+	}
+
+	// The whole point of the finding: a corpus with no non-finite
+	// document that CPython PARSES cannot separate the two decoders.
+	if nonFiniteParsed == 0 {
+		t.Fatal("no case where CPython parsed a bare non-finite token: " +
+			"the r4 HIGH is not actually pinned")
+	}
+}
+
+// StringArray took the identical fix, and it is an EQUIVALENT MUTANT
+// there — proven, not assumed. Reverting StringArray alone to a decoder
+// that rejects bare non-finite tokens survives the whole suite, and no
+// document can separate the two under this function's contract:
+//
+// A bare NaN/Infinity inside the carved [...] span is a NUMBER token. It
+// is therefore either an element (so the array is not all-strings) or
+// nested inside a sub-object or sub-array (so that element is not a
+// string). Either way StringArray returns an error. Measured, CPython
+// keeps the value and hands back a mixed list:
+//
+//	["a", NaN]          -> ['a', nan]
+//	["a", {"c": NaN}]   -> ['a', {'c': nan}]
+//
+// which this port refuses on purpose (a planner step that is not text is
+// nothing it can execute). Only the error TEXT moves — "array found but
+// unparseable" becomes "array contains non-string elements" — and every
+// caller treats both the same, so no byte reaches the store differently.
+//
+// The change is kept anyway so the package has ONE decoder rather than
+// two: the r4 HIGH exists precisely because a fix landed in one of three
+// siblings and the split survived three review rounds.
+//
+// A non-finite in a SIBLING key is not a counter-example either — it
+// falls outside the carved span, so neither decoder ever sees it.
+func TestStringArrayNonFiniteIsUnreachableByConstruction(t *testing.T) {
+	if _, err := StringArray(`["step one", "step two"]`); err != nil {
+		t.Fatalf("the ordinary case broke: %v", err)
+	}
+
+	// Both spellings of a reachable non-finite, both refused, and the
+	// refusal is the SAME one a mixed-type array gets.
+	for _, doc := range []string{
+		`["a", NaN]`,
+		`["a", {"c": NaN}]`,
+		`["a", Infinity]`,
+	} {
+		if _, err := StringArray(doc); err == nil {
+			t.Fatalf("%s decoded as a string array; if the contract has "+
+				"widened, this equivalence argument no longer holds", doc)
+		}
+	}
+
+	// The sibling-key case: the span carved is ["a", "b"], so the NaN is
+	// never decoded by either implementation.
+	arr, err := StringArray(`{"score": NaN, "steps": ["a", "b"]}`)
+	if err != nil {
+		t.Fatalf("a non-finite OUTSIDE the carved span must not matter: %v", err)
+	}
+	if len(arr) != 2 || arr[0] != "a" || arr[1] != "b" {
+		t.Fatalf("array decoded wrong: %v", arr)
 	}
 }

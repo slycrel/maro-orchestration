@@ -339,6 +339,44 @@ func LoadsOrdered(text string) (any, error) {
 	return v, nil
 }
 
+// Plain flattens a LoadsOrdered tree into the shape `json.Unmarshal`
+// into an `any` produces: Obj -> map[string]any, List -> []any,
+// json.Number -> float64. It exists so callers that only ever wanted a
+// plain map can still route through LoadsOrdered and inherit its
+// non-finite masking, WITHOUT changing the types eleven call sites
+// already type-assert (adversarial mission-r4 HIGH).
+//
+// The number conversion deliberately keeps a `strconv.ErrRange` result
+// rather than failing: `json.loads('1e309')` is `inf` in CPython, and
+// Number.Float64 returns +Inf together with that error, so ignoring it
+// is what matches. `json.Unmarshal` into an `any` instead REJECTS the
+// whole document there — a fork this closes on the way past.
+//
+// What it does NOT restore is int-vs-float: CPython's json.loads gives a
+// real `int` for `1` and this gives 1.0, exactly as encoding/json always
+// has. That is the pre-existing gap ObjectOrdered exists to serve, left
+// where it is rather than widened or narrowed here.
+func Plain(v any) any {
+	switch t := v.(type) {
+	case Obj:
+		m := make(map[string]any, len(t))
+		for _, f := range t {
+			m[f.Key] = Plain(f.Val)
+		}
+		return m
+	case List:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = Plain(e)
+		}
+		return out
+	case json.Number:
+		f, _ := t.Float64()
+		return f
+	}
+	return v
+}
+
 func decodeOrdered(dec *json.Decoder) (any, error) {
 	tok, err := dec.Token()
 	if err != nil {
@@ -415,8 +453,23 @@ func IntOf(v any) int {
 // Clip is Python's s[:n] — n CODE POINTS, not n bytes. Every truncation
 // in this package feeds a human-facing line, and slicing bytes both counts
 // wrong and can split a rune into replacement characters.
+// A NEGATIVE n counts from the end, as Python's does: "abc"[:-1] is
+// "ab", not "". The first cut returned "" for every n <= 0 under a doc
+// comment claiming to be s[:n] — the same overstated-helper shape that
+// cost two r1 MEDIUMs and produced pySliceLen in the orch package, which
+// gets it right. Two implementations of one Python operation disagreeing
+// is the defect even when no live caller passes a negative (every one
+// today passes a constant 200/60/40), because the doc comment is what
+// the next caller reads (adversarial mission-r4 LOW).
 func Clip(s string, n int) string {
-	if n <= 0 {
+	if n < 0 {
+		if c := utf8.RuneCountInString(s) + n; c > 0 {
+			n = c
+		} else {
+			return ""
+		}
+	}
+	if n == 0 {
 		return ""
 	}
 	if utf8.RuneCountInString(s) <= n {

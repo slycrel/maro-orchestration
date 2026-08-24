@@ -155,8 +155,40 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 		idx int
 		err error
 	}
-	completions := make(chan done)
-	slots := make(chan struct{}, opts.MaxWorkers)
+	// A FIXED POOL fed by a FIFO queue — the shape of the
+	// ThreadPoolExecutor Python actually uses, rather than a goroutine
+	// per milestone racing for a semaphore (adversarial mission-r4 LOW).
+	//
+	// Python submits EVERY ready milestone and `executor.submit` does not
+	// block: the pool's SimpleQueue is unbounded and FIFO, so with
+	// max_workers=2 and four ready milestones, milestones 0 and 1 start
+	// first, deterministically. The old code spawned four goroutines and
+	// let them race for a buffered `slots` channel, so any two of the
+	// four could win — Go's runtime makes no ordering promise there.
+	//
+	// It was never a data race; both runtimes run the admitted N
+	// concurrently. But independent milestones execute in the SAME
+	// project working directory by design (decomposeSystem says so), so
+	// WHICH pair is admitted decides which pair can collide, and one
+	// runtime picking deterministically while the other does not is the
+	// kind of difference that makes a store fork unreproducible.
+	//
+	// Both channels are buffered to the milestone count so neither the
+	// scheduler nor a worker can ever block on a send — the property
+	// that makes this safe. Acquiring a slot on the scheduler goroutine
+	// instead WOULD deadlock: `completions` is drained only after the
+	// submit loop, so a worker finishing while the scheduler waits for a
+	// slot leaves each waiting on the other.
+	completions := make(chan done, len(m.Milestones))
+	tasks := make(chan int, len(m.Milestones))
+	defer close(tasks)
+	for w := 0; w < opts.MaxWorkers; w++ {
+		go func() {
+			for idx := range tasks {
+				completions <- done{idx, runOne(ctx, idx, &m.Milestones[idx])}
+			}
+		}()
+	}
 	inFlight := 0
 
 	for len(terminal) < len(m.Milestones) {
@@ -167,11 +199,7 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 			}
 			submitted[ms.ID] = true
 			inFlight++
-			go func(idx int, ms *Milestone) {
-				slots <- struct{}{}
-				defer func() { <-slots }()
-				completions <- done{idx, runOne(ctx, idx, ms)}
-			}(i, ms)
+			tasks <- i // executor.submit: buffered, never blocks, FIFO
 		}
 
 		if inFlight == 0 {

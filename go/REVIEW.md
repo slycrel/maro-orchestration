@@ -5267,3 +5267,144 @@ actionable:
 > declaring it fixed.** Both times a fork has been fixed in this port, the
 > next one was within five lines and survived another full round. A fork
 > is evidence about the file, not just about the line.
+
+## Adversarial mission-r4
+
+Whole chunk again, opus tier, with the r3 lesson folded in as the lead
+lens: *a fork is evidence about the FILE, not about the line* — re-read
+every file that has had a fork fixed in it, end to end, asking of every
+branch whether Go does something Python does not.
+
+**Eleven findings — two HIGH, five MEDIUM, four LOW. All eleven verified
+against the source and re-measured on both runtimes before any fix. Zero
+hallucinated, the third round running.**
+
+The lens paid out a fourth time, and harder than in r3: seven of the
+eleven landed in files a previous round had already "finished".
+
+### HIGH — a static rationale CPython never writes
+
+`internal/now/now.go` ended the non-fulfilled branch with
+
+```go
+if res.VerdictSummary == "" {
+    res.VerdictSummary = "response reports non-fulfillment (judge gave no rationale)"
+}
+```
+
+Python is `clip(str(why or "").strip(), CAP) or _now_verdict_rationale(...)`
+— an `or` chain with no third arm. Both empty gives `""`. The sentence
+exists in the Python only as a **log** fallback on the next line
+(`handle.py:673`), and `grep -rn "judge gave no" src/` finds nothing.
+
+The trigger is `{"fulfilled": false}` — the commonest non-fulfilled reply
+in the lane, and the literal reply the function's own doc comment quotes
+from run `ea4ebe4a`. `runs._apply_verdict_tuple` writes
+`goal_verdict_summary` unconditionally, so `metadata.json` got `""` from
+one runtime and prose from the other, and the outcome row got the key
+omitted from one and present in the other.
+
+The comment two lines above called it "a static placeholder", as though
+Python had one. **A claim in a comment is load-bearing** — the r2 rule,
+firing again.
+
+### HIGH — the r1 non-finite fix landed in one of three siblings
+
+`ObjectOrdered` decodes through `pyval.LoadsOrdered`, which masks the bare
+`NaN`/`Infinity`/`-Infinity` tokens CPython's `json.loads` accepts by
+default. That was the r1 MEDIUM. `Object` and `StringArray` were left on
+`encoding/json` for three more rounds, and the rejection kills the
+**whole document**, not one field:
+
+```
+{"lane": "now", "confidence": NaN}
+  CPython  -> {'lane': 'now', 'confidence': nan} -> routed as NOW
+  Go (old) -> error -> heuristicClassify -> a DIFFERENT lane
+```
+
+Eleven production call sites, three of which prompt the model for a float
+(`intent.go:189`, `evolver.go:197`, `now.go:368`). The fence differential
+could not see it: it compares the **strip** output on purpose, so the
+decode step was never handed back to CPython at all.
+
+Fixed with a new `pyval.Plain`, which flattens a `LoadsOrdered` tree into
+the shape `json.Unmarshal` into an `any` produces — so the eleven call
+sites keep the types they already assert.
+
+### The rest
+
+- **MEDIUM** — `str()` is not a cast, again. `obj["why"].(string)` threw
+  away a list, an int or a dict `why` and then claimed the judge had
+  given no reason. All three now render byte-identically through
+  `pyval.Str`.
+- **MEDIUM** — two more `strings.TrimSpace` sites where Python calls
+  `.strip()`, both in the file r3 fixed three of them in.
+- **MEDIUM** — `decomposeViaLLM` swallowed an adapter error under a
+  comment claiming Python does too. Python catches **only**
+  `ImportError`, and `FailoverAdapter.complete` re-raises when every
+  backend fails. Measured: CPython raises, Go returned a two-phase
+  heuristic mission.
+- **MEDIUM** — `expandUser` handled only `~` and `~/`, under a test
+  comment asserting `~user` "is a different lookup and this box has no
+  such user, so Python leaves it alone too". False twice: `~clawd/...`
+  expands, and `~nosuchuser/...` **raises**. Seven lines from the r3 fix
+  it is the second spelling of.
+- **MEDIUM** — `scrub.Secrets` on a durable field CPython does not
+  scrub. Kept as a **named divergence** rather than converged: matching
+  Python here would mean writing live credentials to disk. The fix is
+  owed to `handle._verify_now_outcome`, and
+  `TestTheScrubDivergesFromCPythonOnPurpose` fails when it lands.
+- **LOW** — the YAML 1.1/1.2 test asserted only Go's side against a
+  hardcoded table, with the CPython half in an unexecuted string. One
+  row was measurably wrong (`2026-1-2` is a `str`, not a
+  `datetime.date` — PyYAML's timestamp resolver needs zero-padded
+  fields), and the whole unsigned-exponent family was missing. Rewritten
+  to drive `pyGetBools` like its neighbours; it found `1.0e2` on its own.
+- **LOW** — the `\b` residual note gave only the harmless direction. The
+  mirror is destructive: `<thinK>` with U+212A KELVIN SIGN folds to `k`
+  in both engines, but only Python's `\b` treats U+212A as a word
+  character, so **Go** carves the model's hypothetical where CPython
+  carves the real answer.
+- **LOW** — `pyval.Clip` claimed to be `s[:n]` and returned `""` for
+  every negative n; `internal/orch`'s `pySliceLen`, which exists because
+  the naive version cost two r1 MEDIUMs, gets it right. Two
+  implementations of one Python operation disagreeing.
+- **LOW** — the DAG spawned a goroutine per ready milestone and let them
+  race for a semaphore. Python's `ThreadPoolExecutor` queue is FIFO, so
+  admission order is deterministic there and was not here. Replaced with
+  a fixed pool over a buffered task channel — the shape Python actually
+  uses.
+
+### The battery: 12 killed, 1 proven equivalent, 2 false greens caught
+
+Every fix was reverted in place and the suite re-run. Two rounds were
+needed, and both rounds taught something.
+
+**Round one: two survivors, and my own corpus was the reason.** The two
+`.strip()` cases wrote the separators as **raw control bytes inside a
+JSON document** — which is illegal JSON that *both* parsers reject, so
+the two runtimes agreed trivially and the case pinned nothing. Rewritten
+with backslash-u JSON escapes, both mutants died. The lesson
+generalises, and it is new: *a fixture both sides refuse is not a
+differential.* It looks exactly like agreement.
+
+**Round one also mis-reported three kills as real.** They were
+`compile-killed` — the mutant failed to build, which says the mutant was
+ill-formed, not that a test noticed. Re-expressed using only packages
+each file already imports, one of the three then **survived**: the
+`Object` non-finite mutant, because `verifyNow` had been switched to
+`ObjectOrdered` and the coverage I thought I had was for a different
+function. A real differential (`TestObjectDecodesWhatCPythonDecodes`)
+now covers it. **A compile-kill is not a kill** — it must be re-expressed
+or it hides a survivor.
+
+**One proven equivalence.** Reverting `StringArray` alone survives, and
+no document can separate the two: a bare non-finite inside the carved
+`[...]` span is a number token, so it is either an element (array is not
+all-strings) or nested inside one (that element is not a string) — and
+`StringArray` errors either way. Only the error text moves, and no caller
+branches on it. The change is kept so the package has one decoder rather
+than two, which is the very split this round's HIGH was.
+
+`gofmt` clean, `go vet ./...` clean, full suite green, `go test -race`
+green on orch/pyval/jsonx/config/now.

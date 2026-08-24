@@ -60,6 +60,13 @@ class Stub:
     def __init__(self, payload): self.payload = payload
     def complete(self, messages, **kw):
         Stub.seen = (messages, kw)
+        # The transient-outage arm. FailoverAdapter.complete ends with
+        # a bare re-raise of the last exception when every backend fails, and
+        # decompose_mission catches ONLY ImportError — so this leaves
+        # the function by exception rather than falling through to the
+        # heuristic (adversarial mission-r4 MEDIUM).
+        if self.payload == '__RAISE__':
+            raise RuntimeError('all backends failed')
         return Resp(self.payload)
 
 payload = json.loads(sys.argv[1])
@@ -634,5 +641,34 @@ func TestTheBoundsCorpusReachesMoreThanOnePlan(t *testing.T) {
 		t.Fatalf("CPython produced %d distinct plans and reached the "+
 			"heuristic %d times; the sweep cannot discriminate",
 			len(shapes), heuristic)
+	}
+}
+
+// An adapter error must LEAVE DecomposeMission, not fall through to the
+// two-phase heuristic. Python catches only ImportError around the whole
+// LLM block, so a rate limit, an outage or a BudgetRunawayError ends
+// decompose_mission by exception — and a port that quietly produced a
+// working mission where Python produces none is exactly what
+// ErrNoAdapter was created to prevent (adversarial mission-r4 MEDIUM).
+//
+// Both sides are driven here: CPython's `raised` channel already existed
+// in the snippet and no case had ever used it.
+func TestAnAdapterErrorPropagatesLikeCPythons(t *testing.T) {
+	const goal = "build a thing"
+
+	got := pyDecompose(t, "__RAISE__", goal, 4, 3)
+	if got.Raised == "" {
+		t.Fatalf("CPython did NOT raise — the premise of this test is gone; "+
+			"re-read mission.py's except clause. got %+v", got)
+	}
+
+	n := 0
+	m, err := DecomposeMission(context.Background(), goal,
+		&recordingAdapter{fail: true}, 4, 3,
+		func() string { return "2026-08-23T00:00:00+00:00" },
+		func() string { n++; return "id" + strconv.Itoa(n) })
+	if err == nil {
+		t.Fatalf("Go swallowed the adapter error and returned %d milestones "+
+			"where CPython raised %s", len(m.Milestones), got.Raised)
 	}
 }

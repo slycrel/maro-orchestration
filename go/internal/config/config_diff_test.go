@@ -160,6 +160,17 @@ var boolCorpus = []boolCase{
 	{"a nested path that stops short", "a:\n  b: 1\n", "a.b.c", false},
 }
 
+// assertTempRoot is the standing live-store rule in one place: never let
+// a probe write outside a temp dir. It cost a live ledger once
+// (feedback_live_store_probes, 2026-08-16), and the check was inlined in
+// one test while later tests just trusted t.TempDir().
+func assertTempRoot(t *testing.T, root string) {
+	t.Helper()
+	if !strings.HasPrefix(root, "/tmp/") && !strings.HasPrefix(root, os.TempDir()) {
+		t.Fatalf("refusing to run: probe root %q is not under a temp dir", root)
+	}
+}
+
 func pyGetBools(t *testing.T, root string, cases []boolCase) [][]*json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(cases)
@@ -362,10 +373,18 @@ func TestEnvPathsResolveLikeCPython(t *testing.T) {
 		{"a bare tilde", "~"},
 		{"an absolute path is untouched", "/tmp/somewhere/ws"},
 		{"a tilde in the MIDDLE is not expanded", "/tmp/a~b/ws"},
-		// Python's expanduser only fires on a LEADING ~; ~user is a
+		// The ~user form. The comment that used to sit here claimed
+		// "Python's expanduser only fires on a LEADING ~; ~user is a
 		// different lookup and this box has no such user, so Python
-		// leaves it alone too.
+		// leaves it alone too" — false in both halves, and it sat above
+		// a `relative/ws` case that could not test either one
+		// (adversarial mission-r4 MEDIUM). This case drives real
+		// CPython, so it settles itself rather than being asserted.
+		{"a ~user path expands to that user's home", "~" + os.Getenv("USER") + "/.maro/workspace"},
 		{"a relative path is untouched", "relative/ws"},
+	}
+	if os.Getenv("USER") == "" {
+		cases = append(cases[:4], cases[5:]...) // no $USER to look up
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -425,44 +444,84 @@ func TestEnvPathsResolveLikeCPython(t *testing.T) {
 // Pinned as divergences rather than fixed. Normalizing would mean
 // re-resolving every scalar under 1.1 rules inside Get/Lookup, which is
 // its own slice and touches every config read in the port.
+// The YAML 1.1 vs 1.2 scalar divergences, driven against REAL CPython
+// like every other test in this file.
+//
+// It used to assert only Go's side against hardcoded goVal/goWarns, with
+// the CPython half sitting in an unexecuted `pyNote` string — so a
+// PyYAML-side move, or a wrong note, could not fail it. One note WAS
+// wrong: the table claimed `2026-1-2` resolves to a datetime.date, and
+// it does not (PyYAML's timestamp resolver needs zero-padded fields;
+// `2026-01-02` is a date, `2026-1-2` is the string). Same shape as r3's
+// `\b` note whose example measured nothing — a claim in a comment is
+// load-bearing (adversarial mission-r4 LOW).
+//
+// The corpus is also wider than the old one in the direction it claims
+// to cover: PyYAML's float resolver requires a decimal point, so the
+// whole unsigned/signed-exponent family forks too and was unlisted.
+var yamlVersionCorpus = []boolCase{
+	{"a leading-zero 08", "flag: 08\n", "flag", false},
+	{"a leading-zero 09", "flag: 09\n", "flag", false},
+	{"a 1.2 octal 0o10", "flag: 0o10\n", "flag", false},
+	{"a 1.1 octal 010", "flag: 010\n", "flag", false},
+	{"a sexagesimal 1:30", "flag: 1:30\n", "flag", false},
+	{"a padded date", "flag: 2026-01-02\n", "flag", false},
+	{"an unpadded date is NOT a date", "flag: 2026-1-2\n", "flag", false},
+	{"a bare exponent 1e2", "flag: 1e2\n", "flag", false},
+	{"a positive exponent 1e+2", "flag: 1e+2\n", "flag", false},
+	{"a negative exponent 1e-2", "flag: 1e-2\n", "flag", false},
+	{"a decimal-point float", "flag: 1.0e2\n", "flag", false},
+}
+
 func TestYAML11And12DisagreeOnMoreThanTheBoolWords(t *testing.T) {
-	cases := []struct {
-		name    string
-		yaml    string
-		def     bool
-		goVal   bool   // what Go reaches today
-		goWarns bool   // ...and whether it says anything
-		pyNote  string // what CPython does, for the failure message
-	}{
-		{"a leading-zero 08", "flag: 08\n", false, true, false,
-			"PyYAML: str '08' -> falsy-set miss -> default false, WITH a warning"},
-		{"a leading-zero 09", "flag: 09\n", false, true, false,
-			"PyYAML: str '09' -> default false, WITH a warning"},
-		{"a 1.2 octal 0o10", "flag: 0o10\n", false, true, false,
-			"PyYAML: str '0o10' -> default false, WITH a warning"},
-		{"a sexagesimal 1:30", "flag: 1:30\n", false, false, true,
-			"PyYAML: int 90 -> bool(90) -> true, SILENTLY"},
+	root := t.TempDir()
+	assertTempRoot(t, root)
+	want := pyGetBools(t, root, yamlVersionCorpus)
+	if len(want) != len(yamlVersionCorpus) {
+		t.Fatalf("probe returned %d rows for %d cases", len(want), len(yamlVersionCorpus))
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+
+	var forks int
+	for i, c := range yamlVersionCorpus {
+		t.Run(c.Name, func(t *testing.T) {
 			dir := t.TempDir()
+			assertTempRoot(t, dir)
 			ws := filepath.Join(dir, "ws")
 			if err := os.MkdirAll(ws, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(ws, "config.yml"), []byte(c.yaml), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(ws, "config.yml"),
+				[]byte(c.YAML), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("MARO_USER_DIR", dir)
 			t.Setenv("MARO_WORKSPACE", ws)
 			cfg, _ := Load()
+			got, warn := GetBool(cfg, c.Key, c.Def)
 
-			got, warn := GetBool(cfg, "flag", c.def)
-			if got != c.goVal || (warn != "") != c.goWarns {
-				t.Fatalf("Go's behaviour on %q moved (got %v warn=%q); if it now "+
-					"matches CPython, delete this case and add it to boolCorpus.\n  %s",
-					c.yaml, got, warn, c.pyNote)
+			var pyVal bool
+			if want[i][0] != nil {
+				if err := json.Unmarshal(*want[i][0], &pyVal); err != nil {
+					t.Fatalf("decoding CPython value: %v", err)
+				}
+			}
+			pyWarned := want[i][1] != nil && string(*want[i][1]) != "null" &&
+				string(*want[i][1]) != `""`
+
+			if got != pyVal || (warn != "") != pyWarned {
+				forks++
+				t.Logf("KNOWN YAML-version fork on %q\n  go %v warn=%q\n  py %v warned=%v",
+					c.YAML, got, warn, pyVal, pyWarned)
 			}
 		})
+	}
+
+	// This test asserts that the fork EXISTS. If PyYAML 1.1 and yaml.v3
+	// ever agree on all of these, the whole GetBool table in config.go is
+	// stale and should be rewritten from measurement, not trimmed.
+	if forks == 0 {
+		t.Fatal("no YAML-version fork observed across the whole corpus — " +
+			"either the resolvers now agree or this test stopped measuring; " +
+			"re-derive the table in config.go before trusting it")
 	}
 }

@@ -325,3 +325,57 @@ func TestWhatGoWritesCPythonCanRead(t *testing.T) {
 		}
 	}
 }
+
+// Clip's doc comment says it is Python's s[:n], and for three rounds it
+// was not: every n <= 0 returned "". Python's negative index counts from
+// the END — "abc"[:-1] is "ab" — and internal/orch's pySliceLen, which
+// exists BECAUSE the naive version cost two r1 MEDIUMs, gets this right.
+// Two implementations of one Python operation disagreeing is the defect
+// (adversarial mission-r4 LOW), so this settles it against CPython
+// rather than against either implementation.
+func TestClipMatchesPythonSliceIncludingNegativeN(t *testing.T) {
+	type probe struct {
+		S string `json:"s"`
+		N int    `json:"n"`
+	}
+	var cases []probe
+	for _, s := range []string{"", "a", "abc", "abcdef", "héllo", "日本語テキスト", "a\x1cb"} {
+		for n := -8; n <= 8; n++ {
+			cases = append(cases, probe{s, n})
+		}
+	}
+	in, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"print(json.dumps([c['s'][:c['n']] for c in json.loads(sys.argv[1])]))",
+		string(in)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []string
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+	var negativeAndNonEmpty int
+	for i, c := range cases {
+		got := Clip(c.S, c.N)
+		if got != want[i] {
+			t.Errorf("Clip(%q, %d) diverges\n  go %q\n  py %q", c.S, c.N, got, want[i])
+		}
+		if c.N < 0 && want[i] != "" {
+			negativeAndNonEmpty++
+		}
+	}
+	// The old code returned "" for every negative n, so a corpus whose
+	// negative cases all happened to be empty would not separate them.
+	if negativeAndNonEmpty == 0 {
+		t.Fatal("no case where a NEGATIVE n yields a non-empty string: " +
+			"the r4 LOW is not actually pinned")
+	}
+}

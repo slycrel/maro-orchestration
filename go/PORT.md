@@ -3616,3 +3616,44 @@ Reviewing the fix is not the same as covering it, and the mutation battery
 is what tells them apart. Every fix in this port now gets mutants derived
 from the FILE it landed in — and a survivor is either a missing fixture or
 an equivalence worth writing down, never something to leave unexplained.
+
+### Rule — a fixture both sides refuse is not a differential
+
+The r4 battery produced two survivors, and the fixtures were the reason,
+not the fixes. Two cases meant to pin `str.strip()` against
+`strings.TrimSpace` wrote U+001C and U+001F as **raw bytes inside a JSON
+document**. A raw control character in a JSON string is illegal, so
+CPython's `json.loads` and Go's decoder both rejected the document, both
+produced nothing, and the case reported agreement.
+
+That is the dangerous shape: a broken fixture does not fail, it *passes*.
+It looks like the strongest possible evidence — byte-identical output on
+both runtimes — while testing neither branch. Written with backslash-u
+escapes instead, the same two cases killed their mutants immediately.
+
+The general form: whenever a differential case agrees, ask whether both
+sides agreed on an *answer* or agreed on a *refusal*. Only the first is
+evidence. The anti-vacuity guards this port already writes for corpora
+(`TestThe...CorpusReaches...`) exist for the same reason one layer up —
+this is that idea applied to a single case.
+
+### Rule — a compile-kill is not a kill
+
+The same battery reported three mutants `compile-killed`. That reads like
+a strong result and is nearly worthless: it says the mutant was
+ill-formed, not that any test noticed the behaviour change. Two of the
+three failed only because removing a call left an import unused.
+
+Re-expressed so they build — using only packages each file already
+imports — one of the three **survived**, and the survival was real. The
+mutant reverted `jsonx.Object`, but the test I believed covered it had
+been pointed at `jsonx.ObjectOrdered` by an earlier fix in the same
+round. The coverage existed for a different function with a similar name.
+
+So: a mutation harness must treat a compile failure as *unusable*, never
+as a kill, and re-express it. Otherwise the harness's own error rate
+hides exactly the survivors it exists to surface. This is the second
+false-green class the battery has produced — the first was the
+anchor-miss in r1 (`count(old) != 1`), where a mutant that never applied
+was reported as a survivor. Both are the harness lying in the direction
+of comfort.
