@@ -4380,3 +4380,183 @@ The package doc had named this case from the day it was written. The code
 under it used 0x80, and r8's own CPython differential walked U+0001 ->
 U+001F -> "cafe", stepping straight over the boundary. When a doc comment
 names a specific value, the corpus should contain that value.
+
+
+## The run dir's name is a lookup key
+
+Python's `runs.run_dir(handle_id)` returns `runs/<handle_id>-<nickname>`,
+where the nickname is two words indexed by the first two bytes of
+`sha1(handle_id)` out of a 50-adjective and a 50-noun tuple. The Go port
+used the bare handle id, on the reasoning -- written into this package's
+doc comment -- that readers glob `runs/*/metadata.json`.
+
+Two of the three readers do glob. `run_dir` does not: it BUILDS the path,
+and it is
+
+  - the first thing `resolve_run_dir` tries, before the index;
+  - how `create_run_dir` decides a run dir already exists;
+  - the path every resume goes through.
+
+So a Go-created run was reachable from Python only via the index or the
+legacy scan, and a Python `create_run_dir` for the same handle id created
+a SECOND directory beside it. Two run dirs for one run, each with half the
+metadata, in a shared workspace.
+
+The two word lists are spelled out in Python's order, and the order is
+contract: the nickname is an index into them, so reordering either one
+silently renames every future run dir while leaving existing ones in
+place.
+
+## Every metadata write publishes the index
+
+`WriteMetadata` calls `IndexRunDir` on the merged object before
+serializing it, because both Python writers of this file do
+(`write_metadata` at the create path, `_stamp_metadata_at` at the merge
+path). A loop id that appears in `metadata.json` is findable from the
+moment it lands; anything less means the ref is reachable only through a
+migration, and a workspace whose migration is already marked complete
+will never run one again.
+
+The ORDER is Python's and is deliberate: refs before metadata. A crash
+between the two leaves an entry pointing at a run dir whose metadata is
+one revision old, and a reader that follows it finds a real run. The
+other order leaves a published loop id with no entry, which reads as "no
+such run".
+
+## The run-ref index (v2)
+
+`<workspace>/.run-ref-index-v2/<sha256(ref)>.json`, a SIBLING of `runs/`,
+each file `{"ref": ..., "run_dir": <bare name>}`. The refs for one run are
+`handle_id`, `loop_id`, every entry of `loop_ids`, every `loops[].loop_id`,
+and `origin.resumed_from`.
+
+The plural keys are what v2 added and why the version was bumped: the
+loops ledger stopped stamping the singular `metadata.loop_id`, so every
+v1-indexed run was unreachable by `loop_id` -- which is the key the
+outcome ledger and the verdict seam JOIN on, so every loop_id-keyed
+consumer silently no-op'd.
+
+Properties the port preserves that are easy to lose:
+
+  - **It is an optimization, never an availability dependency.** A
+    read-only, corrupt, or lock-starved index degrades to the historical
+    directory scan. That posture is the reason for the otherwise-odd
+    error handling.
+  - **A duplicate ref resolves to the alphabetically FIRST live run dir**,
+    because that is what a sorted scan returned. An optimization must not
+    answer a question differently from the fallback it replaces. LIVE is
+    load-bearing: applied to a pruned directory the same rule would pin a
+    ref to a name nothing can resolve, permanently, since every republish
+    reads the same stale entry and keeps it.
+  - **Repair is local.** A corrupt leaf unlinks itself, rescans for its
+    own ref, and republishes -- it does NOT invalidate the global
+    migration marker, which would force every unrelated miss through a
+    second O(all runs) rebuild on account of one damaged file.
+  - **Two different defaults on the marker.** An absent `complete` key
+    means complete (an old marker predates the flag); an unreadable
+    marker means NOT complete. Python answers these differently -- a
+    `.get("complete", True)` inside a `try` whose `except` returns False
+    -- and collapsing them into one default breaks one case or the other.
+  - **A plain miss is not corruption.** A missing entry file returns
+    early; only a PRESENT but unusable one triggers unlink-and-rescan.
+
+Testing note, learned here: the migration and the local repair each turn
+a real gap into a slow success, so a test that leaves either one
+available proves nothing about the thing it names. The tests plant a
+`complete: true` marker, or delete the index outright, depending on which
+half they are pinning.
+
+## `Path(name).name == name` is a weaker guard than it looks
+
+Measured: `Path("").name` is `""` and `Path("..").name` is `".."`, so
+both equal themselves and pass `runs.py`'s traversal check. Both then pass
+the `is_dir()` test that follows, because `root/""` is the runs root and
+`root/".."` is the workspace directory.
+
+The port keeps `pathDotNameIsSelf` as a faithful, CPython-diffed
+reproduction and refuses `""`, `"."` and `".."` on top of it, in
+`isBareName`. Named divergence, safe direction, with a test that
+demonstrates the consequence rather than asserting the rule.
+
+## `str(x or "")` is the idiom, not `str(x)`
+
+`pyval.Str` is `str()`, and `str(None)` is the four-character string
+`"None"`. Nearly every `str()` in the Python source is guarded -- by
+`or ""`, or by reading through `d.get(k, "")` first. Three sites in this
+tranche reached for `Str` alone and produced the literal `"None"` in a
+field that should have been empty; one of them as an index key, so every
+run without a `loop_id` collided on one file.
+
+`Obj.GetString` is `d.get(k, "")` and already existed. `pyval.StrOrEmpty`
+is `str(x or "")` and now exists, with a test. Note that it is a
+TRUTHINESS gate: an id of integer `0` vanishes, an id of `5` is spelled
+`"5"`. That is Python's actual behaviour at these sites.
+
+## The two stop-verdict writers are deliberately asymmetric
+
+`runs.stamp_run_stop_verdict` does **no** vocabulary check;
+`memory_ledger.stamp_outcome_stop_verdict` does. That is Python's
+arrangement and the port keeps it: an off-vocabulary value fails to
+UNSTAMPED at the ledger so a reader's status fallback applies, and a
+metadata file plus a ledger row that disagree about whether a verdict was
+accepted is worse than either rule applied consistently. A test pins the
+asymmetry so a future reader who notices the "missing" check finds out it
+was a decision.
+
+Other properties worth naming:
+
+  - The metadata tuple REPLACES WHOLE (a new verdict without a reopen
+    payload pops the stale one, even for the same verdict); the ledger
+    row MERGES (absent evidence leaves the existing evidence standing).
+    Different contracts on purpose: metadata describes THIS ending, the
+    ledger row accumulates what is known about the run.
+  - The refine note is composed BEFORE the clip, or the note is what gets
+    cut.
+  - `EvidenceOut` is captured inside the lock. Python's round-2 review
+    found a caller re-reading `metadata.json` after release, and a
+    concurrent writer substituting its content into the caller's ledger
+    row. The Go signature makes the correct thing the only available one.
+  - `RunDir` is REQUIRED, where Python defaults to the process's active
+    run. This writer's only caller stamps a run that ended somewhere else.
+
+## A conditional rewrite is not a read-modify-write
+
+`record.LockedRMW` writes whatever its callback returns, unconditionally.
+`stamp_outcome_stop_verdict` must not write on a MISS -- the
+splitlines/join round trip normalizes Python's eight extra line
+separators to `\n` and appends a trailing newline, so a failed lookup
+would become a silent whole-file edit on a store the other runtime is
+appending to. Even returning the input unchanged replaces the inode and
+races an appender.
+
+The port uses `record.Locked` + read + conditional `AtomicWrite`, which is
+the shape Python has.
+
+Assert the INODE, not the mtime. Measured on this box: `os.WriteFile`
+followed immediately by `AtomicWrite` leaves both stats reporting the
+same nanosecond, so an mtime assertion here cannot fail. `AtomicWrite`
+always renames a fresh temp over the target, so the inode necessarily
+changes -- and it is also what the harm is about, since an appender
+holding the old file open keeps writing into a file nothing will read
+again.
+
+## Named residuals after r10
+
+  - The legacy scan and the migration read every run's `metadata.json`
+    with no size bound. Python does too.
+  - `IndexRunDir`'s failure path invalidates the marker but does not
+    report; the caller cannot distinguish "indexed" from "will rebuild".
+  - `runs.remove_run_index`'s Python twin is ported, but nothing in the Go
+    tree prunes runs yet, so it has no caller.
+  - `ResolveRunDir` takes an explicit workspace where Python reads
+    `MARO_WORKSPACE`. Consistent with the rest of this port; noted because
+    a future CLI entry point has to supply it.
+  - The refs-before-metadata write order is asserted by nothing. It is a
+    crash-ordering property, and testing it needs fault injection between
+    two statements; the mutant that swaps them survives every test here
+    and was left out of the battery rather than counted as killed.
+  - The stop-verdict rail is ported; the CALLERS are not.
+    `director.handle_escalation` is the next tranche, and
+    `agent_loop`'s fence stamp, `loop_finalize`'s ending stamp and
+    `handle`'s demotion stamp are three more Python sites that will need
+    the same owner when their tranches land.

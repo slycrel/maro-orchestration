@@ -5,13 +5,24 @@
 // workspace degraded to zero prior attempts because nothing on this
 // side wrote run metadata (named in PORT.md since the recall tranche).
 //
-// Deliberately unported (see PORT.md): nicknames, the run-ref index,
-// thread brains, dispatch-envelope/attachment landing, the stranded-run
-// sweep, and cross-process locking on metadata.json (locked_rmw) — the
-// Go v0 loop is metadata.json's only writer in its workspace; writes
-// are atomic (temp+rename) so concurrent READERS never see a torn file,
-// and the single-writer assumption is named here rather than silently
-// relied on.
+// Deliberately unported (see PORT.md): thread brains, the
+// dispatch-envelope/attachment landing rider, and the stranded-run
+// sweep.
+//
+// Nicknames and the run-ref index came in with the stop-verdict rail
+// (mission-r10) — both were on this list, and both turned out to be
+// reachability rather than cosmetics: without the nickname a Go run dir
+// is a directory Python's create_run_dir does not find and duplicates,
+// and without the index a run is unreachable by loop_id, which is the
+// key the outcome ledger and the verdict seam join on.
+//
+// metadata.json's cross-process lock is no longer a blanket exception
+// either: StampRunStopVerdict takes it (record.Locked, the same
+// path+".lock" file Python's locked_rmw takes), because that writer is
+// explicitly called on runs OTHER processes own — a director close
+// stamps a run that ended elsewhere. WriteMetadata still writes
+// unlocked-but-atomic on the single-writer assumption, which holds for
+// the active run and is named here rather than silently relied on.
 package runs
 
 import (
@@ -28,11 +39,16 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
-// Dir is the run-dir path for a handle id (does not create it). Python
-// appends a human nickname (`<id>-<nickname>`); the Go dir is the bare
-// id — readers glob runs/*/metadata.json, so naming is not contract.
+// Dir is the run-dir path for a handle id (does not create it), spelled
+// exactly as Python's runs.run_dir spells it: `<id>-<nickname>`.
+//
+// This used to be the bare id, on the reasoning that readers glob
+// runs/*/metadata.json so naming is not contract. See Nickname's doc for
+// why that was wrong — the short version is that Python reconstructs
+// this path by name before it ever lists the directory, so a bare-id dir
+// was a run the other runtime would create a SECOND directory for.
 func Dir(workspaceDir, handleID string) string {
-	return filepath.Join(workspaceDir, "runs", handleID)
+	return filepath.Join(workspaceDir, "runs", handleID+"-"+Nickname(handleID))
 }
 
 // Create makes the run-dir with the source/build/artifact skeleton
@@ -76,6 +92,14 @@ func Create(workspaceDir, handleID, prompt string) (string, error) {
 // delete semantics, and "set to null" would read as a judged false by
 // sloppy consumers. The write is atomic so readers (FindPriorAttempts
 // in either runtime) never see a torn file.
+//
+// It also PUBLISHES the run's lookup refs, because every Python writer
+// of this file does: `_stamp_metadata_at` and `write_metadata` both call
+// index_run_dir on the merged dict before serializing it. Leaving that
+// out made every Go metadata mutation invisible to a Python lookup by
+// loop_id until some later miss paid for a full migration — the exact
+// failure the index exists to prevent, arrived at from the writing side
+// instead of the naming side.
 func WriteMetadata(runDir string, fields pyval.Obj) error {
 	metaPath := filepath.Join(runDir, "metadata.json")
 	var existing pyval.Obj
@@ -117,6 +141,14 @@ func WriteMetadata(runDir string, fields pyval.Obj) error {
 	out, err := pyval.DumpsIndent2(existing)
 	if err != nil {
 		return err
+	}
+	// Refs BEFORE the metadata, which is Python's order and a deliberate
+	// one: a crash between the two leaves an index entry pointing at a run
+	// dir whose metadata is one revision old, and a reader that follows it
+	// finds a real run. The other order leaves a published loop id with no
+	// entry, which reads as "no such run".
+	if m, ok := pyval.Plain(existing).(map[string]any); ok {
+		IndexRunDir(runDir, m)
 	}
 	return atomicWrite(metaPath, []byte(out))
 }

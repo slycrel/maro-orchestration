@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // LoadsClean is jsonl_utils.loads_clean: a JSON-object decode that REFUSES
@@ -73,6 +75,52 @@ func LoadsClean(line string) (map[string]any, error) {
 		return nil, fmt.Errorf("trailing data after JSON value")
 	}
 	return m, nil
+}
+
+// LoadsCleanOrdered is LoadsClean for a caller that intends to REWRITE the
+// row it just read.
+//
+// Same admission predicate, same four refusals — the guards are literally
+// the same calls, not a second copy, because a rewriting reader that
+// admitted a line the removing reader refuses is how the two disagree
+// about which rows exist. What differs is only the shape handed back:
+// a pyval.Obj that remembers key order, so a stamper can set one field
+// and re-emit the row with every other key still where its original
+// writer put it.
+//
+// Python gets this for free — json.loads gives back an insertion-ordered
+// dict and json.dumps walks it in that order — which is exactly why it is
+// easy to miss on this side. A Go stamper that round-trips through
+// map[string]any re-emits every row alphabetized. No consumer parses the
+// bytes (they all json.loads), so nothing breaks; the store just stops
+// being one both runtimes wrote the same way, and the next person to diff
+// it sees every stamped row rewritten end to end.
+//
+// The order the guards run in is load-bearing: refuseDuplicateNames walks
+// the line with a PLAIN decoder, which is also what rejects the bare NaN
+// and Infinity tokens json.loads refuses through its parse_constant hook.
+// pyval.LoadsOrdered deliberately ADMITS those (it masks them so one stray
+// non-finite float in a model reply cannot kill a whole document), so
+// calling it first would let a row in here that LoadsClean strands.
+func LoadsCleanOrdered(line string) (pyval.Obj, error) {
+	if !utf8.ValidString(line) {
+		return nil, fmt.Errorf("byte-tainted line (raw non-UTF-8 bytes)")
+	}
+	if err := RefuseLoneSurrogates([]byte(line)); err != nil {
+		return nil, err
+	}
+	if err := refuseDuplicateNames(line); err != nil {
+		return nil, err
+	}
+	v, err := pyval.LoadsOrdered(line)
+	if err != nil {
+		return nil, err
+	}
+	obj, ok := v.(pyval.Obj)
+	if !ok {
+		return nil, fmt.Errorf("not a JSON object")
+	}
+	return obj, nil
 }
 
 // IsFrameBlank ports jsonl_utils.is_frame_blank: a fragment is FRAMING only

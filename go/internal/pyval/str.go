@@ -30,11 +30,42 @@ import (
 // resulting Obj/List.
 
 // Str is Python's str(v).
+//
+// Note what that means for a MISSING value: str(None) is the
+// four-character string "None", so Str(nil) is "None" and not "". That is
+// correct, and it is also a trap, because the Python source this port
+// reads almost never writes a bare str(x) over a value that might be
+// absent — it writes `str(x or "")` or `d.get(k, "")` first. See
+// StrOrEmpty and Obj.GetString, which are the two spellings that actually
+// appear, and reach for one of those unless the Python line really is a
+// bare str().
 func Str(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
 	return Repr(v)
+}
+
+// StrOrEmpty is Python's `str(v or "")` — the defaulting idiom that
+// guards nearly every str() over a value read out of a dict.
+//
+// It is a TRUTHINESS gate, not a nil check: None, "", 0, False and every
+// empty container all become "". A value of 0 therefore vanishes, which
+// is Python's actual behaviour at these sites and occasionally surprising
+// — an id of integer 0 is dropped, an id of 5 is spelled "5".
+//
+// This exists because writing Str(v) where Python wrote str(v or "") was
+// got wrong three separate times in one tranche (mission-r10), in three
+// different packages, each time producing the literal string "None" in a
+// field that should have been empty — once as an index key, so every run
+// without a loop_id collided on one file. Three private wrong copies of
+// one idiom is the exact shape the r9 lens named; this is the shared
+// right one, and it has a test.
+func StrOrEmpty(v any) string {
+	if !Truthy(v) {
+		return ""
+	}
+	return Str(v)
 }
 
 // Repr is Python's repr(v).

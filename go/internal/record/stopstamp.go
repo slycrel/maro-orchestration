@@ -1,0 +1,149 @@
+package record
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/stopverdicts"
+)
+
+// StampOutcomeStopVerdict is memory_ledger.stamp_outcome_stop_verdict: a
+// post-hoc stop-verdict stamp on the NEWEST outcomes row for a loop id.
+//
+// Post-hoc is the whole point. The reachable-but-not-worth-it verdict is
+// decided AFTER the run closed — a director escalation "close" is a later
+// value/cost judgment about a run that already ended "stuck" — so it has
+// to land on a row that was written and closed by someone else, the same
+// way closure verdicts do.
+//
+// Merge-only: it touches stop_verdict and (when evidence is given)
+// stop_evidence, and NEVER the goal-verdict fields. Best-effort by
+// contract — false on any miss, including an off-vocabulary verdict,
+// which fails to UNSTAMPED so a reader's status fallback applies rather
+// than a phantom value standing in the field.
+//
+// Returns whether a row was actually updated. That boolean is the honest
+// answer to "is this judgment recorded?", and a caller that wants to
+// report the close as durable has to look at it.
+func StampOutcomeStopVerdict(workspaceDir, loopID, stopVerdict, stopEvidence string) (bool, error) {
+	if loopID == "" || stopVerdict == "" {
+		return false, nil
+	}
+	// The vocabulary gate lives HERE and not at the metadata stamp,
+	// matching Python. See runs.StampRunStopVerdict's note on why the
+	// asymmetry is preserved rather than tidied.
+	if !stopverdicts.IsValidStopValue(stopVerdict) {
+		return false, nil
+	}
+	path := filepath.Join(workspaceDir, "memory", "outcomes.jsonl")
+	// A missing store is a miss, not an error, and must not CREATE the
+	// file: Python reads first and returns False on FileNotFoundError,
+	// before any writer is involved. A read-modify-write would
+	// materialize an empty outcomes.jsonl in a workspace that has none —
+	// a store appearing out of a failed lookup.
+	if _, err := os.Stat(path); err != nil {
+		return false, nil
+	}
+
+	hit := false
+	// Locked plus a CONDITIONAL AtomicWrite — deliberately NOT LockedRMW.
+	//
+	// LockedRMW is the natural fit here and it is the wrong one: it writes
+	// whatever the callback returns, unconditionally, so a lookup that
+	// found nothing still replaces the file. Same bytes, but a new inode,
+	// a new mtime, and a window to race anyone appending. Python is shaped
+	// this way for exactly that reason — `locked_write`, read, then
+	// `if hit["v"]: atomic_write` — and the tell is in the guard itself:
+	// a rewrite that is conditional on a flag is not a read-modify-write.
+	// (Caught here by an mtime assertion; the content comparison alone
+	// passed, because the rewrite really is byte-identical.)
+	err := Locked(path, func() error {
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			// Vanished between the stat above and the lock. A miss, not
+			// an error — Python's inner `except FileNotFoundError: return
+			// False` covers the identical window.
+			return nil
+		}
+		out, matched := stampNewestRow(string(raw), loopID, stopVerdict, stopEvidence)
+		if !matched {
+			return nil
+		}
+		hit = true
+		return AtomicWrite(path, []byte(out))
+	})
+	if err != nil {
+		return false, err
+	}
+	return hit, nil
+}
+
+// stampNewestRow rewrites the newest row belonging to loopID and returns
+// the whole store text, plus whether anything matched. On a miss the text
+// it returns is meaningless and the caller must not write it.
+func stampNewestRow(old, loopID, stopVerdict, stopEvidence string) (string, bool) {
+	// SplitLines, not strings.Split(old, "\n"): Python's str.splitlines()
+	// breaks on eight separators Go's does not — \v, \f, \x1c–\x1e,
+	// U+2028, U+2029, U+0085. A row is ensure_ascii-escaped so its own
+	// content never carries one raw, but a FOREIGN writer's row can, and
+	// then the two runtimes disagree about how many rows the store has.
+	// Matching Python here means matching it including where Python is
+	// lossy: the rejoin below normalizes every one of those to \n.
+	lines := pytext.SplitLines(old)
+	for i := len(lines) - 1; i >= 0; i-- {
+		// Newest first. The ledger is append-ordered, so the LAST matching
+		// row is the current one — an earlier row for the same loop id is
+		// a superseded attempt and keeps its own record.
+		line := pytext.Strip(lines[i])
+		if line == "" {
+			continue
+		}
+		// LoadsCleanOrdered, not LoadsClean: this line is about to be
+		// re-serialized, and a map would re-emit every key alphabetized.
+		// A line it REFUSES is skipped and carried verbatim — the
+		// corruption keeps announcing itself instead of being laundered
+		// by a rewrite.
+		row, perr := LoadsCleanOrdered(line)
+		if perr != nil {
+			continue
+		}
+		// Python compares `row.get("loop_id") == loop_id` against a str,
+		// so a row whose loop_id decoded as a NUMBER does not match
+		// (5 == "5" is False in Python). The type assertion is what keeps
+		// that true here; pyval.Str would spell the number and stamp a
+		// row Python skips.
+		v, present := row.Get("loop_id")
+		if !present {
+			continue
+		}
+		if s, isStr := v.(string); !isStr || s != loopID {
+			continue
+		}
+		row.Set("stop_verdict", stopVerdict)
+		if stopEvidence != "" {
+			// Absent evidence leaves any EXISTING stop_evidence standing
+			// rather than clearing it — this stamper is merge-only,
+			// unlike the metadata tuple owner, which replaces whole. The
+			// two really are different contracts: metadata describes THIS
+			// ending, the ledger row accumulates what is known about the
+			// run.
+			row.Set("stop_evidence", budget.Clip(stopEvidence, 800))
+		}
+		out, derr := pyval.DumpsCompactPy(row)
+		if derr != nil {
+			// Leave the row untouched rather than writing a partial one,
+			// and report a miss so nothing is written at all.
+			return "", false
+		}
+		lines[i] = out
+		if len(lines) == 0 {
+			return "", true
+		}
+		return strings.Join(lines, "\n") + "\n", true
+	}
+	return "", false
+}

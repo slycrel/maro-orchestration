@@ -11,6 +11,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/runs"
 )
 
 func readRows(t *testing.T, path string) []map[string]any {
@@ -51,7 +52,7 @@ func TestRunNowFulfilledStampsAchieved(t *testing.T) {
 	if row["task_type"] != "now" || row["goal_achieved"] != true {
 		t.Fatalf("outcome row: %v", row)
 	}
-	raw, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	raw, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
@@ -172,7 +173,7 @@ func TestRunNowStampsNoConfidenceKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	raw, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	if rerr != nil {
 		t.Fatal(rerr)
 	}

@@ -6457,3 +6457,143 @@ tests, or review-of-the-diff can see the divergence. Before adding a
 private helper for a Python builtin's semantics, grep `pyval`/`pytext`
 for the contract by NAME; when a private one already exists, treat it as
 evidence there are others.
+
+
+### Round 10 — the stop-verdict rail, and a name that was a key
+
+The tranche: `stop_verdicts.py` (the whole vocabulary), the v2 run-ref
+index, `runs.stamp_run_stop_verdict` + `_apply_stop_tuple`,
+`memory_ledger.stamp_outcome_stop_verdict`, and the nickname that names a
+run dir. Together they are what `director.handle_escalation`'s `close`
+branch needs before it can be ported at all -- a judged close has to find
+the run it is judging, and then record the judgment in two places.
+
+**The find that justifies the tranche.** This package's own doc comment
+said nicknames were unported and that this was harmless: *"readers glob
+runs/*/metadata.json, so naming is not contract."* Two of the three
+readers do glob. The third is `runs.run_dir(handle_id)`, which builds the
+path by NAME -- and it is the first thing `resolve_run_dir` tries, the
+thing `create_run_dir` uses to decide whether a run dir already exists,
+and the thing every resume goes through. So a Go run dir was a directory
+Python could only reach by falling through to the index or a scan, and a
+Python `create_run_dir` for a handle id a Go run had already started
+would MISS it and create a second directory beside it: two run dirs for
+one run, each holding half the metadata, in the shared workspace the
+whole port exists to interoperate with.
+
+That is not a spelling difference. It is the first divergence this port
+has found that would corrupt a live workspace on the first day both
+runtimes ran in it. It cost nine words of sha1 and two word lists to fix.
+
+**The same question asked from the writing side, one round later.** The
+find above is about the NAME a run dir gets. The mutation battery
+surfaced its twin, which is about the ENTRIES a write publishes: Python's
+`write_metadata` and `_stamp_metadata_at` both call `index_run_dir` from
+inside the merge, before serializing. This port's `WriteMetadata` did
+not. Every ordinary Go metadata mutation -- including `Create`, including
+every `StampVerdict` -- left the run's loop ids unpublished.
+
+What makes it worth recording is how well it hides. A Python lookup that
+misses MIGRATES, so it finds the run anyway: once, slowly, and only until
+some earlier miss has already marked the migration complete, after which
+the ref is simply gone. Every crossing test in the file tolerated that,
+because they were all written before there was a complete marker to worry
+about. The test that catches it has to plant a complete marker first and
+then ask -- at which point the ref is reachable if and only if the write
+published it.
+
+**Three copies of one mistake, in one tranche.** `pyval.Str` is Python's
+`str()`, and `str(None)` is the four-character string `"None"`. The
+Python source almost never writes a bare `str(x)` over a value that might
+be absent -- it writes `str(x or "")` or `d.get(k, "")` first. Reaching
+for `Str` alone was wrong three separate times here:
+
+  - `metadataRefs` wrote an index entry for the literal ref `"None"` on
+    every run whose metadata lacked a `loop_id` -- most of them -- all
+    colliding on one file.
+  - `StampRunStopVerdict` handed a caller `"None"` as the evidence a
+    clearing stamp wrote, which would land in a ledger row as evidence.
+  - the refine-note branch read a prior verdict of `"None"`, so every
+    FIRST stamp would have recorded itself as refining a predecessor that
+    never existed.
+
+`Obj.GetString` already existed and is exactly `d.get(k, "")`. `str(x or
+"")` did not, so `pyval.StrOrEmpty` was added with a test rather than a
+fourth private copy -- the r9 lens applied on purpose this time, having
+first been re-earned by accident.
+
+**Where the port deliberately does not match.** `runs.py` guards an index
+entry's stored directory name with `Path(name).name != name`. Measured
+against CPython: `Path("").name` is `""` and `Path("..").name` is `".."`,
+so that check ACCEPTS both -- and both pass the `is_dir()` test right
+after it, because `root/""` is the runs root and `root/".."` is the
+workspace directory. A corrupt entry therefore resolves to a directory
+that is not a run, and a stamp against it writes `metadata.json` into the
+top of the workspace.
+
+Matching that faithfully would import a bug rather than a behaviour, so
+the port refuses the three degenerate names. The r1 lens says a hardening
+IS a divergence and must be named, not that it is always wrong. It is
+named twice over: `pathDotNameIsSelf` reproduces Python's predicate
+exactly and is diffed against CPython, `isBareName` layers the refusal on
+top, and a separate test demonstrates the CONSEQUENCE (building a
+workspace and showing both names resolve to real directories) rather than
+merely asserting the rule. A later reader can judge whether restoring
+parity is safe; with the two folded together they could not.
+
+**A conditional rewrite is not a read-modify-write.**
+`StampOutcomeStopVerdict` was written on `record.LockedRMW`, which is the
+natural fit and the wrong one: it writes whatever the callback returns,
+unconditionally. A lookup that found nothing still replaced the whole
+store -- byte-identical, so a content comparison passes, but a new inode
+and a window to race an appender. Python is shaped as `locked_write` +
+read + `if hit["v"]: atomic_write` for exactly that reason, and the tell
+is in the guard itself.
+
+The guard written to pin it did not work, which is the more useful half
+of the story. It compared mtimes, and on this filesystem seeding the
+store with `os.WriteFile` and immediately replacing it via `AtomicWrite`
+leaves both stats reporting the same nanosecond -- so the assertion could
+not fail. It reported PASS against a mutant instrumented to print
+`MUTANT WRITING 479 matched false` as it wrote. The inode is the honest
+signal, and also the one that matches the harm: `AtomicWrite` renames a
+fresh temp over the target, and an appender holding the old file open
+keeps writing into a file nothing will read again.
+
+Worth recording separately: the first run of that test reported `ok`. The
+filtered `-run` regex had not matched it, and the truncated output was
+read as a pass. The r6 lens is about tests that cannot fail; this is the
+adjacent one -- *a test that did not RUN reports the same word as a test
+that passed.* Naming tests explicitly in the filter, and reading `--- PASS`
+lines rather than the summary, is the cheap fix.
+
+**Battery: 76 mutants, 76 killed, 0 survivors, 0 unusable.** Derived from the seven files, not the diff.
+The first pass was 57 killed / 10 survived / 4 unusable, and the
+survivors are where the round's real value was. Two were the finds above
+(the metadata write that never published; the mtime assertion that could
+not fail). Six more were tests that named a property they could not
+observe, because the index heals itself: the migration or the local
+repair answered before the guard under test ever ran. One was a
+semantically equivalent mutant -- indexing a nil map yields nil, which
+the nonempty filter drops -- and it was rewritten to say something
+falsifiable rather than counted. Four were unusable: three anchors off by
+a tab, and one mutation that left an import unused and would not compile.
+Reporting those four separately from SURVIVED is the reason they got
+fixed instead of read as evidence.
+
+**Lens carried forward to r11:** *a name is a key the moment anything
+reconstructs it.* Every previous round asked whether the port wrote the
+same BYTES into a store. This one turned on whether it wrote them into
+the same PLACE -- and the doc comment that dismissed the question had
+surveyed the readers it could see, all of which listed the directory.
+The reader that mattered built the path from a hash of the id. Before
+calling any naming scheme cosmetic, grep the Python source for the
+function that CONSTRUCTS the name, not just the ones that consume it;
+a constructor is a reader that cannot be found by looking at readers.
+
+**And its second half, earned by the battery:** *a lookup that repairs
+itself will hide a writer that never published.* Both r10 finds are the
+same defect seen from two sides, and both were masked by the index's own
+resilience -- the migration and the local repair each turn a real gap
+into a slow success. Any test of a self-healing store has to disable the
+healing first, or it is testing the healing.

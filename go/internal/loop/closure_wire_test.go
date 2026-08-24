@@ -32,7 +32,7 @@ func TestRunWritesRunMetadataAndFeedsNextRecall(t *testing.T) {
 		t.Fatalf("run: %v %+v", err, res)
 	}
 	// Metadata on disk, finalized.
-	metaPath := filepath.Join(ws, "runs", res.LoopID, "metadata.json")
+	metaPath := filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json")
 	raw, rerr := os.ReadFile(metaPath)
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -87,7 +87,7 @@ func TestRunClosureStampsGoalAchieved(t *testing.T) {
 	if res.Closure == nil || !res.Closure.Judged || !res.Closure.Complete {
 		t.Fatalf("closure verdict missing from result: %+v", res.Closure)
 	}
-	raw, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	raw, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
@@ -98,7 +98,7 @@ func TestRunClosureStampsGoalAchieved(t *testing.T) {
 	if meta["goal_achieved"] != true || meta["goal_verdict_source"] != "go_closure_v1" {
 		t.Fatalf("verdict stamp: %v", meta)
 	}
-	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	rows, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "build", "closure_verdicts.jsonl"))
 	// `": "`, not `":"` — this file is written with json.dumps' DEFAULT
 	// separators, which carry a space. The literal is the assertion.
 	if rerr != nil || !strings.Contains(string(rows), `"checks_run": 1`) {
@@ -156,7 +156,7 @@ func TestRunClosureUnjudgedStampsNothing(t *testing.T) {
 	if res.Closure == nil || res.Closure.Judged {
 		t.Fatalf("all-inconclusive closure claims judged: %+v", res.Closure)
 	}
-	raw, _ := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	raw, _ := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	var meta map[string]any
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestRunToolLessLaneWritesNamedSkipRow(t *testing.T) {
 	if res.Closure != nil {
 		t.Fatalf("tool-less lane ran closure: %+v", res.Closure)
 	}
-	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	rows, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "build", "closure_verdicts.jsonl"))
 	if rerr != nil || !strings.Contains(string(rows), `"skipped": "tool_less_lane"`) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
@@ -243,7 +243,7 @@ func TestRunStuckWithStepsStillGetsClosure(t *testing.T) {
 	if res.Closure == nil || !res.Closure.Judged || res.Closure.Complete {
 		t.Fatalf("stuck run with a done step must still get closure: %+v", res.Closure)
 	}
-	raw, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	raw, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
@@ -276,7 +276,7 @@ func TestRunExecNoStepsRanWritesNamedSkipRow(t *testing.T) {
 	if res.Status != "stuck" || res.Closure != nil {
 		t.Fatalf("expected stuck run without closure: %s %+v", res.Status, res.Closure)
 	}
-	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	rows, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "build", "closure_verdicts.jsonl"))
 	if rerr != nil || !strings.Contains(string(rows), `"skipped": "no_steps_ran"`) {
 		t.Fatalf("named skip row missing: %v %s", rerr, rows)
 	}
@@ -332,12 +332,12 @@ func TestRunClosureRowStampFailureWritesDurableMarker(t *testing.T) {
 	if !warned {
 		t.Fatalf("stamp failure must warn: %v", res.Warnings)
 	}
-	rows, rerr := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "build", "closure_verdicts.jsonl"))
+	rows, rerr := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "build", "closure_verdicts.jsonl"))
 	if rerr != nil || !strings.Contains(string(rows), "outcome_row_stamp_failed") {
 		t.Fatalf("stamp failure must leave a durable marker: %v %s", rerr, rows)
 	}
 	// The metadata stamp (a different owner) must still have landed.
-	meta, _ := os.ReadFile(filepath.Join(ws, "runs", res.LoopID, "metadata.json"))
+	meta, _ := os.ReadFile(filepath.Join(runs.Dir(ws, res.LoopID), "metadata.json"))
 	if !strings.Contains(string(meta), `"goal_achieved": true`) &&
 		!strings.Contains(string(meta), `"goal_achieved":true`) {
 		t.Fatalf("metadata stamp must survive a row-stamp failure: %s", meta)

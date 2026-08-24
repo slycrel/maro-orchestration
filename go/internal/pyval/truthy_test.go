@@ -116,3 +116,54 @@ func TestTruthyAndBoolDisagreeWhereTheyShould(t *testing.T) {
 		}
 	}
 }
+
+// StrOrEmpty is `str(v or "")`, and it exists because Str alone was
+// wrong at three sites in one tranche. The table is the two halves of
+// that expression checked separately: the truthiness gate (which is
+// Truthy's table again, so only the surprising members are repeated) and
+// the str() that runs on what survives it.
+func TestStrOrEmptyIsPythonsStrOfXOrEmpty(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+		want string
+	}{
+		// The three bugs this helper was written for: str(None) is the
+		// four-character string "None", not "".
+		{"nil", nil, ""},
+		{"empty string", "", ""},
+		{"false", false, ""},
+		// Falsy numbers and containers go the same way. An id of integer
+		// zero really does vanish in Python; that is the behaviour, not a
+		// rounding of it.
+		{"int zero", 0, ""},
+		{"float zero", float64(0), ""},
+		{"json.Number zero", json.Number("0"), ""},
+		{"empty slice", []any{}, ""},
+		{"empty map", map[string]any{}, ""},
+		{"empty Obj", Obj{}, ""},
+		// What survives the gate is spelled with str(), so a number
+		// becomes its digits rather than being dropped for not being a
+		// string.
+		{"a string passes through", "loop-1", "loop-1"},
+		{"the string zero is truthy", "0", "0"},
+		{"int", 5, "5"},
+		{"json.Number", json.Number("7"), "7"},
+		{"true", true, "True"},
+		{"float", 1.5, "1.5"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StrOrEmpty(c.v); got != c.want {
+				t.Fatalf("StrOrEmpty(%#v) = %q, want %q", c.v, got, c.want)
+			}
+		})
+	}
+	// The distinction that makes the helper necessary, asserted directly:
+	// if Str ever starts answering "" for nil, this helper is redundant
+	// and the comments pointing at it are wrong.
+	if Str(nil) != "None" {
+		t.Errorf("Str(nil) = %q; the whole reason StrOrEmpty exists is that "+
+			"Python's str(None) is \"None\"", Str(nil))
+	}
+}
