@@ -218,8 +218,19 @@ func (o Obj) GetString(key string) string {
 // which is json.dumps' default. There is no trailing newline: Python's
 // dumps does not add one, and a caller that needs one adds it.
 func DumpsIndent2(v any) (string, error) {
+	return DumpsIndentN(v, 2)
+}
+
+// DumpsIndentN is json.dumps(v, indent=n) for any n >= 1, ensure_ascii ON.
+//
+// The width is a per-writer decision the same way ensure_ascii is, and this
+// workspace holds more than one: the dispatch provenance sidecar is written
+// at indent=1 and its operator-lane sibling one function away at indent=2.
+// A port with a single hard-coded width is wrong for one of them, and the
+// difference is every line of the file.
+func DumpsIndentN(v any, n int) (string, error) {
 	var sb strings.Builder
-	if err := render(&sb, v, 0, true); err != nil {
+	if err := renderUnit(&sb, v, 0, true, strings.Repeat(" ", n)); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
@@ -254,9 +265,14 @@ func DumpsCompactPy(v any) (string, error) {
 	return sb.String(), nil
 }
 
-// render writes v at nesting depth. depth < 0 means compact (one line);
-// otherwise each level indents two more spaces. ea is ensure_ascii.
+// render writes v at nesting depth with json.dumps' two-space indent.
+// depth < 0 means compact (one line). ea is ensure_ascii.
 func render(sb *strings.Builder, v any, depth int, ea bool) error {
+	return renderUnit(sb, v, depth, ea, "  ")
+}
+
+// renderUnit is render with the per-level indent string given explicitly.
+func renderUnit(sb *strings.Builder, v any, depth int, ea bool, unit string) error {
 	switch t := v.(type) {
 	case nil:
 		sb.WriteString("null")
@@ -269,21 +285,21 @@ func render(sb *strings.Builder, v any, depth int, ea bool) error {
 		sb.WriteString(esc)
 		return nil
 	case Obj:
-		return renderContainer(sb, depth, '{', '}', len(t), func(i int, sb *strings.Builder, d int) error {
+		return renderContainer(sb, depth, '{', '}', len(t), unit, func(i int, sb *strings.Builder, d int) error {
 			key, err := encodeString(t[i].Key, ea)
 			if err != nil {
 				return err
 			}
 			sb.WriteString(key)
 			sb.WriteString(": ") // Python's key separator carries a space
-			return render(sb, t[i].Val, d, ea)
+			return renderUnit(sb, t[i].Val, d, ea, unit)
 		})
 	case List:
-		return renderContainer(sb, depth, '[', ']', len(t), func(i int, sb *strings.Builder, d int) error {
-			return render(sb, t[i], d, ea)
+		return renderContainer(sb, depth, '[', ']', len(t), unit, func(i int, sb *strings.Builder, d int) error {
+			return renderUnit(sb, t[i], d, ea, unit)
 		})
 	case []string:
-		return renderContainer(sb, depth, '[', ']', len(t), func(i int, sb *strings.Builder, d int) error {
+		return renderContainer(sb, depth, '[', ']', len(t), unit, func(i int, sb *strings.Builder, d int) error {
 			esc, err := encodeString(t[i], ea)
 			if err != nil {
 				return err
@@ -311,7 +327,7 @@ func render(sb *strings.Builder, v any, depth int, ea bool) error {
 }
 
 func renderContainer(sb *strings.Builder, depth int, open, close byte, n int,
-	item func(i int, sb *strings.Builder, d int) error) error {
+	unit string, item func(i int, sb *strings.Builder, d int) error) error {
 	sb.WriteByte(open)
 	if n == 0 {
 		// json.dumps renders an EMPTY container inline even in indent
@@ -332,7 +348,7 @@ func renderContainer(sb *strings.Builder, depth int, open, close byte, n int,
 		}
 		if depth >= 0 {
 			sb.WriteByte('\n')
-			sb.WriteString(strings.Repeat("  ", inner))
+			sb.WriteString(strings.Repeat(unit, inner))
 		}
 		if err := item(i, sb, inner); err != nil {
 			return err
@@ -340,7 +356,7 @@ func renderContainer(sb *strings.Builder, depth int, open, close byte, n int,
 	}
 	if depth >= 0 {
 		sb.WriteByte('\n')
-		sb.WriteString(strings.Repeat("  ", depth))
+		sb.WriteString(strings.Repeat(unit, depth))
 	}
 	sb.WriteByte(close)
 	return nil

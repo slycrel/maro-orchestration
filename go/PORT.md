@@ -4812,3 +4812,156 @@ ancestry is empty.
 - The stop-verdict rail's remaining Python callers are still unported:
   `agent_loop`'s fence stamp, `loop_finalize`'s ending stamp, `handle`'s
   demotion stamp. r11 closed the director-close one.
+
+## r12 — the dispatch envelope, and the three names in one loop
+
+`dispatch_envelope.py` is the box's intake for machine-dispatched work:
+one JSON payload declaring `maro-dispatch/v1`, carrying the user's
+verbatim ask, advisory operator fields, and reference artifacts that get
+written to disk with provenance sidecars before the run starts. It is
+415 lines and it is the densest file this port has met for
+divergence-per-line, because almost every line either names a path,
+spells a string a caller will read, or decides which exception class a
+CLI sees.
+
+The whole module is ported: `parse_dispatch_payload`, `_safe_name`,
+`_safe_key`, `store_attachments`, `store_operator_attachments`, `_land`,
+`land_in_run_dir`, `land_operator_attachments`, `operator_block`,
+`operator_attachment_block`.
+
+### `pathlib` is not `path/filepath`, and the differences are load-bearing
+
+Go's `path/filepath` is close enough to `pathlib.PurePosixPath` to look
+interchangeable and is not. `internal/dispatch/pypath.go` writes out the
+four rules this module leans on, because each one decides a filename
+that ends up on disk:
+
+|              | pathlib          | filepath      |
+|--------------|------------------|---------------|
+| `Path("")`   | `.`, name `""`   | `Base("") == "."` |
+| `Path("/")`  | `/`, name `""`   | `Base("/") == "/"` |
+| `Path("a/.")`| `a`, name `"a"`  | `Base("a/.") == "."` |
+| `Path("a/..")`| `a/..`, name `".."` | `Base("a/..") == ".."` |
+
+The `a/.` row is the one that bites: an attachment named `a/.` is stored
+as `a` by Python and would be stored as `artifact` by a port that reached
+for `filepath.Base`.
+
+`.suffix` is worse, because it is **interpreter-version-dependent**.
+CPython 3.14 — what runs on this box — is `name.lstrip('.')` then
+`rfind('.')`. CPython ≤3.13 was `if 0 < i < len(name) - 1`. The two
+disagree for `f.` (suffix `"."` here, `""` there) and `..f` (`""` here,
+`.f` there), and `.suffix` is what builds the disambiguated name when two
+attachments collide. A port matching the older rule stores the second
+file under a different name than the Python beside it — silently, on a
+filename nobody looks at until they need it.
+
+`expanduser` is the fourth. `Path("~nosuchuser/x").expanduser()` does not
+pass through; it raises **RuntimeError**, and so does `Path("~~")`. That
+is deliberately NOT an `*Error` on this side: `EnvelopeError` is what the
+CLI catches to print one actionable line, so widening the lane's refusal
+vocabulary to cover a `~` typo would turn a traceback into a shrug.
+
+### One Python loop, three different spellings of "the name"
+
+`store_attachments`'s body is five lines and spells the artifact's name
+three ways:
+
+```python
+name = _safe_name(str(art.get("name", "")) or f"artifact-{i}")   # the FILENAME
+...
+"name": str(art.get("name")),                                     # the ROW
+json.dumps({**rec, "lane": "dispatch"}, indent=1)                 # the SIDECAR, raw
+```
+
+The filename gets a `""` default and a positional fallback. The returned
+row gets **no default**, so a missing name is the string `"None"`. The
+sidecar takes whatever `rec` holds. Three spellings, one loop, and the
+first version of this port used `pyval.Str` for all three — which
+answers `"None"` where Python answers `""`, i.e. it got the filename
+wrong in the one case an artifact arrives unnamed.
+
+`store_operator_attachments` has the same shape with a different answer:
+its row's `name` is the **sanitised source name**, and it stays that
+whatever the file ends up being called. Two rows in one call can share a
+`name` and differ only in `path`. That one bit me in the test rather than
+the code: the fixture guard counted disambiguations off `name` and
+reported zero on a table that disambiguates three times.
+
+### Two landing functions that look like one function with a parameter
+
+`land_in_run_dir` and `land_operator_attachments` both copy a stored
+directory into `<run_dir>/fetch-raw/<sub>/`. They are not the same
+function:
+
+- `land_in_run_dir` leaves an existing target alone **whatever its
+  bytes**.
+- `_land` (the operator lane) treats identical bytes as a no-op and
+  **disambiguates differing bytes**, keeping both.
+
+The asymmetry is deliberate and recorded in the Python: dropping one of
+two distinct operator files is worse than a run tree holding an
+oddly-named pair, while the dispatch lane's copy is a convenience over a
+record that already exists elsewhere. A port that shared one helper
+between them passes any test that lands once. It takes landing, then
+perturbing, then landing again to see it — which is what
+`TestTheLandingFunctionsMatchCPython` does, with an assertion that the
+two re-land counts actually DIFFER, because a test whose two lanes agree
+is testing one lane twice.
+
+Both are fail-soft in the blunt Python sense: a blanket `except` around
+the whole loop returns **0**, even when earlier files did land. The count
+is what the caller logs, so under-reporting is the honest half of a
+partial copy — reproduced, not fixed.
+
+### The sidecars disagree about indentation on purpose
+
+`store_attachments` writes `json.dumps(..., indent=1)`. Its operator-lane
+sibling writes `indent=2`. Nothing depends on it and nothing explains it;
+it is almost certainly an accident that has been on disk long enough to
+be a fact. `pyval.DumpsIndentN` exists because of it — `DumpsIndent2`
+now delegates.
+
+### A guard on the resolved path, in one place
+
+Eight packages had grown their own CPython probe harness. They had
+diverged on the two things that decide whether a differential is worth
+anything: whether a failing probe is a **skip** (six said yes, which
+turned ten of twelve playbook differentials green while running nothing),
+and whether a writing probe **checks where it is about to write** (four
+carried a live-workspace refusal in three spellings; two carried none at
+all while setting `MARO_WORKSPACE` and writing a tree).
+
+`internal/pyprobe` is one harness with one answer to each. A missing
+interpreter skips; a probe that RAN and failed is fatal, with its stderr.
+A writing probe asserts its resolved path on both sides — realpath'd,
+because a symlinked temp dir pointing at `~/.maro` passes a string
+comparison and is exactly the shape that makes that accident survive
+review. Callers whose Python resolves the path through a specific
+function (`config.output_dir`) pass a `Guard` so the **resolver's own
+answer** is asserted rather than the test's intention.
+
+It earned its keep the same afternoon: a fixture handed the dispatch
+probe `null` for an empty artifact list and the probe died on
+`TypeError: 'NoneType' object is not iterable`. Under the old
+majority behaviour that would have been a green skip.
+
+The remaining eight harnesses are not yet migrated — the packages they
+live in are mid-review, and rewriting a harness under a running reviewer
+is how you get a round that reviews neither version.
+
+### Named residuals after r12
+
+- `oserr` renders a Go file error as `open path: text` where
+  `str(OSError)` is `[Errno N] text: 'path'`. The two differ and this
+  port does not pretend otherwise. Confined to two operator-facing
+  strings that no store ever holds.
+- `EnvelopeError` subclasses `ValueError`, so a Python caller catching
+  `ValueError` also catches it. `*Error` has no such relationship. No
+  caller in this port does that yet; the day one does, it needs saying.
+- Nothing in the Go tree CALLS the dispatch package yet — `handle.py`'s
+  intake is the next tranche. The lane is ported and pinned ahead of its
+  caller, which is the same order the director tranche used.
+- `sortedFileNames` sorts by UTF-8 byte where Python sorts Path objects
+  by code point. Those orders agree (UTF-8 preserves code-point order)
+  and the agreement is the reason it is safe, not an accident.

@@ -6896,3 +6896,81 @@ masked everywhere by construction, the other because it only shows at the
 parse failure edge. Neither cost anything to find once the two functions
 were open next to each other, and no amount of fixture-writing would have
 surfaced either.
+
+---
+
+### Round 12 — `dispatch_envelope.py`, and a mutation read of the file
+
+r12 ports the box's dispatch intake whole: payload parsing, both
+attachment-storage lanes, both landing lanes, both advisory blocks, and
+the `pathlib` rules underneath all of them.
+
+Four differentials, all against the live interpreter:
+
+- **`parse_diff_test.go`** — 47 payloads through
+  `parse_dispatch_payload`, with a lane-count guard asserting the fixture
+  actually reaches all three outcomes (≥18 refused, ≥12 parsed, ≥9 prose
+  passthrough). A table that stops reaching a lane agrees with the port
+  on everything it does reach.
+- **`store_diff_test.go`** — 10 calls through `store_attachments`,
+  compared on three surfaces: the returned rows, the rendered operator
+  block, and the whole workspace tree. Each hides a different mistake.
+  The rows alone miss the sidecar's contents; the tree alone misses that
+  the row reports a THIRD spelling of the artifact's name.
+- **`operator_diff_test.go`** — 19 calls through
+  `store_operator_attachments` driving all six refusals plus the one
+  non-`EnvelopeError` raise, then both landing lanes twice with a
+  perturbation between.
+- **`pypath_diff_test.go`** — the four `pathlib` helpers against
+  `PurePosixPath` and `Path.expanduser` directly.
+
+The fourth exists because of the round's actual finding, which came from
+the battery rather than from reading:
+
+> **A mutation derived from the FILE finds what a mutation derived from
+> the diff cannot.** Every attachment name in the store and operator
+> tables is a real filename on a real disk. So `a/.`, `f.` and `..f`
+> never appear — and both `pathName -> filepath.Base` and
+> `pathSuffix -> the CPython 3.13 rule` were mutations the ENTIRE
+> dispatch suite passed. Two helpers written specifically because they
+> differ from the Go standard library, pinned nowhere.
+
+`pypath_diff_test.go` closes both by asking the interpreter rather than a
+table of expected strings — a hand-written table is exactly the thing
+that records a 3.13/3.14 difference once and then stops tracking it.
+
+The battery's second miss was the same shape one level up: `>` → `>=` on
+the 32MiB attachment limit survived everything, because no fixture sat at
+the boundary. **A limit with no case at its own boundary is a limit
+nothing pins.** It now has three points — one under, one exactly at, one
+over — in a test of its own, since it is the only case here that costs
+real I/O and folding it into the filename table would put 128MiB behind
+every run of a test whose subject is names.
+
+Final battery: **13 mutations, 13 caught.**
+
+Two things the port got wrong before any reviewer saw them, both found by
+writing the differential rather than by reading:
+
+- `store_attachments` spells the artifact's name **three ways in five
+  lines** — `str(art.get("name", "")) or f"artifact-{i}"` for the
+  filename, `str(art.get("name"))` with NO default for the returned row,
+  and the raw value for the sidecar. The port used one spelling for all
+  three, which answers `"None"` where Python answers `""` — i.e. it got
+  the FILENAME wrong in the one case an artifact arrives unnamed.
+- The operator row's `name` is the sanitised SOURCE name and stays that
+  whatever the file is called, so two rows can share a name and differ
+  only in path. That one bit the fixture guard, not the code: it counted
+  disambiguations off `name` and reported zero on a table that
+  disambiguates three times. A guard that measures the wrong field is a
+  guard that certifies coverage it does not have.
+
+**Lens carried forward to r13:** *a helper written because it differs
+from the standard library is a helper whose distinguishing inputs no
+realistic fixture contains.* The reason `pathName` exists is `a/.`; the
+reason `pathSuffix` exists is `f.`. Neither is a filename anyone would
+put in a test about attachments, which is precisely why both needed a
+test that is not about attachments. The general form: **when you write a
+function because it disagrees with an obvious alternative, the inputs
+where they disagree are the test — and they will not appear on their
+own.**
