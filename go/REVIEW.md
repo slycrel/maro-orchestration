@@ -5408,3 +5408,278 @@ than two, which is the very split this round's HIGH was.
 
 `gofmt` clean, `go vet ./...` clean, full suite green, `go test -race`
 green on orch/pyval/jsonx/config/now.
+
+## Adversarial mission-r5
+
+Whole chunk, opus tier, with r4's newest rule promoted to the lead lens:
+*a fix is evidence about its SIBLINGS.* r4's non-finite fix had landed in
+`ObjectOrdered` and in neither of its two siblings; r5 asked, of every
+fix any round has made, where else that exact shape lives.
+
+**Twelve findings — three HIGH, five MEDIUM, four LOW. All twelve
+verified against the source and re-measured on both runtimes before any
+fix. Zero hallucinated, the fourth round running.** A thirteenth was
+produced by the coverage work itself and is recorded below with the
+finding it sits next to.
+
+The lens paid out immediately and at the worst possible place: it found
+FOUR hand-written ports of `llm_parse.safe_float`, no two alike, one of
+which could stop a run from writing `metadata.json` at all.
+
+### HIGH — a NaN confidence silently loses the whole verdict record
+
+`internal/closure/closure.go` read the model's confidence as
+
+```go
+confidence := 0.7
+if f, ok := vdObj["confidence"].(float64); ok {
+    confidence = f
+}
+```
+
+Python is `safe_float(vd.get("confidence"), default=0.7, min_val=0.0,
+max_val=1.0)`, which returns the default for anything non-finite. The Go
+arm clamped but never checked finiteness, so a `NaN` went through
+untouched.
+
+Measured end to end on this box: `runs.StampVerdict` with a NaN
+confidence returns `json: unsupported value: NaN`, and **metadata.json is
+never written**. Not a wrong value in the shared store — no row at all.
+The Python runtime reading that run directory sees an unfinished run.
+
+This is the round's sharpest result, because **it is a regression that
+r4's own fix unlocked.** Before r4, `jsonx.Object` went through
+`encoding/json` into `any`, and a bare `NaN` token was rejected at decode
+time; the fork was masked by a *different* fork. r4 correctly made the
+decoder match CPython's, which admits `NaN` — and in doing so handed the
+non-finite value to the first consumer that had no guard. A hardening one
+round is a live path the next.
+
+### HIGH — judge tokens billed on verdicts CPython never bills
+
+`internal/now/now.go` added `resp.TokensIn`/`resp.TokensOut` to the
+result on every judge reply. `handle._verify_now_outcome` adds them
+**only inside the `fulfilled is False` branch** — a fulfilled verdict
+costs the run nothing in the recorded totals.
+
+Token totals are a shared-store column that feeds spend accounting and
+the auto-breaker thresholds, so the two runtimes were writing different
+numbers for the same work. The fix moves both accumulations inside the
+`!v` branch, where they were in the Python all along, and the differential
+now returns tokens alongside the summary so the parity is asserted rather
+than argued.
+
+### HIGH — an RE2 space class lets a contradiction through
+
+`verdictOpenerRe` in `internal/closure/closure.go` was written with
+RE2's `\s`, which is five code points. Python's `re` module reads
+twenty-nine. `VerdictFirstSummary` exists for exactly one reason — the
+`d2f4e2f4` regression, where a `complete=false` verdict stored prose that
+opened by announcing the goal achieved — and it is the opener match that
+prevents it.
+
+With a non-breaking space in front of the opener, or inside it, the Go
+regex missed and the Go runtime stored
+
+```
+Not achieved: Goal achieved. the file exists.
+```
+
+while CPython stored `Not achieved: the file exists.` The prose is not
+decoration: `§9.3` reads it, and a human reading the store reads it. The
+fix rebuilds the pattern from `pytext.SpaceClass`, the measured
+twenty-nine.
+
+### MEDIUM — the other three safe_float ports
+
+The lens's actual payload. `safe_float` had been hand-ported four times:
+
+| site | what it did | what it missed |
+|---|---|---|
+| `closure.go` confidence | type assertion + clamp | non-finite, strings, ints |
+| `evolver.go` `safeConfidence` | type assertion + clamp | non-finite, strings, ints |
+| `intent.go` confidence | type assertion + clamp | non-finite, strings, ints |
+| `now.go` (r4) | already fixed | — |
+
+All four are now one function, `pyval.SafeFloat(v, def, min, max)` with
+the `SafeFloatUnit` convenience for the `[0,1]` case that every one of
+these sites wanted. It is driven against CPython's own `safe_float` over
+a 22-case corpus including `NaN`, `±Inf`, numeric strings, bools, and
+out-of-range values, because `float(value)` accepts all of them and a
+type assertion accepts none.
+
+The general shape, now written into PORT.md: **a helper ported by hand at
+N sites has N different bugs, and finding one is evidence about the other
+N-1.**
+
+### MEDIUM — a whitespace-only check command is a passing check
+
+`closure_verify` builds each check with
+`safe_str(c.get("command", ""))`, which is `str(value).strip()`, and
+skips the check when that is empty. The Go port read the field raw, so a
+command of `"   "` survived the skip, reached `sh -c`, and **exited 0** —
+a check CPython never ran, recorded as passed.
+
+A fabricated passing check is worse than a missing one: it moves the
+closure verdict toward complete on evidence that does not exist. The plan
+parsing was inline in a 200-line function and could not be tested at all;
+it is now `parsePlanChecks`, which strips both description and command
+and drops the check when the command strips to empty.
+
+### MEDIUM — the restart identity forks on four code points
+
+`Fingerprint` carries a doc claiming byte-parity with CPython's
+`closure_fingerprint`. It normalised with `strings.Fields`, which splits
+on `unicode.IsSpace` (25 code points); Python's `str.split()` splits on
+29. The four extras are `U+001C`–`U+001F`, the information separators,
+which turn up in captured `stderr` more often than their obscurity
+suggests.
+
+This is not a cosmetic hash difference. `§9.3` declares a thesis refuted
+when the fingerprint stops changing across restarts. A fork means one
+runtime declares blocked and stops while the other keeps restarting on
+identical evidence. Now `pytext.Split`.
+
+**The thirteenth finding, produced by writing that test.** Covering
+`Fingerprint` meant covering the material it hashes, which is
+`_failed_check_signature`. Python is
+
+```python
+cmd = safe_str(row.get("command", ""))[:200]
+```
+
+— strip, *then* slice. The Go port sliced first, so a command with
+leading whitespace produced a different 200 characters and therefore a
+different fingerprint. That is the third unstripped-command site in this
+file, found only because the coverage work made me read the Python line
+by line. It reinforces r4's rule rather than adding a new one: the
+coverage is not paperwork after the fix, it is where the next fix comes
+from.
+
+### MEDIUM — the heuristic fallback picks a different LANE
+
+`intent.heuristicClassify` used `strings.ToLower`, `strings.TrimSpace`
+and `strings.Fields` where Python uses `str.lower()`, `str.strip()` and
+`str.split()`. All three differ, and this function does not decide a
+field — it decides which **execution lane** the goal runs in.
+
+Exactly one code point (`U+0130`, LATIN CAPITAL LETTER I WITH DOT ABOVE)
+has a `str.lower()` longer than one character: Python maps it to
+`"i" + U+0307`, Go maps it to `"i"`. So `"BUİLD a new dashboard"` lowers
+to text that matches the ASCII-keyed agenda regex on one runtime and
+misses on the other. One runtime writes a `task_type:"now"` outcome row;
+the other writes an agenda run directory and a mission.
+
+The same three-way substitution fixes the word-count threshold, which
+reads the split set directly.
+
+### LOW ×4
+
+- **The lane field and the two boolean overrides** in `intent.go` read
+  the model's own answer through `TrimSpace`; Python is
+  `safe_str(...).lower()` and `raw.strip().lower()`, the 29-point strip.
+  A lane of `"now\u001c"` (a JSON-escaped file separator) matched
+  neither arm and fell back to the wrong lane from a well-formed
+  verdict.
+- **The YAML 1.1/1.2 table was documentation, not a test.** The corpus
+  ran both engines and printed the difference; nothing asserted which
+  rows were *supposed* to fork. `yamlVersionRows` now pairs each case
+  with a `WantFork` bool, so the table is binding in both directions —
+  a row that stops forking fails just as loudly as one that starts.
+- **`TestObjectDecodesWhatCPythonDecodes` compared keys only.** A decoder
+  that returned every key with a nil value passed. It now compares
+  `pyval.Repr` of the sorted object against CPython's, with int-ness
+  normalised on the Python side (Go's decoder has always lost it —
+  pinned separately by `TestObjectLosesIntNessAsItAlwaysHas`).
+- **The DAG spawned `opts.MaxWorkers` goroutines regardless of the work.**
+  `ThreadPoolExecutor` spawns lazily: measured here, `max_workers=100000`
+  with three submits keeps three threads. `mission.milestone_workers` is
+  operator-set, so a fat-fingered value was a memory event on one runtime
+  only — and a mission that dies that way writes a different store than
+  one that completes. Worker count is now `min(MaxWorkers, len(milestones))`.
+- **A panicking milestone body took the process down.** Python gets a
+  boundary for free: the worker thread's exception is captured by the
+  `Future` and re-raised at `fut.result()`, inside the scheduler's `try`,
+  so `_mark_crashed` runs and the other milestones finish. A Go panic in
+  a worker goroutine has no such boundary. `runWithRecover` turns it into
+  an error for that milestone, which `markCrashed` — whose own doc calls
+  itself the backstop for "anything the milestone body's own guards
+  miss" — then handles as it always did.
+
+(Five bullets under a heading that says four: the DAG pair was filed as
+one finding about the scheduler and is split here because the fixes are
+independent.)
+
+### The new finding class: a frozen snapshot wearing a differential's name
+
+Writing the missing coverage collided with four existing tests, all
+named `...MatchesCPython`, all of which assert **hardcoded constants**:
+
+- `closure.TestFingerprintMatchesCPython`
+- `closure.TestFailedCheckSignatureMatchesCPython`
+- `closure.TestVerdictFirstSummaryMatchesCPython`
+- `intent.TestHeuristicClassifyMatchesCPython`
+
+A snapshot of CPython's output frozen into a Go literal cannot notice
+CPython moving, and cannot notice the port drifting toward a stale copy
+of it. Worse, the name claims the opposite: the next reader — me, three
+rounds later — sees `MatchesCPython` and believes the boundary is
+covered. Every one of the r5 findings above sat under one of these.
+
+All four are deleted; their fixtures are folded into the real
+differentials that replaced them, and each deletion left a comment
+saying what was there and why it went. The rule is in PORT.md: **a test
+named for a differential must RUN the other side.**
+
+### The battery
+
+Fourteen mutants, one per fix plus the two extra sites found along the
+way. **14 killed, 0 survived, 0 unusable.**
+
+Getting there took two passes, and the first pass is the more useful
+record: it returned **0 killed, 8 survived, 4 unusable**, because I had
+named `-run` regexes for tests that did not exist. r4's rule — *a fix
+arrives with no coverage by construction* — firing at full strength. The
+harness now reports `NO-SUCH-TEST` as its own outcome rather than
+letting a nonexistent test read as a survivor.
+
+Two mutants had to be re-expressed for a reason worth naming, and it is
+the round's fourth rule:
+
+> **A mutant that edits the test's own assertion is meaningless.**
+
+L2 as first written replaced `if forked != want` with `if false`, and L3
+replaced the value comparison with a tautology. No test can detect the
+deletion of its own check, so both "survived" while proving nothing. The
+live question in each case is whether the new assertion is load-bearing,
+which is answered by mutating what it *reads*: L2 flips a fixture row's
+`WantFork` (the binding is real — killed), L3 breaks `pyval.Plain`'s
+number arm in production (the value comparison is real — killed).
+
+Four more were compile-kills of the r4 kind, each because reverting a fix
+dropped a file's last use of an import. Re-expressed with a companion
+edit (`_ = pyval.SafeFloatUnit`, or re-adding `"strings"`), all four
+killed.
+
+`gofmt`, `go vet ./...`, the full suite, and `go test -race` over
+closure, intent, evolver, now, orch, pyval, jsonx and config are green.
+
+### Owed to the Python side, unchanged from r4
+
+- `scrub()` in `handle._verify_now_outcome` — Go scrubs the verdict
+  prose, CPython does not. Pinned by
+  `TestTheScrubDivergesFromCPythonOnPurpose` so it cannot be forgotten.
+- Judge-token accounting: the Go side now matches Python exactly, and
+  Python's own behaviour (a fulfilled verdict costing nothing) is the
+  thing that looks wrong. That is a Python bug to raise, not a port
+  divergence to fix.
+
+### Named, unpriced, carried to r6
+
+The sibling sweep reported every remaining site rather than only the ones
+it fixed, which is the honest form for a lens that works by analogy.
+Unmeasured `\s` siblings: `internal/closure/modality.go:32,43`,
+`internal/loop/blocked.go:268,269`, `internal/scrub/scrub.go:26`,
+`internal/guard/guard.go:32-61`. The `TrimSpace`/`Fields`/`ToLower`
+sites outside the files touched here are listed in full in the round's
+raw output. None is claimed safe; none is claimed broken.

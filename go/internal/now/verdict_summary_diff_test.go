@@ -39,8 +39,8 @@ import handle
 class _Resp:
     def __init__(self, content):
         self.content = content
-        self.input_tokens = 0
-        self.output_tokens = 0
+        self.input_tokens = 111
+        self.output_tokens = 222
 
 class _Adapter:
     def __init__(self, content):
@@ -50,10 +50,11 @@ class _Adapter:
 
 out = []
 for raw in json.loads(sys.argv[1]):
-    base = {"status": "done", "result": "an answer", "tokens_in": 0, "tokens_out": 0}
+    base = {"status": "done", "result": "an answer", "tokens_in": 10, "tokens_out": 20}
     res = handle._verify_now_outcome("a goal", base, _Adapter(raw))
     out.append([res.get("status"), res.get("goal_verdict_summary"),
-                res.get("goal_achieved")])
+                res.get("goal_achieved"),
+                res.get("tokens_in"), res.get("tokens_out")])
 print(json.dumps(out))
 `
 
@@ -64,7 +65,7 @@ type verdictStub struct{ content string }
 func (s verdictStub) Name() string { return "verdict-stub" }
 
 func (s verdictStub) Complete(_ context.Context, _ []llm.Message, _ llm.Options) (*llm.Response, error) {
-	return &llm.Response{Content: s.content}, nil
+	return &llm.Response{Content: s.content, TokensIn: 111, TokensOut: 222}, nil
 }
 
 var verdictSummaryCorpus = []struct{ name, raw string }{
@@ -152,8 +153,23 @@ func TestVerdictSummaryMatchesCPython(t *testing.T) {
 
 	for i, c := range verdictSummaryCorpus {
 		t.Run(c.name, func(t *testing.T) {
-			res := &Result{Status: "done", Answer: "an answer"}
+			res := &Result{Status: "done", Answer: "an answer",
+				TokensIn: 10, TokensOut: 20}
 			verifyNow(context.Background(), verdictStub{c.raw}, "a goal", res)
+
+			// THE r5 HIGH. handle._verify_now_outcome adds the judge's
+			// tokens ONLY inside the `fulfilled is False` branch; the
+			// True branch and the no-verdict path return without any
+			// token arithmetic. Billing them unconditionally put
+			// different numbers in the SHARED outcome ledger, which is
+			// what cost reporting and the evolver read on both runtimes.
+			pyIn := int(want[i][3].(float64))
+			pyOut := int(want[i][4].(float64))
+			if res.TokensIn != pyIn || res.TokensOut != pyOut {
+				t.Errorf("judge token billing diverges\n  reply %q\n"+
+					"     go %d/%d\n     py %d/%d",
+					c.raw, res.TokensIn, res.TokensOut, pyIn, pyOut)
+			}
 
 			pyStatus, _ := want[i][0].(string)
 			pySummary, _ := want[i][1].(string) // absent -> "", same as Go's zero

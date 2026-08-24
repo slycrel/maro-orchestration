@@ -10,6 +10,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -217,20 +218,22 @@ func llmAnalyze(ctx context.Context, adapter llm.Adapter, outcomes []map[string]
 	return patterns, raw
 }
 
-// safeConfidence ports llm_parse.safe_float(default 0.5, clamped 0-1).
-func safeConfidence(v any) float64 {
-	f, ok := v.(float64)
-	if !ok {
-		return 0.5
-	}
-	if f < 0 {
-		return 0
-	}
-	if f > 1 {
-		return 1
-	}
-	return f
-}
+// safeConfidence is llm_parse.safe_float(default 0.5, clamped 0-1).
+//
+// It used to be a bare `v.(float64)` type assertion, which is neither of
+// safe_float's two coercions and neither of its guards (mission-r5
+// MEDIUM). Measured against CPython:
+//
+//	"0.9" -> py 0.9   go 0.5      NaN -> py 0.5   go NaN
+//	true  -> py 1.0   go 0.5
+//
+// All three are durable. `"confidence": "0.9"` auto-applies the
+// suggestion on CPython (>= 0.8) and not on Go, so the two runtimes
+// write different applied state to the same suggestions.jsonl. A NaN is
+// worse: it passes `!(NaN < 0.8)` so Go APPLIES the suggestion, while
+// SaveSuggestions then fails with "json: unsupported value: NaN" and the
+// whole batch is lost — applied but never persisted.
+func safeConfidence(v any) float64 { return pyval.SafeFloatUnit(v, 0.5) }
 
 // expectedSignal ports safe_list(..., element_type=dict).
 func expectedSignal(v any) []map[string]any {

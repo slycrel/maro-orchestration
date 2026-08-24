@@ -3,12 +3,15 @@ package pyval
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // This file is `json.dumps(obj, indent=2)` — the writer discipline every
@@ -726,4 +729,112 @@ func unmaskPaired(a, b any) any {
 		return ta
 	}
 	return a
+}
+
+// SafeFloat is llm_parse.safe_float: coerce an LLM-supplied value to a
+// float, fall back to def on anything that will not convert, REFUSE
+// non-finite results, then clamp.
+//
+// Python is four lines and every one of them matters:
+//
+//	if value is None: return default
+//	try: result = float(value)
+//	except (TypeError, ValueError): return default
+//	if math.isnan(result) or math.isinf(result): return default
+//	# then max(min_val, ...) / min(..., max_val)
+//
+// `float(value)` is a CONVERSION, not a type check — it accepts a
+// numeric string ("0.9", the shape LLMs emit often enough that Python
+// handles it) and a bool (True -> 1.0). The isnan/isinf line is the one
+// this port kept losing.
+//
+// It exists because there were FOUR hand-written ports of this one
+// function — closure.go, intent.go, evolver.go and the skills coercion
+// — each missing a different subset of those lines, and one of them cost
+// a HIGH (adversarial mission-r5). That is the same split the r4 HIGH
+// was: a fix landing in one sibling and not the others. One
+// implementation, four call sites.
+//
+// The non-finite guard is not cosmetic. Go's encoding/json REFUSES NaN
+// and ±Inf, so a non-finite that reaches runs.WriteMetadata or
+// evolver.SaveSuggestions does not write a wrong number — it destroys
+// the ENTIRE record, while CPython's writer emits `NaN`/`Infinity` and
+// the Python reader accepts them.
+//
+// Pass nil for min/max to skip that clamp, matching Python's Optional.
+func SafeFloat(v any, def float64, min, max *float64) float64 {
+	result, ok := toFloat(v)
+	if !ok || math.IsNaN(result) || math.IsInf(result, 0) {
+		return def
+	}
+	if min != nil && result < *min {
+		result = *min
+	}
+	if max != nil && result > *max {
+		result = *max
+	}
+	return result
+}
+
+// SafeFloatUnit is SafeFloat clamped to [0, 1] — the confidence shape
+// every call site in this port actually uses.
+func SafeFloatUnit(v any, def float64) float64 {
+	lo, hi := 0.0, 1.0
+	return SafeFloat(v, def, &lo, &hi)
+}
+
+// toFloat is Python's `float(value)` over the types a decoded JSON
+// document can hold. nil is Python's None (the early return), and a
+// string goes through ParseFloat because float("0.9") does.
+//
+// ParseFloat accepts spellings Python's float() also accepts —
+// "inf", "infinity", "nan", case-insensitively, with an optional sign —
+// and every one of them is then refused by the non-finite guard in
+// SafeFloat, exactly as Python refuses them one line later. It also
+// accepts Go's underscore separators ONLY with a base prefix, which a
+// JSON string cannot carry, so PEP 515's `1_0` stays a ValueError on
+// both sides.
+func toFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case nil:
+		return 0, false
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case uint64:
+		return float64(t), true
+	case bool:
+		if t {
+			return 1, true
+		}
+		return 0, true
+	case json.Number:
+		f, err := t.Float64()
+		// Float64 returns ±Inf together with ErrRange on overflow, and
+		// Python's float("1e309") is inf too — so the value is right and
+		// SafeFloat's guard is what rejects it, on both sides.
+		if err != nil && !math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	case string:
+		// Python's float() strips surrounding whitespace, and its set is
+		// wider than Go's ParseFloat tolerates.
+		f, err := strconv.ParseFloat(pytext.Strip(t), 64)
+		if err != nil {
+			// ParseFloat reports ErrRange with ±Inf for an overflowing
+			// literal; float("1e309") is inf, so keep the value.
+			if math.IsInf(f, 0) {
+				return f, true
+			}
+			return 0, false
+		}
+		return f, true
+	}
+	return 0, false
 }

@@ -459,6 +459,31 @@ func TestEnvPathsResolveLikeCPython(t *testing.T) {
 // The corpus is also wider than the old one in the direction it claims
 // to cover: PyYAML's float resolver requires a decimal point, so the
 // whole unsigned/signed-exponent family forks too and was unlisted.
+// WantFork is what makes each row BINDING. Without it the rewritten
+// test could still only fail when EVERY row agreed: the per-row
+// divergences were reported with t.Logf inside subtests that always
+// passed, so `1:30` ceasing to fork and `010` starting to would both go
+// unnoticed (adversarial mission-r5 LOW — the r4 fix made the probe real
+// without making the rows binding, which is the same shape one layer in).
+type yamlCase struct {
+	Case     boolCase
+	WantFork bool
+}
+
+var yamlVersionRows = []yamlCase{
+	{yamlVersionCorpus[0], true},  // 08
+	{yamlVersionCorpus[1], true},  // 09
+	{yamlVersionCorpus[2], true},  // 0o10
+	{yamlVersionCorpus[3], false}, // 010 — int 8 on both
+	{yamlVersionCorpus[4], true},  // 1:30 sexagesimal
+	{yamlVersionCorpus[5], false}, // 2026-01-02 — date/time.Time, both warn
+	{yamlVersionCorpus[6], false}, // 2026-1-2 — a plain string on both
+	{yamlVersionCorpus[7], true},  // 1e2
+	{yamlVersionCorpus[8], true},  // 1e+2
+	{yamlVersionCorpus[9], true},  // 1e-2
+	{yamlVersionCorpus[10], true}, // 1.0e2
+}
+
 var yamlVersionCorpus = []boolCase{
 	{"a leading-zero 08", "flag: 08\n", "flag", false},
 	{"a leading-zero 09", "flag: 09\n", "flag", false},
@@ -508,10 +533,17 @@ func TestYAML11And12DisagreeOnMoreThanTheBoolWords(t *testing.T) {
 			pyWarned := want[i][1] != nil && string(*want[i][1]) != "null" &&
 				string(*want[i][1]) != `""`
 
-			if got != pyVal || (warn != "") != pyWarned {
+			forked := got != pyVal || (warn != "") != pyWarned
+			if forked {
 				forks++
-				t.Logf("KNOWN YAML-version fork on %q\n  go %v warn=%q\n  py %v warned=%v",
-					c.YAML, got, warn, pyVal, pyWarned)
+			}
+			if forked != yamlVersionRows[i].WantFork {
+				t.Errorf("row %q changed: fork=%v, expected %v\n"+
+					"  go %v warn=%q\n  py %v warned=%v\n"+
+					"  the table in config.go is now stale — RE-MEASURE it, "+
+					"do not just flip this flag",
+					c.YAML, forked, yamlVersionRows[i].WantFork,
+					got, warn, pyVal, pyWarned)
 			}
 		})
 	}

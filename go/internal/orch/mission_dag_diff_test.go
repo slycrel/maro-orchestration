@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -649,5 +650,105 @@ func TestDAGAdmissionFollowsListOrderLikePythonsFIFO(t *testing.T) {
 				"were not milestones a and b, so Go is not FIFO where Python is",
 				it, order)
 		}
+	}
+}
+
+// ThreadPoolExecutor spawns worker threads LAZILY — measured on this
+// box, max_workers=100000 with three submits keeps three threads alive.
+// The Go pool spawned opts.MaxWorkers goroutines regardless of how much
+// work there was, and mission.milestone_workers is operator-set, so a
+// fat-fingered value was a memory event on one runtime only — and a
+// mission that dies that way writes a different store than one that
+// completes (adversarial mission-r5 LOW).
+func TestDAGWorkerCountFollowsTheWorkNotTheConfig(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	m := &Mission{ID: "m", Milestones: []Milestone{
+		{ID: "a", Title: "A"}, {ID: "b", Title: "B"},
+	}}
+	peak := before
+	var mu sync.Mutex
+	RunMilestoneDAG(context.Background(), m,
+		func(_ context.Context, _ int, _ *Milestone) error {
+			mu.Lock()
+			if n := runtime.NumGoroutine(); n > peak {
+				peak = n
+			}
+			mu.Unlock()
+			return nil
+		},
+		DAGOptions{MaxWorkers: 5000, LogFn: func(string) {}, WarnFn: func(string) {}})
+
+	// Two milestones must never need thousands of goroutines. The bound
+	// is generous on purpose — this is a "did we spawn MaxWorkers"
+	// check, not a precise accounting of the runtime's own goroutines.
+	if peak-before > 100 {
+		t.Fatalf("peak goroutines rose by %d for 2 milestones with "+
+			"MaxWorkers=5000 — the pool is sized by the config, not the work",
+			peak-before)
+	}
+}
+
+// A panic in a milestone body must fail THAT MILESTONE and let the
+// mission continue, which is what Python gets by construction: the
+// worker thread's exception is captured by the Future and re-raised at
+// fut.result(), inside the scheduler's try, so _mark_crashed runs.
+//
+// A Go panic in a worker goroutine has no such boundary and takes the
+// process down, losing every other milestone's in-flight work and
+// writing nothing (adversarial mission-r5 LOW). markCrashed's own doc
+// calls itself the backstop for "anything the milestone body's own
+// guards miss", and a panic is exactly that.
+func TestAPanickingMilestoneFailsOnlyItself(t *testing.T) {
+	m := &Mission{ID: "m", Milestones: []Milestone{
+		{ID: "a", Title: "A"}, {ID: "b", Title: "B"}, {ID: "c", Title: "C"},
+	}}
+	var warns []string
+	var mu sync.Mutex
+
+	RunMilestoneDAG(context.Background(), m,
+		func(_ context.Context, _ int, ms *Milestone) error {
+			if ms.ID == "b" {
+				panic("the milestone body exploded")
+			}
+			ms.Status = "completed"
+			return nil
+		},
+		DAGOptions{
+			MaxWorkers: 2,
+			LogFn:      func(string) {},
+			WarnFn: func(s string) {
+				mu.Lock()
+				warns = append(warns, s)
+				mu.Unlock()
+			},
+		})
+
+	byID := map[string]*Milestone{}
+	for i := range m.Milestones {
+		byID[m.Milestones[i].ID] = &m.Milestones[i]
+	}
+	if got := byID["b"].Status; got != "failed" {
+		t.Errorf("the panicking milestone must be marked failed, got %q", got)
+	}
+	if byID["b"].ValidationResult == nil ||
+		!strings.Contains(*byID["b"].ValidationResult, "panic") {
+		t.Errorf("the panic must leave durable evidence on the milestone, got %v",
+			byID["b"].ValidationResult)
+	}
+	for _, id := range []string{"a", "c"} {
+		if got := byID[id].Status; got != "completed" {
+			t.Errorf("milestone %s must still complete, got %q", id, got)
+		}
+	}
+	// warnFn is the DURABLE half of the evidence, per markCrashed's doc.
+	var sawCrash bool
+	for _, w := range warns {
+		if strings.Contains(w, "mission_dag_thread_crash") {
+			sawCrash = true
+		}
+	}
+	if !sawCrash {
+		t.Errorf("no mission_dag_thread_crash warning was emitted: %v", warns)
 	}
 }

@@ -3,7 +3,9 @@ package evolver
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -988,4 +990,112 @@ func TestRowToSuggestionPyTruthyCoercion(t *testing.T) {
 	if s == nil || !s.AppliedManually || !s.Applied {
 		t.Fatalf("truthy-string coercion: %+v", s)
 	}
+}
+
+// safeConfidence is llm_parse.safe_float(default 0.5, clamped 0-1), and
+// it was a bare `v.(float64)` type assertion — neither of safe_float's
+// two coercions and neither of its guards (adversarial mission-r5
+// MEDIUM). All three gaps are durable:
+//
+//   - "0.9" auto-applies the suggestion on CPython (>= 0.8) and did not
+//     here, so the two runtimes wrote different applied state to the
+//     same suggestions.jsonl;
+//   - a bool confidence is 1.0 in Python and was 0.5 here;
+//   - a NaN passed `!(NaN < 0.8)` so Go APPLIED the suggestion, while
+//     SaveSuggestions then failed with "json: unsupported value: NaN"
+//     and lost the whole batch — applied but never persisted.
+func TestSafeConfidenceMatchesCPython(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+	}{
+		{"a plain float", 0.9},
+		{"below the apply threshold", 0.5},
+		{"negative clamps", -1.0},
+		{"above one clamps", 2.0},
+		{"a numeric string", "0.9"},
+		{"a numeric string below threshold", "0.1"},
+		{"a non-numeric string", "high"},
+		{"a bool true", true},
+		{"a bool false", false},
+		{"null", nil},
+		{"NaN", math.NaN()},
+		{"positive infinity", math.Inf(1)},
+		{"an int", 1},
+	}
+	vals := make([]any, len(cases))
+	for i, c := range cases {
+		v := c.val
+		switch {
+		case isNaN(v):
+			v = "__NAN__"
+		case isInf(v):
+			v = "__INF__"
+		}
+		vals[i] = v
+	}
+	in, err := json.Marshal(vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"sys.path.insert(0, sys.argv[2])\n"+
+			"from llm_parse import safe_float\n"+
+			"S={'__NAN__':float('nan'),'__INF__':float('inf')}\n"+
+			"print(json.dumps([safe_float(S.get(v,v) if isinstance(v,str) else v,"+
+			" default=0.5, min_val=0, max_val=1)"+
+			" for v in json.loads(sys.argv[1])]))",
+		string(in), srcDirEvolver(t)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []float64
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+
+	const applyThreshold = 0.8
+	var applyFlips int
+	for i, c := range cases {
+		got := safeConfidence(c.val)
+		if got != want[i] {
+			t.Errorf("safeConfidence(%#v) = %v, CPython safe_float = %v",
+				c.val, got, want[i])
+		}
+		// The consequence that reaches disk: whether the suggestion is
+		// auto-applied. A corpus where this never differs could not have
+		// caught the finding.
+		if (got >= applyThreshold) != (want[i] >= applyThreshold) {
+			applyFlips++
+		}
+	}
+	if applyFlips != 0 {
+		t.Errorf("%d cases would auto-apply differently on the two runtimes",
+			applyFlips)
+	}
+
+	// A non-finite must never reach SaveSuggestions: encoding/json
+	// refuses it and the ENTIRE batch is lost, where CPython writes NaN.
+	for _, v := range []any{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if c := safeConfidence(v); math.IsNaN(c) || math.IsInf(c, 0) {
+			t.Fatalf("safeConfidence let a non-finite through (%v) — "+
+				"SaveSuggestions will refuse the whole file", c)
+		}
+	}
+}
+
+func isNaN(v any) bool { f, ok := v.(float64); return ok && math.IsNaN(f) }
+func isInf(v any) bool { f, ok := v.(float64); return ok && math.IsInf(f, 0) }
+
+func srcDirEvolver(t *testing.T) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

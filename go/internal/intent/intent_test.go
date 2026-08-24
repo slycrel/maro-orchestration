@@ -7,34 +7,17 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
 
-// TestHeuristicClassifyMatchesCPython pins the fallback classifier
-// against intent._heuristic_classify (fixtures generated 2026-08-22
-// from the live Python module).
-func TestHeuristicClassifyMatchesCPython(t *testing.T) {
-	cases := []struct {
-		msg  string
-		lane string
-		conf float64
-	}{
-		{"what time is it?", "now", 0.80},
-		{"write a haiku", "now", 0.80},
-		{"translate this to Spanish please my friend, it is very important to me", "now", 0.65},
-		{"research winning polymarket strategies", "agenda", 0.65},
-		{"build a research report on solar adoption and then summarize it", "agenda", 0.90},
-		{"fix the login bug", "now", 0.65},
-		{"what's the current BTC price?", "agenda", 0.65},
-		{"summarize this paragraph", "now", 0.80},
-		{"monitor my competitor pricing and compare it against ours", "agenda", 0.80},
-		{"hello", "now", 0.65},
-	}
-	for _, c := range cases {
-		lane, conf, _ := heuristicClassify(c.msg, nil)
-		if lane != c.lane || conf < c.conf-0.001 || conf > c.conf+0.001 {
-			t.Errorf("heuristicClassify(%q) = (%s, %.2f), want CPython (%s, %.2f)",
-				c.msg, lane, conf, c.lane, c.conf)
-		}
-	}
-}
+// TestHeuristicClassifyMatchesCPython WAS HERE and has been replaced by
+// the live differential in r5_diff_test.go (adversarial mission-r5
+// follow-up). Its comment described its own weakness precisely —
+// "fixtures generated 2026-08-22 from the live Python module" — a
+// SNAPSHOT of CPython, which by construction cannot notice CPython
+// moving, and cannot notice the port drifting toward a stale copy of it.
+//
+// It was green while heuristicClassify used strings.ToLower/TrimSpace/
+// Fields against Python's str.lower/.strip/.split, which is a LANE flip
+// on a Turkish dotted capital I. All ten of its cases were folded into
+// heuristicCorpus, which runs the real _heuristic_classify.
 
 // TestRequiresFileOutputMatchesCPython pins the capability override's
 // trigger regex.

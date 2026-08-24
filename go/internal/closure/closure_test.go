@@ -88,67 +88,6 @@ func TestCheckOutcomeMatchesCPython(t *testing.T) {
 	}
 }
 
-// TestFingerprintMatchesCPython: md5-12hex parity, whitespace
-// normalization, order-insensitivity, empty means no-signal.
-func TestFingerprintMatchesCPython(t *testing.T) {
-	v := Verdict{FailedChecks: []string{
-		"pytest -q => exit 1: FAILED tests/test_a.py::test_x",
-		"grep -q done out.txt => exit 1",
-	}}
-	if got := Fingerprint(v); got != "8d60cd2f8f3e" {
-		t.Fatalf("Fingerprint = %q, want CPython 8d60cd2f8f3e", got)
-	}
-	v2 := Verdict{FailedChecks: []string{
-		"  grep   -q done   out.txt  => exit 1",
-		"pytest -q => exit 1: FAILED tests/test_a.py::test_x",
-	}}
-	if got := Fingerprint(v2); got != "8d60cd2f8f3e" {
-		t.Fatalf("normalized/reordered fingerprint diverged: %q", got)
-	}
-	if got := Fingerprint(Verdict{}); got != "" {
-		t.Fatalf("no hard failures must fingerprint to no-signal, got %q", got)
-	}
-}
-
-func TestFailedCheckSignatureMatchesCPython(t *testing.T) {
-	sig := FailedCheckSignature(CheckResult{
-		Command: "pytest -q", ExitCode: 1,
-		Stderr: "boom  err", Stdout: "FAILED  x",
-	})
-	if sig != "pytest -q => exit 1: boom err FAILED x" {
-		t.Fatalf("signature = %q", sig)
-	}
-	bare := FailedCheckSignature(CheckResult{Command: "grep -q done out.txt", ExitCode: 1})
-	if bare != "grep -q done out.txt => exit 1" {
-		t.Fatalf("no-output signature = %q", bare)
-	}
-}
-
-// TestVerdictFirstSummaryMatchesCPython: the flag writes the opener;
-// the prose can only elaborate, never contradict, in a truncated view.
-func TestVerdictFirstSummaryMatchesCPython(t *testing.T) {
-	cases := []struct {
-		summary          string
-		complete, judged bool
-		want             string
-	}{
-		{"The goal was achieved. Files present.", true, true, "Achieved: Files present."},
-		{"Goal not achieved: missing tests.", false, true, "Not achieved: missing tests."},
-		{"plain words", true, true, "Achieved: plain words"},
-		{"", false, false, "Not judged (verification evidence inconclusive)."},
-	}
-	for _, c := range cases {
-		if got := VerdictFirstSummary(c.summary, c.complete, c.judged); got != c.want {
-			t.Errorf("VerdictFirstSummary(%q,%v,%v) = %q, want %q",
-				c.summary, c.complete, c.judged, got, c.want)
-		}
-	}
-	dg := "Downgraded to not-achieved — reason. rest"
-	if got := VerdictFirstSummary(dg, false, true); got != dg {
-		t.Errorf("downgrade opener must be left alone: %q", got)
-	}
-}
-
 // TestRuntimeGapAdmissionMatchesCPython pins the self-admission regex.
 func TestRuntimeGapAdmissionMatchesCPython(t *testing.T) {
 	cases := []struct {
@@ -764,3 +703,18 @@ func TestRunCheckWaitDelayScalesToShortTimeouts(t *testing.T) {
 		t.Fatalf("scaled WaitDelay did not fire: %s (flat 2s grace would exceed this)", elapsed)
 	}
 }
+
+// THREE TESTS WERE DELETED HERE (adversarial mission-r5 follow-up).
+//
+// TestFingerprintMatchesCPython, TestFailedCheckSignatureMatchesCPython
+// and TestVerdictFirstSummaryMatchesCPython were all named for a
+// differential they did not run: each asserted a HARDCODED constant that
+// someone had once measured. That is the same shape as the r4 LOW in
+// config_diff_test.go — an expectation frozen at authoring time cannot
+// notice CPython moving, and cannot notice the port drifting toward a
+// stale copy of it.
+//
+// Two of the three were green while the code under them diverged from
+// CPython on the whitespace class (the r5 HIGH and the r5 MEDIUM). Their
+// fixtures were folded into r5_diff_test.go, which drives the real
+// closure_verify functions instead.

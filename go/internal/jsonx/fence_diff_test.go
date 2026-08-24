@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // The fence strip is the OTHER transcription in this package, and it was
@@ -319,8 +320,26 @@ for text, kind in json.loads(sys.argv[1]):
     v = extract_json(text, dict if kind == 'dict' else list)
     # repr() is the comparable rendering: it spells nan/inf the way
     # pyval.Repr does, and json.dumps cannot carry them at all.
+    # Coerce int -> float recursively. json.Unmarshal into a plain Go any
+    # has always made every JSON number a float64, so Object cannot
+    # tell 1 from 1.0 and never could; that gap is named in
+    # pyval.Plain's doc and is why ObjectOrdered exists. Normalising it
+    # HERE, loudly, is what lets this test compare everything else
+    # exactly -- and TestObjectLosesIntNessAsItAlwaysHas pins the gap
+    # itself so it is not silently absorbed.
+    def f(x):
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, int):
+            return float(x)
+        if isinstance(x, list):
+            return [f(e) for e in x]
+        if isinstance(x, dict):
+            return {k: f(e) for k, e in x.items()}
+        return x
+    ordered = dict(sorted(v.items())) if kind == 'dict' else v
     out.append([sorted(v.keys()) if kind == 'dict' else None,
-                repr(v), bool(v)])
+                repr(f(ordered)), bool(v)])
 print(json.dumps(out))
 `
 
@@ -405,6 +424,21 @@ func TestObjectDecodesWhatCPythonDecodes(t *testing.T) {
 				t.Errorf("key sets differ\n  input %q\n     go %v\n     py %v",
 					c.text, gotKeys, pyKeys)
 			}
+
+			// COMPARE THE VALUES, not just the key set. Comparing keys
+			// alone is exactly why the r5 HIGH survived this test:
+			// {"confidence": NaN} and {"confidence": 0.7} have identical
+			// keys, so the whole non-finite class — the very thing this
+			// test was written for — was invisible to it.
+			//
+			// pyval.Repr renders a Go value the way CPython's repr()
+			// renders the Python one, including nan/inf, which is what
+			// makes this comparable at all; json.dumps cannot carry them.
+			pyRepr, _ := want[i][1].(string)
+			if got := pyval.Repr(sortedObj(obj)); got != pyRepr {
+				t.Errorf("decoded VALUES differ\n  input %q\n     go %s\n     py %s",
+					c.text, got, pyRepr)
+			}
 		})
 	}
 
@@ -467,5 +501,64 @@ func TestStringArrayNonFiniteIsUnreachableByConstruction(t *testing.T) {
 	}
 	if len(arr) != 2 || arr[0] != "a" || arr[1] != "b" {
 		t.Fatalf("array decoded wrong: %v", arr)
+	}
+}
+
+// sortedObj renders a Go map through pyval.Obj in sorted key order.
+// CPython's repr of a dict follows insertion order and Go's map has
+// none, so the two are only comparable once both are sorted — the probe
+// sorts on its side too.
+func sortedObj(m map[string]any) pyval.Obj {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	o := pyval.Obj{}
+	for _, k := range keys {
+		v := m[k]
+		if nested, ok := v.(map[string]any); ok {
+			v = sortedObj(nested)
+		}
+		o.Set(k, v)
+	}
+	return o
+}
+
+// The one difference TestObjectDecodesWhatCPythonDecodes normalises away,
+// pinned on its own so the normalisation cannot quietly grow.
+//
+// jsonx.Object returns map[string]any with every number a float64,
+// because that is what encoding/json into an `any` has always produced
+// and eleven call sites type-assert it. CPython's json.loads gives a
+// real int. ObjectOrdered exists precisely for the two callers that need
+// to tell 1 from 1.0 (rendering through Python's str(), and int-vs-float
+// checks), and it keeps the source literal as a json.Number.
+//
+// This is a NAMED, pre-existing divergence, not a finding. It reaches
+// disk only through a caller that renders an Object value into stored
+// text — and pyval.Plain's doc carries the same warning at the other end.
+func TestObjectLosesIntNessAsItAlwaysHas(t *testing.T) {
+	obj, err := Object(`{"n": 3}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, isFloat := obj["n"].(float64); !isFloat {
+		t.Fatalf("Object no longer yields float64 for an integer literal "+
+			"(%T) — if it now preserves int-ness, delete the int coercion "+
+			"in pyDecodeSnippet and this test", obj["n"])
+	}
+
+	// ...and the ordered decoder, which is the answer for callers that
+	// need the distinction, still keeps the literal.
+	o, err := ObjectOrdered(`{"n": 3, "f": 3.0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := o.Get("n")
+	f, _ := o.Get("f")
+	if pyval.Repr(n) != "3" || pyval.Repr(f) != "3.0" {
+		t.Fatalf("ObjectOrdered stopped preserving the source literal: "+
+			"n=%s f=%s", pyval.Repr(n), pyval.Repr(f))
 	}
 }

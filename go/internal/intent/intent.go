@@ -39,12 +39,12 @@ import (
 	"errors"
 	"math"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Result is Python's ClassifyResult: named routing facts, read by
@@ -164,7 +164,13 @@ func truthyField(v any) bool {
 	case bool:
 		return t
 	case string:
-		return strings.EqualFold(strings.TrimSpace(t), "true")
+		// Python is `raw.strip().lower() == "true"`, and str.strip()
+		// covers U+001C..U+001F where strings.TrimSpace does not. A
+		// `"needs_live_data": "true\u001c"` was true on CPython and
+		// false here — and this field gates the live-data override and
+		// the container-isolation decree, so the two runtimes executed
+		// the same goal with different capabilities (mission-r5 LOW).
+		return pytext.Lower(pytext.Strip(t)) == "true"
 	}
 	return false
 }
@@ -192,22 +198,24 @@ func llmClassify(ctx context.Context, a llm.Adapter, message string) (Result, bo
 	}
 	lane := "agenda"
 	if s, ok := obj["lane"].(string); ok {
-		if l := strings.ToLower(strings.TrimSpace(s)); l == "now" || l == "agenda" {
+		// Python is safe_str(...).lower(), and safe_str strips the
+		// 29-point set: `{"lane": "now\u001c"}` is "now" there and
+		// "now\x1c" here, which matches neither arm and silently fell
+		// back to "agenda" — the wrong lane from a well-formed verdict
+		// (adversarial mission-r5 LOW).
+		if l := pytext.Lower(pytext.Strip(s)); l == "now" || l == "agenda" {
 			lane = l
 		}
 	}
 	// safe_float parity, the closure tranche's rule: numeric strings
 	// coerce; non-finite refused; clamp [0,1]; default 0.7.
-	conf := 0.7
-	switch f := obj["confidence"].(type) {
-	case float64:
-		conf = f
-	case string:
-		if pf, perr := strconv.ParseFloat(strings.TrimSpace(f), 64); perr == nil &&
-			!math.IsNaN(pf) && !math.IsInf(pf, 0) {
-			conf = pf
-		}
-	}
+	// One implementation, not a fourth hand-rolled one: this arm had the
+	// same missing non-finite guard as closure.go's (mission-r5 HIGH).
+	// It does not reach disk here — Result.Confidence only reaches a
+	// terminal print — but two ports of one Python function drifting
+	// apart is the defect regardless of which one is currently load-
+	// bearing, and that is exactly how the r4 and r5 HIGHs both started.
+	conf := pyval.SafeFloatUnit(obj["confidence"], 0.7)
 	conf = math.Min(math.Max(conf, 0), 1)
 	reason, _ := obj["reason"].(string)
 	r.Lane = lane
@@ -250,8 +258,26 @@ var liveDataRe = regexp.MustCompile(`(?i)\b(what('s| is) (the |a |an )?(current|
 const shortThreshold = 8 // words — very short messages tend to be NOW
 
 func heuristicClassify(message string, cfg map[string]any) (lane string, confidence float64, reason string) {
-	msg := strings.ToLower(strings.TrimSpace(message))
-	wordCount := len(strings.Fields(msg))
+	// pytext.Lower/Strip/Split, not the stdlib three. Python is
+	// `message.lower().strip()` then `.split()`, and all three differ:
+	// str.lower() maps U+0130 to two code points where strings.ToLower
+	// maps it to one, str.strip() covers U+001C..U+001F, and str.split()
+	// splits on 29 code points to strings.Fields' 25.
+	//
+	// This is not a field difference, it is a different EXECUTION LANE.
+	// Measured end to end on "BUİLD a new dashboard" (U+0130):
+	//
+	//	CPython .lower() -> "bui̇ld a new dashboard"  -> agenda regex MISSES
+	//	  -> agenda_score 0, 4 words <= 8 -> now_score 1 -> lane "now"
+	//	Go      ToLower  -> "build a new dashboard"  -> agenda regex HITS
+	//	  -> lane "agenda"
+	//
+	// One runtime writes a task_type:"now" outcome row; the other writes
+	// an agenda run dir and a mission. Reachable whenever the LLM
+	// classify call fails or returns unparseable JSON (adversarial
+	// mission-r5 MEDIUM).
+	msg := pytext.Strip(pytext.Lower(message))
+	wordCount := len(pytext.Split(msg))
 
 	nowScore, agendaScore := 0, 0
 	for _, p := range nowPatterns {

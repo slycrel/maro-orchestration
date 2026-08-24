@@ -68,6 +68,27 @@ type DAGOptions struct {
 	WarnFn func(string)
 }
 
+// runWithRecover turns a panicking milestone body into an ERROR for that
+// one milestone, which is what Python does by construction: the worker
+// thread's exception is captured by the Future and re-raised at
+// fut.result(), inside the scheduler's try — so _mark_crashed fails that
+// milestone and the mission continues.
+//
+// A Go panic in a worker goroutine has no such boundary: it takes the
+// whole process down, losing every other milestone's in-flight work and
+// writing nothing. markCrashed's own doc calls itself the "backstop for
+// anything the milestone body's own guards miss", and a panic is exactly
+// that (adversarial mission-r5 LOW). Pre-existing; not introduced by the
+// r4 pool rewrite.
+func runWithRecover(ctx context.Context, runOne RunOne, idx int, ms *Milestone) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("milestone body panicked: %v", r)
+		}
+	}()
+	return runOne(ctx, idx, ms)
+}
+
 // RunMilestoneDAG is _run_milestone_dag: execute milestones as a
 // dependency DAG, MaxWorkers at a time.
 //
@@ -182,10 +203,23 @@ func RunMilestoneDAG(ctx context.Context, m *Mission, runOne RunOne, opts DAGOpt
 	completions := make(chan done, len(m.Milestones))
 	tasks := make(chan int, len(m.Milestones))
 	defer close(tasks)
-	for w := 0; w < opts.MaxWorkers; w++ {
+	// Never more workers than there is work. ThreadPoolExecutor spawns
+	// threads LAZILY — measured, max_workers=100000 with three submits
+	// keeps three threads alive — while spawning eagerly created
+	// opts.MaxWorkers goroutines regardless of milestone count.
+	// mission.milestone_workers is operator-set, so a fat-fingered value
+	// was a memory event on one runtime only, and a mission that dies
+	// that way writes a different store than one that completes
+	// (adversarial mission-r5 LOW).
+	workers := opts.MaxWorkers
+	if workers > len(m.Milestones) {
+		workers = len(m.Milestones)
+	}
+	for w := 0; w < workers; w++ {
 		go func() {
 			for idx := range tasks {
-				completions <- done{idx, runOne(ctx, idx, &m.Milestones[idx])}
+				completions <- done{idx, runWithRecover(ctx, runOne, idx,
+					&m.Milestones[idx])}
 			}
 		}()
 	}

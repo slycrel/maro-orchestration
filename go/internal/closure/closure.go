@@ -40,12 +40,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os/exec"
 	"regexp"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,6 +51,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
@@ -149,8 +149,22 @@ func CheckOutcome(exitCode int, stderr string) string {
 // Nondeterministic output (timestamps, tmp paths) can only make
 // fingerprints DIFFER, which fails open to a normal restart.
 func FailedCheckSignature(r CheckResult) string {
-	cmd := cutRunes(r.Command, 200)
-	out := strings.Join(strings.Fields(r.Stderr+" "+r.Stdout), " ")
+	// Python is `safe_str(row.get("command", ""))[:200]` — safe_str
+	// STRIPS before the slice, and this did not (found while writing the
+	// mission-r5 coverage; same class as the plan-parse MEDIUM above).
+	// The signature is written verbatim into failed_checks on the
+	// verdict row and is the material Fingerprint hashes, so an
+	// unstripped command forks the §9.3 restart identity.
+	cmd := cutRunes(pytext.Strip(r.Command), 200)
+	// str.split() with no argument splits on 29 code points;
+	// strings.Fields splits on unicode.IsSpace, which is four narrower
+	// (U+001C..U+001F) — and those arrive through captured stderr, which
+	// is exactly what this normalises (adversarial mission-r5 MEDIUM).
+	// Python applies safe_str to each stream before joining; the outer
+	// split() would absorb that, but the strip set is what matters and
+	// pytext.Split is it.
+	out := strings.Join(pytext.Split(pytext.Strip(r.Stderr)+" "+
+		pytext.Strip(r.Stdout)), " ")
 	if out != "" {
 		out = cutRunes(out, 200)
 		return fmt.Sprintf("%s => exit %d: %s", cmd, r.ExitCode, out)
@@ -173,7 +187,17 @@ func Fingerprint(v Verdict) string {
 	}
 	norm := make([]string, 0, len(v.FailedChecks))
 	for _, c := range v.FailedChecks {
-		s := strings.Join(strings.Fields(c), " ")
+		// pytext.Split, not strings.Fields: the doc above claims
+		// BYTE-PARITY with CPython closure_fingerprint, and with the
+		// narrower split set it did not have it. Measured on a single
+		// failed check "a\u001cb":
+		//	CPython -> 0cc9cd4dd26c
+		//	Go (old) -> d5cead7ccd89
+		// This fingerprint is the §9.3 restart-convergence identity, so a
+		// divergence means one runtime declares thesis-refuted while the
+		// other keeps restarting on identical evidence (mission-r5
+		// MEDIUM). A claim in a comment is load-bearing.
+		s := strings.Join(pytext.Split(c), " ")
 		if len([]rune(s)) > 500 {
 			s = string([]rune(s)[:500])
 		}
@@ -184,7 +208,26 @@ func Fingerprint(v Verdict) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-var verdictOpenerRe = regexp.MustCompile(`(?i)^\s*(?:the\s+)?goal\s+(?:was\s+|is\s+)?(?:not\s+)?(?:fully\s+)?achieved[.!:,]?\s*`)
+// `\s` is NOT transcribable: RE2 reads it as five ASCII code points and
+// Python's re reads it as twenty-nine. pytext.SpaceClass is the measured
+// Python set, and jsonx.go documents this exact hazard — this pattern
+// was not using it (adversarial mission-r5 HIGH).
+//
+// It matters here more than almost anywhere else, because this function
+// exists so the stored prose can only ELABORATE the flag, never
+// contradict it. Measured, with a non-breaking space:
+//
+//	"\u00a0Goal achieved. the file exists."   (complete=false)
+//	  CPython -> "Not achieved: the file exists."
+//	  Go (old) -> "Not achieved: Goal achieved. the file exists."
+//
+// which is verbatim the regression run d2f4e2f4 produced and this
+// function was written to stop. It reaches disk as goal_verdict_summary.
+var verdictOpenerRe = regexp.MustCompile(`(?i)^` + pytext.SpaceClass +
+	`*(?:the` + pytext.SpaceClass + `+)?goal` + pytext.SpaceClass +
+	`+(?:was` + pytext.SpaceClass + `+|is` + pytext.SpaceClass +
+	`+)?(?:not` + pytext.SpaceClass + `+)?(?:fully` + pytext.SpaceClass +
+	`+)?achieved[.!:,]?` + pytext.SpaceClass + `*`)
 
 // VerdictFirstSummary opens the stored summary with the FLAG's verdict,
 // deterministically. Every surface showing the summary bounds it, and
@@ -463,6 +506,59 @@ func runCheck(ctx context.Context, cmd, cwd string, timeout time.Duration) (exit
 	return 0, out.String(), errb.String()
 }
 
+// planCheck is one entry of the verification plan.
+type planCheck struct{ description, command string }
+
+// parsePlanChecks reads the plan call's answer. Extracted from the body
+// of Verify because an inline parse inside a two-hundred-line function
+// is untestable by construction, and the r5 MEDIUM below could not
+// otherwise be covered.
+//
+// safe_str is `str(value).strip()`, and the strip is load-bearing:
+// closure_verify.py skips a check whose command strips to empty
+// (`cmd = safe_str(check.get("command", "")); if not cmd: continue`).
+// Reading the field raw let `"   "` reach `sh -c`, which exits 0 — a
+// PASSING check CPython never ran. That moves checks_run/checks_passed
+// on the verdict row and flips both the `judged` gate and the
+// ungrounded-False cap (adversarial mission-r5 MEDIUM).
+//
+// Surrounding whitespace also changes the stored failed_checks
+// signature byte for byte, and that string is written to the verdict
+// row verbatim:
+//
+//	py "pytest -q => exit 1: boom"
+//	go "  pytest -q   => exit 1: boom"
+func parsePlanChecks(content string) ([]planCheck, error) {
+	planObj, perr := jsonx.Object(content)
+	if perr != nil {
+		// The error is returned rather than swallowed: Verify names it
+		// in the no_checks_generated skip detail, and a skip with no
+		// reason is the no-silent-errors doctrine's whole complaint.
+		return nil, perr
+	}
+	raw, ok := planObj["checks"].([]any)
+	if !ok {
+		return nil, nil
+	}
+	var out []planCheck
+	for _, e := range raw {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		desc, _ := m["description"].(string)
+		cmdRaw, _ := m["command"].(string)
+		cmd := pytext.Strip(cmdRaw)
+		if cmd == "" {
+			// Python's `if not cmd: continue`. Dropping it HERE rather
+			// than at the run site is what keeps checks_run aligned.
+			continue
+		}
+		out = append(out, planCheck{pytext.Strip(desc), cmd})
+	}
+	return out, nil
+}
+
 // Verify runs the closure evidence pipeline: plan → mechanical checks →
 // verdict → integrity branches. Non-fatal by contract — it never
 // returns an error; every failure lands as a named skip (unjudged) or
@@ -558,22 +654,7 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	if err != nil {
 		return skip("plan_call_failed", err.Error())
 	}
-	planObj, perr := jsonx.Object(planResp.Content)
-	type planCheck struct{ description, command string }
-	var planChecks []planCheck
-	if perr == nil {
-		if raw, ok := planObj["checks"].([]any); ok {
-			for _, e := range raw {
-				m, ok := e.(map[string]any)
-				if !ok {
-					continue
-				}
-				desc, _ := m["description"].(string)
-				cmd, _ := m["command"].(string)
-				planChecks = append(planChecks, planCheck{desc, cmd})
-			}
-		}
-	}
+	planChecks, perr := parsePlanChecks(planResp.Content)
 	if len(planChecks) == 0 {
 		// Research/writing goal — no executable checks. A parse failure
 		// lands in the same lane with its detail named.
@@ -676,22 +757,27 @@ func Verify(ctx context.Context, a llm.Adapter, goal string, steps []StepView, o
 	// right where the ungrounded-False cap reads it (adversarial
 	// closure r1 2026-08-22, Minimalist — the recall tranche's
 	// type-drift pattern recurring one tranche later).
-	confidence := 0.7
-	switch f := vdObj["confidence"].(type) {
-	case float64:
-		confidence = f
-	case string:
-		if pf, perr := strconv.ParseFloat(strings.TrimSpace(f), 64); perr == nil &&
-			!math.IsNaN(pf) && !math.IsInf(pf, 0) {
-			confidence = pf
-		}
-	}
-	if confidence < 0 {
-		confidence = 0
-	}
-	if confidence > 1 {
-		confidence = 1
-	}
+	//
+	// THE NON-FINITE GUARD IS THE WHOLE POINT, and this arm did not have
+	// it: the string arm above checked IsNaN/IsInf and the float64 arm
+	// did not (adversarial mission-r5 HIGH). It only became reachable
+	// when r4 taught jsonx.Object to decode bare NaN/Infinity the way
+	// CPython does — before that the document was rejected outright and
+	// closure took skip("verdict_parse_failed"), which MASKED this.
+	//
+	// A NaN survives `< 0` and `> 1` (both false), so it reached the
+	// stamp. Measured end to end:
+	//
+	//	{"complete": true, "confidence": NaN, "summary": "ok"}
+	//	  CPython -> safe_float -> 0.7, complete stamp written
+	//	  Go (old) -> NaN -> runs.StampVerdict returns
+	//	              "json: unsupported value: NaN" and metadata.json is
+	//	              NEVER WRITTEN — goal_achieved, verdict source and
+	//	              summary all lost, not just the number
+	//
+	// `{"confidence": 1e999}` is the quiet half: CPython 0.7, Go +Inf
+	// clamped to 1.0 — maximum confidence from a garbage literal.
+	confidence := pyval.SafeFloatUnit(vdObj["confidence"], 0.7)
 	var gaps []string
 	switch raw := vdObj["gaps"].(type) {
 	case []any:

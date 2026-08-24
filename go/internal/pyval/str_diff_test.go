@@ -2,7 +2,9 @@ package pyval
 
 import (
 	"encoding/json"
+	"math"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -378,4 +380,122 @@ func TestClipMatchesPythonSliceIncludingNegativeN(t *testing.T) {
 		t.Fatal("no case where a NEGATIVE n yields a non-empty string: " +
 			"the r4 LOW is not actually pinned")
 	}
+}
+
+// SafeFloat is llm_parse.safe_float, and it replaced FOUR hand-written
+// ports that each dropped a different line of it. The one that dropped
+// the isnan/isinf check cost the r5 HIGH: a NaN confidence survived the
+// clamp, reached runs.StampVerdict, and encoding/json refused the whole
+// document — so the verdict stamp was not wrong, it was ABSENT.
+//
+// Driven against the real CPython function so no arm can be argued from
+// a reading of it.
+func TestSafeFloatMatchesCPython(t *testing.T) {
+	// argv carries [value, default] pairs as JSON. A JSON document
+	// cannot carry NaN/Infinity, so those three ride as sentinel
+	// strings and are rebuilt on both sides.
+	type sfCase struct {
+		Name string  `json:"-"`
+		Val  any     `json:"v"`
+		Def  float64 `json:"d"`
+	}
+	cases := []sfCase{
+		{"a plain float", 0.9, 0.7},
+		{"an integer", 3, 0.7},
+		{"zero", 0, 0.7},
+		{"negative clamps to 0", -2.5, 0.7},
+		{"above one clamps to 1", 4.2, 0.7},
+		// float() is a CONVERSION, not a type check.
+		{"a numeric string", "0.9", 0.5},
+		{"a numeric string with padding", "  0.9  ", 0.5},
+		{"a numeric string out of range", "42", 0.5},
+		{"a non-numeric string", "high", 0.5},
+		{"an empty string", "", 0.5},
+		{"a bool true", true, 0.5},
+		{"a bool false", false, 0.5},
+		{"null", nil, 0.5},
+		{"a list", []any{1}, 0.5},
+		{"a dict", map[string]any{"a": 1}, 0.5},
+		// THE r5 HIGH: non-finite must fall to the default, never
+		// survive the clamp.
+		{"NaN", "__NAN__", 0.7},
+		{"Infinity", "__INF__", 0.7},
+		{"negative Infinity", "__NEGINF__", 0.7},
+		{"a string spelling of nan", "nan", 0.7},
+		{"a string spelling of inf", "inf", 0.7},
+		{"a string spelling of Infinity", "Infinity", 0.7},
+		{"an overflowing literal", "__INF__", 0.7},
+		{"an overflowing string literal", "1e309", 0.7},
+	}
+
+	in, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, perr := exec.Command("python3", "-c",
+		"import json,sys,math\n"+
+			"sys.path.insert(0, sys.argv[2])\n"+
+			"from llm_parse import safe_float\n"+
+			"S={'__NAN__':float('nan'),'__INF__':float('inf'),"+
+			"'__NEGINF__':float('-inf')}\n"+
+			"r=[]\n"+
+			"for c in json.loads(sys.argv[1]):\n"+
+			"    v=c['v']\n"+
+			"    v=S.get(v,v) if isinstance(v,str) else v\n"+
+			"    r.append(safe_float(v, default=c['d'], min_val=0, max_val=1))\n"+
+			"print(json.dumps(r))",
+		string(in), srcDirPyval(t)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var want []float64
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+	}
+
+	var defaulted, coerced int
+	for i, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			v := c.Val
+			switch v {
+			case "__NAN__":
+				v = math.NaN()
+			case "__INF__":
+				v = math.Inf(1)
+			case "__NEGINF__":
+				v = math.Inf(-1)
+			}
+			got := SafeFloatUnit(v, c.Def)
+			if got != want[i] {
+				t.Errorf("SafeFloat(%#v, %v) diverges\n  go %v\n  py %v",
+					c.Val, c.Def, got, want[i])
+			}
+			if got == c.Def {
+				defaulted++
+			} else if _, isFloat := c.Val.(float64); !isFloat {
+				coerced++
+			}
+		})
+	}
+	// The two arms the four hand-written ports kept losing: a value
+	// that DEFAULTS (the non-finite guard) and a non-float value that
+	// COERCES (the string/bool arm).
+	if defaulted == 0 {
+		t.Fatal("no case falls back to the default: the non-finite guard is not pinned")
+	}
+	if coerced == 0 {
+		t.Fatal("no non-float value coerces: safe_float's float() conversion is not pinned")
+	}
+}
+
+func srcDirPyval(t *testing.T) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

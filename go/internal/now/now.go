@@ -387,8 +387,29 @@ func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
 		}
 		return
 	}
-	res.TokensIn += resp.TokensIn
-	res.TokensOut += resp.TokensOut
+	// The judge's tokens are billed ONLY on the non-fulfilled branch,
+	// because that is the only branch handle._verify_now_outcome bills
+	// them on: the `fulfilled is True` arm returns
+	// `dict(outcome)` + goal_achieved with no token arithmetic, and the
+	// no-clear-verdict path returns `outcome` untouched.
+	//
+	// Measured with a judge reporting 111/222 over a NOW call seeded
+	// 10/20:
+	//
+	//	{"fulfilled": true}   py 10/20    go (old) 121/242
+	//	{"fulfilled": false}  py 121/242  go       121/242
+	//	no json here          py 10/20    go (old) 121/242
+	//
+	// res.TokensIn/Out go straight into the shared outcome ledger
+	// (now.go's record.Outcome below), which is what cost reporting and
+	// the evolver's outcome summaries read on BOTH runtimes.
+	//
+	// Go's accounting is arguably the honest one — Python drops real
+	// spend — and that is exactly why it is a FORK rather than a
+	// hardening (adversarial mission-r5 HIGH). The fix belongs in
+	// handle._verify_now_outcome; until it lands, parity wins, and this
+	// one is safe to converge because matching Python here loses only
+	// accuracy, never data.
 	obj, jerr := jsonx.ObjectOrdered(resp.Content)
 	if jerr != nil || obj == nil {
 		// No clear verdict: goal achievement stays unverified — absence
@@ -402,6 +423,8 @@ func verifyNow(ctx context.Context, a llm.Adapter, goal string, res *Result) {
 		res.GoalAchieved = &achieved
 		if !v {
 			res.Status = "incomplete"
+			res.TokensIn += resp.TokensIn
+			res.TokensOut += resp.TokensOut
 			// Python is `str(verdict.get("why") or "").strip()`, and
 			// str() is NOT a cast — the hazard mission_plan.go is
 			// written around. A Go type assertion threw a real

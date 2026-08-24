@@ -3657,3 +3657,100 @@ false-green class the battery has produced — the first was the
 anchor-miss in r1 (`count(old) != 1`), where a mutant that never applied
 was reported as a survivor. Both are the harness lying in the direction
 of comfort.
+
+### Rule — a hand-ported helper is a family, not a line
+
+`llm_parse.safe_float` is six lines of Python. It got ported by hand at
+four call sites in this repo — `closure.go`, `evolver.go`, `intent.go`,
+`now.go` — and no two ports were the same. Three of the four missed the
+non-finite guard, all four missed numeric strings, and one of them could
+prevent `metadata.json` from being written at all (adversarial
+mission-r5 HIGH).
+
+Nobody decided to write it four times. Each site had a confidence field,
+each port was three obvious lines, and each was correct enough to pass
+its own test. The divergence is invisible per-site and only visible as a
+set.
+
+So the rule has two halves:
+
+- **Finding one is evidence about the other N-1.** This is r4's *a fix is
+  evidence about its SIBLINGS* narrowed to its sharpest case: when a fix
+  lands on something that looks like an inlined helper, the next move is
+  `grep` for the shape, not `go test`.
+- **The fix is to stop having N.** `pyval.SafeFloat` is now the only port
+  of `safe_float`, driven against CPython's own function. A fifth site
+  will either call it or be a visible exception.
+
+Corollary for finding them before they bite: a Python helper with a
+`*`-keyword signature (`safe_float(value, *, default, min_val, max_val)`)
+is one someone thought hard about. Those are the ones worth porting once,
+in `pyval` or `pytext`, rather than at the call site.
+
+### Rule — a test named for a differential must RUN the other side
+
+Four tests in this tree were named `...MatchesCPython` and asserted
+hardcoded constants:
+
+```go
+// what it looked like
+if got := Fingerprint(v); got != "3f2a1b0c9d8e" {
+```
+
+A frozen snapshot of CPython's output cannot notice CPython moving, and
+cannot notice the port drifting toward a stale copy of it. That is
+tolerable in a test named `TestFingerprintIsStable`. Under
+`MatchesCPython` it is worse than no test, because the name tells the
+next reader the boundary is covered. **Every one of the r5 findings sat
+under one of these four names.**
+
+The rule is about the name as much as the mechanism:
+
+- If the name says it matches CPython, it must `exec.Command("python3",
+  ...)` and compare. No exceptions — a differential that skips when
+  `python3` is missing is fine, one that never had it is not.
+- If it asserts a constant, name it for what it actually pins
+  (`...IsRuneSafe`, `...IsStable`, `...LosesIntNessAsItAlwaysHas`) and
+  say in a comment why a constant is the right thing here.
+- When deleting one, fold its fixtures into the real differential that
+  replaces it and leave a comment saying what was there. The fixtures are
+  usually the only surviving record of what someone once cared about.
+
+This is a third member of the false-green family, alongside *a fixture
+both sides refuse is not a differential* and *a compile-kill is not a
+kill*. All three share a shape: the test reports agreement while testing
+nothing, and the report is what you read next round.
+
+### Rule — a mutant that edits the test's own assertion is meaningless
+
+Two r5 mutants were written as, in effect:
+
+```go
+- if forked != yamlVersionRows[i].WantFork {
++ if false {
+```
+
+Both "survived", and both proved nothing: no test can detect the deletion
+of its own check. A mutation battery measures whether a test NOTICES a
+change in the code under test, so a mutant that edits the test is outside
+the experiment.
+
+When the fix under review *was* a test change — closing a vacuous
+assertion, making a table binding — the live question is whether the new
+assertion is load-bearing, and that is answered by mutating what the
+assertion READS:
+
+| the fix | the wrong mutant | the right mutant |
+|---|---|---|
+| make the YAML rows binding | delete the `!=` check | flip a fixture row's `WantFork` |
+| compare values, not just keys | tautologise the comparison | break `pyval.Plain`'s number arm |
+
+Both re-expressions killed. The general form: **mutate the fixture or the
+production code the assertion depends on, never the assertion.**
+
+One harness change came out of the same round and belongs here. The first
+r5 battery returned `0 killed, 8 survived` because the `-run` regexes
+named tests that did not exist — a nonexistent test cannot fail, so every
+mutant read as a survivor. `NO-SUCH-TEST` is now its own reported
+outcome, distinct from `SURVIVED`, alongside `ANCHOR-MISS` and
+`COMPILE-BROKEN`. Four ways to get a false green, four named outcomes.
