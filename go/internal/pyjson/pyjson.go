@@ -87,20 +87,28 @@ func String(s string) (string, error) {
 // "\U0001f600". A lone surrogate cannot reach here — IsCleanText refuses
 // those upstream.
 func ensureASCII(lit string) string {
-	ascii := true
+	// The threshold is 0x7F, not 0x80. CPython's ESCAPE_ASCII is
+	// `[^\ -~]` — anything outside 0x20..0x7E — so DEL is escaped even
+	// though it IS ASCII, while Go's encoding/json emits it raw (RFC 8259
+	// only requires escaping below 0x20). This package's own doc comment
+	// has named that case since it was written; the code used
+	// utf8.RuneSelf anyway, and every `\x7f` in a captured tool
+	// transcript went to the shared store as a raw byte no CPython writer
+	// produces (mission-r9, found by the python-maro cross-review).
+	clean := true
 	for i := 0; i < len(lit); i++ {
-		if lit[i] >= utf8.RuneSelf {
-			ascii = false
+		if lit[i] >= 0x7F {
+			clean = false
 			break
 		}
 	}
-	if ascii {
+	if clean {
 		return lit // the overwhelmingly common case, untouched
 	}
 	var sb strings.Builder
 	sb.Grow(len(lit) + 8)
 	for _, r := range lit {
-		if r < utf8.RuneSelf {
+		if r < 0x7F {
 			sb.WriteByte(byte(r))
 			continue
 		}

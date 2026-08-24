@@ -227,30 +227,15 @@ func orEmpty(s []string) []string {
 	return s
 }
 
-// pyBool is Python's bool() for stored values — the truthiness the coercing
-// stats constructor applies. Note the reader REFUSES non-bool
+// pyBool is Python's bool() for stored values — the truthiness the
+// coercing stats constructor applies. Note the reader REFUSES a non-bool
 // needs_escalation before this runs (validateStatsRow); this exists for
 // parity on paths Python leaves tolerant.
-func pyBool(v any) bool {
-	switch t := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return t
-	case string:
-		return t != ""
-	case json.Number:
-		f, err := t.Float64()
-		return err == nil && f != 0
-	case float64:
-		return t != 0
-	case []any:
-		return len(t) > 0
-	case map[string]any:
-		return len(t) > 0
-	}
-	return true
-}
+//
+// Delegates rather than re-implements: this was one of three private
+// copies of the same contract, and the copies disagreed with each other
+// about `int` and about the default for an unknown type (mission-r9).
+func pyBool(v any) bool { return pyval.Truthy(v) }
 
 func sortStrings(s []string) { sort.Strings(s) }
 

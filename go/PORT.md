@@ -4199,3 +4199,184 @@ writes `3.0` where `asdict()` keeps `3`.
   emitter. `MarshalIndent` sorted too, so this changed nothing.
 - Escalation-ledger and event-row key order (`scans/notify.go`): the
   entry arrives as a Go map. Escaping and ensure_ascii are recovered.
+
+## The notify lane: three copies of one contract
+
+`internal/notify` ports `notify.py` and `escalation_context.py`. A partial
+copy of the same writers already lived as private helpers inside `scans`,
+which is the r8 finding one layer up: a shared emitter with a second copy
+drifts, and nothing notices because each copy is self-consistent.
+
+What the second copy had actually drifted into:
+
+- Its `escalations.jsonl` rows sorted their keys alphabetically (a Go map),
+  where Python emits `{"ts": ..., "event_type": ..., **payload}` — ts and
+  event_type LEADING, in that order.
+- Its `events.jsonl` rows did the same, so `event_type` was not first.
+- It had no hook lane at all. A substrate that registered `notify.command`
+  never received a cadence verdict, and the failure is invisible from
+  the substrate side: no hook call looks exactly like an event that was
+  filtered out.
+
+### `{"a": 1, **payload}` keeps the position AND takes the value
+
+A dict literal followed by a splat is easy to port half-right. A payload
+carrying its own `ts` OVERRIDES the value but the key KEEPS its leading
+position. `pyval.Obj.Set` already has this semantics, which is why the port
+is a `Set` loop rather than an append.
+
+### A presence default is not a truthiness default
+
+`str(payload.get("result_excerpt", payload.get("summary", "")))` falls back
+only when the key is ABSENT. A payload carrying `result_excerpt=None`
+projects the literal string `"None"`, because that is what `str(None)` is.
+Reading it as "falsy means fall back" is the natural port, it is wrong, and
+it is wrong precisely for the payloads where a producer explicitly recorded
+"there was no excerpt".
+
+Two lines further down, `if payload.get("goal_verdict_source")` IS a
+truthiness test. The same payload is read two different ways in adjacent
+lines, so both need pinning.
+
+### `pyval.Bool` is not `pyval.Truthy`, and the comment does not decide it
+
+The first revision of this port aliased `truthy` to `pyval.Bool` with a
+comment saying "Python's bool() for the values that reach these fields".
+`pyval.Bool` is a bare type assertion and documents itself correctly for
+its own callers; the comment over it was the false claim. Effect:
+`goal_verdict_source: "judge"` read as false and the `source=` clause
+vanished from every `run_verdict` row. Caught by a test written in the same
+session, which is the only reason it is a footnote instead of a residual.
+
+### Three packages had re-implemented `bool()`
+
+`evolver.pyTruthy`, `graduation.truthy` and `skills.pyBool` were three
+private copies of Python's `bool()` with three different case sets — while
+a complete `pyval.Truthy` already existed. Measured:
+
+| copy | `int` | `json.Number` | default for an unknown type |
+|---|---|---|---|
+| `evolver.pyTruthy` | no | no | `true` |
+| `graduation.truthy` | no | no | `v != nil` |
+| `skills.pyBool` | no | yes | `true` |
+| `pyval.Truthy` | yes | yes | `true` (Python's rule) |
+
+The missing `case int` is the live one. Every value arriving from
+`encoding/json` is a `float64`, so the gap is invisible on the read path —
+but a value built in Go (a struct field, a count) is an `int`, and
+`bool(0)` came back TRUE. `graduation`'s `v != nil` default was wrong in
+two directions at once: Python says an unrecognized type is TRUE, and a
+typed nil in a Go interface is not nil. All three now delegate.
+
+The lesson is not "write a shared helper" — one already existed. It is that
+a package reaching for a local four-line helper does not go looking for the
+shared one, and nothing in the build tells it to.
+
+### The clip breaker is not a length bound
+
+`context_budget.clip(text, cap)` keeps `cap` characters and then APPENDS a
+marker naming what it cut, so the field is LONGER than its cap by design.
+It is also idempotent only at the same or a WIDER cap. The notify
+projection clips at 300 and `write_event` clips again at 200, so the outer
+marker describes the 343-character string it received rather than the
+500-character original, and the first marker survives nested inside the
+payload. Python nests it identically — that makes it a fact about the
+format, not a divergence, and a test asserting "at most 200" is asserting
+something neither runtime does.
+
+### Two bounds in one row, different kinds on purpose
+
+In the same `events.jsonl` row, `goal` is a bare `goal[:80]` slice that
+says nothing and `detail` goes through the breaker that announces itself.
+That asymmetry is `write_event`'s long-standing contract, not an oversight,
+so the port keeps both and the test records which is which.
+
+### Named residuals after r9
+
+- The escalation ledger sorts payload keys: the payload arrives as a Go
+  map, so Python's insertion order was gone before the writer saw it.
+  Escaping, ensure_ascii, float spelling and the separators are recovered.
+  Same for the hook's stdin. This is the r8 nested-key-order residual
+  reaching one more surface, and the fix is the same ordered-payload API.
+- `escalationClipFields` is a hand-maintained list that must stay synced
+  with `Emit`'s callers. Python found the same hole twice — round 14 for
+  the canonical names, round 15 for two live ALIASES — which is evidence
+  the list is the wrong shape. A typed per-event schema is the real fix.
+- `notify.events` set to a bare STRING behaves as a SUBSTRING test in
+  Python (`"escalation" in "escalation_only"` is True). The port treats it
+  as a one-element list, which is stricter. Config error either way; named
+  rather than accidental.
+- `FamilyROILine` bounds its ledger read at 8MB where Python reads
+  unbounded. When the cap bites, the OLDEST rows drop, so "on record"
+  understates rather than overstates — the safe direction for a line whose
+  job is to say "this recurs".
+- Nested-context key order inside an escalation payload is still sorted
+  (the r8 residual, unchanged).
+
+### Who calls Emit, and who does not yet
+
+`internal/notify` exists; being wired everywhere is a separate question,
+and leaving it unstated would let a later reader assume the lane is
+complete. Every `notify.emit` call site in the Python tree, audited:
+
+| Python site | event | status |
+|---|---|---|
+| `evolver_scans._notify_verdict` | `self_improvement_verdict` | **ported** (`scans.notifyVerdict`) |
+| `director.py:1236` | `recursion_checkin` | next tranche (`handle_escalation`) |
+| `handle.py:951,1007` | `backend_actionable`, `run_completed` | `handle_queue` tranche |
+| `cli.py:2411` | `run_verdict` | CLI tranche |
+| `container_exec.py:929,1020` | `backend_actionable` | unported subsystem |
+| `audit_repair.py:662` | `escalation` | unported subsystem |
+| `loop_init.py:186` | `escalation` (daily budget gate) | the pre-start daily-cap refusal is unported (no `metrics.spend_today` twin) |
+| `loop_blocked.py:841` | `escalation` (blocked step) | inside `_act_blocked_step`, already on `blocked.go`'s named not-ported list (navigator shadow) |
+
+No ported Go path drops a notification. Every gap above is a gap in the
+SUBSYSTEM, not in the lane — which is the distinction worth keeping,
+because the two look identical from the substrate's side.
+
+`DecisionLine` and `FamilyROILine` have no caller yet for the same reason:
+their two Python call sites are `loop_blocked`'s navigator override and
+`director.handle_escalation`. They are ported now because the director
+tranche is next and the prose needed its differential either way.
+
+### An open seam the director tranche will hit immediately
+
+`notify.WriteEvent` currently hardcodes `project`, `loop_id`, `step`,
+`step_idx`, `model` and `elapsed_ms` to their zero values, because the
+notify projection is the only caller and Python's `notify._emit` passes
+only `goal`, `status` and `detail`. `director.handle_escalation` calls the
+same `observe.write_event` with `project`, `loop_id` and `status` filled
+in, so the next tranche needs the full field set.
+
+Two ways to go, and the choice is worth making deliberately rather than
+by whichever is convenient at the call site:
+
+1. Widen `WriteEvent` to an options struct and have the notify projection
+   pass its own defaults. One writer, one row shape.
+2. Let the director write its own row.
+
+(1) is right, and the reason is this round's own finding: (2) is how you
+get a second copy of a shared writer, which is what `scans` had and what
+this tranche just removed. It is not being done speculatively now — the
+widening should land with the caller that needs it, so the new fields
+arrive with a test that exercises them rather than as untested capacity.
+Named here so the next tranche does not rediscover it as a choice.
+
+Two more things the director port will need that this tranche did not:
+`calibration.jsonl` rows are `json.dumps` with a FLOAT `time.time()` `ts`
+(content-key, this port's recurring family — a whole float must spell
+`1756000000.0`, not `1756000000`), and the escalation summary artifact is
+markdown PROSE with a `.title()`-cased action in its heading.
+
+### ensure_ascii's threshold is 0x7F, not 0x80
+
+CPython's `ESCAPE_ASCII` matches anything outside 0x20..0x7E. DEL (U+007F)
+is therefore escaped **even though it is ASCII**, while Go's
+`encoding/json` follows RFC 8259 and escapes only below 0x20. A port
+gating on `utf8.RuneSelf` writes a raw DEL byte into the shared store --
+which arrives through captured terminal output more often than it sounds.
+
+The package doc had named this case from the day it was written. The code
+under it used 0x80, and r8's own CPython differential walked U+0001 ->
+U+001F -> "cafe", stepping straight over the boundary. When a doc comment
+names a specific value, the corpus should contain that value.

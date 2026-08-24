@@ -96,6 +96,32 @@ func TestStringMatchesCPython(t *testing.T) {
 		"plain", "a > b & c < d", "café", "日本語", "😀", "tab\there",
 		"quote\"backslash\\", "\u0001\u001f", "surrogate-free \uFFFD",
 		"mixed café > 😀",
+		// The ensure_ascii BOUNDARY, walked one code point at a time.
+		// The corpus above stopped at \u001f and the next case anyone
+		// thinks of is a non-ASCII rune — which skips 0x7F entirely.
+		// CPython's ESCAPE_ASCII is `[^\ -~]`, i.e. outside 0x20..0x7E,
+		// so DEL is escaped despite BEING ASCII while Go's encoding/json
+		// emits it raw. This package's doc comment named that case from
+		// the start; the code used utf8.RuneSelf and shipped a raw byte
+		// no CPython writer produces (mission-r9).
+		"~",      // 0x7E — the last unescaped code point
+		"\u007f", // 0x7F — DEL, escaped by Python, raw in Go until r9
+		"\u0080", // 0x80 — the first code point Go would have caught
+		"a\u007fb",
+		"tail\u007f",
+		"\u007f\u007f",
+		// The two control bytes with SHORT escapes on both sides. A
+		// cross-review called these a divergence; measured, they agree —
+		// Go's encoder special-cases them exactly as ESCAPE_DCT does.
+		// Pinned because "we checked and they match" is only durable as a
+		// test (verify-before-fix, mission-r9).
+		"a\bc", "a\fc",
+		// U+2028/U+2029: Go's encoder escapes these unconditionally even
+		// with SetEscapeHTML(false), and ensure_ascii escapes them on the
+		// Python side, so the two agree by two different routes. Pinned
+		// because an agreement reached by different routes is the fragile
+		// kind — a future rewrite of either route breaks it silently.
+		"line\u2028sep", "para\u2029sep",
 	} {
 		got, err := String(s)
 		if err != nil {

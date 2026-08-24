@@ -224,23 +224,15 @@ func rowToSuggestion(m map[string]any) Suggestion {
 }
 
 // pyTruthy mirrors Python bool(): non-empty string, non-zero number, true.
-func pyTruthy(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		return t != ""
-	case float64:
-		return t != 0
-	case nil:
-		return false
-	case []any:
-		return len(t) > 0
-	case map[string]any:
-		return len(t) > 0
-	}
-	return true
-}
+// pyTruthy delegates to the one implementation of Python's bool().
+//
+// It used to be a private copy, and the copy had no `case int`: every
+// value arriving from encoding/json is a float64, so the gap was
+// invisible on the read path, but a count built in Go is an `int` and
+// bool(0) came back TRUE. Three packages had grown their own copy of
+// this — with three different case sets — while a complete one already
+// sat in pyval (mission-r9: the copies are the bug, not the case sets).
+func pyTruthy(v any) bool { return pyval.Truthy(v) }
 
 // LoadSuggestions returns up to limit suggestions, newest first.
 func LoadSuggestions(workspaceDir string, limit int) []Suggestion {

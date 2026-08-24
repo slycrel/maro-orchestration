@@ -208,25 +208,13 @@ func proposedIn(lines []string, failureClass string) bool {
 	return false
 }
 
-// truthy mirrors Python bool() for the display-only fields this package
-// reports (behavior gates keep Python's strict checks).
-func truthy(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		return t != ""
-	case float64:
-		return t != 0
-	case nil:
-		return false
-	case []any:
-		return len(t) > 0
-	case map[string]any:
-		return len(t) > 0
-	}
-	return v != nil
-}
+// truthy delegates to the one implementation of Python's bool().
+//
+// The private copy this replaces ended `return v != nil`, which is not
+// Python's rule for an unrecognized type (Python says TRUE) and is not
+// even Go's, since a typed nil in an interface is non-nil. It also had
+// no `case int` (mission-r9).
+func truthy(v any) bool { return pyval.Truthy(v) }
 
 // lastLines returns the last n non-empty trimmed lines of text.
 func lastLines(text string, n int) []string {

@@ -6344,3 +6344,116 @@ it never knew it was responsible for. Audit the helper against the
 SOURCE, not against its own doc comment, and give it a differential of
 its own; a shared emitter with no differential is a single point of
 silent, distributed failure.
+
+### Round 9 — the escalation lane, and the helper nobody looked for
+
+The tranche was escalation + notifications: `notify.py` (224 lines) and
+`escalation_context.py` (121 lines) into a new `internal/notify`, plus the
+partial private copy of the same writers that had been sitting inside
+`scans`. Running r8's own lens on it before writing anything — *a shared
+helper is a claim about a contract* — is what made the shape of the round.
+
+**The second copy had drifted, exactly as the lens predicts.** `scans`
+carried private `writeEscalation` and `writeEvent` helpers with a doc
+saying the hook COMMAND was "deferred with the heartbeat tranche". What
+the doc did not say, because nobody had measured it: both writers built
+their rows as Go MAPS, so `escalations.jsonl` came out alphabetically
+sorted where Python emits `{"ts": ..., "event_type": ..., **payload}` with
+those two keys LEADING, and `events.jsonl` did not put `event_type` first
+either. The deferred hook was the visible gap; the key order was the one
+nobody had claimed and nobody could see. Both writers now live in
+`internal/notify` and `scans` builds a payload and calls `Emit`.
+
+**Two bugs my own new tests found, in code I had just written.** The
+first: `truthy` was aliased to `pyval.Bool` under a comment claiming it was
+Python's `bool()`. `pyval.Bool` is a bare type assertion, correctly
+documented for its own callers — the comment over it was the false claim,
+and it made `goal_verdict_source: "judge"` read as false so the `source=`
+clause vanished from every `run_verdict` row. r2's lens (*a claim in a
+comment is load-bearing*), paying out at r9. The second: I asserted the
+projected `detail` was "at most 200 characters". It is not, on either
+side — `clip` appends its marker PAST the cap, and the value is clipped
+twice (300 then 200) so the outer marker reads "first 200 of 343". The
+test was asserting something neither runtime does.
+
+**The finding underneath the finding.** Chasing the first bug turned up
+`evolver.pyTruthy`, `graduation.truthy` and `skills.pyBool` — three
+private copies of Python's `bool()`, with three different case sets, while
+a complete `pyval.Truthy` had existed the whole time. None had `case int`,
+which is invisible on the read path (everything from `encoding/json` is a
+float64) and live the moment a value is built in Go: `bool(0)` came back
+TRUE. `graduation`'s `return v != nil` default was wrong twice over —
+Python says an unrecognized type is truthy, and a typed nil in a Go
+interface is not nil. All three now delegate.
+
+So r8's lens needs an amendment. It said: give a shared helper a
+differential of its own. That is necessary and it is not sufficient — the
+helper here was correct, documented, and tested. Nothing failed at the
+helper. What failed is that four packages each wanted four lines of
+Python-truthiness and none of them went looking first, and the build has
+nothing to say about it.
+
+**What the new package owes, and pays.** `internal/notify` ships with a
+CPython differential from its first commit, not added after a defect:
+`decision_line` and `family_roi_line` compared character-for-character
+over 17 and 13 cases (content-key PROSE is this port's recurring bug
+family), the escalation row diffed byte-for-byte against
+`notify._write_escalation_file`, and the whole `events.jsonl` projection
+run through both `emit()` implementations over 13 payloads. The double-
+clip nesting is the case that argues for differentials over arithmetic:
+"first 200 of 343" is not a number anyone derives correctly by reading the
+source.
+
+The `decision_line` test carries an anti-vacuity guard of the shape r6
+introduced: `strings.Fields` — the wrong-but-plausible implementation — is
+replayed over the same corpus and the test FAILS if it does not lose.
+Python's bare `str.split()` splits on 29 code points to `strings.Fields`'
+25, and U+001C..U+001F arrive through pasted terminal output more often
+than their obscurity suggests.
+
+**Battery: 50 killed / 0 survived / 0 unusable**, over three rounds
+(41/6/2 -> 49/1/0 -> 50/0/0). Every one of the six first-round survivors
+was a real coverage gap rather than a vacuous mutant, and five of the six
+had the same shape: the fixture only exercised the HAPPY value. Every hook
+test passed a run dir, so `if run_dir:` was never live; every ordering
+test used a FAILING hook, so "the durable writes come first" was never
+live; every verdict fixture used real bools, where a bare type assertion
+and Python truthiness agree. A guard whose input never reaches its branch
+reports success and tests nothing.
+
+**The DEL find, and where it came from.** A cross-review run by the Python
+runtime reported that `pyjson` emits U+007F raw where json.dumps writes
+its escape. Verified: true. CPython's ESCAPE_ASCII matches anything
+outside 0x20..0x7E, so DEL is escaped despite BEING ASCII, while Go's
+encoder follows RFC 8259 and escapes only below 0x20. The port gated on
+`utf8.RuneSelf` (0x80).
+
+What makes it worth recording is not the byte. It is that **this
+package's own doc comment has named the case since it was written** --
+"DEL at 0x7f is escaped even though it is ASCII" -- and the code under it
+used 0x80. r8 rewrote this exact function, added a CPython differential to
+it, and the corpus went U+0001, U+001F, then "cafe": it stepped over the
+one boundary the doc points at, because the next control-character case
+anyone thinks of is a non-ASCII rune. r2's lens (*a claim in a comment is
+load-bearing*) firing inside the file r8 had just rewritten, against a
+differential r8 had just written.
+
+**Scoring the cross-review honestly:** four findings -- one real (DEL),
+one hallucinated (a confident HIGH claiming Go drops the backspace and
+form-feed short escapes; measured, Go emits them byte-identically to
+CPython, and the reviewer had itself flagged the claim as unverifiable
+from the files it was given), and two accurate restatements of
+already-named residuals. Squarely in the 30-50% band the verify-before-fix
+rule predicts, and the one real find was worth the exercise. Its
+"everything else matches" list was independently spot-checked on the
+U+2028/U+2029 claim and held.
+
+**Lens carried forward to r10:** *a helper you did not look for is a
+helper you will write again.* The r8 lens assumed the danger was a shared
+helper being wrong. The commoner failure is a correct shared helper going
+unused, because a four-line local copy is faster to write than a search is
+to run — and every copy is self-consistent, so nothing in the build, the
+tests, or review-of-the-diff can see the divergence. Before adding a
+private helper for a Python builtin's semantics, grep `pyval`/`pytext`
+for the contract by NAME; when a private one already exists, treat it as
+evidence there are others.
