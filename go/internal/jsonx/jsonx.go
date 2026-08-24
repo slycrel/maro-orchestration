@@ -121,8 +121,13 @@ var (
 	// where CPython reads the model's actual verdict.
 	//
 	// RESIDUAL, measured and deliberately NOT patched: `\b` is
-	// ASCII-only in RE2 and Unicode-aware in Python. On `<thinke\u0301>`
-	// — any letter or digit outside ASCII straight after the tag name —
+	// ASCII-only in RE2 and Unicode-aware in Python. On `<think\u00e9>`
+	// — a PRECOMPOSED é, or any other letter or digit outside ASCII
+	// straight after the tag name; the decomposed spelling `<thinke\u0301>`
+	// does NOT demonstrate this, because the character right after the
+	// tag name there is an ASCII "e" and both engines then agree
+	// (mission-r3 LOW: a "measured" example that measures nothing is
+	// what lets a residual note stop being checked) —
 	// Python finds no boundary, matches NEITHER pattern, leaves the trace
 	// in place and carves the hypothetical; Go finds a boundary and
 	// strips. Expressing Python's `\w` here needs a word class, and Go

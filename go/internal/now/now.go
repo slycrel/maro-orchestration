@@ -266,48 +266,74 @@ func verdictRationale(raw string) string {
 		// ```json { ... } ``` preamble: prose is after the closing fence.
 		parts := strings.Split(text, "```")
 		if len(parts) > 2 {
-			text = strings.TrimSpace(strings.Join(parts[2:], ""))
+			text = pytext.Strip(strings.Join(parts[2:], ""))
 		} else {
 			text = ""
 		}
 	} else if strings.HasPrefix(text, "{") {
-		// Bare JSON, then prose: skip past the balanced object. The scan
-		// is STRING-AWARE (Go-stricter than Python's naive count): a
-		// brace inside a JSON string value must not close the object
-		// early, and an object that never balances (truncated mid-JSON)
-		// recovers NOTHING rather than returning the raw JSON blob as a
-		// "rationale" (adversarial routing r2, Skeptic + Architect).
-		depth, inString, escaped, closed := 0, false, false, false
-		for i, ch := range text {
-			switch {
-			case escaped:
-				escaped = false
-			case inString && ch == '\\':
-				escaped = true
-			case ch == '"':
-				inString = !inString
-			case inString:
-			case ch == '{':
+		// Bare JSON, then prose: skip past the balanced object, exactly
+		// as handle._now_verdict_rationale does it:
+		//
+		//	depth = 0
+		//	for i, ch in enumerate(text):
+		//	    depth += (ch == "{") - (ch == "}")
+		//	    if depth == 0:
+		//	        text = text[i + 1:].strip()
+		//	        break
+		//
+		// A NAIVE counter, blind to string literals, and with no
+		// unbalanced-input lane at all: if the object never closes, the
+		// loop simply ends and `text` keeps the whole blob.
+		//
+		// THIRD REJECTED HARDENING IN THIS PORT, and the second in this
+		// function (adversarial mission-r3 HIGH). The scan used to track
+		// string literals and to `return ""` on a truncated object,
+		// under a comment saying so — "Go-stricter than Python's naive
+		// count" — four lines below the <think> pre-strip that was
+		// removed for the same reason one round earlier. Measured:
+		//
+		//	{"fulfilled": false, "why": "missing } brace in file"} the file was never created
+		//	  CPython -> `brace in file"} the file was never created`
+		//	  Go      -> `the file was never created`
+		//
+		//	{"fulfilled": false, "why": "no write call     <- truncated at the token budget
+		//	  CPython -> the whole blob back
+		//	  Go      -> "" -> the caller then stores the STATIC string
+		//	             "judge gave no rationale", which is false, and is
+		//	             the exact regression this function exists to stop
+		//
+		// Both land in res.VerdictSummary, which is written to the
+		// outcome row and stamped into the run dir. A `}` inside a `why`
+		// string is not exotic: the judge is instructed to name the
+		// SPECIFIC missing thing, and that is often a code fragment.
+		//
+		// If the string-awareness is wanted it belongs in
+		// handle._now_verdict_rationale first, where both runtimes get
+		// it. `}` is one byte, so text[i+1:] never splits a rune.
+		depth := 0
+		for i := 0; i < len(text); i++ {
+			switch text[i] {
+			case '{':
 				depth++
-			case ch == '}':
+			case '}':
 				depth--
-				if depth == 0 {
-					text = strings.TrimSpace(text[i+1:])
-					closed = true
-				}
 			}
-			if closed {
+			if depth == 0 {
+				text = pytext.Strip(text[i+1:])
 				break
 			}
-		}
-		if !closed {
-			return ""
 		}
 	}
 	// No clip here: the caller scrubs FIRST, then the sinks clip — a
 	// clip-before-scrub could truncate a credential mid-string and slip
 	// it past the fixed-length secret patterns (r2 Skeptic).
-	return strings.Join(strings.Fields(text), " ")
+	// Python: `" ".join(text.split())`. str.split() with no argument
+	// splits on the 29-code-point whitespace set; strings.Fields splits
+	// on unicode.IsSpace, which is four code points narrower
+	// (U+001C..U+001F) — and pytext's own package doc flags Split for
+	// exactly this (mission-r3 MEDIUM). Those four arrive through pasted
+	// terminal output, which is precisely what a NOW judge quotes back.
+	return strings.Join(pytext.Split(text), " ")
 }
 
 // verifyNow runs the text judge and applies the tri-state verdict.

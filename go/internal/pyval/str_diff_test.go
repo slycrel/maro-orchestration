@@ -241,3 +241,87 @@ func TestALoneSurrogateDivergesFromCPython(t *testing.T) {
 		t.Fatalf("CPython no longer keeps U+D800: %v — the divergence has moved", row)
 	}
 }
+
+// The store IS the contract, so the sharpest test of a writer is not
+// "does it look right" but "can the other runtime read it back". This
+// round-trips documents through LoadsOrdered -> DumpsIndent2 and then
+// hands the RESULT to CPython's json.loads, asserting both that it parses
+// and that the values survive.
+//
+// It exists because emitting Inf instead of Infinity passed every
+// existing test in this package while making the whole document
+// unreadable to Python (mission-r3 MEDIUM) — a divergence no
+// Go-side-only assertion can see.
+func TestWhatGoWritesCPythonCanRead(t *testing.T) {
+	docs := []struct{ name, in string }{
+		{"the non-finite family", `{"a": Infinity, "b": -Infinity, "c": NaN, "d": 1.0}`},
+		{"infinities nested in a list", `{"scores": [Infinity, -Infinity, NaN]}`},
+		{"a lone infinity", `{"a": Infinity}`},
+		{"ordinary values", `{"a": 1, "b": 1.0, "c": "x", "d": null, "e": [1, 2]}`},
+		{"a float that overflows to inf", `{"a": 1e309}`},
+		{"key order and unicode", `{"z": "\u00e9", "a": "b", "m": {"n": 1}}`},
+	}
+
+	type row struct {
+		Name string `json:"name"`
+		Out  string `json:"out"`
+	}
+	var rows []row
+	for _, d := range docs {
+		v, err := LoadsOrdered(d.in)
+		if err != nil {
+			t.Fatalf("%s: Go could not read its own input %q: %v", d.name, d.in, err)
+		}
+		out, err := DumpsIndent2(v)
+		if err != nil {
+			t.Fatalf("%s: Go could not render: %v", d.name, err)
+		}
+		rows = append(rows, row{d.name, out})
+	}
+
+	in, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// For each document: can CPython parse what Go wrote, and does
+	// re-dumping it in Python reproduce the same values? Compare the
+	// PARSED forms, not the text, so indentation is not under test here.
+	probe, perr := exec.Command("python3", "-c",
+		"import json,sys\n"+
+			"out=[]\n"+
+			"for r in json.loads(sys.argv[1]):\n"+
+			"    try:\n"+
+			"        v=json.loads(r['out'])\n"+
+			"        out.append([r['name'], None, json.dumps(v)])\n"+
+			"    except Exception as e:\n"+
+			"        out.append([r['name'], str(e), None])\n"+
+			"print(json.dumps(out))", string(in)).Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var got [][]*string
+	if err := json.Unmarshal(probe, &got); err != nil {
+		t.Fatalf("probe output was not JSON: %v\n%s", err, probe)
+	}
+	for i, g := range got {
+		if g[1] != nil {
+			t.Errorf("CPython CANNOT read what Go wrote for %q\n  go wrote: %s\n  error:    %s",
+				docs[i].name, rows[i].Out, *g[1])
+			continue
+		}
+		// And the input itself must survive: CPython reading Go's output
+		// has to agree with CPython reading the ORIGINAL.
+		want, werr := exec.Command("python3", "-c",
+			"import json,sys; print(json.dumps(json.loads(sys.argv[1])))", docs[i].in).Output()
+		if werr != nil {
+			t.Fatalf("%s: probe failed on the original: %v", docs[i].name, werr)
+		}
+		if got, wanted := *g[2], strings.TrimSpace(string(want)); got != wanted {
+			t.Errorf("the values changed on the way through Go for %q\n"+
+				"  py(go(x)) %s\n  py(x)     %s", docs[i].name, got, wanted)
+		}
+	}
+}

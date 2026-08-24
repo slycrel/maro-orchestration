@@ -5143,3 +5143,127 @@ rounds of adversarial review read those comments as settled and moved on;
 the round that was told explicitly to treat them as claims found all
 three. Reviewing the whole chunk is what made it possible — the comments
 in question were not in any round's diff.
+
+## Adversarial mission-r3 — six findings, all real, one HIGH
+
+Whole chunk again, opus tier, with one lens added to the prompt: *read
+every comment that claims a divergence is safe as an unverified claim.*
+Six findings — 1 HIGH, 4 MEDIUM, 1 LOW — **none hallucinated**, every
+CPython claim re-measured here before any fix. It also ran its own
+sweeps and reported them: 4000 generated fence/think/bracket documents
+and 30 extra decompose payloads against CPython, **zero divergences**,
+with a "checked and clean" section naming what it could not break.
+
+### HIGH — the same fork, four lines below the one r2 removed
+
+`verdictRationale`'s JSON-skip scan was string-aware, and bailed to `""`
+on an unbalanced object, under a comment saying so: *"The scan is
+STRING-AWARE (Go-stricter than Python's naive count)"*. Python's is six
+lines of naive counter with no unbalanced lane at all. Measured:
+
+```
+{"fulfilled": false, "why": "missing } brace in file"} the file was never created
+  CPython -> `brace in file"} the file was never created`
+  Go      -> `the file was never created`
+
+{"fulfilled": false, "why": "no write call        <- truncated at the token budget
+  CPython -> the whole blob back
+  Go      -> "" -> the caller then stores the STATIC string
+             "judge gave no rationale"
+```
+
+The second is the worse one: `""` flips the caller to a fixed sentence
+claiming the judge gave no reason, which is **false**, and is the exact
+regression `_now_verdict_rationale` was written to prevent. Both land in
+`res.VerdictSummary`, the outcome row, and the run-dir stamp.
+
+What makes this the round's real finding is where it was. r2 removed a
+`<think>` pre-strip from this function for precisely this reason, and
+left a comment saying that reasoning was *"right about the symptom and
+wrong about the remedy"*. **The next fork was four lines below it, in the
+same function, and r2 did not look.** r1's fence fork was four lines from
+r1's carve fork. Twice now, fixing a fork has stopped at the fork instead
+of re-reading the file it was in.
+
+### MEDIUM — Go wrote a file CPython cannot open
+
+`unmaskPaired` mapped CPython's `Infinity` token to `json.Number("Inf")`,
+and `pyjson.Value` writes number literals back verbatim:
+
+```
+in : {"a": Infinity, "b": -Infinity, "c": NaN, "d": 1.0}
+out: {"a": Inf, "b": -Inf, "c": NaN, "d": 1.0}
+
+json.dumps({'a': float('inf')}) -> {"a": Infinity}    <- how it gets there
+json.loads('{"a": Inf}')        -> JSONDecodeError    <- the WHOLE document
+```
+
+Not one field — the whole document. `MarkFeaturePassing` decodes all of
+`feature_list.json`, patches three fields, and re-renders it, so a single
+`Infinity` anywhere in that file, rewritten by Go, leaves the Python
+runtime unable to parse the manifest at all.
+
+Every existing test passed before and after the fix. That gap is now
+closed by a test shaped like the actual contract — **`TestWhatGoWrites
+CPythonCanRead`**: round-trip through `LoadsOrdered` → `DumpsIndent2`,
+then hand the result to CPython's `json.loads` and compare the parsed
+values against CPython reading the original. It fails with the words
+"CPython CANNOT read what Go wrote". No Go-side-only assertion can see
+this class of defect, and this slice had none of this shape until now.
+
+### MEDIUM — a missing `expanduser`, under a comment claiming exact parity
+
+`Workspace()`'s doc said it matched `config.workspace_root` *"exactly"*.
+Python applies `.expanduser()` to every env-var branch; Go returned the
+raw string. On `MARO_WORKSPACE=~/.maro/workspace` — the form a systemd
+`Environment=` line, a Docker `-e`, or this repo's own
+`scripts/mint_grounding_census.py` produces, none of which expand `~` —
+CPython resolves to the home directory and Go creates a directory named
+`~` under the process cwd. The two runtimes then use entirely different
+stores. That is the `feedback_live_store_probes` failure in a second
+spelling, and the doc comment asserting parity is what carried it.
+
+`.resolve()` is deliberately not ported, and now says why: it only
+matters if a caller chdirs mid-run, and following symlinks would make Go
+disagree with Python about which path *string* a probe should assert —
+which is the thing that rule exists for.
+
+### MEDIUM ×2 more, and a LOW about my own comment
+
+- Three remaining `strings.TrimSpace`/`strings.Fields` sites in the same
+  function that opens by getting this right and explaining why. Same four
+  code points, same durable field.
+- The YAML 1.1/1.2 note was **incomplete in a way that made it
+  reassuring**. It said the seam was the four bool words and that both
+  runtimes agree anyway. Measured, the seam is wider and the agreement is
+  a coincidence of those words being in both string sets:
+
+  | `config.yml` | PyYAML 1.1 | yaml.v3 1.2 | `get_bool(_, False)` |
+  |---|---|---|---|
+  | `flag: 08` | `str '08'` | `float64 8` | `false`+warn / **`true`, silent** |
+  | `flag: 0o10` | `str '0o10'` | `int 8` | `false`+warn / **`true`, silent** |
+  | `flag: 1:30` | **`int 90`** | `str "1:30"` | `true`, silent / **`false`+warn** |
+
+  A zero-padded value is an ordinary thing to write; the two runtimes take
+  **opposite branches of a behaviour gate**, and Go is the side that stays
+  silent — the operator gets no signal from the runtime doing the wrong
+  thing. Pinned as named divergences; normalizing means re-resolving every
+  scalar under 1.1 rules inside `Get`/`Lookup`, which is its own slice.
+- And a LOW on a comment written earlier **in this same session**: the
+  `\b` residual's "measured" example was `<thinké>`, whose first
+  character after the tag name is an ASCII `e` — so both engines agree and
+  it demonstrates nothing. The residual is real and the *test* pins the
+  right spelling (`<thinké>`); only the comment was wrong. Filed
+  under the round's own lens: a "measured" example that measures nothing
+  is what lets a residual note stop being checked.
+
+### The rule this round adds
+
+r1: a fix arrives with no coverage by construction. r2: a claim in a
+comment is load-bearing. r3 sharpens the second into something
+actionable:
+
+> **When a fork is found, re-read the whole file it was in before
+> declaring it fixed.** Both times a fork has been fixed in this port, the
+> next one was within five lines and survived another full round. A fork
+> is evidence about the file, not just about the line.

@@ -28,7 +28,7 @@ import (
 // adversarial round (Architect, 2026-08-22) neither does Go.
 func Home() string {
 	if v := os.Getenv("MARO_USER_DIR"); v != "" {
-		return v
+		return expandUser(v)
 	}
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -47,7 +47,7 @@ func Home() string {
 func Workspace() string {
 	for _, name := range []string{"MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"} {
 		if v := os.Getenv(name); v != "" {
-			return v
+			return expandUser(v)
 		}
 	}
 	h, err := os.UserHomeDir()
@@ -55,6 +55,36 @@ func Workspace() string {
 		return filepath.Join(".maro", "workspace")
 	}
 	return filepath.Join(h, ".maro", "workspace")
+}
+
+// expandUser is the `.expanduser()` both Python resolvers apply to an
+// env-var path, and its absence was a whole-store fork (mission-r3
+// MEDIUM). A shell does not expand `~` inside a systemd `Environment=`
+// line, a Docker `-e`, or a quoted assignment — and this repo's own
+// scripts/mint_grounding_census.py writes exactly that shape. Measured
+// on MARO_WORKSPACE=~/.maro/workspace:
+//
+//	CPython -> /home/clawd/.maro/workspace
+//	Go      -> the literal "~/.maro/workspace", i.e. a directory named
+//	           "~" under the process cwd
+//
+// The two runtimes then read and write entirely different mission.json,
+// memory/ and playbook.md. That is the failure feedback_live_store_probes
+// records, in a second spelling.
+//
+// Python also calls .resolve() on the workspace (not on _maro_dir), which
+// absolutizes and follows symlinks. Deliberately NOT ported: it only
+// changes an answer when a caller chdirs between two resolutions, and
+// resolving symlinks here would make Go disagree with Python about which
+// path STRING a probe should assert — the thing that rule is for. Named
+// so the next reader knows it was a decision.
+func expandUser(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(h, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
 }
 
 // Load reads and merges the two config tiers. A missing or unparseable
@@ -193,16 +223,35 @@ var (
 // string is a divergence in a shared log.
 //
 // PARITY NOTE, and it is the sharp one here. Python reads this file with
-// PyYAML, which is YAML **1.1**, where bare `on`/`off`/`yes`/`no` are
-// BOOLEANS. Go reads it with gopkg.in/yaml.v3, which is YAML **1.2**,
-// where those same words are plain strings. The two libraries disagree
-// about the type before get_bool is ever called. It happens that both
-// runtimes reach the same answer anyway — 1.1 hands Python a real bool,
-// 1.2 hands Go a string that is in truthyStrings/falsyStrings — but they
-// reach it by different routes, and the agreement is a coincidence of
-// these particular four words being in both sets. Pinned case by case in
-// config_diff_test.go so that if either set ever changes, the test says
-// so instead of the store quietly forking.
+// PyYAML, which is YAML **1.1**, and Go reads it with gopkg.in/yaml.v3,
+// which is YAML **1.2**. The two libraries disagree about a scalar's TYPE
+// before get_bool is ever called, and the disagreement is wider than the
+// bool words (mission-r3 MEDIUM corrected an earlier version of this note
+// that said it was confined to them). Measured on this box:
+//
+//	config.yml     PyYAML 1.1        yaml.v3 1.2      get_bool(_, False)
+//	flag: on       bool True         string "on"      true  / true    agree
+//	flag: off      bool False        string "off"     false / false   agree
+//	flag: 08       str "08"          float64 8        false / TRUE    FORK
+//	flag: 09       str "09"          float64 9        false / TRUE    FORK
+//	flag: 0o10     str "0o10"        int 8            false / TRUE    FORK
+//	flag: 1:30     int 90 (!)        string "1:30"    true  / FALSE   FORK
+//	flag: 2026-1-2 datetime.date     time.Time        both warn, differently
+//
+// The four bool words agree, and that is a COINCIDENCE of those words
+// being in truthyStrings/falsyStrings under either reading — not a
+// property of the seam. Where the libraries disagree about the value
+// rather than the route, the two runtimes take opposite branches of a
+// behaviour gate, and on 08/09/0o10 Go is the side that stays SILENT: the
+// operator gets no signal from the runtime doing the wrong thing.
+//
+// Not normalized, because doing it properly means re-resolving every
+// scalar under 1.1 rules inside Get/Lookup — its own slice, touching
+// every config read in the port. Pinned case by case in
+// config_diff_test.go: the agreeing spellings in boolCorpus, the forking
+// ones in TestYAML11And12DisagreeOnMoreThanTheBoolWords, which fails if
+// either side moves. pyval.Repr renders a time.Time as
+// "<unrepresentable>", so the date row's warning text forks too.
 func GetBool(cfg map[string]any, path string, def bool) (value bool, warning string) {
 	val, present := Lookup(cfg, path)
 	if !present {

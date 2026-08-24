@@ -85,7 +85,11 @@ func reprNumber(n json.Number) string {
 	// ParseInt, and get echoed verbatim — `NaN` and `Inf` where Python
 	// prints `nan` and `inf`, straight into a milestone title.
 	switch s {
-	case "NaN", "Inf", "-Inf":
+	// The spellings unmaskPaired produces, which are CPython's own
+	// (json.dumps writes Infinity, and json.loads refuses Inf). Without
+	// this arm they fall into the integer arm below — no '.', 'e' or 'E'
+	// — and a milestone title gets "Infinity" where Python renders "inf".
+	case "NaN", "Infinity", "-Infinity":
 		f, err := n.Float64()
 		if err == nil {
 			return pyjson.FloatRepr(f)

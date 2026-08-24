@@ -624,13 +624,33 @@ func unmaskPaired(a, b any) any {
 		if !okA || !okB || restA != restB {
 			return a
 		}
+		// KEEP CPYTHON'S SPELLING. These literals are written back
+		// VERBATIM by pyjson.Value ("keep the source literal"), so the
+		// token chosen here is the token that lands in the shared file.
+		//
+		// This used to emit "Inf"/"-Inf", and CPython's json.loads
+		// rejects those outright — not the field, the WHOLE document
+		// (mission-r3 MEDIUM). Measured:
+		//
+		//	json.dumps({'a': float('inf')}) -> {"a": Infinity}   <- how it gets there
+		//	json.loads('{"a": Inf}')        -> JSONDecodeError: Expecting value
+		//
+		// The reach is every read-modify-write path: MarkFeaturePassing
+		// decodes all of feature_list.json, patches three fields on one
+		// feature, and re-renders the whole document — so one Infinity
+		// anywhere in that file, rewritten by Go, leaves the Python
+		// runtime unable to parse the manifest at all.
+		//
+		// strconv.ParseFloat accepts "Infinity" and "-Infinity", so
+		// json.Number.Float64 keeps working and nothing downstream
+		// changes. NaN was never affected; only the two infinities were.
 		switch restA {
 		case "NaN":
 			return json.Number("NaN")
 		case "Infinity":
-			return json.Number("Inf")
+			return json.Number("Infinity")
 		case "-Infinity":
-			return json.Number("-Inf")
+			return json.Number("-Infinity")
 		}
 		return a
 	case List:

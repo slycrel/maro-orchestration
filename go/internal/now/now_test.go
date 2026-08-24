@@ -381,20 +381,42 @@ func TestVerifyPayloadRuneSafe(t *testing.T) {
 	}
 }
 
-// TestVerdictRationaleStringAwareBraces: a brace inside a JSON string
-// value must not close the object early, and an unbalanced (truncated)
-// object recovers NOTHING rather than the raw JSON blob (r2 Skeptic +
-// Architect).
-func TestVerdictRationaleStringAwareBraces(t *testing.T) {
-	got := verdictRationale(`{"fulfilled": false, "note": "stray } inside"} the real reason`)
-	if got != "the real reason" {
-		t.Fatalf("string-aware scan must skip the whole object: %q", got)
-	}
-	if got := verdictRationale(`{"fulfilled": false, "why": "truncated mid-obj`); got != "" {
-		t.Fatalf("unbalanced JSON must recover nothing, got %q", got)
-	}
-	if got := verdictRationale(`{"a": "esc \" }", "b": 1} after escape`); got != "after escape" {
-		t.Fatalf("escaped quote handling: %q", got)
+// The JSON skip is a NAIVE brace counter, blind to string literals, with
+// no unbalanced-input lane — handle._now_verdict_rationale's exactly.
+// These three assertions used to demand the opposite (a string-aware scan
+// that returns "" on truncation), which is the r3 HIGH. Measured against
+// CPython 3.14.3 on 2026-08-23; the whole corpus is in
+// verdict_diff_test.go and this test names the three consequences at the
+// surface.
+//
+// None of these is the behaviour anyone would design. All three are the
+// behaviour the store is shaped by.
+func TestVerdictRationaleCountsBracesNaivelyAsPythonDoes(t *testing.T) {
+	for _, c := range []struct{ name, raw, want string }{
+		// A `}` inside a string value closes the object EARLY, so the
+		// tail of the JSON survives as part of the "rationale".
+		{"a brace inside a string closes early",
+			`{"fulfilled": false, "note": "stray } inside"} the real reason`,
+			`inside"} the real reason`},
+		// A truncated object never balances, the loop simply ends, and
+		// the whole blob comes back. Go used to return "" here, which
+		// flipped the caller to the static "judge gave no rationale" —
+		// a stored claim that is false, and the exact regression this
+		// function was written to prevent.
+		{"a truncated object keeps the whole blob",
+			`{"fulfilled": false, "why": "truncated mid-obj`,
+			`{"fulfilled": false, "why": "truncated mid-obj`},
+		// An escaped quote is not special to a counter that never
+		// tracked strings in the first place.
+		{"an escaped quote is not special",
+			`{"a": "esc \" }", "b": 1} after escape`,
+			`", "b": 1} after escape`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := verdictRationale(c.raw); got != c.want {
+				t.Fatalf("diverges from CPython\n    go %q\n    py %q", got, c.want)
+			}
+		})
 	}
 }
 

@@ -346,3 +346,123 @@ func TestAMappingValueWarnsDifferentlyThanCPython(t *testing.T) {
 			"CPython, delete this test and move the case into boolCorpus", gotWarn)
 	}
 }
+
+// The env-var path resolvers are the widest blast radius in this package:
+// get them wrong and the two runtimes read and write entirely different
+// stores. Python applies .expanduser() to every env-var branch, and Go
+// did not — measured against the real config.workspace_root/_maro_dir
+// rather than asserted.
+func TestEnvPathsResolveLikeCPython(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+	cases := []struct{ name, val string }{
+		{"a tilde path", "~/.maro/workspace"},
+		{"a bare tilde", "~"},
+		{"an absolute path is untouched", "/tmp/somewhere/ws"},
+		{"a tilde in the MIDDLE is not expanded", "/tmp/a~b/ws"},
+		// Python's expanduser only fires on a LEADING ~; ~user is a
+		// different lookup and this box has no such user, so Python
+		// leaves it alone too.
+		{"a relative path is untouched", "relative/ws"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, perr := exec.Command("python3", "-c",
+				"import json,os,sys\n"+
+					"os.environ['MARO_WORKSPACE']=sys.argv[1]\n"+
+					"os.environ['MARO_USER_DIR']=sys.argv[1]\n"+
+					"sys.path.insert(0, sys.argv[2])\n"+
+					"import config\n"+
+					"print(json.dumps([str(config.workspace_root()), str(config._maro_dir())]))",
+				c.val, srcDirConfig(t)).Output()
+			if perr != nil {
+				if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+					t.Skipf("python3 unavailable: %v", lookErr)
+				}
+				t.Fatalf("the CPython probe could not run: %v", perr)
+			}
+			var want []string
+			if err := json.Unmarshal(out, &want); err != nil {
+				t.Fatalf("probe output was not JSON: %v\n%s", err, out)
+			}
+
+			t.Setenv("MARO_WORKSPACE", c.val)
+			t.Setenv("MARO_USER_DIR", c.val)
+
+			// Python's workspace_root also calls .resolve(), which
+			// absolutizes against the CWD; _maro_dir does not. Compare
+			// the tilde expansion, which is what forks the store, and
+			// absolutize the Go side the same way for the comparison.
+			gotWS, _ := filepath.Abs(Workspace())
+			if gotWS != want[0] {
+				t.Errorf("Workspace() diverges for %q\n    go %q\n    py %q",
+					c.val, gotWS, want[0])
+			}
+			if got := Home(); got != want[1] {
+				t.Errorf("Home() diverges for %q\n    go %q\n    py %q",
+					c.val, got, want[1])
+			}
+			if c.val == "~/.maro/workspace" && !strings.HasPrefix(gotWS, home) {
+				t.Errorf("a tilde path did not expand into the home directory: %q", gotWS)
+			}
+		})
+	}
+}
+
+// KNOWN DIVERGENCES, YAML 1.1 vs YAML 1.2 — the half of the seam the
+// bool words hide. PyYAML resolves YAML 1.1 tags and yaml.v3 resolves
+// 1.2, and on `on`/`off`/`yes`/`no` the two happen to agree because those
+// words are in truthyStrings/falsyStrings either way. On leading-zero
+// numbers, sexagesimals and dates they do NOT agree, and the runtimes
+// take opposite branches of a behaviour gate (mission-r3 MEDIUM).
+//
+// `08` is the sharp one: a zero-padded value is an ordinary thing to
+// write, and Go is the side that stays SILENT — so the operator gets no
+// signal from the runtime that does the wrong thing.
+//
+// Pinned as divergences rather than fixed. Normalizing would mean
+// re-resolving every scalar under 1.1 rules inside Get/Lookup, which is
+// its own slice and touches every config read in the port.
+func TestYAML11And12DisagreeOnMoreThanTheBoolWords(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		def     bool
+		goVal   bool   // what Go reaches today
+		goWarns bool   // ...and whether it says anything
+		pyNote  string // what CPython does, for the failure message
+	}{
+		{"a leading-zero 08", "flag: 08\n", false, true, false,
+			"PyYAML: str '08' -> falsy-set miss -> default false, WITH a warning"},
+		{"a leading-zero 09", "flag: 09\n", false, true, false,
+			"PyYAML: str '09' -> default false, WITH a warning"},
+		{"a 1.2 octal 0o10", "flag: 0o10\n", false, true, false,
+			"PyYAML: str '0o10' -> default false, WITH a warning"},
+		{"a sexagesimal 1:30", "flag: 1:30\n", false, false, true,
+			"PyYAML: int 90 -> bool(90) -> true, SILENTLY"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ws := filepath.Join(dir, "ws")
+			if err := os.MkdirAll(ws, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(ws, "config.yml"), []byte(c.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("MARO_USER_DIR", dir)
+			t.Setenv("MARO_WORKSPACE", ws)
+			cfg, _ := Load()
+
+			got, warn := GetBool(cfg, "flag", c.def)
+			if got != c.goVal || (warn != "") != c.goWarns {
+				t.Fatalf("Go's behaviour on %q moved (got %v warn=%q); if it now "+
+					"matches CPython, delete this case and add it to boolCorpus.\n  %s",
+					c.yaml, got, warn, c.pyNote)
+			}
+		})
+	}
+}
