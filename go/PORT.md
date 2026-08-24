@@ -4027,3 +4027,104 @@ Both accept `"1_000"`, and both accept `"nan"`/`"inf"` — so does
 `float()`, which is not a bug in either. The strip set is
 `strings.TrimSpace` exactly: `float()`'s whitespace set is `str.strip()`'s
 MINUS U+001C–U+001F (25 code points vs 29).
+
+
+### mission slice 3 — run_mission, the drain, and five seams that are not silence
+
+`run_mission` reaches five subsystems this port does not have: `hooks`,
+`sprint_contract`, `boot_protocol`, `ancestry` and `loop_artifacts`.
+Four of the five are ALREADY optional over there — sprint_contract and
+boot_protocol behind `try/except ImportError`, every `run_hooks` and the
+whole ancestry block inside a bare `except Exception: pass`. A Python run
+on a box where those imports fail takes exactly the path this port takes,
+so the port is a supported configuration rather than a degraded one.
+
+They are **nil-able seams** on `RunOptions`, not silence. What each one
+costs when nil:
+
+| Seam | Nil behaviour | What is lost |
+|---|---|---|
+| `Hooks` | no hook ever fires | no hook can BLOCK a feature or a milestone, and `get_injected_context` contributes nothing to the worker's context |
+| `Ancestry` | `mission.ancestry_context` stays `""` | the mission carries no prior-work context |
+| (sprint contract) | unported entirely | **`feature_list.json`'s `passing` flags are never set** — `MarkFeaturePassing` has no caller in this runtime |
+| (boot protocol) | unported entirely | the worker gets no completed-features / dead-ends block |
+| `ResolveSlug` | REQUIRED when `Project` is empty | — |
+
+The third row is the one to watch on the interop side: a manifest that
+never advances reads exactly like a mission that never passed anything,
+and the Python runtime reads that same file.
+
+`RunFeature` is **required**, not nil-able. The agent loop is the one
+thing that is not optional in Python, and a mission that silently ran no
+features and still reported a status would be worse than an error.
+
+**Import direction.** Python does `from agent_loop import run_agent_loop`
+INSIDE the function body — the idiom for "this would be a cycle at module
+scope". Go has no lazy import, so the edge lives in `internal/missionrun`
+and `orch` stays free of `loop`.
+
+**Named divergence — two dropped kwargs.** `missionrun.FeatureRunner`
+cannot pass `project=` or `ancestry_context_extra=`, because `loop.Opts`
+has neither. The loop resolves its OWN slug from the feature title, so a
+mission's features can land in per-feature project dirs where Python puts
+them all under the mission's project. `ancestry_context_extra` is always
+empty today (all three of its producers are unported) so the drop costs
+nothing yet — but it will the moment one of them lands. Both are dropped
+VISIBLY: `FeatureRequest` carries them and the wiring ignores them, so
+the gap is inspectable rather than invisible.
+
+### The DAG's named residual, closed
+
+`mission_dag.go` shipped with a residual: `PersistFn` walks EVERY
+milestone, including ones whose `runOne` is still writing to them.
+Python's `_save_lock` guards only `save_mission`, so a snapshot there can
+capture a sibling mid-mutation — a LOGICAL tear that self-heals at the
+next persist. Under the GIL that is all it is. In Go the same shape is a
+data race, which is undefined behaviour rather than a stale field.
+
+`RunMission` closes it by holding one lock on BOTH sides: every mutation
+of a `Milestone` or `Feature` goes through `missionRun.lock`, and so does
+the snapshot. The feature and validation WORK stays outside it — the
+critical sections are field assignments, so the concurrency the DAG
+exists to buy is untouched. `TestConcurrentMilestonesSnapshotWithoutRacing`
+runs four concurrent milestones with two concurrent features each under
+`-race`.
+
+### The two lanes really do disagree, and it is not a bug
+
+`run_mission` and `drain_next_mission` write the same fields of the same
+file with different vocabularies. Ported verbatim, and pinned by a test
+each, because a Go port that "fixed" the inconsistency would be changing
+behaviour under the name of a port:
+
+* `run_mission` narrows ANY non-`done` loop status to `blocked`. The
+  drain stores it **raw**, so a `stuck` can appear in `mission.json`
+  where run_mission's own vocabulary cannot produce one.
+* Milestones: `done`/`partial`/`failed` there, `done`/`blocked` here.
+  Missions: `done`/`partial`/`stuck` there, `done`/`blocked` here.
+* The drain has no validation gate and no hooks.
+* `all()` over an EMPTY feature list is **True**, so a milestone with no
+  features drains as done with nothing having run. A Go
+  `len(features) > 0 &&` guard added by instinct would be a divergence.
+
+### Three Python details that do not survive a careless port
+
+* **`max(1, int(cfg))` and its `except` are different numbers.** A
+  configured `0` becomes **one** (the floor); garbage becomes **two**
+  (the `except (TypeError, ValueError)`). Reading Go's zero value as
+  "unset" collapses them and silently doubles the concurrency an operator
+  asked to turn off. `orch.MilestoneWorkers` is the one implementation,
+  exported so the arithmetic is testable without a replay in a test file.
+* **`get_bool`, not `bool(get(...))`.** `mission.parallel_milestones` is
+  THE revert lever, and `bool("false")` is `True` — a quoted `false` in
+  YAML has to actually revert. The test asserts the LANE, not the parse.
+* **The status branch is guarded by `mission.status != "stuck"`**, and
+  `partial` counts as progress. So a failed milestone beside a partial
+  one is `partial`, not `stuck` — and a mission the scheduler already
+  marked stuck keeps that verdict even when the counts would compute
+  something softer.
+
+`goal[:80]` and `briefing[:3000]` are Python str slices — **runes**. Go's
+`s[:n]` would cut a multi-byte character in half and produce an invalid
+string where Python produces a shorter valid one, and both of those
+strings reach a durable store or a Telegram message.

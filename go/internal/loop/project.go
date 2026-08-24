@@ -227,3 +227,13 @@ func recordProjectMission(projectDir, goal string) error {
 	}
 	return nil
 }
+
+// ResolveProjectSlug is resolveProjectSlug, exported for the mission
+// wiring (internal/missionrun). It is the same function: run_mission's
+// `from loop_artifacts import resolve_project_slug` needs the identical
+// decision procedure, and a second implementation over there would be a
+// second answer to "which project is this goal's" — the exact defect
+// this file's package comment is written about.
+func ResolveProjectSlug(projectsRoot, goal string) (slug, warn string) {
+	return resolveProjectSlug(projectsRoot, goal)
+}
