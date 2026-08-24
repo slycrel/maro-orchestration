@@ -24,6 +24,12 @@ type Fake struct {
 	// Opts records each call's Options so tests can pin what the loop
 	// actually requested (tools, cwd, timeouts).
 	Opts []Options
+	// Msgs records each call's messages UNFLATTENED. Prompts above is the
+	// rendered string, which is the right surface for a subprocess backend
+	// and the wrong one for comparing against a CPython probe: the probe
+	// sees role/content pairs, and flattening them here would compare a Go
+	// rendering against itself.
+	Msgs [][]Message
 }
 
 func (f *Fake) Name() string { return "fake" }
@@ -34,6 +40,7 @@ func (f *Fake) Complete(_ context.Context, msgs []Message, opts Options) (*Respo
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Prompts = append(f.Prompts, BuildPrompt(msgs, opts.Tools...))
+	f.Msgs = append(f.Msgs, msgs)
 	f.Opts = append(f.Opts, opts)
 	if len(f.Script) == 0 {
 		return nil, fmt.Errorf("fake adapter with empty script (purpose=%s)", opts.Purpose)

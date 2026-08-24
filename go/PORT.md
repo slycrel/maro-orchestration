@@ -4690,11 +4690,23 @@ operator's file is missing. And the calibration row's `job_id` is raw in
 Python's dict literal too, which the same test case caught one ledger
 later.
 
-`depth` is the one field left coerced: this port reads
-`continuation_depth` as an int where Python holds the raw value. It only
-diverges for a non-numeric depth, where Python's `depth + 1` raises
-inside the spawn branch's own try — and the queue entries carrying that
-field are written by this port. Named, not fixed.
+`depth` was left coerced through r11 and named as a residual on the
+grounds that it "only diverges for a non-numeric depth, where Python's
+`depth + 1` raises inside the spawn branch's own try." **That reasoning
+was wrong and the review round after r11 found it.** A FLOAT depth raises
+nothing: it stays a float through `depth + 1`, and it is spelled `2.0` in
+the calibration row, the event detail, the operator artifact, the queue
+row, the check-in payload, and the stop evidence written into both
+`outcomes.jsonl` and `metadata.json`. Any foreign JSON writer — jq, any
+JavaScript tool, anything that types every number as a double — produces
+one. `depth` is raw now, `pyval.AddOne` does the arithmetic, and
+`tasks.Options.ContinuationDepth` is `any` so the float survives the
+queue.
+
+The residual had it backwards in a way worth naming: it described the
+LOUD failure and missed the silent one. A divergence that raises is a
+divergence someone finds. A residual that reasons only about the raising
+case has not looked at the other half.
 
 ### The r9 residual, closed
 

@@ -65,7 +65,10 @@ func TestTheCheckinCadenceAdvancesOnTheAncestry(t *testing.T) {
 			}
 
 			task := pyval.Obj{{Key: "origin", Val: c.origin}}
-			got, fired := AdvanceOriginWithCheckin(task, c.newDepth, nil)
+			got, fired, err := AdvanceOriginWithCheckin(task, c.newDepth, nil)
+			if err != nil {
+				t.Fatalf("a well-formed origin raised: %v", err)
+			}
 			if fired != c.wantFire {
 				t.Errorf("should_fire = %v, want %v", fired, c.wantFire)
 			}
@@ -191,7 +194,10 @@ func TestAPlainMapOriginKeepsItsFields(t *testing.T) {
 		"next_checkin_depth": 11,
 		"checkins_sent":      1,
 	}}}
-	got, fired := AdvanceOriginWithCheckin(task, 4, nil)
+	got, fired, err := AdvanceOriginWithCheckin(task, 4, nil)
+	if err != nil {
+		t.Fatalf("a well-formed origin raised: %v", err)
+	}
 	if fired {
 		t.Error("depth 4 fired against a next_checkin_depth of 11")
 	}
@@ -226,29 +232,154 @@ func TestAPlainMapOriginKeepsItsFields(t *testing.T) {
 	}
 }
 
-// `Origin(task.get("origin") or {})` — the `or` is a TRUTHINESS gate, so
-// None, an empty dict, and anything that is not a dict at all become a
-// fresh empty object rather than raising or riding through.
-func TestANonDictOriginBecomesAFreshObject(t *testing.T) {
+// `Origin(task.get("origin") or {})` is two gates, not one, and the port
+// asserted only the first for two rounds.
+//
+// The `or` is a TRUTHINESS gate: None, {}, "", 0 and False never reach the
+// constructor and become a fresh empty object. Everything TRUTHY does reach
+// it — and `Origin` is a TypedDict, so `Origin(x)` is `dict(x)` at runtime,
+// which raises for a string, a number, and a list whose elements are not
+// pairs. It does NOT raise for a list of pairs, which is a perfectly good
+// origin spelled the other way.
+//
+// The raise is not cosmetic. It happens inside the spawn branch's own try,
+// so CPython enqueues nothing and reports `surface`; a port that substituted
+// an empty object here enqueued a task, fired a check-in claiming "still
+// running", and returned `continue`.
+func TestATruthyNonMappingOriginRaisesTheWayDictDoes(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		val  any
+		name    string
+		val     any
+		wantErr string
 	}{
-		{"absent", nil},
-		{"null", nil},
-		{"a string", "loop-parent-1"},
-		{"a list", []any{"a", "b"}},
-		{"a number", 7},
-		{"a bool", false},
+		{"absent", nil, ""},
+		{"an empty object", pyval.Obj{}, ""},
+		{"an empty string", "", ""},
+		{"a zero", 0, ""},
+		{"false", false, ""},
+		{"a string", "loop-parent-1",
+			"dictionary update sequence element #0 has length 1; 2 is required"},
+		{"a one-character string", "x",
+			"dictionary update sequence element #0 has length 1; 2 is required"},
+		{"a list of singles", pyval.List{"a", "b"},
+			"dictionary update sequence element #0 has length 1; 2 is required"},
+		{"a list whose SECOND element is short", pyval.List{pyval.List{"a", 1}, pyval.List{"b"}},
+			"dictionary update sequence element #1 has length 1; 2 is required"},
+		{"a list of scalars", pyval.List{1},
+			"object is not iterable"},
+		{"a number", 7, "'int' object is not iterable"},
+		{"a float", 2.5, "'float' object is not iterable"},
+		{"true", true, "'bool' object is not iterable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			task := pyval.Obj{{Key: "origin", Val: c.val}}
-			got, fired := AdvanceOriginWithCheckin(task, 1, nil)
-			if fired {
-				t.Error("depth 1 fired the first check-in, which sits at 2")
+			got, fired, err := AdvanceOriginWithCheckin(task, 1, nil)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("a falsy origin raised: %v", err)
+				}
+				if fired {
+					t.Error("depth 1 fired the first check-in, which sits at 2")
+				}
+				if len(got) != 0 {
+					t.Errorf("a falsy origin rode through as %v", got)
+				}
+				return
 			}
-			if len(got) != 0 {
-				t.Errorf("a non-dict origin rode through as %v", got)
+			if err == nil {
+				t.Fatalf("a truthy non-mapping origin was swallowed, "+
+					"yielding %v — CPython raises %q here and refuses to enqueue",
+					got, c.wantErr)
+			}
+			if err.Error() != c.wantErr {
+				t.Errorf("message = %q, want %q", err.Error(), c.wantErr)
+			}
+		})
+	}
+}
+
+// A list of PAIRS is a mapping to dict(), and two-character strings are
+// pairs. Neither is a shape this system writes, and both are shapes it must
+// read the same way the Python beside it does.
+func TestAListOfPairsIsAPerfectlyGoodOrigin(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		val  any
+		want string
+	}{
+		{"a list of two-element lists",
+			pyval.List{pyval.List{"checkins_sent", 3}, pyval.List{"parent_goal", "ask"}},
+			"checkins_sent=3,parent_goal=ask"},
+		{"a list of two-character strings",
+			pyval.List{"ab", "cd"}, "a=b,c=d"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			task := pyval.Obj{{Key: "origin", Val: c.val}}
+			got, _, err := AdvanceOriginWithCheckin(task, 1, nil)
+			if err != nil {
+				t.Fatalf("dict() accepts this and the port refused: %v", err)
+			}
+			parts := []string{}
+			for _, f := range got {
+				parts = append(parts, fmt.Sprintf("%s=%v", f.Key, pyval.Plain(f.Val)))
+			}
+			if strings.Join(parts, ",") != c.want {
+				t.Errorf("origin = %v, want %s", parts, c.want)
+			}
+		})
+	}
+}
+
+// The cadence fields are read RAW and compared/incremented with Python's
+// own operators, so a non-numeric one raises into the same except and a
+// FLOAT one compares as a float rather than being truncated.
+func TestTheCadenceFieldsAreNumbersNotIntsBestEffort(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		origin   pyval.Obj
+		depth    any
+		wantFire bool
+		wantErr  string
+	}{
+		{"a float threshold above the depth",
+			pyval.Obj{{Key: "next_checkin_depth", Val: 2.5}}, 2, false, ""},
+		{"a float threshold below the depth",
+			pyval.Obj{{Key: "next_checkin_depth", Val: 1.5}}, 2, true, ""},
+		{"a string threshold",
+			pyval.Obj{{Key: "next_checkin_depth", Val: "soon"}}, 2, false,
+			"'>=' not supported between instances of 'int' and 'str'"},
+		{"a null threshold",
+			pyval.Obj{{Key: "next_checkin_depth", Val: nil}}, 2, false,
+			"'>=' not supported between instances of 'int' and 'NoneType'"},
+		{"a string count, on a firing depth",
+			pyval.Obj{{Key: "checkins_sent", Val: "two"}}, 9, false,
+			`can only concatenate str (not "int") to str`},
+		{"a null count, on a firing depth",
+			pyval.Obj{{Key: "checkins_sent", Val: nil}}, 9, false,
+			"unsupported operand type(s) for +: 'NoneType' and 'int'"},
+		{"a float depth compared against the default first depth",
+			pyval.Obj{}, 1.5, false, ""},
+		{"a string depth",
+			pyval.Obj{}, "deep", false,
+			"'>=' not supported between instances of 'str' and 'int'"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			task := pyval.Obj{{Key: "origin", Val: c.origin}}
+			_, fired, err := AdvanceOriginWithCheckin(task, c.depth, nil)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected raise: %v", err)
+				}
+				if fired != c.wantFire {
+					t.Errorf("should_fire = %v, want %v", fired, c.wantFire)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("no raise; CPython raises %q", c.wantErr)
+			}
+			if err.Error() != c.wantErr {
+				t.Errorf("message = %q, want %q", err.Error(), c.wantErr)
 			}
 		})
 	}
@@ -466,11 +597,19 @@ func TestTheLowConfidenceAdvisoryFiresOnlyForActedRiskyCalls(t *testing.T) {
 // paragraph is the failure this bound exists for — and the two bounds are
 // easy to collapse into one.
 func TestTheAdvisoryArgumentsAreBounded(t *testing.T) {
+	// The fixture is MULTI-BYTE on purpose. Python's `[:120]` and `[:200]`
+	// count code points; a byte slice counts bytes, and an ASCII fixture
+	// cannot tell the two apart — so `s[:120]` would pass this test while
+	// cutting a 3-byte rune in half on the first real reply that carried
+	// one. Every other bound in this chunk has a multi-byte fixture; this
+	// one did not, and a mutation battery found nothing because there was
+	// nothing here to find.
+	const unit = "é😀ル" // 2 + 4 + 3 bytes, 3 runes
 	ws := t.TempDir()
 	ch := &recordingChannel{}
 	body := reply(fmt.Sprintf(`"action": "close", "decision_class": "taste",
 		"confidence": 7, "reasoning": %q, "summary_for_user": %q`,
-		strings.Repeat("r", 400), strings.Repeat("s", 400)))
+		strings.Repeat(unit, 200), strings.Repeat(unit, 200)))
 	HandleEscalation(context.Background(), ws, objOf(map[string]any{
 		"job_id": "job-bound001", "parent_job_id": "loop-parent-1",
 		"reason": "audit the escalation lane", "continuation_depth": 1,
@@ -483,12 +622,18 @@ func TestTheAdvisoryArgumentsAreBounded(t *testing.T) {
 	if len(parts) != 3 {
 		t.Fatalf("malformed advisory: %q", ch.calls[0])
 	}
-	// "close: " plus 120 of summary.
-	if got := len(parts[0]); got != len("close: ")+120 {
-		t.Errorf("decision is %d chars, want %d", got, len("close: ")+120)
+	// "close: " plus 120 RUNES of summary, and 200 runes of reasoning.
+	if got := len([]rune(parts[0])); got != len("close: ")+120 {
+		t.Errorf("decision is %d runes, want %d", got, len("close: ")+120)
 	}
-	if got := len(parts[2]); got != 200 {
-		t.Errorf("reasoning is %d chars, want 200", got)
+	if got := len([]rune(parts[2])); got != 200 {
+		t.Errorf("reasoning is %d runes, want 200", got)
+	}
+	// And the cut lands on a rune boundary, which is the half a length
+	// check cannot see: a byte slice would leave a replacement character
+	// at the end instead of failing.
+	if strings.ContainsRune(parts[0]+parts[2], '\uFFFD') {
+		t.Error("the advisory was cut mid-rune")
 	}
 }
 

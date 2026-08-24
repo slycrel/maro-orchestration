@@ -163,7 +163,15 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	// is spelled by str() at each interpolation. taskGet reproduces that
 	// — the coercion happens where Python's f-string does it.
 	reason := taskGet(task, "reason", "")
-	depth := pyval.IntOf(taskGet(task, "continuation_depth", 0))
+	// RAW, like reason and the two ids beside it. Python holds
+	// `continuation_depth` untouched and spells it with str() at each
+	// interpolation, so a float depth — which is what ANY foreign JSON
+	// writer produces, jq and JavaScript included — stays "2.0" in the
+	// calibration row, the event detail, the operator artifact and the stop
+	// evidence. Reading it as an int here loses the ".0" in five places at
+	// once and nothing raises to say so.
+	depth := taskGet(task, "continuation_depth", 0)
+	depthStr := pyval.Str(depth)
 	// jobIDRaw is what Python holds. Every f-string spells it with str()
 	// at the point of use, and that is what jobID is for — but two places
 	// need the raw value: write_event's loop_id, which is not coerced, and
@@ -171,11 +179,17 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 	// so writes no artifact at all.
 	jobIDRaw := taskGet(task, "job_id", "unknown")
 	jobID := pyval.Str(jobIDRaw)
-	parentID := pyval.Str(taskGet(task, "parent_job_id", ""))
+	// RAW as well, and the reason is a lock file. The close branch hands
+	// this straight to the stop-verdict stamp, whose first line is
+	// `if not loop_id: return` — a TRUTHINESS gate. Spelling a JSON null as
+	// "None" first walks past that gate, creates memory/ and takes
+	// memory/outcomes.jsonl.lock that CPython never takes, and would stamp a
+	// row keyed on the literal string "None".
+	parentID := taskGet(task, "parent_job_id", "")
 
-	o.logf("escalation_start job_id=%s depth=%d", jobID, depth)
+	o.logf("escalation_start job_id=%s depth=%s", jobID, depthStr)
 	if o.Verbose {
-		fmt.Fprintf(os.Stderr, "[maro:director:escalation] job=%s depth=%d\n", jobID, depth)
+		fmt.Fprintf(os.Stderr, "[maro:director:escalation] job=%s depth=%s\n", jobID, depthStr)
 	}
 
 	// Dry-run: close the escalation without further work. Note this close
@@ -185,7 +199,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		return EscalationDecision{
 			Action:         "close",
 			Reasoning:      "[dry-run] escalation acknowledged, closing",
-			SummaryForUser: fmt.Sprintf("Dry-run escalation for job %s at depth %d", jobID, depth),
+			SummaryForUser: fmt.Sprintf("Dry-run escalation for job %s at depth %s", jobID, depthStr),
 			DecisionClass:  "mechanical",
 			Confidence:     5,
 		}
@@ -196,9 +210,9 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		{Role: "system", Content: escalationSystem},
 		{Role: "user", Content: fmt.Sprintf(
 			"Escalation context:\n\n%s\n\n"+
-				"Continuation depth: %d\n\n"+
+				"Continuation depth: %s\n\n"+
 				"What should happen next? Respond with JSON only.",
-			pyval.Str(reason), depth)},
+			pyval.Str(reason), depthStr)},
 	}, llm.Options{
 		MaxTokens:   512,
 		Temperature: 0.1,
@@ -219,8 +233,8 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			Action:    "surface",
 			Reasoning: "LLM call failed during escalation processing",
 			SummaryForUser: fmt.Sprintf(
-				"Escalation for job %s (depth %d) could not be processed automatically.",
-				jobID, depth),
+				"Escalation for job %s (depth %s) could not be processed automatically.",
+				jobID, depthStr),
 			DecisionClass: "mechanical",
 			Confidence:    5,
 		}
@@ -289,19 +303,35 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 
 	switch {
 	case action == "continue":
-		newDepth := depth + 1
-		// Deep-recursion check-in cadence (non-blocking) + carry ancestry.
-		origin, shouldCheckin := AdvanceOriginWithCheckin(task, newDepth, o.Config)
-		t, terr := tasks.Enqueue(ws, tasks.Options{
-			Lane:   "agenda",
-			Source: "loop_continuation",
-			// The original escalation context becomes the continuation
-			// context.
-			Reason:            pyval.Str(reason),
-			ParentJobID:       jobID,
-			ContinuationDepth: newDepth,
-			Origin:            origin,
-		})
+		// Everything from `depth + 1` to the enqueue sits inside ONE try in
+		// Python, so a raise anywhere in it — a non-numeric depth, a
+		// malformed origin, a non-numeric cadence field, the enqueue itself
+		// — lands on the same except and produces the same surface. Go has
+		// no try, so the sequence is written out and every step reports into
+		// the same `terr`.
+		var (
+			newDepth      any
+			origin        pyval.Obj
+			shouldCheckin bool
+			t             tasks.Task
+		)
+		newDepth, terr := pyval.AddOne(depth)
+		if terr == nil {
+			// Deep-recursion check-in cadence (non-blocking) + carry ancestry.
+			origin, shouldCheckin, terr = AdvanceOriginWithCheckin(task, newDepth, o.Config)
+		}
+		if terr == nil {
+			t, terr = tasks.Enqueue(ws, tasks.Options{
+				Lane:   "agenda",
+				Source: "loop_continuation",
+				// The original escalation context becomes the continuation
+				// context.
+				Reason:            pyval.Str(reason),
+				ParentJobID:       jobID,
+				ContinuationDepth: newDepth,
+				Origin:            origin,
+			})
+		}
 		if terr != nil {
 			o.logf("escalation continue: failed to enqueue continuation: %v", terr)
 			// Suppressing the misleading check-in is not enough — the chain
@@ -317,7 +347,7 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			break
 		}
 		followupTaskID = t.GetString("job_id")
-		o.logf("escalation_continue: enqueued %s depth=%d", followupTaskID, depth+1)
+		o.logf("escalation_continue: enqueued %s depth=%v", followupTaskID, newDepth)
 		// Fire only after the continuation is CONFIRMED enqueued — a failed
 		// enqueue must never tell the user "still running".
 		if shouldCheckin {
@@ -330,16 +360,27 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 		action = "surface"
 
 	case action == "narrow":
-		newDepth := depth + 1
-		origin, shouldCheckin := AdvanceOriginWithCheckin(task, newDepth, o.Config)
-		t, terr := tasks.Enqueue(ws, tasks.Options{
-			Lane:              "agenda",
-			Source:            "loop_continuation",
-			Reason:            fmt.Sprintf("NARROWED from escalation %s:\n\n%s", jobID, revisedGoal),
-			ParentJobID:       jobID,
-			ContinuationDepth: newDepth,
-			Origin:            origin,
-		})
+		// One try in Python; see the continue branch above.
+		var (
+			newDepth      any
+			origin        pyval.Obj
+			shouldCheckin bool
+			t             tasks.Task
+		)
+		newDepth, terr := pyval.AddOne(depth)
+		if terr == nil {
+			origin, shouldCheckin, terr = AdvanceOriginWithCheckin(task, newDepth, o.Config)
+		}
+		if terr == nil {
+			t, terr = tasks.Enqueue(ws, tasks.Options{
+				Lane:              "agenda",
+				Source:            "loop_continuation",
+				Reason:            fmt.Sprintf("NARROWED from escalation %s:\n\n%s", jobID, revisedGoal),
+				ParentJobID:       jobID,
+				ContinuationDepth: newDepth,
+				Origin:            origin,
+			})
+		}
 		if terr != nil {
 			o.logf("escalation narrow: failed to enqueue narrowed task: %v", terr)
 			// Same rationale as the continue branch: a dead chain must
@@ -407,8 +448,8 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 			Project: taskGet(task, "parent_job_id", ""),
 			LoopID:  jobIDRaw,
 			Status:  action,
-			Detail: fmt.Sprintf("depth=%d followup=%s | %s",
-				depth, followupLabel, pyval.Clip(reasoning, 100)),
+			Detail: fmt.Sprintf("depth=%s followup=%s | %s",
+				depthStr, followupLabel, pyval.Clip(reasoning, 100)),
 		})
 	}
 
@@ -481,29 +522,58 @@ func CheckinJitter(cfg map[string]any) int {
 // fires the check-in only after that enqueue succeeds; otherwise a failed
 // enqueue would still tell the user "still running" for a chain that just
 // silently died.
-func AdvanceOriginWithCheckin(task pyval.Obj, newDepth int, cfg map[string]any) (pyval.Obj, bool) {
-	// `Origin(task.get("origin") or {})` — the `or` is a truthiness gate,
-	// so an origin of None, {} or a non-dict all become a fresh object.
+// It returns an ERROR for the three CPython operations here that raise, and
+// the error is not cosmetic: every one of them happens inside the spawn
+// branch's own try, whose except flips the action to `surface` and enqueues
+// NOTHING. A port that swallowed them would create a queue entry CPython
+// never creates, fire a check-in saying "still running", and report
+// `continue` where CPython reported `surface` — with the exception's own
+// message in the ledger row.
+func AdvanceOriginWithCheckin(task pyval.Obj, newDepth any, cfg map[string]any) (pyval.Obj, bool, error) {
+	// `Origin(task.get("origin") or {})`. The `or` is a truthiness gate, so
+	// None, {}, "" and 0 all become a fresh object — but a TRUTHY non-mapping
+	// reaches dict(), which raises. `Origin` is a TypedDict, so `Origin(x)`
+	// is `dict(x)` at runtime with none of a cast's forgiveness.
 	//
-	// The copy matters: Python builds a NEW Origin from the task's dict,
-	// so advancing the cadence must not mutate the task the caller still
-	// holds. Aliasing here would advance next_checkin_depth on a task that
-	// was never enqueued when the enqueue below fails.
-	origin := asOrigin(taskGet(task, "origin", nil))
-	nextCheckin := CheckinFirstDepth(cfg)
-	if v, ok := origin.Get("next_checkin_depth"); ok {
-		nextCheckin = pyval.IntOf(v)
-	}
-	shouldFire := newDepth >= nextCheckin
-	if shouldFire {
-		origin.Set("next_checkin_depth", newDepth+CheckinJitter(cfg))
-		sent := 0
-		if v, ok := origin.Get("checkins_sent"); ok {
-			sent = pyval.IntOf(v)
+	// The copy matters: Python builds a NEW dict from the task's, so
+	// advancing the cadence must not mutate the task the caller still holds.
+	// Aliasing here would advance next_checkin_depth on a task that was never
+	// enqueued when the enqueue below fails.
+	origin := pyval.Obj{}
+	if raw := taskGet(task, "origin", nil); pyval.Truthy(raw) {
+		built, err := pyval.DictOf(raw)
+		if err != nil {
+			return nil, false, err
 		}
-		origin.Set("checkins_sent", sent+1)
+		origin = built
 	}
-	return origin, shouldFire
+	// The default is evaluated EAGERLY — it is an argument to .get(), so the
+	// config read and its clamp happen even when the key is present.
+	var nextCheckin any = CheckinFirstDepth(cfg)
+	if v, ok := origin.Get("next_checkin_depth"); ok {
+		nextCheckin = v
+	}
+	shouldFire, err := pyval.GE(newDepth, nextCheckin)
+	if err != nil {
+		return nil, false, err
+	}
+	if shouldFire {
+		jittered, err := pyval.AddN(newDepth, CheckinJitter(cfg))
+		if err != nil {
+			return nil, false, err
+		}
+		origin.Set("next_checkin_depth", jittered)
+		var sent any = 0
+		if v, ok := origin.Get("checkins_sent"); ok {
+			sent = v
+		}
+		next, err := pyval.AddOne(sent)
+		if err != nil {
+			return nil, false, err
+		}
+		origin.Set("checkins_sent", next)
+	}
+	return origin, shouldFire, nil
 }
 
 const checkinRedirectHint = "This goal is still running in the background. Reply on your " +
@@ -517,22 +587,37 @@ const checkinRedirectHint = "This goal is still running in the background. Reply
 // Every field comes from data already in hand — no second LLM call. The
 // director's own reasoning and summary_for_user from THIS escalation
 // decision already explain how the work serves the original ask.
-func FireCheckin(ws string, task pyval.Obj, newDepth int, action, reasoning,
+func FireCheckin(ws string, task pyval.Obj, newDepth any, action, reasoning,
 	summaryForUser string, origin pyval.Obj, o EscalationOptions) {
 
 	// Original ask: prefer the root goal carried in ancestry, fall back to
 	// this chain's escalation reason. Don't block the check-in on being
 	// able to reconstruct full lineage.
-	originalGoal := origin.GetString("parent_goal")
-	if originalGoal == "" {
-		originalGoal = pyval.Str(taskGet(task, "reason", ""))
+	//
+	// The `or` gates on TRUTHINESS of the raw value, not on it being a
+	// string. A parent_goal of 55 is truthy, so CPython carries "55" into
+	// the ledger row where a type assertion reads "" and silently falls
+	// through to a DIFFERENT string — the escalation reason.
+	originalGoal, _ := origin.Get("parent_goal")
+	if !pyval.Truthy(originalGoal) {
+		originalGoal = taskGet(task, "reason", "")
 	}
 	// origin["checkins_sent"] was already advanced to include THIS
 	// check-in by AdvanceOriginWithCheckin — adding another +1 here would
 	// report one check-in ahead of the count actually carried in origin.
-	checkinNumber := 0
+	//
+	// This int() is BARE, with no local try, so a non-numeric count raises
+	// into the blanket except wrapping this whole function: no notify at
+	// all, no ledger row, no hook. Answering 0 instead would emit a row
+	// CPython never writes.
+	sentRaw := any(0)
 	if v, ok := origin.Get("checkins_sent"); ok {
-		checkinNumber = pyval.IntOf(v)
+		sentRaw = v
+	}
+	checkinNumber, ok := pyInt(sentRaw)
+	if !ok {
+		o.logf("recursion check-in emit failed (non-fatal): int(%s)", pyval.Repr(sentRaw))
+		return
 	}
 	// An ORDERED payload, in Python's dict-literal order, because two
 	// surfaces write these keys out positionally: output/escalations.jsonl
@@ -540,27 +625,38 @@ func FireCheckin(ws string, task pyval.Obj, newDepth int, action, reasoning,
 	// — which is still valid JSON, still parses, and is why the
 	// divergence sat as a named residual from r9 until this payload gave
 	// a differential something to see.
+	handleID, _ := origin.Get("parent_handle_id")
+	// `new_depth + 1` cannot raise here: new_depth is already the result of
+	// `depth + 1` upstream, so it is a number by construction.
+	goalPass, err := pyval.AddOne(newDepth)
+	if err != nil {
+		o.logf("recursion check-in emit failed (non-fatal): %v", err)
+		return
+	}
 	payload := pyval.Obj{
-		{Key: "handle_id", Val: origin.GetString("parent_handle_id")},
+		{Key: "handle_id", Val: pyval.StrOrEmpty(handleID)},
 		// Distinguishes this from a park-the-goal escalation.
 		{Key: "blocking", Val: false},
-		{Key: "goal", Val: pyval.Clip(originalGoal, 400)},
-		{Key: "reason", Val: pyval.Clip(originalGoal, 400)},
-		{Key: "continuation_depth", Val: newDepth},
+		{Key: "goal", Val: pyval.Clip(pyval.Str(originalGoal), 400)},
+		{Key: "reason", Val: pyval.Clip(pyval.Str(originalGoal), 400)},
+		{Key: "continuation_depth", Val: pyval.FromPlain(newDepth)},
 		// pass 1 == depth 0
-		{Key: "goal_pass", Val: newDepth + 1},
+		{Key: "goal_pass", Val: pyval.FromPlain(goalPass)},
 		{Key: "checkin_number", Val: checkinNumber},
 		{Key: "action", Val: action},
 		{Key: "reasoning", Val: reasoning},
 		{Key: "summary_for_user", Val: summaryForUser},
-		{Key: "job_id", Val: pyval.Str(taskGet(task, "job_id", ""))},
-		{Key: "parent_job_id", Val: pyval.Str(taskGet(task, "parent_job_id", ""))},
+		// RAW, both of them: Python's dict literal carries the task's own
+		// values and notify's writer passes them to json.dumps untouched, so
+		// an integer job id stays an integer in the ledger row.
+		{Key: "job_id", Val: pyval.FromPlain(taskGet(task, "job_id", ""))},
+		{Key: "parent_job_id", Val: pyval.FromPlain(taskGet(task, "parent_job_id", ""))},
 		{Key: "redirect_hint", Val: checkinRedirectHint},
 		{Key: "status", Val: "running"},
 	}
 	notify.EmitOrdered(context.Background(), ws, "recursion_checkin", payload, notify.Options{})
-	o.logf("recursion_checkin fired: depth=%d pass=%d checkin=%d action=%s",
-		newDepth, newDepth+1, checkinNumber, action)
+	o.logf("recursion_checkin fired: depth=%v pass=%v checkin=%d action=%s",
+		newDepth, goalPass, checkinNumber, action)
 }
 
 // --- the judged close ----------------------------------------------------
@@ -574,17 +670,18 @@ func FireCheckin(ws string, task pyval.Obj, newDepth int, action, reasoning,
 // better-informed judgment ending the whole chain — so it overwrites,
 // keeping the prior verdict visible in the evidence. The reopen condition
 // is type-derived: the cost/value estimate moves.
-func StampCloseStopVerdict(ws, loopID string, depth, confidence int,
+func StampCloseStopVerdict(ws string, loopIDRaw, depth any, confidence int,
 	reasoning string, o EscalationOptions) {
 
-	if loopID == "" {
+	if !pyval.Truthy(loopIDRaw) {
 		return
 	}
+	loopID := pyval.Str(loopIDRaw)
 	// Composed RAW here; the one clip happens after the [refines: …] note
 	// is appended. Clipping first and then appending strips the marker and
 	// usually the note with it.
-	evidence := fmt.Sprintf("director escalation close at depth %d (confidence %d/10): %s",
-		depth, confidence, reasoning)
+	evidence := fmt.Sprintf("director escalation close at depth %s (confidence %d/10): %s",
+		pyval.Str(depth), confidence, reasoning)
 	// Fallback if the metadata stamp fails; the owner below re-assigns
 	// with the note included, clipped once at the same cap.
 	rowEvidence := budget.Clip(evidence, 800)
@@ -599,7 +696,7 @@ func StampCloseStopVerdict(ws, loopID string, depth, confidence int,
 			EvidenceOut:  &evOut,
 			ReopenPayload: pyval.Obj{
 				{Key: "kind", Val: "escalation-close"},
-				{Key: "depth", Val: depth},
+				{Key: "depth", Val: pyval.FromPlain(depth)},
 				{Key: "confidence", Val: confidence},
 			},
 		})
@@ -623,7 +720,7 @@ func StampCloseStopVerdict(ws, loopID string, depth, confidence int,
 
 // writeEscalationSummary writes the human-readable record of a close or a
 // surface. Best-effort: a failure here must not change the decision.
-func writeEscalationSummary(ws string, jobIDRaw any, action string, depth int,
+func writeEscalationSummary(ws string, jobIDRaw any, action string, depth any,
 	reasoning, summaryForUser string, reason any, o EscalationOptions) {
 
 	// `job_id[:8]` is a BARE slice inside the artifact's own try/except:
@@ -643,12 +740,12 @@ func writeEscalationSummary(ws string, jobIDRaw any, action string, depth int,
 	path := filepath.Join(artDir, fmt.Sprintf("escalation-%s-%s.md", short, action))
 	body := fmt.Sprintf(
 		"# Escalation %s — %s\n\n"+
-			"**Depth:** %d\n"+
+			"**Depth:** %s\n"+
 			"**Action:** %s\n"+
 			"**Reasoning:** %s\n\n"+
 			"## Summary for operator\n%s\n\n"+
 			"## Full escalation context\n%s\n",
-		titleCase(action), jobID, depth, action, reasoning, summaryForUser, pyval.Str(reason))
+		titleCase(action), jobID, pyval.Str(depth), action, reasoning, summaryForUser, pyval.Str(reason))
 	if err := record.AtomicWrite(path, []byte(body)); err != nil {
 		o.logf("escalation %s: failed to write summary: %v", action, err)
 		return
@@ -660,7 +757,7 @@ func writeEscalationSummary(ws string, jobIDRaw any, action string, depth int,
 
 // logCalibration appends one escalation_decision row to
 // memory/calibration.jsonl. Non-fatal by contract.
-func logCalibration(ws string, jobIDRaw any, depth int, action, decisionClass string,
+func logCalibration(ws string, jobIDRaw any, depth any, action, decisionClass string,
 	confidence int, o EscalationOptions) {
 
 	dir := orch.MemoryDir(ws)
@@ -678,7 +775,7 @@ func logCalibration(ws string, jobIDRaw any, depth int, action, decisionClass st
 		// RAW, like every other value in Python's dict literal here — a
 		// task carrying a non-string job_id writes it as whatever it is.
 		{Key: "job_id", Val: pyval.FromPlain(jobIDRaw)},
-		{Key: "depth", Val: depth},
+		{Key: "depth", Val: pyval.FromPlain(depth)},
 		{Key: "action", Val: action},
 		{Key: "decision_class", Val: decisionClass},
 		{Key: "confidence", Val: confidence},
@@ -722,39 +819,51 @@ func dataGet(d map[string]any, key string, def any) any {
 // to 1, i.e. maximum uncertainty, from a reply that said nothing about
 // confidence at all.
 func pyIntOr(v any, def int) int {
+	if n, ok := pyInt(v); ok {
+		return n
+	}
+	return def
+}
+
+// pyInt is bare `int(v)`: the value, or false where CPython raises.
+//
+// The two spellings are not interchangeable and both are live in this file.
+// `confidence` wraps int() in its own try with a default of 5, so it wants
+// pyIntOr. `checkin_number` does NOT — its int() is bare, and the raise
+// travels to the blanket except around the whole check-in, which means no
+// notification at all rather than a notification carrying a substituted
+// number.
+func pyInt(v any) (int, bool) {
 	switch t := v.(type) {
 	case nil:
-		return def // int(None) raises TypeError
+		return 0, false // int(None) raises TypeError
 	case bool:
 		if t {
-			return 1
+			return 1, true
 		}
-		return 0
+		return 0, true
 	case int:
-		return t
+		return t, true
 	case float64:
 		if t != t || t > 1e18 || t < -1e18 {
 			// int(nan) and int(inf) raise; a magnitude past int64 would
 			// be an arbitrary-precision int in CPython, which this port
 			// does not carry (named residual, shared with pyval.Plain).
-			return def
+			return 0, false
 		}
-		return int(t)
+		return int(t), true
 	case json.Number:
 		if i, err := t.Int64(); err == nil {
-			return int(i)
+			return int(i), true
 		}
 		if f, err := t.Float64(); err == nil {
-			return int(f)
+			return int(f), true
 		}
-		return def
+		return 0, false
 	case string:
-		if n, ok := pyIntFromString(t); ok {
-			return n
-		}
-		return def
+		return pyIntFromString(t)
 	}
-	return def
+	return 0, false
 }
 
 // pyIntFromString is int(str): surrounding whitespace is stripped, an

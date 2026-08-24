@@ -421,7 +421,7 @@ func Locked(path string, fn func() error) error {
 	// orch/mission.go had already papered over at ONE call site with a
 	// comment saying it belonged down here and that "every direct
 	// AppendRawLine caller has the same hole until it moves". It has moved.
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(lockPath), NewDirMode); err != nil {
 		return fmt.Errorf("create lock dir for %s: %w", lockPath, err)
 	}
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o666)

@@ -115,6 +115,14 @@ for p in sorted(ws.rglob("*")):
     # neither side's contract, so only existence is compared.
     files[str(p.relative_to(ws))] = "" if p.name.endswith(".lock") else _read(p)
 
+# The REQUEST is a compared surface too. It was captured and never read
+# for two rounds, which reads as though the prompt and the sampling
+# arguments were being diffed when nothing was: a drifted system prompt,
+# a changed max_tokens, or a lost no_tools would all have passed.
+_msgs = [{"role": m.role, "content": m.content}
+         for m in getattr(_Scripted, "messages", [])]
+_kw = {k: v for k, v in getattr(_Scripted, "kwargs", {}).items()}
+
 sys.stdout.write(json.dumps({
     "action": d.action,
     "reasoning": d.reasoning,
@@ -123,6 +131,8 @@ sys.stdout.write(json.dumps({
     "decision_class": d.decision_class,
     "confidence": d.confidence,
     "files": files,
+    "messages": _msgs,
+    "kwargs": _kw,
 }))
 `
 
@@ -417,6 +427,144 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 		}, reply(`"action": "surface", "decision_class": "mechanical",
 			"confidence": 8, "reasoning": "no job id",
 			"summary_for_user": "surfacing"`)},
+
+		// --- the check-in payload's own raw fields --------------------
+		//
+		// Every check-in case above uses STRING ids, and the two
+		// non-string-id cases never fire a check-in — so four fields of a
+		// fourteen-key payload had never been compared with anything but a
+		// string in them. `job_id` and `parent_job_id` are raw in Python's
+		// dict literal; `handle_id` is `str(x or "")`, which carries a
+		// truthy non-string; and `parent_goal` is an `or` fallback on the
+		// RAW value, so a truthy non-string one becomes the goal instead of
+		// falling through to the escalation reason.
+		{"a check-in carries non-string ids and ancestry", map[string]any{
+			"job_id": 4242, "parent_job_id": 991,
+			"reason": "audit the escalation lane", "continuation_depth": 3,
+			"origin": map[string]any{
+				"parent_handle_id": 77, "parent_goal": 55,
+			},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// A FALSY parent_goal falls through to the reason; a falsy
+		// parent_handle_id becomes "" rather than "0" or "False".
+		{"a check-in with falsy ancestry falls through", map[string]any{
+			"job_id": "job-fals01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 3,
+			"origin": map[string]any{
+				"parent_handle_id": 0, "parent_goal": "",
+			},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// int(checkins_sent) is BARE — no local try — so the raise travels
+		// to the blanket except around the whole check-in: the continuation
+		// is still enqueued, and NO notification is written at all.
+		{"an unreadable check-in count silences the notification", map[string]any{
+			"job_id": "job-cnt001", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 3,
+			"origin": map[string]any{"checkins_sent": "two", "next_checkin_depth": 2},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// --- the origin constructor's own refusals --------------------
+		//
+		// `Origin(x)` is `dict(x)`. A truthy non-mapping raises INSIDE the
+		// spawn branch's try, so CPython enqueues nothing, fires no
+		// check-in, and surfaces with the exception's own message in the
+		// ledger row and the operator summary.
+		{"a string origin refuses the whole enqueue", map[string]any{
+			"job_id": "job-orgs01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+			"origin": "loop-parent-1",
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		{"a numeric origin refuses with a different message", map[string]any{
+			"job_id": "job-orgn01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+			"origin": 7,
+		}, reply(`"action": "narrow", "decision_class": "mechanical",
+			"confidence": 8, "reasoning": "too broad",
+			"revised_goal": "just the lock shapes",
+			"summary_for_user": "narrowing"`)},
+
+		// A list of PAIRS is a mapping to dict(), and this one carries the
+		// cadence forward like any other origin.
+		{"a list-of-pairs origin is a perfectly good origin", map[string]any{
+			"job_id": "job-orgp01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 3,
+			"origin": []any{[]any{"parent_goal", "the original ask"},
+				[]any{"checkins_sent", 1}},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// A non-numeric cadence field raises from the comparison rather
+		// than the constructor — same except, different message.
+		{"an unreadable cadence threshold refuses the enqueue", map[string]any{
+			"job_id": "job-orgc01", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": 1,
+			"origin": map[string]any{"next_checkin_depth": "soon"},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// --- depth is raw, and a float depth writes ".0" everywhere ----
+		//
+		// Nothing raises for a float, which is why this one is invisible to
+		// a test that only drives bad types: the calibration row, the event
+		// detail, the operator artifact and the stop evidence in BOTH
+		// outcomes.jsonl and metadata.json each carry "2.0".
+		{"a float depth keeps its .0 in five places", map[string]any{
+			"job_id": "job-flt001", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane",
+			// json.Number, not a Go float: `json.Marshal(2.0)` emits `2`,
+			// so a float64 fixture hands CPython an INT and the case
+			// silently tests nothing. The literal has to survive the wire
+			// for the value under test to reach the other runtime — the
+			// same fixture artifact that made an r11 case report a port bug
+			// that was not there.
+			"continuation_depth": json.Number("2.0"),
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closed"`)},
+
+		// …and it survives `depth + 1` as a float into the queue row and
+		// the check-in payload.
+		{"a float depth stays a float through the enqueue", map[string]any{
+			"job_id": "job-flt002", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": json.Number("2.5"),
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// A non-numeric depth raises at `depth + 1`, before the origin is
+		// even built.
+		{"a string depth refuses the enqueue at depth+1", map[string]any{
+			"job_id": "job-flt003", "parent_job_id": "loop-parent-1",
+			"reason": "audit the escalation lane", "continuation_depth": "deep",
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded remaining work",
+			"summary_for_user": "another pass"`)},
+
+		// A close whose parent_job_id is NULL. `if not loop_id: return` is
+		// a truthiness gate, and a port that spelled the null "None" first
+		// walks past it — creating memory/ and taking
+		// memory/outcomes.jsonl.lock in a workspace where CPython leaves
+		// neither. This is the r11 lock-shape finding one branch over, and
+		// it is why the file SET is compared and not just the rows.
+		{"a close with a null parent locks nothing", map[string]any{
+			"job_id": "job-null01", "parent_job_id": nil,
+			"reason": "audit the escalation lane", "continuation_depth": 2,
+		}, reply(`"action": "close", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "done here",
+			"summary_for_user": "closed"`)},
 	}
 
 	for _, c := range cases {
@@ -429,8 +577,9 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 			checkinRandInt = func(lo, hi int) int { return frozenJitter }
 			defer func() { checkinRandInt = prev }()
 
+			fake := &llm.Fake{Script: []string{c.reply}}
 			got := HandleEscalation(context.Background(), goWS, objOf(c.task),
-				EscalationOptions{Adapter: &llm.Fake{Script: []string{c.reply}}})
+				EscalationOptions{Adapter: fake})
 
 			arg, err := json.Marshal([]any{c.task, c.reply, frozenJitter})
 			if err != nil {
@@ -444,6 +593,11 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 				DecisionClass  string            `json:"decision_class"`
 				Confidence     int               `json:"confidence"`
 				Files          map[string]string `json:"files"`
+				Messages       []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+				Kwargs map[string]any `json:"kwargs"`
 			}
 			if err := json.Unmarshal([]byte(runPyIn(t, pyWS, pyEscalationSrc, string(arg))), &want); err != nil {
 				t.Fatal(err)
@@ -474,6 +628,48 @@ func TestHandleEscalationMatchesCPython(t *testing.T) {
 			if gotFollowup != wantFollowup {
 				t.Errorf("followup present = %v, CPython says %v (%q)",
 					gotFollowup, wantFollowup, got.FollowupTaskID)
+			}
+
+			// The REQUEST, not just the response. Both sides drive a
+			// scripted adapter, so the prompt and the sampling arguments
+			// are as comparable as anything the run wrote to disk — and a
+			// drifted system prompt is exactly the kind of divergence no
+			// on-disk artifact would ever show.
+			if len(fake.Msgs) != 1 {
+				t.Errorf("%d LLM call(s), want exactly 1", len(fake.Msgs))
+			} else if n := len(fake.Msgs[0]); n != len(want.Messages) {
+				t.Errorf("%d message(s) in the call, CPython sent %d",
+					n, len(want.Messages))
+			} else {
+				for i, m := range fake.Msgs[0] {
+					if m.Role != want.Messages[i].Role {
+						t.Errorf("message %d role = %q, CPython %q",
+							i, m.Role, want.Messages[i].Role)
+					}
+					if m.Content != want.Messages[i].Content {
+						t.Errorf("message %d content diverges:\n go: %q\n py: %q",
+							i, m.Content, want.Messages[i].Content)
+					}
+				}
+			}
+			if len(fake.Opts) == 1 && want.Kwargs != nil {
+				o := fake.Opts[0]
+				if n, _ := want.Kwargs["max_tokens"].(float64); int(n) != o.MaxTokens {
+					t.Errorf("max_tokens = %d, CPython %v", o.MaxTokens, want.Kwargs["max_tokens"])
+				}
+				if f, _ := want.Kwargs["temperature"].(float64); f != o.Temperature {
+					t.Errorf("temperature = %v, CPython %v", o.Temperature, want.Kwargs["temperature"])
+				}
+				if p, _ := want.Kwargs["purpose"].(string); p != o.Purpose {
+					t.Errorf("purpose = %q, CPython %q", o.Purpose, p)
+				}
+				// no_tools=True on the Python side is Tools being EMPTY here:
+				// this port injects tools into the prompt rather than passing
+				// a flag, so the flag's effect is what can be compared.
+				if noTools, _ := want.Kwargs["no_tools"].(bool); noTools && len(o.Tools) != 0 {
+					t.Errorf("CPython asked for no_tools and the port sent %d tool(s)",
+						len(o.Tools))
+				}
 			}
 
 			compareWorkspaces(t, goWS, want.Files)

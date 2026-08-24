@@ -6752,6 +6752,132 @@ previous round's, is the whole fix. Two mutants were dropped as
 semantically equivalent and recorded as comments naming why, rather than
 counted as kills.
 
+#### r11, review round 1 — the whole chunk, opus tier
+
+Eight findings against the whole r11 chunk plus its fixes (Jeremy's
+2026-08-22 amendment). Six real, one refuted, one an observation about
+the harness. The two HIGHs are both the SAME defect r11 had just fixed
+one function away — which is the r8 lens, unlearned:
+
+> **A fix is evidence about its siblings, and "siblings" means every
+> other site in the same FUNCTION FAMILY, not the ones the diff
+> touched.** r11 retyped `EventFields.Project`/`.LoopID` to `any` because
+> Python's dict literal carries them raw. The recursion check-in is
+> another dict literal, forty lines away, with four more raw fields in
+> it. Nobody looked.
+
+**H1 — the check-in payload spelled four raw values with `str()`.**
+`job_id` and `parent_job_id` are raw in Python's literal, so an integer
+id stays an integer in `output/escalations.jsonl` and became `"4242"`
+here. `handle_id` is `str(x or "")` — a truthiness gate, where the port
+used a type assertion that answers `""` for any non-string. And
+`parent_goal` is an `or` fallback on the RAW value: a `parent_goal` of
+`55` is truthy, so CPython carries `"55"` into the row while the port
+read `""` and silently fell through to a **different string**, the
+escalation reason. Four fields, one row, one hook's stdin, and
+`MARO_HANDLE_ID` with them.
+
+A fifth divergence turned up in the same function while fixing it:
+`int(origin.get("checkins_sent", 0))` is a BARE int() with no local try,
+so a non-numeric count raises into the blanket except wrapping the whole
+check-in — **no notification at all**. `pyval.IntOf` answered 0 and
+emitted a row CPython never writes. `pyIntOr` and `pyInt` are now two
+functions rather than one, because bare-int-that-raises and
+int-in-a-try-with-a-default are different contracts and both are live in
+this file.
+
+**H2 — a null `parent_job_id` took a lock CPython never takes.**
+`parent_id` is raw in Python and the stop-verdict stamp opens with
+`if not loop_id: return`, a truthiness gate. Spelling the null `"None"`
+first walks straight past it: `memory/` gets created and
+`memory/outcomes.jsonl.lock` appears in a workspace where CPython leaves
+neither, and the stamp would key a row on the literal string `"None"`.
+This is r11's own lock-shape finding one branch over — and the
+differential had a `parent_job_id: ""` case in the file-set comparison
+and the `nil` case only in a row-comparison test that never looks at the
+file set. **A fixture split across two tests is a fixture that covers
+neither.**
+
+**M3 — a malformed origin was swallowed here and raises there.**
+`Origin` is a TypedDict, so `Origin(x)` is `dict(x)` at runtime, and
+`dict()` raises for a truthy non-mapping. That raise happens inside the
+spawn branch's own try, whose except flips the action to `surface` and
+enqueues nothing. The port substituted an empty object, so it **enqueued
+a task CPython never enqueues, fired a check-in claiming "still
+running", and returned `continue`** — plus a whole escalations row and a
+different `status` in `events.jsonl`.
+
+Worse, a test PINNED the wrong behaviour: `TestANonDictOriginBecomesAFreshObject`
+asserted that a string, a list and a number "become a fresh empty object
+rather than raising", and `asOrigin`'s doc said the same. The falsy half
+was right and the truthy half was exactly backwards. Two of its six rows
+were also both literally `nil`, so one of them tested nothing.
+
+`pyval.DictOf` is the real constructor now, messages included, and it
+carries the case the review did not name either: `dict(["ab", "cd"])` is
+`{"a": "b", "c": "d"}` and `dict([["a", 1]])` is `{"a": 1}` — **a list
+of pairs is a perfectly good origin**, and refusing it would have been a
+new divergence introduced while fixing the old one.
+
+The cadence reads are the same story in miniature: `next_checkin_depth`
+and `checkins_sent` were read through `IntOf`, which both swallows the
+raise AND truncates a float. `2 >= 2.5` is false; a truncating port
+fires a check-in CPython does not. `pyval.GE` and `pyval.AddOne` are
+Python's operators with Python's exception messages, because those
+messages are interpolated straight into the ledger row.
+
+**M4 — the named residual described the loud failure and missed the
+silent one.** See the depth section above. This is the finding that
+should change how residuals get written here: a residual is a CLAIM, and
+"it only diverges when X raises" is a claim about the non-raising cases
+too.
+
+**L5 — REFUTED.** The review reported the system prompt differing by a
+trailing newline, measured at 3405 Python bytes against 3404 Go. The
+module attribute is 3404 bytes and ends `"\n}` on both sides; the probe
+had measured something else. Nothing to fix — and the fix for L6 below
+now proves it on every case, which is a better answer than a
+re-measurement.
+
+**L6 — the probe captured a surface it never compared.** The scripted
+adapter stashed `messages` and `kwargs` and nothing read either. It
+reads as though the prompt and the sampling arguments were being
+diffed; they were not, which is precisely why L5 could be neither
+confirmed nor dismissed by the harness. Both are emitted and compared
+now — role and content per message, plus `max_tokens`, `temperature`,
+`purpose`, and `no_tools` (whose Go equivalent is an EMPTY tool list,
+since this port injects tools into the prompt rather than passing a
+flag). **A capture with no assertion is worse than no capture: it
+answers "is the prompt covered?" with a yes.**
+
+**L7 — three `MkdirAll`s carried a bare `0o755`** where the port has
+`record.NewDirMode` and a whole file explaining why (`0o777 & ~umask` is
+what `Path.mkdir()` does, and hardcoding 0755 is narrower on a umask-002
+host). Same class as the r4 finding that produced `NewFileMode`, in
+sites written after it.
+
+**L8 — a bounds fixture that could not fail.** The advisory-bounds test
+repeated an ASCII character 400 times and asserted with `len()`. Python
+slices code points; a byte slice would pass that test and cut a 3-byte
+rune in half on the first real reply carrying one. Every other bound in
+this chunk had a multi-byte fixture. It now uses `é😀ル` and also asserts
+that no replacement character appears — the half a length check
+structurally cannot see.
+
+**Differential cases added:** twelve, all of them shapes the existing
+table reached in one test but not the other — a check-in with non-string
+ids and ancestry, one with falsy ancestry, an unreadable check-in count,
+four malformed-origin shapes plus the list-of-pairs that is NOT
+malformed, an unreadable cadence threshold, three depth shapes
+(`2.0`, `2.5`, `"deep"`), and the null-parent close.
+
+One of them exposed a FIXTURE bug rather than a port bug, for the second
+round running: `json.Marshal(2.0)` emits `2`, so a Go `float64` fixture
+hands CPython an int and the case silently tests nothing. It has to be a
+`json.Number("2.0")` for the literal to survive the wire. **A
+differential's fixture crosses a serializer too, and a value that cannot
+survive the crossing is a case that agrees for the wrong reason.**
+
 **Lens carried forward to r12:** *an exclusion is a hypothesis, and the
 oldest ones have never been tested.* Every harness in this port carries
 exclusions — masked fields, skipped names, ignored directories — and each

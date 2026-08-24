@@ -114,14 +114,28 @@ func newRunID() string {
 // default set except for Lane and Source, which default below — Go has no
 // argument defaults, so the substitution is explicit and one place.
 type Options struct {
-	JobID             string
-	Lane              string
-	Source            string
-	Reason            string
-	ParentJobID       string
-	BlockedBy         []string
-	ContinuationDepth int
-	Origin            pyval.Obj
+	JobID       string
+	Lane        string
+	Source      string
+	Reason      string
+	ParentJobID string
+	BlockedBy   []string
+	Origin      pyval.Obj
+	// ContinuationDepth is `any` rather than `int` because Python's
+	// annotation is a hint, not a coercion: `make_task` writes whatever the
+	// caller passed straight into the row. The director derives it from a
+	// task field it read back off disk, so a foreign writer — jq, a
+	// JavaScript tool, anything that types every JSON number as a double —
+	// makes it a float, and `depth + 1` keeps it one down the whole chain.
+	// nil is the parameter default of 0.
+	ContinuationDepth any
+}
+
+func (o Options) continuationDepth() any {
+	if o.ContinuationDepth == nil {
+		return 0
+	}
+	return o.ContinuationDepth
 }
 
 func (o Options) lane() string {
@@ -159,7 +173,7 @@ func MakeTask(jobID string, o Options) Task {
 		{Key: "attempt", Val: 0},
 		{Key: "parent_job_id", Val: o.ParentJobID},
 		{Key: "blocked_by", Val: blocked},
-		{Key: "continuation_depth", Val: o.ContinuationDepth},
+		{Key: "continuation_depth", Val: pyval.FromPlain(o.continuationDepth())},
 		// Ancestry back to the work that spawned this task. Without it a
 		// requeued plan step arrives at handle() as a brand-new goal with
 		// no thread identity — the fan-out failure traced in the

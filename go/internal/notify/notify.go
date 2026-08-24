@@ -379,7 +379,7 @@ type ToolPathology struct {
 // recurse into the lock machinery while it reports a lock timeout.
 func WriteEvent(ws, eventType string, f EventFields) {
 	dir := filepath.Dir(eventsPath(ws))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return
 	}
 	entry := pyval.Obj{
@@ -468,7 +468,7 @@ func writeEscalationFile(ws, eventType string, payload pyval.Obj,
 	}
 
 	p := EscalationsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), record.NewDirMode); err != nil {
 		return err
 	}
 	line, err := pyval.DumpsCompactPy(entry)
