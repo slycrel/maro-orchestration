@@ -1,6 +1,11 @@
 package pyval
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+)
 
 // DecodeUTF8Strict is `bytes.decode("utf-8")` — and, through it,
 // `Path.read_text(encoding="utf-8")`, which is how every Python module in
@@ -100,4 +105,40 @@ func utf8DecodeErr(b []byte, start, end int, reason string) error {
 	return &PyErr{Class: "UnicodeDecodeError", Msg: fmt.Sprintf(
 		"'utf-8' codec can't decode bytes in position %d-%d: %s",
 		start, end-1, reason)}
+}
+
+// ReadText is `Path.read_text(encoding="utf-8")`, whole.
+//
+// Two rules, and the port had been missing the second at every call site
+// that keeps the text rather than immediately splitting it:
+//
+//   - STRICT decoding. Invalid UTF-8 raises there, so it fails here.
+//     DecodeUTF8Strict has carried this half for a while; `os.ReadFile` +
+//     `string(raw)` carries neither, and encoding/json then substitutes
+//     U+FFFD for each bad byte, so the port silently ships content nobody
+//     wrote where CPython refuses to ship anything at all.
+//   - UNIVERSAL NEWLINES. `read_text` opens with `newline=None`, so "\r\n"
+//     and a lone "\r" are "\n" before the caller sees them.
+//
+// The second rule is invisible to a caller that splits immediately and
+// decisive for one that does not: pack's artifacts are hashed into a
+// manifest and shipped as tar members, so a CRLF skill file exported by Go
+// produced different member bytes, a different sha256, a different
+// REVIEW.md and a different payload digest than the same file exported by
+// Python. Neither pack could verify in the other runtime.
+//
+// This is the fourth lens again — a helper you did not look for is a helper
+// you will write again — and the shape it took here is worse than a rewrite:
+// every site had HALF of read_text, spelled a different way, and the halves
+// looked complete on their own.
+func ReadText(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	s, derr := DecodeUTF8Strict(raw)
+	if derr != nil {
+		return "", fmt.Errorf("%s: %w", path, derr)
+	}
+	return pytext.TranslateNewlines(s), nil
 }

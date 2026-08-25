@@ -10,7 +10,6 @@
 package pack
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,7 +58,11 @@ func DefaultDenylist() []string {
 		}
 	}
 	if out, err := exec.Command("git", "config", "--get", "user.email").Output(); err == nil {
-		if v := strings.TrimSpace(string(out)); v != "" {
+		// `.strip()`, not TrimSpace. Nothing realistic reaches the
+		// difference — git prints one email and a newline — but this is the
+		// same sweep class as the five sites above it, and a site skipped by
+		// name is a claim nobody re-examines (lens 6).
+		if v := pytext.Strip(string(out)); v != "" {
 			items[v] = true
 		}
 	}
@@ -85,7 +88,16 @@ var redactionMarkers = []string{"[REDACTED]", "[HOME]", "[USER]", "[HOST]"}
 
 func reviewSection(cls, relPath, content string) string {
 	var flagged []string
-	for _, ln := range strings.Split(content, "\n") {
+	// `content.splitlines()`, not a split on "\n" — the sibling of the strip
+	// on the render line below, and it was left behind when that one was
+	// fixed (lens 3: a fix is evidence about its SIBLINGS).
+	//
+	// A marker with an interior \x0b or \x1c is one flagged line to Python
+	// and one longer line here, and the strip cannot mask it because the
+	// separator is not at either end. REVIEW.md is hashed into the seal, so
+	// the two runtimes seal the same workspace to different digests. It also
+	// changes the COUNT when a marker lands in each fragment.
+	for _, ln := range pytext.SplitLines(content) {
 		for _, m := range redactionMarkers {
 			if strings.Contains(ln, m) {
 				flagged = append(flagged, ln)
@@ -170,7 +182,25 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		if err != nil {
 			return scrubText(line) // `except json.JSONDecodeError`
 		}
-		walked := scrub.Walk(obj, scrubText)
+		// NAMED RESIDUAL — a LONE SURROGATE in a row's string value.
+		// json.loads keeps it and json.dumps writes `\ud800` back;
+		// LoadsOrdered decodes through encoding/json, which rewrites it to
+		// U+FFFD, so the port ships a different character in a durable
+		// shared store. Not fixed here because the fix is a string decoder
+		// inside LoadsOrdered, which every caller in the port shares.
+		//
+		// Worth naming at THIS consumer rather than only at LoadsOrdered,
+		// because the consequence here is specific and worse than elsewhere:
+		// different member bytes, a different artifact sha256, a pack the
+		// other runtime cannot verify. Note the asymmetry with the importer
+		// one file over — import.go's scanRows calls refuseLoneSurrogates
+		// and rejects the row LOUDLY; the exporter rewrites it silently.
+		// PyNumbers between the load and the dump: CPython has no numeric
+		// literal to preserve across a loads/dumps pair, so `1e3` comes back
+		// as `1000.0`. Without it the port shipped the source literal, the
+		// member bytes differed, and the artifact sha256 in the hashed
+		// manifest differed with them.
+		walked := scrub.Walk(pyval.PyNumbers(obj), scrubText)
 		out, derr := pyval.DumpsCompactPy(walked)
 		if derr != nil {
 			// A row whose decoded shape the writer cannot render degrades
@@ -193,22 +223,63 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		sections = append(sections, reviewSection(cls, rel, scrubbed))
 	}
 
+	// `json.loads`, not encoding/json — and this is the one predicate in the
+	// exporter where the difference SHIPS SOMETHING.
+	//
+	// It is the gate that keeps `minted_from="prompt"` rows (the provenance
+	// quarantine, the db37d525 contamination answer) out of a curated pack.
+	// Two ways the strict decoder let one through, both measured:
+	//
+	//   - A row carrying a non-finite float. CPython's json.dumps WRITES the
+	//     bare tokens NaN / Infinity, and its json.loads reads them back;
+	//     encoding/json refuses both. So a lessons row with `"score": NaN` —
+	//     a row CPython itself wrote — failed to decode here, returned
+	//     false, and shipped WITH its prompt stamp. LoadsOrdered masks the
+	//     tokens the way Python accepts them.
+	// A DUPLICATE `minted_from` — `{"minted_from":"outcome","minted_from":
+	// "prompt"}` — is the other way this predicate could have been defeated,
+	// since json.loads keeps the LAST value and Obj.Get returns the FIRST.
+	// It is not a bug here, because decodeOrdered already collapses
+	// duplicates last-wins the way CPython does, and Get therefore never
+	// sees two. Measured, not assumed: an earlier draft of this comment
+	// claimed the leak and added a hand-rolled last-wins scan for it, and
+	// the mutation that removed the scan was an equivalent mutant. The
+	// fixture stays — it is now this consumer's pin on decodeOrdered's
+	// collapse, which nothing else here would notice losing.
+	//
+	// Valid-JSON non-object rows (null, [], "str") are not lessons but must
+	// not abort the export — they ship as before, scrubbed. That is the
+	// `isinstance(obj, dict)` arm, and falling out of the type switch is it.
 	quarantinedRow := func(line string) bool {
-		var obj map[string]any
-		if json.Unmarshal([]byte(line), &obj) != nil {
+		v, err := pyval.LoadsOrdered(line)
+		if err != nil {
+			return false // `except json.JSONDecodeError`
+		}
+		obj, ok := v.(pyval.Obj)
+		if !ok {
 			return false
 		}
-		return obj["minted_from"] == "prompt"
+		minted, _ := obj.Get("minted_from")
+		return minted == "prompt"
 	}
 
 	addJSONL := func(cls, rel, path string, dropQuarantined bool) error {
-		raw, err := os.ReadFile(path)
+		// `_read_jsonl_rows`: `if not path.exists(): return []`, then
+		// read_text — so a missing store is empty and a byte-tainted one
+		// aborts the export. Universal newlines matter here too even though
+		// every row is split immediately: a "\r\n" store row would otherwise
+		// keep its "\r" in the SCRUBBED member bytes... which SplitLines
+		// already strips. It is the whole-file readers that need it. Using
+		// the same helper anyway, because two spellings of read_text is how
+		// the halves got separated in the first place.
+		text, err := pyval.ReadText(path)
 		if os.IsNotExist(err) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
+		raw := []byte(text)
 		var rows []string
 		// `[ln for ln in text.splitlines() if ln.strip()]`, and BOTH halves
 		// of that are wrong when spelled with the strings package. Python
@@ -273,11 +344,19 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		names, _ := filepath.Glob(filepath.Join(d, "*.md"))
 		sort.Strings(names)
 		for _, f := range names {
-			raw, err := os.ReadFile(f)
+			// read_text, and the error PROPAGATES. Python's
+			// `f.read_text(encoding="utf-8")` here is not inside a try —
+			// only the include_runs loop below catches UnicodeDecodeError,
+			// deliberately, because run artifacts may be binary. A skill
+			// file that is not UTF-8 aborts the whole CPython export; the
+			// port used to `continue` and ship a pack SHORT one artifact,
+			// silently, which is the worse of the two answers: the operator
+			// gets a pack that looks complete.
+			text, err := pyval.ReadText(f)
 			if err != nil {
-				continue
+				return nil, err
 			}
-			addText(kind.cls, kind.dir+"/"+filepath.Base(f), string(raw))
+			addText(kind.cls, kind.dir+"/"+filepath.Base(f), text)
 		}
 	}
 
@@ -303,8 +382,14 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 	}
 	if opts.IncludePlaybook {
 		pb := filepath.Join(ws, "playbook.md")
-		if raw, err := os.ReadFile(pb); err == nil {
-			addText("playbook", "playbook.md", string(raw))
+		// `if pb.exists(): _add_text_artifact(..., pb.read_text(...))` — a
+		// missing playbook is not an error, anything else about it is.
+		if _, serr := os.Stat(pb); serr == nil {
+			text, err := pyval.ReadText(pb)
+			if err != nil {
+				return nil, err
+			}
+			addText("playbook", "playbook.md", text)
 		}
 	}
 

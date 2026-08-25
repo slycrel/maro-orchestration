@@ -6087,3 +6087,136 @@ bug, it is a footnote on a bigger one.** The tier-1 and tier-2 sites that
 have been fixed were all inside functions the port DOES claim byte-equality
 for — a sealed pack, a hashed manifest, a provenance stamp — which is why
 they were worth the differential.
+
+## The pack transport review — thirteen findings, worked
+
+An adversarial review of the pack export/import chunk (built both binaries
+and measured every claim end-to-end rather than reading code) returned
+thirteen findings. Every one was verified at the source before being
+touched; twelve were real, one — a claimed duplicate-key leak in the
+quarantine predicate — turned out to be an equivalent mutant and the
+"fix" written for it was deleted.
+
+They were not thirteen unrelated bugs. Four of them were one missing helper,
+three were one Python idiom spelled as a Go type assertion, and two were the
+same "what does `json.loads` actually produce" question asked at two ends of
+the pipe.
+
+### The missing helper: `read_text` had been ported in halves
+
+`pyval.DecodeUTF8Strict` had existed for a while and carried one half of
+`Path.read_text(encoding="utf-8")`: refuse invalid UTF-8. Nothing carried the
+other half — `newline=None`, so CRLF and a lone CR become LF before the
+caller sees a byte. Every call site had `os.ReadFile` + `string(raw)`, which
+is neither half, and each looked complete on its own.
+
+The consequences ran the length of the transport:
+
+* A CRLF skill file exported by Go produced different member bytes, a
+  different artifact sha256, a different REVIEW.md and a different payload
+  digest than the same file exported by Python. Neither pack verified in the
+  other runtime.
+* A byte-tainted skill file aborted the CPython export and was silently
+  SKIPPED here — a pack that looks complete and is one artifact short is
+  worse than a pack that fails to build.
+* On the import side the translation decides an OUTCOME, not just bytes: a
+  local skill saved with CRLF is `skipped_identical` to Python and
+  `conflict_quarantined` here, so the port wrote a quarantine file and a
+  CONFLICTS.md row for a file the other runtime calls unchanged. Two
+  separate compare sites, one call apart, and the fixture for the first read
+  as covering the second until a mutation said otherwise.
+
+`pyval.ReadText` is now the whole function, and eight call sites use it.
+
+### The `json.loads` question, asked at both ends
+
+`_quarantined_row` is the gate that keeps `minted_from="prompt"` rows out of
+a curated pack. It is `json.loads` in CPython, which accepts the bare `NaN`
+token — a token CPython's own `json.dumps` WRITES for a non-finite float.
+`encoding/json` refuses it, the refusal returned false, and the
+prompt-derived row shipped. That is the db37d525 contamination class
+travelling by transport, defeated by a row CPython itself wrote.
+
+At the other end, a `json.loads` → `json.dumps` round-trip in CPython cannot
+preserve a numeric literal, because there is no literal left to preserve —
+only an int or a float. `LoadsOrdered`'s `UseNumber` kept the source text, so
+the port re-emitted `1e3`, `0.10`, `5.00` and `-0` where CPython writes
+`1000.0`, `0.1`, `5.0` and `0`. `pyval.PyNumbers` is the rule, and it keeps
+integral literals as literals on purpose: CPython's int is
+arbitrary-precision and a 20-digit id must not be routed through float64 in
+the name of normalizing.
+
+### A Python idiom is not a Go type assertion
+
+Three findings were the same shape, and this file had already fixed the
+identical idiom twice within a screen of the third:
+
+* `if row.get("imported"):` is TRUTHINESS, and the value is stored whatever
+  it is. The type assertion made it a shape test only dicts pass, so an
+  incoming `"imported": "from-elsewhere"` dropped the provenance chain here
+  and kept it there.
+* `float(row.get("score", 1.0))` defaults only when the key is ABSENT. An
+  explicit null is a PRESENT key, so CPython gets None, `float(None)` raises
+  and the row is `malformed_skipped`. `row[key]` is nil for both, so the port
+  imported a row CPython refuses, into a live shared store, with an invented
+  trust value. A zero value that has to mean two things means neither.
+* `{scrub(k): scrub(v) for ...}` is a dict comprehension and cannot hold a
+  key twice. Two secret-shaped keys both scrubbing to `[REDACTED]` — the
+  scrubber's ordinary case, not a contrived one — produced a JSON object with
+  a duplicate key, carrying a value Python discards.
+
+### Key ORDER is content when the store is shared
+
+`TieredLesson.Imported` and `Hypothesis.Imported` were `map[string]any`.
+Python builds those blocks as dict literals and `json.dumps` writes insertion
+order; a Go map has none, so `DumpsStruct` sorted them and the two runtimes
+wrote different bytes for the same provenance chain into
+`memory/medium/lessons.jsonl` and `memory/hypotheses.jsonl` — live shared
+stores, not audit trails. Both fields are `pyval.Obj` now, and `fromValue`
+learned to pass an ordered value through instead of rendering it as an array
+of `{"Key":…,"Val":…}`.
+
+### What is written down rather than fixed
+
+* A LONE SURROGATE in a row's string value. `json.loads` keeps it and
+  `json.dumps` writes `\ud800` back; `LoadsOrdered` decodes through
+  encoding/json, which rewrites it to U+FFFD. The fix is a string decoder
+  inside `LoadsOrdered` that every caller in the port shares. Named at the
+  export consumer too, because there the consequence is a pack the other
+  runtime cannot verify — and note the asymmetry: the IMPORTER refuses a
+  lone surrogate loudly, the exporter rewrites it silently.
+* `lesson` and `source_goal` are stored RAW by Python (no `str()`, unlike the
+  `task_type`/`outcome` pair beside them) and the port's struct fields are
+  Go strings. Widening them to `any` ripples through every reader in the
+  knowledge package to buy fidelity on a shape no writer in either runtime
+  produces.
+* The `original_provenance` chain arrives off the strict decoder as a
+  `map[string]any` with its order already gone, so an incoming provenance
+  OBJECT sorts where CPython keeps the parse order. Same fix as the tiered
+  loader needs: decode that path through `LoadsOrdered`.
+* `nowISO()` always writes six fractional digits; `datetime.isoformat()`
+  omits `.ffffff` entirely when the microsecond is zero. One stamp in 10⁶.
+  Port-wide, not pack's.
+* PORT-WIDE: every other `DumpsCompactPy` caller that re-emits a row it read
+  through `LoadsOrdered` has the number-literal divergence. Each needs its
+  own differential to say whether the row it re-emits is one CPython would
+  have round-tripped, so they were not swept blind.
+
+### What the review says about the differentials
+
+The one finding the existing differential structurally could not see is the
+sharpest lesson in the batch. `reviewSection`'s strip was fixed and its
+`splitlines()` was not, and the fixture written for the strip put the
+separator at the END of the flagged line — where the strip consumes it. Both
+runtimes rendered the identical string. The fixture pinned the fix it was
+written for and was blind to its sibling one line up, and no amount of
+re-reading it would have shown that: it took a mutation to say so.
+
+Two new differentials, both end-to-end over real archives:
+`export_fidelity_diff_test.go` (6 cases, comparing every member byte for byte
+via a latin-1 byte channel, plus the manifest's per-artifact sha256) and
+`import_fidelity_diff_test.go` (4 cases, letting CPython build AND seal the
+pack so the exporter is out of the question, then importing the same file
+twice and comparing the result rows and the store bytes). Mutation batteries:
+11/11 on export, 10/10 on import, every anti-vacuity guard asserting that
+CPython actually exhibits the behaviour under test before the comparison runs.

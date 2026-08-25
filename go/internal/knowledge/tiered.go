@@ -253,7 +253,23 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 		}
 	}
 	if im, isMap := m["imported"].(map[string]any); isMap {
-		tl.Imported = im
+		// NAMED RESIDUAL: the order is already gone. This loader is handed a
+		// map[string]any, so a row read here and written back would come out
+		// sorted no matter what this line does. Sorted deliberately rather
+		// than in map order, so the loss is at least deterministic — and so
+		// that a reader who cares is looking at a stable diff. Fixing it
+		// properly means decoding through pyval.LoadsOrdered on this path,
+		// which is a different chunk; the WRITER (pack's provenance stamp,
+		// the only thing that mints this block) is ordered correctly now.
+		keys := make([]string, 0, len(im))
+		for k := range im {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		tl.Imported = make(pyval.Obj, 0, len(keys))
+		for _, k := range keys {
+			tl.Imported = append(tl.Imported, pyval.Field{Key: k, Val: im[k]})
+		}
 	}
 	if dm, isMap := m["delta_evidence"].(map[string]any); isMap {
 		tl.DeltaEvidence = dm

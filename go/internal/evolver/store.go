@@ -670,7 +670,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 			RecordedAt:      nowISO(),
 			EvidenceSources: []any{},
 			LessonType:      "practice",
-			Imported:        map[string]any{},
+			Imported:        pyval.Obj{},
 			// NOT provisional (Python comment): evolver suggestions
 			// have their own behavioral verify lifecycle, and this
 			// category exists to be injected. §5 cut B producer stamp:

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Seal refuses without explicit confirmation (the CLI's --yes). The
@@ -78,8 +79,17 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 
 	companion := reviewCompanionPath(packPath)
 	reviewText := archivedReview
-	if raw, err := os.ReadFile(companion); err == nil {
-		reviewText = string(raw)
+	// `companion.read_text(encoding="utf-8") if companion.exists() else
+	// archived_review`. This is the DOCUMENTED path where a human edited
+	// REVIEW.md before sealing, so it is exactly where an editor that writes
+	// CRLF lands — and the result is hashed into review_manifest_sha256. An
+	// untranslated read seals the same reviewed text to a different digest.
+	if _, serr := os.Stat(companion); serr == nil {
+		text, err := pyval.ReadText(companion)
+		if err != nil {
+			return nil, err
+		}
+		reviewText = text
 	}
 
 	payloadSHA, err := payloadSHA256(manifestArtifacts(manifest), artifactBytes)

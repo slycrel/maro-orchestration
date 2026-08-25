@@ -436,8 +436,18 @@ type scannedRow struct {
 // silently to match Python's json.JSONDecodeError → continue.
 func scanRows(content string) []scannedRow {
 	var out []scannedRow
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
+	// `[ln for ln in content.splitlines() if ln.strip()]` — the same pair the
+	// exporter's _read_jsonl_rows needed, unfixed at the READER for all three
+	// trust lanes. U+001F is the case that makes it asymmetric rather than
+	// merely different: splitlines() does NOT break on it, so a row prefixed
+	// with one survives a CPython export intact as a single member line, and
+	// then strings.TrimSpace — which does not know U+001C-U+001F — leaves it
+	// on the front, decodeStrictJSONObject refuses the row, and the import
+	// drops it SILENTLY. Measured on a real CPython-sealed pack: 1 lesson
+	// imported there, zero here, and not even a malformed_skipped row to say
+	// so.
+	for _, line := range pytext.SplitLines(content) {
+		line = pytext.Strip(line)
 		if line == "" {
 			continue
 		}
@@ -454,16 +464,42 @@ func scanRows(content string) []scannedRow {
 	return out
 }
 
-func (im *importer) provenanceStamp(originalID, originalClass string, row map[string]any) map[string]any {
-	imported := map[string]any{
-		"imported_from": im.label, "pack": im.packTag,
-		"original_id": originalID, "original_class": originalClass,
-		"original_confirmations":  row["confirmations"],
-		"original_contradictions": row["contradictions"],
-		"imported_at":             im.now,
+// provenanceStamp is the rules/hypotheses lanes' `imported` block, in
+// Python's INSERTION order — a dict literal there, so json.dumps writes it
+// in the order it is written, and this block lands in hypotheses.jsonl,
+// which is a live shared store rather than an audit trail. A Go map has no
+// order and DumpsStruct sorted it, so the two runtimes wrote different bytes
+// for the same provenance chain.
+func (im *importer) provenanceStamp(originalID, originalClass string, row map[string]any) pyval.Obj {
+	imported := pyval.Obj{
+		{Key: "imported_from", Val: im.label},
+		{Key: "pack", Val: im.packTag},
+		{Key: "original_id", Val: originalID},
+		{Key: "original_class", Val: originalClass},
+		{Key: "original_confirmations", Val: row["confirmations"]},
+		{Key: "original_contradictions", Val: row["contradictions"]},
+		{Key: "imported_at", Val: im.now},
 	}
-	if prov, ok := row["imported"].(map[string]any); ok && len(prov) > 0 {
-		imported["original_provenance"] = prov
+	// `if row.get("imported"): imported["original_provenance"] = row["imported"]`
+	// — a truthiness test, and the value is stored WHATEVER IT IS.
+	//
+	// The type assertion made this a shape test that only dicts pass, so an
+	// incoming `"imported": "from-elsewhere"` dropped the provenance chain
+	// here and kept it there. This file already fixes exactly this Python
+	// idiom twice, one field apart (CoerceEvidenceSources, Truthy on
+	// provisional) — lens 3 again: a fix is evidence about its siblings, and
+	// the third instance was one screen away from both of them.
+	if pyval.Truthy(row["imported"]) {
+		// FromPlain, because the value came off the strict decoder as a Go
+		// container and the ordered writer refuses those by construction.
+		//
+		// NAMED RESIDUAL, and it is the decoder's not this line's: an
+		// incoming provenance OBJECT arrives as a map[string]any with its
+		// order already gone, so FromPlain sorts it where CPython keeps the
+		// parse order. Scalars and arrays — which is what a chain actually
+		// carries — are unaffected. The fix is the same one tiered.go's
+		// loader needs: decode this path through pyval.LoadsOrdered.
+		imported.Set("original_provenance", pyval.FromPlain(row["imported"]))
 	}
 	return imported
 }
@@ -604,10 +640,33 @@ func importVariants(raw any) []string {
 // asFloat ports Python float() coercion: JSON numbers pass; numeric
 // strings pass ("0.7"); anything else errors (→ malformed_skipped, per-row
 // fault isolation — a junk value costs the import, not the store).
+// pyFloatGet is `float(row.get(key, default))`, and the parameter that
+// matters is the one Go cannot express as an argument: PRESENCE.
+//
+// `.get(k, d)` returns d only when the key is ABSENT. An explicit JSON null
+// is a present key, so Python gets None, `float(None)` raises TypeError, the
+// per-row except catches it and the row is reported malformed_skipped. Go's
+// `row[key]` is nil for both, so asFloat's old `case nil` silently defaulted
+// a null score to 1.0 and imported a row Python refuses.
+//
+// A zero value that has to mean two things means neither (lens 15) — here
+// nil meant "absent" and "null", and only the map's second return value
+// separates them.
+func pyFloatGet(row map[string]any, key string, def float64) (float64, error) {
+	v, present := row[key]
+	if !present {
+		return def, nil
+	}
+	return asFloat(v, def)
+}
+
 func asFloat(v any, def float64) (float64, error) {
 	switch t := v.(type) {
 	case nil:
-		return def, nil
+		// `float(None)`, reproduced sentence and all: the error text rides
+		// the malformed_skipped result row, where an operator reads it.
+		return 0, fmt.Errorf("float() argument must be a string or a real " +
+			"number, not 'NoneType'")
 	case float64:
 		return t, nil
 	case json.Number:
@@ -626,6 +685,21 @@ func asFloat(v any, def float64) (float64, error) {
 	default:
 		return 0, fmt.Errorf("not a number: %v", v)
 	}
+}
+
+// pyStrOr is `str(v or "")` — str() of the value, but "" for anything
+// FALSY.
+//
+// Python writes the provenance classifier's two arguments that way and
+// writes the stored fields as bare `.get(k, "")`, and the difference is not
+// decoration: `str(0)` is "0" and `str(0 or "")` is "". The classifier's
+// input decides whether a lesson is quarantined, so a falsy non-string in
+// either field made the two runtimes classify the same row differently.
+func pyStrOr(v any) string {
+	if !pyval.Truthy(v) {
+		return ""
+	}
+	return asString(v)
 }
 
 func asString(v any) string {
@@ -698,18 +772,24 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 			"outcome": "skipped_identical", "variants_merged": len(inVars)}
 	}
 
-	originalScore, err := asFloat(row["score"], 1.0)
+	// The error text is `str(exc)` from Python's per-row except and it rides
+	// the result row an operator reads, so it is a content key: no "score: "
+	// prefix, however much more useful one would be. Which field failed is
+	// recoverable — the two messages differ only when the two values do, and
+	// a helpful prefix that the other runtime does not write is one more
+	// string an operator cannot grep across both.
+	originalScore, err := pyFloatGet(row, "score", 1.0)
 	if err != nil {
 		return map[string]any{"lesson_id": originalID,
-			"outcome": "malformed_skipped", "error": "score: " + err.Error()}
+			"outcome": "malformed_skipped", "error": err.Error()}
 	}
-	confidence, err := asFloat(row["confidence"], 0.5)
+	confidence, err := pyFloatGet(row, "confidence", 0.5)
 	if err != nil {
 		// Coerce at the border: a junk value costs the import (reported),
 		// not the store (a non-numeric confidence is load-fatal in Python's
 		// knowledge_web).
 		return map[string]any{"lesson_id": originalID,
-			"outcome": "malformed_skipped", "error": "confidence: " + err.Error()}
+			"outcome": "malformed_skipped", "error": err.Error()}
 	}
 
 	scopeClean, scopeBad := knowledge.CoerceScope(row["scope"])
@@ -718,13 +798,22 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 			"scope %v — imported unstamped\n", im.packTag, originalID, row["scope"])
 	}
 
-	imported := map[string]any{
-		"imported_from": im.label, "pack": im.packTag,
-		"original_id": originalID, "original_tier": asString(row["tier"]),
-		"original_trust": originalScore, "imported_at": im.now,
+	// Python's dict literal, in Python's INSERTION order — this block ships
+	// verbatim into medium/lessons.jsonl, which the other runtime reads.
+	imported := pyval.Obj{
+		{Key: "imported_from", Val: im.label},
+		{Key: "pack", Val: im.packTag},
+		{Key: "original_id", Val: originalID},
+		// row.get("tier", "") — RAW, unlike the task_type/outcome pair
+		// further down, which Python does wrap in str(). The asymmetry is
+		// in the source and it is load-bearing here because this block
+		// ships verbatim: a numeric tier stores as 5 there and "5" here.
+		{Key: "original_tier", Val: row["tier"]},
+		{Key: "original_trust", Val: originalScore},
+		{Key: "imported_at", Val: im.now},
 	}
-	if prov, ok := row["imported"].(map[string]any); ok && len(prov) > 0 {
-		imported["original_provenance"] = prov
+	if pyval.Truthy(row["imported"]) { // the lessons lane's copy of the same idiom
+		imported.Set("original_provenance", pyval.FromPlain(row["imported"]))
 	}
 
 	// An incoming stamp is a CLAIM in untrusted JSON, not provenance —
@@ -745,7 +834,13 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	}
 	localClass := ""
 	if im.provGate {
-		localClass = provenance.Classify(lessonText, asString(row["source_goal"]), "")
+		// `classify_lesson_provenance(str(row.get("lesson") or ""),
+		// str(row.get("source_goal") or ""))` — str-of-or-empty on BOTH,
+		// which is not how either value is stored two dozen lines down.
+		// lessonText is the `.(string)` read, so a numeric lesson reaches
+		// the classifier as "" here and as "5" in CPython.
+		localClass = provenance.Classify(
+			pyStrOr(row["lesson"]), pyStrOr(row["source_goal"]), "")
 	}
 	mintedFrom := incoming
 	if incoming == "prompt" || localClass == "prompt" {
@@ -778,6 +873,19 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 		score = 0.5
 	}
 
+	// NAMED DIVERGENCE, and it is the typed struct rather than a mistake.
+	// Python stores `lesson` and `source_goal` RAW (`row.get(k, "")`, no
+	// str(), unlike the task_type/outcome pair below), so a numeric lesson
+	// lands in the store as a JSON number there. TieredLesson.Lesson and
+	// .SourceGoal are Go strings, so the port stringifies — and for `lesson`
+	// specifically the `.(string)` read above ERASES a non-string to "",
+	// which is worse than stringifying it: an empty lesson row.
+	//
+	// Not fixed by widening the fields to `any`: that ripples through every
+	// reader in the knowledge package to buy fidelity on a shape no writer
+	// in either runtime produces. Written down instead, because an unwritten
+	// divergence is one the next reader re-derives — and if a foreign pack
+	// ever does ship one, this comment is where the fix starts.
 	tl := knowledge.TieredLesson{
 		LessonID: newID, Lesson: lessonText,
 		SourceGoal: asString(row["source_goal"]),
@@ -839,9 +947,22 @@ func (im *importer) writeQuarantine(path, content string) (bool, error) {
 	}
 	already := false
 	err := record.Locked(path, func() error {
-		if raw, err := os.ReadFile(path); err == nil && string(raw) == content {
+		// read_text, and only FileNotFoundError is caught. Everything else
+		// PROPAGATES in Python — a quarantine file that is unreadable or not
+		// UTF-8 aborts the import rather than being overwritten. `os.ReadFile
+		// ... err == nil` swallowed both: a byte-tainted file compared
+		// unequal and was replaced, so the port destroyed a file the other
+		// runtime refuses to touch.
+		//
+		// And the comparison itself needs the newline translation: a
+		// quarantine file written with CRLF is `already_quarantined` to
+		// Python and a fresh `quarantined` write here.
+		switch text, rerr := pyval.ReadText(path); {
+		case rerr == nil && text == content:
 			already = true
 			return nil
+		case rerr != nil && !os.IsNotExist(rerr):
+			return rerr
 		}
 		tmp, err := os.CreateTemp(filepath.Dir(path), ".quarantine-*")
 		if err != nil {
@@ -863,12 +984,12 @@ func (im *importer) writeQuarantine(path, content string) (bool, error) {
 func (im *importer) quarantineSingle(relpath, content string) (map[string]any, error) {
 	path := filepath.Join(im.quarantineDir(), filepath.FromSlash(relpath))
 	if im.dryRun {
-		already := false
-		if raw, err := os.ReadFile(path); err == nil && string(raw) == content {
-			already = true
+		text, rerr := pyval.ReadText(path)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return nil, rerr // `path.exists() and path.read_text(...)`
 		}
 		return map[string]any{"path": relpath,
-			"outcome": quarantineOutcome(already)}, nil
+			"outcome": quarantineOutcome(rerr == nil && text == content)}, nil
 	}
 	already, err := im.writeQuarantine(path, content)
 	if err != nil {
@@ -892,8 +1013,16 @@ func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]
 	livePath := filepath.Join(im.ws, kind, name)
 	quarantinePath := filepath.Join(im.quarantineDir(), kind, name)
 
-	if raw, err := os.ReadFile(livePath); err == nil {
-		if string(raw) == content {
+	// `if live_path.exists(): live_path.read_text(...) == content`. The
+	// translation decides the OUTCOME, not just the bytes: a local skill
+	// saved with CRLF is `skipped_identical` to Python and
+	// `conflict_quarantined` here — the port writes a quarantine file and a
+	// CONFLICTS.md row for a file the other runtime calls unchanged.
+	if text, err := pyval.ReadText(livePath); err == nil || !os.IsNotExist(err) {
+		if err != nil {
+			return nil, err
+		}
+		if text == content {
 			return map[string]any{"name": name, "outcome": "skipped_identical"}, nil
 		}
 		if !im.dryRun {
@@ -908,12 +1037,12 @@ func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]
 	}
 
 	if im.dryRun {
-		already := false
-		if raw, err := os.ReadFile(quarantinePath); err == nil && string(raw) == content {
-			already = true
+		text, rerr := pyval.ReadText(quarantinePath)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return nil, rerr
 		}
 		return map[string]any{"name": name,
-			"outcome": quarantinedMDOutcome(already)}, nil
+			"outcome": quarantinedMDOutcome(rerr == nil && text == content)}, nil
 	}
 	already, err := im.writeQuarantine(quarantinePath, content)
 	if err != nil {
@@ -945,7 +1074,12 @@ func (im *importer) appendConflictsNote(kind, name string) error {
 		if raw, err := os.ReadFile(path); err == nil {
 			old = string(raw)
 		}
-		for _, existing := range strings.Split(old, "\n") {
+		// `line in old.splitlines()`. Nothing can reach the difference —
+		// this function is the only writer of these lines and their format
+		// is fixed — but it is the same class as scanRows above, and a
+		// spelling left un-fixed because it is currently unreachable is one
+		// nobody re-examines when it stops being unreachable.
+		for _, existing := range pytext.SplitLines(old) {
 			if existing == line {
 				return nil
 			}

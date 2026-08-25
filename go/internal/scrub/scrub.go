@@ -176,9 +176,26 @@ func Walk(v any, fn func(string) string) any {
 		// through to `default` and was returned UNSCRUBBED — the
 		// durable-sink hole closure r1 found, reopened by the very
 		// change that fixed the key order (adversarial mission-r7 HIGH).
-		out := make(pyval.Obj, len(t))
-		for i, f := range t {
-			out[i] = pyval.Field{Key: fn(f.Key), Val: Walk(f.Val, fn)}
+		// `{scrub(k): scrub(v) for k, v in obj.items()}` is a DICT
+		// COMPREHENSION, and a dict cannot hold a key twice. The positional
+		// map here could: two distinct keys that scrub to the SAME string
+		// (two secret-shaped values both becoming "[REDACTED]", which is the
+		// ordinary case for this scrubber, not a contrived one) produced a
+		// JSON object with a duplicate key — bytes Python never writes, and
+		// carrying a value Python discards.
+		//
+		// Python's collapse rule, both halves: the key keeps the ordinal of
+		// its FIRST appearance and the value of its LAST.
+		out := make(pyval.Obj, 0, len(t))
+		at := make(map[string]int, len(t))
+		for _, f := range t {
+			k, v := fn(f.Key), Walk(f.Val, fn)
+			if i, seen := at[k]; seen {
+				out[i].Val = v
+				continue
+			}
+			at[k] = len(out)
+			out = append(out, pyval.Field{Key: k, Val: v})
 		}
 		return out
 	case pyval.List:

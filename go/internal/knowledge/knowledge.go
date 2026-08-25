@@ -54,15 +54,21 @@ func CoerceScope(raw any) (string, bool) {
 
 // Hypothesis mirrors knowledge_lens.Hypothesis.to_dict exactly.
 type Hypothesis struct {
-	HypID           string         `json:"hyp_id"`
-	Lesson          string         `json:"lesson"`
-	Domain          string         `json:"domain"`
-	Confirmations   int            `json:"confirmations"`
-	Contradictions  int            `json:"contradictions"`
-	SourceLessonIDs []string       `json:"source_lesson_ids"`
-	FirstSeen       string         `json:"first_seen"`
-	LastSeen        string         `json:"last_seen"`
-	Imported        map[string]any `json:"imported"`
+	HypID           string   `json:"hyp_id"`
+	Lesson          string   `json:"lesson"`
+	Domain          string   `json:"domain"`
+	Confirmations   int      `json:"confirmations"`
+	Contradictions  int      `json:"contradictions"`
+	SourceLessonIDs []string `json:"source_lesson_ids"`
+	FirstSeen       string   `json:"first_seen"`
+	LastSeen        string   `json:"last_seen"`
+	// ORDERED, not a map. Python builds this block as a dict literal and
+	// json.dumps writes a dict in insertion order; a Go map has none, so
+	// DumpsStruct sorted it and the two runtimes wrote different bytes for
+	// the same provenance chain into a LIVE shared store. The rest of the
+	// row already keeps Python's order because DumpsStruct walks the struct
+	// in field order — this was the one nested block that did not.
+	Imported pyval.Obj `json:"imported"`
 }
 
 // TieredLesson mirrors knowledge_web.TieredLesson via asdict() — every
@@ -86,7 +92,7 @@ type TieredLesson struct {
 	AcquiredFor       *string          `json:"acquired_for"`
 	EvidenceSources   []any            `json:"evidence_sources"`
 	LessonType        string           `json:"lesson_type"`
-	Imported          map[string]any   `json:"imported"`
+	Imported          pyval.Obj        `json:"imported"`
 	Novelty           float64          `json:"novelty"`
 	Provisional       bool             `json:"provisional"`
 	MintedFrom        string           `json:"minted_from"`

@@ -464,3 +464,37 @@ func IsPrintable(r rune) bool {
 func Split(s string) []string {
 	return strings.FieldsFunc(s, IsSpace)
 }
+
+// TranslateNewlines is what `open(..., newline=None)` does before any caller
+// sees a byte: "\r\n" and a lone "\r" both become "\n".
+//
+// This is NOT the same rule as SplitLines' separator set, and conflating
+// them is how the port lost it. SplitLines does the \r\n pairing itself, so
+// for anything that immediately splits, the translation is invisible — the
+// note on SplitLines says so and is correct. But a caller that keeps the
+// WHOLE TEXT (hashes it, ships it in a tar member, compares it for
+// equality) sees the difference in every byte: CPython holds "a\nb" where an
+// untranslated port holds "a\r\nb".
+//
+// Only \r is touched. The other seven separators splitlines() knows —
+// \v \f \x1c \x1d \x1e \x85 U+2028 U+2029 — are ordinary characters to the
+// io layer and survive read_text() intact. A "translation" that normalized
+// those would corrupt content Python preserves.
+func TranslateNewlines(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s // the common case, and it must not allocate
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\r' {
+			if i+1 < len(s) && s[i+1] == '\n' {
+				i++
+			}
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}

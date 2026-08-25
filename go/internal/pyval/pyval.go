@@ -1203,6 +1203,26 @@ func appendStructFields(out *Obj, rv reflect.Value) error {
 // declaration order survives; everything else goes through FromPlain,
 // which already knows every container spelling.
 func fromValue(fv reflect.Value) any {
+	// An ORDERED value passes through untouched. Obj is a []Field and List
+	// is a []any, so without this they fall into the Slice arm below and Obj
+	// renders as a JSON ARRAY of {"Key":...,"Val":...} objects — valid JSON
+	// that no reader in either runtime understands.
+	//
+	// It is not hypothetical tidiness: a struct field is typed Obj precisely
+	// when its key ORDER is part of what the other runtime reads
+	// (TieredLesson.Imported, Hypothesis.Imported — Python builds those as
+	// dict literals and json.dumps writes insertion order), so the very
+	// fields that need this are the ones that would break loudest without
+	// it. Nil is left to the Slice arm, which writes null, matching what a
+	// nil map field did before these fields were widened.
+	if fv.IsValid() && fv.CanInterface() && !fv.IsZero() {
+		switch t := fv.Interface().(type) {
+		case Obj:
+			return t
+		case List:
+			return t
+		}
+	}
 	switch fv.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if fv.IsNil() {
@@ -1294,4 +1314,88 @@ func DumpsStructIndent2(v any) (string, error) {
 		return "", err
 	}
 	return DumpsIndent2(o)
+}
+
+// PyNumbers is Plain's number rule WITHOUT Plain's flattening: every
+// json.Number becomes the value `json.loads` would have produced, and Obj
+// keeps its key order.
+//
+// It exists because a `json.loads` → `json.dumps` round-trip in CPython
+// cannot preserve a numeric literal — there is no literal left to preserve,
+// only an int or a float — while LoadsOrdered's UseNumber keeps the source
+// text and DumpsCompactPy writes it back verbatim. So the port re-emitted
+// `1e3`, `0.10`, `5.00` and `-0` where CPython writes `1000.0`, `0.1`, `5.0`
+// and `0`. For pack that is not cosmetic: the row's bytes are the artifact's
+// bytes, the artifact's sha256 is in the hashed manifest, and a pack whose
+// members do not match is a pack the other runtime cannot verify.
+//
+// Integral literals stay json.Number rather than becoming int, and that is
+// the point of not just calling Plain: CPython's int is arbitrary-precision
+// and prints its exact value, so for a JSON integer the literal IS the
+// value — while Plain's int64 door drops a 20-digit id to float64 and
+// prints it in scientific notation. `-0` is the one integral literal whose
+// text differs from its value, and it is spelled out rather than computed
+// because it is the whole exception.
+//
+// A float literal past float64's range keeps the ±Inf that ParseFloat
+// returns with its ErrRange, because `float("1e400")` is `inf` in CPython
+// and `json.dumps(inf)` is `Infinity` — the same reason Plain ignores that
+// error.
+//
+// PORT-WIDE RESIDUAL, named here because this is where it was found: every
+// other DumpsCompactPy caller that re-emits a row it read through
+// LoadsOrdered has the same divergence. They were not swept in the same
+// change because each needs its own differential to say whether the row it
+// re-emits is one CPython would have round-tripped; this one is proven.
+func PyNumbers(v any) any {
+	switch t := v.(type) {
+	case Obj:
+		out := make(Obj, len(t))
+		for i, f := range t {
+			out[i] = Field{Key: f.Key, Val: PyNumbers(f.Val)}
+		}
+		return out
+	case List:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = PyNumbers(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = PyNumbers(e)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			out[k] = PyNumbers(e)
+		}
+		return out
+	case json.Number:
+		lit := t.String()
+		if !strings.ContainsAny(lit, ".eE") {
+			if lit == "-0" {
+				return json.Number("0")
+			}
+			return t
+		}
+		f, _ := t.Float64()
+		// A literal past float64's range becomes ±Inf, and the encoder
+		// refuses a raw non-finite float64 — deliberately, since Go's own
+		// encoder cannot write one. The non-finite spelling this package
+		// already round-trips is json.Number("Infinity"), which unmaskPaired
+		// produces for the bare TOKEN, so an overflowed literal joins it
+		// there rather than dying in the writer. Without this, `1e400`
+		// aborted the row's re-encode where CPython writes Infinity.
+		if math.IsInf(f, 1) {
+			return json.Number("Infinity")
+		}
+		if math.IsInf(f, -1) {
+			return json.Number("-Infinity")
+		}
+		return f
+	}
+	return v
 }
