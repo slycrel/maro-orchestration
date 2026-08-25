@@ -7335,3 +7335,255 @@ the test now also asserts a floor — the walk must find at least as many
 layout writers as the allowlist claims exist. A stripper that blanked too
 much would otherwise make the census pass by seeing nothing, which is the
 failure its own regex probes were written against, one layer up.
+
+## The finalize helpers, and a ContextVar with no Go spelling
+
+`loop_finalize.py` is the loop's terminal phase — 1319 lines that build the
+final `LoopResult`, write the artifacts, and run the post-loop side effects.
+This tranche takes the self-contained head of it (`_step_evidence`,
+`_auto_prune_days`, `cleanup_step_artifacts`) plus the dependency it turned
+out to need: `runs.artifact_dir` and the run-dir accessors under it.
+
+### `contextvars.ContextVar` is `context.Context`, and the difference is safe
+
+`runs._current_run_dir` is a ContextVar, and the comment above the
+declaration says exactly why rather than leaving it to be inferred:
+concurrent loops in one process (`run_parallel_loops`, DAG step fan-out)
+must each see their OWN run-dir instead of sharing a last-writer-wins
+global.
+
+A package-level `var currentRunDir string` would be that global, with the
+same bug and a data race on top. Go has no goroutine-local storage, and that
+is not a gap to work around — `context.Context` IS the mechanism, and it
+matches ContextVar closely:
+
+| ContextVar | context.Context |
+|---|---|
+| `set` inside a `copy_context()` is invisible to the caller | a value on a derived context is invisible to its parent |
+| `scoped_run_dir`'s `reset(token)` | the derived context going out of scope |
+| `copy_context().run(fn)` for a worker | handing the goroutine the derived context |
+
+They differ on the FAN-OUT DEFAULT, and in the safe direction. Python's
+ThreadPoolExecutor workers do NOT inherit the submitting thread's context;
+the comment in `runs.py` warns that fan-out sites must remember
+`copy_context().run`, and forgetting is silent. A Go goroutine has no
+ambient context at all, so it can only see the run-dir a caller explicitly
+handed it. There is nothing to forget.
+
+### `Path("")` is `.`, and one Go string cannot hold that
+
+`set_current_run_dir(None)` CLEARS — `handle_queue` uses it for drain-batch
+hygiene between resumed handles, and without it run N+1 would write its
+artifacts into run N's build dir.
+
+`set_current_run_dir("")` does NOT clear. `Path("")` is `PosixPath('.')`, a
+perfectly good truthy Path, so `current_run_dir()` answers `.` and
+`artifact_dir` then creates `./build` under whatever the process CWD happens
+to be. Measured:
+
+```
+>>> Path(""), Path("").name
+(PosixPath('.'), '')
+```
+
+A `string` in the context could carry one of those two answers, not both, so
+the stored value is a POINTER: nil is None, non-nil is a path, and the empty
+string is normalised to `"."` at the one function that constructs it.
+`WithoutRunDir` must store an explicit nil rather than simply declining to
+set anything — an inner scope that set nothing would INHERIT the outer
+run-dir, where Python's `set(None)` genuinely blanks it downstream. That is
+mutant F29, and it is the one a reasonable person writes first.
+
+`current_handle_id` carves the id out of the run-dir NAME
+(`<handle_id>-<nickname>`) with `split("-", 1)[0]`, and the edge that
+matters is `"-x"`, which yields an EMPTY handle id — not an absent one. So
+the Go signature is `(string, bool)` rather than a bare string: folding ""
+into "no run pinned" would make a caller resume the wrong run rather than
+fail.
+
+### `max(0.0, float(v or 0))` is four coercions and none are decorative
+
+`_auto_prune_days` is one line:
+
+```python
+return max(0.0, float(_cfg_get("artifacts.auto_prune_days", 0) or 0))
+```
+
+`or 0` turns every FALSY value into 0 before `float()` sees it; `float()`
+accepts numeric strings and strips their whitespace; a non-numeric string
+RAISES into the outer `except`; and `max` clamps negatives — and clamps NaN
+too, because `nan > 0.0` is false. Measured across what a hand-edited config
+can hold:
+
+```
+0 -> 0    3 -> 3     3.5 -> 3.5   "3" -> 3    " 3 " -> 3
+true -> 1 false -> 0 None -> 0    "" -> 0     [] -> 0
+"abc" -> ValueError -> 0          "0x10" -> ValueError -> 0
+"nan" -> 0 (clamped)   "inf" -> +Inf (NOT clamped)   "-1" -> 0
+```
+
+Infinity surviving is correct and worth naming: `auto_prune_days: inf`
+disables pruning by putting the grace period past every mtime, rather than
+by being clamped to the delete-everything end.
+
+The Go gate is spelled `!(f > 0)`, not `f <= 0`, so NaN lands in the
+disabled arm. NaN fails BOTH comparisons, and `f <= 0` would let it through
+to be multiplied into a grace period no mtime is ever less than — which
+silently disables pruning instead of clamping it, and would look identical
+in any test that only asserts "nothing was deleted".
+
+And the string arm: `strconv.ParseFloat` and CPython's `float()` agree on
+every shape a config file can hold, including the pair that looked like a
+divergence and is not — underscore grouping (`"1_000"` → 1000 in both,
+`"_1"` and `"1__0"` errors in both). The ONE real difference is the HEX
+FLOAT: Go parses `"0x10p0"` as 16 and CPython raises. No valid decimal float
+string contains `0x`, so screening for it costs nothing and removes the only
+case where one config value would mean two numbers.
+
+### A pruning routine, where an extra deletion is the expensive direction
+
+`cleanup_step_artifacts` is opt-in by decree (Jeremy, 2026-07-10: the system
+never decides run data is clutter — *"the result isn't always just the
+outcome, it's also the path that gets you there"*). The knob defaults to
+zero, and zero means never.
+
+Porting the deletion turned up one real divergence, found by measuring
+rather than reading. `Path.glob` returns DIRECTORIES, and `unlink()` on one
+raises `IsADirectoryError`, which the `except OSError: pass` swallows — so a
+directory named `loop-1-step-1.md` survives every prune. Go's `os.Remove`
+SUCCEEDS on an empty directory. Without an `IsDir` skip the port would
+delete it and count it:
+
+```
+>>> (d/"loop-1-step-1.md").mkdir()
+>>> [p.name for p in d.glob("loop-*-step-*.md")]
+['loop-1-step-1.md']
+>>> (d/"loop-1-step-1.md").unlink()
+IsADirectoryError
+```
+
+The glob itself was measured at its edges rather than reasoned about, and
+the surprise is which way it falls:
+
+```
+fnmatch("loop--step-.md",     "loop-*-step-*.md") -> True    # EMPTY id
+fnmatch("loop-step-x.md",     "loop-*-step-*.md") -> False   # MISSING id
+fnmatch("loop-a-step.md",     "loop-*-step-*.md") -> False
+fnmatch("loop-x-step-y.md.md","loop-*-step-*.md") -> True
+```
+
+An empty loop id matches and a missing one does not. The rule is exactly
+"the literals appear in order", which is what the Go matcher does.
+
+The differential asserts the SURVIVORS, not the count. Two implementations
+that delete the same NUMBER of files can delete different files — the
+exclusion prefix and the glob are precisely where they would differ — and a
+caller only finds out when an audit goes looking for an artifact that is
+gone.
+
+### The step index is a stored field, and the port did not have one
+
+`_step_evidence` renders `Step {index}`, and Python's `StepOutcome.index` is
+the 1-based PLAN ITEM index. Go's `StepOutcome` had no such field, so the
+obvious port is the slice position.
+
+They agree in the v0 loop, which appends one outcome per item in order. They
+already disagree in the lanes this port has not reached: `loop_blocked`
+passes `item_index` for a step that has just been RETRIED, so two outcomes
+carry one index, and `loop_parallel`'s fan-out numbers its own batch from 1.
+So `Index` is a stored field, assigned in the step loop from the same
+`len(res.Steps)+1` the exec lane was already computing — for BOTH lanes, so
+the tool-less path is not the one that renders "Step 0" into a lesson.
+
+The other detail worth pinning is where the strip goes. Python builds
+
+```python
+f"Step {i} [{status}] {text}\n{result}".strip()
+```
+
+so the strip is on the JOINED string. A step with text and no result loses
+its trailing newline; a step with a result and no text KEEPS the space after
+the bracket:
+
+```
+'Step 1 [ok] txt'
+'Step 1 [ok] \nres'
+```
+
+Stripping the parts and then joining produces neither. This is a prompt —
+the text feeds lesson extraction — so the spacing is the behaviour.
+
+### Two keyword defaults that a single Go signature cannot carry
+
+`_step_evidence(step_outcomes, *, total_budget=None, entry_cap=None)`
+forwards each keyword only when it was passed, so `None` means "ContextBudget's
+own default" and NOT zero — and zero is a real value a caller could pass,
+which renders an empty block. A `func(outcomes, total, cap int)` would make
+0 ambiguous exactly where Python is unambiguous, so the port is two
+functions: `StepEvidence` takes the defaults and `StepEvidenceBounded` takes
+explicit numbers.
+
+### Evidence, and five tests that were agreeing rather than measuring
+
+Mutation battery over the tranche, derived from the FILE. The first run was
+26 detected, 8 missed, 3 build-failed — and every one of the eight misses was
+a fault in the TESTS or in the battery, not a gap that needed new production
+code. They are worth listing because four of them are the same shape as the
+findings the last review round produced, arriving one round later in freshly
+written work.
+
+**The reader was tested and the writer was not.** `StepOutcome.Index` is
+rendered by `_step_evidence` and assigned by the loop. The differential
+builds its outcomes as literals, so zeroing the assignment (F9) and making it
+zero-based (F10) both passed every subtest — the test pinned how the number
+RENDERS and said nothing about where it comes from. A field is two claims,
+and a test of one is not a test of the other. `TestRunStampsOneBasedStepIndices`
+drives the actual loop and checks both halves together.
+
+**My own test duplicated a production guard, and hid it.** The pruning
+differential entered through a local helper that re-checked `project == ""`
+before delegating — so the mutant deleting the production check passed (F28).
+That is precisely the finding the previous round's fence-strip produced, and
+the paragraph about it was written the same day. The helper is gone; the test
+now enters at `pruneStepArtifacts`, the two guards live in exactly one place
+each, and a separate end-to-end test drives the exported entry point where
+both short-circuits actually are.
+
+**One temp directory served two runtimes, and the existence check became
+free.** `TestArtifactDirMatchesCPython` gave Python and Go the same root.
+Python ran first and created the directory, so the Go assertion that the
+directory EXISTS passed whether or not `ArtifactDir` created anything —
+mutants deleting both `MkdirAll` calls survived (F33, F34). The trees are now
+separate and compared by their de-rooted tails. A test that shares a fixture
+with the thing it is measuring against is measuring the fixture.
+
+**A bool nothing read made two mutants unkillable.** `pyFloatOrZero` returned
+`(float64, bool)`, separating "float() would have raised" from "the value was
+falsy". Every failing arm returns 0 as well, so `!ok` was implied by the
+caller's own `!(f > 0)` and both mutants that flipped the bool survived
+(F15, F18). The right answer to that pair of misses was not a test — it was
+deleting the bool. A distinction nothing reads is a second guard making the
+first unobservable.
+
+**A fixture at the wrong value.** The hex screen exists because Go's
+`ParseFloat` accepts `"0x10p0"` and CPython does not. The fixture used
+`"0x10"`, which BOTH runtimes reject, so removing the screen changed nothing
+(F14). One character of exponent apart, and the test proved nothing.
+
+**A no-prefix name that the "wrong order" fixture could not see.** Dropping
+the `loop-` prefix requirement survived (F27) because the fixture meant to
+catch it — `step-a-loop-b.md` — has no dash before its `step` either way, so
+it is rejected by the `-step-` test whether or not the prefix is checked.
+`x-step-y.md` is the name that separates them.
+
+And one mutant that is **unobservable by construction**, recorded rather than
+worked around: the age comparison is `<` and could be `<=`, but each runtime
+reads its own clock after the fixture's mtimes are set, so no input can make
+the difference come out exactly equal. It is named here instead of being
+covered by a mutant nothing can detect. (The `<` itself IS pinned — a mutant
+that zeroes the grace period fails two subtests.)
+
+Two rounds of correction later, the battery reads **38/38 DETECTED** — and
+of the ten mutants that survived along the way, two were answered by DELETING
+production code rather than by adding a test, which is the right answer more
+often than it feels like it should be.

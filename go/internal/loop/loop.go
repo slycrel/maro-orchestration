@@ -43,6 +43,20 @@ text, list, or answer the step asks for. Be concrete and complete; no
 preamble about what you would do.`
 
 type StepOutcome struct {
+	// Index is Python StepOutcome.index — the 1-based PLAN ITEM index,
+	// not this outcome's position in the slice. The two agree in the v0
+	// loop, which appends exactly one outcome per item in order, and
+	// Python's construction sites already disagree with position in the
+	// lanes this port has not reached: loop_blocked passes item_index for
+	// a step that has just been RETRIED, so two outcomes carry one index,
+	// and loop_parallel's fan-out numbers its own batch from 1.
+	//
+	// It is a stored field rather than a derived one for that reason. A
+	// reader that recomputed it from position would be right today and
+	// silently wrong the moment retry outcomes land in the slice — and
+	// the thing that reads it (StepEvidence) feeds lesson extraction,
+	// where a mislabelled step is a lesson attributed to the wrong work.
+	Index     int
 	Step      string
 	Status    string // "done" | "blocked"
 	Result    string
@@ -464,6 +478,10 @@ stepLoop:
 			out = executeStep(ctx, a, goal, step.text, res.Steps)
 		}
 		out.WasInjected = step.injected
+		// The same 1-based item index executeExecStep is already handed
+		// above, assigned for BOTH lanes so the tool-less path is not the
+		// one that renders "Step 0" into a lesson.
+		out.Index = len(res.Steps) + 1
 		res.Steps = append(res.Steps, out)
 		res.TokensIn += out.TokensIn
 		res.TokensOut += out.TokensOut
