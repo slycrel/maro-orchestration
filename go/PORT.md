@@ -5665,3 +5665,96 @@ production set in `record.go` had to name them too. A table that agreed
 with Python while the code disagreed would have been exactly the shape
 lens 1 warns about, and the census refuses to be satisfied by it. Both
 are `user` in Python's `USER_SURFACED_EVENTS`.
+
+## Round-10 fixes — pyStrip everywhere, and a claim turned into a test
+
+### `str.strip()` / `str.lower()` are not their Go namesakes
+
+Two divergences, both measured on this box, both now carried by
+`pytext.Strip` / `pytext.Lower` (with `pyStrip` / `pyLower` as the
+`internal/skills` wrappers):
+
+* `str.strip()` removes **29** code points. Go's `unicode.IsSpace` knows
+  25 and misses **U+001C–U+001F** — FILE, GROUP, RECORD and UNIT
+  SEPARATOR.
+* `str.lower()` applies FULL case mapping. **U+0130 lowercases to TWO
+  runes** ("i" + U+0307); `strings.ToLower` gives one. Measured:
+  `"İSTANBUL".lower()` is nine characters in CPython, eight in Go.
+
+`internal/skills/mint.go` used the Go spellings for `name`,
+`description`, `domain` and each `steps_template` entry — the four
+fields `ComputeSkillHash` hashes. So the same model reply produced a
+different `content_hash` in each runtime, and a name of only separators
+was dropped silently by CPython while the port wrote it, had it refused
+by `ValidateSkillRow`, and returned the empty list — **discarding
+skills it had already written to disk**.
+
+The fixtures that pin this spell the separators as JSON *escapes*
+(`jsonEscape(0x1c)`), not raw bytes. A raw control character is not
+legal inside a JSON string: the first cut embedded the bytes, both
+runtimes rejected the reply outright, and the fixtures agreed about
+nothing.
+
+### `manifestSkillIDs` now uses the admission predicate everyone else uses
+
+Python reads the run's injection manifest through `_read_store →
+_classify → loads_clean`. The port had hand-rolled `bufio.Scanner` +
+`json.Unmarshal`, which admits raw non-UTF-8 bytes (substituted to
+U+FFFD), escaped lone surrogates, duplicate names, non-object lines and
+trailing data. It is now `record.IsFrameBlank` + `record.LoadsClean`
+over a whole-file split, matching the five other readers in the package.
+
+Two rules worth keeping in mind for any remaining reader:
+
+* **blank means EMPTY, not whitespace.** `_classify` strips the trailing
+  newline and compares to `b""`. A whitespace-only line is a COUNTED
+  loss in Python, not framing.
+* **`bufio.Scanner` is not `for line in f`.** It also strips a trailing
+  `\r`, and it caps line length. Split the whole read on `"\n"`.
+
+### `pyprobe.Probe.Env`, and what it refuses
+
+New field, for a probe whose subject is something only settable before
+the interpreter starts. The only such thing so far is
+`PYTHONHASHSEED`. It **refuses** `MARO_WORKSPACE`, `MARO_USER_DIR` and
+`PYTHONPATH`: each is what a guard reads, and an escape hatch that can
+switch off the live-workspace refusal from a field named `Env` is one
+nobody would think to look at.
+
+### A named ambiguity: `RetireLosingVariants` on a variant chain
+
+For a chain `p1 ← c1 ← c2` where BOTH links win, the content the
+surviving `p1` ends up with depends on which parent id CPython's set
+yielded first — so **CPython does not agree with itself across runs**
+(measured: `list({"p1","c1"})` splits 8/4 across twelve hash seeds). The
+port picks first-appearance order, which is deterministic and reachable.
+
+`variant_diff_test.go` no longer asserts that in prose. For any fixture
+where an id appears in both `promoted` and `retired`, it sweeps twelve
+seeds, collects the distinct answers, and requires the port's file to be
+one of them — falling back to STRICT comparison when the sweep finds
+only one, because containment against a single candidate is equality
+with the failure message thrown away. That fallback is not hypothetical:
+the existing "a promoted parent that is itself retired" fixture is
+chain-shaped but content-identical either way, and the guard caught it
+on the first run.
+
+### Value semantics where Python mutates
+
+`CreateSkillVariant` takes `rewritten *Skill`. Python assigns onto the
+caller's object and returns that same object; taking it by value left a
+Python-shaped caller holding an unmarked skill, which
+`RetireLosingVariants` — grouping on `variant_of` — would never see.
+
+### Named residual: the port-wide strip/lower sweep
+
+`internal/skills` is fixed and `internal/intent`, `internal/jsonx`,
+`internal/now`, `internal/guard` and `internal/pytext` were already
+correct (they carry comments saying so). There are ~130 other non-test
+`strings.TrimSpace` / `strings.ToLower` / `strings.ToUpper` calls across
+25 packages, and each needs the same question asked of it: **does this
+port a Python `.strip()`/`.lower()`, and does the result become data
+that outlives the call?** A classification sweep is in flight; the
+exposure to fix is the subset that is stored, hashed, used as a map key,
+or gates a write. A truthiness test IS in that subset when it decides
+whether a record is written — that shape is exactly what H1 was.

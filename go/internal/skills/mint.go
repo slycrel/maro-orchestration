@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
@@ -214,8 +215,28 @@ func ExtractSkills(ctx context.Context, ws string, outcomes []pyval.Obj,
 		// `str(rs.get("name", "unnamed")).strip()` — the default applies
 		// only when the key is ABSENT. A present null becomes the STRING
 		// "None", which is truthy, so the skill is saved under that name.
-		sk.Name = strings.TrimSpace(pyval.Str(getOr(rs, "name", "unnamed")))
-		sk.Description = strings.TrimSpace(pyval.Str(getOr(rs, "description", "")))
+		//
+		// pyStrip, NOT strings.TrimSpace. Python's str.strip() removes 29
+		// code points; Go's unicode.IsSpace knows 25 of them, missing
+		// U+001C–U+001F (the FILE/GROUP/RECORD/UNIT separators). This
+		// package already carries the correct spelling and NormalizeTags
+		// three lines below already used it — so within this one function
+		// `tags` was right and `name` was wrong, which is how it survived
+		// review. Two live consequences, both measured:
+		//
+		//   - the separators land in the name and description, so
+		//     ComputeSkillHash returns a different content_hash than
+		//     CPython for the same reply, and the two runtimes write rows
+		//     that disagree about their own identity;
+		//   - a name that is ONLY separators strips to "" in CPython (the
+		//     skill is dropped silently at the truthiness gate below), but
+		//     stays truthy here, reaches SaveSkill, and is refused by
+		//     ValidateSkillRow — and that refusal returns nil,nil at the
+		//     bare-except, discarding skills already appended AND already
+		//     written to disk. One unstripped byte turned a silent drop
+		//     into a partial write with a disagreeing return value.
+		sk.Name = pyStrip(pyval.Str(getOr(rs, "name", "unnamed")))
+		sk.Description = pyStrip(pyval.Str(getOr(rs, "description", "")))
 		trig, terr := strListOf(rs, "trigger_patterns")
 		if terr != nil {
 			return nil, nil
@@ -232,8 +253,16 @@ func ExtractSkills(ctx context.Context, ws string, outcomes []pyval.Obj,
 		// strip THEN lower THEN truncate — the order is load-bearing: a
 		// 40-character cut applied first would keep trailing spaces that
 		// the strip removes.
+		//
+		// pyLower, not strings.ToLower: Go applies SIMPLE case mapping,
+		// one rune in and one rune out, where Python's str.lower() maps
+		// U+0130 to TWO runes ("i" + U+0307). Measured: "İSTANBUL".lower()
+		// is "i̇stanbul" in CPython and "i̇stanbul" one rune shorter
+		// here. That is a one-character difference INSIDE a 40-character
+		// clip, so the divergence is not only the domain string but where
+		// the truncation falls.
 		sk.Domain = pyval.Clip(
-			strings.ToLower(strings.TrimSpace(pyval.Str(getOr(rs, "domain", "")))), 40)
+			pyLower(pyStrip(pyval.Str(getOr(rs, "domain", "")))), 40)
 		tagsRaw, _ := rs.Get("tags")
 		sk.Tags = NormalizeTags(tagsRaw, 6)
 
@@ -292,7 +321,11 @@ func strListOf(o pyval.Obj, key string) ([]string, error) {
 	}
 	out := []string{}
 	for _, it := range items {
-		s := strings.TrimSpace(pyval.Str(it))
+		// pyStrip — see the note at the name/description sites. This one
+		// feeds trigger_patterns and steps_template, so an unstripped
+		// separator both changes the content hash and survives into the
+		// keyword matcher as part of a trigger.
+		s := pyStrip(pyval.Str(it))
 		if s != "" {
 			out = append(out, s)
 		}
@@ -301,13 +334,33 @@ func strListOf(o pyval.Obj, key string) ([]string, error) {
 }
 
 // stableSortByFalseFirst is list.sort with a bool key: stable, False first.
-// Written out rather than reached for from sort.SliceStable because the
+//
 // STABILITY is the contract — Python's sort keeps the ledger's order within
 // each group, and that order decides which twenty rows survive the [:20].
+// An earlier version hand-rolled an insertion sort on the stated grounds
+// that sort.SliceStable could not be relied on for that, which is simply
+// false: SliceStable is documented stable and that is its entire reason to
+// exist beside sort.Slice. The false premise bought a quadratic sort with
+// an O(keys) comparison over the WHOLE outcome ledger — measured 824ms at
+// 6000 rows against CPython's 1.1ms, on a live ledger already at 1,524.
+//
+// The keys are computed ONCE, up front. list.sort() calls a Python key
+// function exactly once per element and sorts the decorated values; calling
+// key() inside the comparator instead is a second divergence from what is
+// being ported, and it is the one that made the quadratic cost bite.
 func stableSortByFalseFirst(xs []pyval.Obj, key func(pyval.Obj) bool) {
-	for i := 1; i < len(xs); i++ {
-		for j := i; j > 0 && key(xs[j-1]) && !key(xs[j]); j-- {
-			xs[j], xs[j-1] = xs[j-1], xs[j]
-		}
+	keys := make([]bool, len(xs))
+	for i, x := range xs {
+		keys[i] = key(x)
 	}
+	idx := make([]int, len(xs))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return !keys[idx[a]] && keys[idx[b]] })
+	out := make([]pyval.Obj, len(xs))
+	for i, j := range idx {
+		out[i] = xs[j]
+	}
+	copy(xs, out)
 }

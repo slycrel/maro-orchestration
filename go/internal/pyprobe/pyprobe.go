@@ -97,6 +97,22 @@ type Probe struct {
 	// "the resolved path is inside the workspace" assertion. It runs after
 	// the live-workspace refusal, so it can import freely.
 	Guard string
+	// Env is extra "K=V" pairs appended to the child's environment, for a
+	// probe whose SUBJECT is something only settable before the interpreter
+	// starts. The one that exists is PYTHONHASHSEED: a function that
+	// iterates a set of strings does not answer the same way twice, and the
+	// honest way to test a port against it is to sweep the seed and require
+	// the port's deterministic answer to be one CPython can produce — see
+	// internal/skills' retire-variants chain case.
+	//
+	// The four variables Run sets itself — MARO_WORKSPACE, MARO_USER_DIR,
+	// PYTHONPATH, PYTHONDONTWRITEBYTECODE — are REFUSED here rather than
+	// overridden. Every one of them is load-bearing for a guard (the
+	// live-workspace refusal reads MARO_WORKSPACE; the marker check decides
+	// PYTHONPATH), and an escape hatch that can switch off the guard from a
+	// field named Env is one nobody would think to look at. Set Workspace
+	// or UserDir for those.
+	Env []string
 	// UserDir overrides MARO_USER_DIR. Leave it empty and Run points it at
 	// a fresh temp dir — see the package doc. Set it only when the probe's
 	// subject IS the user-tier config, and then point it somewhere the test
@@ -140,6 +156,18 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	}
 	if p.Workspace != "" {
 		env = append(env, "MARO_WORKSPACE="+p.Workspace)
+	}
+	for _, kv := range p.Env {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			t.Fatalf("pyprobe: Env entry %q is not K=V", kv)
+		}
+		switch name {
+		case "MARO_WORKSPACE", "MARO_USER_DIR", "PYTHONPATH":
+			t.Fatalf("pyprobe: Env must not set %s — it is what a guard reads. "+
+				"Use the Workspace or UserDir field.", name)
+		}
+		env = append(env, kv)
 	}
 	cmd.Env = env
 	out, err := cmd.Output()

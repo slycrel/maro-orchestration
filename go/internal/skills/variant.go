@@ -24,7 +24,18 @@ const MinVariantUses = 5
 //
 // rec may be nil. Python wraps the captain's-log write in a bare except, so
 // a logging failure never costs the caller its variant.
-func CreateSkillVariant(original Skill, rewritten Skill,
+//
+// rewritten is a POINTER because Python mutates the caller's object and
+// returns that same object — `rewritten.variant_of = original.id` is an
+// attribute assignment on the argument, not a copy. Taking it by value made
+// the return the only channel, so a caller that followed Python's shape and
+// used its own `rewritten` afterwards held an UNMARKED skill: variant_of
+// nil, wins and losses whatever they were. It would then be saved into the
+// pool as a plain skill, and RetireLosingVariants — which groups on
+// variant_of — would never see the A/B pair at all. Nothing in the port
+// calls this yet, which is why the signature could still be fixed rather
+// than worked around.
+func CreateSkillVariant(original Skill, rewritten *Skill,
 	rec *record.Recorder) (Skill, error) {
 	if rewritten.ID == original.ID {
 		return Skill{}, &pyval.PyErr{Class: "ValueError", Msg: fmt.Sprintf(
@@ -45,7 +56,7 @@ func CreateSkillVariant(original Skill, rewritten Skill,
 				"challenger_id": rewritten.ID}, "",
 			[]string{"skill:" + original.ID, "skill:" + rewritten.ID})
 	}
-	return rewritten, nil
+	return *rewritten, nil
 }
 
 // RetireReport is retire_losing_variants' return dict.
@@ -79,8 +90,34 @@ type RetireReport struct {
 // order, so CPython does not agree with ITSELF across runs. This port
 // iterates parents in first-appearance order, which is deterministic and
 // inside the set of orders CPython can produce. The differential compares
-// the two as sets for that reason, and the archive/save effects do not
-// depend on order at all.
+// the two as sets for that reason.
+//
+// It used to end "and the archive/save effects do not depend on order at
+// all". That sentence was false, and the case it is false for is a VARIANT
+// CHAIN — p1 <- c1 <- c2, where both links win:
+//
+//	group p1 first: p1 takes c1's ORIGINAL content, then c1 takes c2's.
+//	group c1 first: c1 takes c2's content, then p1 takes THAT.
+//
+// The challengers are pointers into one pool, so the second group sees the
+// first group's write. p1 is the row that SURVIVES, and its content — and
+// therefore its content_hash, which is recomputed from it — depends on
+// which parent id the set happened to yield first. Measured on this box:
+// 3 of 8 CPython runs disagreed with the other 5 on p1's stored content.
+//
+// c1's archived row does NOT depend on order (its own group always runs),
+// and neither does either id list once compared as a set. The surviving
+// root's CONTENT is the whole of the exposure, and both runtimes have it.
+//
+// This is not a defect the port can fix on its own side: CPython is the
+// runtime being ported and CPython is ambiguous here. So the port picks the
+// deterministic order and the differential PROVES the containment claim
+// rather than asserting it — for any fixture where a skill appears in both
+// `promoted` and `retired` (the structural signature of a chain), the test
+// runs CPython under several PYTHONHASHSEEDs, collects the distinct answers,
+// and requires the port's answer to be one of them. See the seed sweep in
+// variant_diff_test.go. Lens 19: the sentence claiming order-independence
+// was the thing to check, not the code under it.
 func RetireLosingVariants(ws string, dryRun bool, minUses int,
 	rec *record.Recorder) (RetireReport, error) {
 	res := LoadSkills(ws)

@@ -83,6 +83,24 @@ type extractCase struct {
 	reply    string
 }
 
+// The four code points Python's str.strip() removes and Go's unicode.IsSpace
+// does not: FILE, GROUP, RECORD and UNIT SEPARATOR.
+//
+// Spelled as JSON ESCAPES, and built here rather than written into the
+// fixture literals, because a raw control byte is not legal inside a JSON
+// string. The first attempt at these fixtures embedded the bytes directly;
+// both runtimes then rejected the whole reply as unparseable and agreed
+// perfectly about the empty result, testing nothing (lens 1). The escape is
+// what a real model reply carries, and it is what exercises the strip.
+var (
+	fsep = jsonEscape(0x1c)
+	gsep = jsonEscape(0x1d)
+	rsep = jsonEscape(0x1e)
+	usep = jsonEscape(0x1f)
+)
+
+func jsonEscape(r rune) string { return fmt.Sprintf(`\u%04x`, r) }
+
 // TestExtractSkillsMatchesCPython pins the mint path against the
 // interpreter, prompt included.
 //
@@ -223,6 +241,47 @@ func TestExtractSkillsMatchesCPython(t *testing.T) {
 		{"a whitespace name is dropped", []map[string]any{
 			{"status": "done", "goal": "g", "summary": "s"}},
 			`{"skills": [{"name": "   ", "steps_template": ["s"]}]}`},
+
+		// THE FOUR CODE POINTS GO DOES NOT CALL SPACE.
+		//
+		// str.strip() removes 29 code points; Go's unicode.IsSpace knows 25
+		// and misses U+001C..U+001F, the FILE/GROUP/RECORD/UNIT separators.
+		// Every fixture above strips ASCII spaces, which the two agree on,
+		// so strings.TrimSpace passed this whole table while writing a
+		// different content_hash for any reply carrying a separator (round
+		// 10 HIGH). These rows are why the port calls pyStrip.
+		//
+		// The first pins the VALUE (and, through `saved`, the hash computed
+		// from it). The second pins the DROP: a name that is only separators
+		// is empty to Python and the skill vanishes silently, where an
+		// unstripped name stays truthy, reaches save_skill, and is refused
+		// by validate_skill_row — which returns the empty list and discards
+		// the rows already written. One byte, two different stores.
+		{"separators strip out of a name", []map[string]any{
+			{"status": "done", "goal": "g", "summary": "s"}},
+			`{"skills": [{"name": "` + fsep + `Fetch And Sum` + usep + `",
+			  "description": "` + gsep + ` desc ` + rsep + `",
+			  "steps_template": ["s"]}]}`},
+		{"a name of only separators is dropped", []map[string]any{
+			{"status": "done", "goal": "g", "summary": "s"}},
+			`{"skills": [{"name": "` + fsep + gsep + rsep + usep + `",
+			  "steps_template": ["s"]}]}`},
+		{"separators strip out of a steps template", []map[string]any{
+			{"status": "done", "goal": "g", "summary": "s"}},
+			`{"skills": [{"name": "n",
+			  "steps_template": ["` + fsep + `step one` + usep + `", "` + rsep + `"],
+			  "trigger_patterns": ["` + gsep + `trig` + fsep + `"]}]}`},
+
+		// str.lower() applies FULL case mapping: U+0130 becomes TWO runes,
+		// "i" + U+0307, where Go's simple mapping gives one. The domain is
+		// lowered and then clipped to 40, so the divergence moves the cut as
+		// well as changing the string. Measured: "İSTANBUL".lower() is nine
+		// characters in CPython and eight under strings.ToLower.
+		{"a dotted capital I in the domain lowercases to two runes",
+			[]map[string]any{
+				{"status": "done", "goal": "g", "summary": "s"}},
+			`{"skills": [{"name": "n", "steps_template": ["s"],
+			  "domain": "` + fsep + `İSTANBUL` + usep + `"}]}`},
 		{"an empty template is dropped", []map[string]any{
 			{"status": "done", "goal": "g", "summary": "s"}},
 			`{"skills": [{"name": "n", "steps_template": []}]}`},

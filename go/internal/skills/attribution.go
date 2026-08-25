@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -249,25 +248,56 @@ func sameIDSet(stored []any, want []string) bool {
 // _read_store has the same announced-skip posture. That is the opposite of
 // internal/tasks' deliberate fail-closed read, and the difference is which
 // runtime behaviour is being ported, not a house preference.
+//
+// # The admission predicate is record.LoadsClean, not encoding/json
+//
+// Python's _read_store is read_jsonl_announced -> _classify, and _classify
+// calls loads_clean. The first cut of this reader hand-rolled the ladder
+// with bufio.Scanner + json.Unmarshal, which opened every door loads_clean
+// exists to shut — and this is the one place in the port where an admitted
+// row becomes a skill-stats IDENTITY, so a laundered id mints a permanent
+// counter under a name nothing else in either runtime uses:
+//
+//   - RAW NON-UTF-8 BYTES. Go's decoder substitutes U+FFFD and succeeds;
+//     CPython's per-line decode raises and the line is counted undecodable
+//     and dropped. A torn byte inside an id therefore minted a NEW stats
+//     identity here and none at all there. Round 9 shut this same door in
+//     internal/tasks; this was its unswept sibling (lens 3).
+//   - A LONE SURROGATE ARRIVING AS A JSON ESCAPE, which is pure ASCII on
+//     the wire and so invisible to a UTF-8 check.
+//   - DUPLICATE NAMES, where both decoders silently keep the last value.
+//   - A NON-OBJECT line and TRAILING DATA after the object.
+//   - NaN/Infinity tokens.
+//
+// # Blank means EMPTY, not whitespace
+//
+// _classify strips the trailing newline and compares to b"" — it does not
+// trim. A line of spaces (or "\x0b") is therefore NOT blank to Python: it
+// is decoded, refused by loads_clean, and counted as a loss the operator
+// hears about. strings.TrimSpace dropped it silently as framing, so the
+// two runtimes announced different numbers of torn lines for one file.
+// record.IsFrameBlank is the ported rule and every other reader here uses
+// it; this was the only caller that had grown its own.
+//
+// The whole file is read and split on "\n" rather than scanned, for the
+// same reason: bufio.ScanLines also strips a trailing "\r" (so a lone-"\r"
+// line vanishes uncounted where Python counts it) and imposes a max line
+// length Python does not have.
 func manifestSkillIDs(path string) ([]string, int, []string) {
-	f, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, []string{"skills manifest unreadable (" + path + "): " + err.Error()}
 	}
-	defer f.Close()
 
 	var ids []string
 	seen := map[string]bool{}
 	malformed, torn := 0, 0
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+	for _, line := range strings.Split(string(raw), "\n") {
+		if record.IsFrameBlank(line) {
 			continue
 		}
-		var rec map[string]any
-		if json.Unmarshal([]byte(line), &rec) != nil {
+		rec, lerr := record.LoadsClean(line)
+		if lerr != nil {
 			torn++
 			continue
 		}
@@ -290,9 +320,6 @@ func manifestSkillIDs(path string) ([]string, int, []string) {
 		}
 	}
 	var warns []string
-	if err := sc.Err(); err != nil {
-		warns = append(warns, "skills manifest read failed ("+path+"): "+err.Error())
-	}
 	if torn > 0 {
 		warns = append(warns, fmt.Sprintf("skills manifest (%s): %d unparseable "+
 			"line(s) skipped", path, torn))

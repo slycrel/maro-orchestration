@@ -8250,3 +8250,180 @@ Lens 18 said a detector that cannot see the case you already have is
 agreeing rather than measuring. Lens 19 is its documentation twin: the
 line that TELLS you the detector can see it is not evidence that it
 can.
+
+## Round 10 — the whole of tranche 5, plus the two pieces added after round 9
+
+Same posture as round 9: the reviewer read the entire tranche and its
+fixes rather than the latest diff. Six findings, **6/6 verified real**
+— the second clean round in a row, after a project history where 30–50%
+of adversarial findings had been hallucinated. Both clean rounds came
+from reviewers that reported having MEASURED each claim in a scratch
+copy rather than reasoning from the source alone.
+
+The reviewer also swept and cleared `pyval/utf8.go` (346,200 byte
+sequences, zero differences), `outcomepolicy.go` (13,560 rows),
+`asAssignable`/`asIndexable`/`asMapping`, `pyhash.floatHashKey`, and
+round 9's `[]string` and `readRaw` sweeps.
+
+### H1 — `str.strip()` is not `strings.TrimSpace`, in the one file that mints identities
+
+`mint.go` used `strings.TrimSpace` for `name`, `description` and each
+`steps_template` entry, and `strings.ToLower` for `domain`. Python's
+`str.strip()` removes 29 code points; Go's `unicode.IsSpace` knows 25
+and misses **U+001C–U+001F** (FILE/GROUP/RECORD/UNIT SEPARATOR).
+`str.lower()` applies the FULL case mapping, where **U+0130 becomes two
+runes** ("i" + U+0307); Go's is simple mapping, one rune in one rune
+out. Both measured on this box.
+
+Two live consequences, and the second is the one that matters:
+
+* the separators survive into the stored fields, so `ComputeSkillHash`
+  returns a different `content_hash` than CPython for the same reply —
+  two runtimes writing rows that disagree about their own identity;
+* a name that is ONLY separators strips to `""` in CPython and the
+  skill is dropped silently at the truthiness gate. Unstripped it stays
+  truthy, reaches `SaveSkill`, and is refused by `ValidateSkillRow` —
+  and that refusal takes the bare-except path and returns `nil, nil`,
+  **discarding skills already appended and already written to disk**.
+  One unstripped byte turns a silent drop into a partial write whose
+  return value disagrees with the file.
+
+What makes this the round's sharpest finding is where the correct
+spelling was: `pyStrip` and `pyLower` are in `coerce.go`, in the same
+package, with comments explaining this exact hazard — and
+`NormalizeTags`, three lines below the broken sites, already used them.
+Within one function `tags` was right and `name` was wrong.
+
+### M2 — an ordering claim that was false, and is now a test
+
+`RetireLosingVariants`' doc comment ended "and the archive/save effects
+do not depend on order at all." False, for a variant CHAIN whose links
+both win (`p1 ← c1 ← c2`). The challengers are pointers into one pool,
+so the second group sees the first group's write:
+
+    group p1 first: p1 takes c1's ORIGINAL content, then c1 takes c2's.
+    group c1 first: c1 takes c2's content, then p1 takes THAT.
+
+`p1` is the row that SURVIVES, and its content — and the `content_hash`
+recomputed from it — depends on which parent id CPython's set yielded
+first. Measured: `list({"p1","c1"})` is `['p1','c1']` under 8 of 12
+hash seeds and `['c1','p1']` under the other 4.
+
+This is not fixable on the port's side: CPython is the runtime being
+ported and CPython is ambiguous here. So the port keeps its
+deterministic first-appearance order and the differential now **proves
+the containment claim instead of asserting it** — for any fixture where
+an id appears in both `promoted` and `retired`, the probe runs under
+twelve `PYTHONHASHSEED`s and the port's `skills.jsonl` must match one of
+the distinct answers.
+
+Two things fell out of building it:
+
+* `pyprobe.Probe` gained an `Env` field, which REFUSES `MARO_WORKSPACE`,
+  `MARO_USER_DIR` and `PYTHONPATH` — an escape hatch that could switch
+  off the live-workspace guard from a field named `Env` is one nobody
+  would think to look at.
+* the anti-vacuity guard fired immediately on an EXISTING fixture: "a
+  promoted parent that is itself retired" is chain-shaped but its two
+  challengers carry identical content, so CPython answers once. Chain
+  shape is NECESSARY for ambiguity, not sufficient. When the sweep finds
+  one answer the test now asserts ON it strictly — containment against a
+  single candidate is equality with the failure message thrown away.
+
+The test file also claimed "PYTHONHASHSEED is pinned by the caller".
+Nothing pinned it anywhere. Lens 19 again.
+
+### M3 — round 9's decode fix had an unswept sibling
+
+`manifestSkillIDs` hand-rolled `bufio.Scanner` + `json.Unmarshal` where
+Python reaches the manifest through `_read_store → _classify →
+loads_clean`. The port already had `record.LoadsClean`, the exact port
+of that predicate, and five other readers in the same package already
+used it with `record.IsFrameBlank` — this was the only caller that had
+grown its own (lens 4).
+
+It matters more here than anywhere else it could have: this reader is
+the ONE place in the port where an admitted row becomes a **skill-stats
+identity**, so a laundered id mints a permanent counter under a name
+nothing else in either runtime uses. Doors that were open: raw non-UTF-8
+bytes (Go substitutes U+FFFD and succeeds where CPython drops the line —
+verbatim round 9's `internal/tasks` fix), a lone surrogate arriving as a
+JSON *escape*, duplicate names, non-object lines, trailing data,
+NaN/Infinity.
+
+Second defect on the same line: `strings.TrimSpace(sc.Text())` as the
+blank test. `_classify` strips the trailing newline and compares to
+`b""` — it does not trim. A whitespace-only line is decoded, refused,
+and COUNTED by Python; the port dropped it silently as framing, so the
+two runtimes announced different numbers of torn lines for one file. The
+read also moved from `bufio.Scanner` to whole-file split, because
+`ScanLines` strips a trailing `\r` and imposes a max line length Python
+does not have.
+
+### L4 — a quadratic sort resting on a false sentence
+
+`stableSortByFalseFirst` hand-rolled an insertion sort, "written out
+rather than reached for from `sort.SliceStable` because the STABILITY is
+the contract". `sort.SliceStable` **is** stable — that is its entire
+reason to exist beside `sort.Slice`. The false premise bought an O(n²)
+sort with an O(keys) comparison over the whole outcome ledger: measured
+824ms at 6000 rows against CPython's 1.1ms, on a live ledger already at
+1,524. Keys are now computed once up front, which is also what
+`list.sort(key=...)` does.
+
+### L5 — the `[]string` sweep that stopped one enumeration short
+
+`NormalizeTags` matched `pyval.List` and `[]any`. `Skill.ToDict()` emits
+`Tags` as `[]string`, so `DictToSkill(s.ToDict())` — a round trip
+through this package's own two functions — silently returned a skill
+with NO tags. Round 9's `[]string` sweep across `pyval` did not reach
+here because this switch is a second enumeration of "list": **an
+enumeration is not a class** (lens 2), and lens 3 says a fix is evidence
+about its siblings in the sense of BEHAVIOUR, not of package.
+
+### L6 — value semantics where Python mutates
+
+`CreateSkillVariant` took `rewritten Skill` by value; Python assigns
+`rewritten.variant_of` onto the caller's object and returns that same
+object. A caller following Python's shape held an UNMARKED skill, which
+would then be saved into the pool as a plain skill and never seen by
+`RetireLosingVariants`' `variant_of` grouping. Now a `*Skill`, and the
+differential asserts the ARGUMENT was mutated, not only the return.
+
+### Verification
+
+11/11 mutations caught, after four rounds of repair to the battery
+itself — the repairs are the interesting part:
+
+* the first cut of the separator fixtures embedded **raw control
+  bytes** in the JSON replies. A raw control character is not legal
+  inside a JSON string, so both runtimes rejected the whole reply and
+  agreed perfectly about the empty result. Lens 1, in the fixtures
+  written to close a finding about lens 19. They are now JSON *escapes*
+  built by `jsonEscape(0x1c)`, which is what a real model reply carries.
+* `M4 domain pyStrip → TrimSpace` MISSED: the İSTANBUL fixture proved
+  the `lower` half and nothing about the `strip` half of the same
+  expression. Two mutations against one expression, and only one had a
+  fixture.
+* `M9 NormalizeTags drops the []string arm` MISSED: nothing drove the
+  round trip at all. The finding was reported as latent, and the battery
+  is what showed that "latent" meant "untested", not "unreachable".
+* `M6` and `M7` came back SITEFAIL and BUILDFAIL — the battery's own
+  reporting working as intended. **A mutation that does not compile
+  proves nothing**, and a site that does not match uniquely mutates
+  something else.
+
+### What round 10 says about the reviews themselves
+
+No new lens. Round 10 is lens 19's second harvest and lens 3's: **four
+of the six findings are a correct helper that existed, in scope, unused
+by the site that needed it** — `pyStrip`/`pyLower` beside the broken
+mint sites, `record.LoadsClean`/`IsFrameBlank` beside the hand-rolled
+manifest reader, `sort.SliceStable` beside the hand-rolled insertion
+sort, the `[]string` arm beside the two that were there. In three of
+those four, a comment in the same file explained why the helper was
+needed.
+
+The standing amendment — review the whole chunk, not the latest diff —
+is what found them. None of the four is IN a round-9 diff; they are all
+things round 9 walked past.

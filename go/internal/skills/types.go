@@ -86,12 +86,24 @@ func NormalizeTags(raw any, cap int) []string {
 	// type, not underlying type — so the mint path silently produced an
 	// EMPTY tag set for a reply CPython tags normally. Found the first
 	// time a pyval-decoded caller reached here (skills mint, tranche 5).
+	// THREE, not two. Skill.ToDict() emits Tags as []string, so
+	// FromDict(ToDict(s)) dropped every tag on the floor — a round trip
+	// through this package's own two functions, returning a skill with no
+	// tags and no complaint. Latent only because FromDict has no non-test
+	// caller yet; the []string arm round 9 added across pyval never reached
+	// here because this switch is a different enumeration of "list" than
+	// pyval's, and an enumeration is not a class (lens 2).
 	var list []any
 	switch t := raw.(type) {
 	case pyval.List:
 		list = []any(t)
 	case []any:
 		list = t
+	case []string:
+		list = make([]any, len(t))
+		for i, s := range t {
+			list[i] = s
+		}
 	default:
 		return []string{}
 	}

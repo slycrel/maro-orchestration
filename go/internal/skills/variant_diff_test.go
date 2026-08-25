@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +136,26 @@ func TestCreateSkillVariantMatchesCPython(t *testing.T) {
 
 			goOrig := skillOf(t, orig)
 			goRew := skillOf(t, rew)
-			got, gotErr := CreateSkillVariant(goOrig, goRew, nil)
+			got, gotErr := CreateSkillVariant(goOrig, &goRew, nil)
+
+			// Python MUTATES the argument and returns that same object, so
+			// the caller's own copy must carry the markers too — checked
+			// here rather than only through the return value, because
+			// taking `rewritten` by value passed every assertion below
+			// while leaving a caller who followed Python's shape holding an
+			// unmarked skill (round 10 LOW).
+			if gotErr == nil {
+				if goRew.VariantOf == nil || *goRew.VariantOf != goOrig.ID {
+					t.Errorf("the ARGUMENT was not mutated: variant_of=%v, "+
+						"want %q — Python assigns onto the caller's object",
+						pyOptStr(goRew.VariantOf), goOrig.ID)
+				}
+				if goRew.VariantWins != 0 || goRew.VariantLosses != 0 {
+					t.Errorf("the ARGUMENT kept wins=%d losses=%d; Python zeroes "+
+						"both on the caller's object", goRew.VariantWins,
+						goRew.VariantLosses)
+				}
+			}
 
 			if want.OK != (gotErr == nil) {
 				t.Fatalf("ok=%v; CPython ok=%v (%s: %s)",
@@ -292,6 +312,25 @@ func TestRetireLosingVariantsMatchesCPython(t *testing.T) {
 			parent("p1", 0.9, 10), child("c1", "p1", 5, 0)}, nil, false, 5},
 		{"...and loses at it", []map[string]any{
 			parent("p1", 0.9, 10), child("c1", "p1", 4, 1)}, nil, false, 5},
+
+		// A CHAIN WHERE BOTH LINKS WIN — the case that makes CPython
+		// disagree with itself, and the reason the seed sweep below exists.
+		//
+		// The other chain fixture above has its middle link LOSE, so only
+		// one promotion happens and group order cannot matter. Here c1 beats
+		// p1 AND c2 beats c1, so c1 is in `promoted` and `retired` both, and
+		// the content p1 SURVIVES with depends on which group ran first:
+		// "c1 desc" if p1's group won the race to read c1, "c2 desc" if c1's
+		// group overwrote c1 first. The descriptions are overridden for
+		// exactly that reason — child() gives every child the same text, and
+		// with identical content the two orders produce the same file and
+		// this fixture would prove nothing (lens 12).
+		{"a chain where BOTH links win", []map[string]any{
+			parent("p1", 0.1, 10),
+			withField(withField(child("c1", "p1", 9, 1),
+				"utility_score", 0.5), "description", "c1 desc"),
+			withField(child("c2", "c1", 10, 0), "description", "c2 desc")},
+			[]map[string]any{{"skill_id": "c1", "total_uses": 20}}, false, 5},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pyWS := t.TempDir()
@@ -351,7 +390,20 @@ func TestRetireLosingVariantsMatchesCPython(t *testing.T) {
 			// The FILES. Rows are compared as decoded objects because the
 			// live pool's row ORDER follows each runtime's rewrite and is
 			// not a contract; the SET of rows and every field in them is.
-			cmpJSONL(t, "skills.jsonl", readFile(t, skillsPath(goWS)), want.Skills)
+			//
+			// A skill in BOTH lists is a variant chain whose links both won,
+			// and for those CPython has more than one right answer — see
+			// RetireLosingVariants' ordering note. Strict equality against
+			// ONE run of CPython would then pass or fail on the
+			// interpreter's hash seed, which is a flaky test wearing a
+			// differential's clothes. Sweeping the seed and requiring
+			// containment turns the doc comment's claim into the assertion.
+			if intersects(got.Promoted, got.Retired) {
+				assertAmongCPythonAnswers(t, c.rows, c.stats, c.dryRun,
+					c.minUses, readFile(t, skillsPath(goWS)))
+			} else {
+				cmpJSONL(t, "skills.jsonl", readFile(t, skillsPath(goWS)), want.Skills)
+			}
 			cmpJSONL(t, "skills_archive.jsonl",
 				readFile(t, skillsArchivePath(goWS)), want.Archive)
 
@@ -432,27 +484,139 @@ func readFile(t *testing.T, p string) string {
 
 // cmpJSONL compares two JSONL files as multisets of decoded rows. Row order
 // is each runtime's rewrite order and is not a contract; the rows are.
+// intersects reports whether any id appears in both lists — for the retire
+// report, the structural signature of a variant CHAIN whose links both won,
+// which is the only shape whose stored result depends on group order.
+func intersects(a, b []string) bool {
+	in := map[string]bool{}
+	for _, s := range a {
+		in[s] = true
+	}
+	for _, s := range b {
+		if in[s] {
+			return true
+		}
+	}
+	return false
+}
+
+// hashSeeds are the PYTHONHASHSEED values the sweep runs under. Twelve, not
+// two: the order a set yields two strings in is a property of their hashes
+// modulo the table size, so a given pair can favour one order heavily.
+// Measured for the ids this file's chain fixture uses, list({"p1","c1"}) came
+// out ['p1','c1'] under 8 of these seeds and ['c1','p1'] under the other 4 —
+// a two-seed sweep would have had a one-in-nine chance of seeing only one
+// answer and concluding the case was unambiguous.
+var hashSeeds = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
+
+// assertAmongCPythonAnswers runs the CPython probe once per hash seed and
+// requires the port's skills.jsonl to match one of the distinct answers it
+// gets back.
+//
+// This is a WEAKER assertion than equality and it is deliberately confined
+// to the fixtures that earn it: RetireLosingVariants' doc comment claims the
+// port's first-appearance order is "inside the set of orders CPython can
+// produce", and a claim in a comment is exactly the kind that decays (lens
+// 19). Running it makes the claim falsifiable — if the port ever picks an
+// order CPython cannot reach, this fails, where comparing against one
+// arbitrary seed would just flake.
+//
+// Each seed gets a FRESH workspace. The probe seeds skills.jsonl with "w",
+// but it APPENDS to the archive and writes new provenance sidecars, so
+// reusing one directory would accumulate every earlier seed's leavings and
+// the answers would differ for a reason that has nothing to do with order.
+func assertAmongCPythonAnswers(t *testing.T, rows, stats []map[string]any,
+	dryRun bool, minUses int, goSkills string) {
+	t.Helper()
+	arg := map[string]any{"rows": rows, "stats": stats,
+		"dry_run": dryRun, "min_uses": minUses}
+
+	distinct := map[string]bool{}
+	var samples []string
+	for _, seed := range hashSeeds {
+		var want struct {
+			OK     bool   `json:"ok"`
+			Skills string `json:"skills"`
+			Loaded int    `json:"loaded"`
+			Cls    string `json:"cls"`
+			Msg    string `json:"msg"`
+		}
+		pyprobe.Probe{Marker: "skills.py", Workspace: t.TempDir(),
+			Env: []string{"PYTHONHASHSEED=" + seed}}.RunJSON(
+			t, pyVariantSrc, &want, pyprobe.Arg(t, arg))
+		if !want.OK {
+			t.Fatalf("CPython raised under PYTHONHASHSEED=%s: %s: %s",
+				seed, want.Cls, want.Msg)
+		}
+		if want.Loaded != len(rows) {
+			t.Fatalf("CPython loaded %d of %d seeded rows under seed %s",
+				want.Loaded, len(rows), seed)
+		}
+		key := strings.Join(normJSONL(t, want.Skills), "\n")
+		if !distinct[key] {
+			distinct[key] = true
+			samples = append(samples, key)
+		}
+	}
+
+	// Chain-shaped is NECESSARY for ambiguity, not sufficient: a chain whose
+	// two challengers carry the SAME content produces one file either way.
+	// The existing "a promoted parent that is itself retired" fixture is
+	// exactly that — it routes here on shape and the sweep answers once.
+	//
+	// When CPython has one answer, assert ON it. Containment against a
+	// single candidate is equality with the failure message thrown away, and
+	// weakening a case that did not need weakening is how a differential
+	// stops noticing things. The test is as strong as CPython's own
+	// determinism permits, fixture by fixture, decided by measurement rather
+	// than by the shape heuristic that got it here.
+	got := strings.Join(normJSONL(t, goSkills), "\n")
+	if len(distinct) == 1 {
+		if got != samples[0] {
+			t.Errorf("skills.jsonl: CPython answers identically under all %d "+
+				"hash seeds, so this is a STRICT mismatch.\n go:\n%s\n py:\n%s",
+				len(hashSeeds), got, samples[0])
+		}
+		return
+	}
+
+	if distinct[got] {
+		return
+	}
+	t.Errorf("the port's skills.jsonl matches NONE of the %d answers CPython "+
+		"produced across %d hash seeds — its group order is outside what "+
+		"CPython can reach, which the ordering note in variant.go claims it "+
+		"is not.\n go:\n%s\n CPython answers:\n%s",
+		len(distinct), len(hashSeeds), got, strings.Join(samples, "\n  ---\n"))
+}
+
+// normJSONL is the canonical form both the strict comparison and the seed
+// sweep compare: rows as re-marshalled JSON, sorted, with a just-minted
+// archived_at masked. One implementation, because two would be free to drift
+// into disagreeing about what "the same store" means.
+func normJSONL(t *testing.T, s string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range splitLines(s) {
+		var v any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			out = append(out, "UNPARSEABLE:"+line)
+			continue
+		}
+		maskFreshArchivedAt(v)
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(b))
+	}
+	sort.Strings(out)
+	return out
+}
+
 func cmpJSONL(t *testing.T, label, got, want string) {
 	t.Helper()
-	norm := func(s string) []string {
-		var out []string
-		for _, line := range splitLines(s) {
-			var v any
-			if err := json.Unmarshal([]byte(line), &v); err != nil {
-				out = append(out, "UNPARSEABLE:"+line)
-				continue
-			}
-			maskFreshArchivedAt(v)
-			b, err := json.Marshal(v)
-			if err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, string(b))
-		}
-		sort.Strings(out)
-		return out
-	}
-	g, w := norm(got), norm(want)
+	g, w := normJSONL(t, got), normJSONL(t, want)
 	if len(g) != len(w) {
 		t.Errorf("%s: %d rows, CPython wrote %d\n go: %v\n py: %v",
 			label, len(g), len(w), g, w)
