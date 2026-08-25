@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -33,13 +34,14 @@ func read(t *testing.T, path string) string {
 // other runtime or the test is just this package agreeing with itself.
 func pythonLockName(t *testing.T, path string) string {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	// Through pyprobe, so a with_suffix that RAISES is fatal. The old skip
+	// reported every non-zero exit as "python3 unavailable", and
+	// with_suffix does raise on some names — none of this table's, today,
+	// which is what made the guard invisible rather than absent
+	// (adversarial r11 round 8, fixture sweep).
+	return strings.TrimSpace(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import pathlib,sys; print(pathlib.Path(sys.argv[1]).with_suffix('.lock'))",
-		path).Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
-	return strings.TrimSpace(string(out))
+		path))
 }
 
 func TestTheLockFileReplacesTheExtensionLikePython(t *testing.T) {
@@ -53,11 +55,42 @@ func TestTheLockFileReplacesTheExtensionLikePython(t *testing.T) {
 		// suffix one.)
 		".json", ".hidden.json", "..json", "...json", "a..json", "x.", "..",
 	} {
-		p := filepath.Join("/q", name)
+		// CONCATENATED, not filepath.Join. Join calls Clean, which turned
+		// "/q/.." into "/" before either runtime saw it — so the case named
+		// ".." spent its life testing a path whose name is EMPTY, and the
+		// row was pinning something other than what it said. pathlib does
+		// not clean: Path("/q/..").name is "..", and with_suffix gives
+		// "/q/...lock". Unhollowing the skip above is what surfaced it
+		// (adversarial r11 round 8, fixture sweep).
+		p := "/q/" + name
 		want := pythonLockName(t, p)
 		if got := lockPath(p); got != want {
 			t.Errorf("lockPath(%q)\n got %q\nwant %q (CPython's with_suffix)", p, got, want)
 		}
+	}
+}
+
+// A KNOWN GAP, pinned as one: CPython's with_suffix RAISES on a path whose
+// name is empty, and lockPath answers.
+//
+//	pathlib.Path("/").with_suffix(".lock")
+//	  -> ValueError: PosixPath('/') has an empty name
+//	lockPath("/")
+//	  -> "/.lock"
+//
+// Nothing in production reaches it: every lock path derives from TaskPath,
+// which is `<dir>/<job_id>.json`, so the name always ends in ".json" and is
+// never empty. Closing it means lockPath returning an error, which would
+// ripple through every locked() caller for an input none of them can pass.
+//
+// So it stays named, and asserts the DIVERGENCE — if someone teaches
+// lockPath to raise here, this fails and says to delete it.
+func TestAnEmptyNameIsRefusedByCPythonAndAnsweredHere(t *testing.T) {
+	if got := lockPath("/"); got != "/.lock" {
+		t.Fatalf("lockPath(\"/\") = %q, want %q.\n\nIf this changed because "+
+			"lockPath now refuses an empty name, the gap is CLOSED — delete "+
+			"this test and add \"\" to the differential table above, which "+
+			"can now compare the two runtimes directly.", got, "/.lock")
 	}
 }
 
@@ -576,7 +609,40 @@ func TestATornTaskFileFailsTheSweepRatherThanVanishing(t *testing.T) {
 	}
 }
 
-func TestListIsSortedAndFilterable(t *testing.T) {
+// The order is the GLOB PATH's, not the job id's, and the two are only the
+// same order when every id is one character. Round 8's read of the old
+// fixture — ids "c", "a", "b" — was that its name claimed a sort the table
+// could not observe: sorting by id, by filename, or by anything else
+// consistent all answer "a,b,c". The ids below separate them. CPython is
+// `sorted(_tasks_dir().glob("*.json"))`, so "a10.json" precedes "a9.json";
+// a port that sorted the DECODED rows by job_id, or that reached for a
+// natural-order compare, answers a1,a9,a10 instead.
+func TestListIsOrderedByFilenameNotByJobID(t *testing.T) {
+	dir := ws(t)
+	for _, id := range []string{"a9", "a10", "a1"} {
+		if _, err := Enqueue(dir, Options{JobID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byPath, err := List(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tk := range byPath {
+		m, err := asMapping(tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, m.GetString("job_id"))
+	}
+	if strings.Join(got, ",") != "a1,a10,a9" {
+		t.Errorf("List order = %v, want a1,a10,a9 — the ASCII order of the "+
+			"FILENAMES, which is what sorted(glob) gives", got)
+	}
+}
+
+func TestListIsFilterable(t *testing.T) {
 	dir := ws(t)
 	for _, id := range []string{"c", "a", "b"} {
 		if _, err := Enqueue(dir, Options{JobID: id}); err != nil {

@@ -452,6 +452,23 @@ func TestDrainTaskStoreMatchesCPython(t *testing.T) {
 		// consult blocked_by at all — claim() is what refuses it.
 		{name: "blocked task is claimed and refused", rows: []row{
 			over("j1", "user_goal", "blocked_by", []any{"nope"})}},
+		// The drain hands complete() a job_id it took from the ROW, and
+		// complete() spends it twice under different rules: task_path()
+		// str()s it, while `blocked_by.remove()` compares it by VALUE.
+		// A numeric 4242 therefore unblocks the dependent listing 4242 and
+		// leaves the one listing "4242" blocked — the two dependents here
+		// disagree only if the drain passes the value through, so a
+		// call-site that collapses it to its spelling first flips them.
+		{name: "numeric job_id unblocks by value not spelling", rows: []row{
+			over("4242", "user_goal", "job_id", 4242),
+			over("dep_num", "user_goal", "blocked_by", []any{4242}),
+			over("dep_str", "user_goal", "blocked_by", []any{"4242"})}},
+		// The same seam with a float: str(1.0) is "1.0", and only the
+		// dependent holding the FLOAT is released.
+		{name: "float job_id unblocks by value not spelling", rows: []row{
+			over("1.0", "user_goal", "job_id", json.RawMessage("1.0")),
+			over("dep_f", "user_goal", "blocked_by", []any{json.RawMessage("1.0")}),
+			over("dep_s", "user_goal", "blocked_by", []any{"1.0"})}},
 		// A row missing `timestamps` is a KeyError inside claim, which the
 		// drain catches: skipped, not processed, and no event.
 		{name: "row without timestamps cannot be claimed", rows: []row{

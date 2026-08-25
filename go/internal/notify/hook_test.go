@@ -155,11 +155,34 @@ func TestRunDirIsAbsentWhenThereIsNoRunDir(t *testing.T) {
 func TestASucceedingHookStillWritesBothSurfaces(t *testing.T) {
 	ws := t.TempDir()
 	rec := &recorder{}
+	// The ORDER, observed from inside the hook rather than inferred from
+	// the files existing afterwards. Round 8's read: this test's own
+	// comment says the durable writes come first, and every assertion
+	// below it would hold just as well for a port that ran the hook and
+	// wrote the files after — which is the exact optimisation the comment
+	// warns against. A hook command that reads escalations.jsonl (the
+	// documented substrate idiom) is what would break, and only a stat
+	// taken DURING the call can see it.
+	var sawLedger, sawEvents bool
+	seen := func(ctx context.Context, command, stdin string, env []string,
+		timeout time.Duration) (int, string, bool, error) {
+		_, e1 := os.Stat(EscalationsPath(ws))
+		_, e2 := os.Stat(filepath.Join(ws, "memory", "events.jsonl"))
+		sawLedger, sawEvents = e1 == nil, e2 == nil
+		return rec.fn(ctx, command, stdin, env, timeout)
+	}
 	if !Emit(context.Background(), ws, "escalation",
 		map[string]any{"handle_id": "h1", "reason": "x"},
 		Options{Cfg: map[string]any{"notify": map[string]any{"command": "true"}},
-			Exec: rec.fn}) {
+			Exec: seen}) {
 		t.Fatal("a clean hook must report true")
+	}
+	if !sawLedger {
+		t.Error("the hook ran BEFORE the escalation ledger was written; a " +
+			"substrate hook that reads it sees an absent file")
+	}
+	if !sawEvents {
+		t.Error("the hook ran BEFORE the events feed was written")
 	}
 	if rec.calls != 1 {
 		t.Fatalf("hook ran %d times", rec.calls)
@@ -301,20 +324,25 @@ func TestEventSetsMatchCPython(t *testing.T) {
 			t.Errorf("DEFAULT_EVENTS[%d]: go %q, py %q", i, DefaultEvents[i], py.Default[i])
 		}
 	}
+	// Built from the GO set, not by filtering Python's defaults. Sampling
+	// IsEscalationClass over py.Default can only ever find members Python
+	// already has: a Go-side event absent from DEFAULT_EVENTS was never
+	// asked about, so adding one here — writing escalations.jsonl rows
+	// CPython never writes — left every assertion in this test green
+	// (adversarial r11 round 8, fixture sweep). The old anti-vacuity guard
+	// checked ESCALATION_FILE_EVENTS ⊆ DEFAULT_EVENTS, which is a fact
+	// about CPython and says nothing about what this runtime does.
 	var goEsc []string
-	for _, e := range py.Default {
+	for e := range escalationFileEvents {
 		if IsEscalationClass(e) {
 			goEsc = append(goEsc, e)
 		}
 	}
-	// Every escalation-class event on the Python side is also a default
-	// event there, so walking the defaults reaches all of them — assert
-	// that too, or this comparison could pass by looking at the wrong set.
-	for _, e := range py.EscalationFile {
-		if !contains(py.Default, e) {
-			t.Fatalf("py ESCALATION_FILE_EVENTS has %q, which is not in "+
-				"DEFAULT_EVENTS — this test's traversal no longer covers the set", e)
-		}
+	// The map and the predicate are two statements of one set; if they ever
+	// disagree the comparison below would silently narrow.
+	if len(goEsc) != len(escalationFileEvents) {
+		t.Fatalf("IsEscalationClass rejects %d of its own map's keys",
+			len(escalationFileEvents)-len(goEsc))
 	}
 	sortStrings(goEsc)
 	if strings.Join(goEsc, ",") != strings.Join(py.EscalationFile, ",") {

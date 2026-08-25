@@ -226,7 +226,7 @@ var Registry = []Budget{
 	SummaryJudgeWindow,
 }
 
-// markerRe recognizes a clip marker at end-of-string. Format is
+// The clip-marker regexes recognize a marker at end-of-string. Format is
 // byte-identical to Python context_budget.clip so mixed-runtime records
 // stay parseable by one tool. Digit runs are bounded and the match is
 // position-guarded below, mirroring Python's 2026-08-14 fixpoint fix:
@@ -242,7 +242,28 @@ var Registry = []Budget{
 // and StripMarker's callers must gate on ClipInfo's did-we-actually-cut
 // bit anyway, so neither runtime strips it in practice (adversarial
 // mission-r7 LOW: named, not silent).
-var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]$`)
+//
+// TWO of them, because the `$` in Python's `_CLIP_MARKER_RE` and the `$` in
+// a Go regexp are different assertions and only one consumer mirrors Python.
+// Python's `$` (no re.MULTILINE) matches at end of string OR just before a
+// single trailing newline; Go's `$` (no `(?m)`) is `\z` and matches only at
+// the very end. Measured both ways on `…characters]` + "\n":
+//
+//	CPython re.search -> matches      Go FindStringIndex -> nil
+//	(and neither matches with TWO trailing newlines)
+//
+// So a value ending in `marker\n` passed through CPython's idempotence
+// check unchanged and got re-cut here — with a marker claiming a source
+// length of the already-clipped text, which is the exact stacked-cut
+// dishonesty the guard exists to prevent (adversarial r11 round 8, MEDIUM).
+//
+// clipMarkerRe is Clip's, and carries Python's meaning. stripMarkerRe is
+// StripMarker's; StripMarker has NO Python counterpart (nothing in
+// context_budget.py strips), so it keeps the strict end-of-text anchor
+// rather than inheriting a newline-eating one it was never asked for.
+var clipMarkerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]\n?\z`)
+
+var stripMarkerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} characters\]\z`)
 
 // StripMarker removes Clip's own marker from the true END of s — the
 // only position Clip ever writes it. Interior or line-final
@@ -254,7 +275,7 @@ var markerRe = regexp.MustCompile(` … \[truncated: first \d{1,9} of \d{1,9} ch
 // genuine when Clip actually cut — so callers MUST gate on ClipInfo's
 // bit before stripping (adversarial director r6, both lenses).
 func StripMarker(s string) string {
-	return markerRe.ReplaceAllString(s, "")
+	return stripMarkerRe.ReplaceAllString(s, "")
 }
 
 // markerMax is the longest legitimate marker: fixed text plus two
@@ -290,7 +311,7 @@ func Clip(s string, limit int) string {
 	if len(r) <= limit {
 		return s
 	}
-	if loc := markerRe.FindStringIndex(s); loc != nil {
+	if loc := clipMarkerRe.FindStringIndex(s); loc != nil {
 		markerStart := utf8.RuneCountInString(s[:loc[0]])
 		if markerStart <= limit && len(r)-markerStart <= markerMax {
 			return s

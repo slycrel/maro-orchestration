@@ -7992,3 +7992,122 @@ reach `config.get`, **12 still run without the isolation**, listed in
 PORT.md. None of them is known to emit an event; that is exactly the
 problem with leaving it at "known", so it is a named residual with a list
 and not a claim of safety.
+
+---
+
+## Round 8 — the whole chunk, and what a fix says about its siblings
+
+Run under the standing amendment (Jeremy, 2026-08-22): the reviewer reads
+the WHOLE chunk plus every earlier round's fixes, not the latest diff.
+Six substantive findings, a twelve-item fixture sweep, and — the part
+worth writing down — the reviewer independently found the same
+false-marker defect in `pyval` and `pypath` that round 7's `Stdlib` flag
+had just been built to prevent. **A helper that fixes a class does not
+fix the class; it fixes the callers that reach it** (lens 17). Six sites
+had been migrated by hand and six had not, and nothing distinguished
+them but which files were open at the time.
+
+**H1 — `complete()`'s job id reaches two consumers with different
+rules.** `task_path` f-strings it; `_resolve_dependents` compares it to
+every other task's `blocked_by` entries by VALUE. The port stringified at
+the caller, which satisfies the first and INVERTS the second: CPython
+releases the dependent listing `4242` and leaves the one listing
+`"4242"` blocked, and the port did exactly the reverse. Fixed by taking
+the raw value through `Complete` and spelling it only where a path is
+built. `pyContains` was widened alongside it — a `str` container is a
+substring test, a dict is a key test that HASHES the needle (so an
+unhashable job id raises rather than answering false), and `.remove`
+exists on neither.
+
+**M2 — Python's `$` is not Go's.** The clip marker's regex is anchored
+`$` with no `re.MULTILINE`, which matches at end of string OR before a
+SINGLE trailing newline; Go's `$` is `\z`. A value ending `marker\n`
+passed CPython's idempotence check and was RE-CUT here, stamped with a
+source length taken from already-clipped text. Two regexes now, because
+the two call sites want different anchors, and the bound is pinned: two
+trailing newlines match neither.
+
+**M3 — the unhashable wording.** 3.12+ says `cannot use 'list' as a set
+element (unhashable type: 'list')`; the port carried the old short
+sentence. Measured on 3.14.3, both the set-element and dict-key
+spellings. The interesting part is that `objHasKey`, written during THIS
+round's H1 fix, inherited the same wrong wording — the defect reproduced
+itself inside its own repair.
+
+**M4 — recovered ids are raw.** `recover_stale_claims` returns what it
+read; the port stringified.
+
+**L5 / L8 / L9, resolved as decisions rather than edits.** `Clip` with a
+non-positive cap returns the text where CPython cuts it to a bare marker
+(and, for a negative cap, slices from the END and reports "first -3 of
+N" — a sentence describing something that did not happen). That
+divergence is the caps decree, so it is now a known-gap pin that
+MEASURES CPython rather than asserting the port. Writing that pin
+corrected me twice: `clip("", -3)` is not the empty string, because `0 <=
+-3` is false and even an empty string falls through to the marker.
+`Options.JobID`/`BlockedBy` stay string-typed — traced the same way H1's
+argument was, and every Python producer hands them a `str`, so widening
+would add the unreachable arm this chunk keeps deleting. `handlequeue`'s
+`asObj` lost its `map[string]any` arm: dead, and worse than dead, since
+ranging a Go map would have made a passing differential FLAP rather than
+fail.
+
+**The fixture sweep — twelve guards that could not fail.** The pattern
+across all twelve is one lens: **a detector that cannot see the case you
+already have is not measuring, it is agreeing** (lens 18). Three worth
+naming:
+
+- `TestASucceedingHookStillWritesBothSurfaces` asserted the files EXIST
+  afterwards, while its own comment claimed the durable writes come
+  FIRST. A port that ran the hook and wrote after would have passed. The
+  order is now observed from inside the hook, and the assertion was
+  confirmed by reordering `Emit` and watching it go red.
+- `maskTS`/`maskEventTS` returned the line UNCHANGED when their anchor
+  was missing — so a port that stopped writing `event_type` in second
+  position left both sides unmasked and let two wall clocks decide the
+  result, which agrees whenever the runs share a second. Both are now
+  fatal on a missing anchor.
+- The `%.0f` "boundary" pair rendered IDENTICALLY (`2147484` twice). The
+  poll boundary is not observable at precision 0; it belongs in the
+  hookconfig table, and what belongs here is the millisecond surviving at
+  a precision that can show it.
+
+**Item 11 was not a hollow guard — it was a live bug.** `Realpath`'s
+40-hop counter cited MAXSYMLINKS and asserted "so does Python". Measured:
+`os.path.realpath` is pure Python walking lstat/readlink, so ELOOP never
+enters into it. It has NO depth limit (a 60-link chain resolves), and on
+a cycle it does not refuse either — `_joinrealpath` keeps a seen dict and
+`strict=False` returns the path where the repeat occurred (`start→g→h→i→g`
+answers `g`). The port refused all of it, and callers read a refusal as
+"no such path" and skip work CPython performs. Replaced with the seen
+set, pinned against a symlink farm the PYTHON side builds so both
+runtimes answer about the same inodes.
+
+**The battery: 13 caught, 4 missed, and all four ran down to something.**
+
+- **F4a** — a false marker naming a vanished module produces `--- SKIP`,
+  and `go test` reports a skip as `ok`. The mutation was caught; the
+  SCORER could not see it. Third detector of my own to fail this chunk.
+- **F1a** — genuinely caught, but by the self-consistency check added
+  this round rather than by the traversal fix. Confirmed properly by
+  reverting BOTH changes and re-adding a Go-only escalation member: the
+  original test passes. The finding was real.
+- **H1a** — round 6's lesson exactly: the mutation was at the
+  `handlequeue` call site and the battery ran the `tasks` differential,
+  which drives `Complete` directly. No drain fixture carried dependents.
+  Two now do — a numeric and a float job id, each with one dependent
+  listing the number and one listing its spelling, so the collapse is
+  observable where it actually happens.
+- **H1c** — the `[]string` arm was unreachable and is gone, along with
+  `[]any` and `map[string]any`: the one caller reads `blocked_by` off a
+  pyval-decoded row, and that decoder produces `Obj`/`List`/scalars and
+  nothing else. A Go-native container now returns an explicit port-bug
+  error rather than a `TypeError` CPython would never raise for a list.
+
+**A flake found by accident and fixed properly.** The sweep differential
+compared timestamps two processes stamp at two different instants, so a
+second boundary between them failed the run (00:46:12 vs :13). Masking
+every stamp would have turned "the port copied the wrong field" into a
+pass, so only FRESH stamps are masked and both sides must carry the same
+NUMBER of them — verified by making `Complete` write a fixture stamp and
+watching the count guard fire.

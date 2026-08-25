@@ -5501,3 +5501,74 @@ Twelve probe files import repo modules without the isolation:
 None is known to emit an event that reaches the hook. That is the reason
 it is written down rather than closed: "not known to" is the state the
 r11 round 2 finding was in before it fired.
+
+## Round 8 — the fixes that changed behaviour
+
+Documented in full in REVIEW.md; this is the part a reader of the CODE
+needs.
+
+**`tasks.Complete` takes `any`, not `string`.** The job id it is given
+reaches two consumers under different rules: a path is f-stringed from
+it, while `blocked_by` membership and `list.remove` compare it by VALUE.
+`4242` and `"4242"` therefore unblock DIFFERENT dependents, and a caller
+that spells the id before passing it inverts the second consumer while
+satisfying the first. `handlequeue` passes the raw value to `Complete`
+and the spelling to `claim`/`fail`, and the split is commented at the
+call site because it looks like an inconsistency until you know why.
+
+**`pyContains` is Python's `in`, not a list scan.** A `str` container is
+a substring test that raises `TypeError` for a non-str needle; a dict is
+a KEY test that hashes the needle, so an unhashable job id raises rather
+than answering false. Its Go-native container arms are GONE: the one
+caller reads `blocked_by` off a pyval-decoded row, so `[]any`,
+`[]string` and `map[string]any` were unreachable. They now return an
+explicit port-bug error instead of a `TypeError` CPython would never
+raise for a list.
+
+**`budget` has two clip regexes, not one.** Python's `$` without
+`re.MULTILINE` matches at end of string OR before a single trailing
+newline; Go's `$` is `\z`. `Clip`'s idempotence check uses `\n?\z` and
+`StripMarker` uses `\z`, because the two call sites genuinely want
+different anchors. Two trailing newlines match neither — that bound has
+a fixture.
+
+**`pypath.Realpath` no longer has a hop limit.** `os.path.realpath` is
+pure Python walking lstat/readlink, so the kernel's ELOOP does not apply:
+there is no depth limit, and a cycle is detected with a seen dict whose
+`strict=False` answer is the path at which the repeat occurred. The old
+40-hop counter refused a 60-link chain AND every cycle, and callers read
+a refusal as "no such path". Replaced with the seen set.
+
+**`Clip` with a non-positive cap is a deliberate divergence.** CPython
+cuts to a bare marker at cap 0 and slices from the END at a negative cap.
+This port returns the text: a cap is a circuit breaker, not a truncator
+(GOAL_BRAIN decree 2026-07-29, strengthened 2026-08-21), and zero is Go's
+zero value. Pinned as a known gap that measures CPython, so the decision
+stays visible.
+
+### The `Stdlib` migration was half-done and the reviewer found the rest
+
+Round 7 added `pyprobe.Probe{Stdlib: true}` for probes that ask about the
+LANGUAGE and import nothing from the repo, precisely so no probe would
+borrow an unrelated module's filename as a marker. Fifteen sites were
+migrated. Six were not — four in `internal/pyval/pyint_diff_test.go`, two
+in `internal/pypath/pypath_diff_test.go` — and round 8 found them
+independently. Nothing distinguished the migrated from the unmigrated but
+which files happened to be open. **A helper that fixes a class fixes the
+callers that reach it, not the class.** If another such flag is added,
+the sweep for its callers is part of the change, not a follow-up.
+
+### Test-side changes worth knowing about
+
+- `internal/tasks/sweep_diff_test.go` masks only FRESH timestamps (within
+  two minutes of now) and asserts both sides carry the same number of
+  them. A seeded `2026-01-01` stamp stays literal and still has to match,
+  so a port that overwrote `queued_at` is still caught. Masking every
+  stamp would have made that a pass.
+- `internal/notify`'s `maskTS`/`maskEventTS` take `*testing.T` and are
+  FATAL when their anchor is missing. Returning the line unchanged let
+  two wall clocks decide the comparison.
+- `TestListIsSortedAndFilterable` is now two tests. The order CPython
+  gives is `sorted(glob("*.json"))` — the FILENAME's, not the job id's —
+  and the old fixture's one-character ids could not tell the two apart.
+  The ids are `a1`/`a9`/`a10` now, which can.

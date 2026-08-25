@@ -59,7 +59,7 @@ func TestThePathlibHelpersMatchCPython(t *testing.T) {
 		"plain/path", "~", "~/", "~//a", "~/a/../b", "~~", "~nosuchuser-maro-goport/x",
 	}
 
-	raw := pyprobe.Probe{Marker: "dispatch_envelope.py"}.Run(
+	raw := pyprobe.Probe{Stdlib: true}.Run(
 		t, pyPathSrc, pyprobe.Arg(t, inputs))
 	var want []struct {
 		Name     string  `json:"name"`
@@ -186,7 +186,7 @@ func TestJoinMatchesCPython(t *testing.T) {
 		Cls   string `json:"cls"`
 		Msg   string `json:"msg"`
 	}
-	pyprobe.Probe{Marker: "task_store.py"}.RunJSON(t, pyJoinSrc, &want,
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyJoinSrc, &want,
 		pyprobe.Arg(t, pairs))
 	if len(want) != len(pairs) {
 		t.Fatalf("probe answered %d rows for %d pairs", len(want), len(pairs))
@@ -211,5 +211,78 @@ func TestJoinMatchesCPython(t *testing.T) {
 	if escaped == 0 {
 		t.Fatal("no fixture left the base directory; the absolute-rhs rule " +
 			"is not under test")
+	}
+}
+
+// pyRealpathSrc builds a symlink farm and asks CPython to resolve each
+// entry. The farm is built on the PYTHON side and read by both, so the two
+// runtimes are answering about the same inodes rather than about two
+// separately-constructed approximations of the same shape.
+const pyRealpathSrc = `
+import json, os, os.path, sys
+
+d = sys.argv[1]
+# a two-cycle, a self-link, a relative two-cycle, a chain that ENTERS a
+# three-cycle, a 60-deep chain, a dangling link, and a plain file.
+os.symlink(os.path.join(d, "b"), os.path.join(d, "a"))
+os.symlink(os.path.join(d, "a"), os.path.join(d, "b"))
+os.symlink(os.path.join(d, "c"), os.path.join(d, "c"))
+os.symlink("e", os.path.join(d, "f"))
+os.symlink("f", os.path.join(d, "e"))
+for x, y in (("g", "h"), ("h", "i"), ("i", "g")):
+    os.symlink(os.path.join(d, y), os.path.join(d, x))
+os.symlink(os.path.join(d, "g"), os.path.join(d, "start"))
+for i in range(60):
+    os.symlink(os.path.join(d, "L%d" % (i + 1)), os.path.join(d, "L%d" % i))
+os.symlink(os.path.join(d, "nowhere"), os.path.join(d, "dangling"))
+open(os.path.join(d, "plain"), "w").close()
+
+out = {}
+for n in ("a", "b", "c", "e", "f", "g", "start", "L0", "dangling", "plain"):
+    out[n] = os.path.realpath(os.path.join(d, n), strict=False)
+print(json.dumps(out))
+`
+
+// TestRealpathMatchesCPythonOnCyclesAndDeepChains pins the arm round 8
+// found untested — and it was untested AND wrong, in both directions.
+//
+// os.path.realpath is pure Python walking lstat/readlink, so the kernel's
+// ELOOP never applies to it: there is no depth limit at all, and a cycle is
+// detected with a seen dict whose strict=False answer is the path at which
+// the repeat occurred. This port had a 40-hop counter that refused both.
+// A refusal is not conservative here — every caller reads it as "no such
+// path" and skips work CPython does.
+func TestRealpathMatchesCPythonOnCyclesAndDeepChains(t *testing.T) {
+	dir := t.TempDir()
+	var want map[string]string
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyRealpathSrc, &want, dir)
+	if len(want) != 10 {
+		t.Fatalf("the probe answered %d entries, want 10", len(want))
+	}
+
+	// Anti-vacuity from the CPython side: if the farm ever stops being a
+	// farm — a symlink call that silently no-ops, a tmpdir that is itself
+	// a link — every entry would resolve to itself and the whole table
+	// would agree for the wrong reason.
+	moved := 0
+	for n, got := range want {
+		if got != dir+"/"+n {
+			moved++
+		}
+	}
+	if moved < 3 {
+		t.Fatalf("only %d of 10 entries resolved to a DIFFERENT path; the "+
+			"symlink farm is not a farm: %v", moved, want)
+	}
+
+	for n, w := range want {
+		got, ok := Realpath(dir + "/" + n)
+		if !ok {
+			t.Errorf("Realpath(%s) refused; CPython answers %q", n, w)
+			continue
+		}
+		if got != w {
+			t.Errorf("Realpath(%s)\n go: %q\n py: %q", n, got, w)
+		}
 	}
 }

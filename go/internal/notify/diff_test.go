@@ -187,6 +187,12 @@ func TestFamilyROILineMatchesCPython(t *testing.T) {
 		window int
 		// touch, when set, writes the file even when rows is empty.
 		emptyFile bool
+		// rawText writes the file's bytes VERBATIM, for the shapes a
+		// []map fixture cannot express. Round 8 found the row below
+		// claiming an unparseable ledger while setting only emptyFile —
+		// a byte-for-byte duplicate of "ledger exists but is empty" with
+		// a name describing a case nothing in this table reached.
+		rawText string
 	}{
 		{name: "no ledger at all", rows: nil, class: "tool_thrash", window: 30},
 		{name: "ledger exists but is empty", rows: nil, class: "tool_thrash",
@@ -240,14 +246,31 @@ func TestFamilyROILineMatchesCPython(t *testing.T) {
 			rows:  []map[string]any{{"failure_class": `it's "odd"`, "recorded_at": old}},
 			class: `it's "odd"`, window: 30},
 		{name: "an unparseable row still leaves the ledger non-empty",
-			rows: nil, class: "tool_thrash", window: 30, emptyFile: true},
+			class: "tool_thrash", window: 30,
+			rawText: "{not json at all\n"},
+		// ...and a ledger where SOME rows parse: the readable ones still
+		// count, so a port that abandons the file on the first bad line
+		// reports a colder history than CPython does.
+		{name: "a broken row among good ones", class: "tool_thrash",
+			window: 30,
+			rawText: `{"failure_class": "tool_thrash", "recorded_at": "` +
+				recentA + `"}` + "\nnot json\n" +
+				`{"failure_class": "tool_thrash", "recorded_at": "` +
+				recentB + `"}` + "\n"},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ws := t.TempDir()
 			p := filepath.Join(ws, "memory", "diagnoses.jsonl")
-			if len(c.rows) > 0 || c.emptyFile {
+			if c.rawText != "" {
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(c.rawText), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else if len(c.rows) > 0 || c.emptyFile {
 				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -416,21 +439,44 @@ func TestEscalationRowMatchesCPythonByteForByte(t *testing.T) {
 		t.Fatalf("the escalation ts is not today's: %s", got[:40])
 	}
 
-	if maskTS(got) != maskTS(want) {
+	if maskTS(t, got) != maskTS(t, want) {
 		t.Fatalf("escalation row diverges:\n go: %s\n py: %s",
-			firstDiff(maskTS(got), maskTS(want)), firstDiff(maskTS(want), maskTS(got)))
+			firstDiff(maskTS(t, got), maskTS(t, want)),
+			firstDiff(maskTS(t, want), maskTS(t, got)))
 	}
 
-	// Anti-vacuity: encoding/json — the implementation this replaced — must
-	// LOSE on this payload. Otherwise the fixture stopped exercising the
-	// forks and the comparison above proves nothing.
-	naive, err := json.Marshal(map[string]any{"ts": "x", "event_type": "escalation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(naive), `", "`) {
-		t.Fatal("encoding/json now emits json.dumps' separators — this test's " +
-			"whole premise is gone")
+	// Anti-vacuity, one clause per fork, asserted against the row CPYTHON
+	// actually wrote.
+	//
+	// This used to marshal a FIXED two-key map and check it lacked
+	// json.dumps' separators — a property of encoding/json, not of the
+	// fixture. It could not be falsified: gutting the payload above of the
+	// emoji, the arrow, the whole float, the int and the nested map left it
+	// green, because the map it inspected was not the payload (adversarial
+	// r11 round 8, fixture sweep). Its sibling at the decision-line
+	// differential does this right, and this is now the same shape: name
+	// the gap, and fail when the fixture stops exercising it.
+	for _, fork := range []struct{ why, needle string }{
+		{"json.dumps does not escape HTML characters and encoding/json does",
+			"a > b"},
+		{"a whole float keeps its .0 in Python and loses it in Go", `"success_rate": 1.0`},
+		{"json.dumps' default separators are `, ` and `: `", `", "`},
+		// Measured, not assumed: this writer runs json.dumps at its
+		// DEFAULT ensure_ascii=True, so an astral rune becomes a surrogate
+		// pair and é becomes é — the opposite of the task-store writer
+		// one directory over, which passes ensure_ascii=False. Asserting
+		// the raw rune here failed, and the interpreter is what said so.
+		{"ensure_ascii=True escapes an astral rune as a surrogate pair",
+			`\ud83d\ude00`},
+		{"ensure_ascii=True escapes a Latin-1 rune", `caf\u00e9`},
+		{"a clip-listed key holding a non-string is left un-clipped",
+			`"revert_detail": 12345`},
+	} {
+		if !strings.Contains(want, fork.needle) {
+			t.Fatalf("CPython's row no longer contains %q, so the fixture has "+
+				"stopped exercising a fork this comparison exists for: %s",
+				fork.needle, fork.why)
+		}
 	}
 }
 
@@ -451,7 +497,15 @@ func TestEmitWritesBothSurfacesAndRunsNoHookByDefault(t *testing.T) {
 		}}) {
 		t.Fatal("Emit reported a hook ran when none is configured")
 	}
-	_ = ranHook
+	// The flag exists to prove the hook was never INVOKED, and it was
+	// discarded — so this Exec was an elaborate way of asserting nothing.
+	// The false return and an un-run hook are different facts: a port that
+	// ran the command and reported false would satisfy every other line
+	// here while spending a subprocess on every event of a box that
+	// configured no lane.
+	if ranHook {
+		t.Fatal("the hook command ran with no notify.command configured")
+	}
 
 	esc, err := os.ReadFile(EscalationsPath(ws))
 	if err != nil {
@@ -502,10 +556,22 @@ func naiveHoursAgo(hours int) string {
 		Format("2006-01-02T15:04:05.000000")
 }
 
-func maskTS(line string) string {
+// maskTS blanks the leading ts of an escalation row, which is the one field
+// two processes cannot agree on.
+//
+// A MISSING anchor is fatal, not a pass-through. Round 8's read: this
+// returned the line untouched when `", "event_type"` was absent, so a port
+// that stopped writing event_type in second position — the reordering the
+// comparison exists to catch — left BOTH sides unmasked and the two raw
+// timestamps decided the result. That passes whenever the two runs land in
+// the same second, which on this box they usually do.
+func maskTS(t *testing.T, line string) string {
+	t.Helper()
 	i := strings.Index(line, `", "event_type"`)
 	if i < 0 {
-		return line
+		t.Fatalf("no `\", \"event_type\"` anchor in the row, so the ts "+
+			"cannot be masked and the comparison would be against two "+
+			"wall clocks: %s", line)
 	}
 	return `{"ts": "TS` + line[i:]
 }
@@ -641,7 +707,7 @@ func TestEventRowMatchesCPython(t *testing.T) {
 			}
 			got := strings.TrimRight(string(raw), "\n")
 
-			if maskEventTS(got) != maskEventTS(want) {
+			if maskEventTS(t, got) != maskEventTS(t, want) {
 				t.Fatalf("events row diverges:\n go: %s\n py: %s", got, want)
 			}
 		})
@@ -652,15 +718,20 @@ func TestEventRowMatchesCPython(t *testing.T) {
 // the THIRD thing in the row, after event_type, so the mask is anchored to
 // both sides of it — a mask that swallowed the tail would hide exactly the
 // reordering this comparison exists to catch.
-func maskEventTS(line string) string {
+//
+// Both "anchor missing" arms are fatal for the same reason maskTS's is: a
+// silent pass-through turns "the row lost its ts field" into a comparison
+// of two wall clocks, which agrees whenever the two runs share a second.
+func maskEventTS(t *testing.T, line string) string {
+	t.Helper()
 	open := strings.Index(line, `"ts": "`)
 	if open < 0 {
-		return line
+		t.Fatalf("the row carries no ts field at all: %s", line)
 	}
 	rest := line[open+len(`"ts": "`):]
 	close := strings.Index(rest, `"`)
 	if close < 0 {
-		return line
+		t.Fatalf("the row's ts is unterminated: %s", line)
 	}
 	return line[:open] + `"ts": "TS` + rest[close:]
 }

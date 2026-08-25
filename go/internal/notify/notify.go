@@ -149,8 +149,21 @@ type Options struct {
 	Exec ExecFn
 	// Now defaults to time.Now.
 	Now func() time.Time
-	// Log defaults to stderr. Two things reach it: an escalation-ledger
-	// write failure and a non-zero/timed-out hook.
+	// Log defaults to stderr. FIVE classes reach it, not the two this
+	// comment used to claim: a recovered panic inside Emit, an
+	// escalation-ledger write failure, a `notify.events` value that is not
+	// a container, a `notify.timeout_seconds` that is non-numeric or out of
+	// range, and a hook that timed out, failed to start, or exited
+	// non-zero. Nine call sites in all.
+	//
+	// This surface is WIDER than notify.py's, which logs at four points and
+	// says nothing about a malformed events list or timeout — it silently
+	// declines to run the hook. That is a deliberate divergence, not a
+	// port bug: a config typo that quietly disables notifications is the
+	// failure a headless box cannot see. Nothing asserts the Python
+	// runtime's log text, so the extra lines break no contract, but a
+	// reader comparing the two files will find lines here with no Python
+	// original and should not "fix" them.
 	Log LogFn
 	// Env is the base environment for the hook. Nil means os.Environ().
 	Env []string

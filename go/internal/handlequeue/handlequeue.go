@@ -370,9 +370,12 @@ func DrainTaskStore(ctx context.Context, ws string, o Options, d DrainOptions) (
 
 	for _, task := range queued[:listBound(len(queued), d.maxTasks())] {
 		jobIDRaw := taskGet(task, "job_id", "unknown")
-		// `claim(job_id)` is handed the RAW value, which task_path spells
-		// with an f-string. Str is that same spelling, so the file both
-		// runtimes open is the same one.
+		// `claim(job_id)` and `fail(job_id)` are handed the RAW value, and
+		// both use it only to spell a path with an f-string. Str is that
+		// same spelling, so the file both runtimes open is the same one.
+		//
+		// `complete(job_id)` is NOT in that set: it also compares the value
+		// to other tasks' blocked_by entries, so it gets the raw value.
 		jobID := pyval.Str(jobIDRaw)
 		if _, err := tasks.Claim(ws, jobID, 0); err != nil {
 			o.logf("drain_task_store: failed to claim %s: %s", jobID, err)
@@ -397,7 +400,7 @@ func DrainTaskStore(ctx context.Context, ws string, o Options, d DrainOptions) (
 		if status == "error" {
 			_, cerr = tasks.Fail(ws, jobID, resultText(res, status))
 		} else {
-			_, cerr = tasks.Complete(ws, jobID, nil, status)
+			_, cerr = tasks.Complete(ws, jobIDRaw, nil, status)
 		}
 		if cerr != nil {
 			o.logf("drain_task_store: failed to mark %s complete: %s", jobID, cerr)
@@ -542,16 +545,22 @@ func inTuple(v any, options []string) bool {
 
 // asObj is "does this support .get" — a mapping, and nothing else.
 func asObj(v any) (pyval.Obj, bool) {
-	switch t := v.(type) {
-	case pyval.Obj:
+	if t, ok := v.(pyval.Obj); ok {
 		return t, true
-	case map[string]any:
-		out := pyval.Obj{}
-		for k, val := range t {
-			out = append(out, pyval.Field{Key: k, Val: val})
-		}
-		return out, true
 	}
+	// There was a `map[string]any` arm here and it was DEAD: both callers
+	// read their value out of a task row that pyval decoded, and that
+	// decoder produces Obj — never a Go-native map. Worse than dead, it was
+	// wrong if it ever fired: ranging a Go map yields keys in random order,
+	// and the origin it converts is emitted as a payload whose field order
+	// is part of what the differential compares, so the arm would have made
+	// a passing test flap rather than fail.
+	//
+	// Nothing replaces it. A Go-native map now falls through to "not a
+	// mapping", and both callers turn that into `'dict' object has no
+	// attribute 'get'` — a sentence absurd enough on its face to read as
+	// the port bug it would be, which the silent random-order conversion
+	// was not.
 	return nil, false
 }
 

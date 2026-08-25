@@ -175,7 +175,7 @@ func TestWriteEventFieldsMatchCPython(t *testing.T) {
 				t.Fatalf("wrote a row CPython refused to write: %s", got)
 			}
 
-			if maskEventTS(got) != maskEventTS(want) {
+			if maskEventTS(t, got) != maskEventTS(t, want) {
 				t.Fatalf("event row diverges:\n go: %s\n py: %s", got, want)
 			}
 		})
@@ -226,7 +226,7 @@ func TestABareCallMatchesCPythonsKeywordDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if maskEventTS(strings.TrimRight(string(raw), "\n")) != maskEventTS(want) {
+	if maskEventTS(t, strings.TrimRight(string(raw), "\n")) != maskEventTS(t, want) {
 		t.Fatalf("a defaults-only row diverges:\n go: %s\n py: %s", raw, want)
 	}
 

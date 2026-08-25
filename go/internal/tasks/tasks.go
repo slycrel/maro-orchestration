@@ -155,6 +155,23 @@ func newRunID() string {
 // default set except for Lane and Source, which default below — Go has no
 // argument defaults, so the substitution is explicit and one place.
 type Options struct {
+	// JobID and BlockedBy stay STRING-typed, and that is a measured
+	// decision rather than an oversight. Round 8 widened `Complete`'s job
+	// id to `any` and the lens says a fix is evidence about its siblings —
+	// so these two were traced the same way, and they are not the same
+	// case. Complete's argument arrives from a task FILE, where any JSON
+	// type is reachable and a foreign writer routinely produces one. These
+	// are PARAMETERS, and every producer in the Python tree hands them a
+	// str: `job_id` is `Optional[str]` and no in-repo caller passes it at
+	// all, while `blocked_by` comes from a comma-split CLI argument
+	// (cli.py, task_store.py) or from `[job_ids[-1]]`, whose element is
+	// `new_job_id()`'s string (handle_queue.enqueue_goals). Widening them
+	// would add an unreachable arm — the shape this suite keeps deleting.
+	//
+	// The one behavioural subtlety a widening WOULD have to carry: Python
+	// is `jid = job_id or new_job_id()`, truthiness rather than a None
+	// check, so a hypothetical `job_id=0` mints a fresh id. For a str that
+	// is exactly `== ""`, which is what Enqueue tests.
 	JobID  string
 	Lane   string
 	Source string
@@ -323,8 +340,16 @@ func checkCycle(ws, jobID string, blockedBy any, visited map[string]bool) error 
 		// operations, so an unhashable dep_id raises before either.
 		key, hashable := pyval.HashKey(depRaw)
 		if !hashable {
-			return &pyval.PyErr{Class: "TypeError",
-				Msg: "unhashable type: '" + pyval.TypeName(depRaw) + "'"}
+			// The full CPython wording, matching the three siblings that
+			// already carry it (handlequeue's set element, pyops' dict key,
+			// statusSummary's dict key). This site had the bare
+			// "unhashable type: 'list'" — the pre-3.12 sentence — so one of
+			// four members of a class disagreed with the interpreter
+			// (adversarial r11 round 8, MEDIUM). Measured on 3.14.3:
+			//   cannot use 'list' as a set element (unhashable type: 'list')
+			return &pyval.PyErr{Class: "TypeError", Msg: fmt.Sprintf(
+				"cannot use '%s' as a set element (unhashable type: '%s')",
+				pyval.TypeName(depRaw), pyval.TypeName(depRaw))}
 		}
 		depID := pyval.Str(depRaw) // task_path is an f-string
 		if visited[key] {
@@ -488,7 +513,15 @@ func Claim(ws, jobID string, pid int) (Task, error) {
 // the processing concluded is a separate fact, which is why resultStatus
 // exists: 2026-07-16, task …b414ccab showed queue "done" beside dispatch
 // "clarification_needed" and derailed a diagnosis.
-func Complete(ws, jobID string, artifactPaths pyval.Obj, resultStatus string) (Task, error) {
+// jobIDRaw is `any` because complete() feeds its argument to TWO consumers
+// with different rules: task_path f-strings it (so a str spelling is right),
+// and _resolve_dependents compares it to every other task's blocked_by
+// entries by VALUE (so a str spelling is wrong). Collapsing at the caller
+// satisfied the first and inverted the second — a job_id of 4242 unblocked
+// the dependents listing "4242" and left the ones listing 4242 blocked,
+// exactly backwards from CPython (adversarial r11 round 8, HIGH).
+func Complete(ws string, jobIDRaw any, artifactPaths pyval.Obj, resultStatus string) (Task, error) {
+	jobID := pyval.Str(jobIDRaw)
 	path := TaskPath(ws, jobID)
 	var task Task
 	err := locked(path, false, func() error {
@@ -545,7 +578,7 @@ func Complete(ws, jobID string, artifactPaths pyval.Obj, resultStatus string) (T
 	if err != nil {
 		return nil, err
 	}
-	if err := resolveDependents(ws, jobID); err != nil {
+	if err := resolveDependents(ws, jobIDRaw); err != nil {
 		return nil, err
 	}
 	return task, nil
@@ -594,7 +627,7 @@ func Fail(ws, jobID, errText string) (Task, error) {
 // silently improved — a Go runtime that removed all copies would unblock
 // a task Python leaves blocked, and the two would disagree about what is
 // claimable.
-func resolveDependents(ws, completedJobID string) error {
+func resolveDependents(ws string, completedJobID any) error {
 	dir := TasksDir(ws)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
@@ -639,9 +672,11 @@ func resolveDependents(ws, completedJobID string) error {
 					Msg: fmt.Sprintf("'%s' object has no attribute 'remove'",
 						pyval.TypeName(blockedRaw))}
 			}
-			// list.remove drops the FIRST equal element only.
+			// list.remove drops the FIRST equal element only, and "equal"
+			// is Python's == — the same relation pyContains just used, so
+			// the two cannot disagree about which element was found.
 			for i, v := range blocked {
-				if sv, ok := v.(string); ok && sv == completedJobID {
+				if pyval.Eq(v, completedJobID) {
 					blocked = append(blocked[:i:i], blocked[i+1:]...)
 					break
 				}
@@ -862,7 +897,12 @@ func Archive(ws, jobID string) (Task, error) {
 
 // RecoverStaleClaims resets to queued every claimed task whose claimer is
 // gone, and reports the ids it reset.
-func RecoverStaleClaims(ws string) ([]string, error) {
+//
+// The ids are RAW. Python appends `task["job_id"]` and the CLI json-dumps
+// the list, so a numeric job_id prints as a number; stringifying here made
+// it print as "4242" (adversarial r11 round 8, MEDIUM) — the same
+// narrow-type shape as Complete's needle, one field over.
+func RecoverStaleClaims(ws string) ([]any, error) {
 	dir := TasksDir(ws)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
@@ -871,7 +911,7 @@ func RecoverStaleClaims(ws string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	recovered := []string{}
+	recovered := []any{}
 	for _, p := range paths {
 		err := locked(p, false, func() error {
 			v, err := readRaw(p)
@@ -916,7 +956,7 @@ func RecoverStaleClaims(ws string) ([]string, error) {
 			if err != nil {
 				return err
 			}
-			recovered = append(recovered, pyval.Str(recoveredID))
+			recovered = append(recovered, recoveredID)
 			return nil
 		})
 		if err != nil {
@@ -1086,44 +1126,84 @@ func pyIter(v any) ([]any, error) {
 // pyContains is Python's `needle in v`, which is NOT iteration: it is a
 // SUBSTRING test on a str, a KEY test on a dict, and a TypeError with its
 // own wording on everything non-container.
-func pyContains(v any, needle string) (bool, error) {
+//
+// The NEEDLE is `any` for the same reason the container is. Round 5 widened
+// the container here and left the needle a Go string, which made the two
+// runtimes disagree about which tasks a completion unblocks — see
+// resolveDependents. A str needle is not a universal spelling of a value;
+// it is one of the operands, and Python compares operands by value.
+func pyContains(v any, needle any) (bool, error) {
 	switch t := v.(type) {
 	case string:
-		return strings.Contains(t, needle), nil
+		// `x in "some string"` demands a str on the left. CPython names the
+		// type it got, and this is reachable: blocked_by is read off a task
+		// file, so it can be a string while job_id is a number.
+		s, ok := needle.(string)
+		if !ok {
+			return false, &pyval.PyErr{Class: "TypeError", Msg: fmt.Sprintf(
+				"'in <string>' requires string as left operand, not %s",
+				pyval.TypeName(needle))}
+		}
+		return strings.Contains(t, s), nil
 	case pyval.List:
 		return listHas([]any(t), needle), nil
-	case []any:
-		return listHas(t, needle), nil
-	case []string:
-		for _, e := range t {
-			if e == needle {
-				return true, nil
-			}
-		}
-		return false, nil
 	case pyval.Obj:
-		_, ok := t.Get(needle)
-		return ok, nil
-	case map[string]any:
-		_, ok := t[needle]
-		return ok, nil
+		keys := make([]string, 0, len(t))
+		for _, kv := range t {
+			keys = append(keys, kv.Key)
+		}
+		return objHasKey(keys, needle)
+	}
+	// Go-native containers do not appear here and are not silently
+	// handled. The only caller reads blocked_by off a decoded task file,
+	// and pyval's decoder produces Obj/List/string/number/bool/nil and
+	// nothing else — so a []any or a map[string]any reaching this point
+	// is a PORT bug, not a Python condition, and must not be answered
+	// with a TypeError CPython would never raise for a list. Round 8
+	// found the []string arm here unreachable: three arms that could not
+	// fire were standing in for evidence that the shapes were handled.
+	switch v.(type) {
+	case []any, []string, map[string]any:
+		return false, fmt.Errorf(
+			"pyContains: Go-native %T reached a Python membership test; "+
+				"decode through pyval before comparing", v)
 	}
 	return false, &pyval.PyErr{Class: "TypeError", Msg: fmt.Sprintf(
 		"argument of type '%s' is not a container or iterable",
 		pyval.TypeName(v))}
 }
 
-// listHas is Python's `==` between a str and each element: a str never
-// equals an int, a bool or a dict, so a non-string element is simply not a
-// match — it is NOT skipped, which matters because the same element is
-// still interpolated into a path by the caller.
-func listHas(l []any, needle string) bool {
+// listHas is Python's `==` between the needle and each element, which is
+// pyval.Eq: a str never equals an int, but 5 DOES equal 5.0 and True DOES
+// equal 1. A non-matching element is not a match — it is NOT skipped, which
+// matters because the same element is still interpolated into a path by the
+// caller.
+func listHas(l []any, needle any) bool {
 	for _, e := range l {
-		if s, ok := e.(string); ok && s == needle {
+		if pyval.Eq(e, needle) {
 			return true
 		}
 	}
 	return false
+}
+
+// objHasKey is `needle in some_dict`, which hashes the needle rather than
+// comparing it to each key. A decoded JSON object's keys are all strings, so
+// a number never matches one — but an UNHASHABLE needle raises rather than
+// answering False, and job_id is read off a file and can be a list.
+func objHasKey(keys []string, needle any) (bool, error) {
+	nk, ok := pyval.HashKey(needle)
+	if !ok {
+		return false, &pyval.PyErr{Class: "TypeError", Msg: fmt.Sprintf(
+			"cannot use '%s' as a dict key (unhashable type: '%s')",
+			pyval.TypeName(needle), pyval.TypeName(needle))}
+	}
+	for _, k := range keys {
+		if kk, ok := pyval.HashKey(k); ok && kk == nk {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // blockedIter is `for dep_id in task.get("blocked_by", [])` — a `.get` with

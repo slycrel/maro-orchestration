@@ -176,10 +176,31 @@ func Realpath(p string) (string, bool) {
 		return "", false
 	}
 	cur := filepath.Join(rd, base)
-	// 40 is Linux's own MAXSYMLINKS. Past it the kernel answers ELOOP and
-	// so does Python; answering "unresolvable" here is the same refusal
-	// wearing this function's vocabulary.
-	for i := 0; i < 40; i++ {
+	// A SEEN SET, not a hop counter, because that is what CPython does and
+	// the two answer differently in both directions. `os.path.realpath` is
+	// pure Python walking lstat/readlink itself, so the kernel's ELOOP
+	// never enters into it:
+	//
+	//   - It has NO depth limit. A chain of 60 distinct links resolves to
+	//     its end (measured on 3.14.3). This loop stopped at 40 — the old
+	//     comment cited MAXSYMLINKS and asserted "so does Python", which
+	//     is simply not true of this function — and refused.
+	//   - On a CYCLE it does not refuse either. `_joinrealpath` keeps a
+	//     seen dict and, with strict=False, returns the path at which the
+	//     repeat was detected: a→b→a answers a, and a chain ENTERING a
+	//     cycle answers the cycle's first node (start→g→h→i→g answers g).
+	//     This returned "unresolvable" for all of them.
+	//
+	// The refusal is not a harmless conservatism: callers read false as
+	// "no such path" and skip work CPython performs.
+	seen := map[string]bool{}
+	for {
+		if seen[cur] {
+			// The repeat itself is the answer, exactly as strict=False
+			// spells it.
+			return cur, true
+		}
+		seen[cur] = true
 		fi, err := os.Lstat(cur)
 		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 			return cur, true
@@ -193,7 +214,6 @@ func Realpath(p string) (string, bool) {
 		}
 		cur = filepath.Clean(t)
 	}
-	return "", false
 }
 
 // Join is pathlib's `/`, and the half of it that differs from

@@ -92,23 +92,3 @@ func TestTaskStoreDriveProbe(t *testing.T) {
 	}
 	dump(TaskPath(ws, "task-min-0003"))
 }
-
-// sortedObj renders a count map the way Python's json.dumps(sort_keys=True)
-// would — the probe's summary line is the only place a Go map's undefined
-// order would otherwise leak into a byte comparison.
-func sortedObj(m map[string]int) pyval.Obj {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	out := pyval.Obj{}
-	for _, k := range keys {
-		out = append(out, pyval.Field{Key: k, Val: m[k]})
-	}
-	return out
-}

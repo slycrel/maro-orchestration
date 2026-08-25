@@ -64,6 +64,13 @@ func TestTheHookReadsTheWorkspaceItWasHanded(t *testing.T) {
 // defaulting read would have run a command Python declined to run, at a
 // timeout nobody configured.
 func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
+	// The two refusal diagnoses, spelled once. A row naming the wrong one
+	// is the bug this column exists to catch: an operator who wrote
+	// `timeout_seconds: soon` and an operator who wrote `3e6` need
+	// different corrections.
+	const notANumber = "notify.timeout_seconds is not a number"
+	const outOfRange = "notify.timeout_seconds is out of range"
+
 	for _, c := range []struct {
 		name    string
 		val     any
@@ -75,46 +82,56 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 		// answers False either way, and the log is the only surface a
 		// headless operator reads.
 		wantLog string
+		// wantRefusal is the OTHER half, and it is why the "" rows above
+		// are not vacuous. CPython logs nothing for a value float() or
+		// poll() rejects — it just raises into emit's outer handler — but
+		// this port deliberately says so (see Options.Log), and "not a
+		// number" and "out of range" are two different diagnoses of two
+		// different operator mistakes. Round 8 found these rows asserting
+		// only the ABSENCE of a timeout line, which every one of them would
+		// satisfy while the port said nothing at all, or said the wrong
+		// thing. Empty means the port must stay silent too.
+		wantRefusal string
 	}{
-		{"an int", 45, true, 45 * time.Second, ""},
-		{"a float", 4.5, true, 4500 * time.Millisecond, ""},
-		{"a quoted number", "45", true, 45 * time.Second, ""},
-		{"a quoted float", " 4.5 ", true, 4500 * time.Millisecond, ""},
-		{"a bool", true, true, time.Second, ""},
-		{"prose", "soon", false, 0, ""},
-		{"a null", nil, false, 0, ""},
-		{"a list", []any{45}, false, 0, ""},
+		{"an int", 45, true, 45 * time.Second, "", ""},
+		{"a float", 4.5, true, 4500 * time.Millisecond, "", ""},
+		{"a quoted number", "45", true, 45 * time.Second, "", ""},
+		{"a quoted float", " 4.5 ", true, 4500 * time.Millisecond, "", ""},
+		{"a bool", true, true, time.Second, "", ""},
+		{"prose", "soon", false, 0, "", notANumber},
+		{"a null", nil, false, 0, "", notANumber},
+		{"a list", []any{45}, false, 0, "", notANumber},
 		// The bound is poll()'s, not Go's: subprocess hands the remaining
 		// time to select/poll as a C int of MILLISECONDS, so anything past
 		// INT_MAX ms is OverflowError("timeout is too large") — an escape
 		// to emit's outer handler, not a TimeoutExpired. Measured on
 		// 3.14.3: 2147483.647 runs, 2147483.648 raises.
 		{"the largest timeout that fits", 2147483.647, true,
-			time.Duration(2147483.647 * float64(time.Second)), ""},
-		{"one millisecond past the poll bound", 2147483.648, false, 0, ""},
+			time.Duration(2147483.647 * float64(time.Second)), "", ""},
+		{"one millisecond past the poll bound", 2147483.648, false, 0, "", outOfRange},
 		// The operator idiom this bound actually exists for. Every one of
 		// these ran the hook under the round-5 guard, which sat at Go's
 		// Duration limit — ~4300x too high.
-		{"the never-time-out idiom", 3e6, false, 0, ""},
-		{"a timeout past the int64 nanosecond range", 1e11, false, 0, ""},
-		{"an infinite timeout", math.Inf(1), false, 0, ""},
-		{"a NaN timeout", math.NaN(), false, 0, ""},
+		{"the never-time-out idiom", 3e6, false, 0, "", outOfRange},
+		{"a timeout past the int64 nanosecond range", 1e11, false, 0, "", outOfRange},
+		{"an infinite timeout", math.Inf(1), false, 0, "", outOfRange},
+		{"a NaN timeout", math.NaN(), false, 0, "", outOfRange},
 		// A NEGATIVE is not out of range at all: poll() gets a deadline
 		// already past, so the hook is spawned, killed, and reported as
 		// timed out — with the CONFIGURED value in the line, spelled the
 		// way Python's %.0f spells it. -Inf included (measured).
 		{"a negative timeout", -1.0, false, 0,
-			"notify.command timed out after -1s for escalation (h-1)"},
+			"notify.command timed out after -1s for escalation (h-1)", ""},
 		{"a negative infinite timeout", math.Inf(-1), false, 0,
-			"notify.command timed out after -infs for escalation (h-1)"},
+			"notify.command timed out after -infs for escalation (h-1)", ""},
 		{"a hugely negative timeout", -1e9, false, 0,
-			"notify.command timed out after -1000000000s for escalation (h-1)"},
+			"notify.command timed out after -1000000000s for escalation (h-1)", ""},
 		// Zero is a deadline already reached, so it is the same immediate
 		// timeout — and its sign survives into the line.
 		{"a zero timeout", 0.0, false, 0,
-			"notify.command timed out after 0s for escalation (h-1)"},
+			"notify.command timed out after 0s for escalation (h-1)", ""},
 		{"a negative zero timeout", math.Copysign(0, -1), false, 0,
-			"notify.command timed out after -0s for escalation (h-1)"},
+			"notify.command timed out after -0s for escalation (h-1)", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{}
@@ -151,6 +168,21 @@ func TestTheHookTimeoutIsFloatedNotAsserted(t *testing.T) {
 					if len(timedOut) > 0 {
 						t.Errorf("the port logged a timeout CPython never "+
 							"reports: %q", timedOut)
+					}
+					// And the refusal itself. Without this the row is
+					// satisfied by a port that logs nothing, which is the
+					// failure an operator cannot see: emit answered False
+					// and the config is why.
+					var said []string
+					for _, line := range logged {
+						if strings.Contains(line, "notify.timeout_seconds") {
+							said = append(said, line)
+						}
+					}
+					if len(said) != 1 ||
+						!strings.HasPrefix(said[0], c.wantRefusal) {
+						t.Errorf("refusal log:\n  got  %q\n  want one line "+
+							"starting %q", said, c.wantRefusal)
 					}
 					return
 				}

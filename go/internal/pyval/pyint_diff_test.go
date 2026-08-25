@@ -175,7 +175,7 @@ func TestIntMatchesCPython(t *testing.T) {
 		Cls   string `json:"cls"`
 		Msg   string `json:"msg"`
 	}
-	pyprobe.Probe{Marker: "director.py"}.RunJSON(t, pyIntSrc, &want, string(arg))
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyIntSrc, &want, string(arg))
 	if len(want) != len(rows) {
 		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
 	}
@@ -416,7 +416,7 @@ func TestSliceHeadMatchesCPython(t *testing.T) {
 		Cls   string          `json:"cls"`
 		Msg   string          `json:"msg"`
 	}
-	pyprobe.Probe{Marker: "notify.py"}.RunJSON(t, pySliceSrc, &want,
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pySliceSrc, &want,
 		pyprobe.Arg(t, args))
 	if len(want) != len(rows) {
 		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
@@ -635,7 +635,7 @@ func TestPercentDMatchesCPython(t *testing.T) {
 		OK    bool   `json:"ok"`
 		Value string `json:"value"`
 	}
-	pyprobe.Probe{Marker: "director.py"}.RunJSON(t, pyPercentDSrc, &want, string(arg))
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyPercentDSrc, &want, string(arg))
 	if len(want) != len(rows) {
 		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
 	}
@@ -775,8 +775,20 @@ func TestPercentFMatchesCPython(t *testing.T) {
 		{"a negative half", -0.5, 0, "-0.5"},
 
 		// The hook timeout's own boundary, at the precision the log uses.
+		// These two rows render IDENTICALLY — "2147484" both times — and
+		// round 8 read their names as a claim they do not make: at
+		// precision 0 the poll boundary is invisible, and the pair was
+		// two spellings of one case. The boundary itself is asserted where
+		// it is observable (notify's hookconfig table, which checks
+		// whether the hook runs at all); what belongs HERE is that the
+		// millisecond survives at a precision that can show it.
 		{"the largest timeout poll accepts", 2147483.647, 0, "2147483.647"},
-		{"one millisecond past it", 2147483.648, 0, "2147483.648"},
+		{"the same value at millisecond precision", 2147483.647, 3,
+			"2147483.647"},
+		{"one millisecond past it, where %.0f cannot tell", 2147483.648, 0,
+			"2147483.648"},
+		{"one millisecond past it, at a precision that can", 2147483.648, 3,
+			"2147483.648"},
 		{"the never-time-out idiom", 3e6, 0, "3e6"},
 
 		// A value with no short decimal form. Python expands it in full,
@@ -804,7 +816,7 @@ func TestPercentFMatchesCPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	var want []string
-	pyprobe.Probe{Marker: "notify.py"}.RunJSON(t, pyPercentFSrc, &want, string(arg))
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyPercentFSrc, &want, string(arg))
 	if len(want) != len(rows) {
 		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
 	}
@@ -832,5 +844,105 @@ func TestPercentFMatchesCPython(t *testing.T) {
 					r.goVal, r.prec, got, want[i])
 			}
 		})
+	}
+}
+
+// pyIntLiteralSrc asks CPython what an integer JSON literal decodes to and
+// how it prints — the two things IntLiteral claims to answer.
+const pyIntLiteralSrc = `
+import json, sys
+out = []
+for lit in json.loads(sys.argv[1]):
+    try:
+        v = json.loads(lit)
+    except Exception as e:
+        out.append(["raise", type(e).__name__])
+        continue
+    out.append(["int", str(v)] if isinstance(v, int) and not isinstance(v, bool)
+               else ["other", str(v)])
+print(json.dumps(out))
+`
+
+// TestIntLiteralMatchesCPython pins the helper the %d path and the hash path
+// both lean on. It had NO test of its own: round 8 found its zero-collapsing
+// arm ("-0 and 0000 are both the integer 0") reachable from neither, which
+// is the same helper-arm-with-no-case shape PercentF's NaN arm turned out to
+// be. `-0` is legal JSON and decodes to the int 0, so half of that arm is
+// live; `0000` is not, and is pinned below as the port's own answer rather
+// than as a claim about CPython.
+func TestIntLiteralMatchesCPython(t *testing.T) {
+	lits := []string{
+		"0", "-0", "1", "-1", "42", "-42",
+		// Wider than int64 in both directions: still an int in Python, and
+		// IntLiteral's whole reason for existing is that it does not
+		// narrow.
+		"9223372036854775807", "9223372036854775808",
+		"-9223372036854775808", "-9223372036854775809",
+		"1000000000000000000000000000000",
+		"-1000000000000000000000000000000",
+		// NOT integer literals. Each must be refused, and each is a
+		// different way of not being one.
+		"1.0", "-1.0", "1e3", "1E3", "0.5", "-0.5",
+		"", "-", "+1", "0x10", "abc", "null", "true",
+	}
+	// NOT in the table above: " 1" and "1 ". json.loads accepts surrounding
+	// whitespace and answers the int 1, so CPython-via-json is the wrong
+	// oracle for them — the input IntLiteral actually receives is a
+	// json.Number's String(), which the decoder never pads. They are pinned
+	// below with the other shapes no decoder produces.
+
+	var pyAns [][]string
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyIntLiteralSrc, &pyAns,
+		pyprobe.Arg(t, lits))
+	if len(pyAns) != len(lits) {
+		t.Fatalf("CPython answered %d of %d literals", len(pyAns), len(lits))
+	}
+
+	ints := 0
+	for i, lit := range lits {
+		gotStr, gotOK := pyval.IntLiteral(lit)
+		kind, val := pyAns[i][0], pyAns[i][1]
+		wantOK := kind == "int"
+		if gotOK != wantOK {
+			t.Errorf("pyval.IntLiteral(%q) = (%q, %v); CPython decodes it as %s(%s)",
+				lit, gotStr, gotOK, kind, val)
+			continue
+		}
+		if wantOK {
+			ints++
+			if gotStr != val {
+				t.Errorf("pyval.IntLiteral(%q) prints %q, CPython prints %q",
+					lit, gotStr, val)
+			}
+		}
+	}
+	// Without this the table could be all refusals and every assertion
+	// above would still hold.
+	if ints < 10 {
+		t.Fatalf("only %d literals decoded as ints; the table is not "+
+			"exercising the accepting arm", ints)
+	}
+
+	// The other half of the zero-collapsing arm, which JSON cannot reach:
+	// a leading-zero run is a decode error in both runtimes, so this is a
+	// pin on the PORT's answer for a hand-built json.Number, not a claim
+	// about CPython. It is recorded so the arm is not mistaken for tested
+	// behaviour, and so deleting it is a visible decision.
+	for lit, want := range map[string]string{
+		"0000": "0", "-0000": "0", "007": "007",
+		// Padded forms are refused outright — the empty want below means
+		// "not an integer literal", which is right for a helper whose
+		// input is a decoder's own token.
+		" 1": "", "1 ": "",
+	} {
+		got, ok := pyval.IntLiteral(lit)
+		if ok != (want != "") {
+			t.Errorf("pyval.IntLiteral(%q) = (%q, %v); this pin records %q",
+				lit, got, ok, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("pyval.IntLiteral(%q) = %q, this pin records %q", lit, got, want)
+		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
@@ -93,6 +94,12 @@ elif verb == "list":
 elif verb == "list_queued":
     ans = _try(lambda: [t.get("job_id")
                         for t in task_store.list_tasks(status_filter="queued")])
+elif verb == "complete_raw":
+    # complete() feeds its argument to TWO consumers with different rules:
+    # task_path f-strings it, and _resolve_dependents compares it to every
+    # other task's blocked_by entries by VALUE. A port that stringifies at
+    # the caller satisfies the first and inverts the second.
+    ans = _try(lambda: json.dumps(task_store.complete(json.loads(sys.argv[2]))))
 elif verb == "recover":
     ans = _try(task_store.recover_stale_claims)
 elif verb == "summary":
@@ -117,6 +124,28 @@ else:
 ans["files"] = _files()
 print(json.dumps(ans))
 `
+
+// utcStampRe is the shape task_store writes for every *_at_utc field.
+var utcStampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`)
+
+// maskFreshStamps replaces the timestamps a run MINTED — those within two
+// minutes of now — with a sentinel, and reports how many it replaced. A
+// stamp that came out of a fixture is left alone: masking every stamp
+// would turn "the port copied the wrong field" into a pass, which is the
+// hollow-guard shape this suite keeps finding elsewhere.
+func maskFreshStamps(b []byte) ([]byte, int) {
+	now := time.Now().UTC()
+	n := 0
+	out := utcStampRe.ReplaceAllFunc(b, func(m []byte) []byte {
+		ts, err := time.Parse(time.RFC3339, string(m))
+		if err != nil || now.Sub(ts) > 2*time.Minute || ts.After(now.Add(2*time.Minute)) {
+			return m
+		}
+		n++
+		return []byte("<fresh>")
+	})
+	return out, n
+}
 
 func TestTheQueueSweepsMatchCPython(t *testing.T) {
 	// A pid that is certainly not running: the max on Linux is well under
@@ -619,6 +648,84 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				"t1": `{"job_id":"t1","status":"done","lane":"agenda",
 					"attempt":1,"timestamps":{},"blocked_by":[]}`,
 			}},
+
+		// complete()'s job_id reaches TWO consumers with different rules:
+		// task_path f-strings it, _resolve_dependents compares it by VALUE.
+		// The port collapsed it to a string at the caller, which satisfied
+		// the first and INVERTED the second — CPython leaves the dependent
+		// spelling "4242" blocked and releases the one spelling 4242, and
+		// the port did exactly the reverse. Both dependents are present in
+		// every row below so the answer is which one moved, not whether
+		// anything did (adversarial r11 round 8, HIGH).
+		{"a numeric job id releases the dependent that lists a number",
+			"complete_raw", `4242`, map[string]string{
+				"4242": `{"job_id":4242,"status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[]}`,
+				"sA": `{"job_id":"sA","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":["4242"]}`,
+				"sB": `{"job_id":"sB","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[4242]}`,
+			}},
+		// The same axis one type over: 5.0 == 5 is True in Python, and a
+		// str spelling of either matches neither.
+		{"a float job id releases the dependent that lists the integer",
+			"complete_raw", `5.0`, map[string]string{
+				"5.0": `{"job_id":5.0,"status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[]}`,
+				"sI": `{"job_id":"sI","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[5]}`,
+				"sS": `{"job_id":"sS","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":["5.0"]}`,
+			}},
+		// A str job id must still match a str dependent and NOT a numeric
+		// one — the reverse direction, so the fix cannot be "compare
+		// everything loosely".
+		{"a string job id releases only the string dependent",
+			"complete_raw", `"77"`, map[string]string{
+				"77": `{"job_id":"77","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[]}`,
+				"sN": `{"job_id":"sN","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[77]}`,
+				"sT": `{"job_id":"sT","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":["77"]}`,
+			}},
+		// blocked_by is foreign-writable, so it can be a STRING while the
+		// job id is a number. `7 in "7"` is not a substring test in CPython
+		// — it is a TypeError naming the left operand's type.
+		{"a string blocked_by against a numeric job id is a TypeError",
+			"complete_raw", `7`, map[string]string{
+				"7": `{"job_id":7,"status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[]}`,
+				"sQ": `{"job_id":"sQ","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":"7"}`,
+			}},
+		// ...and the same field as a DICT is a key test, which hashes the
+		// needle rather than comparing it: a number never matches a decoded
+		// JSON object's string keys.
+		{"a dict blocked_by is a key test, not a value one",
+			"complete_raw", `8`, map[string]string{
+				"8": `{"job_id":8,"status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":[]}`,
+				"sD": `{"job_id":"sD","status":"queued","lane":"agenda",
+					"attempt":1,"timestamps":{},"artifact_paths":{},"blocked_by":{"8":1}}`,
+			}},
+		// recover_stale_claims appends the RAW job_id and the CLI dumps the
+		// list, so a numeric id prints as a number (adversarial r11 round
+		// 8, MEDIUM).
+		{"a numeric job id is recovered as a number", "recover", "",
+			map[string]string{
+				"9001": `{"job_id":9001,"status":"claimed","claimed_by_pid":` +
+					deadPID + `,"lane":"agenda","attempt":1,
+					"timestamps":{},"blocked_by":[]}`,
+			}},
+		// _check_cycle's visited is a SET, so an unhashable dep raises
+		// before the membership test — with CPython's full 3.12+ wording,
+		// which this site alone was missing.
+		{"an unhashable dep is a set-element TypeError",
+			"enqueue_blocked", "", map[string]string{
+				"d1": `{"job_id":"d1","status":"queued","lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[[1,2]]}`,
+			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pyWS, goWS := t.TempDir(), t.TempDir()
@@ -746,14 +853,26 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					dumped, gotErr = pyval.DumpsCompactPy(tk)
 					got = dumped
 				}
-			case "recover":
-				var ids []string
-				ids, gotErr = RecoverStaleClaims(goWS)
-				out := []any{}
-				for _, id := range ids {
-					out = append(out, id)
+			case "complete_raw":
+				// LoadsOrdered, not json.Unmarshal: Unmarshal into an `any`
+				// makes 4242 a float64, and pyval.Str spells that "4242.0" —
+				// so the harness would open a different file than CPython and
+				// report a FileNotFoundError instead of the answer.
+				raw, derr := pyval.LoadsOrdered(c.arg)
+				if derr != nil {
+					t.Fatal(derr)
 				}
-				got = out
+				var tk Task
+				tk, gotErr = Complete(goWS, raw, nil, "")
+				if gotErr == nil {
+					var dumped string
+					dumped, gotErr = pyval.DumpsCompactPy(tk)
+					got = dumped
+				}
+			case "recover":
+				var ids []any
+				ids, gotErr = RecoverStaleClaims(goWS)
+				got = append([]any{}, ids...)
 			}
 
 			if (gotErr == nil) != want.OK {
@@ -794,14 +913,27 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 				// part of the contract. The lists are compared in order,
 				// because theirs is.
 				var wantV, gotV any
-				if err := json.Unmarshal(want.Value, &wantV); err != nil {
-					t.Fatal(err)
-				}
 				gotRaw, err := json.Marshal(got)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := json.Unmarshal(gotRaw, &gotV); err != nil {
+				// The two runtimes stamp `now` at two different instants,
+				// so a second boundary between them made this differential
+				// flake (seen 2026-08-24, 00:46:12 vs :13). Only stamps
+				// that are actually FRESH are masked, and both sides must
+				// carry the same number of them — a seeded 2026-01-01
+				// timestamp stays literal and still has to match, so a port
+				// that overwrote queued_at would still be caught.
+				maskedWant, nWant := maskFreshStamps(want.Value)
+				maskedGot, nGot := maskFreshStamps(gotRaw)
+				if nWant != nGot {
+					t.Errorf("%s wrote %d fresh timestamp(s), CPython wrote "+
+						"%d: %s vs %s", c.verb, nGot, nWant, gotRaw, want.Value)
+				}
+				if err := json.Unmarshal(maskedWant, &wantV); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(maskedGot, &gotV); err != nil {
 					t.Fatal(err)
 				}
 				if !reflect.DeepEqual(gotV, wantV) {
