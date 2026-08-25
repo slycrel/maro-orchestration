@@ -3,6 +3,7 @@ package pyval
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"sort"
@@ -477,7 +478,21 @@ func LoadsOrdered(text string) (any, error) {
 	}
 	// Refuse trailing content the way json.loads does — `{}{}` is an
 	// error there, and accepting it would let a torn write parse.
-	if _, err := dec.Token(); err == nil {
+	//
+	// The test is `err != io.EOF`, NOT `err == nil`. `err == nil` refuses
+	// only trailing content that is itself a valid JSON token, so `{"a":1}x`
+	// came back as a clean object with the `x` silently gone. Both sibling
+	// implementations — record.LoadsCleanValue and pack.decodeStrictJSONObject
+	// — already spelled it this way; this was the odd copy, and the comment
+	// above it asserted a coverage it did not have (a comment that asserts
+	// coverage is a claim, and it decays).
+	//
+	// The consequence was not a lenient read but a DESTRUCTIVE one: pack's
+	// scrubJSONLLine parses a row and re-emits it, so a row CPython refuses
+	// (and therefore scrubs as raw text and ships intact) had its trailing
+	// bytes deleted from a hashed payload — a different sha256 for the same
+	// input, in a pack neither runtime could then verify against the other.
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, fmt.Errorf("trailing content after JSON value")
 	}
 	return v, nil
@@ -1396,6 +1411,72 @@ func PyNumbers(v any) any {
 			return json.Number("-Infinity")
 		}
 		return f
+	}
+	return v
+}
+
+// LoadsMap is a bare `json.loads(line)` whose result the caller will index
+// as a dict: one JSON OBJECT, numbers kept as their source literal, the
+// CPython constants NaN/Infinity/-Infinity accepted, trailing data refused.
+//
+// It exists because `json.NewDecoder(...).Decode(&map[string]any{})` is not
+// `json.loads` in three separate ways, and the port had fixed only two of
+// them. CPython's decoder accepts the three bare non-finite tokens BY
+// DEFAULT — and, more to the point, CPython's `json.dumps` WRITES them by
+// default (`allow_nan=True`), so a store CPython appended to with a plain
+// `json.dumps(asdict(row))` can hold a row that a Go reader refuses whole.
+//
+// The consequence measured on pack import: one non-finite anywhere in a
+// CPython-sealed pack made all three trust lanes drop that row silently —
+// no imported row, no `malformed_skipped` report row, no warning. Data
+// loss on a shared-store write path, from a value CPython considers
+// ordinary.
+//
+// This is NOT the right reader for a caller porting `loads_clean`, which
+// passes `parse_constant=_refuse_constant` and refuses those tokens on
+// purpose. record.LoadsClean is that one. The two Python functions are
+// different programs and the port must keep them different.
+func LoadsMap(text string) (map[string]any, error) {
+	v, err := LoadsOrdered(text)
+	if err != nil {
+		return nil, err
+	}
+	o, ok := v.(Obj)
+	if !ok {
+		// CPython does not refuse here — `json.loads("[1]")` succeeds and
+		// the caller's next `.get()` raises AttributeError, aborting the
+		// whole import rather than one row. Refusing the row is a
+		// deliberate, narrower divergence: it costs the row that would
+		// have crashed and keeps the rest, which is the direction every
+		// other reader in this port already takes. Named, not silent.
+		return nil, fmt.Errorf("expected a JSON object, got %T", v)
+	}
+	m := make(map[string]any, len(o))
+	for _, f := range o {
+		m[f.Key] = keepNumbers(f.Val)
+	}
+	return m, nil
+}
+
+// keepNumbers flattens an Obj/List tree to map/slice WITHOUT Plain's
+// json.Number → int/float64 conversion. Callers of LoadsMap read stored ids
+// back out and re-emit them; a literal that round-trips through float64
+// comes back as a different identity (a >2^53 id rounds, and a craftable
+// collision follows).
+func keepNumbers(v any) any {
+	switch t := v.(type) {
+	case Obj:
+		m := make(map[string]any, len(t))
+		for _, f := range t {
+			m[f.Key] = keepNumbers(f.Val)
+		}
+		return m
+	case List:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = keepNumbers(e)
+		}
+		return out
 	}
 	return v
 }

@@ -6,7 +6,6 @@ package pack
 import (
 	"archive/tar"
 	"compress/gzip"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -205,23 +204,25 @@ func decodeManifest(raw []byte) (map[string]any, error) {
 	return m, nil
 }
 
-// decodeStrictJSONObject decodes exactly ONE JSON object with UseNumber
-// and refuses trailing data. Decoder.Decode alone reads one value and
-// ignores the rest — the r3 switch to it (for UseNumber) silently
-// dropped Unmarshal's full-consumption check, so `{...}{...}` rows
-// imported in Go where Python's json.loads raises Extra data (r4
-// 2026-08-22, QA HIGH; decodeManifest shared the defect from birth).
+// decodeStrictJSONObject decodes exactly ONE JSON object the way a bare
+// `json.loads(line)` does: numbers keep their source literal, the CPython
+// constants NaN/Infinity/-Infinity are accepted, trailing data is refused.
+//
+// Decoder.Decode alone reads one value and ignores the rest — the r3 switch
+// to it (for UseNumber) silently dropped Unmarshal's full-consumption
+// check, so `{...}{...}` rows imported in Go where Python's json.loads
+// raises Extra data (r4 2026-08-22, QA HIGH; decodeManifest shared the
+// defect from birth).
+//
+// The non-finite half was the r5 finding, and it is the one that lost data
+// rather than admitting it: CPython's json.dumps WRITES a bare `NaN` by
+// default, so knowledge_web's plain `json.dumps(asdict(tl))` mints rows
+// that this function refused whole — all three pack trust lanes dropping
+// the row with no report row and no warning. pyval.LoadsMap is the one
+// implementation of "bare json.loads, indexed as a dict"; this now
+// delegates rather than being a fourth spelling of it.
 func decodeStrictJSONObject(text string) (map[string]any, error) {
-	dec := json.NewDecoder(strings.NewReader(text))
-	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil {
-		return nil, err
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, fmt.Errorf("trailing data after JSON value")
-	}
-	return m, nil
+	return pyval.LoadsMap(text)
 }
 
 // refuseLoneSurrogates scans raw JSON text for \uD800–\uDFFF escapes

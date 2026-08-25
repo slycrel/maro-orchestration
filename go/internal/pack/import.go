@@ -21,6 +21,7 @@ package pack
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -660,31 +661,122 @@ func pyFloatGet(row map[string]any, key string, def float64) (float64, error) {
 	return asFloat(v, def)
 }
 
+// pyGet is `row.get(key, def)` — the same presence rule, for a value that
+// is STORED rather than coerced. `original_tier` is the live instance:
+// `row.get("tier", "")` writes "" for an absent key and the JSON null
+// through for a present one, and the fix that removed a wrong `str()` from
+// this site put `row["tier"]` in its place — which is nil for BOTH, so an
+// absent tier started writing `null` into a shared store where CPython
+// writes `""`.
+//
+// That inversion is the reason this is a named helper and not an inline
+// two-liner. The idiom has now cost a divergence three times, each time
+// spelled differently, and each fix was correct about the case that
+// prompted it and wrong about the case it did not have a fixture for. The
+// map's second return value is the only thing that separates absent from
+// null, so it belongs in one place that every site reaches.
+func pyGet(row map[string]any, key string, def any) any {
+	if v, present := row[key]; present {
+		return v
+	}
+	return def
+}
+
+// pyStrGet is `str(row.get(key, def))` — pyGet, then Python's str().
+//
+// The two rules compose into three outcomes, and the port had all three
+// collapsed into one: an ABSENT key gives str(def), a null gives "None",
+// and anything else gives its str(). `asString(row[key])` gave "" for the
+// first two, which put "" into `task_type` and `outcome` on a row CPython
+// stores as the literal string "None".
+func pyStrGet(row map[string]any, key string, def any) string {
+	return asString(pyGet(row, key, def))
+}
+
 func asFloat(v any, def float64) (float64, error) {
 	switch t := v.(type) {
 	case nil:
 		// `float(None)`, reproduced sentence and all: the error text rides
 		// the malformed_skipped result row, where an operator reads it.
-		return 0, fmt.Errorf("float() argument must be a string or a real " +
-			"number, not 'NoneType'")
+		return 0, fmt.Errorf(pyFloatTypeErr, "NoneType")
 	case float64:
 		return t, nil
 	case json.Number:
-		return t.Float64()
+		f, ferr := t.Float64()
+		if ferr != nil && math.IsInf(f, 0) {
+			// A literal past float64's range. CPython's json.loads has
+			// ALREADY turned `1e400` into inf by the time float() sees it,
+			// and float(inf) succeeds — so the row imports there. Go's
+			// Float64 reports the same ±Inf alongside ErrRange, and
+			// treating that as a fault made the row malformed_skipped
+			// here. The value agrees; only the error did not.
+			//
+			// REACHABILITY, measured rather than assumed: neither
+			// exporter can produce this. Both normalize a float literal
+			// through loads→dumps before it enters a pack, so `1e400`
+			// arrives as the token `Infinity` — and json.Number("Infinity")
+			// .Float64() returns +Inf with NO error, missing this branch
+			// entirely. What reaches it is a HAND-BUILT pack, which is
+			// exactly the input this whole file treats as adversarial.
+			// Pinned by TestAsFloatMatchesPythonFloat rather than through
+			// the pipeline, because the pipeline cannot express it.
+			return f, nil
+		}
+		return f, ferr
 	case string:
 		// float(str), not TrimSpace + strconv (mission-r7 MEDIUM).
 		if f, ok := pyval.ParseFloat(t); ok {
 			return f, nil
 		}
-		return 0, fmt.Errorf("not a number: %v", v)
+		// ValueError, not TypeError — a different sentence AND a different
+		// shape: this one quotes the offending value with repr().
+		return 0, fmt.Errorf("could not convert string to float: %s",
+			pytext.Repr(t))
 	case bool:
 		if t {
 			return 1, nil
 		}
 		return 0, nil
 	default:
-		return 0, fmt.Errorf("not a number: %v", v)
+		return 0, fmt.Errorf(pyFloatTypeErr, pyTypeName(v))
 	}
+}
+
+// pyFloatTypeErr is CPython's TypeError sentence for float(x), and
+// pyTypeName is the type name it interpolates.
+//
+// These are content keys, not diagnostics. The text lands verbatim in a
+// `malformed_skipped` result row that both runtimes write to a shared audit
+// ledger, so `not a number: map[]` is not merely uglier than CPython's
+// wording — it is a different stored value, and Go's %v spelling of a map
+// leaks into a row an operator reads.
+//
+// The same commit that removed a `"score: "` prefix from this error path,
+// with a comment explaining that the error text is a content key, left the
+// error text itself invented at three of four branches. Naming the class
+// was not the same as sweeping it (lens 3).
+const pyFloatTypeErr = "float() argument must be a string or a real number, not '%s'"
+
+func pyTypeName(v any) string {
+	switch v.(type) {
+	case nil:
+		return "NoneType"
+	case bool:
+		return "bool"
+	case string:
+		return "str"
+	case []any:
+		return "list"
+	case map[string]any:
+		return "dict"
+	case json.Number, float64, int:
+		return "float"
+	}
+	// Every value here came out of a JSON decode, so the cases above are
+	// exhaustive for real input. A Go type name is a wrong answer rather
+	// than a missing one, but it is at least visibly foreign — better than
+	// silently claiming a Python type this value does not have.
+	return fmt.Sprintf("%T", v)
 }
 
 // pyStrOr is `str(v or "")` — str() of the value, but "" for anything
@@ -707,7 +799,16 @@ func asString(v any) string {
 	case string:
 		return t
 	case nil:
-		return ""
+		// `str(None)` is "None", not "". This arm used to return "", which
+		// made asString a str() that is wrong about exactly one value —
+		// and that value is what an explicit JSON null decodes to, so the
+		// arm was wrong precisely where a foreign pack could reach it.
+		//
+		// Only pyStrGet and the two typed lesson fields reach nil here:
+		// rowID's nil case is handled before the call, and pyStrOr guards
+		// on Truthy. Callers that want ""-for-absent must say so with
+		// pyGet's default, which is what Python's own `.get(k, "")` does.
+		return "None"
 	case json.Number:
 		return t.String()
 	case float64:
@@ -794,8 +895,16 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 
 	scopeClean, scopeBad := knowledge.CoerceScope(row["scope"])
 	if scopeBad {
-		fmt.Fprintf(os.Stderr, "warn: pack %s: lesson %s carries an off-vocabulary "+
-			"scope %v — imported unstamped\n", im.packTag, originalID, row["scope"])
+		// log.warning("pack %s: lesson %s carries an off-vocabulary scope
+		// %r — imported unstamped", ...). Three pieces, and the port had
+		// invented two of them: a "warn: " prefix that appears nowhere else
+		// in this port or in Python, and %v where Python writes %r. The
+		// value is `row.get("scope")` with NO default, so an absent scope
+		// reprs as None — which is why this reads pyGet(..., nil) rather
+		// than the coerced string.
+		fmt.Fprintf(os.Stderr, "pack %s: lesson %s carries an off-vocabulary "+
+			"scope %s — imported unstamped\n", im.packTag, originalID,
+			pyRepr(pyGet(row, "scope", nil)))
 	}
 
 	// Python's dict literal, in Python's INSERTION order — this block ships
@@ -808,7 +917,7 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 		// further down, which Python does wrap in str(). The asymmetry is
 		// in the source and it is load-bearing here because this block
 		// ships verbatim: a numeric tier stores as 5 there and "5" here.
-		{Key: "original_tier", Val: row["tier"]},
+		{Key: "original_tier", Val: pyGet(row, "tier", "")},
 		{Key: "original_trust", Val: originalScore},
 		{Key: "imported_at", Val: im.now},
 	}
@@ -888,12 +997,19 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	// ever does ship one, this comment is where the fix starts.
 	tl := knowledge.TieredLesson{
 		LessonID: newID, Lesson: lessonText,
-		SourceGoal: asString(row["source_goal"]),
+		// `row.get("source_goal", "")` with NO str() around it, so an
+		// explicit null is stored as null. This field is typed `string`
+		// here and cannot hold one — the raw-value-vs-typed-struct
+		// residual PORT.md already names, narrowed: absent agrees ("" both
+		// sides), null does not (CPython writes null, this writes "").
+		SourceGoal: asString(pyGet(row, "source_goal", "")),
 		Confidence: confidence,
-		TaskType:   asString(row["task_type"]),
-		Outcome:    asString(row["outcome"]),
-		Tier:       "medium",
-		Score:      score,
+		// These two ARE wrapped in str() on the Python side, so a null is
+		// the literal "None" in the store — not "".
+		TaskType: pyStrGet(row, "task_type", ""),
+		Outcome:  pyStrGet(row, "outcome", ""),
+		Tier:     "medium",
+		Score:    score,
 		// Transaction time: decay reads last_reinforced, so this is what
 		// stops a 3-month-old import from arriving half-decayed — it gets a
 		// fair local hearing starting now.
@@ -1094,4 +1210,28 @@ func (im *importer) appendConflictsNote(kind, name string) error {
 		}
 		return os.WriteFile(path, []byte(content), 0o644)
 	})
+}
+
+// pyRepr is Python's repr() for the JSON value types, for the operator
+// sentences that interpolate %r. pytext.Repr covers the string case, which
+// is the one that quote-switches; the others are short and exact.
+func pyRepr(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "None"
+	case string:
+		return pytext.Repr(t)
+	case bool:
+		if t {
+			return "True"
+		}
+		return "False"
+	case json.Number:
+		return t.String()
+	}
+	// A list or dict reprs with Python's spacing, which pyval already
+	// knows how to write. Not reachable from the one live caller (an
+	// off-vocabulary scope that is a container fails CoerceScope's string
+	// check first), so this is a floor rather than a claim.
+	return fmt.Sprintf("%v", v)
 }

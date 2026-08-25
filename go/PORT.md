@@ -6369,3 +6369,187 @@ mind:
   separators must be spelled ``, ` `, ` `. **Lens 21: a
   fixture travels through a channel, and the channel has opinions about
   what it carries.**
+
+## The transport review, round 5 — fourteen findings, and the shape of them
+
+The whole-chunk review of `68d9bc75` + `8284e3a7` returned 4 HIGH, 4 MEDIUM
+and 6 LOW. All fourteen code claims were verified at source before anything
+was touched; all fourteen held. That is well above the ~50–70% rate this
+project has seen, and the reason is visible in the report: the reviewer
+measured rather than read, ran CPython on both sides of every claim, and
+self-caught one false finding of its own (a raw `0x85` byte in a Go literal
+rather than U+0085 — the same invisible-byte trap that cost the previous
+round a false report, and that this chunk's own fixture then walked into).
+
+### What the findings actually were
+
+Not fourteen bugs. Counting by CAUSE:
+
+**One idiom, three sites (H2, H4, and the fix that caused H2).**
+`.get(k, default)` defaults on ABSENCE, and a Go map's `row[key]` is nil for
+both absent and null. `pyFloatGet` was written for exactly this in the
+PREVIOUS chunk, with a comment naming the lens — and then the same chunk
+introduced a fresh instance of it two screens away, by replacing a wrong
+`asString(row["tier"])` with `row["tier"]`. The old code was right about
+absent and wrong about numeric; the fix inverted which case diverged.
+
+That is the whole argument for a named helper. There are now three:
+`pyFloatGet` (`float(row.get(k, d))`), `pyGet` (`row.get(k, d)` for a value
+that is STORED), and `pyStrGet` (`str(row.get(k, d))`). The three Python
+spellings produce three different answers for a null — a TypeError, a JSON
+null, and the literal string `"None"` — and collapsing them into one Go
+expression is what made each fix look complete.
+
+`asString(nil)` returned `""`. `str(None)` is `"None"`. A function that
+claims to be `str()` and is wrong about exactly one value is wrong precisely
+where an untrusted document can reach it.
+
+**One decoder, two ends (H1, H3).** `json.loads` is not
+`json.NewDecoder(...).Decode(&m)` in three ways, and the port had fixed two.
+
+*H3* — the trailing-content check was spelled `err == nil`, which refuses
+only trailing content that is itself a valid JSON token. `{"a":1}x` parsed
+clean and the `x` vanished. Both sibling implementations
+(`record.LoadsCleanValue`, `pack.decodeStrictJSONObject`) already had
+`err != io.EOF`; this was the odd copy, and its comment — *"Refuse trailing
+content the way json.loads does"* — asserted a coverage it did not have.
+The consequence was destructive, not lenient: `scrubJSONLLine` parses a row
+and RE-EMITS it, so a row CPython refuses (and therefore scrubs as raw text
+and ships intact) had its trailing bytes deleted from a hashed payload —
+different sha256 for the same input, neither pack verifying in the other
+runtime.
+
+*H1* — CPython's `json.loads` accepts bare `NaN`/`Infinity`/`-Infinity` by
+default, and, more to the point, CPython's `json.dumps` WRITES them by
+default. `knowledge_web` appends tiered lessons with a plain
+`json.dumps(asdict(tl))`, so a store CPython wrote can hold a row Go's
+decoder refuses whole. All three pack trust lanes dropped such a row with no
+imported row, no `malformed_skipped` report row, and no warning. Measured
+end-to-end on a CPython-built-and-sealed pack: 3 hypotheses there, 1 here;
+`memory/medium/lessons.jsonl` written there, not written at all here.
+
+Both are now one function — `pyval.LoadsMap`, "bare `json.loads`, indexed as
+a dict" — which `decodeStrictJSONObject` delegates to rather than being a
+fourth spelling of. It is explicitly NOT the reader for a caller porting
+`loads_clean`, which passes `parse_constant=_refuse_constant` and refuses
+those tokens on purpose. Two Python functions, two Go functions.
+
+**Operator sentences, again (M1, M2).** The previous chunk removed a
+`"score: "` prefix from an error path with a comment explaining that the
+text is a CONTENT KEY — a `malformed_skipped` row both runtimes write to a
+shared audit ledger — and left the error text itself invented at three of
+four branches. `not a number: map[]` is Go's `%v` spelling of a map, in a
+row an operator reads. Naming a class is not sweeping it. Likewise the
+off-vocabulary-scope warning carried a `warn: ` prefix that appears nowhere
+else in this port or in Python, and `%v` where Python writes `%r`.
+
+**A fix that made a dormant divergence load-bearing (M3).** Python filters
+the skills glob with `if f.is_file()`; the port never had that guard. While
+the read merely `continue`d on error the omission was invisible. Turning the
+read into a propagating error — the right fix for a DIFFERENT divergence —
+made a directory named `*.md` abort the entire export. *A fix is evidence
+about its siblings* has a second direction: a fix can also make a sleeping
+divergence fatal, and the guard it silently relied on was never there.
+
+**The sweep item this chunk had already found (M4).** `recordedMission`
+carries all three of the idioms the graduation sweep classified, at one site,
+and the value decides which project directory a run writes into.
+
+### The deliberate divergence the LOW uncovered
+
+L3 was a one-line fix — `1e400` is already `inf` by the time CPython's
+`float()` sees it, so `float(inf)` succeeds where Go's
+`json.Number.Float64` reports `+Inf` alongside `ErrRange` and the port
+called that a coercion fault. Fixing it exposed the layer underneath, and
+that layer is NOT a bug to be fixed into parity:
+
+* CPython imports the row and writes a bare `Infinity` into
+  `memory/medium/lessons.jsonl`.
+* `prove_record_line` exists in that same codebase to stop exactly this: it
+  dumps with `allow_nan=False` and re-reads through `loads_clean`, which
+  refuses the bare tokens. `knowledge_web`'s append never calls it. **So the
+  row CPython just wrote is a row CPython's own strict readers will not read
+  back.** It is stranded on write.
+* The port refuses at the writer and reports `malformed_skipped`, which
+  costs the row and keeps the store readable.
+
+The port stays on the refusing side, and
+`TestImportRefusesToWriteANonFiniteCPythonWrites` pins the disagreement
+EXPLICITLY so it cannot drift into an accident. Note the asymmetry, which is
+not a contradiction: READING a non-finite must succeed (H1), because CPython
+writes them and refusing the read loses the whole document. WRITING one is
+where the port declines.
+
+The L3 fix itself turned out to be unreachable through the pack pipeline —
+both exporters normalize a float literal through loads→dumps before it
+enters a pack, so `1e400` arrives as the token `Infinity`, and
+`json.Number("Infinity").Float64()` returns `+Inf` with NO error, missing
+the branch entirely. What reaches it is a HAND-BUILT pack, which is exactly
+the input this file treats as adversarial. Measured, said at the site, and
+pinned by a direct `asFloat` differential rather than through a pipeline
+that cannot express it — *a measurement is only evidence about the call you
+actually made.*
+
+### The test that was agreeing with itself (L1)
+
+`TestExportCollapsesKeysThatScrubToTheSameString` pinned the scrubber's
+key-collapse and NOT the ordinal half its own comment stated — *"the key
+keeps the ordinal of its FIRST appearance and the value of its LAST"* —
+because with the two colliding keys ADJACENT, first-ordinal and last-ordinal
+produce the same object. The reviewer measured it: a remove-and-append
+mutant in `scrub.Walk` passed that test and the whole `internal/scrub`
+suite.
+
+The killing fixture is one plain key between the two collapsing ones. The
+tell was available without the mutant: the comment claimed more than the
+fixture could show.
+
+### Evidence
+
+New: `import_r5_diff_test.go` (`TestImportAcceptsCPythonNonFiniteRows`,
+`TestImportStampsAbsentAndNullFieldsLikePython`,
+`TestImportReportsPythonsFloatErrors`,
+`TestImportRefusesToWriteANonFiniteCPythonWrites`,
+`TestAsFloatMatchesPythonFloat` × 14),
+`export_r5_diff_test.go` (`TestExportShipsTrailingGarbageVerbatim`,
+`TestExportSkipsANonFileMatchingTheGlob`), and
+`loop/mission_line_diff_test.go` (14 separator cases + an undecodable
+ledger). Every one carries an anti-vacuity guard that fails if CPython did
+not actually exhibit the behaviour under test.
+
+Mutation battery 12/12 DETECTED, covering both directions of the
+absent-vs-null fix (the pre-fix `str()` spelling AND the post-fix raw-value
+spelling, since the bug was an inversion between them), both float() error
+sentences, the non-finite masking, the trailing-token check, the ordinal
+rule, the `is_file` guard, and all three idioms at `recordedMission`.
+
+Two fixture bugs of my own, caught by the anti-vacuity guards rather than by
+review: the lesson fixtures seeded `memory/medium/lessons.jsonl` when the
+exporter reads `memory/long/`, and a mechanical `str.replace` pass produced
+rows with duplicate `minted_from` keys. Both showed up as "CPython imported
+0 of 4" instead of as green tests — which is the entire reason the guards
+are there.
+
+### Carried, not fixed
+
+* **L5.** `record/dailylog.go:236` (lesson count, missing the strict-decode
+  half) and `loop/slot.go:54` (a lock-holder diagnostic). Both low
+  consequence. `record/outcomes.go:75` and `pack/import.go:1075` are
+  `locked_rmw` equivalents and are CORRECT as raw byte reads — Python's
+  `locked_rmw` uses `errors="surrogateescape"`, not `read_text`. That
+  distinction is the same classification discipline the graduation section
+  above argues for, arrived at independently.
+* **L6.** Number literals reach the `imported` block raw on the import side
+  (`row["confirmations"]`, `row["contradictions"]`, `row["tier"]`,
+  `original_provenance`). Measured UNREACHABLE through either exporter, and
+  the residual note lives only in `PyNumbers`' doc rather than at these
+  sites.
+* **L4.** `parseTieredLesson` leaves `Imported` nil when `imported` is
+  absent, which renders as `null` where Python's `default_factory=dict`
+  gives `{}`. Unreachable today — both appending callers set the field
+  explicitly. A note now sits at the site; the one-line fix would be an
+  unfireable guard until a caller re-emits a loaded lesson.
+* A non-dict JSONL row makes CPython raise `AttributeError` on the next
+  `.get()` and abort the WHOLE import (only `json.JSONDecodeError` is
+  caught). `LoadsMap` refuses the row instead, costing one row. A narrower,
+  deliberate divergence, named at the site.

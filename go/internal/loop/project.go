@@ -30,6 +30,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // genericWords ports Python _GENERIC_WORDS verbatim: words that carry no
@@ -101,14 +104,26 @@ func recordedMission(projectDir string) string {
 			return m
 		}
 	}
-	next, err := os.ReadFile(filepath.Join(projectDir, "NEXT.md"))
+	// `o.next_path(slug).read_text(encoding="utf-8")` then `.splitlines()`
+	// then `line.strip()` — all three of the idioms the graduation sweep
+	// classified, at one site, and the value decides which project
+	// directory a run writes into.
+	//
+	// read_text is inside a bare `except: return ""`, so an undecodable
+	// NEXT.md means CPython records NO mission and the caller falls back
+	// to slug-only disambiguation. `string(raw)` read on with U+FFFD
+	// substituted and could match a DIFFERENT project.
+	text, err := pyval.ReadText(filepath.Join(projectDir, "NEXT.md"))
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(next), "\n") {
-		line = strings.TrimSpace(line)
+	for _, line := range pytext.SplitLines(text) {
+		line = pytext.Strip(line)
 		if strings.HasPrefix(line, ">") {
-			return strings.TrimSpace(strings.TrimLeft(line, "> "))
+			// lstrip("> ") is a CUTSET, not a prefix — it eats any run of
+			// '>' and ' '. strings.TrimLeft is the same rule; the outer
+			// strip is Python's trailing `.strip()`.
+			return pytext.Strip(strings.TrimLeft(line, "> "))
 		}
 	}
 	return ""

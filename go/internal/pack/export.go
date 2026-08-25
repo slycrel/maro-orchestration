@@ -69,9 +69,18 @@ func DefaultDenylist() []string {
 	cfg, _ := config.Load()
 	if extra, ok := cfg["pack"].(map[string]any); ok {
 		if lst, ok := extra["export_denylist"].([]any); ok {
+			// `items.update(str(x) for x in extra if x)` — a TRUTHINESS
+			// filter and a str() COERCION, not a type assertion. A
+			// config entry of 42 or true is a denylist entry CPython
+			// redacts and the port did not, and the direction that
+			// divergence fails in is the leak direction: the port ships
+			// a value the operator asked to have scrubbed.
+			//
+			// Sixth instance of "a Python idiom spelled as a Go type
+			// assertion" in this file's review history.
 			for _, x := range lst {
-				if s, ok := x.(string); ok && s != "" {
-					items[s] = true
+				if pyval.Truthy(x) {
+					items[asString(x)] = true
 				}
 			}
 		}
@@ -344,6 +353,19 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		names, _ := filepath.Glob(filepath.Join(d, "*.md"))
 		sort.Strings(names)
 		for _, f := range names {
+			// `if f.is_file()`. Python filters the glob; the port never
+			// did, and while the read merely `continue`d that was invisible.
+			// Turning the read into a propagating error turned a benign
+			// divergence into a fatal one: a DIRECTORY named `*.md` now
+			// aborts the whole export where CPython exports fine.
+			//
+			// A fix is evidence about its siblings, and this is the other
+			// direction of the same lens — a fix can also make a dormant
+			// divergence load-bearing. The guard the fix relied on was
+			// never there.
+			if st, serr := os.Stat(f); serr != nil || !st.Mode().IsRegular() {
+				continue
+			}
 			// read_text, and the error PROPAGATES. Python's
 			// `f.read_text(encoding="utf-8")` here is not inside a try —
 			// only the include_runs loop below catches UnicodeDecodeError,

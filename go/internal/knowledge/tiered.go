@@ -270,6 +270,21 @@ func parseTieredLesson(line string) (TieredLesson, bool) {
 		for _, k := range keys {
 			tl.Imported = append(tl.Imported, pyval.Field{Key: k, Val: im[k]})
 		}
+	} else {
+		// SECOND NAMED RESIDUAL, and a latent one. Python's field is
+		// `field(default_factory=dict)`, so an absent `imported` is `{}`
+		// and json.dumps writes `{}`. A nil pyval.Obj renders as `null`.
+		//
+		// Currently UNREACHABLE: the only two callers that append a lesson
+		// built this way (pack/import.go and evolver/store.go) both set the
+		// field explicitly, and this loader's own output is compared field
+		// by field rather than re-emitted. It is written down because
+		// fromValue's doc reasons about the nil case as if it were fine
+		// rather than latent, and the next caller that re-emits a loaded
+		// lesson makes it live. An empty-but-non-nil Obj is the fix, and
+		// it costs one line — but adding it now would be an unfireable
+		// guard, so the note is the honest form until a caller reaches it.
+		_ = tl.Imported
 	}
 	if dm, isMap := m["delta_evidence"].(map[string]any); isMap {
 		tl.DeltaEvidence = dm

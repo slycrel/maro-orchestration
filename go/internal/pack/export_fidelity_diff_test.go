@@ -244,8 +244,20 @@ func TestExportNormalizesNumbersLikeALoadsDumpsPair(t *testing.T) {
 func TestExportCollapsesKeysThatScrubToTheSameString(t *testing.T) {
 	seed := func(ws string) {
 		w := seedWriter(t, ws)
+		// A PLAIN key between the two collapsing ones. Without it the
+		// fixture pins the collapse and not the ORDINAL half its own
+		// comment states — "the key keeps the ordinal of its FIRST
+		// appearance and the value of its LAST" — because with the two
+		// adjacent, first-ordinal and last-ordinal produce the same
+		// object. Measured: a remove-and-append mutant in scrub.Walk
+		// passed this test AND the whole internal/scrub suite.
+		//
+		// A test reporting agreement may be testing nothing (lens 1), and
+		// the tell here was that the comment claimed more than the fixture
+		// could show.
 		w("memory/standing_rules.jsonl",
 			`{"rule_id":"k","sk-ant-aaaaaaaaaaaaaaaaaa":1,`+
+				`"plain":9,`+
 				`"sk-ant-bbbbbbbbbbbbbbbbbb":2}`+"\n")
 	}
 	want, members, err := runExportBoth(t, seed)
