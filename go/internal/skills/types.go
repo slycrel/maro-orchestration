@@ -21,6 +21,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -78,8 +79,20 @@ func newSkill() Skill {
 // empties dropped, capped at mint. cap < 0 means no cap — the read path,
 // where stored rows must not be re-truncated.
 func NormalizeTags(raw any, cap int) []string {
-	list, ok := raw.([]any)
-	if !ok {
+	// BOTH slice spellings. `isinstance(raw, list)` is true for every
+	// Python list, and this port has two representations of one: []any
+	// from a json.Unmarshal caller and pyval.List from a LoadsOrdered
+	// one. A type assertion to []any does not match a pyval.List — named
+	// type, not underlying type — so the mint path silently produced an
+	// EMPTY tag set for a reply CPython tags normally. Found the first
+	// time a pyval-decoded caller reached here (skills mint, tranche 5).
+	var list []any
+	switch t := raw.(type) {
+	case pyval.List:
+		list = []any(t)
+	case []any:
+		list = t
+	default:
 		return []string{}
 	}
 	out := []string{}

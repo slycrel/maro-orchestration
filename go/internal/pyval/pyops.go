@@ -380,6 +380,16 @@ func seqList(v any) ([]any, bool) {
 		return t, true
 	case []any:
 		return t, true
+	case []string:
+		// Iterable, like every other sequence shape this package accepts.
+		// Without this arm a []string was "not iterable" to `in`, to the
+		// list coercions and to everything built on them, while Str and
+		// TypeName happily named it a list (adversarial r11 round 9, LOW).
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = x
+		}
+		return out, true
 	}
 	return nil, false
 }

@@ -255,6 +255,11 @@ var userSurfacedEvents = map[string]bool{
 	"SKILL_CIRCUIT_OPEN":   true,
 	"SKILL_CIRCUIT_CLOSED": true,
 	"ISLAND_CULLED":        true,
+	// The A/B lifecycle pair, both in Python's USER_SURFACED_EVENTS:
+	// minting a challenger and resolving the contest are decisions about
+	// the system's own behaviour, which is what this lane is.
+	"SKILL_VARIANT_CREATED": true,
+	"AB_RETIRED":            true,
 	"EVOLVER_APPLIED":      true,
 	"EVOLVER_REVERTED":     true,
 	"EVOLVER_VERDICT":      true,

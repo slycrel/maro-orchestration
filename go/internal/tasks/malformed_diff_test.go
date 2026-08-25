@@ -57,7 +57,13 @@ except BaseException as e:
 if p.exists():
     after = p.read_bytes()
     out["unchanged"] = before == after
-    out["after"] = after.decode("utf-8")
+    try:
+        out["after"] = after.decode("utf-8")
+    except UnicodeDecodeError:
+        # One fixture seeds bytes this runtime cannot decode at all. That is
+        # the case under test, not a probe failure — report a sentinel and
+        # let the comparison below assert on the raw bytes instead.
+        out["after"] = "<not-utf-8>"
 else:
     out["unchanged"] = False
     out["after"] = None
@@ -183,6 +189,27 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 		{"a fail on a row with no timestamps", "fail", `{
 			"job_id": "task-mal12", "lane": "agenda", "status": "claimed",
 			"attempt": 1, "artifact_paths": {}, "blocked_by": []}`},
+
+		// BYTES, not JSON — the axis every other row in this table shares a
+		// blind spot on, because each of them is valid UTF-8 by
+		// construction. `read_text(encoding="utf-8")` refuses a file with an
+		// undecodable byte and no verb touches it; Go's decoder substitutes
+		// U+FFFD, hands the caller an ordinary row, and the next write
+		// re-encodes the replacements onto disk. The unchanged-file
+		// assertion below is the one that matters here: this is not two
+		// runtimes disagreeing about a value, it is one of them destroying
+		// bytes the other can still see.
+		//
+		// Both message widths, so the port's decoder is pinned on the
+		// sentence and not only on the refusal.
+		{"a claim on a row holding an undecodable byte", "claim",
+			"{\n\t\t\t\"job_id\": \"task-mal29\", \"lane\": \"agenda\", " +
+				"\"status\": \"queued\",\n\t\t\t\"attempt\": 0, " +
+				"\"note\": \"\xff\", \"timestamps\": {}, \"blocked_by\": []}"},
+		{"a claim on a row truncated mid-sequence", "claim",
+			"{\n\t\t\t\"job_id\": \"task-mal30\", \"lane\": \"agenda\", " +
+				"\"status\": \"queued\",\n\t\t\t\"attempt\": 0, " +
+				"\"note\": \"\xf0\x9f\", \"timestamps\": {}, \"blocked_by\": []}"},
 
 		// The healthy row, so the table is not one-sided: without it every
 		// assertion below would hold for a package that raised on
@@ -367,23 +394,62 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 // normTask blanks the pid and every timestamp — a wall clock and a process
 // id are not comparable across two runtimes, and everything else in the row
 // is.
+//
+// It decodes and re-encodes through pyval rather than encoding/json, and the
+// difference is the whole point. A `map[string]any` round-trip erases two
+// axes this file's own table exists to pin:
+//
+//   - NUMBER SPELLING. Every JSON number lands as float64 and re-encodes in
+//     Go's shortest form, so Python's `3.0` and a port's `3` both render as
+//     `3`. The "attempt is a float" fixture is there because `task["attempt"]
+//     += 1` is Python's +, which keeps a float a float — and under the old
+//     normalizer that fixture could not fail. Measured: `{"attempt":3.0}`
+//     round-tripped to `{"attempt":3}`.
+//   - KEY ORDER. Go marshals a map with its keys SORTED; Python writes the
+//     dict's insertion order. A port that rebuilt the row in a different
+//     order wrote a file no byte-comparison would accept, and passed here.
+//
+// pyval.LoadsOrdered keeps both (ordered fields, json.Number), and
+// DumpsCompactPy is CPython's own separators and escaping — so the claim
+// that this comparison is byte-level is true of everything left after the
+// two masks.
 func normTask(t *testing.T, raw string) string {
 	t.Helper()
-	var v map[string]any
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+	v, err := pyval.LoadsOrdered(raw)
+	if err != nil {
 		t.Fatalf("the row is not JSON: %v\n%s", err, raw)
 	}
-	delete(v, "claimed_by_pid")
-	if ts, ok := v["timestamps"].(map[string]any); ok {
-		for k := range ts {
-			ts[k] = "<ts>"
+	o, ok := v.(pyval.Obj)
+	if !ok {
+		t.Fatalf("the row is not an object: %s", raw)
+	}
+	out := pyval.Obj{}
+	for _, f := range o {
+		switch {
+		case f.Key == "claimed_by_pid":
+			continue // a process id is not comparable across runtimes
+		case f.Key == "timestamps":
+			// Only a MAPPING of stamps is masked. A row whose timestamps is
+			// a string or a list is a fixture in this table, and its value
+			// has to keep comparing exactly.
+			if ts, isObj := f.Val.(pyval.Obj); isObj {
+				masked := pyval.Obj{}
+				for _, kv := range ts {
+					masked = append(masked, pyval.Field{Key: kv.Key, Val: "<ts>"})
+				}
+				out = append(out, pyval.Field{Key: f.Key, Val: masked})
+				continue
+			}
+			out = append(out, f)
+		default:
+			out = append(out, f)
 		}
 	}
-	b, err := json.Marshal(v)
+	s, err := pyval.DumpsCompactPy(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return s
 }
 
 // The resolver under test is task_store's own, so that is what gets

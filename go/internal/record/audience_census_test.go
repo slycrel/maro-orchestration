@@ -26,6 +26,14 @@ var knownEmittedEvents = map[string]string{
 	"SKILL_CIRCUIT_CLOSED":    "user",
 	"SKILL_CIRCUIT_HALF_OPEN": "system",
 	"ISLAND_CULLED":           "user",
+	// The A/B lifecycle pair, added with internal/skills/variant.go and
+	// checked against the live frozenset: both sit in Python's
+	// USER_SURFACED_EVENTS, one line apart from ISLAND_CULLED. The census
+	// caught them on the first full run after that file landed, which is
+	// what it is for — a new event type reaches the user lane by decision
+	// or not at all.
+	"SKILL_VARIANT_CREATED": "user",
+	"AB_RETIRED":            "user",
 	"EVOLVER_APPLIED":         "user",
 	"EVOLVER_REVERTED":        "user",
 	"EVOLVER_VERDICT":         "user",

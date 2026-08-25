@@ -5572,3 +5572,96 @@ the sweep for its callers is part of the change, not a follow-up.
   gives is `sorted(glob("*.json"))` — the FILENAME's, not the job id's —
   and the old fixture's one-character ids could not tell the two apart.
   The ids are `a1`/`a9`/`a10` now, which can.
+
+## Round 9 — the byte the port rewrote, and two number-keys
+
+### Reading a file is not converting bytes to a string
+
+`internal/tasks` read task files with `pyval.LoadsOrdered(string(raw))`.
+Python's `_read_task` is `json.loads(path.read_text(encoding="utf-8"))`,
+and `read_text` REFUSES a file carrying an undecodable byte. Go's
+decoder does not: it substitutes U+FFFD, the document parses, and the
+next `write_task` writes those replacement characters back. The Python
+runtime can then read the task again and sees content nobody wrote.
+
+`pyval.DecodeUTF8Strict` is the reader's rule, spelled once. It raises
+CPython's `UnicodeDecodeError` — class AND sentence — because the class
+is what an `except UnicodeDecodeError` catches. Four rules, all
+measured:
+
+- a byte that cannot begin a sequence (0x80–0xC1, 0xF5–0xFF) is
+  "invalid start byte", width one. The overlong lead `C0` is reported
+  there, not as a bad continuation.
+- a sequence running off the END is "unexpected end of data" — so the
+  same truncated `C3` reports differently at EOF than one byte earlier.
+- anything else bad mid-sequence is "invalid continuation byte",
+  spanning the lead plus the continuations already accepted. Four leads
+  (E0, ED, F0, F4) carry a NARROWER first-continuation range, which is
+  what rejects overlong forms, surrogates and code points past U+10FFFF.
+- width decides the sentence: one byte names the byte, more than one
+  names a position range.
+
+Six other sites already applied the lenient-read rule with a plain Go
+error (`record`, `orch`, `knowledge`, `pack`, `pyjson`). They refuse and
+do not rewrite, so they stay as they are; `tasks` was the one that could
+launder AND persist. **If a new reader is added, this is the decision it
+inherits — refuse, and refuse the way the other runtime does.**
+
+### A float key is a value, not a spelling
+
+`floatHashKey` folded an integral float onto the integer's key by
+formatting it. Past 2^53 the shortest round-trip decimal is a DIFFERENT
+number from the float, so the fold merged keys CPython splits (`1e23`
+vs `10**23`) and split keys CPython merges (`2**64` vs
+`1.8446744073709552e19`). It now takes the float's exact integer value
+through `big.Float`. Anywhere else this port compares a float against an
+integer, the same rule applies: compare values, never renderings.
+
+### `fail` assigns before it reads
+
+`task["status"] = "failed"` is `__setitem__`, and its TypeError differs
+from `__getitem__`'s for every type except list. `asAssignable` is the
+assignment's spelling; `asIndexable` stays the read's. Both share
+`listish` so they cannot drift about which decoded shapes are lists.
+When porting a function, the FIRST operation on a value decides which
+error the caller sees — reading the whole body and picking the most
+common operation is how this one was got wrong.
+
+### `DrainOptions.JobIDs` is keyed by HashKey
+
+The set holds `"s:job-1"`, not `"job-1"`, because a Python set holds
+`4242` and `"4242"` as different elements. Build it with `NewJobIDSet`
+or `NewJobIDSetOfStrings`; a raw-id map literal compiles and matches
+nothing. The type is `JobIDSet` now so the two cannot be confused at a
+call site.
+
+### Test-side changes worth knowing about
+
+- `normTask` and `normSweep` no longer round-trip through
+  `map[string]any`. That erased number spelling (`3.0` vs `3`) and key
+  ORDER, both of which those tables exist to pin. They go through
+  `pyval.LoadsOrdered` + `DumpsCompactPy` now, so everything outside the
+  two masked fields really is compared byte for byte, as the comment
+  always claimed.
+- The sweep differential has a `fail_arg` verb. Every other verb there
+  reads a key first, so none of them could reach the assignment error.
+- `internal/skills/variant_diff_test.go` asserts both runtimes LOADED
+  the rows it seeded, measured BEFORE the call — retirement rewrites the
+  pool, so reading the count afterwards reports the survivors and makes
+  a working case look like an inadmissible fixture. The first cut of
+  that table seeded rows without `content_hash`/`created_at`, which
+  `validate_skill_row` refuses and `load_skills` silently skips, so
+  twelve cases compared two empty answers and agreed. The mutation
+  battery caught two of twelve; it now catches fifteen of fifteen.
+
+### The audience census caught the A/B events
+
+`internal/skills/variant.go` emits `SKILL_VARIANT_CREATED` and
+`AB_RETIRED`, and `TestEveryEmittedEventTypeHasADecidedAudience` failed
+on the first full-suite run after it landed — twice, which is the part
+worth recording. Registering the two in the census table was not enough:
+the test compares the audience the EMITTER actually stamps, so the
+production set in `record.go` had to name them too. A table that agreed
+with Python while the code disagreed would have been exactly the shape
+lens 1 warns about, and the census refuses to be satisfied by it. Both
+are `user` in Python's `USER_SURFACED_EVENTS`.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -153,7 +154,29 @@ func readRaw(path string) (any, error) {
 		}
 		return nil, err
 	}
-	v, err := pyval.LoadsOrdered(string(raw))
+	// `read_text(encoding="utf-8")` is STRICT: a task file carrying a byte
+	// that is not valid UTF-8 raises UnicodeDecodeError, and every caller
+	// here — claim, complete, the sweep — fails without touching it.
+	//
+	// Go's decoder does not refuse. It substitutes U+FFFD for each bad byte
+	// and returns a perfectly ordinary object, and the next write_task
+	// re-encodes those replacement characters back to disk. That is not a
+	// divergence in what the two runtimes REPORT; it is this runtime
+	// DESTROYING the file's original bytes, after which the Python runtime
+	// can read the task again and sees content nobody wrote. Measured:
+	// {"note":"\xff\xfe"} decodes clean in Go and re-encodes as two U+FFFD.
+	//
+	// The same rule already guards internal/record, internal/orch and
+	// internal/knowledge — but each of those refuses with a plain Go error.
+	// This one raises the exception Python raises, class and sentence, both
+	// because the class is what an `except UnicodeDecodeError` sees and
+	// because this reader's callers already compare exception classes
+	// against CPython row by row.
+	text, derr := pyval.DecodeUTF8Strict(raw)
+	if derr != nil {
+		return nil, derr
+	}
+	v, err := pyval.LoadsOrdered(text)
 	if err != nil {
 		return nil, fmt.Errorf("read task %s: %w", path, err)
 	}
@@ -176,15 +199,50 @@ func asIndexable(v any) (Task, error) {
 		return t, nil
 	}
 	var msg string
+	if _, isList := listish(v); isList {
+		return nil, &pyval.PyErr{Class: "TypeError",
+			Msg: "list indices must be integers or slices, not str"}
+	}
 	switch v.(type) {
-	case pyval.List, []any, []string:
-		msg = "list indices must be integers or slices, not str"
 	case string:
 		msg = "string indices must be integers, not 'str'"
 	default:
 		msg = fmt.Sprintf("'%s' object is not subscriptable", pyval.TypeName(v))
 	}
 	return nil, &pyval.PyErr{Class: "TypeError", Msg: msg}
+}
+
+// asAssignable is `task["status"] = ...` on a non-mapping — item
+// ASSIGNMENT, whose TypeError differs from the subscript READ above for
+// every type but list.
+//
+// A list says the same sentence both ways because the complaint is about the
+// INDEX, not about the container; every other type complains about the
+// container, and __setitem__ and __getitem__ complain differently. That
+// single agreeing arm is why a table built only from list fixtures cannot
+// tell asIndexable from this function.
+func asAssignable(v any) (Task, error) {
+	if t, ok := v.(pyval.Obj); ok {
+		return t, nil
+	}
+	if _, isList := listish(v); isList {
+		return nil, &pyval.PyErr{Class: "TypeError",
+			Msg: "list indices must be integers or slices, not str"}
+	}
+	return nil, &pyval.PyErr{Class: "TypeError",
+		Msg: fmt.Sprintf("'%s' object does not support item assignment",
+			pyval.TypeName(v))}
+}
+
+// listish reports whether a decoded value is one of the shapes that stands
+// in for a Python list here. Spelled once so asIndexable and asAssignable
+// cannot drift apart about which types those are.
+func listish(v any) (any, bool) {
+	switch v.(type) {
+	case pyval.List, []any, []string:
+		return v, true
+	}
+	return nil, false
 }
 
 // asMapping is `task.get(...)` on a non-mapping — one AttributeError

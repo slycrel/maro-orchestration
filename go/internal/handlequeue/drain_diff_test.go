@@ -534,13 +534,16 @@ func TestDrainTaskStoreMatchesCPython(t *testing.T) {
 				d.Sources = *c.sources
 			}
 			if c.jobIDs != nil {
-				d.JobIDs = map[string]bool{}
-				for _, id := range *c.jobIDs {
-					k, ok := pyval.HashKey(id)
-					if !ok {
-						t.Fatalf("fixture job id %v is unhashable", id)
-					}
-					d.JobIDs[k] = true
+				// NewJobIDSet, not a hand-rolled loop. This test WAS the
+				// hand-rolled loop, and it was the only thing in the tree
+				// that knew the set is keyed by HashKey rather than by the
+				// raw id — so the whole differential passed while the
+				// exported field's own documentation said nothing about it
+				// and no production caller could have got it right.
+				var err error
+				d.JobIDs, err = NewJobIDSet(*c.jobIDs...)
+				if err != nil {
+					t.Fatalf("fixture job ids %v: %v", *c.jobIDs, err)
 				}
 			}
 

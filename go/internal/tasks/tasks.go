@@ -591,12 +591,29 @@ func Fail(ws, jobID, errText string) (Task, error) {
 	path := TaskPath(ws, jobID)
 	var task Task
 	err := locked(path, false, func() error {
-		t, err := readTask(path)
+		// readRaw, not readTask, because fail's FIRST act on the row is
+		// `task["status"] = "failed"` — an item ASSIGNMENT. claim, complete
+		// and archive all read `task["status"]` first, and the two
+		// operations do not word their TypeError the same way. Measured:
+		//
+		//	          __setitem__                        __getitem__
+		//	str    'str' object does not support…   string indices must be…
+		//	int    'int' object does not support…   'int' object is not subscriptable
+		//	list   list indices must be integers…   list indices must be integers…
+		//
+		// Only the list arm agrees; a str, int, float or bool row got the
+		// subscript sentence here where CPython gives the assignment one
+		// (adversarial r11 round 9, MEDIUM).
+		v, err := readRaw(path)
 		if err != nil {
 			return err
 		}
-		if t == nil {
+		if v == nil {
 			return fmt.Errorf("%w: %s", ErrNotFound, jobID)
+		}
+		t, err := asAssignable(v)
+		if err != nil {
+			return err
 		}
 		t.Set("status", "failed")
 		if err := setTimestamp(&t, "finished_at_utc", UTCNow()); err != nil {

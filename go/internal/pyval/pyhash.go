@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"math/big"
 	"strconv"
 )
 
@@ -97,17 +98,34 @@ func floatHashKey(f float64) string {
 	if f == 0 {
 		return "i:0"
 	}
-	// 'f' with precision -1 spells an integral float as its EXACT integer
-	// digits at any magnitude, so 1e19 keys as "10000000000000000000" and
-	// meets the JSON integer literal of the same value.
+	// The float's EXACT integer value, not its shortest round-trip
+	// spelling. An integral float IS an exact integer, and Python compares
+	// int against float exactly — so the key has to be the value, not a
+	// rendering of it.
 	//
-	// The first cut folded only within ±9.2e18 and fell through to the
-	// float spelling above that, which split `1e19` from `10**19` — two
-	// buckets of one where CPython reports one bucket of two. The bound was
-	// the upper-end sibling of the fold that makes True/1/1.0 agree, and it
-	// was arbitrary in both directions: 9.2e18 is under 2^63-1, so
-	// 9.22e18 and 9220000000000000000 split as well (adversarial r11 round
-	// 7, LOW). There is no bound now, which is what Python's numeric
-	// hashing has.
-	return "i:" + strconv.FormatFloat(f, 'f', -1, 64)
+	// strconv.FormatFloat(f, 'f', -1, 64) is the shortest decimal that
+	// round-trips, which is a different number above 2^53 and wrong in BOTH
+	// directions. Measured on this box:
+	//
+	//	2**64                      exact 18446744073709551616
+	//	  as a float, shortest     "18446744073709552000"   -> port SPLIT
+	//	  CPython: 2**64 == 1.8446744073709552e19 is True   -> one bucket
+	//	1e300                      exact 1000...52504760255204420248704...
+	//	  shortest                 "1" + 300 zeros, which is 10**300's own
+	//	                           digits                   -> port MERGED
+	//	  CPython: 10**300 == 1e300 is False                -> two buckets
+	//	1e23  likewise: exact 99999999999999991611392, shortest 10**23.
+	//
+	// So the previous spelling reported one bucket where CPython reports
+	// two, and two where CPython reports one — a lookup answering the wrong
+	// value, not merely a cosmetic key difference (adversarial r11 round 9,
+	// MEDIUM). The comment it replaced asserted the exactness that the
+	// measurement above disproves; no fixture reached past 2^53 to check.
+	//
+	// The first cut before that folded only within ±9.2e18 and fell through
+	// to the float spelling above it, splitting `1e19` from `10**19`
+	// (adversarial r11 round 7, LOW). There is still no bound, which is
+	// what Python's numeric hashing has.
+	exact, _ := new(big.Float).SetFloat64(f).Int(nil)
+	return "i:" + exact.String()
 }

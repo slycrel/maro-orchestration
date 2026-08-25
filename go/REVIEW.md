@@ -8111,3 +8111,142 @@ every stamp would have turned "the port copied the wrong field" into a
 pass, so only FRESH stamps are masked and both sides must carry the same
 NUMBER of them — verified by making `Complete` write a fixture stamp and
 watching the count guard fire.
+
+## Round 9 — a launderer, two number-keys, and an assignment nobody typed
+
+Seven findings, all seven real. That is the first round with no
+hallucinated claim, and the reason is worth naming: every finding this
+round pointed at a MEASUREMENT rather than at a reading of the code, and
+each one reproduced on the first attempt.
+
+**H1 (HIGH) — the task store laundered bytes and then rewrote them.**
+`_read_task` is `json.loads(path.read_text(encoding="utf-8"))`, and
+`read_text` is strict: a task file holding an undecodable byte raises
+`UnicodeDecodeError` and no verb touches it. Go's decoder does not
+refuse — it substitutes U+FFFD per bad byte, hands back an ordinary row,
+and the next `write_task` re-encodes the replacements to disk. Measured:
+
+    {"job_id":"j1","note":"\xff\xfe"}
+      CPython  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff
+               in position 41: invalid start byte
+      Go       decodes clean, re-encodes as two U+FFFD
+
+This is not two runtimes disagreeing about a value. It is one of them
+DESTROYING the file's original bytes, after which Python can read the
+task again and sees content nobody wrote. The same rule already guarded
+`internal/record`, `internal/orch`, `internal/knowledge` and
+`internal/pack` — six sites — and this was the seventh, the only one
+that could also rewrite what it had just misread. **Lens 3 held and was
+not enough: the class had been fixed five times and the one instance
+that mattered most was never enumerated.**
+
+Fixed with `pyval.DecodeUTF8Strict`, which reproduces CPython's decoder
+including the exception's class and sentence, because the class is what
+an `except UnicodeDecodeError` sees. The rules were measured, not read
+off a table — an overlong `C0` is an "invalid start byte" and not a bad
+continuation; the same truncated `C3` is "unexpected end of data" at EOF
+and "invalid continuation byte" one byte earlier; the message names a
+single byte or a position RANGE depending on how much of the sequence
+had been accepted. 34 fixtures against the interpreter, green first run.
+
+**M2 (MEDIUM) — a float key that was a rendering, not a value.** The
+numeric fold spelled an integral float with
+`strconv.FormatFloat(f, 'f', -1, 64)` under a comment claiming that
+gives "the EXACT integer digits at any magnitude". It does not: it gives
+the shortest decimal that ROUND-TRIPS, which past 2^53 is a different
+number. Wrong in both directions —
+
+    2**64 == 1.8446744073709552e19   CPython True   -> one bucket
+      shortest spelling "18446744073709552000"      -> port SPLIT them
+    10**23 == 1e23                   CPython False  -> two buckets
+      both render "1" + 23 zeros                    -> port MERGED them
+
+so `status_summary` reported one bucket where CPython reports two and
+two where it reports one. Every existing fold fixture (9.22e18, 1e19,
+-0.0) sits below 2^53, where shortest and exact coincide — **twelve
+fixtures pinning a fold, none of which could tell an exact key from a
+rendered one.** Now the float's exact integer value via `big.Float`, and
+two fixtures that straddle the boundary in opposite directions, so a
+"fix" that merely printed more digits fails the second one.
+
+**M3 (MEDIUM) — `fail` leads with an assignment.** `fail`'s first act on
+the row is `task["status"] = "failed"`; `claim`, `complete` and
+`archive` all READ `task["status"]` first. `__setitem__` and
+`__getitem__ `do not word their TypeError the same way:
+
+    str   'str' object does not support item assignment
+            vs  string indices must be integers, not 'str'
+    int   'int' object does not support item assignment
+            vs  'int' object is not subscriptable
+    list  list indices must be integers or slices, not str   (BOTH)
+
+The list arm agrees because its complaint is about the INDEX rather than
+the container — which is exactly why a table built from list fixtures
+cannot tell the two operations apart. Four of six row types were wrong.
+Fixed with `asAssignable`; both it and `asIndexable` now share one
+`listish` so they cannot drift about which types are lists.
+
+**M4 (MEDIUM) — the normalizer that erased what the table was pinning.**
+`normTask` and `normSweep` masked two fields by round-tripping the row
+through `map[string]any` and `encoding/json`. That erases two axes these
+files exist to test: every number becomes float64 and re-renders in Go's
+shortest form, and a Go map marshals with its keys SORTED. So Python's
+`3.0` and a port's `3` both rendered `3`, and a port that rebuilt the
+row in a different key order passed a comparison whose own comment
+called it byte-level. The `attempt is a float` fixture — written
+specifically because `task["attempt"] += 1` keeps a float a float —
+could not fail. Both normalizers now go through `pyval.LoadsOrdered` and
+`DumpsCompactPy`, which keep order and number spelling; a mutation
+writing `int(f)` for a float attempt now fails exactly that fixture.
+**Lens 1, in its purest form: the mask was wider than the thing it was
+masking, so the test reported agreement about a field it had thrown
+away.**
+
+**L5 — `exc_info` is not part of the message.** Round 6's H6 established
+this and fixed two sites in the recursion check-in; `notify` had two
+more, and one of them also worded its message differently from
+Python's. Fixed both. The dropped detail is a real loss — CPython's
+`exc_info=True` writes a traceback the operator does see — and it is
+named here rather than resolved a second way, because one convention
+applied twice beats two applied once. The log surface is asserted by no
+differential, so this is a convention question, not a correctness one.
+
+**L6 — a set keyed by something other than what the caller has.**
+`DrainOptions.JobIDs` is looked up by `pyval.HashKey` output, so the id
+`"job-1"` lives under `"s:job-1"`. The field's own documentation said
+only that it was a Python set. A caller writing the obvious map literal
+of raw ids compiles, type-checks and matches NOTHING — and the drain
+would report an empty queue rather than a lookup miss. There is no
+production caller yet, which is the only reason this had not fired. The
+one place in the tree that knew the rule was the differential's own
+hand-rolled loop — **lens 4 exactly: a helper nobody looked for is a
+helper somebody already wrote.** Now `JobIDSet` with `NewJobIDSet` /
+`NewJobIDSetOfStrings`, and the differential builds its set through the
+constructor so the whole table exercises it.
+
+**L7 — a sequence family that disagreed with itself.** `Str`, `TypeName`
+and the task store's subscript errors all knew `[]string`; `Truthy`,
+`Repr` and `seqList` did not. An EMPTY `[]string` was therefore TRUE
+where every other empty sequence is False — a wrong answer, not a
+missing one — and the same value was "not iterable" to `in` while
+`TypeName` called it a list. Arms added rather than pruned: round 8
+pruned `pyContains` because its one caller provably could not reach
+those shapes, and that argument does not hold for three general-purpose
+primitives.
+
+### What round 9 says about the reviews themselves
+
+Three of the seven (M2, M4, and the sibling half of H1) are the same
+shape: **a guard whose own comment asserted the property it had stopped
+checking.** "EXACT integer digits at any magnitude", "compared by
+BYTES", "the same rule already guards…". In each case the sentence was
+true when written and was falsified by something else changing, and
+nothing re-read it. That is a new lens, and the sharpest one yet:
+
+> **19. A comment that asserts coverage is a claim, and it decays.
+> Every round, verify the sentence, not just the code under it.**
+
+Lens 18 said a detector that cannot see the case you already have is
+agreeing rather than measuring. Lens 19 is its documentation twin: the
+line that TELLS you the detector can see it is not evidence that it
+can.

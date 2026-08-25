@@ -118,6 +118,11 @@ elif verb == "claim_arg":
     # pid pinned: the claimed row carries it, and two processes do not
     # share one.
     ans = _try(lambda: json.dumps(task_store.claim(sys.argv[2], pid=4242)))
+elif verb == "fail_arg":
+    # fail is the ONE verb whose first act on the row is an item
+    # ASSIGNMENT rather than a subscript read, so it needs its own arm:
+    # every other verb here would report the getter's TypeError.
+    ans = _try(lambda: json.dumps(task_store.fail(sys.argv[2], "boom")))
 else:
     raise SystemExit("unknown verb " + verb)
 
@@ -367,6 +372,45 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 			"recover", "", map[string]string{"t1": `"x"`}},
 		{"a bare number row is a TypeError to the stale sweep",
 			"recover", "", map[string]string{"t1": `5`}},
+
+		// ...and the FOURTH operation, which no fixture above reaches.
+		// fail's first act on the row is `task["status"] = "failed"` — an
+		// item ASSIGNMENT, whose TypeError is worded differently from the
+		// subscript READ every other verb here performs. Measured:
+		//
+		//	str    'str' object does not support item assignment
+		//	         vs  string indices must be integers, not 'str'
+		//	int    'int' object does not support item assignment
+		//	         vs  'int' object is not subscriptable
+		//	list   list indices must be integers or slices, not str  (BOTH)
+		//
+		// The list arm agrees because its complaint is about the index
+		// rather than the container, which is exactly why a table of list
+		// fixtures cannot tell the two operations apart. Four types, so
+		// the agreeing one is not carrying the case (adversarial r11
+		// round 9, MEDIUM).
+		{"a bare string row is an assignment TypeError to fail",
+			"fail_arg", "t1", map[string]string{"t1": `"x"`}},
+		{"a bare number row is an assignment TypeError to fail",
+			"fail_arg", "t1", map[string]string{"t1": `5`}},
+		{"a bare float row is an assignment TypeError to fail",
+			"fail_arg", "t1", map[string]string{"t1": `1.5`}},
+		{"a bare bool row is an assignment TypeError to fail",
+			"fail_arg", "t1", map[string]string{"t1": `true`}},
+		{"a bare list row is an INDEX TypeError to fail, same as a read",
+			"fail_arg", "t1", map[string]string{"t1": `[]`}},
+		// `null` decodes to None, which every verb treats as "no such
+		// task" before any subscript — so this one is a FileNotFoundError,
+		// not a TypeError at all.
+		{"a null row is not found by fail",
+			"fail_arg", "t1", map[string]string{"t1": `null`}},
+		// The healthy row through the same verb, so the arm above is not
+		// "fail always raises".
+		{"a well-formed row fails normally", "fail_arg", "t1",
+			map[string]string{
+				"t1": `{"job_id":"t1","status":"claimed","lane":"agenda",
+					"attempt":1,"timestamps":{},"blocked_by":[]}`,
+			}},
 		// A FALSY junk row is stepped over by the cycle walk's
 		// `if dep and dep.get(...)` without the .get ever running.
 		{"a falsy junk row is skipped by the completion walk",
@@ -576,6 +620,41 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"lane":"agenda","attempt":0,"timestamps":{},
 					"blocked_by":[]}`,
 			}},
+		// Past 2^53, where a float's SHORTEST round-trip spelling stops
+		// being its value. Every fold fixture above sits below that, so
+		// each one is satisfied by either implementation — the fold was
+		// pinned at three magnitudes and none of them could tell an exact
+		// key from a rendered one (adversarial r11 round 9, MEDIUM).
+		//
+		// This pair MERGES: 2**64 is exactly representable, so the int and
+		// the float are equal and CPython files them together. The
+		// shortest-round-trip spelling of that float is
+		// "18446744073709552000", a different number, which split them.
+		{"an exactly representable float past 2^53 folds onto its integer",
+			"summary", "", map[string]string{
+				"t1": `{"job_id":"t1","status":1.8446744073709552e19,
+					"lane":"agenda","attempt":0,"timestamps":{},
+					"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":18446744073709551616,
+					"lane":"agenda","attempt":0,"timestamps":{},
+					"blocked_by":[]}`,
+			}},
+		// ...and this pair SPLITS, which is the same defect from the other
+		// side. 1e23 is NOT 10**23 — the nearest double is
+		// 99999999999999991611392 — but both render as "1" followed by
+		// twenty-three zeros, so a rendered key merged two buckets CPython
+		// keeps apart. A test with only the merging case above would have
+		// accepted a fix that rendered more digits rather than the right
+		// ones.
+		{"a float that is not the integer it looks like stays separate",
+			"summary", "", map[string]string{
+				"t1": `{"job_id":"t1","status":1e23,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":100000000000000000000000,
+					"lane":"agenda","attempt":0,"timestamps":{},
+					"blocked_by":[]}`,
+			}},
+
 		// A negative zero and a zero are one key, and "-0" would split
 		// them — the fold's own lower edge.
 		{"negative zero and zero are one bucket", "summary", "",
@@ -845,6 +924,14 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					dumped, gotErr = pyval.DumpsCompactPy(tk)
 					got = dumped
 				}
+			case "fail_arg":
+				var tk Task
+				tk, gotErr = Fail(goWS, sub(goWS, c.arg), "boom")
+				if gotErr == nil {
+					var dumped string
+					dumped, gotErr = pyval.DumpsCompactPy(tk)
+					got = dumped
+				}
 			case "claim_arg":
 				var tk Task
 				tk, gotErr = Claim(goWS, sub(goWS, c.arg), 4242)
@@ -1018,8 +1105,12 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 // that is the claim here. The malformed-row differential compares bytes.
 func normSweep(t *testing.T, raw string) string {
 	t.Helper()
-	var v any
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+	// pyval, not encoding/json, for the reason spelled out on normTask: a
+	// map round-trip sorts the keys and collapses every number to float64,
+	// so it hides both a reordered rewrite and an int written where Python
+	// keeps a float.
+	v, err := pyval.LoadsOrdered(raw)
+	if err != nil {
 		return raw // `null` and any torn row compare as themselves
 	}
 	// Every timestamp blanked. A verb that WRITES one (complete) reads two
@@ -1027,24 +1118,40 @@ func normSweep(t *testing.T, raw string) string {
 	// that fails on that is measuring the clock, not the queue. The
 	// PRESENCE of each key still compares, which is the part that says
 	// whether the row was rewritten at all.
-	if m, ok := v.(map[string]any); ok {
-		if ts, ok := m["timestamps"].(map[string]any); ok {
-			for k := range ts {
-				ts[k] = "<ts>"
+	if o, ok := v.(pyval.Obj); ok {
+		out := pyval.Obj{}
+		for _, f := range o {
+			switch f.Key {
+			case "timestamps":
+				if ts, isObj := f.Val.(pyval.Obj); isObj {
+					masked := pyval.Obj{}
+					for _, kv := range ts {
+						masked = append(masked, pyval.Field{Key: kv.Key, Val: "<ts>"})
+					}
+					out = append(out, pyval.Field{Key: f.Key, Val: masked})
+					continue
+				}
+				out = append(out, f)
+			case "run_id":
+				// A freshly minted run_id is a uuid4 and cannot match across
+				// two processes. Masked by SHAPE, not blanked: a row that
+				// lost the field, or gained a non-uuid there, still diverges.
+				if rid, isStr := f.Val.(string); isStr && uuidRe.MatchString(rid) {
+					out = append(out, pyval.Field{Key: f.Key, Val: "<uuid>"})
+					continue
+				}
+				out = append(out, f)
+			default:
+				out = append(out, f)
 			}
 		}
-		// A freshly minted run_id is a uuid4 and cannot match across two
-		// processes. Masked by SHAPE, not blanked: a row that lost the
-		// field, or gained a non-uuid there, still diverges.
-		if rid, ok := m["run_id"].(string); ok && uuidRe.MatchString(rid) {
-			m["run_id"] = "<uuid>"
-		}
+		v = out
 	}
-	b, err := json.Marshal(v)
+	s, err := pyval.DumpsCompactPy(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return s
 }
 
 var uuidRe = regexp.MustCompile(

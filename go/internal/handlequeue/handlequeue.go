@@ -286,14 +286,62 @@ type DrainOptions struct {
 	Sources []string
 
 	// JobIDs is Python's `job_ids: Optional[set]`. nil is None — "drain
-	// anything matching sources". A non-nil EMPTY map is an empty SET and
+	// anything matching sources". A non-nil EMPTY set is an empty SET and
 	// drains nothing, which is a different thing, and the substrate
 	// dispatch contract depends on the difference: a dispatch must run
 	// exactly what it enqueued, never an older queued task whose notify
 	// event the substrate would misattribute. Go distinguishes the two
 	// natively, so there is no companion flag here — one would be a choice
 	// with no observable answer.
-	JobIDs map[string]bool
+	//
+	// BUILD IT WITH NewJobIDSet. Its keys are pyval.HashKey outputs, not
+	// raw ids: a Python set holds 4242 and "4242" as different elements,
+	// and the drain's membership test has to as well, so the id "job-1" is
+	// stored under "s:job-1". A map literal of raw ids compiles, type-checks
+	// and matches NOTHING — the drain would report zero queued tasks and
+	// look like an empty queue rather than a lookup miss. There is no caller
+	// yet, which is why the trap was still latent (adversarial r11 round 9,
+	// LOW); the named type and constructor are here so the first one cannot
+	// spell it wrong.
+	JobIDs JobIDSet
+}
+
+// JobIDSet is the drain's `job_ids` set, keyed by pyval.HashKey rather than
+// by the raw id. Named so it cannot be confused with an ordinary
+// map[string]bool of ids at a call site.
+type JobIDSet map[string]bool
+
+// NewJobIDSet builds the set from raw job-id values — the ids as they
+// appear in a task row, of whatever type they arrived as.
+//
+// An UNHASHABLE id (a list, a dict) is refused here rather than silently
+// dropped, because Python refuses it too: `{[]}` is a TypeError at
+// construction, and a set that quietly lost an element would make the drain
+// skip exactly the task the caller asked for.
+//
+// The empty call is meaningful: NewJobIDSet() is a non-nil empty set, which
+// drains nothing. Leave DrainOptions.JobIDs nil for "no filter".
+func NewJobIDSet(ids ...any) (JobIDSet, error) {
+	out := JobIDSet{}
+	for _, id := range ids {
+		key, hashable := pyval.HashKey(id)
+		if !hashable {
+			return nil, &ErrUnhashableJobID{TypeName: pyval.TypeName(id)}
+		}
+		out[key] = true
+	}
+	return out, nil
+}
+
+// NewJobIDSetOfStrings is NewJobIDSet for the ordinary case, where every id
+// is a string and no error is possible.
+func NewJobIDSetOfStrings(ids ...string) JobIDSet {
+	out := JobIDSet{}
+	for _, id := range ids {
+		key, _ := pyval.HashKey(id) // a string is always hashable
+		out[key] = true
+	}
+	return out
 }
 
 func (d DrainOptions) maxTasks() int {

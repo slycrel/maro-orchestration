@@ -234,7 +234,21 @@ func EmitOrdered(ctx context.Context, ws, eventType string, payload pyval.Obj,
 		// error, but the CONTRACT is "never takes the run down", and that
 		// contract is the reason this function is called from finalizers.
 		if r := recover(); r != nil {
-			opts.Log("emit(%s) panicked: %v", eventType, r)
+			// Python's message is `log.debug("notify.emit(%s) failed",
+			// event_type, exc_info=True)`: the exception rides exc_info and
+			// never enters the message. Round 6's H6 set the rule for that
+			// shape and fixed two sites in the recursion check-in; these
+			// were its unswept siblings, and this one also spelled the
+			// message differently from Python's ("panicked", no prefix).
+			//
+			// The detail is dropped rather than moved, following round 6 —
+			// and it is a real loss, because CPython's exc_info writes a
+			// traceback the operator does see. Named here rather than
+			// quietly resolved a second way: the log surface is not
+			// asserted by any differential, so this is a convention
+			// question, not a correctness one, and one convention applied
+			// twice beats two applied once.
+			opts.Log("notify.emit(%s) failed", eventType)
 			ran = false
 		}
 	}()
@@ -259,7 +273,11 @@ func EmitOrdered(ctx context.Context, ws, eventType string, payload pyval.Obj,
 			// this file is specifically pitched as "the thing you check
 			// when nothing else is configured" (adversarial review
 			// 2026-07-12).
-			opts.Log("escalation file write failed for %s: %v", eventType, err)
+			// `log.warning("escalation file write failed for %s",
+			// event_type, exc_info=True)` — the error rides exc_info, so
+			// the message ends at the event type. See the recover() arm
+			// above for why the detail is dropped rather than relocated.
+			opts.Log("escalation file write failed for %s", eventType)
 		}
 	}
 

@@ -99,6 +99,15 @@ func Repr(v any) string {
 		return "<unordered map: decode with LoadsOrdered>"
 	case []any:
 		return reprList(List(t))
+	case []string:
+		// Same missing arm as Truthy's: a Go-native string slice reprs as
+		// the Python list it stands for rather than as
+		// "<unrepresentable>".
+		out := make(List, len(t))
+		for i, x := range t {
+			out[i] = x
+		}
+		return reprList(out)
 	}
 	return "<unrepresentable>"
 }
@@ -270,6 +279,13 @@ func Truthy(v any) bool {
 	case map[string]any:
 		return len(t) > 0
 	case []any:
+		return len(t) > 0
+	case []string:
+		// The sibling arm the sequence family was missing. Str, TypeName
+		// and the task store's subscript errors all know this shape; here
+		// it fell through to "unknown object", so an EMPTY []string
+		// answered TRUE where every other empty sequence answers False —
+		// a wrong answer, not a missing one (adversarial r11 round 9, LOW).
 		return len(t) > 0
 	}
 	return true // an unknown object is truthy in Python
