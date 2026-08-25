@@ -3,6 +3,7 @@ package record
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
@@ -15,23 +16,37 @@ import (
 // — a corpus whose entries are unlabelled decays into a list nobody dares
 // to change.
 var readerCorpus = []string{
-	`{"a":1,"b":2}`,                     // ordinary
-	`{"b":2,"a":1}`,                     // same keys, other order
-	``,                                  // blank frame: not a record, not a loss
-	`   `,                               // whitespace-only: NOT a blank frame
-	`[1,2,3]`,                           // clean JSON, wrong shape → non_dict
-	`"just a string"`,                   // ditto
-	`null`,                              // ditto
-	`{"a":1}x`,                          // trailing content → malformed
-	`{"a":1,"a":2}`,                     // duplicate name → malformed
-	`{"a": Infinity}`,                   // bare non-finite → malformed
-	`{"a": NaN}`,                        // ditto
-	`{"a":1e400}`,                       // out-of-range float, CLEAN
-	`{"a":` + hugeInt() + `}`,           // >4300-digit int → malformed
+	`{"a":1,"b":2}`,           // ordinary
+	`{"b":2,"a":1}`,           // same keys, other order
+	``,                        // blank frame: not a record, not a loss
+	`   `,                     // whitespace-only: NOT a blank frame
+	`[1,2,3]`,                 // clean JSON, wrong shape → non_dict
+	`"just a string"`,         // ditto
+	`null`,                    // ditto
+	`{"a":1}x`,                // trailing content → malformed
+	`{"a":1,"a":2}`,           // duplicate name → malformed
+	`{"a": Infinity}`,         // bare non-finite → malformed
+	`{"a": NaN}`,              // ditto
+	`{"a":1e400}`,             // out-of-range float, CLEAN
+	`{"a":` + hugeInt() + `}`, // >4300-digit int → malformed
+	// NESTING DEPTH, both sides of encoding/json's 10000 limit. These are
+	// the two lines the corpus was missing when it first claimed the two
+	// readers agree: `Decode` enforces the limit in the scanner and
+	// `Token()` does not, so the ordered reader admitted 10001 — and kept
+	// recursing, into a `fatal error: stack overflow` past ~2M. A
+	// detector that cannot see the case you already have is agreeing, not
+	// measuring.
+	nest(9999),                          // deep but legal on both
+	nest(10001),                         // refused by both → malformed
 	"{\"a\":\"\xff\xfe\"}",              // byte-tainted → undecodable
 	`{"a":"\ud800"}`,                    // lone surrogate → malformed
 	`{"nested":{"z":1,"a":2},"t":true}`, // nesting, for the order check
 	`{"n":3.0,"i":7,"big":12345678901234567890}`, // number shapes
+}
+
+// nest builds `{"a":[[[…]]]}` with n levels of array under the object.
+func nest(n int) string {
+	return `{"a":` + strings.Repeat("[", n) + strings.Repeat("]", n) + `}`
 }
 
 func hugeInt() string {

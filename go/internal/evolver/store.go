@@ -46,6 +46,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -362,11 +363,37 @@ func pyStrValue(v any) string {
 		}
 		return "False"
 	case json.Number:
-		return t.String()
+		return pyNumStr(t)
 	case float64:
 		return pyjson.FloatRepr(t)
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// pyNumStr is `str()` on a number CPython has already DECODED, which is
+// not the same as the literal the file carried.
+//
+// json.Number.String() hands back the source text, so `1.50` stayed
+// "1.50" where Python says "1.5", `1e5` stayed "1e5" where Python says
+// "100000.0", and `1e400` stayed "1e400" where Python says "inf". Every
+// one of those is a content-key mismatch, and a content-key mismatch is a
+// MISSED dedup — the direction that resurrects a suggestion someone
+// already reviewed.
+//
+// An INTEGER literal keeps its text: Python's str(int) is exact at any
+// width, and routing a 22-digit integer through float64 would round it.
+// Only a literal carrying '.', 'e' or 'E' decoded to a float in the first
+// place, so only those go back through FloatRepr.
+func pyNumStr(t json.Number) string {
+	s := t.String()
+	if !strings.ContainsAny(s, ".eE") {
+		return s // an int literal: str(int) is the literal, at any width
+	}
+	f, err := t.Float64()
+	if err != nil && !math.IsInf(f, 0) {
+		return s // unparseable as a float; the literal is the best answer
+	}
+	return pyjson.FloatRepr(f)
 }
 
 // SaveSuggestions appends rows whose finding is not already on disk.
@@ -390,6 +417,7 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	var marshalErr error
 	err := record.LockedRMW(p, func(old string) string {
 		seen := map[string]bool{}
+		dedupReport := record.SkipReport{}
 		for _, line := range rmwLines(old) {
 			s := pytext.Strip(line)
 			if s == "" {
@@ -404,9 +432,25 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 			// operator the corpus went short.
 			m, lerr := record.LoadsClean(s)
 			if lerr != nil {
+				// ...and the warning is the half that was missing. The
+				// comment above says the announced warning "is what tells
+				// an operator the corpus went short", and then this loop
+				// did not emit one — a comment asserting a coverage the
+				// code below it does not have.
+				//
+				// The read cannot just call readRowsAnnounced: it happens
+				// INSIDE LockedRMW on purpose (the r1 lock fix — a `seen`
+				// built outside the lock reopens the 81-duplicate bug), so
+				// the reader helper is not reachable here. Counting into
+				// the same SkipReport and borrowing its sentence keeps one
+				// spelling of the operator-facing line.
+				dedupReport.Malformed++
 				continue
 			}
 			seen[contentKeyOf(m)] = true
+		}
+		if warn := dedupReport.Announce("_save_suggestions", p); warn != "" {
+			fmt.Fprintln(os.Stderr, "[evolver] "+warn)
 		}
 		out := old
 		if out != "" && !strings.HasSuffix(out, "\n") {
@@ -644,10 +688,21 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 					out = append(out, s) // already terminal
 					continue
 				}
-				// int(row.get("verify_extensions", 0) or 0) in Python:
 				// pyval.IntOf covers the json.Number the ordered reader
 				// hands back AND the float64 the old map read produced,
 				// so a store written by either runtime counts the same.
+				//
+				// NOT a quotation of a Python line, and the comment here
+				// used to claim one that does not exist
+				// (`int(row.get("verify_extensions", 0) or 0)`). The real
+				// Python read is evolver_scans.py:1478,
+				// `int(getattr(s, "verify_extensions", 0)) + 1` — off a
+				// DATACLASS attribute, from a pre-lock snapshot. This
+				// whole in-lock bump is the r1 QA hardening and has no
+				// Python counterpart. In a file whose discipline is
+				// quoting the line being ported, an invented citation is
+				// worse than none: it is the thing the next reader
+				// trusts instead of checking.
 				ext = pyval.IntOf(val(row, "verify_extensions")) + 1
 				row.Set("verify_extensions", ext)
 				if ext >= max {
@@ -816,7 +871,20 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 		// do for a matched one. This code used to return early — which
 		// suppressed BOTH, and on a shared store that is a row Python
 		// writes and this runtime does not.
-		pattern := strings.TrimSpace(stringOr(d["pattern"]))
+		// `str(d.get("pattern", "") or "").strip()` — evolver_store.py:594.
+		// That is pyStrKey (the `or ""` collapses every falsey value first)
+		// and pytext.Strip (which knows U+001C-U+001F where TrimSpace does
+		// not), and the port had BOTH halves wrong at once.
+		//
+		// stringOr is a bare type assertion, so a numeric or boolean pattern
+		// became "" and the whole branch fell through to guidance-only —
+		// while still stamping the row applied. Measured: `"pattern": 5`
+		// makes CPython write a constraint row with "5" and this runtime
+		// write none, both with `"applied": true`. And a pattern wrapped in
+		// unit separators kept them here and lost them there, which is the
+		// 2026-08-04 "guardrails that could never fire" failure re-created
+		// in a file constraint.py reads.
+		pattern := pytext.Strip(pyStrKey(d["pattern"]))
 		if pattern == "" {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail %s has no matchable pattern — "+
 				"guidance only, no constraint row\n", suggestionID)
@@ -953,13 +1021,16 @@ var playbookSection = map[string]string{
 // turns an alarm into a permanent insight. Python's `or ""` collapses
 // every falsey value first, then `str()` renders whatever survives.
 //
-// NAMED DIVERGENCE on a value that is out of contract anyway: Go's JSON
-// decoder folds integers and floats into one float64, so a stored `5`
-// and a stored `5.0` are indistinguishable here and both render the way
-// Python renders the float. Every writer in either runtime puts a STRING
-// in this field (scans.go's "drift:<metric>" and friends); a number here
-// is malformed data, and rendering it as a float is the conservative
-// reading of malformed data.
+// Numbers arrive as json.Number, because every reader that feeds this
+// decodes with UseNumber. That arm was MISSING and the value fell to the
+// default "" — the same class as the verify_extensions bug, one file over
+// and found by the same review: swapping the decoder changed the type at
+// every site that reads a number, and two of them read one.
+//
+// The float64 arm is kept for a caller holding a value from a plain
+// json.Unmarshal; both are live, and they must agree, because a store
+// read through one path and rewritten through the other is the whole
+// problem this chunk exists about.
 func pyStrKey(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -971,6 +1042,12 @@ func pyStrKey(v any) string {
 			return "True"
 		}
 		return "" // falsey: the `or ""` collapses it before str()
+	case json.Number:
+		f, err := t.Float64()
+		if err == nil && f == 0 {
+			return "" // falsey — 0, 0.0 and -0.0 alike
+		}
+		return pyNumStr(t)
 	case float64:
 		if t == 0 {
 			return "" // falsey
@@ -1216,8 +1293,15 @@ func stampAction(workspaceDir string, rec *record.Recorder, d *pyval.Obj) {
 	switch applyAction(workspaceDir, rec, objMap(*d)) {
 	case actionApplied:
 		d.Set("applied", true)
+		// `d.pop("status", None)` and NOTHING ELSE — all five of Python's
+		// success arms (evolver_store.py:767/796/817/837/874) pop exactly
+		// this one key. The port also popped block_reason, which is a
+		// tidier row and a byte divergence: a suggestion held once and
+		// applied later keeps its stale block_reason in CPython's copy
+		// and lost it in this one. Reached by an entirely ordinary row —
+		// no exotic character, no concurrency — and unnamed, which is the
+		// half that makes it a bug rather than a decision.
 		d.Pop("status")
-		d.Pop("block_reason")
 	case actionGuidanceOnly:
 		d.Set("applied", false)
 		d.Set("status", "held_for_review")
@@ -1381,42 +1465,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 	p := suggestionsPath(workspaceDir)
 	if _, err := os.Stat(p); err == nil {
 		merr := record.LockedRMW(p, func(old string) string {
-			var out []string
-			// _mark_reverted is the other odd merge, and it differs from
-			// its four siblings in three ways at once:
-			//
-			//   - it does not skip blanks. A blank line reaches
-			//     loads_clean(""), raises, and lands in the PRESERVE
-			//     branch, which appends the RAW line — so the blank
-			//     survives the rewrite.
-			//   - the strip is for the PARSE only; what gets preserved is
-			//     the untouched line.
-			//   - it returns "\n".join(...) + "\n" UNCONDITIONALLY. On an
-			//     empty store CPython writes "\n" where the four siblings
-			//     write "". One byte, in a file the other runtime reads.
-			//
-			// This branch re-dumps EVERY parseable row, so a byte-tainted
-			// line must be refused INTO the preserve branch or it would be
-			// laundered into clean escapes — which is exactly why Python
-			// spells the parse as loads_clean and not json.loads.
-			for _, line := range rmwLines(old) {
-				row, lerr := record.LoadsCleanOrdered(pytext.Strip(line))
-				if lerr != nil {
-					out = append(out, line)
-					continue
-				}
-				if val(row, "suggestion_id") == suggestionID {
-					row.Set("applied", false)
-					row.Set("status", "reverted")
-				}
-				enc, eerr := pyval.DumpsCompactPy(row)
-				if eerr != nil {
-					out = append(out, line)
-					continue
-				}
-				out = append(out, enc)
-			}
-			return pyJoinAlways(out)
+			return markRevertedMerge(old, suggestionID)
 		})
 		if merr != nil {
 			detail += "; suggestion store NOT updated — still marked applied"
@@ -1580,4 +1629,54 @@ func readRowsOrdered(path, what string) []pyval.Obj {
 		fmt.Fprintln(os.Stderr, "[evolver] "+warn)
 	}
 	return rows
+}
+
+// markRevertedMerge is _mark_reverted's merge, named so a test can
+// drive it without a store, a lock and an IsApplied check in the way.
+//
+// It was inline, and that made the SITE untestable even though both
+// join helpers had tests: swapping pyJoinAlways for pyJoinOrEmpty here
+// survived the whole suite, because Revert only reaches this merge past
+// an IsApplied check that reads the same file — so an empty store exits
+// early and the one case the asymmetry exists for was unreachable from
+// outside. A helper that fixes a class does not fix the class; it fixes
+// the callers that reach it, and a test of the helper is not a test of
+// the call.
+func markRevertedMerge(old, suggestionID string) string {
+	var out []string
+	// _mark_reverted is the other odd merge, and it differs from
+	// its four siblings in three ways at once:
+	//
+	//   - it does not skip blanks. A blank line reaches
+	//     loads_clean(""), raises, and lands in the PRESERVE
+	//     branch, which appends the RAW line — so the blank
+	//     survives the rewrite.
+	//   - the strip is for the PARSE only; what gets preserved is
+	//     the untouched line.
+	//   - it returns "\n".join(...) + "\n" UNCONDITIONALLY. On an
+	//     empty store CPython writes "\n" where the four siblings
+	//     write "". One byte, in a file the other runtime reads.
+	//
+	// This branch re-dumps EVERY parseable row, so a byte-tainted
+	// line must be refused INTO the preserve branch or it would be
+	// laundered into clean escapes — which is exactly why Python
+	// spells the parse as loads_clean and not json.loads.
+	for _, line := range rmwLines(old) {
+		row, lerr := record.LoadsCleanOrdered(pytext.Strip(line))
+		if lerr != nil {
+			out = append(out, line)
+			continue
+		}
+		if val(row, "suggestion_id") == suggestionID {
+			row.Set("applied", false)
+			row.Set("status", "reverted")
+		}
+		enc, eerr := pyval.DumpsCompactPy(row)
+		if eerr != nil {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, enc)
+	}
+	return pyJoinAlways(out)
 }

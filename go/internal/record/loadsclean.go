@@ -127,7 +127,19 @@ func LoadsCleanValue(line string) (any, error) {
 // Same admission predicate, same four refusals — the guards are literally
 // the same calls, not a second copy, because a rewriting reader that
 // admitted a line the removing reader refuses is how the two disagree
-// about which rows exist. What differs is only the shape handed back:
+// about which rows exist.
+//
+// The guards being shared is NOT the same as the decoders agreeing, and
+// that gap was real: the four refusals above are shared calls, but the
+// parse underneath is pyval.LoadsOrdered where LoadsClean uses a bare
+// json.Decoder, and only one of them enforced encoding/json's nesting
+// limit. `Decode` checks depth in the scanner; a `Token()` walk does not.
+// So this reader admitted a document LoadsClean refuses and recursed on
+// it — to a `fatal error: stack overflow` at the tail. pyval now bounds
+// the ordered walk at the same 10000, and
+// TestOrderedReaderClassifiesLikeThePlainOne carries both sides of that
+// boundary as fixtures. A shared guard list is evidence about the guards,
+// not about everything downstream of them. What differs is only the shape handed back:
 // a pyval.Obj that remembers key order, so a stamper can set one field
 // and re-emit the row with every other key still where its original
 // writer put it.

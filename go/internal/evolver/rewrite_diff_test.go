@@ -1,14 +1,17 @@
 package evolver
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -110,7 +113,27 @@ func seedRewriteStore(t *testing.T, ws string) {
 			// one that makes the dynamic-constraints append happen.
 			`{"suggestion_id":"s5","category":"new_guardrail","target":"all",`+
 			`"suggestion":"never rm -rf a workspace","confidence":0.9,`+
-			`"pattern":"rm -rf","applied":false}`+"\n")
+			`"pattern":"rm -rf","applied":false}`+"\n"+
+			// A row HELD earlier and applied later: it carries a
+			// block_reason CPython's apply leaves in place. The plainest
+			// possible row, and the one that caught an unnamed divergence.
+			`{"suggestion_id":"s6","category":"observation","target":"all",`+
+			`"suggestion":"just an observation","confidence":0.9,`+
+			`"status":"held_for_review","block_reason":"was held earlier",`+
+			`"applied":false}`+"\n"+
+			// A NUMERIC pattern. CPython's str() renders it "5"; a bare
+			// Go type assertion renders "" and the guardrail branch falls
+			// through to guidance-only while still stamping applied.
+			`{"suggestion_id":"s7","category":"new_guardrail","target":"all",`+
+			`"suggestion":"numeric pattern","confidence":0.9,`+
+			`"pattern":5,"applied":false}`+"\n"+
+			// A pattern wrapped in UNIT SEPARATORS: str.strip() removes
+			// them, strings.TrimSpace does not, so one runtime writes a
+			// regex that can match step text and the other writes one
+			// that never can.
+			`{"suggestion_id":"s8","category":"new_guardrail","target":"all",`+
+			`"suggestion":"separator pattern","confidence":0.9,`+
+			`"pattern":"\u001frm -rf\u001f","applied":false}`+"\n")
 	w("memory/dynamic-constraints.jsonl",
 		`{"source":"evolver:s1","pattern":"the target row","risk":"MEDIUM"}`+"\n"+
 			"\n"+
@@ -167,6 +190,7 @@ func runRewriteBoth(t *testing.T, arg map[string]any, act func(ws string)) {
 		for _, r := range *wantBody {
 			wb = append(wb, byte(r))
 		}
+		assertEpochsAgree(t, rel, string(got), string(wb))
 		if maskStamps(string(got)) != maskStamps(string(wb)) {
 			t.Errorf("%s: rewritten store differs.\n  go: %q\n  py: %q",
 				rel, maskStamps(string(got)), maskStamps(string(wb)))
@@ -195,6 +219,46 @@ var stampRe = regexp.MustCompile(
 // obligation: the PRECISION it hides is pinned by the assertion at the end
 // of TestApplyRewritesTheStoreLikeCPython.
 var epochRe = regexp.MustCompile(`"added_at": \d+(\.\d+)?`)
+
+// assertEpochsAgree checks the magnitude the <EPOCH> mask is about to
+// hide.
+//
+// Masking a wall clock hides the INSTANT, which is unavoidable — the two
+// runs are microseconds apart. It was also hiding the UNIT: changing
+// `UnixNano()/1e9` to `/1e6` (seconds to milliseconds, in the field
+// constraint.py's TTL check compares against time.time()) survived the
+// whole suite, because "has a fractional part" is true of a millisecond
+// count too.
+//
+// Two runs microseconds apart cannot differ by a second, so an absolute
+// tolerance restores the magnitude without restoring the instant. A
+// thousandfold unit error is 1.7e12 out.
+func assertEpochsAgree(t *testing.T, rel, goBody, pyBody string) {
+	t.Helper()
+	num := func(body string) (float64, bool) {
+		m := epochRe.FindString(body)
+		if m == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(strings.TrimPrefix(m, `"added_at": `), 64)
+		return f, err == nil
+	}
+	g, gok := num(goBody)
+	p, pok := num(pyBody)
+	if gok != pok {
+		t.Errorf("%s: one runtime wrote added_at and the other did not "+
+			"(go=%v py=%v)", rel, gok, pok)
+		return
+	}
+	if !gok {
+		return // neither store carries one; nothing to compare
+	}
+	if diff := g - p; diff > 5 || diff < -5 {
+		t.Errorf("%s: added_at %v vs %v — %.0f apart. Two runs microseconds "+
+			"apart cannot differ by that; this is a UNIT error, not a clock "+
+			"difference", rel, g, p, diff)
+	}
+}
 
 func maskStamps(s string) string {
 	return epochRe.ReplaceAllString(stampRe.ReplaceAllString(s, "<TS>"),
@@ -231,8 +295,15 @@ print(json.dumps(out))
 	// And the store's own stamp must BE that helper, not a second
 	// spelling of it: the whole finding was a local nowISO in this file
 	// rendering RFC3339Nano into a store CPython reads.
-	if s := nowISO(); !stampRe.MatchString(s) || strings.HasSuffix(s, "Z") {
-		t.Errorf("nowISO() = %q — a \"Z\" suffix is RFC3339Nano, not isoformat", s)
+	//
+	// "+00:00", not merely "not Z": the earlier spelling of this check
+	// passed for a stamp rendered in LOCAL time, because `-06:00` is
+	// neither Z nor a match failure. Dropping the .UTC() on this box
+	// survived the whole suite. isoformat on a UTC-aware datetime is
+	// always "+00:00", so that is what to demand.
+	if s := nowISO(); !stampRe.MatchString(s) || !strings.HasSuffix(s, "+00:00") {
+		t.Errorf("nowISO() = %q — Python writes isoformat on a UTC datetime, "+
+			"which always ends +00:00", s)
 	}
 }
 
@@ -298,6 +369,43 @@ func TestMarkRevertedWritesANewlineOnAnEmptyStore(t *testing.T) {
 	if pyJoinAlways([]string{"a"}) != pyJoinOrEmpty([]string{"a"}) {
 		t.Error("the two joins disagree on a non-empty list; only the empty " +
 			"case is supposed to differ")
+	}
+
+	// The helpers being right is not the same as the SITE calling the
+	// right one. Swapping pyJoinAlways for pyJoinOrEmpty at the single
+	// line that needs the asymmetry survived the whole suite, because
+	// nothing drove _mark_reverted over an empty store: Revert reaches it
+	// only past an IsApplied check that reads the same file, so an empty
+	// store exits early as NothingToRevert. Only a truncation racing
+	// between that unlocked read and the lock gets there — which is
+	// exactly the kind of case a rewrite callback is only ever wrong in.
+	if got := markRevertedMerge("", "nobody"); got != "\n" {
+		t.Errorf("_mark_reverted over an empty store wrote %q; CPython's "+
+			"unconditional join writes a lone newline", got)
+	}
+	// And the blank-line preservation the same merge is odd about, driven
+	// at the site rather than inferred from the helper — and MEASURED,
+	// not hand-computed. The first version of this assertion expected
+	// "\n\n\n" by reasoning about it, and was wrong: "\n\n".splitlines()
+	// is two empty strings, both preserved, joined by "\n" and given a
+	// trailing one. Two lines of Python beat one line of arithmetic.
+	const blanksSrc = `
+import json, sys
+old = json.loads(sys.argv[1])["old"]
+out = []
+for line in old.splitlines():
+    out.append(line)
+print(json.dumps({"merged": "\n".join(out) + "\n"}))
+`
+	for _, old := range []string{"", "\n", "\n\n", "\n\n\n"} {
+		var want struct {
+			Merged string `json:"merged"`
+		}
+		pyprobe.Probe{Stdlib: true}.RunJSON(t, blanksSrc, &want,
+			pyprobe.Arg(t, map[string]any{"old": old}))
+		if got := markRevertedMerge(old, "nobody"); got != want.Merged {
+			t.Errorf("_mark_reverted(%q) = %q, CPython %q", old, got, want.Merged)
+		}
 	}
 }
 
@@ -425,4 +533,227 @@ func TestApplyRewritesTheStoreLikeCPython(t *testing.T) {
 			t.Errorf("added_at = %q — Python's time.time() is not whole seconds", m)
 		}
 	})
+}
+
+// TestGuardrailPatternCoercesLikePython pins the two-halves-wrong site the
+// r1 review found: `str(d.get("pattern","") or "").strip()`.
+//
+// The port spelled it `strings.TrimSpace(stringOr(...))`, which is a bare
+// type assertion (so a numeric or boolean pattern became "") and a strip
+// that does not know U+001C-U+001F. Both failures land in the same place:
+// a suggestion stamped `"applied": true` with either NO constraint row at
+// all or a regex carrying control characters that can never match step
+// text — the 2026-08-04 "guardrails that could never fire" failure, in a
+// file constraint.py reads.
+//
+// The rows are JSON LINES decoded by record.LoadsClean, not Go map
+// literals. The first draft of this test used literals and failed on
+// `{"pattern": 5}` — because a Go `int` is not what production sees;
+// production sees the json.Number the shared decoder produces. The test
+// was measuring a type no store can contain. Same lens as the sibling
+// below, hit while writing the test that names it.
+func TestGuardrailPatternCoercesLikePython(t *testing.T) {
+	const src = `
+import json, sys
+d = json.loads(json.loads(sys.argv[1])["line"])
+print(json.dumps({"pattern": str(d.get("pattern", "") or "").strip()}))
+`
+	for _, line := range []string{
+		`{"pattern":"rm -rf"}`,
+		`{"pattern":5}`,
+		`{"pattern":5.5}`,
+		`{"pattern":true}`,
+		`{"pattern":false}`,
+		`{"pattern":0}`,
+		`{"pattern":null}`,
+		`{}`,
+		// A unit separator on each side: str.strip() removes it,
+		// strings.TrimSpace does not. Spelled \u001f, never typed — a raw
+		// control byte is invisible in a diff and an editor may eat it.
+		`{"pattern":"\u001frm -rf\u001f"}`,
+		`{"pattern":"  spaced  "}`,
+	} {
+		var want struct {
+			Pattern string `json:"pattern"`
+		}
+		pyprobe.Probe{Stdlib: true}.RunJSON(t, src, &want,
+			pyprobe.Arg(t, map[string]any{"line": line}))
+		row, err := record.LoadsClean(line)
+		if err != nil {
+			t.Fatalf("%s: the fixture line must decode: %v", line, err)
+		}
+		if got := pytext.Strip(pyStrKey(row["pattern"])); got != want.Pattern {
+			t.Errorf("%s: port %q, CPython %q", line, got, want.Pattern)
+		}
+	}
+}
+
+// TestApplyKeepsBlockReasonLikeCPython pins the pop arm.
+//
+// Python's five success arms are `d.pop("status", None)` and nothing else.
+// The port also popped block_reason — a tidier row, and a byte divergence
+// on the most ordinary path there is: a suggestion held once and applied
+// later. No exotic character, no concurrency, and nothing named it.
+func TestApplyKeepsBlockReasonLikeCPython(t *testing.T) {
+	runRewriteBoth(t, map[string]any{
+		"verb": "apply", "id": "s6",
+	}, func(ws string) {
+		if _, err := Apply(ws, record.New(ws), nil, "s6", true); err != nil {
+			t.Fatal(err)
+		}
+		raw, rerr := os.ReadFile(filepath.Join(ws, "memory", "suggestions.jsonl"))
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if !strings.Contains(string(raw), `"block_reason": "was held earlier"`) {
+			t.Error("the apply dropped block_reason; CPython's pop takes only status")
+		}
+	})
+}
+
+// TestStrHelpersMatchPythonOnDecodedNumbers is the sibling sweep the
+// verify_extensions bug demanded and did not get.
+//
+// Swapping json.Unmarshal for record.LoadsClean changed every decoded
+// number from float64 to json.Number, and two more helpers read one. One
+// site was caught by an existing test; these two were found by review.
+// pyStrKey lost its number arm entirely (falling to ""), and pyStrValue
+// returned json.Number.String() — the SOURCE LITERAL, where Python's
+// str() runs on the decoded float, so "1.50" stayed "1.50" against
+// CPython's "1.5" and "1e400" stayed "1e400" against "inf".
+//
+// The values go through record.LoadsClean rather than being written as Go
+// literals, because a Go literal arrives typed the way the test author
+// imagined and not the way production types it. That was the flaw in the
+// first content-key test: a detector that cannot see the case the
+// production path has.
+func TestStrHelpersMatchPythonOnDecodedNumbers(t *testing.T) {
+	const src = `
+import json, sys
+v = json.loads(json.loads(sys.argv[1])["line"])["v"]
+print(json.dumps({"str": str(v), "or": str(v or "")}))
+`
+	for _, lit := range []string{
+		`5`, `5.0`, `1.50`, `0.1`, `1e5`, `1E5`, `-2.5`, `0`, `0.0`, `-0.0`,
+		`1e400`, `-1e400`, `1234567890123456789012`, `3.0`,
+	} {
+		line := `{"v":` + lit + `}`
+		var want struct {
+			Str string `json:"str"`
+			Or  string `json:"or"`
+		}
+		pyprobe.Probe{Stdlib: true}.RunJSON(t, src, &want,
+			pyprobe.Arg(t, map[string]any{"line": line}))
+		m, err := record.LoadsClean(line)
+		if err != nil {
+			t.Fatalf("%s: the fixture line must decode: %v", lit, err)
+		}
+		if got := pyStrValue(m["v"]); got != want.Str {
+			t.Errorf("%s: pyStrValue = %q, CPython str() = %q", lit, got, want.Str)
+		}
+		if got := pyStrKey(m["v"]); got != want.Or {
+			t.Errorf("%s: pyStrKey = %q, CPython str(v or \"\") = %q",
+				lit, got, want.Or)
+		}
+	}
+}
+
+// TestSaveSuggestionsAnnouncesADroppedRow pins the warning the dedup scan
+// was not emitting.
+//
+// Python's `_save_suggestions` reads through `read_jsonl_announced`, so a
+// torn line shrinks `seen` AND says so. The port's scan reads inside
+// LockedRMW (correct — a `seen` built outside the lock reopens the
+// 81-duplicate bug) and had no announcement at all, under a comment
+// stating that the announced warning "is what tells an operator the
+// corpus went short". Dropping the row is parity; dropping the warning
+// with it is the divergence, and it is the failure mode where a duplicate
+// arrives and nothing explains why.
+func TestSaveSuggestionsAnnouncesADroppedRow(t *testing.T) {
+	ws := t.TempDir()
+	p := filepath.Join(ws, "memory", "suggestions.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// One clean row and one torn one. The torn row is what CPython's
+	// reader counts as malformed.
+	body := `{"suggestion_id":"a","category":"observation","target":"all",` +
+		`"suggestion":"already stored","confidence":0.5}` + "\n" +
+		`{"suggestion_id":"b",` + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	old := os.Stderr
+	r, w, perr := os.Pipe()
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	os.Stderr = w
+	serr := SaveSuggestions(ws, []Suggestion{{
+		SuggestionID: "c", Category: "observation", Target: "all",
+		Suggestion: "a fresh finding", Confidence: 0.5,
+	}})
+	w.Close()
+	os.Stderr = old
+	var buf strings.Builder
+	if _, cerr := io.Copy(&buf, r); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if !strings.Contains(buf.String(), "_save_suggestions") ||
+		!strings.Contains(buf.String(), "1 malformed") {
+		t.Errorf("the dedup scan dropped a row and said nothing; stderr was:\n%s",
+			buf.String())
+	}
+	// Anti-vacuity: the append must still have happened. A warning about a
+	// write that did not occur is not the behaviour under test.
+	raw, rerr := os.ReadFile(p)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !strings.Contains(string(raw), `"suggestion_id": "c"`) {
+		t.Fatal("the new suggestion was not appended — this test is vacuous")
+	}
+}
+
+// TestApplyCoercesTheGuardrailPatternAtTheSite drives the pattern through
+// a real Apply on both runtimes and compares the appended constraint row.
+//
+// TestGuardrailPatternCoercesLikePython above tests the EXPRESSION, and
+// that is not the same test: reverting the production line to
+// `strings.TrimSpace(stringOr(...))` left it green, because it never
+// touches the production line. A helper that fixes a class does not fix
+// the class — it fixes the callers that reach it — and a test of the
+// helper does not test the call. The reviewer made this point about
+// pyJoinAlways; the test written to answer it had the same shape.
+//
+// s7 carries a NUMERIC pattern and s8 a pattern wrapped in unit
+// separators, which are the two halves of the finding. Both rows also
+// end up `"applied": true` on both sides, so a divergence here is an
+// applied guardrail with no constraint row or an unmatchable one — not a
+// visible failure.
+func TestApplyCoercesTheGuardrailPatternAtTheSite(t *testing.T) {
+	for _, id := range []string{"s7", "s8"} {
+		t.Run(id, func(t *testing.T) {
+			runRewriteBoth(t, map[string]any{"verb": "apply", "id": id},
+				func(ws string) {
+					if _, err := Apply(ws, record.New(ws), nil, id, true); err != nil {
+						t.Fatal(err)
+					}
+					raw, rerr := os.ReadFile(filepath.Join(ws, "memory",
+						"dynamic-constraints.jsonl"))
+					if rerr != nil {
+						t.Fatal(rerr)
+					}
+					if !strings.Contains(string(raw), `"source": "`+id+`"`) {
+						t.Fatalf("no constraint row was appended for %s — the "+
+							"pattern coerced to empty and the branch fell "+
+							"through to guidance-only", id)
+					}
+				})
+		})
+	}
 }

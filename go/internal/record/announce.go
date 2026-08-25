@@ -244,6 +244,15 @@ func ReadAllAnnouncedOrdered(path, what string) ([]pyval.Obj, string) {
 // line corpus through both. If that test ever fails, the two readers have
 // stopped being the same reader and this doc comment is the promise that
 // broke.
+//
+// It HAS been broken once, and by the gap that structure would have
+// closed: encoding/json's nesting limit lives in the scanner, which
+// `Decode` drives and a `Token()` walk does not, so the ordered reader
+// admitted a 10001-deep document the plain one refuses — and recursed on
+// it into a process-killing stack overflow. Found by review, not by this
+// test, because the corpus had no deep line in it. Both sides of the
+// boundary are fixtures now. The lesson is about the corpus, not the
+// promise: a claim of parity is only as wide as the inputs behind it.
 func ReadAllCountedOrdered(path string) ([]pyval.Obj, SkipReport) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

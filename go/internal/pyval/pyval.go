@@ -560,7 +560,40 @@ func Plain(v any) any {
 	return v
 }
 
+// maxOrderedDepth is encoding/json's own maxNestingDepth.
+//
+// It is duplicated here rather than derived because the constant is
+// unexported, and duplicating a NUMBER whose only job is to match another
+// number is the lesser evil: the alternative is this decoder having no
+// bound at all, which is what it had.
+//
+// Why it needs one. `Decode` enforces the limit inside the scanner, but
+// `Token()` does not — so LoadsOrdered, which is a hand-rolled Token()
+// walk, admitted a document `LoadsClean` refuses, and kept RECURSING on
+// it. Measured on this box: depth 10001 refused by the plain decoder and
+// admitted by this one, and depth 3000000 not refused but
+// `fatal error: stack overflow` — unrecoverable, no strand, no
+// announcement, the whole process gone. The two readers are supposed to
+// admit the same lines; a caller's choice between them decided whether a
+// row existed, and at the tail decided whether the process survived.
+//
+// CPython's own limit is elsewhere again (measured: 10001 admitted, 50000
+// refused with JSONDecodeError), so neither runtime's threshold is the
+// other's. What matters is that BOTH of this port's readers refuse in the
+// same place, since they read the same files for the same callers.
+const maxOrderedDepth = 10000
+
 func decodeOrdered(dec *json.Decoder) (any, error) {
+	return decodeOrderedAt(dec, 0)
+}
+
+func decodeOrderedAt(dec *json.Decoder, depth int) (any, error) {
+	if depth > maxOrderedDepth {
+		// Worded to match what encoding/json's scanner says, because a
+		// caller that surfaces the text should not be able to tell which
+		// of the two readers refused.
+		return nil, fmt.Errorf("exceeded max depth")
+	}
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -579,7 +612,7 @@ func decodeOrdered(dec *json.Decoder) (any, error) {
 				if !ok {
 					return nil, fmt.Errorf("object key is not a string")
 				}
-				val, err := decodeOrdered(dec)
+				val, err := decodeOrderedAt(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -595,7 +628,7 @@ func decodeOrdered(dec *json.Decoder) (any, error) {
 		case '[':
 			list := List{}
 			for dec.More() {
-				val, err := decodeOrdered(dec)
+				val, err := decodeOrderedAt(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}

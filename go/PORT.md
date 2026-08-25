@@ -6806,3 +6806,155 @@ both halves of NowISO's rendering.
   that formats a time through some other route (a helper taking a layout
   parameter, say). It pins the shape the port keeps regressing into, not
   every shape it could.
+
+## The r1 review of the rewrite chunk — ten findings, ten verified
+
+Whole-chunk review of `90c60e77`: 1 HIGH, 3 MEDIUM, 6 LOW. Every code claim
+was checked at source before anything was touched, and all ten held. That
+is two rounds running well above this project's historical ~50–70%, and for
+the same reason both times: the reviewer measured on both sides of every
+claim rather than reading, and reported four findings as *surviving
+mutants* rather than as arguments.
+
+### The HIGH: a shared guard list is not a shared decoder
+
+`LoadsCleanOrdered`'s doc said "same admission predicate, same four
+refusals — the guards are literally the same calls", and
+`ReadAllCountedOrdered`'s said the bucketing is "measured and pinned". Both
+were true about the guards and false about the parse underneath.
+
+`LoadsClean` decodes with `json.Decoder.Decode`, which enforces
+`encoding/json`'s 10000-deep nesting limit inside the scanner.
+`LoadsCleanOrdered` goes through `pyval.LoadsOrdered`, a hand-rolled
+recursive `Token()` walk — and `Token()` does not drive that check. So the
+ordered reader admitted a document the plain one refuses, and then
+**recursed on it**. Measured: depth 10001 refused by one and admitted by
+the other; depth 3000000 not refused at all but `fatal error: stack
+overflow` — unrecoverable, no strand, no announcement, the process gone.
+`refuseDuplicateNames` in the same file carries a doc comment explaining
+that it was rewritten iteratively to avoid exactly this.
+
+The in-package consequence is concrete and needs no adversary: `Apply`'s
+keyed merge parses with `LoadsClean` and `_mark_reverted` parses with
+`LoadsCleanOrdered`. A deeply-nested row is invisible to `Apply` — so
+`replaced` stays false and it **appends a second row for the same id** —
+while `Revert` parses and rewrites it. CPython admits it in both.
+
+A 56-shape sweep through both classifiers disagreed on exactly two lines,
+both nesting depth. So the rest of the parity claim was verified clean and
+depth was the whole gap. `pyval` now bounds the ordered walk at the same
+10000, and both sides of that boundary are fixtures in `readerCorpus`.
+
+The corpus is the real lesson. `TestOrderedReaderClassifiesLikeThePlainOne`
+was written to pin this exact property and could not see the one case that
+broke it, because no deep line was in it. **A claim of parity is only as
+wide as the inputs behind it** — the detector was agreeing, not measuring.
+Both doc comments now say what is actually shared and what is not.
+
+### The MEDIUMs
+
+**The guardrail pattern was wrong on both halves.** Python is
+`str(d.get("pattern", "") or "").strip()` — `pyStrKey` plus `pytext.Strip`.
+The port spelled it `strings.TrimSpace(stringOr(d["pattern"]))`: a bare
+type assertion, so a numeric or boolean pattern became `""`, and a strip
+that does not know U+001C–U+001F. Measured through a real `Apply` on both
+runtimes: `"pattern": 5` makes CPython write a constraint row with `"5"`
+and made this runtime write none; a separator-wrapped pattern kept its
+separators here and lost them there. **In every case both runtimes stamp
+the row `"applied": true`** — so the port recorded an applied guardrail
+with no constraint row, or with a regex that can never match step text.
+That is the 2026-08-04 "guardrails that could never fire" failure,
+re-created, in a file `constraint.py` reads.
+
+`pyStrValue`'s own comment, seven lines away, says `stringOr` "survives
+only at sites whose Python really does compare against a string". This
+site coerces. The quartet was documented and then not applied.
+
+**`Apply` deleted `block_reason`; CPython keeps it.** All five Python
+success arms are `d.pop("status", None)` and nothing else. A row held once
+and applied later keeps its stale `block_reason` there and lost it here —
+no exotic character, no concurrency, the most ordinary path in the file.
+Silently tidier is the one option this chunk's own premise rules out.
+
+**The `<EPOCH>` mask hid the unit, not just the wall clock.** The previous
+section claimed both masks "hand their lost coverage to a named
+replacement". For `added_at` that was false: the replacement asserted only
+"has a fractional part and does not end `.0`", which a millisecond count
+satisfies. Changing `UnixNano()/1e9` to `/1e6` survived the entire suite —
+in the field whose comment three lines up says an ISO string there once
+"silently discarded the whole lane". The fix is an absolute tolerance
+before masking: two runs microseconds apart cannot differ by a second, and
+a thousandfold unit error is 1.7e12 out.
+
+### The LOWs, and the two that were about tests
+
+**`pyStrKey` lost its number arm to the same decoder swap.** This is the
+sibling the `verify_extensions` bug should have prompted a sweep for and
+did not. Its only call site reads off an ordered row, so numbers arrive as
+`json.Number` — an arm it did not have — and fell to `default: return ""`.
+The paragraph above it spent six lines describing how a stored `5` renders,
+an arm the production path could no longer reach.
+
+**`pyStrValue`'s `json.Number` arm returned the source literal.** `String()`
+is the file's text; Python's `str()` runs on the *decoded* float. So
+`1.50` stayed `"1.50"` against CPython's `"1.5"`, `1e5` stayed `"1e5"`
+against `"100000.0"`, and `1e400` stayed `"1e400"` against `"inf"` — each
+one a content-key mismatch, and a content-key mismatch is a missed dedup.
+`pyNumStr` now routes only literals carrying `.`, `e` or `E` through
+`FloatRepr`; an integer literal keeps its text, because `str(int)` is exact
+at any width and a 22-digit integer through float64 would round.
+
+`TestContentKeyCoercesLikePython` could not see any of it: its rows were Go
+literals, not values that came through the decoder. Both new tests feed
+their fixtures through `record.LoadsClean` first — and the test written to
+answer this finding hit the identical flaw on its first run, failing on
+`{"pattern": 5}` because a Go `int` is not a type any store can contain.
+
+**`<TS>` also hid the UTC offset.** The format check guarded against a `"Z"`
+suffix; `-06:00` is neither Z nor a match failure, so dropping `.UTC()`
+survived the suite. It now demands `+00:00`.
+
+**The join test tested the helpers, not the site.** Swapping `pyJoinAlways`
+for `pyJoinOrEmpty` at the one line that needs the asymmetry survived
+everything, because `Revert` reaches `_mark_reverted` only past an
+`IsApplied` check that reads the same file — an empty store exits early. The
+merge is now `markRevertedMerge`, driven directly, with the empty and
+blank-only cases **measured against CPython** rather than hand-computed
+(the first draft of that assertion was wrong by arithmetic).
+
+**A doc comment cited a Python line that does not exist.** The comment read
+`int(row.get("verify_extensions", 0) or 0) in Python`; the real read is
+`evolver_scans.py:1478`, `int(getattr(s, "verify_extensions", 0)) + 1`, off
+a dataclass attribute — and the whole in-lock bump has no Python
+counterpart at all. In a file whose discipline is quoting the line being
+ported, an invented citation is worse than none: it is what the next reader
+trusts instead of checking.
+
+**`SaveSuggestions` was the one `_read_store` site still dropping the
+announcement.** Its comment says the announced warning "is what tells an
+operator the corpus went short" — and then emitted nothing. It cannot call
+the reader helper, because the scan happens inside `LockedRMW` on purpose
+(a `seen` set built outside the lock reopens the 81-duplicate bug), so it
+now counts into a `record.SkipReport` and borrows its sentence.
+
+### Verified clean
+
+The reviewer also checked and cleared: every `objMap` caller (two, both
+read-only); every `pyval.Obj` passed by value and then mutated (none);
+`Pop` versus `Set(k, nil)` in the applied arm; every remaining
+`.(float64)`/`.(string)`/`.(bool)` in the package; all four
+`readRowsAnnounced` callers under the new `json.Number`;
+`ReadAllCounted`'s `strings.Split` (correct — `jsonl_utils._read` opens
+binary); the five `what` labels; `locked_append`'s torn-tail framing; and
+`before_state`'s accepted loss, which turns out to be currently zero-sized
+because both ported categories build a one-key map.
+
+### Evidence
+
+Mutation battery **12/12 DETECTED** across the fixes, including both
+directions of the depth bound (removed, and set too low so a legal 9999 is
+refused), both halves of the pattern coercion, the unit slip behind the
+epoch mask, the local-time stamp behind the TS mask, and the wrong join at
+the site.
+
+`go test ./...` exits 0; `go vet ./...` clean.
