@@ -6025,3 +6025,65 @@ Battery: 41 CAUGHT of 45. The four misses are all structural and named at
 their sites — two guards Go's zero value or a sibling condition makes
 unobservable, `_load_skill_tests`' drift counter (unreachable in both
 runtimes), and `ToDict`'s raw arm (nothing re-saves a loaded row).
+
+## Scope ledger — what the first pass has NOT touched
+
+The standing goal is "the first pass of the go port completely implemented
+and each tranche review-fixed", and until now the port had no honest answer
+to "how much is left". This is that answer, measured rather than estimated:
+26 Python modules, **30,338 lines**, are not referenced anywhere in the Go
+tree — no port, no stub, no named divergence.
+
+Measured by `grep -rl "<module>.py" internal/ cmd/`. That is a weak test
+(it finds modules the port has NAMED, not ones it has finished), so it
+overstates coverage and cannot understate it: anything on this list has not
+been started.
+
+| Module | Lines | What it is |
+|---|---:|---|
+| `loop_report.py` | 2705 | run readouts / operator-facing report assembly |
+| `run_curation.py` | 2135 | post-run curation, re-render |
+| `introspect.py` | 1775 | failure classifier, lenses, recovery planner |
+| `container_exec.py` | 1676 | containerized worker lane |
+| `heartbeat.py` | 1653 | the periodic driver |
+| `orch_bridges.py` | 1522 | orchestration bridges |
+| `loop_finalize.py` | 1319 | the loop's finalize phase |
+| `navigator_shadow.py` | 1231 | shadow-lane navigator |
+| `eval.py` | 1186 | evaluation harness |
+| `correspondence.py` | 1174 | dev-facing retrieval (explicitly NOT runtime) |
+| `web_fetch.py` | 1172 | Jina Reader / tweet fetching |
+| `tail_jobs.py` | 1149 | tail-job runner |
+| `quality_gate.py` | 1110 | the quality gate |
+| `persona.py` | 1060 | persona system |
+| `doctor.py` | 1001 | self-diagnosis |
+| `agent_loop.py` | 871 | the loop entry point |
+| `skill_lifecycle.py` | 843 | skill lifecycle |
+| `camera_readout.py` | 817 | camera readout |
+| `audit_repair.py` | 797 | audit + repair |
+| `harness_optimizer.py` | 768 | harness optimizer |
+| `shadow_lane.py` | 759 | champion–challenger lane |
+| `scope.py` | 736 | scope generation |
+| `artifact_check.py` | 735 | artifact checking |
+| `delta_replay.py` | 729 | delta replay |
+| `worktree.py` | 722 | worktree management |
+| `system_health.py` | 693 | self-health lane |
+
+`correspondence.py` is dev tooling by decree and does not belong in a
+runtime port at all; the other 25 do.
+
+### What the list changes about the sweep's tiering
+
+Chasing the strip/lower sweep into `planner` turned up the reason this
+ledger is needed. `planner.Decompose` is not a port of `planner.decompose`
+with a whitespace bug in it — it is a **v0 function of its own**: a
+different system prompt, a different user message, and no `parse_steps` at
+all (no `FACT:` extraction, no `[after:N]` placeholder drop). Its
+`TrimSpace` cannot diverge from `raw.strip()` in any way that matters,
+because the two functions were never going to produce the same steps.
+
+So the sweep's tier-3 entries need re-tiering before they are worked:
+**a whitespace divergence inside an already-divergent function is not a
+bug, it is a footnote on a bigger one.** The tier-1 and tier-2 sites that
+have been fixed were all inside functions the port DOES claim byte-equality
+for — a sealed pack, a hashed manifest, a provenance stamp — which is why
+they were worth the differential.
