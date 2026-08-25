@@ -6220,3 +6220,152 @@ pack so the exporter is out of the question, then importing the same file
 twice and comparing the result rows and the store bytes). Mutation batteries:
 11/11 on export, 10/10 on import, every anti-vacuity guard asserting that
 CPython actually exhibits the behaviour under test before the comparison runs.
+
+## The graduation window — and why "sweep every `strings.Split`" is wrong
+
+The pack chunk's commit message named its own method: *a fix is evidence
+about its siblings*. One of the siblings it named was `splitlines()` vs
+`strings.Split(s, "\n")`. This chunk followed that thread into
+`internal/graduation`, and the first thing the thread did was correct the
+instruction that sent me down it.
+
+### What was actually wrong in graduation
+
+`src/graduation.py` reads its two ledgers the same way in three places
+(lines 226, 277, 417):
+
+```python
+lines = path.read_text(encoding="utf-8").splitlines()
+for line in lines[-lookback:]:
+    line = line.strip()
+    if not line: continue
+```
+
+The Go read them with `os.ReadFile` + `strings.Split(string(raw), "\n")` +
+`strings.TrimSpace`. Four Python rules, three of them missing:
+
+1. **`splitlines()` breaks on ten separators**, a `"\n"` split on one. A
+   stored row carrying `\x0b` or `\x1c` is TWO lines to Python and one to
+   Go. That is not a rendering difference, because of rule 2.
+2. **The slice happens AFTER the split.** `lines[-lookback:]` is measured
+   in lines, so a disagreement about how many lines a file holds is a
+   disagreement about WHICH rows are inside the lookback window — and the
+   window decides which diagnoses reach a gate whose job is to propose
+   permanent changes to the system's own behaviour.
+3. **`str.strip()` removes U+001C–U+001F; `strings.TrimSpace` does not.**
+   A row with a trailing `\x1f` is blank-then-parsed in Python and
+   non-blank-then-rejected in Go: Go's `encoding/json` refuses trailing
+   bytes outside its own whitespace set (space, tab, `\n`, `\r`). One row
+   lost, silently.
+4. **`read_text` decodes STRICTLY**, and both call sites wrap it in a bare
+   `except` — `scan_candidates` returns `[]`, `_already_proposed` returns
+   `False`. So one bad byte anywhere in the diagnoses ledger means CPython
+   proposes NOTHING, where `string(raw)` reads on and `encoding/json`
+   substitutes U+FFFD per bad byte. The port would have built a graduation
+   candidate out of content nobody wrote and proposed a permanent rule
+   from it. Refusing is the behaviour, not a courtesy.
+
+### The one the sweep found that the sweep was not looking for
+
+`tailLines` and `lastLines` were two hand-written copies of the same rule,
+and they had **drifted in the ORDER of the last two steps**. `tailLines`
+sliced the window and then dropped blanks (Python's order); `lastLines`
+dropped blanks and then sliced. So blank lines cost `lastLines` no window
+budget and it reached further back into the ledger than the predicate it
+was supposed to replay.
+
+That matters because `lastLines` is the in-lock half of the dedup
+re-check — a Go-only TOCTOU guard, since Python's `run_graduation` appends
+under the lock without re-checking. A re-check that windows differently
+from the pre-check protects nothing: it can decide a class was already
+proposed on evidence the pre-check had aged out, and silently suppress a
+suggestion CPython writes.
+
+The comment above it read *"it replays the SAME windowed predicate as the
+pre-check (r2 HIGH-1)"*. That was true when written and had since stopped
+being true — **lens 19 again: a comment that asserts coverage is a claim,
+and it decays.** Both are now `pyWindowLines`, one function, so the claim
+is structural instead of asserted.
+
+`lastLines` is also unreachable from any CPython differential: with no
+concurrent writer it always sees the file the pre-check just read, so it
+can only be wrong by disagreeing with `tailLines` — which is precisely
+what no test through the gate could show. The pin is
+`TestWindowHelpersMatchCPython`, which asserts `pyWindowLines`, `lastLines`
+AND `tailLines` against CPython's four spellings over fourteen crafted
+texts x seven window widths.
+
+### The correction: there are THREE Python line-splitting rules here
+
+The sibling sweep listed thirteen more `strings.Split(string(raw), "\n")`
+sites and I was one edit away from converting them. **Do not.** This
+codebase reads lines three different ways, and they are not
+interchangeable:
+
+| Python spelling | Breaks on | Go equivalent |
+|---|---|---|
+| `read_text(...).splitlines()` | ten separators | `pytext.SplitLines` |
+| `path.open("rb")` then `for line in f` | `b"\n"` only | `strings.Split(s, "\n")` |
+| `path.open()` (text) then `for line in f` | `\n`, `\r`, `\r\n` | neither — needs its own helper |
+
+`internal/record/announce.go:181` is the central announced reader that
+`skills/store.go` and `testgate.go` were migrated onto last chunk, so
+"fixing" it would have swept every migrated caller at once — in the wrong
+direction. Its Python counterpart is `jsonl_utils._read`, which opens
+**binary** (`path.open("rb")`) and iterates, and whose tail path splits on
+`b"\n"` explicitly. `strings.Split(string(raw), "\n")` is the correct port
+there and must stay.
+
+So the sweep is a per-site CLASSIFICATION, not a mechanical replacement,
+and the remaining twelve sites are a tracked list rather than a queue of
+known bugs. **Lens 20: an idiom is not a defect. The defect is a spelling
+that does not match the spelling at ITS OWN site** — and a sweep that
+knows only the fix will apply it where the fix is the bug.
+
+Sites still to classify: `record/record.go:643` (`stampOutcomeVerdictLocked`),
+`record/outcomes.go:38`, `scans/scans.go:109`, `loop/project.go:108`,
+`inspector/inspector.go:1013`, `knowledge/tiered.go:128`,
+`skills/pool.go:151`, `skills/stats.go:200`,
+`notify/escalation_context.go:175`, `evolver/store.go:194` and `:883`,
+`skills/attribution.go:295`. Each needs its Python counterpart READ, not
+guessed.
+
+### The Go-only knob, named
+
+`cmd/maro/selfimprove.go` exposes `-lookback`, which Python never does
+(`run_graduation` is only ever called with defaults, from `evolver.py:817`).
+`ScanCandidates` coerces `lookback <= 0` to 100; Python's `lines[-0:]`
+would return the whole file and `lines[-(-5):]` would drop the FIRST five.
+The coercion is the friendlier behaviour and the divergence is unreachable
+from any Python caller, so it stays — named here rather than silently
+differing.
+
+### Evidence
+
+`window_diff_test.go`: `TestGraduationWindowMatchesCPython` (5 widths),
+`TestGraduationDedupWindowMatchesCPython` (4 widths, a SEPARATE argument on
+a SEPARATE ledger), `TestGraduationRefusesUndecodableLedger` (with an
+anti-vacuity guard that fails if CPython did not actually refuse, and a
+second assertion that the refusal is scoped to the undecodable file rather
+than blanking every read), `TestWindowHelpersMatchCPython` (98 subtests),
+`TestLastLinesRefusesUndecodableTail`.
+
+Mutation battery 8/8 DETECTED: both spellings of the split, both of the
+strip, the strict decode at both readers, a swallowed decode error, the
+window slice removed, the slice/filter order inverted, and `lastLines`
+re-drifting away from the shared helper.
+
+Two fixture bugs that CPython and the battery caught, both worth keeping in
+mind:
+
+* the blanks must be CONSECUTIVE and the window must straddle them, or
+  slice-before-filter and slice-after-filter land on the same real rows and
+  the fixture pins neither order. The first version of this fixture spread
+  its blanks out and mutant `G8` MISSED.
+* `"\x85"` in a Go string literal is the raw byte 0x85, which is not valid
+  UTF-8 — and `pyprobe`'s own JSON argument channel substitutes U+FFFD
+  before Python ever sees it. The fixture was measuring the transport
+  rather than the rule, and it read as agreement. The three non-ASCII
+  separators must be spelled ``, ` `, ` `. **Lens 21: a
+  fixture travels through a channel, and the channel has opinions about
+  what it carries.**

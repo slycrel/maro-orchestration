@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -68,13 +69,69 @@ func tailLines(path string, n int) []string {
 			raw = raw[i+1:] // drop the torn first line
 		}
 	}
-	all := strings.Split(string(raw), "\n")
+	// read_text DECODES STRICTLY, and both callers wrap it in a bare
+	// `except`: scan_candidates returns [] and _already_proposed returns
+	// False. So one bad byte anywhere in the diagnoses ledger means Python
+	// proposes NOTHING, where `string(raw)` reads on and encoding/json
+	// substitutes U+FFFD per bad byte, yielding a candidate built from
+	// content nobody wrote. Refusing is the behaviour, not a courtesy.
+	//
+	// The torn-line drop above happens on BYTES and before this on purpose:
+	// the 8MB tail is a Go-only deviation (Python reads the whole file), and
+	// decoding a window that begins mid-rune would raise where Python never
+	// even looked. Dropping to the first \n first puts us on a line
+	// boundary. Residual: a >8MB file written with lone-\r endings has no \n
+	// to drop to, so its torn head survives — a deviation inside a
+	// deviation, named rather than chased.
+	//
+	// read_text's OTHER rule, universal newlines, is deliberately NOT
+	// applied here and is not missing: pyWindowLines splits immediately,
+	// and SplitLines already treats "\r\n" and a lone "\r" as one break
+	// each, so TranslateNewlines cannot change this function's result. A
+	// call would be a guard that cannot fire — and one of those is not
+	// evidence the danger is gone, it is a place a later reader stops
+	// looking. A caller that KEEPS the text needs pyval.ReadText, whole.
+	text, derr := pyval.DecodeUTF8Strict(raw)
+	if derr != nil {
+		return nil
+	}
+	return pyWindowLines(text, n)
+}
+
+// pyWindowLines is `text.splitlines()[-n:]`, then `line.strip()` with the
+// blanks dropped — the window rule that scan_candidates and
+// _already_proposed both spell inline, in that order.
+//
+// It exists because the two Go spellings of it had already drifted, and the
+// drift was in the ORDER: this file's other copy filtered blanks FIRST and
+// sliced the survivors, so blank lines cost it no window budget and it
+// reached further back into the ledger than the Python predicate it claimed
+// to replay. That is invisible in any test whose blank lines sit next to
+// each other, which is why the divergence survived a review round.
+//
+// splitlines() breaks on ten separators; a "\n" split breaks on one. A
+// stored row carrying \x0b or \x1c is TWO lines to Python and one to a "\n"
+// split, so the two runtimes disagree about how many lines the window holds
+// — and the window decides WHICH diagnoses reach a gate whose job is to
+// propose permanent changes to the system's own behaviour. Not a rendering
+// difference.
+//
+// And strings.TrimSpace does not know U+001C-U+001F, so a row wearing a
+// trailing one is non-empty there, survives the filter, and then fails to
+// parse — where Python strips it and reads the row.
+//
+// n <= 0 means no window, matching `lines[-0:]`. Negative n is not Python's
+// behaviour (`lines[-(-5):]` drops the FIRST five) and is not reachable:
+// every caller coerces. Named so the next reader does not have to re-derive
+// that it is unreachable rather than wrong.
+func pyWindowLines(text string, n int) []string {
+	all := pytext.SplitLines(text)
 	if n > 0 && len(all) > n {
 		all = all[len(all)-n:]
 	}
 	var out []string
 	for _, line := range all {
-		if s := strings.TrimSpace(line); s != "" {
+		if s := pytext.Strip(line); s != "" {
 			out = append(out, s)
 		}
 	}
@@ -216,18 +273,27 @@ func proposedIn(lines []string, failureClass string) bool {
 // no `case int` (mission-r9).
 func truthy(v any) bool { return pyval.Truthy(v) }
 
-// lastLines returns the last n non-empty trimmed lines of text.
+// lastLines is tailLines over a tail already in memory: the in-lock dedup
+// re-check must decide on the SAME window as the pre-check, or the two
+// disagree about whether a class was proposed and the lock protects nothing.
+//
+// It now shares pyWindowLines with tailLines rather than restating it. The
+// restatement had drifted — it sliced AFTER dropping blanks, so blank rows
+// cost it no window budget and it saw proposals the pre-check had aged out,
+// suppressing a write CPython performs. The comment that used to sit here
+// asserted the two "replay the SAME predicate"; that was a claim about the
+// code rather than a property of it, and it had gone stale.
+//
+// The strict decode is applied here too. record.LockedTailAppend hands back
+// bytes, and a lenient read would substitute U+FFFD and let a corrupted row
+// parse into a suppression; refusing yields an empty window, which allows
+// the write — the same direction as Python's `except: pass` → False.
 func lastLines(text string, n int) []string {
-	var out []string
-	for _, line := range strings.Split(text, "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			out = append(out, s)
-		}
+	clean, derr := pyval.DecodeUTF8Strict([]byte(text))
+	if derr != nil {
+		return nil
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out
+	return pyWindowLines(clean, n)
 }
 
 func clipRunes(s string, n int) string {
