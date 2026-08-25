@@ -382,9 +382,22 @@ func TestLoadSkillsAnnouncesItsLosses(t *testing.T) {
 	if l.Unparseable != 1 || l.Drifted != 1 {
 		t.Fatalf("counts: unparseable=%d drifted=%d", l.Unparseable, l.Drifted)
 	}
+	// TWO sentences, not one, and each is Python's. The reader announces the
+	// torn line with its bucket named ("1 undecodable" — a byte-tainted row
+	// is a different operator problem from a syntactically bad one), and the
+	// loader announces schema drift separately. Python emits them from two
+	// different places for exactly that reason; the port used to collapse
+	// them into one invented line that said neither.
 	w := l.Announce()
-	if len(w) != 1 || !strings.Contains(w[0], "1 unparseable and 1") {
+	if len(w) != 2 {
 		t.Fatalf("announcement: %+v", w)
+	}
+	if !strings.HasPrefix(w[0], "load_skills: dropped 1 line(s): 1 undecodable (") {
+		t.Errorf("reader line: %q", w[0])
+	}
+	if !strings.HasPrefix(w[1], "[skills] load_skills: 1 row(s) are JSON but "+
+		"not loadable as Skill — skipped (") {
+		t.Errorf("drift line: %q", w[1])
 	}
 
 	// An UNREADABLE store is not a cold store: reporting them alike made a
@@ -400,7 +413,9 @@ func TestLoadSkillsAnnouncesItsLosses(t *testing.T) {
 	if !l.Unreadable {
 		t.Fatal("an unreadable store must say so")
 	}
-	if w := l.Announce(); len(w) != 1 || !strings.Contains(w[0], "could not be read") {
+	if w := l.Announce(); len(w) != 1 ||
+		!strings.HasPrefix(w[0], "load_skills: unreadable (0 records "+
+			"returned — not an empty ledger) (") {
 		t.Fatalf("announcement: %+v", w)
 	}
 }

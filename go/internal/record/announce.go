@@ -95,6 +95,23 @@ func classifyLine(line string) (map[string]any, string) {
 	}
 }
 
+// Announce is the warning text for a report, in Python's wording:
+// `log.warning("%s: %s (%s)", what, report.summary(), path)`.
+//
+// Empty when nothing was LOST — a missing store is not damage, and a helper
+// that announced it would train an operator to ignore the warning.
+//
+// Split out of ReadAllAnnounced because a caller that needs the buckets
+// (ReadAllCounted) must not have to re-spell the format string to get the
+// same sentence; two spellings of one operator-facing line is the prose
+// divergence class this port keeps finding.
+func (r SkipReport) Announce(what, path string) string {
+	if !r.Lost() {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s (%s)", what, r.Summary(), path)
+}
+
 // ReadAllAnnounced ports jsonl_utils.read_jsonl_announced: every JSON object
 // in a JSONL store, with any loss announced.
 //
@@ -118,14 +135,11 @@ func classifyLine(line string) (map[string]any, string) {
 // directly, and matching that would mean a package-level logger in the
 // record package that tests then have to capture.
 func ReadAllAnnounced(path, what string) ([]map[string]any, string) {
-	rows, report := readAllCounted(path)
-	if report.Lost() {
-		return rows, fmt.Sprintf("%s: %s (%s)", what, report.Summary(), path)
-	}
-	return rows, ""
+	rows, report := ReadAllCounted(path)
+	return rows, report.Announce(what, path)
 }
 
-// readAllCounted is read_jsonl_tail_counted with limit=None: same records,
+// ReadAllCounted is read_jsonl_tail_counted with limit=None: same records,
 // same order, same never-raises contract, plus the report.
 //
 // The bounded (`limit=N`) path is deliberately NOT ported here. Python reads
@@ -133,7 +147,12 @@ func ReadAllAnnounced(path, what string) ([]map[string]any, string) {
 // themselves as a lower bound; a port that quietly full-scanned and called
 // the counts whole-file would be telling the same lie one level up. When a
 // caller needs a tail, that path gets written and probed on its own.
-func readAllCounted(path string) ([]map[string]any, SkipReport) {
+//
+// Exported because Missing and Unreadable are not distinguishable from the
+// announced STRING, and a loader whose result type carries that distinction
+// (skills.LoadResult.Unreadable) would otherwise have to sniff the prose to
+// recover it.
+func ReadAllCounted(path string) ([]map[string]any, SkipReport) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

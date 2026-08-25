@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -24,35 +25,76 @@ func skillsArchivePath(ws string) string {
 // reported, never silent).
 type LoadResult struct {
 	Skills       []Skill
-	Drifted      int      // JSON, but not admissible as a Skill
-	Unparseable  int      // not JSON at all, or byte-tainted
-	HashMismatch []string // ids whose content no longer matches their stamp
-	Unreadable   bool     // the store exists but could not be read at all
+	Drifted      int // JSON, but not admissible as a Skill
+	Unparseable  int // not JSON at all, byte-tainted, or not an object
+	HashMismatch []Tampered
+	Unreadable   bool // the store exists but could not be read at all
 	Path         string
+	StoreWarning string // the announced reader's sentence, verbatim
+}
+
+// Tampered is one skill whose stored content_hash no longer matches what its
+// fields hash to.
+//
+// A slice of IDs used to be enough, because the port rendered one aggregate
+// line. Python logs PER SKILL and names the skill, the two hash prefixes, and
+// nothing else — and the hash prefixes are the whole diagnostic value: an id
+// tells an operator which row to look at, the prefixes tell them whether the
+// row moved or the hash function did.
+type Tampered struct {
+	ID       string
+	Name     string
+	Expected string // what the current fields hash to
+	Stored   string // what the row claims
 }
 
 // Announce renders what the load LOST, for a caller that has a warning rail.
 // An unannounced loss is the failure this whole posture exists to prevent:
 // half a library going byte-tainted looks exactly like "nothing matched",
 // which is also what a healthy cold store looks like.
+//
+// Three warnings in Python's order and Python's wording, because they reach
+// an operator's log and the Python ones are what they already know how to
+// read: the announced reader's line first (it fires during the read), then
+// one line per tampered skill (they fire inside the loop, newest row first),
+// then the schema-drift summary (it fires after the loop).
+//
+// The port used to emit ONE invented line that combined the reader's counts
+// with the drift count, and a second aggregate line for tampering that
+// dropped both hash prefixes. Same information, three different sentences,
+// none of them greppable alongside the Python runtime writing into the same
+// operator log — the content-key prose divergence this port keeps finding,
+// on the operator-facing side rather than the store-facing one.
 func (r LoadResult) Announce() []string {
 	var out []string
-	if r.Unreadable {
-		return append(out, fmt.Sprintf("skills: store exists but could not "+
-			"be read; treating as empty for this run (%s)", r.Path))
+	if r.StoreWarning != "" {
+		out = append(out, r.StoreWarning)
 	}
-	if r.Unparseable > 0 || r.Drifted > 0 {
-		out = append(out, fmt.Sprintf("skills: %d unparseable and %d "+
-			"JSON-but-not-loadable row(s) excluded from this read; they "+
-			"remain in the store verbatim (%s)",
-			r.Unparseable, r.Drifted, r.Path))
+	for _, m := range r.HashMismatch {
+		out = append(out, fmt.Sprintf("[skills] content_hash mismatch for "+
+			"skill id=%s name=%s (expected=%s stored=%s) — possible tampering",
+			m.ID, pytext.Repr(m.Name), clip12(m.Expected), clip12(m.Stored)))
 	}
-	if len(r.HashMismatch) > 0 {
-		out = append(out, fmt.Sprintf("skills: content_hash mismatch on "+
-			"%d skill(s) — possible tampering: %s",
-			len(r.HashMismatch), strings.Join(r.HashMismatch, ", ")))
+	if r.Drifted > 0 {
+		out = append(out, fmt.Sprintf("[skills] load_skills: %d row(s) are "+
+			"JSON but not loadable as Skill — skipped (%s)", r.Drifted, r.Path))
 	}
 	return out
+}
+
+// clip12 is Python's `h[:12]` — a slice by CODE POINT, not by byte.
+//
+// A content_hash is 64 hex characters and the two spellings agree on it, so
+// this looks like pedantry. It is not: `stored` is whatever the ROW claimed,
+// and a row is exactly the thing an attacker or a torn append controls. A
+// byte slice of a multi-byte stored value cuts mid-rune and puts U+FFFD in
+// the operator's warning about tampering.
+func clip12(h string) string {
+	rs := []rune(h)
+	if len(rs) > 12 {
+		return string(rs[:12])
+	}
+	return h
 }
 
 // LoadSkills ports load_skills: every admissible skill in the store, oldest
@@ -76,28 +118,20 @@ func LoadSkills(ws string) LoadResult {
 	var res LoadResult
 	res.Skills = []Skill{}
 	res.Path = skillsPath(ws)
-	raw, err := os.ReadFile(res.Path)
-	if err != nil {
-		// A missing store is an empty store; an UNREADABLE one is not.
-		// Returning the same empty result for both made a permissions or
-		// EIO failure byte-for-byte indistinguishable from a cold install,
-		// so a library that had gone unreachable read as "no skills yet".
-		res.Unreadable = !os.IsNotExist(err)
-		return res
-	}
-	lines := strings.Split(string(raw), "\n")
+	// The announced read, not an inline scan. A missing store is an empty
+	// store; an UNREADABLE one is not — returning the same empty result for
+	// both made a permissions or EIO failure byte-for-byte indistinguishable
+	// from a cold install, so a library that had gone unreachable read as
+	// "no skills yet". That distinction is why this takes the COUNTED form:
+	// it is invisible in the announced string.
+	rows, rep := record.ReadAllCounted(res.Path)
+	res.Unreadable = rep.Unreadable
+	res.Unparseable = rep.Dropped()
+	res.StoreWarning = rep.Announce("load_skills", res.Path)
 	seen := map[string]bool{}
 	// Reverse: the last version of each id wins.
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
-		if record.IsFrameBlank(line) {
-			continue
-		}
-		row, err := record.LoadsClean(line)
-		if err != nil {
-			res.Unparseable++
-			continue
-		}
+	for i := len(rows) - 1; i >= 0; i-- {
+		row := rows[i]
 		sid, _ := row["id"].(string)
 		if sid != "" && seen[sid] {
 			continue
@@ -110,7 +144,12 @@ func LoadSkills(ws string) LoadResult {
 		seen[skill.ID] = true
 		if stored := skill.ContentHash; stored != "" {
 			if !VerifySkillHash(skill, stored) {
-				res.HashMismatch = append(res.HashMismatch, skill.ID)
+				res.HashMismatch = append(res.HashMismatch, Tampered{
+					ID:       skill.ID,
+					Name:     skill.Name,
+					Expected: ComputeSkillHash(skill),
+					Stored:   stored,
+				})
 			}
 		}
 		res.Skills = append([]Skill{skill}, res.Skills...) // restore order

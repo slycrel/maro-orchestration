@@ -200,14 +200,22 @@ func TestNothingRoutesAroundTheAnnouncedReader(t *testing.T) {
 	if !strings.Contains(string(raw), "func ReadAllAnnounced") {
 		t.Fatal("ReadAllAnnounced is gone — the callers below are now silent")
 	}
+	// store.go takes the COUNTED form, because Missing and Unreadable are
+	// not recoverable from the announced string and its result type carries
+	// that distinction. Same helper, same sentence — the reason both
+	// spellings are accepted here is that SkipReport.Announce is what
+	// produces the text in either case, so there is still exactly one
+	// wording to keep right.
 	for _, f := range []string{
 		"../skills/testgate.go",
+		"../skills/store.go",
 	} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(src), "record.ReadAllAnnounced(") {
+		if !strings.Contains(string(src), "record.ReadAllAnnounced(") &&
+			!strings.Contains(string(src), "record.ReadAllCounted(") {
 			t.Errorf("%s no longer reads its store through ReadAllAnnounced "+
 				"— an inline scan returns the same rows and announces "+
 				"nothing, which is exactly the loss this helper exists to "+
