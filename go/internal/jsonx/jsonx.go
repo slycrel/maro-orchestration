@@ -308,6 +308,73 @@ func carve(text string, open, close byte) (string, error) {
 	return "", fmt.Errorf("unbalanced %q...%q in output", string(open), string(close))
 }
 
+// arrayUnwrapKeys is llm_parse.extract_json's dict-unwrap list, IN ORDER.
+// When a list was asked for and an object arrived, Python walks these keys
+// and returns the first one whose value is a list. The order is part of the
+// behaviour for a reply carrying two of them, and a present key whose value
+// is NOT a list does not stop the walk.
+var arrayUnwrapKeys = []string{"items", "results", "steps", "lessons",
+	"signals", "patterns", "suggestions"}
+
+// ArrayOrdered is `extract_json(content, list)` — the ARRAY counterpart of
+// ObjectOrdered, with the two fallbacks StringArray does not have.
+//
+// StringArray was not enough for the callers that arrive here: it carves
+// only `[`...`]` and it refuses an array whose elements are objects, which
+// is the shape every "return a JSON array of test cases" prompt produces.
+// The two fallbacks are the reason this is not a three-line wrapper:
+//
+//   - ALT BRACKETS. If no balanced `[`...`]` is found, Python retries the
+//     span with `{`...`}` "in case LLM switched object vs array" and parses
+//     whatever that yields. So a reply that is a bare object still reaches
+//     the type check below rather than being dropped at the carve.
+//   - DICT UNWRAP. If the parsed value is an object rather than a list,
+//     Python looks for a wrapper key holding the list and returns THAT.
+//
+// The carve runs twice over ONE stripped text, not twice over the raw
+// input: stripping is idempotent today, and depending on that quietly is
+// how the second call starts disagreeing with the first when it stops
+// being.
+//
+// The failure spelling is an error where Python returns its default —
+// the same relationship every other function in this file has with
+// _find_json_bounds' (-1, -1), and every caller treats them identically.
+func ArrayOrdered(text string) (pyval.List, error) {
+	stripped := stripMarkdownFences(stripThinkBlocks(text))
+	payload, err := carve(stripped, '[', ']')
+	if err != nil {
+		alt, altErr := carve(stripped, 0x7b, 0x7d)
+		if altErr != nil {
+			// Python reports the ORIGINAL failure's shape ("no JSON
+			// brackets found"), having tried both. Return the first error:
+			// it names the bracket the caller actually wanted.
+			return nil, err
+		}
+		payload = alt
+	}
+	v, perr := pyval.LoadsOrdered(payload)
+	if perr != nil {
+		return nil, fmt.Errorf("array found but unparseable: %w", perr)
+	}
+	if list, ok := v.(pyval.List); ok {
+		return list, nil
+	}
+	if obj, ok := v.(pyval.Obj); ok {
+		for _, key := range arrayUnwrapKeys {
+			inner, has := obj.Get(key)
+			if !has {
+				continue
+			}
+			if l, isList := inner.(pyval.List); isList {
+				return l, nil
+			}
+			// NOT a break. `if key in parsed and isinstance(...)` fails as
+			// one condition, and the loop goes on to the next key.
+		}
+	}
+	return nil, fmt.Errorf("expected a JSON array, got %T", v)
+}
+
 // ObjectOrdered is Object with the key order and the number LITERALS
 // kept — the same carve, decoded through pyval.LoadsOrdered.
 //

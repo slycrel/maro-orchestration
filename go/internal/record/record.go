@@ -260,10 +260,10 @@ var userSurfacedEvents = map[string]bool{
 	// the system's own behaviour, which is what this lane is.
 	"SKILL_VARIANT_CREATED": true,
 	"AB_RETIRED":            true,
-	"EVOLVER_APPLIED":      true,
-	"EVOLVER_REVERTED":     true,
-	"EVOLVER_VERDICT":      true,
-	"GRADUATION_PROPOSED":  true,
+	"EVOLVER_APPLIED":       true,
+	"EVOLVER_REVERTED":      true,
+	"EVOLVER_VERDICT":       true,
+	"GRADUATION_PROPOSED":   true,
 	// The playbook CURATION pass is user-surfaced; a single append
 	// (PLAYBOOK_UPDATED) is not. Different verbs, different audiences.
 	"PLAYBOOK_CURATED":    true,

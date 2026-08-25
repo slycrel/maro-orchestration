@@ -34,13 +34,13 @@ var knownEmittedEvents = map[string]string{
 	// or not at all.
 	"SKILL_VARIANT_CREATED": "user",
 	"AB_RETIRED":            "user",
-	"EVOLVER_APPLIED":         "user",
-	"EVOLVER_REVERTED":        "user",
-	"EVOLVER_VERDICT":         "user",
-	"EVOLVER_GENERATED":       "system",
-	"EVOLVER_SKIPPED":         "system",
-	"GRADUATION_PROPOSED":     "user",
-	"GRADUATION_VERIFIED":     "user",
+	"EVOLVER_APPLIED":       "user",
+	"EVOLVER_REVERTED":      "user",
+	"EVOLVER_VERDICT":       "user",
+	"EVOLVER_GENERATED":     "system",
+	"EVOLVER_SKIPPED":       "system",
+	"GRADUATION_PROPOSED":   "user",
+	"GRADUATION_VERIFIED":   "user",
 	// The rotation audit row (r5 L2). "system", checked against the live
 	// frozenset: LOG_ROTATED is in Python's EVENT_TYPES and not in its
 	// USER_SURFACED_EVENTS.

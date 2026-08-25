@@ -5758,3 +5758,105 @@ that outlives the call?** A classification sweep is in flight; the
 exposure to fix is the subset that is stored, hashed, used as a map key,
 or gates a write. A truthiness test IS in that subset when it decides
 whether a record is written — that shape is exactly what H1 was.
+
+## Phase 14 — the skill-mutation gate, and the helper the port kept re-writing
+
+`generate_skill_tests`, `run_skill_tests`, `validate_skill_mutation` and
+`_load_skill_tests` (`skills.py` 2790–3100) plus their dataclasses, ported
+as `internal/skills/testgate.go`. `jsonx.ArrayOrdered` is new alongside it —
+`extract_json_array` with the alt-bracket and dict-unwrap fallbacks, order
+preserved, because the LLM path's answer is a list of objects whose key
+order reaches a stored row.
+
+Four differentials drive it (`testgate_diff_test.go`), one per verb, with a
+scripted stub adapter that records every prompt. The prompts are compared,
+not just the results: the `[:5]` failure slice, the `[:200]`/`[:300]`
+description clips and the exact system text are only observable there, and
+a port that returned identical test cases while asking a different question
+would pass a results-only comparison.
+
+### The bug the differential found in the port's own first cut
+
+`_load_skill_tests` is a gate's denominator — `validate_skill_mutation`
+blocks a mutation on `passed < total`. My `SkillTestCaseFromDict` refused
+rows whose fields had drifted (an `input_description` holding the int `7`,
+say). CPython's `SkillTestCase.from_dict` is four `d.get(k, default)` calls:
+it neither coerces nor refuses. It holds the int, **counts the row**, and
+`str.lower()` on it raises later — inside `run_skill_tests`' per-test
+`except`, which counts the test as failed. Refusing the row instead makes
+`total` smaller and the gate *easier* to pass. Fixed by never refusing:
+`ExpectedKeywords []any` plus a `keywordsRaw` field so a non-list value is
+held as the row holds it, and a `MarshalJSON` that re-emits the raw value
+rather than the port's one-element-list storage shape.
+
+One divergence is unavoidable and is now ASSERTED rather than excused: Go
+renders a non-string scalar through `pyval.Str` where Python holds the
+original object. `renderNamedDivergence` in the test names it.
+
+### `read_jsonl_announced`: a helper you did not look for is a helper you will write again
+
+The load differential compared the WARNINGS, not just the rows, and CPython
+said `_load_skill_tests: dropped 1 line(s): 1 malformed (…)` where the port
+said nothing at all.
+
+Python funnels ~20 loaders through `jsonl_utils.read_jsonl_announced`. The
+port had spelled the scan out inline at every site — `ReadFile`, split,
+`IsFrameBlank`, `LoadsClean`, `continue` — and every one of those copies got
+the right rows and dropped the announcement, because the announcement lives
+in the helper and nowhere else. A short list is indistinguishable from a
+short store, and no differential over a loader's RETURN VALUE can see the
+difference.
+
+Now ported properly as `record.ReadAllAnnounced` + `record.SkipReport`, with
+`internal/record/announce_diff_test.go` comparing the sentences verbatim
+against CPython's own logger output across sixteen fixtures. The bucket is
+the operator-facing claim and the buckets are pinned separately: `1 non-dict`
+says a writer is emitting the wrong SHAPE, `1 malformed` says the bytes are
+torn, `1 undecodable` says the append was cut mid-write. All three drop the
+same row.
+
+Two supporting changes fell out of it:
+
+* `record.LoadsCleanValue` — `LoadsClean` without the object requirement.
+  `LoadsClean` is now that function plus one type assertion, so the strict
+  predicate cannot fork into two versions that disagree about what a clean
+  line is.
+* `ErrNotAnObject` and `ErrByteTainted` are sentinels. The classifier needs
+  to tell "not JSON" from "JSON of the wrong shape" from "not UTF-8", and
+  the alternative was matching on message text — prose that gets reworded,
+  after which torn bytes would quietly be counted as malformed.
+
+`TestNothingRoutesAroundTheAnnouncedReader` is the tripwire: a new loader
+that spells the scan out inline is silent in exactly the way this one was,
+and nothing about its rows makes that visible.
+
+**Named residual:** only `internal/skills/testgate.go` reads through the
+announced reader so far. Every other inline store scan in the port is still
+silent about what it drops. That migration is a queued chunk of its own,
+alongside the ~130-site strip/lower sweep.
+
+### Two guards no mutation can pin, both kept and both named in the code
+
+The battery is 32 CAUGHT out of 34, and the two misses are structural
+rather than gaps:
+
+* **the non-object item skip** in the LLM path. Delete it in Python and a
+  string item makes `item.get(...)` raise `AttributeError`, which the outer
+  `try` catches — abandoning the whole LLM path and falling to the
+  heuristic. Delete it in Go and `obj` is the zero `pyval.Obj`: every `Get`
+  misses, the description is `""`, and the item is dropped three lines down
+  by the emptiness test. Same answer. Go's zero value silently absorbs what
+  Python raises on, and the two agree only while that emptiness test stays
+  where it is.
+* **`res.Blocked = !dryRun && passed < total`**. `dryRun` is `adapter == nil`
+  by construction and `run_skill_tests` returns `(total, total)` for that
+  case, so `passed < total` is already false whenever `!dryRun` is. Python
+  is redundant in the same place, for the same reason.
+
+* **`_load_skill_tests`' drift counter is unreachable in BOTH runtimes** and
+  is kept anyway. Python's `except Exception` guards `from_dict`, which is
+  four `.get`s on a value the reader has already proved is a dict; there is
+  no input that reaches it and raises. That is a fact about the constructor,
+  not the loader — the day `from_dict` grows a required field, both runtimes
+  start losing rows there and the branch that announces it should already
+  exist.

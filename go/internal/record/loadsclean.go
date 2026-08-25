@@ -2,6 +2,7 @@ package record
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -53,8 +54,54 @@ import (
 //     matters — a row Go admits and Python strands is a row only one runtime
 //     will act on.
 func LoadsClean(line string) (map[string]any, error) {
+	v, err := LoadsCleanValue(line)
+	if err != nil {
+		return nil, err
+	}
+	m, isObj := v.(map[string]any)
+	if !isObj {
+		return nil, ErrNotAnObject
+	}
+	return m, nil
+}
+
+// ErrNotAnObject is what LoadsClean returns for a line that IS clean JSON
+// and is not an object.
+//
+// A sentinel rather than a fresh fmt.Errorf because the difference matters
+// to exactly one caller and matters a lot: jsonl_utils._classify counts a
+// non-dict line in its OWN bucket ("non-dict"), separate from "malformed",
+// and an operator reading `dropped 3 line(s): 3 non-dict` is being told
+// something different from `3 malformed` — the first says a writer is
+// emitting the wrong SHAPE, the second says bytes are torn. Folding the
+// two would have been invisible: both are dropped, both are counted, and
+// the total is the same.
+var ErrNotAnObject = errors.New("not a JSON object")
+
+// ErrByteTainted is what the admission predicate returns for a line that is
+// not UTF-8 at all — a crash-torn append, typically.
+//
+// A sentinel for the same reason as ErrNotAnObject: the reader's report puts
+// it in its own bucket ("undecodable"), and the alternative was matching on
+// the message text. A message is prose, prose gets reworded, and the day
+// someone improves this sentence the reader would silently start calling
+// torn bytes malformed — a miscount no test that only checks "the row was
+// dropped" can see.
+var ErrByteTainted = errors.New("byte-tainted line (raw non-UTF-8 bytes)")
+
+// LoadsCleanValue is LoadsClean without the object requirement: the same
+// four refusals (invalid UTF-8, lone surrogates, duplicate names, oversized
+// int literals) and the same trailing-data check, returning whatever JSON
+// value the line holds.
+//
+// It exists because the reader needs to tell a line that is NOT JSON from a
+// line that is JSON of the wrong shape, and LoadsClean answers "no" to both.
+// LoadsClean is now this function plus one type assertion, so the two cannot
+// drift into disagreeing about what a clean line is — which is the whole
+// point of there being a single admission predicate.
+func LoadsCleanValue(line string) (any, error) {
 	if !utf8.ValidString(line) {
-		return nil, fmt.Errorf("byte-tainted line (raw non-UTF-8 bytes)")
+		return nil, ErrByteTainted
 	}
 	if err := RefuseLoneSurrogates([]byte(line)); err != nil {
 		return nil, err
@@ -64,17 +111,14 @@ func LoadsClean(line string) (map[string]any, error) {
 	}
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil {
+	var v any
+	if err := dec.Decode(&v); err != nil {
 		return nil, err
-	}
-	if m == nil {
-		return nil, fmt.Errorf("not a JSON object")
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, fmt.Errorf("trailing data after JSON value")
 	}
-	return m, nil
+	return v, nil
 }
 
 // LoadsCleanOrdered is LoadsClean for a caller that intends to REWRITE the
@@ -104,7 +148,7 @@ func LoadsClean(line string) (map[string]any, error) {
 // calling it first would let a row in here that LoadsClean strands.
 func LoadsCleanOrdered(line string) (pyval.Obj, error) {
 	if !utf8.ValidString(line) {
-		return nil, fmt.Errorf("byte-tainted line (raw non-UTF-8 bytes)")
+		return nil, ErrByteTainted
 	}
 	if err := RefuseLoneSurrogates([]byte(line)); err != nil {
 		return nil, err
@@ -118,7 +162,7 @@ func LoadsCleanOrdered(line string) (pyval.Obj, error) {
 	}
 	obj, ok := v.(pyval.Obj)
 	if !ok {
-		return nil, fmt.Errorf("not a JSON object")
+		return nil, ErrNotAnObject
 	}
 	return obj, nil
 }
