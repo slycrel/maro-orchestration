@@ -2,9 +2,10 @@ package pytext
 
 import (
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // casefold is a dedup key on a shared file, so "close enough" is not a
@@ -18,12 +19,9 @@ import (
 // something else, the result.
 func pythonCaseFoldMap(t *testing.T) map[rune]string {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import json,sys;print(json.dumps({c:chr(c).casefold() "+
-			"for c in range(0x110000) if chr(c).casefold()!=chr(c)}))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"for c in range(0x110000) if chr(c).casefold()!=chr(c)}))"))
 	var raw map[string]string
 	if err := json.Unmarshal(out, &raw); err != nil {
 		t.Fatalf("decoding CPython output: %v", err)
@@ -153,12 +151,9 @@ func TestCaseFoldMatchesCPythonOnWordsWhereItDivergesFromLower(t *testing.T) {
 		"ﬄ", "ﬁle", "İstanbul", "ʰΣ",
 		"- Prefer THE cheap path *(from evolver:x)*",
 	}
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import json,sys;print(json.dumps([w.casefold() for w in "+
-			"json.loads(sys.argv[1])]))", mustJSON(t, words)).Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"json.loads(sys.argv[1])]))", mustJSON(t, words)))
 	var want []string
 	if err := json.Unmarshal(out, &want); err != nil {
 		t.Fatalf("decoding CPython output: %v", err)

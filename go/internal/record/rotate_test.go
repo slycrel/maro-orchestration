@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // Rotation is a whole-store REWRITE of a file the Python runtime reads and
@@ -573,16 +574,9 @@ func pythonRotateRawCfg(t *testing.T, ws, cfg string, rows int) map[string]any {
 	}
 	seedLog(t, filepath.Join(ws, "memory", "captains_log.jsonl"), rows)
 
-	cmd := exec.Command("python3", "-c", pyRotateProducer, ws)
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 / captains_log unavailable: %v", err)
-	}
 	var got map[string]any
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "captains_log.py", Workspace: ws}.
+		RunJSON(t, pyRotateProducer, &got, ws)
 	return got
 }
 
@@ -817,16 +811,9 @@ func TestARowHoldingARawLineSeparatorRotatesTheWayPythonRotatesIt(t *testing.T) 
 		t.Fatal(err)
 	}
 	seed(filepath.Join(pyWS, "memory", "captains_log.jsonl"))
-	cmd := exec.Command("python3", "-c", pyRotateProducer, pyWS)
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 / captains_log unavailable: %v", err)
-	}
 	var py map[string]any
-	if err := json.Unmarshal(out, &py); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "captains_log.py", Workspace: pyWS}.
+		RunJSON(t, pyRotateProducer, &py, pyWS)
 
 	_, mem, path := rotWorkspace(t, 0.001, 10)
 	seed(path)
@@ -1157,22 +1144,14 @@ func TestCoerceIntMatchesPythonsInt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("python3", "-c",
+	var want []*int
+	pyprobe.Probe{Stdlib: true}.RunJSON(t,
 		"import json,sys\n"+
 			"out=[]\n"+
-			"for s in json.load(sys.stdin):\n"+
+			"for s in json.loads(sys.argv[1]):\n"+
 			"    try: out.append(int(s))\n"+
 			"    except Exception: out.append(None)\n"+
-			"print(json.dumps(out))")
-	cmd.Stdin = strings.NewReader(string(payload))
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
-	var want []*int
-	if err := json.Unmarshal(out, &want); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+			"print(json.dumps(out))", &want, string(payload))
 	var accepted, refused int
 	for i, s := range inputs {
 		got, ok := coerceInt(s)

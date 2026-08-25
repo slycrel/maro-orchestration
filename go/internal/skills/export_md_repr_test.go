@@ -1,12 +1,11 @@
 package skills
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // THE CONSEQUENCE TEST for adversarial r5's M2.
@@ -24,36 +23,17 @@ import (
 // repr(), so byte parity on it is the contract, not an approximation of one.
 func pythonSkillMD(t *testing.T, name, description string, triggers []string) (string, []string) {
 	t.Helper()
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(src, "skill_loader.py")); err != nil {
-		t.Skipf("Python source tree unavailable: %v", err)
-	}
-	payload, err := json.Marshal(map[string]any{
-		"name": name, "description": description, "triggers": triggers})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c", pySkillMDProducer)
-	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		var stderr string
-		if ee, ok := err.(*exec.ExitError); ok {
-			stderr = string(ee.Stderr)
-		}
-		t.Skipf("python3 unavailable or failed: %v\n%s", err, stderr)
-	}
+	// Through pyprobe: a missing skill_loader.py is an honest skip, but a
+	// probe that RAN and failed — a renamed helper, a changed signature,
+	// the snippet's own /tmp assert firing — must not report byte parity
+	// on a line nothing produced.
 	var got struct {
 		Line     string   `json:"line"`
 		Triggers []string `json:"triggers"`
 	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "skill_loader.py"}.RunJSON(t, pySkillMDProducer, &got,
+		pyprobe.Arg(t, map[string]any{
+			"name": name, "description": description, "triggers": triggers}))
 	return got.Line, got.Triggers
 }
 
@@ -62,7 +42,7 @@ func pythonSkillMD(t *testing.T, name, description string, triggers []string) (s
 const pySkillMDProducer = `
 import json, sys, tempfile
 from pathlib import Path
-spec = json.load(sys.stdin)
+spec = json.loads(sys.argv[1])
 import skill_loader
 line = "triggers: [" + ", ".join(repr(t) for t in spec["triggers"][:8]) + "]"
 d = Path(tempfile.mkdtemp(prefix="m2skill-"))
@@ -140,23 +120,14 @@ func TestSkillMarkdownTriggersMatchPythonsExporterByte(t *testing.T) {
 // pythonLoadSkill runs Python's real skill_loader over a file Go wrote.
 func pythonLoadSkill(t *testing.T, path string) []string {
 	t.Helper()
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c",
+	// The skip here read "python3 unavailable" but caught every ExitError
+	// too — so a load_skill_file that raised on the very file Go wrote
+	// (which is the defect this file exists to catch) reported green.
+	var got []string
+	pyprobe.Probe{Marker: "skill_loader.py"}.RunJSON(t,
 		"import json,sys;from pathlib import Path;import skill_loader;"+
 			"s=skill_loader.load_skill_file(Path(sys.argv[1]));"+
-			"print(json.dumps(list(s.triggers) if s else None))", path)
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
-	var got []string
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+			"print(json.dumps(list(s.triggers) if s else None))", &got, path)
 	return got
 }
 

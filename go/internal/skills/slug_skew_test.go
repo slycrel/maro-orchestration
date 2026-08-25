@@ -1,14 +1,12 @@
 package skills
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // Slugify turns a skill NAME into a FILENAME. Two runtimes disagreeing about
@@ -21,13 +19,10 @@ import (
 // matches it.
 func pythonWordFlags(t *testing.T) []bool {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import re,sys;w=re.compile(r'\\w');"+
 			"sys.stdout.write(''.join('1' if w.match(chr(c)) else '0' "+
-			"for c in range(0x110000)))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"for c in range(0x110000)))"))
 	if len(out) != 0x110000 {
 		t.Fatalf("got %d flags, want %d", len(out), 0x110000)
 	}
@@ -107,30 +102,11 @@ func TestTheWordSupplementIsStillCarryingWeight(t *testing.T) {
 // a re-implementation of it.
 func pythonSlugify(t *testing.T, names []string) []string {
 	t.Helper()
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(src, "skill_loader.py")); err != nil {
-		t.Skipf("Python source tree not present: %v", err)
-	}
-	payload, err := json.Marshal(names)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c",
-		"import json,sys;from skill_loader import _slugify;"+
-			"print(json.dumps([_slugify(n) for n in json.load(sys.stdin)]))")
-	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 / skill_loader unavailable: %v", err)
-	}
 	var got []string
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "skill_loader.py"}.RunJSON(t,
+		"import json,sys;from skill_loader import _slugify;"+
+			"print(json.dumps([_slugify(n) for n in json.loads(sys.argv[1])]))",
+		&got, pyprobe.Arg(t, names))
 	return got
 }
 

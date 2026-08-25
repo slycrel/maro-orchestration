@@ -2,22 +2,20 @@ package pytext
 
 import (
 	"encoding/json"
-	"os/exec"
 	"regexp"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // pythonClassMembers returns every code point CPython's `re` matches with
 // the given one-character class pattern.
 func pythonClassMembers(t *testing.T, pat string) map[rune]bool {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import json,re,sys;p=re.compile(sys.argv[1]);"+
 			"print(json.dumps([c for c in range(0x110000) "+
-			"if p.fullmatch(chr(c))]))", pat).Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"if p.fullmatch(chr(c))]))", pat))
 	var cs []int
 	if err := json.Unmarshal(out, &cs); err != nil {
 		t.Fatalf("decoding CPython output: %v", err)

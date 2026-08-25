@@ -5447,3 +5447,57 @@ accept-not-close residual.
 - **The goal's 200-rune clip is unobservable.** `observe.write_event`
   clips the same string again at 80, so the inner bound never reaches
   disk. Measured, labelled at the site, and scored as a justified miss.
+
+### The probe harnesses — a failing probe is fatal, at 15 more sites
+
+`internal/pyprobe` was built to end two divergences among the CPython
+differential harnesses. Building it did not end them: it ended them for
+the callers that moved. Seventeen sites still took a skip straight off the
+probe's own error, so a CPython run that FAILED — an assert firing, a
+renamed helper, a changed signature — reported the differential green.
+
+Fifteen migrated (`pytext` ×9, `record` ×6, `skills` ×3, minus overlap);
+the two in `internal/tasks` go with the round that is reading that package.
+Measured before and after on the worst of them: with the probe replaced by
+`sys.exit(1)`, `record`'s digit differential reported `--- SKIP` and `ok`
+before, and `--- FAIL: the CPython probe FAILED` after.
+
+`Probe` gained `Stdlib bool`. `pytext` asks the interpreter about the
+LANGUAGE — `casefold`, `repr`, `float()`, `re.compile(r'\w')` — and
+imports nothing from the repo, so it had no honest `Marker` and the only
+way to satisfy the required field was to borrow an unrelated module's
+name. A marker is a claim about what would make a skip honest; a borrowed
+one makes the probe skip for a reason that has nothing to do with it.
+`Run` is now fatal when a probe declares both or neither.
+
+Three probes changed from stdin to `sys.argv[1]` in the process
+(`pyDailyProducer`, `pySkillMDProducer`, `_slugify`), which is what
+`pyprobe.Arg` exists for — a fixture written as a Go value rather than as
+hand-escaped JSON inside a string literal.
+
+### Named residual — probes that read the operator's real config
+
+The other half of `pyprobe`'s promise is `MARO_USER_DIR` isolation. Without
+it a probe inherits this process's environment and `config.get` reads the
+real `~/.maro/config.yml`, which on this box registers a `notify.command`
+that shells out to Telegram and ssh's to another host (adversarial r11
+round 2, HIGH). The key is still there — verified 2026-08-24.
+
+Twelve probe files import repo modules without the isolation:
+
+    internal/director/escalation_diff_test.go
+    internal/jsonx/carve_diff_test.go
+    internal/jsonx/fence_diff_test.go
+    internal/notify/diff_test.go
+    internal/orch/mission_chain_diff_test.go
+    internal/orch/mission_dag_diff_test.go
+    internal/orch/mission_plan_diff_test.go
+    internal/orch/mission_validate_diff_test.go
+    internal/playbook/playbook_diff_test.go
+    internal/record/stopstamp_test.go
+    internal/runs/index_diff_test.go
+    internal/stopverdicts/diff_test.go
+
+None is known to emit an event that reaches the hook. That is the reason
+it is written down rather than closed: "not known to" is the state the
+r11 round 2 finding was in before it fired.

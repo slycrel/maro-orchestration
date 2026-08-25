@@ -1,10 +1,9 @@
 package record
 
 import (
-	"encoding/json"
-	"os/exec"
-	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // The three tests here stayed in record when the digit VALUE table moved
@@ -56,21 +55,16 @@ func TestTheFoldedValueIsTheValueCPythonParses(t *testing.T) {
 		"-٥.٠", "+١e٢", "\U0001E5FA",
 		"\U000116D0", "\U000116DA", // the 20-long supplement run, both halves
 	}
-	payload, err := json.Marshal(inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c",
-		"import json,sys;print(json.dumps([float(s) for s in json.load(sys.stdin)]))")
-	cmd.Stdin = strings.NewReader(string(payload))
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 unavailable or refused an input: %v", err)
-	}
+	// Through pyprobe, so that a probe which RAN and failed is fatal. The
+	// old spelling skipped on any non-zero exit, and its own message said
+	// "or refused an input" — but an input CPython refuses is the axis this
+	// test exists to measure, so the one outcome worth reporting was the
+	// one it swallowed. Measured before the change: making the probe exit 1
+	// reported `--- SKIP` and `ok`.
 	var want []float64
-	if err := json.Unmarshal(out, &want); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "memory_ledger.py"}.RunJSON(t,
+		"import json,sys;print(json.dumps([float(s) for s in json.loads(sys.argv[1])]))",
+		&want, pyprobe.Arg(t, inputs))
 	for i, in := range inputs {
 		got, ok := coerceFloat(in)
 		if !ok {

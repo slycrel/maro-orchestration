@@ -7895,3 +7895,100 @@ compile, which scores MISS while proving nothing) and one was the
 dominated clip above. Neither was a gap in the fixtures; both were the
 battery lying, in the two ways a battery can.
 
+
+### The probe audit — a skip is a test result, and 17 of them were lying
+
+Not a review round. This came out of the migration item that had been
+sitting in the queue as "move the remaining probe harnesses to
+`internal/pyprobe`", which read like bookkeeping and was not.
+
+`pyprobe` exists because eight hand-rolled CPython harnesses had diverged
+on two things, both of which its package doc records. The first is the one
+that matters here: **six of the eight treated a non-zero exit as a missing
+interpreter and skipped.** A probe that RAN and FAILED — a renamed helper,
+a changed signature, a safety assert firing — reported the differential
+green.
+
+The item was written as if the fix had landed and only the callers were
+outstanding. It had not: `pyprobe` was built, several packages moved to
+it, and the defect stayed live everywhere else. **A helper that fixes a
+class does not fix the class; it fixes the callers that reach it.**
+
+**What the sweep found.** 53 test files run CPython. Most discriminate
+correctly — they `exec.LookPath("python3")` first and are fatal otherwise,
+which is `pyprobe`'s own logic inlined. Filtering those out by hand is
+what the first two attempts got wrong, so the count comes from a detector
+instead: a `t.Skip` inside a function that runs `python3` and never calls
+`LookPath`.
+
+    21 sites, of which 4 are honest source-tree Stat checks
+    17 skips taken straight off a probe's own error
+
+Both attempts at that detector were themselves hollow, in the shape this
+chunk keeps finding:
+
+  - The first grep excluded the message `"python3 unavailable:"` as
+    benign. That spelling catches every `ExitError` too. It hid a site in
+    `skills/export_md_repr_test.go` where Python's real
+    `load_skill_file` is run over a file Go wrote — the defect the file
+    exists to catch — and a raise there was a skip.
+  - The first detector matched functions with `\nfunc [^\n]*\{`, so every
+    multi-line signature was invisible to it, `record.pythonDaily`
+    included — the one site I already knew was bad. **A detector that
+    cannot see the case you already have is not measuring; it is
+    agreeing.**
+
+**Measured, not argued.** The claim "this reports green" was tested
+before anything was changed, on the worst of the sites — the one whose
+own skip message read *"python3 unavailable **or refused an input**"*,
+where an input CPython refuses is the axis the test exists to measure:
+
+    probe replaced with `sys.exit(1)`
+      --- SKIP: TestTheFoldedValueIsTheValueCPythonParses
+      PASS
+      ok   .../internal/record  0.032s
+
+After the migration, the same mutation:
+
+    --- FAIL: the CPython probe FAILED (exit 1). This is not a missing
+        interpreter — the differential cannot report green.
+
+**15 sites migrated** across `pytext` (9), `record` (6, counting both
+`rotate` producers), `skills` (3) and the one in `record/verdict_digits`.
+Two more live in `internal/tasks`, which the round-8 reviewer is reading;
+they go with that round rather than under it.
+
+**One thing `pyprobe` could not express.** `pytext`'s probes ask the
+interpreter about the LANGUAGE — `casefold`, `repr`, `float()`,
+`re.compile(r'\w')` — and import nothing from the repo. `Probe` required
+a `Marker`, and the only way to satisfy it was to borrow an unrelated
+module's filename. That is a false claim in the one field whose whole job
+is to say what would make a skip honest: the probe would then skip
+because `notify.py` was renamed, for a test about `str.casefold`. So
+`Stdlib bool` is explicit, and `Run` is fatal when a probe declares both
+or neither — a marker is a claim, and a borrowed one is a wrong claim
+that reads as diligence.
+
+**The battery's first run was worthless and said so.** 18 MISSes, all of
+them compile failures: the inserter put a raw newline inside Go
+double-quoted literals. This is the third time this chunk has scored a
+mutation MISS on a mutation that never ran, and the rule is now written
+into the script rather than remembered — two inserters, one per literal
+shape, each asserting the shape it was given. **A mutation that does not
+compile is not evidence, and a battery that counts it as a miss is
+reporting on itself.**
+
+Re-run: 20 mutations, one per SITE (never at `pyprobe.Run` — round 6's
+lesson), each breaking that site's own snippet and asserting the test goes
+RED rather than green-by-skip.
+
+**A residual, counted rather than worried about.** The other half of
+`pyprobe`'s promise is `MARO_USER_DIR` isolation: without it a probe reads
+the operator's real `~/.maro/config.yml`, which on this box registers a
+`notify.command` that shells out to Telegram and ssh's to another host
+(adversarial r11 round 2, HIGH). Verified still true today — the key is
+there. Of the probe files that import repo modules and could therefore
+reach `config.get`, **12 still run without the isolation**, listed in
+PORT.md. None of them is known to emit an event; that is exactly the
+problem with leaving it at "known", so it is a named residual with a list
+and not a claim of safety.

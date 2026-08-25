@@ -2,9 +2,10 @@ package pytext
 
 import (
 	"fmt"
-	"os/exec"
 	"testing"
 	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // This sweep moved here with the table it tests (from internal/record,
@@ -28,13 +29,10 @@ import (
 // failure instead of as silent drift.
 func pythonDecimalMap(t *testing.T) []int8 {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import sys,unicodedata as u;"+
 			"sys.stdout.write(''.join(chr(48+u.decimal(chr(c),-1)) "+
-			"if u.decimal(chr(c),-1)>=0 else '.' for c in range(0x110000)))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"if u.decimal(chr(c),-1)>=0 else '.' for c in range(0x110000)))"))
 	if len(out) != 0x110000 {
 		t.Fatalf("got %d flags, want %d", len(out), 0x110000)
 	}

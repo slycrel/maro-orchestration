@@ -80,8 +80,16 @@ if _real == _live or _os.path.commonpath([_real, _live]) == _live:
 
 // Probe is one configured CPython probe.
 type Probe struct {
-	// Marker is the file SrcDir checks for; required.
+	// Marker is the file SrcDir checks for; required unless Stdlib is set.
 	Marker string
+	// Stdlib says this probe imports nothing from the repo — it asks the
+	// interpreter about the LANGUAGE (casefold, repr, float()), not about
+	// a ported module. Such a probe gets no PYTHONPATH and no marker, and
+	// must not borrow an unrelated module's name to satisfy one: a marker
+	// is a claim about what would make the skip honest, and a false claim
+	// there is how a probe skips for a reason that has nothing to do with
+	// it. Set this and leave Marker empty.
+	Stdlib bool
 	// Workspace, when set, is exported as MARO_WORKSPACE and turns on the
 	// live-workspace refusal. Leave it empty for a read-only probe.
 	Workspace string
@@ -121,9 +129,15 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	if userDir == "" {
 		userDir = t.TempDir()
 	}
+	if (p.Marker == "") != p.Stdlib {
+		t.Fatalf("pyprobe: a probe needs either a Marker or Stdlib, not "+
+			"both and not neither (Marker=%q Stdlib=%v)", p.Marker, p.Stdlib)
+	}
 	cmd := exec.Command("python3", append([]string{"-c", src}, args...)...)
-	env := append(cmd.Environ(), "PYTHONPATH="+SrcDir(t, p.Marker),
-		"MARO_USER_DIR="+userDir)
+	env := append(cmd.Environ(), "MARO_USER_DIR="+userDir)
+	if !p.Stdlib {
+		env = append(env, "PYTHONPATH="+SrcDir(t, p.Marker))
+	}
 	if p.Workspace != "" {
 		env = append(env, "MARO_WORKSPACE="+p.Workspace)
 	}

@@ -1,11 +1,11 @@
 package pytext
 
 import (
-	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // repr() output is STORED PROSE: it goes into SKILL.md (skills/export_md.go),
@@ -16,21 +16,10 @@ import (
 // pythonRepr asks CPython for repr() of each input.
 func pythonRepr(t *testing.T, in []string) []string {
 	t.Helper()
-	payload, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c",
-		"import json,sys; print(json.dumps([repr(s) for s in json.load(sys.stdin)]))")
-	cmd.Stdin = strings.NewReader(string(payload))
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
 	var got []string
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Stdlib: true}.RunJSON(t,
+		"import json,sys; print(json.dumps([repr(s) for s in json.loads(sys.argv[1])]))",
+		&got, pyprobe.Arg(t, in))
 	return got
 }
 
@@ -109,12 +98,9 @@ func TestPrintabilityDivergesOnlyInTheSafeDirection(t *testing.T) {
 	if unicode.Version == "" {
 		t.Fatal("no unicode version")
 	}
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import sys;sys.stdout.write(''.join('1' if chr(c).isprintable() else '0' "+
-			"for c in range(0x110000)))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"for c in range(0x110000)))"))
 	if len(out) != 0x110000 {
 		t.Fatalf("got %d flags, want %d", len(out), 0x110000)
 	}

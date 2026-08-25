@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // The daily log and MEMORY.md are SHARED files: Python appends to the same
@@ -101,42 +102,24 @@ func boolPtr(b bool) *bool { return &b }
 func pythonDaily(t *testing.T, cases []dailyCase, ledger []map[string]any,
 	days []string, lessons *string) map[string]string {
 	t.Helper()
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "src"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(src, "memory_ledger.py")); err != nil {
-		t.Skipf("Python source tree unavailable: %v", err)
-	}
-	payload, err := json.Marshal(map[string]any{
-		"cases": cases, "recorded_at": diffRecordedAt,
-		"ledger": ledger, "days": days, "lessons": lessons,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c", pyDailyProducer)
-	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+src)
-	out, err := cmd.Output()
-	if err != nil {
-		var stderr string
-		if ee, ok := err.(*exec.ExitError); ok {
-			stderr = string(ee.Stderr)
-		}
-		t.Skipf("python3 unavailable or failed: %v\n%s", err, stderr)
-	}
+	// The snippet mints its own workspace and asserts /tmp on both the
+	// workspace and the RESOLVED _memory_dir(), so it keeps that guard
+	// rather than handing pyprobe a Workspace. What it did not have was the
+	// other half: a probe that ran and FAILED — an assert firing, a renamed
+	// _append_daily_log — reported the whole differential green.
 	var got map[string]string
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Marker: "memory_ledger.py"}.RunJSON(t, pyDailyProducer, &got,
+		pyprobe.Arg(t, map[string]any{
+			"cases": cases, "recorded_at": diffRecordedAt,
+			"ledger": ledger, "days": days, "lessons": lessons,
+		}))
 	return got
 }
 
 const pyDailyProducer = `
 import json, os, sys, tempfile
 from pathlib import Path
-spec = json.load(sys.stdin)
+spec = json.loads(sys.argv[1])
 ws = Path(tempfile.mkdtemp(prefix="m1diff-"))
 assert str(ws).startswith("/tmp/"), ws
 os.environ["MARO_WORKSPACE"] = str(ws)

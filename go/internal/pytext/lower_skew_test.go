@@ -2,10 +2,11 @@ package pytext
 
 import (
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
 
 // str.lower() feeds Slugify, which produces a FILENAME, and the audience
@@ -17,12 +18,9 @@ import (
 // something else, the result.
 func pythonLowerMap(t *testing.T) map[rune]string {
 	t.Helper()
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import json,sys;print(json.dumps({c:chr(c).lower() "+
-			"for c in range(0x110000) if chr(c).lower()!=chr(c)}))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"for c in range(0x110000) if chr(c).lower()!=chr(c)}))"))
 	var raw map[string]string
 	if err := json.Unmarshal(out, &raw); err != nil {
 		t.Fatalf("decoding CPython output: %v", err)
@@ -190,12 +188,9 @@ func TestTheSigmaContextRuleAgreesWithCPythonAtEveryCodePoint(t *testing.T) {
 	for _, a := range arms {
 		expr = append(expr, "('1' if "+a.py+" else '0')")
 	}
-	out, err := exec.Command("python3", "-c",
+	out := []byte(pyprobe.Probe{Stdlib: true}.Run(t,
 		"import sys;sys.stdout.write(''.join("+strings.Join(expr, "+")+
-			"for c in range(0x110000)))").Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
+			"for c in range(0x110000)))"))
 	if len(out) != n*0x110000 {
 		t.Fatalf("got %d flags, want %d", len(out), n*0x110000)
 	}
@@ -313,21 +308,10 @@ func TestLowerMatchesCPythonOnWordsWithSigma(t *testing.T) {
 		"στίγμαΣ",      // already-lowercase context
 		"ΜΆΪΟΣ",        // accents and diaeresis
 	}
-	payload, err := json.Marshal(words)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("python3", "-c",
-		"import json,sys;print(json.dumps([s.lower() for s in json.load(sys.stdin)]))")
-	cmd.Stdin = strings.NewReader(string(payload))
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skipf("python3 unavailable: %v", err)
-	}
 	var want []string
-	if err := json.Unmarshal(out, &want); err != nil {
-		t.Fatalf("decoding CPython output: %v\n%s", err, out)
-	}
+	pyprobe.Probe{Stdlib: true}.RunJSON(t,
+		"import json,sys;print(json.dumps([s.lower() for s in json.loads(sys.argv[1])]))",
+		&want, pyprobe.Arg(t, words))
 	sawFinal := false
 	for i, w := range words {
 		if strings.ContainsRune(want[i], 'ς') {
