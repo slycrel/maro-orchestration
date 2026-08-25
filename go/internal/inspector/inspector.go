@@ -1055,11 +1055,17 @@ func FrictionSummary(workspaceDir string) string {
 // nowISO is `datetime.now(timezone.utc).isoformat()`, which is
 // pyval.NowISO — not a local format string.
 //
-// The local copy this replaced spelled the layout by hand and got the
-// offset and the width right, but wrote ".000000" for a whole second
-// where isoformat omits the fraction entirely. One call in a million
-// lands there, which is exactly the kind of divergence a hand-written
-// layout survives for years. It was also the FIFTH identical copy in
-// this port: a helper you did not look for is a helper you will write
-// again.
+// What this replaced was NOT a hand-spelled copy of the port-wide layout:
+// inspector had four `time.Now().UTC().Format(time.RFC3339Nano)` calls
+// (updated_at, InspectedAt, GeneratedAt, and the diagnosis stamp), which
+// is the LOUDER of the two classes the census separates. RFC3339Nano
+// writes "Z" where isoformat writes "+00:00", and trims trailing zeros
+// where isoformat pads to six digits — so it was wrong on the offset and
+// on the width, not just at the whole-second edge.
+//
+// The paragraph that stood here for one round described the other class,
+// because it was pasted from the four files that really did have a
+// hand-spelled layout. A comment that asserts a history is a claim like
+// any other, and this one was checkable in one `git show` (adversarial
+// r2, L1).
 func nowISO() string { return pyval.NowISO(time.Now().UTC()) }

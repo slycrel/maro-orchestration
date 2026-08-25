@@ -588,18 +588,48 @@ func decodeOrdered(dec *json.Decoder) (any, error) {
 }
 
 func decodeOrderedAt(dec *json.Decoder, depth int) (any, error) {
-	if depth > maxOrderedDepth {
-		// Worded to match what encoding/json's scanner says, because a
-		// caller that surfaces the text should not be able to tell which
-		// of the two readers refused.
-		return nil, fmt.Errorf("exceeded max depth")
-	}
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
 	}
 	switch t := tok.(type) {
 	case json.Delim:
+		// THE BOUND IS ON OPEN CONTAINERS, and it is checked here rather
+		// than at the top of the function, because encoding/json's scanner
+		// counts containers and the first version of this counted TOKENS.
+		//
+		// `depth` is the number of enclosing containers, so the one being
+		// opened now is the (depth+1)-th. Checking `depth > max` before
+		// reading the token instead refused at the (max+2)-th container for
+		// any document whose outermost value is a container holding a
+		// chain — which is `{"a":[[[…]]]}`, the corpus's own nest() shape.
+		// One off by one, in the only place it can be seen:
+		//
+		//	nest(9999)   both admit
+		//	nest(10000)  LoadsClean REFUSES, LoadsCleanOrdered admitted
+		//	nest(10001)  both refuse
+		//
+		// and readerCorpus carried 9999 and 10001 — the two that agree. A
+		// limit with no case at its own boundary is a limit nothing pins,
+		// and the case chosen was one step past the boundary on each side.
+		//
+		// The consequence was the r1 HIGH's, live: Apply's snapshot read is
+		// the ordered reader and its keyed merge is the plain one, so a
+		// row at exactly this depth was rewritten by one and invisible to
+		// the other — `replaced` stayed false, a SECOND row for the same
+		// suggestion_id was appended, and IsApplied then read false for a
+		// suggestion that had just been applied. CPython admits it on both
+		// sides and keeps one row.
+		//
+		// A scalar opens no container, so it needs no check: recursion here
+		// happens only through the two arms below, and bounding those
+		// bounds the stack.
+		if depth+1 > maxOrderedDepth {
+			// Worded to match what encoding/json's scanner says, because a
+			// caller that surfaces the text should not be able to tell which
+			// of the two readers refused.
+			return nil, fmt.Errorf("exceeded max depth")
+		}
 		switch t {
 		case '{':
 			obj := Obj{}

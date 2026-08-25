@@ -1,7 +1,10 @@
 package skills
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/slycrel/maro-orchestration/go/internal/llm"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -43,14 +46,12 @@ type PromotionReport struct {
 }
 
 // MaybeAutoPromoteSkills promotes provisional skills that meet the quality
-// bar to established.
+// bar to established, with no LLM validation harness.
 //
-// NAMED GAP, not a silent one: Python optionally runs a Voyager-style LLM
-// validation harness with a repair loop (validate_skill_for_promotion +
-// evolver.rewrite_skill) before promoting each candidate. This is Python's
-// adapter=None path — behaviourally identical there, and a real difference
-// on a box that passes an adapter. The rewrite half depends on evolver's
-// skill-rewrite surface, which is not ported.
+// This is Python's adapter=None path, spelled as its own function because
+// that is what every caller in the port passes today. The harness lives in
+// MaybeAutoPromoteSkillsWithAdapter, which this delegates to — one body, so
+// the two cannot drift the way two copies of one sweep would.
 //
 // The `limit` caps CANDIDATES, not successes: a pool of never-passing
 // provisionals must not turn the cap into unbounded work every sweep.
@@ -66,6 +67,41 @@ type PromotionReport struct {
 // own lock guards only the write — a mutation landing inside that window
 // would be dropped by the full rewrite.
 func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (PromotionReport, error) {
+	return MaybeAutoPromoteSkillsWithAdapter(context.Background(), ws, limit,
+		DefaultMaxRepairAttempts, rec, nil)
+}
+
+// DefaultMaxRepairAttempts is Python's max_repair_attempts default.
+const DefaultMaxRepairAttempts = 3
+
+// MaybeAutoPromoteSkillsWithAdapter is the sweep with the Voyager-style
+// validation harness wired in.
+//
+// For each candidate that clears the numeric gates, the harness validates,
+// and on a failure sends the skill through evolver.rewrite_skill (in place,
+// so the repair persists) and validates again — up to maxRepairAttempts
+// times. A skill that never validates stays provisional.
+//
+// # Three things about the loop that are easy to get wrong
+//
+// The LAST attempt still spends a rewrite whose result is never validated:
+// the loop is `for attempt in range(n)` with the rewrite at the bottom, so
+// attempt n-1 validates, fails, rewrites, and falls out. That is real LLM
+// spend on a skill this sweep has already given up on, and it is Python's
+// behaviour, so it is this port's.
+//
+// maxRepairAttempts <= 0 with an adapter present promotes NOTHING — the loop
+// body never runs, `valid` stays false, and every candidate is held. It is
+// not clamped to 1 here, because a caller that passes 0 gets the same answer
+// from both runtimes.
+//
+// A rewrite that RAISES and a rewrite that returns None both stop the loop,
+// but they are different events: Python catches the raise in a bare except
+// around the call and breaks. The port's RewriteSkill returns an error for
+// exactly the cases Python raises, and this treats both as break.
+func MaybeAutoPromoteSkillsWithAdapter(ctx context.Context, ws string, limit,
+	maxRepairAttempts int, rec *record.Recorder,
+	adapter llm.Adapter) (PromotionReport, error) {
 	rep := PromotionReport{Held: map[string]string{}}
 	if limit <= 0 {
 		limit = 10
@@ -79,9 +115,10 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 	}
 
 	type promotion struct {
-		skill    Skill
-		uses     int
-		evidence string
+		skill      Skill
+		uses       int
+		evidence   string
+		validation string
 	}
 	var chosen []promotion
 	examined := 0
@@ -110,7 +147,45 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 			evidence = "injected-confirmed"
 		}
 		examined++
-		chosen = append(chosen, promotion{skill: s, uses: uses, evidence: evidence})
+
+		// "skipped" is the honest word for "no adapter, so validation never
+		// ran" — distinct from "passed" (the model judged it) and from
+		// "unjudged" (the fail-open default let it through). The promotion
+		// event carries whichever one happened.
+		validation := "skipped"
+		if adapter != nil {
+			candidate := s
+			valid := false
+			for attempt := 0; attempt < maxRepairAttempts; attempt++ {
+				res := ValidateSkillForPromotion(ctx, candidate, adapter)
+				if res.Valid {
+					valid = true
+					validation = "passed"
+					if !res.Judged {
+						validation = "unjudged"
+					}
+					break
+				}
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+					"skill %s failed validation (attempt %d/%d): %s — rewriting",
+					s.ID, attempt+1, maxRepairAttempts, res.Reason))
+				repaired, rwarns, rerr := RewriteSkill(ctx, ws, candidate, adapter,
+					RewriteOptions{InPlace: true, Rec: rec})
+				rep.Warnings = append(rep.Warnings, rwarns...)
+				if rerr != nil || repaired == nil {
+					break
+				}
+				candidate = *repaired
+			}
+			if !valid {
+				rep.Held[s.ID] = fmt.Sprintf(
+					"held at provisional after %d repair attempt(s)", maxRepairAttempts)
+				continue
+			}
+		}
+
+		chosen = append(chosen, promotion{skill: s, uses: uses,
+			evidence: evidence, validation: validation})
 	}
 	if len(chosen) == 0 {
 		return rep, nil
@@ -184,7 +259,7 @@ func MaybeAutoPromoteSkills(ws string, limit int, rec *record.Recorder) (Promoti
 			p.skill.UtilityScore, p.uses)
 		if evErr := rec.EventRelated("SKILL_PROMOTED", p.skill.Name, summary, map[string]any{
 			"skill_id": p.skill.ID, "utility": round3(p.skill.UtilityScore),
-			"use_count": p.uses, "validation": "skipped", "evidence": p.evidence,
+			"use_count": p.uses, "validation": p.validation, "evidence": p.evidence,
 		}, "", []string{"skill:" + p.skill.ID}); evErr != nil {
 			rep.Warnings = append(rep.Warnings,
 				"captain's log write failed (SKILL_PROMOTED): "+evErr.Error())

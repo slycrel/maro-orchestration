@@ -256,6 +256,11 @@ var userSurfacedEvents = map[string]bool{
 	"SKILL_CIRCUIT_OPEN":   true,
 	"SKILL_CIRCUIT_CLOSED": true,
 	"ISLAND_CULLED":        true,
+	// The circuit-lane rewrite, in Python's USER_SURFACED_EVENTS beside
+	// the promotion. It is the loudest thing the self-improvement lane
+	// does to a skill short of retiring it: the body a future run gets
+	// injected is not the body the operator last read.
+	"SKILL_REWRITE": true,
 	// The A/B lifecycle pair, both in Python's USER_SURFACED_EVENTS:
 	// minting a challenger and resolving the contest are decisions about
 	// the system's own behaviour, which is what this lane is.

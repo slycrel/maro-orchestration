@@ -526,6 +526,25 @@ func pyIterate(v any) ([]any, error) {
 		return []any(t), nil
 	case []any:
 		return t, nil
+	case []string:
+		// THE THIRD SPELLING OF "list", and the one a Go caller supplies
+		// rather than a decoder: rewrite_skill's `parsed.get("steps_template",
+		// skill.steps_template)` falls back to the SKILL's own field, which
+		// is []string here and a plain Python list there. Without this arm
+		// the fallback raised "'list' object is not iterable" — a TypeError
+		// out of rewrite_skill on the most ordinary reply there is, one that
+		// simply omitted a key.
+		//
+		// NormalizeTags has the same three arms and says the same thing in
+		// its own comment: an enumeration is not a class, and this switch is
+		// a different enumeration of "list" than pyval's. Two of the three
+		// were here; the one that only a Go caller can produce was not,
+		// because until now every caller came from a decoder.
+		out := make([]any, len(t))
+		for i, s := range t {
+			out[i] = s
+		}
+		return out, nil
 	case string:
 		var out []any
 		for _, r := range t {

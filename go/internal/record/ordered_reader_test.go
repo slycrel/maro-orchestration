@@ -29,24 +29,42 @@ var readerCorpus = []string{
 	`{"a": NaN}`,              // ditto
 	`{"a":1e400}`,             // out-of-range float, CLEAN
 	`{"a":` + hugeInt() + `}`, // >4300-digit int → malformed
-	// NESTING DEPTH, both sides of encoding/json's 10000 limit. These are
-	// the two lines the corpus was missing when it first claimed the two
-	// readers agree: `Decode` enforces the limit in the scanner and
-	// `Token()` does not, so the ordered reader admitted 10001 — and kept
-	// recursing, into a `fatal error: stack overflow` past ~2M. A
-	// detector that cannot see the case you already have is agreeing, not
-	// measuring.
-	nest(9999),                          // deep but legal on both
-	nest(10001),                         // refused by both → malformed
+	// NESTING DEPTH. `Decode` enforces encoding/json's limit in the
+	// scanner and `Token()` does not, so the ordered reader once admitted
+	// what the plain one refuses — and kept recursing, into a `fatal
+	// error: stack overflow` past ~2M.
+	//
+	// FOUR lines, because the limit counts OPEN CONTAINERS and nest(n)
+	// opens n+1 of them. The first pair here was nest(9999) and
+	// nest(10001) — one step inside the boundary on each side, so the two
+	// readers agreed on both while disagreeing at nest(10000) itself,
+	// which is the only value that could show it. A limit with no case at
+	// its own boundary is a limit nothing pins, and picking neighbours of
+	// the boundary is how that happens while looking thorough.
+	//
+	// The objChain rows are the same boundary for a shape that opens ONE
+	// container per level rather than n+1, so together they pin that the
+	// bound is on containers and not on bracket depth.
+	nest(9999),                          // 10000 containers: legal on both
+	nest(10000),                         // 10001 containers: refused by both
+	objChain(10000),                     // 10000 containers: legal on both
+	objChain(10001),                     // refused by both → malformed
 	"{\"a\":\"\xff\xfe\"}",              // byte-tainted → undecodable
 	`{"a":"\ud800"}`,                    // lone surrogate → malformed
 	`{"nested":{"z":1,"a":2},"t":true}`, // nesting, for the order check
 	`{"n":3.0,"i":7,"big":12345678901234567890}`, // number shapes
 }
 
-// nest builds `{"a":[[[…]]]}` with n levels of array under the object.
+// nest builds `{"a":[[[…]]]}` with n levels of array under the object —
+// n+1 open containers, counting the object.
 func nest(n int) string {
 	return `{"a":` + strings.Repeat("[", n) + strings.Repeat("]", n) + `}`
+}
+
+// objChain builds `{"a":{"a":…1…}}` n objects deep — exactly n containers,
+// so the same n lands on the other side of the bound from nest(n).
+func objChain(n int) string {
+	return strings.Repeat(`{"a":`, n) + "1" + strings.Repeat("}", n)
 }
 
 func hugeInt() string {

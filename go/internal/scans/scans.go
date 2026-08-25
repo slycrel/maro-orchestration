@@ -58,13 +58,19 @@ func memoryDir(ws string) string { return filepath.Join(ws, "memory") }
 // nowISO is `datetime.now(timezone.utc).isoformat()`, which is
 // pyval.NowISO — not a local format string.
 //
-// The local copy this replaced spelled the layout by hand and got the
-// offset and the width right, but wrote ".000000" for a whole second
-// where isoformat omits the fraction entirely. One call in a million
-// lands there, which is exactly the kind of divergence a hand-written
-// layout survives for years. It was also the FIFTH identical copy in
-// this port: a helper you did not look for is a helper you will write
-// again.
+// The local copy this replaced spelled the layout by hand as
+// "2006-01-02T15:04:05.000000-07:00" — offset and width right, but
+// ".000000" for a whole second, where isoformat omits the fraction
+// entirely. One call in a million lands there, which is exactly the kind
+// of divergence a hand-written layout survives for years.
+//
+// It was one of FOUR byte-identical copies of that layout (graduation,
+// pack/export, scans, skills/stats), which is why the answer was a census
+// and not four fixes: a helper you did not look for is a helper you will
+// write again, and the defect was the count. The line that used to stand
+// here said "the FIFTH copy" — in all four files, and in inspector, which
+// had no copy at all. Five claims to be the fifth is a paste, not a
+// measurement (adversarial r2, L4).
 func nowISO() string { return pyval.NowISO(time.Now().UTC()) }
 
 // parseISO accepts both runtimes' timestamp spellings (Python isoformat

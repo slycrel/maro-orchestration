@@ -33,14 +33,23 @@ var knownEmittedEvents = map[string]string{
 	// what it is for — a new event type reaches the user lane by decision
 	// or not at all.
 	"SKILL_VARIANT_CREATED": "user",
-	"AB_RETIRED":            "user",
-	"EVOLVER_APPLIED":       "user",
-	"EVOLVER_REVERTED":      "user",
-	"EVOLVER_VERDICT":       "user",
-	"EVOLVER_GENERATED":     "system",
-	"EVOLVER_SKIPPED":       "system",
-	"GRADUATION_PROPOSED":   "user",
-	"GRADUATION_VERIFIED":   "user",
+	// The circuit-lane rewrite, added with internal/skills/rewrite.go.
+	// "user", read off the LIVE frozenset rather than inferred from the
+	// neighbours: SKILL_REWRITE sits in USER_SURFACED_EVENTS beside
+	// SKILL_PROMOTED and SKILL_VARIANT_CREATED. Python's own history is
+	// the reason to check rather than assume — the event type was
+	// registered and consumed for months before anything emitted it
+	// (BACKLOG #8, wired 2026-07-03), so its membership is older than its
+	// first row.
+	"SKILL_REWRITE":       "user",
+	"AB_RETIRED":          "user",
+	"EVOLVER_APPLIED":     "user",
+	"EVOLVER_REVERTED":    "user",
+	"EVOLVER_VERDICT":     "user",
+	"EVOLVER_GENERATED":   "system",
+	"EVOLVER_SKIPPED":     "system",
+	"GRADUATION_PROPOSED": "user",
+	"GRADUATION_VERIFIED": "user",
 	// The rotation audit row (r5 L2). "system", checked against the live
 	// frozenset: LOG_ROTATED is in Python's EVENT_TYPES and not in its
 	// USER_SURFACED_EVENTS.

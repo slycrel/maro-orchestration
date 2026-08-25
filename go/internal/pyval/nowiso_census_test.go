@@ -1,6 +1,8 @@
 package pyval
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +21,45 @@ import (
 // into a shared ledger.
 var writerLayout = regexp.MustCompile(
 	`\.Format\(\s*(time\.RFC3339[A-Za-z]*|"[^"]*2006[^"]*")`)
+
+// stripComments blanks every comment before the census reads the file, so
+// the tripwire measures CODE.
+//
+// It scanned raw bytes for one round too long. The r2 fixes rewrote
+// inspector.go's doc comment to describe the four RFC3339Nano calls it
+// actually replaced — naming `Format(time.RFC3339Nano)` in a sentence — and
+// the census reported the sentence as a tenth offender. Nothing about the
+// timestamps had changed.
+//
+// That direction is only embarrassing, but the same blindness runs the other
+// way and would not be: a site could be exempted by writing prose that
+// happens to match, or a real writer could be argued about on the strength
+// of a comment near it. The detector's subject is the code, so it reads the
+// code.
+//
+// Comment spans are replaced with spaces rather than deleted so that offsets
+// and line counts survive, in case a future version wants to report them.
+func stripComments(path string, src []byte) (string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	if err != nil {
+		return "", err
+	}
+	base := fset.File(f.Pos()).Base()
+	out := []byte(string(src))
+	for _, group := range f.Comments {
+		lo, hi := int(group.Pos())-base, int(group.End())-base
+		if lo < 0 || hi > len(out) {
+			continue
+		}
+		for i := lo; i < hi; i++ {
+			if out[i] != '\n' {
+				out[i] = ' '
+			}
+		}
+	}
+	return string(out), nil
+}
 
 // TestNoPackageSpellsItsOwnTimestamp is a census tripwire, not a unit test.
 //
@@ -90,6 +131,11 @@ func TestNoPackageSpellsItsOwnTimestamp(t *testing.T) {
 
 	root := ".."
 	var offenders []string
+	// Every writer the walk sees, exempt or not. stripComments is new
+	// machinery between the file and the regex, and machinery that blanked
+	// too much would make this census pass by seeing nothing — the exact
+	// failure the regex probes below were written against, one layer up.
+	var writersSeen int
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -103,7 +149,12 @@ func TestNoPackageSpellsItsOwnTimestamp(t *testing.T) {
 			return rerr
 		}
 		rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
-		for _, m := range writerLayout.FindAllString(string(body), -1) {
+		code, cerr := stripComments(path, body)
+		if cerr != nil {
+			return cerr
+		}
+		for _, m := range writerLayout.FindAllString(code, -1) {
+			writersSeen++
 			if _, ok := allowed[rel]; ok {
 				continue
 			}
@@ -119,6 +170,14 @@ func TestNoPackageSpellsItsOwnTimestamp(t *testing.T) {
 			"pyval.NowISO — Python spells all of them "+
 			"datetime.now(timezone.utc).isoformat():\n  %s",
 			strings.Join(offenders, "\n  "))
+	}
+
+	// The allowlist above names ten files that DO render a layout. If the
+	// walk found none of them, it is not reading source any more.
+	if writersSeen < len(allowed) {
+		t.Errorf("the walk found %d layout writers but %d files are exempted "+
+			"as having one — stripComments or the walk is eating real code",
+			writersSeen, len(allowed))
 	}
 
 	// Anti-vacuity: a regex that matched nothing would pass this test

@@ -180,22 +180,54 @@ func ReadAllCounted(path string) ([]map[string]any, SkipReport) {
 	}
 	var out []map[string]any
 	rep := SkipReport{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		m, bucket := classifyLine(line)
-		switch bucket {
-		case "":
-			if m != nil {
-				out = append(out, m)
-			}
-		case "undecodable":
-			rep.Undecodable++
-		case "malformed":
-			rep.Malformed++
-		case "non_dict":
-			rep.NonDict++
+	for _, line := range SplitStoredLines(string(raw)) {
+		if m := CountLine(line, &rep); m != nil {
+			out = append(out, m)
 		}
 	}
 	return out, rep
+}
+
+// SplitStoredLines is how read_jsonl_announced frames a store it has read
+// whole: `path.open("rb")` and `for raw_line in f`, which breaks on b"\n"
+// and on nothing else.
+//
+// Named rather than inlined because it is NOT the same rule as
+// pytext.SplitLines (ten separators) or as a text-mode iteration (three),
+// and the port has all three live in different places. A caller that holds
+// the bytes already — the evolver's in-lock dedup pass — has to frame them
+// the way its own reader would, and the way to make that checkable is to
+// have one function to point at.
+func SplitStoredLines(raw string) []string { return strings.Split(raw, "\n") }
+
+// CountLine is ReadAllCounted's per-line step, exposed for a caller that has
+// the store's bytes in hand and cannot re-open the file.
+//
+// It returns the record when the line is one, nil otherwise, and folds any
+// loss into rep's own bucket. The buckets are the point: a caller that
+// counted every failure as "malformed" would announce a DIFFERENT sentence
+// than CPython for the same store — an array row is "non-dict" and a
+// non-UTF-8 row is "undecodable", and an operator reading the warning is
+// being told which kind of damage happened.
+//
+// The one caller today is evolver's SaveSuggestions, whose dedup scan runs
+// inside LockedRMW (a `seen` set built outside the lock reopens the
+// 81-duplicate bug) and so cannot call ReadAllAnnounced. It had spelled the
+// scan like its four sibling merges — splitlines, strip, LoadsClean — which
+// is right for those four and wrong for this one, whose Python is
+// read_jsonl_announced. An idiom is not a defect; the defect is a spelling
+// that does not match the spelling at its own site.
+func CountLine(line string, rep *SkipReport) map[string]any {
+	m, bucket := classifyLine(line)
+	switch bucket {
+	case "undecodable":
+		rep.Undecodable++
+	case "malformed":
+		rep.Malformed++
+	case "non_dict":
+		rep.NonDict++
+	}
+	return m
 }
 
 // ReadAllAnnouncedOrdered is ReadAllAnnounced handing back rows that still
@@ -245,14 +277,26 @@ func ReadAllAnnouncedOrdered(path, what string) ([]pyval.Obj, string) {
 // stopped being the same reader and this doc comment is the promise that
 // broke.
 //
-// It HAS been broken once, and by the gap that structure would have
-// closed: encoding/json's nesting limit lives in the scanner, which
-// `Decode` drives and a `Token()` walk does not, so the ordered reader
-// admitted a 10001-deep document the plain one refuses — and recursed on
-// it into a process-killing stack overflow. Found by review, not by this
-// test, because the corpus had no deep line in it. Both sides of the
-// boundary are fixtures now. The lesson is about the corpus, not the
-// promise: a claim of parity is only as wide as the inputs behind it.
+// It HAS been broken TWICE, both times by nesting depth, and the second
+// time is the more instructive one.
+//
+// First: encoding/json's limit lives in the scanner, which `Decode`
+// drives and a `Token()` walk does not, so the ordered reader admitted a
+// deep document the plain one refuses — and recursed on it into a
+// process-killing stack overflow. Found by review, because the corpus had
+// no deep line in it at all.
+//
+// Then the fix went in, two deep rows joined the corpus, this test passed
+// — and the readers still disagreed. The limit counts open CONTAINERS and
+// the fix counted tokens, so `{"a":[[…]]}` with exactly 10000 arrays was
+// refused by one reader and admitted by the other; the corpus had chosen
+// 9999 and 10001, one step outside the boundary on each side. Both true
+// boundaries are fixtures now, for the two container shapes that put the
+// same n on opposite sides of it.
+//
+// The lesson is about the corpus, not the promise, and it got sharper the
+// second time: a claim of parity is only as wide as the inputs behind it,
+// and a limit's neighbours are not its boundary.
 func ReadAllCountedOrdered(path string) ([]pyval.Obj, SkipReport) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

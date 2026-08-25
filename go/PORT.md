@@ -6958,3 +6958,380 @@ epoch mask, the local-time stamp behind the TS mask, and the wrong join at
 the site.
 
 `go test ./...` exits 0; `go vet ./...` clean.
+
+## Round 2 on the rewrite chunk — the fix that was wrong, and the file that knew
+
+Seven findings, **seven verified**, measured on both sides before
+anything was touched. That is three consecutive rounds well above this
+project's historical 50–70% verification rate, and the reason is the
+same each time: the reviewer measured rather than read, and reported
+several findings as surviving mutants rather than as readings of the
+source.
+
+This was also the first round run under the standing whole-chunk rule —
+the entire chunk plus its round-1 fixes, not the latest diff. The
+round's HIGH is the argument for that rule.
+
+### The r1 fix was wrong, and the r1 test could not tell
+
+Round 1 found that `decodeOrderedAt` had no depth bound where
+`encoding/json` has one, so a deeply nested row that `LoadsClean`
+refused was admitted by `LoadsCleanOrdered`. The fix added a bound at
+10000, the corpus gained `nest(9999)` and `nest(10001)`, the promise
+test went green, and the finding was closed.
+
+The readers still disagreed.
+
+`encoding/json`'s scanner bounds **open containers** at 10000.
+`decodeOrderedAt` bounded the **depth parameter of any token**, checked
+before the token was read. For a document whose outermost value is a
+container holding a chain — `{"a":[[[…]]]}`, which is exactly the
+corpus's own `nest(n)` shape and therefore n+1 containers — that is one
+too many:
+
+```
+obj+arrchain n=9999    plain_ok=true   ordered_ok=true
+obj+arrchain n=10000   plain_ok=false  ordered_ok=true    <-- disagree
+obj+arrchain n=10001   plain_ok=false  ordered_ok=false
+obj chain    n=10000   plain_ok=true   ordered_ok=true     (n containers; agrees)
+```
+
+The corpus had picked the boundary's NEIGHBOURS — one step outside on
+each side — and the one value that could show the defect sat between
+them. **A limit's neighbours are not its boundary.** The r1 round's own
+lens said "a limit with no case at its own boundary is a limit nothing
+pins", and the fix satisfied the letter of it.
+
+The bound moved into the `case json.Delim` arm, where it counts the
+container being opened:
+
+```go
+case json.Delim:
+    // depth is the number of ENCLOSING containers, so the one being
+    // opened now is the (depth+1)-th. A scalar opens no container, so
+    // it needs no check.
+    if depth+1 > maxOrderedDepth {
+        return nil, fmt.Errorf("exceeded max depth")
+    }
+```
+
+Re-measured across obj+arrchain, obj-chain and mixed shapes at n ∈ {2,
+9998, 9999, 10000, 10001, 10002}: zero disagreements. The corpus now
+carries four depth rows and a new `objChain(n)` helper so both container
+shapes are pinned at their own boundaries.
+
+The live consequence was not theoretical. `Apply` reads its snapshot
+with `readRowsOrdered` and merges keyed with `record.LoadsClean`. A row
+at exactly this depth was rewritten by one reader and invisible to the
+other, so `replaced` stayed false, a SECOND row for the same
+`suggestion_id` was appended, and `IsApplied` then answered false for a
+suggestion that had just been applied. CPython admits the row on both
+sides and keeps one.
+
+Nothing in the r1 diff looked wrong. This is the strongest evidence the
+port has produced for reviewing the whole chunk rather than the latest
+change.
+
+### The knowledge was written down and not applied
+
+`SaveSuggestions`' dedup scan read the previous file with
+`rmwLines` + `pytext.Strip` + `LoadsClean`, and counted its own
+`Malformed`. Python reads it through `read_jsonl_announced`.
+
+My own round-1 comment, in the same file, said `_save_suggestions`
+"reads through read_jsonl_announced". The loop below it was spelled like
+the four sibling merges anyway. **An idiom is not a defect — the defect
+is a spelling that does not match the spelling at its own site**, and
+here the site had already been named, in writing, one round earlier.
+
+Three axes diverged, not one:
+
+- **strip** reverses the dedup for a row whose content key begins with
+  U+001F: Python's `strip()` removes it, so the two runtimes compute
+  different keys and one deduplicates where the other appends.
+- **split** reverses it for U+001C: `read_jsonl_announced` opens
+  BINARY and breaks on `b"\n"` only, so a row containing U+001C is one
+  line to Python and two to a `SplitLines` reader.
+- **buckets**: the local loop collapsed three distinct CPython answers
+  into "malformed" and silently skipped whitespace-only lines.
+
+The fix extracts the two halves that were being re-implemented:
+
+```go
+func SplitStoredLines(raw string) []string { return strings.Split(raw, "\n") }
+
+func CountLine(line string, rep *SkipReport) map[string]any
+```
+
+and `ReadAllCounted` is rewritten on top of them, so the shared path is
+the one both callers walk. This is the THIRD Python line-splitting rule
+the port has had to name, and the table now reads:
+
+| Python spelling | Breaks on | Go equivalent |
+|---|---|---|
+| `read_text(...).splitlines()` | ten separators | `pytext.SplitLines` |
+| `path.open("rb")` then `for line in f` | `b"\n"` only | `record.SplitStoredLines` |
+| `path.open()` (text) then `for line in f` | `\n`, `\r`, `\r\n` | neither — still unwritten |
+
+### A typed nil is not a nil
+
+`changeLogAppend` took `beforeState map[string]any`. For category
+`observation` there is no before-state, and the call site passed a nil
+map — which is a TYPED nil, matches `FromPlain`'s `case map[string]any`,
+and renders `{}`. CPython writes `null`.
+
+The parameter is now `any` and the call site declares `var beforeState
+any`. **A zero value that must mean two things means neither**, in its
+Go-specific spelling: the interface distinguishes "absent" from "empty
+map" and the concrete type cannot.
+
+### Comments that assert coverage, and decay
+
+Four findings were documentation, and all four were the same failure:
+a paragraph that had been pasted forward and no longer described its own
+site. One claimed to be "the FIFTH identical copy" of a timestamp
+spelling in five different files, where the true count is four; one in
+`inspector.go` described a class the file is not in (its four
+`RFC3339Nano` calls are the louder defect — wrong offset AND wrong
+width); one in `stats.go` was a stale stacked claim about always writing
+six digits; and `pyStrKey`'s `float64` arm was described as a live
+sibling when no production caller supplies a float64, and a float64 has
+already lost the int/float distinction so `5` would render `"5.0"` where
+CPython gives `"5"`.
+
+None of these change behaviour. All of them are load-bearing for the
+next reader, which is why they are findings rather than nits — **a
+comment that asserts coverage is a claim, and it decays.**
+
+### The census caught the new event type
+
+`SKILL_REWRITE` reached the audience census as an undeclared event the
+moment `rewrite.go` landed, which is what that tripwire is for. Its lane
+was read off Python's LIVE `USER_SURFACED_EVENTS` frozenset rather than
+inferred from its neighbours — worth doing, because the event type was
+registered and consumed for months before anything emitted it, so its
+membership is older than its first row.
+
+## The skill-rewrite tranche — the circuit's second chance
+
+`skill_lifecycle.rewrite_skill` is what happens to a skill whose circuit
+has tripped. Rather than deleting it, the evolver asks the model to
+rewrite the skill against its own failure notes and two high-scoring
+peers, and puts the result on probation (`half_open`). It has two lanes
+that share every line except their last twenty:
+
+- **in-place** (`in_place=True`): reload the pool, mutate the row, save,
+  emit `SKILL_REWRITE`, return the fresh row.
+- **frontier** (`in_place=False`, the default): mint a CHALLENGER with a
+  new id, clear its lineage, and return it **without saving anything**.
+  The caller stamps `variant_of` and persists under
+  `SKILL_VARIANT_CREATED`.
+
+The lane is a bare boolean with no safe default, which is why
+`RewriteOptions.InPlace` is documented as having no meaningful zero
+value: `false` is the frontier lane, and a caller who forgets the field
+gets a challenger nobody saves rather than a repair nobody made.
+
+Alongside it, `skills.validate_skill_for_promotion` — the LLM quality
+gate a provisional skill passes on its way to established — and the
+repair loop in `maybe_auto_promote_skills` that ties the two together.
+
+### `extract_json` returns `{}`, and that decides the whole gate
+
+The validation gate is fail-open: if it cannot run, the skill passes.
+The obvious port of that is "any failure → pass", and it is wrong by a
+wide margin.
+
+`llm_parse.extract_json` answers `{}` on a parse failure, not `None`. So
+in
+
+```python
+parsed = extract_json(resp.content)
+if isinstance(parsed, dict):
+    return {"valid": bool(parsed.get("valid", False)), ...}
+```
+
+a garbled reply is a dict, `isinstance` succeeds, `{}.get("valid",
+False)` is `False`, and the skill FAILS validation and goes to the
+repair loop. Fail-open is reached only from the `except` — an adapter
+that raised, or a `None` adapter whose `.complete` is an
+`AttributeError`.
+
+Go's `jsonx.Object` reports `(nil, err)` where Python reports `{}`, and
+a nil map reads exactly like an empty dict. So the port discards the
+error on purpose:
+
+```go
+parsed, _ := jsonx.Object(llm.ContentOrEmpty(resp))
+```
+
+Mapping that error to `failOpen` would promote every skill whose
+validation the model fumbled — silently, at the exact moment the gate is
+supposed to be doing its job. That is mutant M28 in the battery, and it
+is detected by a fixture whose only distinguishing feature is a reply
+that is not JSON.
+
+`valid` is read through `pyval.Truthy`, not a bool assertion:
+`{"valid": "no"}` passes and `{"valid": 0}` does not, because
+`bool(parsed.get("valid", False))` is Python truthiness over whatever
+the model sent.
+
+### Two parse paths, deliberately different
+
+`validate_skill_for_promotion` goes through `extract_json`, which strips
+fences and carves JSON out of surrounding prose. `rewrite_skill` does
+neither — it hand-rolls a fence strip and calls `json.loads` directly,
+so a reply with leading prose is fatal there and survivable in the gate.
+
+The port keeps both: `jsonx.Object` for the first, a local
+`stripRewriteFence` plus `pyval.LoadsOrdered` for the second. Collapsing
+them onto one reader would change which model replies each function
+accepts, in opposite directions.
+
+### A guard that could not fail, hidden by a guard that could not fail
+
+`stripRewriteFence` begins with a strip, because Python's is
+`resp.content.strip()`. The port composed it as
+
+```go
+raw := stripRewriteFence(llm.ContentOrEmpty(resp))
+```
+
+and `ContentOrEmpty`'s entire body is `pytext.Strip(r.Content)`. So the
+strip inside `stripRewriteFence` was a dead second copy. Two fixtures
+existed specifically to pin it — a separator-led reply and a
+separator-trailed one, using U+001C–U+001F, which Python's `strip()`
+removes and Go's `strings.TrimSpace` does not — and BOTH passed with the
+strip reverted to `TrimSpace`. The test that was written to catch the
+divergence could not see it, because the upstream helper had already
+made the divergence unreachable.
+
+The fix is to route the raw content in, so the one strip that happens is
+the one at the site that performs it:
+
+```go
+raw := stripRewriteFence(resp.Content)
+```
+
+With that, the same mutant fails both fixtures. **A duplicated guard is
+what makes a wrong one unobservable** — the same lesson the depth-bound
+round produced, arriving here from the opposite direction: there, two
+readers disagreed and a duplicated bound hid it; here, two strips agreed
+and the duplication hid that only one was load-bearing.
+
+### The repair loop spends a rewrite nothing checks
+
+Inside `maybe_auto_promote_skills`, a candidate that fails validation is
+rewritten in place and re-validated, up to `max_repair_attempts` times.
+The rewrite sits at the BOTTOM of the loop body, so on the last attempt
+the skill is rewritten and the loop exits without validating the result.
+That is a real call to a real model whose output nothing reads.
+
+The port reproduces it rather than optimising it away, because the
+cheaper shape agrees on every promoted id and differs only in spend —
+exactly the class of divergence a differential over return values cannot
+see. `TestPromotionHarnessMatchesCPython` therefore compares the ADAPTER
+CALL SEQUENCE, not just the outcome.
+
+Two further behaviours, both documented and both pinned:
+
+- `max_repair_attempts <= 0` with an adapter present promotes NOTHING.
+  The loop body never runs, `valid` stays false, and every candidate is
+  held. It is not clamped to one.
+- A rewrite that returns `None` and a rewrite that RAISES both break the
+  loop identically — Python's bare `except` around the call.
+
+### The purposes agreed; the questions did not
+
+The harness test originally compared adapter calls by their `purpose`
+string. That is enough to count calls and to see their order, and it is
+blind to the one thing the loop is FOR: dropping the rewrite's return
+value and re-validating the ORIGINAL skill produces the identical
+sequence of purposes, the identical count, and the identical promoted
+ids (mutant M38, a MISS on the first battery).
+
+The test now compares the full message contents of every call, and the
+fixture makes the repaired description markedly different from the
+original so the second validation prompt has to change. M38 is detected.
+
+The sibling gap was `validation: "unjudged"` — the word the captain's
+log stores when a promotion passed on a verdict nobody gave. No fixture
+reached it, because reaching it requires the validation call itself to
+FAIL mid-sweep, and the scripted stub could only return replies. A
+`__RAISE__` sentinel in the script (honoured by the CPython stub and by
+a `sentinelAdapter` wrapping `llm.Fake` on the Go side) makes the failure
+happen on the call it means, and collapsing `unjudged` into `passed`
+became detectable too.
+
+### The bug the differential found on its first run
+
+`pyIterate` — the port's `for x in v` — had arms for `[]any` and for
+`string`, and none for `[]string`. Python needs no such distinction, and
+neither did any earlier caller, because everything reaching it came from
+a decoder that produces `[]any`.
+
+`rewrite_skill` breaks that: `parsed.get("steps_template",
+skill.steps_template)` falls back to the SKILL's own field, which in Go
+is a `[]string`. On the first run of the new differential, a reply that
+omitted `steps_template` raised `'list' object is not iterable` in Go
+and rewrote the skill fine in Python.
+
+Third spelling of "list", found by the third caller. The arm is added
+with a comment naming why it exists.
+
+### Evidence
+
+Mutation battery over the tranche, derived from the FILE: 44 mutants,
+all DETECTED. The corrections that got it there are worth naming,
+because three of the first run's eight failures were faults in the
+BATTERY rather than gaps in the tests:
+
+- **M11** (`pyStrip` → `TrimSpace`) was a genuine gap, described above.
+- **M32** (`len(steps) > 6` → `> 5`) is EQUIVALENT: `steps[:6]` on
+  exactly six elements is the identity, so no input separates the
+  spellings. Replaced with a WIDTH mutant (`steps[:6]` → `steps[:5]`),
+  plus the same on the trigger side.
+- **M25** bolted a `SaveSkills` call with an empty updated-id set onto
+  the frontier lane, which rewrites the file to the same bytes — a
+  mutant that cannot change anything a test can read. Replaced with
+  `if !opts.InPlace` → `if false`, which is the pre-2026-08-06 bug's
+  actual shape: the frontier lane falling through and persisting.
+- **M3**, **M21**, **M31** were real fixture gaps, all masked the same
+  way: the discriminating value was never the one that mattered. The
+  `0.5` peer was outranked by three better peers in a prompt cut at two;
+  every fixture had `variant_of` absent, so clearing it and copying it
+  both produced nil; and a seven-trigger fixture cannot see a `>5` vs
+  `>6` threshold because both slice to five. Fixtures added at the
+  boundary in each case.
+- **M14** was a SITEFAIL: `getOr` had moved to `mint.go`, which the
+  battery's file list did not cover.
+
+`go test ./...` exits 0; `go vet ./...` clean.
+
+### The census that read a sentence
+
+Fixing the four decayed comments broke the timestamp census. Rewriting
+`inspector.go`'s doc comment to describe the four
+`time.Now().UTC().Format(time.RFC3339Nano)` calls it replaced meant the
+file now NAMED that layout in prose, and the census — which regexed raw
+bytes — reported the sentence as a tenth offender. Nothing about the
+timestamps had changed.
+
+The wrong fix is to reword the sentence. The census's subject is the
+code, so it now parses the file and blanks every comment span before
+matching:
+
+```go
+func stripComments(path string, src []byte) (string, error)
+```
+
+The embarrassing direction is the one that fired. The other direction is
+worse and would have been silent: a site could be exempted by prose that
+happens to match the regex, or a real writer argued away on the strength
+of a comment near it.
+
+New machinery between the file and the detector is new vacuity risk, so
+the test now also asserts a floor — the walk must find at least as many
+layout writers as the allowlist claims exist. A stripper that blanked too
+much would otherwise make the census pass by seeing nothing, which is the
+failure its own regex probes were written against, one layer up.

@@ -418,36 +418,40 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	err := record.LockedRMW(p, func(old string) string {
 		seen := map[string]bool{}
 		dedupReport := record.SkipReport{}
-		for _, line := range rmwLines(old) {
-			s := pytext.Strip(line)
-			if s == "" {
-				continue
+		// THIS SCAN IS NOT ONE OF THE FOUR MERGES, and it was spelled like
+		// them for a round.
+		//
+		// Dismiss, StampVerification, BumpExtensionOrPark and Apply each
+		// port a Python merge that really is `for line in old.splitlines():
+		// s = line.strip(); if not s: continue`. _save_suggestions is
+		// `for d in _read_store(p, "_save_suggestions")` —
+		// read_jsonl_announced, which frames on b"\n" alone, parses the
+		// UNSTRIPPED line, treats only a truly empty fragment as framing,
+		// and buckets its losses three ways.
+		//
+		// All three axes changed an answer, measured on both runtimes:
+		//
+		//   - the strip: a row prefixed with U+001F is stranded by CPython
+		//     (its key never enters `seen`, so the duplicate IS appended)
+		//     and admitted here, which SUPPRESSED the append. Two runtimes,
+		//     opposite decisions, same shared store — the 81-duplicate axis
+		//     running in both directions at once.
+		//   - the split: the same reversal for a row carrying U+001C, which
+		//     splitlines() breaks on and the store's own reader does not.
+		//   - the buckets: an array row is "non-dict" and a non-UTF-8 row is
+		//     "undecodable" to CPython, and both were "malformed" here, so
+		//     the operator got a different sentence about the same damage.
+		//     A whitespace-only line was counted by CPython and silently
+		//     skipped here.
+		//
+		// The reader helper is still unreachable — the scan is inside
+		// LockedRMW on purpose, because a `seen` built outside the lock
+		// reopens the bug — so it borrows the reader's own per-line step
+		// instead of re-deriving it.
+		for _, line := range record.SplitStoredLines(old) {
+			if m := record.CountLine(line, &dedupReport); m != nil {
+				seen[contentKeyOf(m)] = true
 			}
-			// _save_suggestions reads through read_jsonl_announced, whose
-			// _classify uses loads_clean — so a tainted row is dropped
-			// from `seen` on BOTH sides, and the duplicate it then fails
-			// to suppress is the 81-row bug reproducing identically. That
-			// is the right kind of agreement: the port must not be quietly
-			// better here, because the announced warning is what tells an
-			// operator the corpus went short.
-			m, lerr := record.LoadsClean(s)
-			if lerr != nil {
-				// ...and the warning is the half that was missing. The
-				// comment above says the announced warning "is what tells
-				// an operator the corpus went short", and then this loop
-				// did not emit one — a comment asserting a coverage the
-				// code below it does not have.
-				//
-				// The read cannot just call readRowsAnnounced: it happens
-				// INSIDE LockedRMW on purpose (the r1 lock fix — a `seen`
-				// built outside the lock reopens the 81-duplicate bug), so
-				// the reader helper is not reachable here. Counting into
-				// the same SkipReport and borrowing its sentence keeps one
-				// spelling of the operator-facing line.
-				dedupReport.Malformed++
-				continue
-			}
-			seen[contentKeyOf(m)] = true
 		}
 		if warn := dedupReport.Announce("_save_suggestions", p); warn != "" {
 			fmt.Fprintln(os.Stderr, "[evolver] "+warn)
@@ -731,7 +735,19 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 // became `null` where CPython writes 0.5, and an absent category became
 // `null` where CPython writes "observation" (adversarial mission-r6
 // MEDIUM). Two readings of one dict is the defect; there is now one.
-func changeLogAppend(workspaceDir string, f applyFields, beforeState map[string]any) {
+// changeLogAppend writes one audit row. beforeState is `any` rather than
+// map[string]any because Python has THREE answers here and a Go map has two:
+// a captured snapshot, an empty snapshot, and None.
+//
+// A typed nil map is still a map to a type switch, so pyval.FromPlain matched
+// its `case map[string]any` and rendered `{}` where CPython writes `null` —
+// on the most ordinary apply there is (category "observation", which captures
+// no before-state at all). The r1 round graded this loss "currently
+// zero-sized because both ported categories build a one-key map"; there is a
+// third category, it builds no map, and what it loses is not key order but
+// the value. An absent-vs-null collapse arriving through the WRITER, in the
+// chunk that closed it on the reader.
+func changeLogAppend(workspaceDir string, f applyFields, beforeState any) {
 	sum := sha256.Sum256([]byte(f.text))
 	entry := pyval.Obj{
 		{Key: "ts", Val: nowISO()},
@@ -787,7 +803,10 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 	category, text, suggestionID := f.category, f.text, f.suggestionID
 	target, confidence := f.target, f.confidence
 
-	var beforeState map[string]any
+	// `any`, and it starts as an untyped nil so an uncaptured before-state
+	// renders `null`. Declaring it map[string]any and leaving it unset gives
+	// a TYPED nil, which is not the same value to a type switch.
+	var beforeState any
 	switch category {
 	case "new_guardrail":
 		beforeState = map[string]any{"type": "guardrail_append"}
@@ -1027,10 +1046,20 @@ var playbookSection = map[string]string{
 // and found by the same review: swapping the decoder changed the type at
 // every site that reads a number, and two of them read one.
 //
-// The float64 arm is kept for a caller holding a value from a plain
-// json.Unmarshal; both are live, and they must agree, because a store
-// read through one path and rewritten through the other is the whole
-// problem this chunk exists about.
+// The float64 arm is a LOSSY FALLBACK, not an agreeing sibling, and the
+// sentence here used to claim the opposite on both halves.
+//
+// It is not live: every production caller reads off a row decoded with
+// UseNumber (pyStrKey from objMap(*d) via readRowsOrdered, pyStrValue from
+// contentKeyOf via record.LoadsClean), so a float64 arrives only from a
+// caller holding a plain json.Unmarshal value, of which there are none.
+//
+// And it could not agree if it were. A float64 has already thrown away the
+// int/float distinction CPython's json keeps, so a stored `5` renders "5.0"
+// here and "5" there — no spelling inside this arm can fix that, because
+// the information is gone before the arm is reached. It stays as a defined
+// answer for an undefined input, and it is named as such (adversarial r2,
+// L3).
 func pyStrKey(v any) string {
 	switch t := v.(type) {
 	case nil:

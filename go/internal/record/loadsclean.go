@@ -135,11 +135,19 @@ func LoadsCleanValue(line string) (any, error) {
 // json.Decoder, and only one of them enforced encoding/json's nesting
 // limit. `Decode` checks depth in the scanner; a `Token()` walk does not.
 // So this reader admitted a document LoadsClean refuses and recursed on
-// it — to a `fatal error: stack overflow` at the tail. pyval now bounds
-// the ordered walk at the same 10000, and
-// TestOrderedReaderClassifiesLikeThePlainOne carries both sides of that
-// boundary as fixtures. A shared guard list is evidence about the guards,
-// not about everything downstream of them. What differs is only the shape handed back:
+// it — to a `fatal error: stack overflow` at the tail.
+//
+// pyval bounds the ordered walk at the same 10000 now, and it took two
+// rounds to get the bound in the right PLACE: encoding/json counts open
+// containers, and the first fix counted tokens, which is one more for any
+// document whose outermost value is a container. `{"a":[[…]]}` with 10000
+// arrays disagreed for a round after the fix, and the corpus row that
+// would have shown it was the one value the corpus did not carry — it had
+// 9999 and 10001, a neighbour on each side. Both true boundaries are
+// fixtures now, for both container shapes.
+//
+// A shared guard list is evidence about the guards, not about everything
+// downstream of them. What differs is only the shape handed back:
 // a pyval.Obj that remembers key order, so a stamper can set one field
 // and re-emit the row with every other key still where its original
 // writer put it.
