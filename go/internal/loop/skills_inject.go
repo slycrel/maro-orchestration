@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/runs"
 	"github.com/slycrel/maro-orchestration/go/internal/skills"
 )
@@ -76,7 +77,7 @@ func injectSkills(workspaceDir, runDir, goal string) (block string, warns []stri
 	meta := &runs.SkillManifestMeta{Method: tel.Method,
 		NCandidates: tel.NCandidates, TopScore: tel.TopScore}
 	if err := runs.AppendSkillsManifest(runDir, entries, "decompose", meta,
-		time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00")); err != nil {
+		pyval.NowISO(time.Now().UTC())); err != nil {
 		warns = append(warns, "skills manifest write failed: "+err.Error())
 	}
 	return block, warns

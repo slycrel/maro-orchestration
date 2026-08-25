@@ -265,7 +265,7 @@ func CadenceTick(workspaceDir string, cadence, deepEvery int) (string, error) {
 		out, _ := pyval.DumpsCompactPy(pyval.Obj{
 			{Key: "runs_since_inspect", Val: count},
 			{Key: "firings_since_deep", Val: firings},
-			{Key: "updated_at", Val: time.Now().UTC().Format(time.RFC3339Nano)},
+			{Key: "updated_at", Val: nowISO()},
 		})
 		return out
 	})
@@ -608,7 +608,7 @@ func InspectSession(ctx context.Context, outcome map[string]any, adapter llm.Ada
 		DelightSignals:     delight,
 		OverallQuality:     quality,
 		InspectorNotes:     notes,
-		InspectedAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		InspectedAt:        nowISO(),
 		AlignmentJudged:    alignmentJudged,
 	}
 }
@@ -784,7 +784,7 @@ func Run(ctx context.Context, workspaceDir string, adapter llm.Adapter,
 	report := InspectionReport{
 		RunID:               runID,
 		QualityDistribution: map[string]int{"good": 0, "fair": 0, "poor": 0},
-		GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		GeneratedAt:         nowISO(),
 	}
 	if len(outcomes) == 0 {
 		report.ElapsedMS = time.Since(started).Milliseconds()
@@ -962,7 +962,7 @@ func saveSuggestions(workspaceDir string, suggestions []string) error {
 		return nil
 	}
 	p := suggestionsPath(workspaceDir)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := nowISO()
 	var lines []string
 	for i, text := range suggestions {
 		row := pyval.Obj{
@@ -1051,3 +1051,15 @@ func FrictionSummary(workspaceDir string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// nowISO is `datetime.now(timezone.utc).isoformat()`, which is
+// pyval.NowISO — not a local format string.
+//
+// The local copy this replaced spelled the layout by hand and got the
+// offset and the width right, but wrote ".000000" for a whole second
+// where isoformat omits the fraction entirely. One call in a million
+// lands there, which is exactly the kind of divergence a hand-written
+// layout survives for years. It was also the FIFTH identical copy in
+// this port: a helper you did not look for is a helper you will write
+// again.
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }

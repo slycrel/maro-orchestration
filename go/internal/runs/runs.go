@@ -76,7 +76,7 @@ func Create(workspaceDir, handleID, prompt string) (string, error) {
 	if err := WriteMetadata(rd, pyval.Obj{
 		{Key: "handle_id", Val: handleID},
 		{Key: "prompt", Val: prompt},
-		{Key: "started_at", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "started_at", Val: pyval.NowISO(time.Now().UTC())},
 		{Key: "status", Val: "running"},
 		{Key: "pid", Val: os.Getpid()},
 	}); err != nil {
@@ -128,7 +128,7 @@ func WriteMetadata(runDir string, fields pyval.Obj) error {
 		existing.Set(f.Key, f.Val)
 	}
 	if _, ok := existing.Get("started_at"); !ok {
-		existing.Set("started_at", time.Now().UTC().Format(time.RFC3339))
+		existing.Set("started_at", pyval.NowISO(time.Now().UTC()))
 	}
 	// pyval.DumpsIndent2, not json.MarshalIndent: Python writes this file
 	// with json.dumps(meta, indent=2), and encoding/json differs from it
@@ -157,7 +157,7 @@ func WriteMetadata(runDir string, fields pyval.Obj) error {
 func Finalize(runDir, status string) error {
 	// ended_at before status: write_metadata's order.
 	return WriteMetadata(runDir, pyval.Obj{
-		{Key: "ended_at", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "ended_at", Val: pyval.NowISO(time.Now().UTC())},
 		{Key: "status", Val: status},
 	})
 }
@@ -232,7 +232,7 @@ func AppendVerdictRow(runDir, loopID string, row pyval.Obj) error {
 	// and that join is the §9.3 material the comment below calls the
 	// reason this file exists (adversarial mission-r7 HIGH).
 	full := pyval.Obj{
-		{Key: "ts", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "ts", Val: pyval.NowISO(time.Now().UTC())},
 		{Key: "loop_id", Val: loopID},
 	}
 	for _, f := range row {

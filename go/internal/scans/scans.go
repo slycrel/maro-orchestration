@@ -55,9 +55,17 @@ import (
 
 func memoryDir(ws string) string { return filepath.Join(ws, "memory") }
 
-func nowISO() string {
-	return time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00")
-}
+// nowISO is `datetime.now(timezone.utc).isoformat()`, which is
+// pyval.NowISO — not a local format string.
+//
+// The local copy this replaced spelled the layout by hand and got the
+// offset and the width right, but wrote ".000000" for a whole second
+// where isoformat omits the fraction entirely. One call in a million
+// lands there, which is exactly the kind of divergence a hand-written
+// layout survives for years. It was also the FIFTH identical copy in
+// this port: a helper you did not look for is a helper you will write
+// again.
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }
 
 // parseISO accepts both runtimes' timestamp spellings (Python isoformat
 // "+00:00", Go RFC3339Nano "Z", date-only prefixes are NOT accepted — a

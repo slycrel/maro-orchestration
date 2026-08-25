@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // lockTimeout matches Python file_lock's default deadline (30s).
@@ -569,7 +570,13 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func nowISO() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00") }
+// nowISO is `datetime.now(timezone.utc).isoformat()`, which is
+// pyval.NowISO. The four stamps this feeds — recorded_at, timestamp,
+// superseded_at, goal_verdict_at — are all that call in Python
+// (memory_ledger.py:414/825, metrics.py:404, audit_policy.py:101), and
+// the hand-written layout it replaced wrote ".000000" for a whole
+// second where isoformat omits the fraction entirely.
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }
 
 func orDefault(s, def string) string {
 	if s == "" {

@@ -6704,3 +6704,105 @@ are the two pre-existing ones.
 * `before_state` inside a change_log entry is still built from a Go map and
   comes out key-sorted. Nothing joins on it — it is read whole for recovery
   — so the loss stays named rather than chased.
+
+## Nine spellings of one timestamp, and the census that found the other six
+
+The previous chunk fixed the evolver's `nowISO`, which rendered
+`time.RFC3339Nano` where Python writes
+`datetime.now(timezone.utc).isoformat()`, and its PORT.md section named
+"five more local copies plus four inline RFC3339Nano stamps still to
+classify". That list came from `grep -rn "func nowISO\|RFC3339Nano"`.
+
+The list was wrong. Not incomplete — wrong in a way grep could not show.
+
+### Why this got a census instead of a sweep
+
+The defect here is not any one site. Each local copy looked locally
+reasonable, and four of the nine were within one character of correct. The
+defect was the COUNT: nine independent copies of one decision, drifting
+apart, none of them wrong enough to fail anything.
+
+That is not a shape a per-site test can hold. So the invariant is stated as
+a census — `pyval.NowISO` is the only place in the port a timestamp layout
+is written — and `TestNoPackageSpellsItsOwnTimestamp` walks `internal/` and
+fails on the tenth.
+
+It found ten sites the grep had missed, in `loop/`, `runs/`, `orch/`,
+`playbook/`, `record/`, `skills/` and `tasks/`. Six of those turned out to
+be CORRECT and are exempted with the Python spelling that justifies each —
+lens 20 in its clearest form:
+
+* `orch_items.now_utc_iso()` really is
+  `time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())`. Second precision, a
+  literal Z, deliberately unlike isoformat.
+* `task_store.utc_now()` is
+  `.replace(microsecond=0).isoformat().replace("+00:00", "Z")` — isoformat
+  post-processed into that same shape on purpose.
+* `skills.py` mints a variant NAME with `%Y%m%dT%H%M%S%fZ`, and several
+  sites render a day key or a filename slug.
+
+The spelling that is wrong three files over is right at these. An exemption
+carries the Python line that justifies it, so the map is a record of
+classification rather than a list of things someone silenced; and one entry
+is marked UNCLASSIFIED (`orch/pids.go`) rather than being quietly exempted,
+because a list that hides its own gaps is worse than no list.
+
+Two anti-vacuity halves guard the census itself: the regex must still match
+both writer shapes, and must NOT match the read side — a parser
+legitimately names `RFC3339Nano`, because a shared store holds stamps
+written by both runtimes and has to accept either.
+
+### What the census found that was not a timestamp
+
+`loop/slot.go` writes the per-project lock file `interrupt.py` also writes,
+and the payload had drifted FOUR ways. The census was looking at the last
+of them:
+
+* the stamp was keyed `"started"`. Python writes `"started_at"`, and
+  `observe.py` renders `loop.get("started_at", "")` — so a Go-held loop
+  showed `started ?` in `maro-observe loop`, which is the one field an
+  operator reads to tell a live run from a wedged one.
+* it rendered `RFC3339` (second precision, "Z") where Python writes
+  isoformat; `observe.py` feeds the value to `_age()`.
+* `"project"` was absent entirely.
+* the goal went in whole where Python writes `goal[:120]`.
+
+And the existing test pinned the wrong key. `TestSlotHolderMetadataIsJSONDumps`
+asserted `"started": "` — the port's own spelling — so it had agreed with
+the bug for as long as the bug existed. **A test can only pin the spelling
+it was told, and this one was told the port's.** It is now told CPython's:
+`TestSlotPayloadMatchesInterruptPy` builds the payload on the Python side
+and compares keys, order, clip and stamp shape.
+
+That test also fixed a second-order gap the old fixture had: its goal was
+34 characters, so the 120-character clip could never fire. The new one
+passes 200 multi-byte runes, which pins both that the clip happens and that
+it counts CODE POINTS — a byte slice would cut at 40 characters and split
+the last rune.
+
+### Evidence
+
+`pyval/nowiso_census_test.go` (the census + its two anti-vacuity halves),
+`loop/r8_diff_test.go` (`TestSlotPayloadMatchesInterruptPy`, plus the
+corrected substring list). The isoformat FORMAT differential lives in
+`evolver/rewrite_diff_test.go` from the previous chunk and is what the
+census delegates the "is NowISO itself right?" question to — census for the
+count, differential for the format.
+
+Mutation battery **11/11 DETECTED**: a tenth copy appearing, an exemption
+removed, the census regex broken to match nothing, the census regex widened
+to catch the read side, the slot key name, the missing clip, a BYTE clip
+instead of a rune clip, the missing project field, the slot key order, and
+both halves of NowISO's rendering.
+
+`go test ./...` exits 0; `go vet ./...` clean.
+
+### Carried
+
+* `orch/pids.go` renders `"2006-01-02T15:04:05-0700"` — an offset with no
+  colon, which is neither isoformat nor `now_utc_iso`. Listed UNCLASSIFIED
+  in the census; its Python has not been read.
+* The census is a Go-side invariant, not a parity one. It cannot see a site
+  that formats a time through some other route (a helper taking a layout
+  parameter, say). It pins the shape the port keeps regressing into, not
+  every shape it could.

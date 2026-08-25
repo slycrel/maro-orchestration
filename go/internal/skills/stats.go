@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -658,6 +659,14 @@ func mergeStats(r *statsRead, skillID string, stats SkillStats, existed bool) {
 // the same way they compare as instants. Go's ".999999" would TRIM trailing
 // zeros, making ".5+00:00" and ".500000+00:00" — the same instant — sort
 // differently from Python's, which always writes six digits.
-func nowISO() string {
-	return time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00")
-}
+// nowISO is `datetime.now(timezone.utc).isoformat()`, which is
+// pyval.NowISO — not a local format string.
+//
+// The local copy this replaced spelled the layout by hand and got the
+// offset and the width right, but wrote ".000000" for a whole second
+// where isoformat omits the fraction entirely. One call in a million
+// lands there, which is exactly the kind of divergence a hand-written
+// layout survives for years. It was also the FIFTH identical copy in
+// this port: a helper you did not look for is a helper you will write
+// again.
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }

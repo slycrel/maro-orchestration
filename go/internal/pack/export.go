@@ -147,9 +147,17 @@ func buildReviewMD(manifest map[string]any, sections []string) string {
 	return header + strings.Join(sections, "\n---\n\n") + "\n"
 }
 
-func nowISO() string {
-	return time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00")
-}
+// nowISO is `datetime.now(timezone.utc).isoformat()`, which is
+// pyval.NowISO — not a local format string.
+//
+// The local copy this replaced spelled the layout by hand and got the
+// offset and the width right, but wrote ".000000" for a whole second
+// where isoformat omits the fraction entirely. One call in a million
+// lands there, which is exactly the kind of divergence a hand-written
+// layout survives for years. It was also the FIFTH identical copy in
+// this port: a helper you did not look for is a helper you will write
+// again.
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }
 
 // Export gathers, scrubs, and writes an unsealed pack + REVIEW.md
 // companion. Artifact classes and paths match Python's exporter so either

@@ -70,11 +70,31 @@ func acquireProjectSlot(memoryDir, slug, loopID, goal string) (release func(), w
 	// in it verbatim — a goal containing `>` or a non-ASCII character was
 	// written in a spelling no CPython writer produces, in a file the
 	// Python side reads to name the holder (adversarial mission-r8).
+	//
+	// The PAYLOAD is interrupt.py's, field for field, and it had drifted
+	// four ways at once — found by the timestamp census, which was only
+	// looking at the last of them:
+	//
+	//   - the stamp was keyed "started"; Python writes "started_at", and
+	//     observe.py renders `loop.get("started_at", "")`. A Go-held loop
+	//     showed `started ?` in `maro-observe loop` — the one field an
+	//     operator checks to tell a live run from a wedged one.
+	//   - it rendered RFC3339 (second precision, "Z") where Python writes
+	//     isoformat. observe.py feeds it to `_age()`, so even under the
+	//     right key the wrong spelling risks an unparsed age.
+	//   - `project` was absent entirely.
+	//   - the goal was written whole; Python clips it to 120 characters,
+	//     and this file is rewritten under a held flock by a contender
+	//     that may be mid-read.
+	//
+	// Key ORDER is Python's dict-literal order for the same reason the
+	// evolver's rewrites keep theirs: both runtimes write this file.
 	meta, _ := pyval.DumpsCompactPy(pyval.Obj{
 		{Key: "loop_id", Val: loopID},
+		{Key: "goal", Val: pyval.Clip(goal, 120)},
 		{Key: "pid", Val: os.Getpid()},
-		{Key: "goal", Val: goal},
-		{Key: "started", Val: time.Now().UTC().Format(time.RFC3339)},
+		{Key: "started_at", Val: pyval.NowISO(time.Now().UTC())},
+		{Key: "project", Val: slug},
 	})
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(meta), 0)

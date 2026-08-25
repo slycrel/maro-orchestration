@@ -36,6 +36,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // FeatureRequest is one call to run_agent_loop.
@@ -204,7 +205,11 @@ func RunMission(ctx context.Context, ws, goal string, opts RunOptions) (MissionR
 	if nowFn == nil {
 		nowFn = func() time.Time { return time.Now().UTC() }
 	}
-	nowISO := func() string { return nowFn().UTC().Format(time.RFC3339Nano) }
+	// pyval.NowISO, not RFC3339Nano: Python spells every one of these
+	// datetime.now(timezone.utc).isoformat() ("+00:00", six digits, no
+	// fraction at zero). The injected clock stays — only the rendering
+	// was wrong.
+	nowISO := func() string { return pyval.NowISO(nowFn().UTC()) }
 	newID := opts.NewID
 	cfg := opts.Cfg
 	if cfg == nil {
@@ -799,7 +804,7 @@ func DrainNextMission(ctx context.Context, ws string, opts DrainOptions) (*Drain
 	}
 	mission.Status = missionStatus
 	if allMilestonesDone {
-		mission.CompletedAt = strPtr(nowFn().UTC().Format(time.RFC3339Nano))
+		mission.CompletedAt = strPtr(pyval.NowISO(nowFn().UTC()))
 	}
 	_ = SaveMission(ws, mission, project)
 
