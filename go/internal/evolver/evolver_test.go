@@ -970,7 +970,7 @@ func TestSaveSuggestionsConcurrentContentDedup(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	rows := readRows(suggestionsPath(ws))
+	rows := readRowsAnnounced(suggestionsPath(ws), "test")
 	if len(rows) != 1 {
 		t.Fatalf("concurrent identical findings must dedup to 1 row, got %d", len(rows))
 	}

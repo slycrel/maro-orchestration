@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // SkipReport ports jsonl_utils.SkipReport: what a JSONL read threw away.
@@ -194,4 +196,97 @@ func ReadAllCounted(path string) ([]map[string]any, SkipReport) {
 		}
 	}
 	return out, rep
+}
+
+// ReadAllAnnouncedOrdered is ReadAllAnnounced handing back rows that still
+// know their key ORDER.
+//
+// Same reader, same buckets, same warning — the only difference is the row
+// type. It exists because `map[string]any` silently discards a fact the
+// store depends on, and the discard is invisible until something re-emits
+// the row:
+//
+// A Python loader gets an insertion-ordered dict. Mutating a key leaves it
+// where it was, a new key lands at the tail, and `json.dumps` writes the
+// row back in the order the FILE had. The port read into a Go map, whose
+// key order does not exist, and re-emitted through `pyval.FromPlain`, whose
+// doc names the sorted output as a LOSS. So every read-modify-write
+// callback rewrote every key of every row it touched into alphabetical
+// order — in a store the Python runtime reads, appends to, and diffs.
+//
+// Nothing about JSON semantics changes, which is exactly why no test caught
+// it for so long: both runtimes parse either byte sequence to the same
+// mapping. What changes is the BYTES, and the bytes are the shared artifact
+// — a ledger diff shows every touched row as fully rewritten, a content
+// hash over the store disagrees across runtimes, and a dedup keyed on the
+// serialized line stops matching.
+//
+// Use this whenever a row read from a store may be written back. Use
+// ReadAllAnnounced when the rows are only ever inspected.
+func ReadAllAnnouncedOrdered(path, what string) ([]pyval.Obj, string) {
+	rows, report := ReadAllCountedOrdered(path)
+	return rows, report.Announce(what, path)
+}
+
+// ReadAllCountedOrdered is ReadAllCounted with ordered rows.
+//
+// The bucketing MUST stay identical to ReadAllCounted's — a line the two
+// readers classify differently would make a caller's CHOICE OF ROW TYPE
+// change which records it sees, which is not a thing a caller should be
+// able to do by accident.
+//
+// It is not enforced by construction, and that is deliberate rather than
+// lazy: LoadsClean and LoadsCleanOrdered reach their verdict through
+// different decoders (a bare json.Decoder against pyval.LoadsOrdered), so
+// making one a projection of the other would silently swap the number
+// types the plain reader hands its ~20 existing callers. Measured instead,
+// and pinned: TestOrderedReaderClassifiesLikeThePlainOne walks the same
+// line corpus through both. If that test ever fails, the two readers have
+// stopped being the same reader and this doc comment is the promise that
+// broke.
+func ReadAllCountedOrdered(path string) ([]pyval.Obj, SkipReport) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, SkipReport{Missing: true}
+		}
+		return nil, SkipReport{Unreadable: true}
+	}
+	var out []pyval.Obj
+	rep := SkipReport{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		o, bucket := classifyLineOrdered(line)
+		switch bucket {
+		case "":
+			if o != nil {
+				out = append(out, o)
+			}
+		case "undecodable":
+			rep.Undecodable++
+		case "malformed":
+			rep.Malformed++
+		case "non_dict":
+			rep.NonDict++
+		}
+	}
+	return out, rep
+}
+
+// classifyLineOrdered is classifyLine's real body: same LoadsClean rules,
+// same three loss buckets, ordered result.
+func classifyLineOrdered(line string) (pyval.Obj, string) {
+	if IsFrameBlank(line) {
+		return nil, "" // blank frame: not a record, not a loss
+	}
+	o, err := LoadsCleanOrdered(line)
+	switch {
+	case err == nil:
+		return o, ""
+	case errors.Is(err, ErrNotAnObject):
+		return nil, "non_dict"
+	case errors.Is(err, ErrByteTainted):
+		return nil, "undecodable"
+	default:
+		return nil, "malformed"
+	}
 }

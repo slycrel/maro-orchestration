@@ -57,6 +57,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/playbook"
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -150,7 +151,25 @@ func changeLogPath(ws string) string {
 	return filepath.Join(ws, "memory", "change_log.jsonl")
 }
 
-func nowISO() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+// nowISO is `datetime.now(timezone.utc).isoformat()` — every timestamp
+// this package writes (dismissed_at, applied_at, added_at_iso, the
+// change_log ts) is that call in Python, verbatim, at all four sites.
+//
+// It delegates rather than formatting, because the two spellings are not
+// the same string. RFC3339Nano — what this was — renders UTC as "Z" and
+// keeps up to NINE fractional digits with trailing zeros trimmed;
+// isoformat renders "+00:00", keeps exactly six, and omits the fraction
+// entirely when it is zero. Three differences in a field that lands in a
+// store the Python runtime reads, and only one of them is cosmetic:
+// datetime.fromisoformat rejected a "Z" suffix outright before CPython
+// 3.11 (measured accepted on 3.14 here, truncating the extra digits), so
+// a Go-written stamp is a stamp an older reader cannot parse at all.
+//
+// pyval.NowISO is the port-wide spelling and predates this file. Writing
+// a second one locally is the fourth lens — a helper you did not look for
+// is a helper you will write again — and there are five more local copies
+// plus four inline RFC3339Nano stamps still to classify (see PORT.md).
+func nowISO() string { return pyval.NowISO(time.Now().UTC()) }
 
 // CadenceTick counts one run finalization toward the evolver cadence;
 // returns true when the counter reaches cadence (and resets). Single
@@ -185,21 +204,25 @@ func CadenceTick(workspaceDir string, cadence int) (bool, error) {
 
 // readRows tolerantly reads all parseable rows from a jsonl file
 // (missing file = empty store; a torn line costs one row).
-func readRows(path string) []map[string]any {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var rows []map[string]any
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var m map[string]any
-		if json.Unmarshal([]byte(line), &m) == nil {
-			rows = append(rows, m)
-		}
+// readRowsAnnounced is the read-only half of readRowsOrdered: Python's
+// `_read_store` again, for the four call sites that only INSPECT rows.
+//
+// Unordered on purpose. Key order is only observable when a row is
+// written back, and handing an ordered row to a caller that will never
+// re-emit it invites the mistake the ordered reader's doc warns about —
+// projecting to a map, mutating, and re-emitting alphabetized.
+//
+// What this replaced was a hand-rolled ReadFile + strings.Split + TrimSpace
+// + json.Unmarshal loop, which diverged from `read_jsonl_announced` three
+// ways: it dropped the loss announcement entirely, it treated a
+// non-dict row and a torn row as the same nothing, and its number type
+// was float64 where every other reader in this port now yields
+// json.Number. The `what` label is the one the Python call site passes,
+// so an operator sees the same loader named in the same warning.
+func readRowsAnnounced(path, what string) []map[string]any {
+	rows, warn := record.ReadAllAnnounced(path, what)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "[evolver] "+warn)
 	}
 	return rows
 }
@@ -236,7 +259,7 @@ func pyTruthy(v any) bool { return pyval.Truthy(v) }
 
 // LoadSuggestions returns up to limit suggestions, newest first.
 func LoadSuggestions(workspaceDir string, limit int) []Suggestion {
-	rows := readRows(suggestionsPath(workspaceDir))
+	rows := readRowsAnnounced(suggestionsPath(workspaceDir), "load_suggestions")
 	var out []Suggestion
 	for i := len(rows) - 1; i >= 0; i-- {
 		out = append(out, rowToSuggestion(rows[i]))
@@ -251,7 +274,7 @@ func LoadSuggestions(workspaceDir string, limit int) []Suggestion {
 // a single-row uncapped lookup that never drops the row behind a
 // newest-N window (Python get_suggestion).
 func GetSuggestion(workspaceDir, suggestionID string) *Suggestion {
-	for _, m := range readRows(suggestionsPath(workspaceDir)) {
+	for _, m := range readRowsAnnounced(suggestionsPath(workspaceDir), "get_suggestion") {
 		if m["suggestion_id"] == suggestionID {
 			s := rowToSuggestion(m)
 			return &s
@@ -265,8 +288,85 @@ func GetSuggestion(workspaceDir, suggestionID string) *Suggestion {
 // fresh uuid per derivation, so id equality can't detect "same finding
 // again" — content equality can (Python _content_key; the 81-duplicate
 // calibration-row bug).
+// The Python key is a TUPLE of three str() COERCIONS, the last one
+// stripped: `(str(d.get("category","")), str(d.get("target","")),
+// str(d.get("suggestion","")).strip())`. Two divergences hid in the Go
+// spelling, and both fail in the same direction — toward a MISSED dedup,
+// which is the direction that resurrects a reviewed suggestion:
+//
+//   - a `.(string)` type assertion yields "" for a numeric or boolean
+//     field, so two rows with different non-string categories collided on
+//     the same key here and had distinct keys there. Or, worse, a row whose
+//     category is 0 keyed as "" and matched an unrelated row.
+//   - strings.TrimSpace does not know U+001C-U+001F, so a suggestion whose
+//     text ends in one keyed differently from its already-stored twin and
+//     the row was appended again.
+//
+// The 81-duplicate calibration-row bug this key was built to end is the
+// standing reminder of what a missed dedup costs.
+//   - and `d.get(k, "")` defaults on ABSENCE, never on a present null. A
+//     row carrying `"category": null` keys as "None" in Python — that is
+//     `str(None)` — where a Go map lookup gives nil for both cases and the
+//     port keyed it "". Same missed-dedup direction, reached by the same
+//     route as three sites in the pack importer (r5 review): the two
+//     spellings collapse into one Go expression, so a fix that looks
+//     total covers only the half the author had in mind.
+func contentKeyOf(row map[string]any) string {
+	return contentKey(pyStrGetV(row, "category"), pyStrGetV(row, "target"),
+		pyStrGetV(row, "suggestion"))
+}
+
+// pyStrGetV is `str(d.get(k, ""))` — the presence rule and the coercion,
+// in one place so neither can be applied without the other.
+func pyStrGetV(row map[string]any, key string) string {
+	v, present := row[key]
+	if !present {
+		return ""
+	}
+	return pyStrValue(v)
+}
+
 func contentKey(category, target, suggestion string) string {
-	return category + "\x00" + target + "\x00" + strings.TrimSpace(suggestion)
+	return category + "\x00" + target + "\x00" + pytext.Strip(suggestion)
+}
+
+// pyStrValue is Python's `str(v)` on a value that is PRESENT — including a
+// present null, which is the string "None" and not the empty string. The
+// absence rule is pyStrGetV's job; splitting them is what stops the next
+// caller from getting one and thinking it got both.
+//
+// FOUR str()-shaped helpers now live in this file and they are NOT
+// interchangeable — read this before reaching for one:
+//
+//   - pyStrValue (here)  `str(v)`              — a present null gives "None"
+//   - pyStrGetV          `str(d.get(k, ""))`   — absent gives "", null "None"
+//   - pyStrKey           `str(d.get(k) or "")` — every FALSY value gives ""
+//   - stringOr           a bare type assertion — "" for any non-string
+//
+// stringOr is the one that is not a Python spelling at all; it survives
+// only at sites whose Python really does compare against a string and
+// where a non-string can be treated as absent. The distinction between
+// the first two is the `or ""`, and it is load-bearing: str(0) is "0"
+// and str(0 or "") is "". Collapsing these is the exact bug this port
+// keeps re-finding — pack carries the same trio (asString / pyStrOr /
+// pyStrGet), and the r5 review found it at three sites in one file.
+func pyStrValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "None"
+	case string:
+		return t
+	case bool:
+		if t {
+			return "True"
+		}
+		return "False"
+	case json.Number:
+		return t.String()
+	case float64:
+		return pyjson.FloatRepr(t)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // SaveSuggestions appends rows whose finding is not already on disk.
@@ -290,19 +390,23 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	var marshalErr error
 	err := record.LockedRMW(p, func(old string) string {
 		seen := map[string]bool{}
-		for _, line := range strings.Split(old, "\n") {
-			s := strings.TrimSpace(line)
+		for _, line := range rmwLines(old) {
+			s := pytext.Strip(line)
 			if s == "" {
 				continue
 			}
-			var m map[string]any
-			if json.Unmarshal([]byte(s), &m) != nil {
+			// _save_suggestions reads through read_jsonl_announced, whose
+			// _classify uses loads_clean — so a tainted row is dropped
+			// from `seen` on BOTH sides, and the duplicate it then fails
+			// to suppress is the 81-row bug reproducing identically. That
+			// is the right kind of agreement: the port must not be quietly
+			// better here, because the announced warning is what tells an
+			// operator the corpus went short.
+			m, lerr := record.LoadsClean(s)
+			if lerr != nil {
 				continue
 			}
-			cat, _ := m["category"].(string)
-			tgt, _ := m["target"].(string)
-			sug, _ := m["suggestion"].(string)
-			seen[contentKey(cat, tgt, sug)] = true
+			seen[contentKeyOf(m)] = true
 		}
 		out := old
 		if out != "" && !strings.HasSuffix(out, "\n") {
@@ -354,7 +458,7 @@ func ListPending(workspaceDir string, limit int) []Suggestion {
 
 // IsApplied reads the durable post-gate state for one suggestion.
 func IsApplied(workspaceDir, suggestionID string) bool {
-	for _, m := range readRows(suggestionsPath(workspaceDir)) {
+	for _, m := range readRowsAnnounced(suggestionsPath(workspaceDir), "suggestion_is_applied") {
 		if m["suggestion_id"] == suggestionID {
 			// pyTruthy, NOT a typed assert — and a NAMED DIVERGENCE, not
 			// parity: fork-point Python's suggestion_is_applied and the
@@ -384,33 +488,35 @@ func Dismiss(workspaceDir, suggestionID, reason string) (bool, error) {
 	found := false
 	err := record.LockedRMW(p, func(old string) string {
 		var out []string
-		for _, line := range strings.Split(old, "\n") {
-			s := strings.TrimSpace(line)
+		for _, line := range rmwLines(old) {
+			s := pytext.Strip(line)
 			if s == "" {
 				continue
 			}
-			var row map[string]any
-			if json.Unmarshal([]byte(s), &row) != nil {
+			// loads_clean, not json.loads. A byte-tainted line must never
+			// id-match: encoding/json substitutes U+FFFD inside string
+			// values, so a tainted row could match and then be re-dumped
+			// as clean escapes — laundering bytes CPython preserves.
+			// Falling into the preserve branch keeps the line as it is.
+			row, lerr := record.LoadsCleanOrdered(s)
+			if lerr != nil {
 				out = append(out, s)
 				continue
 			}
-			if row["suggestion_id"] == suggestionID && !pyTruthy(row["applied"]) {
-				row["status"] = "dismissed"
-				row["dismissed_at"] = nowISO()
+			if val(row, "suggestion_id") == suggestionID && !pyTruthy(val(row, "applied")) {
+				row.Set("status", "dismissed")
+				row.Set("dismissed_at", nowISO())
 				if reason != "" {
-					row["block_reason"] = reason
+					row.Set("block_reason", reason)
 				}
 				found = true
-				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				enc, _ := pyval.DumpsCompactPy(row)
 				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
 		}
-		if len(out) == 0 {
-			return ""
-		}
-		return strings.Join(out, "\n") + "\n"
+		return pyJoinOrEmpty(out)
 	})
 	return found, err
 }
@@ -456,49 +562,51 @@ func StampVerificationChanged(workspaceDir, suggestionID string, stamp Verificat
 	}
 	_ = record.LockedRMW(p, func(old string) string {
 		var out []string
-		for _, line := range strings.Split(old, "\n") {
-			s := strings.TrimSpace(line)
+		for _, line := range rmwLines(old) {
+			s := pytext.Strip(line)
 			if s == "" {
 				continue
 			}
-			var row map[string]any
-			if json.Unmarshal([]byte(s), &row) != nil {
+			// loads_clean, not json.loads. A byte-tainted line must never
+			// id-match: encoding/json substitutes U+FFFD inside string
+			// values, so a tainted row could match and then be re-dumped
+			// as clean escapes — laundering bytes CPython preserves.
+			// Falling into the preserve branch keeps the line as it is.
+			row, lerr := record.LoadsCleanOrdered(s)
+			if lerr != nil {
 				out = append(out, s)
 				continue
 			}
-			if row["suggestion_id"] == suggestionID {
+			if val(row, "suggestion_id") == suggestionID {
 				found = true
 				// A terminal row refuses EVERY further stamp — not just a
 				// second verdict. A VerifiedAt-only stamp slipping past the
 				// refusal was a latent overwrite edge (r2 review LOW-2);
 				// nothing legitimately re-stamps a rendered verdict.
-				prior, _ := row["verify_verdict"].(string)
+				prior, _ := val(row, "verify_verdict").(string)
 				if prior != "" {
 					out = append(out, s)
 					continue
 				}
 				if stamp.Verdict != nil {
-					row["verify_verdict"] = *stamp.Verdict
+					row.Set("verify_verdict", *stamp.Verdict)
 					changed = true
 				}
 				if stamp.VerifiedAt != nil {
-					row["verified_at"] = *stamp.VerifiedAt
+					row.Set("verified_at", *stamp.VerifiedAt)
 					changed = true
 				}
 				if stamp.Extensions != nil {
-					row["verify_extensions"] = *stamp.Extensions
+					row.Set("verify_extensions", *stamp.Extensions)
 					changed = true
 				}
-				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				enc, _ := pyval.DumpsCompactPy(row)
 				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
 		}
-		if len(out) == 0 {
-			return ""
-		}
-		return strings.Join(out, "\n") + "\n"
+		return pyJoinOrEmpty(out)
 	})
 	return found, changed
 }
@@ -516,43 +624,45 @@ func BumpExtensionOrPark(workspaceDir, suggestionID string, max int, now string)
 	}
 	_ = record.LockedRMW(p, func(old string) string {
 		var out []string
-		for _, line := range strings.Split(old, "\n") {
-			s := strings.TrimSpace(line)
+		for _, line := range rmwLines(old) {
+			s := pytext.Strip(line)
 			if s == "" {
 				continue
 			}
-			var row map[string]any
-			if json.Unmarshal([]byte(s), &row) != nil {
+			// loads_clean, not json.loads. A byte-tainted line must never
+			// id-match: encoding/json substitutes U+FFFD inside string
+			// values, so a tainted row could match and then be re-dumped
+			// as clean escapes — laundering bytes CPython preserves.
+			// Falling into the preserve branch keeps the line as it is.
+			row, lerr := record.LoadsCleanOrdered(s)
+			if lerr != nil {
 				out = append(out, s)
 				continue
 			}
-			if row["suggestion_id"] == suggestionID {
-				if prior, _ := row["verify_verdict"].(string); prior != "" {
+			if val(row, "suggestion_id") == suggestionID {
+				if prior, _ := val(row, "verify_verdict").(string); prior != "" {
 					out = append(out, s) // already terminal
 					continue
 				}
-				cur := 0
-				if f, ok := row["verify_extensions"].(float64); ok {
-					cur = int(f)
-				}
-				ext = cur + 1
-				row["verify_extensions"] = ext
+				// int(row.get("verify_extensions", 0) or 0) in Python:
+				// pyval.IntOf covers the json.Number the ordered reader
+				// hands back AND the float64 the old map read produced,
+				// so a store written by either runtime counts the same.
+				ext = pyval.IntOf(val(row, "verify_extensions")) + 1
+				row.Set("verify_extensions", ext)
 				if ext >= max {
-					row["verify_verdict"] = "unverifiable"
-					row["verified_at"] = now
+					row.Set("verify_verdict", "unverifiable")
+					row.Set("verified_at", now)
 					parked = true
 				}
 				changed = true
-				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
+				enc, _ := pyval.DumpsCompactPy(row)
 				out = append(out, enc)
 			} else {
 				out = append(out, s)
 			}
 		}
-		if len(out) == 0 {
-			return ""
-		}
-		return strings.Join(out, "\n") + "\n"
+		return pyJoinOrEmpty(out)
 	})
 	return ext, parked, changed
 }
@@ -728,23 +838,37 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 				"apply is an idempotent no-op\n", suggestionID)
 			break
 		}
-		entry := map[string]any{
-			"pattern": pattern,
-			"risk":    "MEDIUM",
-			"detail":  fmt.Sprintf("evolver guardrail (id=%s): %s", suggestionID, clipRunes(text, 80)),
-			"source":  suggestionID,
+		// pyval.Obj, not a map: this row is APPENDED to a store the
+		// Python runtime also appends to, and a map's keys come out
+		// alphabetized where Python writes them in dict-literal order
+		// (pattern, risk, detail, source, added_at, added_at_iso).
+		// Nothing parses the bytes — the divergence shows up in a diff
+		// of the shared ledger, where every Go-written guardrail row
+		// looks unlike every Python-written one.
+		entry := pyval.Obj{
+			{Key: "pattern", Val: pattern},
+			{Key: "risk", Val: "MEDIUM"},
+			{Key: "detail", Val: fmt.Sprintf("evolver guardrail (id=%s): %s", suggestionID, clipRunes(text, 80))},
+			{Key: "source", Val: suggestionID},
 			// Epoch seconds: constraint._load_dynamic_constraints'
 			// TTL check compares against time.time() — an ISO string
 			// here silently discarded the whole lane (Python lesson,
 			// carried in the row format).
-			"added_at":     float64(time.Now().Unix()),
-			"added_at_iso": nowISO(),
+			// UnixNano/1e9, not float64(Unix()): Python's time.time() is a
+			// float WITH sub-second precision, and truncating to whole
+			// seconds wrote 1787635032.0 where CPython writes
+			// 1787635032.8502514. The TTL comparison tolerates it, so
+			// nothing breaks — the row just carries less than it claims,
+			// and two guardrails applied inside the same second become
+			// indistinguishable by time.
+			{Key: "added_at", Val: float64(time.Now().UnixNano()) / 1e9},
+			{Key: "added_at_iso", Val: nowISO()},
 		}
 		// `added_at` is float64(unix seconds): a whole float on EVERY row,
 		// which json.Marshal wrote as an int and json.dumps writes with a
 		// `.0`. This file gates constraint enforcement on both sides, so
 		// the type of that field is load-bearing (mission-r8).
-		line, _ := pyval.DumpsCompactPy(pyval.FromPlain(entry))
+		line, _ := pyval.DumpsCompactPy(entry)
 		raw := []byte(line)
 		dcPath := dynamicConstraintsPath(workspaceDir)
 		if err := os.MkdirAll(filepath.Dir(dcPath), 0o755); err != nil {
@@ -911,9 +1035,9 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 	// Snapshot read (no lock) to find the target: the decision work
 	// below can take time, so it runs outside the critical section; the
 	// final update is a keyed merge under the lock.
-	var d map[string]any
-	for _, m := range readRows(p) {
-		if m["suggestion_id"] == suggestionID {
+	var d pyval.Obj
+	for _, m := range readRowsOrdered(p, "apply_suggestion") {
+		if val(m, "suggestion_id") == suggestionID {
 			d = m
 			break
 		}
@@ -924,44 +1048,44 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 	// Re-applying a live row must be a no-op: besides replaying the
 	// mutation, a second apply could rewrite applied_manually and
 	// corrupt the authority provenance that decides auto-revert.
-	if pyTruthy(d["applied"]) {
+	if pyTruthy(val(d, "applied")) {
 		return true, nil
 	}
 
-	category := stringOr(d["category"])
+	category := stringOr(val(d, "category"))
 	if category == "" {
 		category = "observation"
 	}
-	text := stringOr(d["suggestion"])
+	text := stringOr(val(d, "suggestion"))
 
 	// Injection guard, FAIL-CLOSED: scan suggestion text before any
 	// action. (Go's ScanContent cannot throw, so the Python
 	// scan-failed arm has no Go twin — the scan itself is the gate.)
 	scan := guard.ScanContent(text, "internal")
 	if !scan.SafeToAutoApply() {
-		d["applied"] = false
-		d["status"] = "injection_risk_blocked"
+		d.Set("applied", false)
+		d.Set("status", "injection_risk_blocked")
 		finding := ""
 		if len(scan.Findings) > 0 {
 			finding = clipRunes(scan.Findings[0], 120)
 		}
-		d["block_reason"] = "injection_guard: " + finding
+		d.Set("block_reason", "injection_guard: "+finding)
 	} else {
 		switch category {
 		case "skill_pattern":
 			// NOT PORTED: skills store + test gate. Held, never
 			// silently "applied" without effect.
-			d["applied"] = false
-			d["status"] = "held_for_review"
-			d["block_reason"] = "skill_pattern apply engine is not ported in the Go slice — " +
-				"apply via the Python CLI (shared store)"
+			d.Set("applied", false)
+			d.Set("status", "held_for_review")
+			d.Set("block_reason", "skill_pattern apply engine is not ported in the Go slice — "+
+				"apply via the Python CLI (shared store)")
 		case "sub_mission":
 			// NOT PORTED: goal enqueue. Same hold shape as Python's
 			// default (auto_enqueue_signals off).
-			d["applied"] = false
-			d["status"] = "held_for_review"
-			d["block_reason"] = "sub_mission enqueue is not ported in the Go slice — " +
-				"run it via the Python CLI (shared store)"
+			d.Set("applied", false)
+			d.Set("status", "held_for_review")
+			d.Set("block_reason", "sub_mission enqueue is not ported in the Go slice — "+
+				"run it via the Python CLI (shared store)")
 		case "inspection_finding":
 			// Inspector-authored rows land in the SHARED suggestions
 			// store (inspector.saveSuggestions), so a human running
@@ -969,10 +1093,10 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			// informational (confidence 0.7, no action to run) — held,
 			// not action_failed (r1 review QA #4: the old default arm's
 			// "unreachable" claim was false for these rows).
-			d["applied"] = false
-			d["status"] = "held_for_review"
-			d["block_reason"] = "inspection_finding is informational — nothing to apply; " +
-				"it surfaces friction for a human to act on"
+			d.Set("applied", false)
+			d.Set("status", "held_for_review")
+			d.Set("block_reason", "inspection_finding is informational — nothing to apply; "+
+				"it surfaces friction for a human to act on")
 		case "cost_optimization":
 			// KNOWN Python category. Python stamps it
 			// "pending_human_review" (evolver_store.py) — NOT
@@ -981,15 +1105,15 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 			// dashboard (observe.py) counts pending_human_review as the
 			// "needs triage" bucket, so the literal must match byte-for-
 			// byte or Go-touched rows vanish from that metric (r3 review).
-			d["applied"] = false
-			d["status"] = "pending_human_review"
-			d["block_reason"] = "cost_optimization has no auto-apply handler — review manually " +
-				"(or apply via the Python CLI, shared store)"
+			d.Set("applied", false)
+			d.Set("status", "pending_human_review")
+			d.Set("block_reason", "cost_optimization has no auto-apply handler — review manually "+
+				"(or apply via the Python CLI, shared store)")
 		case "crystallization":
-			d["applied"] = false
-			d["status"] = "pending_human_review"
-			d["block_reason"] = "crystallization requires human review — run " +
-				"`maro-memory canon-candidates` via the Python CLI (shared store)"
+			d.Set("applied", false)
+			d.Set("status", "pending_human_review")
+			d.Set("block_reason", "crystallization requires human review — run "+
+				"`maro-memory canon-candidates` via the Python CLI (shared store)")
 		case "new_guardrail":
 			// Guardrails can permanently block execution paths, so the
 			// gate is an explicit opt-in: manual apply → the review is
@@ -1007,47 +1131,50 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 				}
 			}
 			if shouldApply {
-				stampAction(workspaceDir, rec, d)
+				stampAction(workspaceDir, rec, &d)
 			} else {
-				d["applied"] = false
-				d["status"] = "held_for_review"
-				d["block_reason"] = "new_guardrail held for review: auto-apply is off by " +
-					"default (apply via `maro evolve -apply <id>`, or set " +
-					"config evolver.auto_apply: true / MARO_AUTO_APPLY_GUARDRAILS=1)"
+				d.Set("applied", false)
+				d.Set("status", "held_for_review")
+				d.Set("block_reason", "new_guardrail held for review: auto-apply is off by "+
+					"default (apply via `maro evolve -apply <id>`, or set "+
+					"config evolver.auto_apply: true / MARO_AUTO_APPLY_GUARDRAILS=1)")
 			}
 		default:
 			// prompt_tweak, observation, and anything unrecognized
 			// (Python's else arm applies too; Go's applyAction refuses
 			// unknown categories into action_failed rather than
 			// stamping a no-op success).
-			stampAction(workspaceDir, rec, d)
+			stampAction(workspaceDir, rec, &d)
 		}
-		if applied, _ := d["applied"].(bool); applied {
+		if applied, _ := val(d, "applied").(bool); applied {
 			// Apply timestamp lives HERE, not (only) in the captain's
 			// log — the log is visibility, never the source of truth
 			// for a system function.
-			d["applied_at"] = nowISO()
-			d["applied_manually"] = manual
+			d.Set("applied_at", nowISO())
+			d.Set("applied_manually", manual)
 		}
 	}
 
 	// Keyed merge under the lock: replace only this suggestion's line;
 	// rows appended or updated concurrently are preserved, and a line
 	// that vanished between snapshot and merge is re-added.
-	updated, err := pyval.DumpsCompactPy(pyval.FromPlain(d))
+	updated, err := pyval.DumpsCompactPy(d)
 	if err != nil {
 		return true, err
 	}
 	merr := record.LockedRMW(p, func(old string) string {
 		var out []string
 		replaced := false
-		for _, line := range strings.Split(old, "\n") {
-			s := strings.TrimSpace(line)
+		for _, line := range rmwLines(old) {
+			s := pytext.Strip(line)
 			if s == "" {
 				continue
 			}
-			var row map[string]any
-			if json.Unmarshal([]byte(s), &row) == nil && row["suggestion_id"] == suggestionID {
+			// loads_clean for the same reason as its three siblings: this
+			// branch REPLACES the matched line, so a tainted row that
+			// id-matched would be silently swapped for a re-dumped one.
+			if row, lerr := record.LoadsClean(s); lerr == nil &&
+				row["suggestion_id"] == suggestionID {
 				out = append(out, updated)
 				replaced = true
 				continue
@@ -1057,10 +1184,7 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 		if !replaced {
 			out = append(out, updated)
 		}
-		if len(out) == 0 {
-			return ""
-		}
-		return strings.Join(out, "\n") + "\n"
+		return pyJoinOrEmpty(out)
 	})
 	return true, merr
 }
@@ -1078,15 +1202,25 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 // stamped with a success it never earned (r1 review Finding B). That is
 // a NAMED divergence: Python stamps applied there anyway, with the prose
 // going nowhere.
-func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
-	switch applyAction(workspaceDir, rec, d) {
+// stampAction takes the row by POINTER because Set may append, which
+// reallocates the slice — a by-value pyval.Obj would take the mutation on
+// a copy and the caller would write the unstamped row. That is the one
+// ergonomic cost of an ordered row over a map, and it is worth naming: a
+// map hands its mutations back for free, so this is the seam where an
+// order-preserving port can silently lose a write.
+func stampAction(workspaceDir string, rec *record.Recorder, d *pyval.Obj) {
+	// applyAction and readApplyFields only READ, so they keep their map
+	// signatures and get a projection. Projecting once here rather than
+	// converting them keeps the ordered type at the sites that re-emit
+	// the row, which is the only place order is observable.
+	switch applyAction(workspaceDir, rec, objMap(*d)) {
 	case actionApplied:
-		d["applied"] = true
-		delete(d, "status")
-		delete(d, "block_reason")
+		d.Set("applied", true)
+		d.Pop("status")
+		d.Pop("block_reason")
 	case actionGuidanceOnly:
-		d["applied"] = false
-		d["status"] = "held_for_review"
+		d.Set("applied", false)
+		d.Set("status", "held_for_review")
 		// The reason must name the cause that ACTUALLY held this row, and
 		// there are three: below the confidence gate, a category with no
 		// playbook section, or an Append that failed (a 30s fail-closed
@@ -1101,7 +1235,7 @@ func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 		// confidence and category are read off `d` with the same
 		// coercions applyAction uses (store.go:612, :622), so this cannot
 		// drift into a second source of truth for the gate.
-		gate := readApplyFields(d)
+		gate := readApplyFields(objMap(*d))
 		confidence, category := gate.confidence, gate.category
 		reason := "new_guardrail has no matchable regex pattern — guidance only, " +
 			"and the prose did not reach the playbook, so it has no durable home"
@@ -1114,10 +1248,10 @@ func stampAction(workspaceDir string, rec *record.Recorder, d map[string]any) {
 		default:
 			reason += " (the playbook append failed — see the warning log)"
 		}
-		d["block_reason"] = reason + "; review manually"
+		d.Set("block_reason", reason+"; review manually")
 	default: // actionFailed
-		d["applied"] = false
-		d["status"] = "action_failed"
+		d.Set("applied", false)
+		d.Set("status", "action_failed")
 	}
 }
 
@@ -1156,7 +1290,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 		return RevertResult{Category: "", NothingToRevert: true,
 			Detail: fmt.Sprintf("suggestion_id %s is not applied — nothing to revert", suggestionID)}
 	}
-	entries := readRows(changeLogPath(workspaceDir))
+	entries := readRowsAnnounced(changeLogPath(workspaceDir), "revert_suggestion")
 	var match map[string]any
 	for i := len(entries) - 1; i >= 0; i-- {
 		if entries[i]["suggestion_id"] == suggestionID {
@@ -1184,13 +1318,23 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 			removed := false
 			rerr := record.LockedRMW(dcPath, func(old string) string {
 				var out []string
-				for _, line := range strings.Split(old, "\n") {
-					s := strings.TrimSpace(line)
-					if s == "" {
-						continue
-					}
-					var row map[string]any
-					if json.Unmarshal([]byte(s), &row) == nil {
+				// _drop_constraint is the ODD one of the five merges, and
+				// it is odd in two ways this port had normalized away:
+				// it does NOT strip, and it does NOT skip blanks. Every
+				// line it does not drop is re-emitted RAW.
+				//
+				// So the port deleted blank lines and trimmed whitespace
+				// off preserved rows — a byte divergence in a shared
+				// store that needs no exotic character at all, just an
+				// ordinary blank line. A rewrite is not a read: what the
+				// loop does with a line it is not interested in IS the
+				// output.
+				for _, line := range rmwLines(old) {
+					// loads_clean on the RAW line: a byte-tainted row must
+					// never match the drop key, so it falls through to the
+					// preserve branch verbatim rather than being re-dumped
+					// as clean escapes.
+					if row, lerr := record.LoadsClean(line); lerr == nil {
 						src := stringOr(row["source"])
 						// Apply writes source=<id>; fork-point Python's
 						// revert matched only "evolver:<id>" (a key
@@ -1204,12 +1348,9 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 							continue
 						}
 					}
-					out = append(out, s)
+					out = append(out, line)
 				}
-				if len(out) == 0 {
-					return ""
-				}
-				return strings.Join(out, "\n") + "\n"
+				return pyJoinOrEmpty(out)
 			})
 			if rerr != nil {
 				return RevertResult{Category: category, Detail: "revert failed: " + rerr.Error()}
@@ -1241,27 +1382,41 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 	if _, err := os.Stat(p); err == nil {
 		merr := record.LockedRMW(p, func(old string) string {
 			var out []string
-			for _, line := range strings.Split(old, "\n") {
-				s := strings.TrimSpace(line)
-				if s == "" {
+			// _mark_reverted is the other odd merge, and it differs from
+			// its four siblings in three ways at once:
+			//
+			//   - it does not skip blanks. A blank line reaches
+			//     loads_clean(""), raises, and lands in the PRESERVE
+			//     branch, which appends the RAW line — so the blank
+			//     survives the rewrite.
+			//   - the strip is for the PARSE only; what gets preserved is
+			//     the untouched line.
+			//   - it returns "\n".join(...) + "\n" UNCONDITIONALLY. On an
+			//     empty store CPython writes "\n" where the four siblings
+			//     write "". One byte, in a file the other runtime reads.
+			//
+			// This branch re-dumps EVERY parseable row, so a byte-tainted
+			// line must be refused INTO the preserve branch or it would be
+			// laundered into clean escapes — which is exactly why Python
+			// spells the parse as loads_clean and not json.loads.
+			for _, line := range rmwLines(old) {
+				row, lerr := record.LoadsCleanOrdered(pytext.Strip(line))
+				if lerr != nil {
+					out = append(out, line)
 					continue
 				}
-				var row map[string]any
-				if json.Unmarshal([]byte(s), &row) != nil {
-					out = append(out, s)
+				if val(row, "suggestion_id") == suggestionID {
+					row.Set("applied", false)
+					row.Set("status", "reverted")
+				}
+				enc, eerr := pyval.DumpsCompactPy(row)
+				if eerr != nil {
+					out = append(out, line)
 					continue
 				}
-				if row["suggestion_id"] == suggestionID {
-					row["applied"] = false
-					row["status"] = "reverted"
-				}
-				enc, _ := pyval.DumpsCompactPy(pyval.FromPlain(row))
 				out = append(out, enc)
 			}
-			if len(out) == 0 {
-				return ""
-			}
-			return strings.Join(out, "\n") + "\n"
+			return pyJoinAlways(out)
 		})
 		if merr != nil {
 			detail += "; suggestion store NOT updated — still marked applied"
@@ -1337,4 +1492,92 @@ func readApplyFields(d map[string]any) applyFields {
 		confidence: pyval.SafeFloat(
 			pyval.GetOr(d, "confidence", 0.5), 0.5, nil, nil),
 	}
+}
+
+// rmwLines is `old.splitlines()` — the ONE line rule for every
+// read-modify-write callback in this file.
+//
+// It exists because there were seven hand-written copies of it, all of them
+// spelled `strings.Split(old, "\n")`, and every one of them REWRITES a
+// store the Python runtime reads. A read that splits differently returns a
+// different list; a rewrite that splits differently WRITES a different file.
+// A row carrying \x0b or \x1c is two lines to CPython's merge and one to
+// this one, so the two runtimes reflow the same store into different bytes
+// — and then each reads the other's reflow.
+//
+// `old` arrives from record.LockedRMW as raw bytes, which is correct: the
+// Python side is `locked_rmw`, whose read is
+// `errors="surrogateescape"`, not `read_text`. Undecodable bytes must
+// SURVIVE a rewrite, not abort it, so there is deliberately no strict
+// decode here — the opposite of the graduation readers, and for the
+// opposite reason.
+func rmwLines(old string) []string { return pytext.SplitLines(old) }
+
+// pyJoinOrEmpty is `"\n".join(out) + "\n" if out else ""` — four of the
+// five Python merges.
+func pyJoinOrEmpty(out []string) string {
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
+// pyJoinAlways is `"\n".join(out) + "\n"`, unconditionally — _mark_reverted
+// alone. On an empty store that is "\n", not "".
+//
+// A one-byte difference is worth its own function precisely because it
+// looks like a typo: the next reader who "tidies" the two into one has
+// reintroduced a divergence, and a named pair makes the asymmetry
+// deliberate rather than accidental.
+func pyJoinAlways(out []string) string {
+	return strings.Join(out, "\n") + "\n"
+}
+
+// val is `d[k]` on an ordered row: the value, or nil when the key is
+// absent — the same one-valued answer a Go map gives, deliberately.
+//
+// The two-valued form is pyval.Obj.Get, and it is the one to reach for
+// whenever ABSENT and NULL have to differ (see pyStrGetV). This spelling
+// exists for the majority of sites, where the row is being matched or
+// truth-tested and both cases mean the same thing.
+func val(o pyval.Obj, key string) any {
+	v, _ := o.Get(key)
+	return v
+}
+
+// objMap projects an ordered row down to a plain map for the read-only
+// helpers that were written against one.
+//
+// One direction only, and that is the point: order is destroyed on the
+// way down and cannot be recovered on the way back, so a caller that
+// projects, mutates the map, and re-emits has silently alphabetized the
+// row. Every mutation stays on the pyval.Obj.
+func objMap(o pyval.Obj) map[string]any {
+	m := make(map[string]any, len(o))
+	for _, f := range o {
+		m[f.Key] = f.Val
+	}
+	return m
+}
+
+// readRowsOrdered is the snapshot read for a row that will be WRITTEN
+// BACK: Python's `_read_store` is `read_jsonl_announced`, so this is
+// record.ReadAllAnnouncedOrdered, and `what` names the loader in the
+// warning exactly as the Python call site does.
+//
+// It replaces a hand-rolled split-and-Unmarshal loop that diverged from
+// its Python three ways at once — it dropped the loss announcement (the
+// fourth-lens class: a helper you did not look for is a helper you will
+// write again), it split on "\n" where Python's reader does not, and it
+// returned unordered rows that Apply then re-emitted alphabetized.
+//
+// The warning goes to stderr rather than being returned, because both
+// callers are deep inside a decision path with nowhere to put it and the
+// alternative — dropping it — is the divergence being fixed.
+func readRowsOrdered(path, what string) []pyval.Obj {
+	rows, warn := record.ReadAllAnnouncedOrdered(path, what)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "[evolver] "+warn)
+	}
+	return rows
 }

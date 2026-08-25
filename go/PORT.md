@@ -6553,3 +6553,154 @@ are there.
   `.get()` and abort the WHOLE import (only `json.JSONDecodeError` is
   caught). `LoadsMap` refuses the row instead, costing one row. A narrower,
   deliberate divergence, named at the site.
+
+## The rewritten row comes back reordered
+
+The evolver's five read-modify-write callbacks are where the port WRITES to
+a store the Python runtime also writes to. That makes them the one place a
+divergence is not a Go-side bug but a shared-artifact bug, and the chunk
+found four separate classes of it in the same twenty lines.
+
+### The finding the differential was not written for
+
+The chunk started as a split-rule sweep — five Python merges spelled
+`old.splitlines()`, and the port spelled `strings.Split(old, "\n")`, which
+matters because *a rewrite that splits differently writes a different file*.
+Two of the five (`_drop_constraint`, `_mark_reverted`) also neither strip
+nor skip blank lines, and one of those returns `"\n".join(out) + "\n"`
+UNCONDITIONALLY, so an empty store comes back as one newline where its four
+siblings return "". All of that was real and all of it is now pinned.
+
+None of it was the biggest thing in the file.
+
+**Every rewrite re-emitted every key in alphabetical order.** Python's
+`json.loads` gives an insertion-ordered dict; assigning a key leaves it
+where it was and a new key lands at the tail, so `json.dumps` writes the row
+back in the order the FILE had. The port read into `map[string]any`, whose
+key order does not exist, and re-emitted through `pyval.FromPlain` — whose
+own doc comment names sorted output as a LOSS and says the two pack.json
+writers are the sites where the loss is live. It was live at five more.
+
+Nothing about JSON semantics changes, which is exactly why nothing caught
+it: both runtimes parse either byte sequence to the same mapping, so no
+consumer ever failed. What changes is the bytes, and the bytes are the
+shared artifact — a ledger diff shows every stamped row rewritten end to
+end, a content hash over the store disagrees across runtimes, and a dedup
+keyed on the serialized line stops matching.
+
+`record.LoadsCleanOrdered` and `pyval.Obj.Set` already existed for exactly
+this, with doc comments explaining exactly this. The machinery was there;
+the callers had not been pointed at it. New this chunk:
+`record.ReadAllAnnouncedOrdered` / `ReadAllCountedOrdered`, so a row that
+arrives from the announced reader can survive a round trip too.
+
+### Why the byte comparison had to be a byte comparison
+
+`pyRewriteSrc` reads both stores with `read_bytes().decode("latin-1")` and
+compares the raw bytes. Parsing first would have hidden every single
+finding in this chunk: a dropped blank line, a trimmed preserved row, a
+moved line boundary, a one-byte empty-store result, and the key order. The
+two masks that survive (`<TS>` for ISO stamps, `<EPOCH>` for `added_at`)
+each hide a WALL CLOCK, and each hands its lost coverage to a named
+replacement rather than surrendering it — `TestNowISOMatchesPythonIsoformat`
+for the format, and a precision assertion inside the apply test for the
+epoch.
+
+### Four more, found because the fixture was byte-exact
+
+**The timestamp was a second spelling of a helper that exists.**
+`nowISO()` in `evolver/store.go` rendered `time.RFC3339Nano`; all four
+Python sites are `datetime.now(timezone.utc).isoformat()`. Three
+differences: `"Z"` versus `"+00:00"`, nine trailing-zero-trimmed fractional
+digits versus exactly six, and isoformat's omission of the fraction
+entirely when it is zero. Measured on this box: CPython 3.14's
+`fromisoformat` parses the Go spelling (truncating), but it rejected a "Z"
+suffix outright before 3.11 — so a Go-written stamp is one an older reader
+cannot parse at all. `pyval.NowISO` is the port-wide spelling and predates
+the local copy. **Five more local `nowISO()` copies and four inline
+RFC3339Nano stamps are still to classify** (record, graduation, scans,
+skills/stats, pack/export; inspector ×4, orch/mission_run ×2) — each needs
+its own Python read before it is touched, for the reason the graduation
+section gives.
+
+**`added_at` truncated to whole seconds.** Python's `time.time()` is a
+float with microsecond precision; `float64(time.Now().Unix())` wrote
+`1787635032.0` against CPython's `1787635032.8502514`. The TTL comparison
+tolerates it, so nothing broke — the row just carried less than it claimed,
+and two guardrails applied in the same second became indistinguishable by
+time.
+
+**`str(None)` is `"None"`, again.** The dedup content key is
+`(str(d.get("category","")), str(d.get("target","")),
+str(d.get("suggestion","")).strip())`. `d.get(k, "")` defaults on ABSENCE,
+never on a present null, so a row carrying `"category": null` keys as
+`"None"` in Python — and the port keyed it `""`, because a Go map lookup
+gives nil for both cases. The r5 review found the identical collapse at
+three sites in the pack importer one chunk ago. The fix is the same shape:
+split the presence rule (`pyStrGetV`) from the coercion (`pyStrValue`) so
+neither can be applied without the other. There are now FOUR str()-shaped
+helpers in this file and a comment listing what separates them.
+
+**A bug this chunk introduced, caught by a test that already existed.**
+Swapping `json.Unmarshal` for `record.LoadsClean` at the merge sites was
+correct — `loads_clean` is what the Python spells, and a byte-tainted line
+must never id-match. But `LoadsClean` decodes with `UseNumber`, so every
+number in a decoded row changed type from `float64` to `json.Number`, and
+one site read a number: `row["verify_extensions"].(float64)`. The
+assertion silently failed, `cur` was always 0, every bump wrote 1, and the
+extension ladder could never reach its park. `TestBumpExtensionOrParkAtomic`
+went red and named it. *A fix is evidence about its siblings* — including
+the siblings that only exist because of the fix.
+
+### The vacuity the battery found
+
+`TestRevertRewritesBothStoresLikeCPython` passed on its first run and was
+testing nothing. The fixture had no `change_log.jsonl`, so both runtimes
+took the "not found in change_log" exit, left both stores untouched, and
+the comparison held two unmodified files against each other. Only the
+mutation battery saw it — M3 and M13 both reported MISS against a green
+test. Seeding a matching `guardrail_append` entry made both mutants
+DETECTED.
+
+The same battery pass reported MISS for the two Apply-side mutants, for
+the plainer reason that nothing drove `Apply` at all;
+`TestApplyRewritesTheStoreLikeCPython` covers it now, and its fixture row
+carries a real regex `pattern` so the new_guardrail branch performs a real
+apply instead of falling through to guidance-only — otherwise the appended
+constraint row the test exists to compare never gets written.
+
+### Evidence
+
+New: `evolver/rewrite_diff_test.go` — four store-BYTE differentials
+(dismiss, stamp_verification, revert, apply), the `pyJoinAlways`/
+`pyJoinOrEmpty` empty-store pair, a nine-case `rmwLines` differential, a
+five-row content-key differential, and the isoformat format differential.
+`record/ordered_reader_test.go` — the ordered and plain readers must
+classify a 17-line corpus identically (all three loss buckets exercised,
+asserted), and an ordered row must re-emit its own line byte for byte with
+Set keeping an existing key's ordinal and appending a new one.
+
+Mutation battery **17/17 DETECTED**: five key-order reversions (one per
+rewrite site), three coercion reversions, two stamp reversions, three
+split/join reversions, the number-type reversion, the two-readers-drift
+mutant, an `Obj.Set` that appends instead of replacing, and the epoch
+truncation.
+
+`go test ./...` exits 0; `go vet ./...` clean; the only gofmt-dirty files
+are the two pre-existing ones.
+
+### Carried
+
+* `evolver/store.go`'s `CadenceTick` still reads
+  `state["runs_since_evolve"].(float64)`, which is CORRECT — that path
+  decodes with `json.Unmarshal`, not `LoadsClean`. It is the one surviving
+  `.(float64)` in the package and it is right for a reason that is invisible
+  at the site; if that read ever moves onto the clean decoder it changes
+  type with it.
+* `constraintRowExists` splits on `"\n"` and has no Python counterpart at
+  all (it is a Go-only guard for the crash window between writing a
+  constraint row and stamping `applied`). The split rule is unobservable
+  there because it never re-emits. Classified, not changed.
+* `before_state` inside a change_log entry is still built from a Go map and
+  comes out key-sorted. Nothing joins on it — it is read whole for recovery
+  — so the loss stays named rather than chased.
