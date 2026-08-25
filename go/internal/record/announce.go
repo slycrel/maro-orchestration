@@ -140,10 +140,21 @@ func readAllCounted(path string) ([]map[string]any, SkipReport) {
 			return nil, SkipReport{Missing: true}
 		}
 		// Python reaches this through `path.exists()` returning True and
-		// `path.open` raising OSError. A path whose PARENT is unsearchable
-		// makes exists() false there and lands in Missing; here it raises
-		// EACCES and lands in Unreadable. Both refuse to invent records;
-		// they disagree only about which flavour of nothing to announce.
+		// `path.open` raising OSError.
+		//
+		// NAMED DIVERGENCE, and it is louder than "which flavour of
+		// nothing". For a path whose PARENT directory is unsearchable,
+		// `Path.exists()` swallows the PermissionError and returns False
+		// (measured), so Python builds SkipReport(missing=True), its
+		// __bool__ is false, and NOTHING IS LOGGED. Go gets EACCES from
+		// ReadFile, lands in Unreadable, and announces
+		// "unreadable (0 records returned — not an empty ledger)".
+		//
+		// One runtime announces a loss and the other is silent about the
+		// same directory. Both refuse to invent records, which is the half
+		// that matters for the store; the half that matters for an
+		// operator is that only one of them will say why the corpus went
+		// empty. The port is on the louder side deliberately.
 		return nil, SkipReport{Unreadable: true}
 	}
 	var out []map[string]any

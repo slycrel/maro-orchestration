@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
@@ -52,7 +53,15 @@ type SkillTestCase struct {
 	// RunSkillTests can iterate it the way Python does — a string yields
 	// its characters. Unexported: nothing outside this file may treat a
 	// drifted row as if it were a normal one.
-	keywordsRaw any
+	//
+	// keywordsIsRaw is not redundant with `keywordsRaw != nil`, which is
+	// what the first cut tested. A stored JSON `null` IS a drifted value
+	// and it is also a nil `any`, so the nil test read it as "this row had
+	// a proper list" and re-emitted `[null]` — the exact invented shape
+	// MarshalJSON exists to prevent. A zero value that has to mean two
+	// things means neither; the flag says which.
+	keywordsRaw   any
+	keywordsIsRaw bool
 }
 
 // SkillMutationResult ports skill_types.SkillMutationResult.
@@ -73,9 +82,32 @@ func (tc SkillTestCase) ToDict() pyval.Obj {
 	return pyval.Obj{
 		{Key: "skill_id", Val: tc.SkillID},
 		{Key: "input_description", Val: tc.InputDescription},
-		{Key: "expected_keywords", Val: pyval.List(tc.ExpectedKeywords)},
+		// The RAW value when there was one. Python's dataclass holds
+		// whatever from_dict put in the field and to_dict hands the same
+		// object back, so re-saving a drifted row rewrites it unchanged;
+		// emitting `pyval.List(...)` here would launder a stored `7` into
+		// `[7]` on the way through.
+		//
+		// UNREACHABLE TODAY, and labelled rather than claimed: nothing
+		// re-saves a LOADED test case. SaveSkillTests is called only by
+		// GenerateSkillTests, whose cases always carry real lists, so no
+		// mutation can pin this arm. It is here because the divergence is
+		// real the moment a caller does round-trip a loaded row, and
+		// because the sibling writer (MarshalJSON) needs the same answer
+		// for a comparison that IS reachable — one helper, so the two
+		// cannot drift.
+		{Key: "expected_keywords", Val: tc.keywordsForWrite()},
 		{Key: "derived_from_failure", Val: tc.DerivedFromFailure},
 	}
+}
+
+// keywordsForWrite is the value both writers emit: the raw one for a
+// drifted row, the list otherwise.
+func (tc SkillTestCase) keywordsForWrite() any {
+	if tc.keywordsIsRaw {
+		return tc.keywordsRaw
+	}
+	return pyval.List(tc.ExpectedKeywords)
 }
 
 // SkillTestCaseFromDict is from_dict, defaults included.
@@ -131,6 +163,7 @@ func SkillTestCaseFromDict(d map[string]any) (SkillTestCase, error) {
 	default:
 		tc.ExpectedKeywords = []any{kws}
 		tc.keywordsRaw = kws
+		tc.keywordsIsRaw = true
 	}
 	return tc, nil
 }
@@ -143,14 +176,10 @@ func SkillTestCaseFromDict(d map[string]any) (SkillTestCase, error) {
 // consumer is a comparison, and a comparison against an invented shape is
 // worse than no comparison.
 func (tc SkillTestCase) MarshalJSON() ([]byte, error) {
-	kws := any(tc.ExpectedKeywords)
-	if tc.keywordsRaw != nil {
-		kws = tc.keywordsRaw
-	}
 	return json.Marshal(map[string]any{
 		"skill_id":             tc.SkillID,
 		"input_description":    tc.InputDescription,
-		"expected_keywords":    kws,
+		"expected_keywords":    tc.keywordsForWrite(),
 		"derived_from_failure": tc.DerivedFromFailure,
 	})
 }
@@ -214,7 +243,15 @@ func LoadSkillTests(ws, skillID string) ([]SkillTestCase, []string) {
 	var tests []SkillTestCase
 	drifted := 0
 	for _, d := range rows {
-		if s, _ := d["skill_id"].(string); s != skillID {
+		// `d.get("skill_id") != skill_id`. The bare `s, _ :=` spelling
+		// this replaces turned BOTH an absent key and a non-string value
+		// into "", which equals the argument when the argument is "" —
+		// so a row with no skill_id at all was admitted for an empty
+		// query, where CPython compares None to "" and skips it. A
+		// comparison whose only disagreement is at its own boundary is
+		// exactly the one no fixture reaches by accident.
+		s, isStr := d["skill_id"].(string)
+		if !isStr || s != skillID {
 			continue
 		}
 		tc, cerr := SkillTestCaseFromDict(d)
@@ -475,12 +512,7 @@ func generateViaLLM(ctx context.Context, ws string, skill Skill,
 
 // keywordsOrRaw is the value Python would iterate: the raw one when
 // expected_keywords was not a list, the list otherwise.
-func (tc SkillTestCase) keywordsOrRaw() any {
-	if tc.keywordsRaw != nil {
-		return tc.keywordsRaw
-	}
-	return pyval.List(tc.ExpectedKeywords)
-}
+func (tc SkillTestCase) keywordsOrRaw() any { return tc.keywordsForWrite() }
 
 // pyIterate yields what `for x in v` yields: a list's elements, a string's
 // characters, a mapping's keys — and a TypeError for anything else.
@@ -504,6 +536,33 @@ func pyIterate(v any) ([]any, error) {
 		var out []any
 		for _, kv := range t {
 			out = append(out, kv.Key)
+		}
+		return out, nil
+	case map[string]any:
+		// The SAME language rule as the pyval.Obj arm, for the other
+		// spelling of a mapping — and the only one that can reach the run
+		// gate. record.LoadsClean decodes through encoding/json, so a
+		// nested object in a stored row is a map[string]any and never a
+		// pyval.Obj; the ordered arm above is reachable only from the LLM
+		// path. Without this case a stored `"expected_keywords": {...}`
+		// raised TypeError, the test was skipped rather than run, and the
+		// short `passed` count blocked a mutation CPython lets through
+		// (measured: CPython (1,1), the port (0,1)).
+		//
+		// Sorted, not insertion order: a Go map cannot remember one. The
+		// only consumer of this arm is an `any(...)` over the keys, whose
+		// answer does not depend on order — and sorted at least makes the
+		// port's own answer reproducible. If a caller ever needs the
+		// ORDER, it must decode through pyval.LoadsOrdered instead; that
+		// is a different fix and this comment is where it starts.
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make([]any, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, k)
 		}
 		return out, nil
 	default:
@@ -635,10 +694,33 @@ func RunSkillTests(ctx context.Context, skill Skill, tests []SkillTestCase,
 func ValidateSkillMutation(ctx context.Context, ws string,
 	original, mutated Skill, failureReasons []string,
 	adapter llm.Adapter) (SkillMutationResult, error) {
+	res, _, err := ValidateSkillMutationWithLog(
+		ctx, ws, original, mutated, failureReasons, adapter)
+	return res, err
+}
+
+// ValidateSkillMutationWithLog is ValidateSkillMutation plus the store
+// warnings its load produced.
+//
+// Python logs those from inside `_load_skill_tests`, so a torn
+// skill-tests.jsonl reaching the gate is operator-visible there. This port
+// has no logger — every ported warning is returned as data — which moves
+// the decision to the caller and means the caller can DROP it. The first
+// cut did exactly that — it dropped the second return value — and no test
+// could see it: the tripwire only checked that the loader still called the
+// announced reader, one frame below where the announcement was being
+// thrown away. Announcing into a return value nobody reads is the same
+// silence with more code (lens 17, one level up).
+//
+// The name follows record.WriteOutcomeWithLog, which is the same shape for
+// the same reason.
+func ValidateSkillMutationWithLog(ctx context.Context, ws string,
+	original, mutated Skill, failureReasons []string,
+	adapter llm.Adapter) (SkillMutationResult, []string, error) {
 	res := SkillMutationResult{SkillID: original.ID,
 		Original: original, Mutated: mutated}
 
-	tests, _ := LoadSkillTests(ws, original.ID)
+	tests, warnings := LoadSkillTests(ws, original.ID)
 	if len(tests) == 0 {
 		var err error
 		tests, err = GenerateSkillTests(ctx, ws, original, failureReasons, adapter)
@@ -647,12 +729,12 @@ func ValidateSkillMutation(ctx context.Context, ws string,
 			// leave validate_skill_mutation too — there is no try here —
 			// so the port returns it rather than converting it into an
 			// unblocked result.
-			return SkillMutationResult{}, err
+			return SkillMutationResult{}, warnings, err
 		}
 	}
 	if len(tests) == 0 {
 		// No tests available at all — allow the mutation.
-		return res, nil
+		return res, warnings, nil
 	}
 
 	dryRun := adapter == nil
@@ -675,5 +757,5 @@ func ValidateSkillMutation(ctx context.Context, ws string,
 		res.BlockReason = fmt.Sprintf("Mutation failed %d/%d tests for skill '%s'",
 			total-passed, total, original.Name)
 	}
-	return res, nil
+	return res, warnings, nil
 }

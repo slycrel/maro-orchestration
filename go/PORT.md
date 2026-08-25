@@ -5941,3 +5941,87 @@ two guards, one observable. That pairing is written down at the site.
 closure, director, graduation, inspector, cmd), its six UNRESOLVED entries,
 and the port-wide migration of inline store scans onto
 `record.ReadAllAnnounced`.
+
+## Round 11 — ten findings against the Phase-14 chunk, eight of them real
+
+Whole-chunk review (the standing amendment: the entire chunk plus its
+fixes, not the latest diff). Nine findings were verified against CPython and
+fixed; one was a misread; one was a comment that understated a divergence.
+
+### The one that mattered
+
+**`pyIterate` did not know the type its own reader produces.** It had a
+`pyval.Obj` arm for "a mapping's keys" and no `map[string]any` arm — and
+`map[string]any` is the ONLY mapping that can reach the run gate, because
+`record.LoadsClean` decodes through `encoding/json`. The ordered arm looks
+exactly like coverage for the case and is dead for the caller that needs it.
+
+A stored `"expected_keywords": {"alpha": 1}` therefore raised TypeError, the
+test was skipped rather than run, and the row still counted toward `total` —
+so the short `passed` BLOCKED a mutation CPython lets through. Measured:
+CPython `(1, 1)`, the port `(0, 1)`. Sorted keys, not insertion order,
+because a Go map cannot remember one; the only consumer is an order-blind
+`any(...)`, and the comment says where a caller that needs order should go
+instead.
+
+### A zero value that had to mean two things
+
+`keywordsRaw != nil` meant "this row's keywords were not a list". A stored
+JSON `null` IS a drifted value and IS a nil `any`, so the test read it as a
+proper list and re-emitted `[null]` — the exact invented shape `MarshalJSON`
+exists to prevent. Now an explicit `keywordsIsRaw` flag, and `ToDict` and
+`MarshalJSON` share one `keywordsForWrite` so the two writers cannot
+disagree.
+
+### The announcement stopped one frame above the announcement
+
+`ValidateSkillMutation` did `tests, _ := LoadSkillTests(...)`. Python logs
+the loss from inside the loader; this port returns warnings as data, which
+moves the decision to the caller — and the caller dropped it. Announcing
+into a return value nobody reads is the same silence with more code.
+
+`ValidateSkillMutationWithLog` now carries them out (the shape
+`record.WriteOutcomeWithLog` already established), and
+`TestNothingRoutesAroundTheAnnouncedReader` checks BOTH frames. The
+tripwire's first version watched only the call site, one level below where
+the loss was happening — a helper does not fix a class, it fixes the callers
+that reach it, and "reach" includes what they do with the answer.
+
+### Tests that agreed without measuring
+
+* both `[:200]` clips on the LLM path — the prompt's per-failure join and
+  `derived_from_failure` — had no fixture at their own boundary: every
+  scripted case carried short failures and the one long failure had no
+  adapter. Either constant could be changed to 100 or 300 with the battery
+  green.
+* `no_tools=True` is this gate's brake — a keyword smoke test that ran with
+  live tools would let the evolver's own safety check act on the text it was
+  asked to classify. The probe recorded the kwarg and nothing compared it.
+  Both halves are asserted now: the kwarg on Python's side, `AgentTools` off
+  and no tool protocol on Go's.
+* `cmpSavedTests` routed through `normJSONL`, which re-marshals each row
+  (sorting keys) and sorts the rows — throwing away `to_dict`'s key order,
+  `json.dumps`' default separators (the whole reason `DumpsCompactPy` exists),
+  and the append order. All three were correct; none was pinned. It is a
+  byte comparison now: the store is an append log, not an unordered set.
+* `LoadSkillTests`' id test read `d["skill_id"]` with a bare type assertion,
+  turning an absent key and a non-string alike into `""` — which EQUALS the
+  argument when the argument is `""`. Every fixture queried `"s1"`, where
+  the two spellings agree.
+
+### The two that were not defects
+
+* the separator-only-name fixture was reported as a duplicate of the
+  empty-name case. It is not: the name is two RAW separator bytes, which
+  render as nothing in a terminal and nothing in a diff. Rewritten as
+  escapes — a fixture whose subject is invisible is one nobody can check.
+* `announce.go`'s note said the Missing/Unreadable split was only "which
+  flavour of nothing to announce". Measured: for an unsearchable parent
+  directory, `Path.exists()` swallows the PermissionError and returns False,
+  so Python logs NOTHING while Go announces "unreadable". One runtime is
+  silent about the same directory. The note says that now.
+
+Battery: 41 CAUGHT of 45. The four misses are all structural and named at
+their sites — two guards Go's zero value or a sibling condition makes
+unobservable, `_load_skill_tests`' drift counter (unreachable in both
+runtimes), and `ToDict`'s raw arm (nothing re-saves a loaded row).

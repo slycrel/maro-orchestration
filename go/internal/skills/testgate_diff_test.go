@@ -290,7 +290,7 @@ func TestGenerateSkillTestsMatchesCPython(t *testing.T) {
 		// separator spelling is the one round 10 made reachable.
 		{"a whitespace name raises IndexError", skill("   ", nil), nil, nil},
 		{"a separator-only name raises IndexError",
-			skill("", nil), nil, nil},
+			skill("\x1c\x1f", nil), nil, nil},
 		// The same shape one level down: the LIST is truthy, its first
 		// element is not.
 		{"a whitespace first step raises IndexError",
@@ -298,8 +298,22 @@ func TestGenerateSkillTestsMatchesCPython(t *testing.T) {
 			nil, nil},
 		// A long failure reason: the hint is [:100] and derived_from_failure
 		// on the LLM path is [:200] — two different cuts of one string.
+		// This case has NO script, so it exercises the heuristic [:100]
+		// only; the LLM-path [:200]s need their own case below, which the
+		// comment used to claim this one covered.
 		{"a long failure reason cuts at one hundred", skill("N", nil),
 			[]string{repeatRunes("é", 300)}, nil},
+		// The two [:200] cuts on the LLM path, at their own boundary: the
+		// prompt joins `e[:200]` per failure and derived_from_failure is
+		// `failure_examples[0][:200]`. Every other scripted case here has
+		// short failures, so before this fixture either constant could be
+		// changed to 100 or 300 with the battery still green — a limit
+		// with no case at its own boundary is a limit nothing pins.
+		// Multi-byte on purpose: a port slicing BYTES rather than runes
+		// cuts é in half and the prompt differs at the seam.
+		{"the LLM path cuts failures at two hundred", skill("N", nil),
+			[]string{repeatRunes("é", 300), repeatRunes("ü", 250)},
+			[]string{goodReply}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pyWS, goWS := t.TempDir(), t.TempDir()
@@ -433,6 +447,32 @@ func TestRunSkillTestsMatchesCPython(t *testing.T) {
 		{"a PRE-LOWERED dotted i decides the match",
 			rows(tc("a", "i̇stanbul")),
 			[]string{"visit İSTANBUL today"}, false, ""},
+		// A STORED OBJECT. `for kw in {"alpha": 1}` yields the KEYS, so
+		// CPython runs the test and passes it. The port raised TypeError
+		// and skipped the test instead — the row still counted toward
+		// `total`, so the short `passed` blocked a mutation CPython lets
+		// through (measured: CPython (1,1), the port (0,1)).
+		//
+		// It reaches the run gate as a map[string]any and never as a
+		// pyval.Obj, because record.LoadsClean decodes through
+		// encoding/json — so pyIterate's ordered-mapping arm, which looks
+		// exactly like coverage for this case, is dead for the only caller
+		// that needs it.
+		{"an object's KEYS are the keywords",
+			[]map[string]any{{"skill_id": "s1", "input_description": "a",
+				"expected_keywords": map[string]any{"alpha": 1}}},
+			[]string{"the alpha result"}, false, ""},
+		{"an object whose keys do not match",
+			[]map[string]any{{"skill_id": "s1", "input_description": "a",
+				"expected_keywords": map[string]any{"alpha": 1}}},
+			[]string{"nothing here"}, false, ""},
+		// A stored JSON null. `for kw in None` is a TypeError in CPython
+		// and the test is skipped — the interesting half is not the count
+		// but the STORED value, which the load differential compares.
+		{"a null keywords value is not iterable",
+			[]map[string]any{{"skill_id": "s1", "input_description": "a",
+				"expected_keywords": nil}},
+			[]string{"anything"}, false, ""},
 		// Partial pass across several tests, with the adapter raising on
 		// the LAST one — Python's per-test except keeps the earlier count.
 		{"two of three, the third raising",
@@ -655,6 +695,21 @@ func (w testGateWant) assertPrompt(t *testing.T, allMsgs [][]llm.Message,
 	if got, want := opts.Purpose, w.Seen[i].KW["purpose"]; got != want {
 		t.Errorf("call %d purpose = %q, CPython was passed %v", i, got, want)
 	}
+	// no_tools=True is the SAFETY property of this gate: a keyword smoke
+	// test that ran with live tools would let the evolver's own brake take
+	// actions on the text it was asked to classify. CPython passes the
+	// kwarg; the Go side means the same thing by leaving AgentTools off
+	// and injecting no tool protocol, so both halves are asserted — the
+	// kwarg's presence there, its equivalent here. Neither alone is the
+	// claim.
+	if w.Seen[i].KW["no_tools"] != true {
+		t.Errorf("call %d: CPython was passed no_tools=%v, not true",
+			i, w.Seen[i].KW["no_tools"])
+	}
+	if opts.AgentTools || len(opts.Tools) > 0 {
+		t.Errorf("call %d: the port asked for tools (AgentTools=%v, %d tools) "+
+			"where Python passes no_tools=True", i, opts.AgentTools, len(opts.Tools))
+	}
 }
 
 func sameNum(got float64, want any) bool {
@@ -730,9 +785,24 @@ func renderNamedDivergence(t *testing.T, w any) {
 	}
 }
 
+// cmpSavedTests compares the appended store BYTE FOR BYTE.
+//
+// It used to route through normJSONL, which json.Unmarshals each row and
+// re-Marshals it (Go sorts map keys) and then sorts the rows. That threw
+// away all three properties the writer exists to get right: to_dict's KEY
+// ORDER, json.dumps' default `", "` / `": "` separators — which is the only
+// reason pyval.DumpsCompactPy exists rather than a compact encoder — and
+// the append ORDER. All three were correct; none was pinned, and
+// byte-identical stores are this port's stated contract. Normalization is
+// right for a store whose row order is genuinely unspecified; this one is
+// an append log.
 func cmpSavedTests(t *testing.T, goWS, want string) {
 	t.Helper()
-	cmpJSONL(t, "skill-tests.jsonl", readFileIfAny(t, skillTestsPath(goWS)), want)
+	got := readFileIfAny(t, skillTestsPath(goWS))
+	if got != want {
+		t.Errorf("skill-tests.jsonl differs byte for byte.\n go: %q\n py: %q",
+			got, want)
+	}
 }
 
 // scriptedFake is llm.Fake plus a per-call raise, which llm.Fake cannot
@@ -839,14 +909,31 @@ func TestLoadSkillTestsMatchesCPython(t *testing.T) {
 		{"trailing data after the object", []string{good, good + good}},
 		{"a non-object line", []string{good, `["not", "an", "object"]`}},
 
-		// SCHEMA DRIFT, which is a different loss from a torn line: the row
-		// parsed, matched the skill_id, and the constructor refused it.
-		// Python counts these separately and so must the port.
+		// A NON-STRING FIELD. The row parses, matches the skill_id, and
+		// the constructor accepts it — `from_dict` is four `d.get(k,
+		// default)` calls and refuses nothing, so CPython holds the int
+		// and still COUNTS the row. What these two fixtures exercise is
+		// the named divergence that follows: Go renders a non-string
+		// scalar through pyval.Str where Python keeps the object.
+		//
+		// The sentence here used to say the constructor REFUSED these
+		// and that Python counted them as drift. Neither is true, and a
+		// comment that asserts a mechanism is the thing that later
+		// justifies keeping a branch for the wrong reason.
 		{"a drifted row for THIS skill", []string{good,
 			`{"skill_id": "s1", "input_description": 7, ` +
 				`"expected_keywords": ["k"]}`}},
 		{"a drifted row for ANOTHER skill is not counted",
 			[]string{good, `{"skill_id": "s2", "input_description": 7}`}},
+		// A stored JSON null. It is a PRESENT key, so `d.get(..., [])`
+		// keeps None rather than defaulting — and the port's first cut
+		// used `keywordsRaw != nil` to mean "this row had a proper list",
+		// which a null satisfies. It re-emitted `[null]`: a shape neither
+		// runtime holds, invented by the port's own storage decision, and
+		// the exact thing MarshalJSON exists to prevent.
+		{"a null keywords value is kept as null", []string{good,
+			`{"skill_id": "s1", "input_description": "x", ` +
+				`"expected_keywords": null}`}},
 		{"keywords that are not a list", []string{good,
 			`{"skill_id": "s1", "input_description": "x", ` +
 				`"expected_keywords": "abc"}`}},
@@ -921,4 +1008,47 @@ func TestLoadSkillTestsMatchesCPython(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoadSkillTestsAtTheEmptySkillID pins the id comparison at its own
+// boundary, which the fixture table above cannot reach.
+//
+// Python compares `d.get("skill_id") != skill_id`, so an absent key is None
+// and never equals anything. The port read the field with a bare type
+// assertion, turning both an absent key and a non-string value into "" —
+// which EQUALS the argument when the argument is "". Every fixture in the
+// table queries "s1", where the two spellings agree; the disagreement is
+// only at the empty string, and a comparison whose only disagreement is at
+// its own boundary is the one nothing reaches by accident.
+func TestLoadSkillTestsAtTheEmptySkillID(t *testing.T) {
+	lines := []string{
+		`{"skill_id": "s1", "input_description": "belongs to s1", ` +
+			`"expected_keywords": ["k"]}`,
+		`{"input_description": "no skill_id at all", "expected_keywords": ["k"]}`,
+		`{"skill_id": "", "input_description": "an empty skill_id", ` +
+			`"expected_keywords": ["k"]}`,
+		`{"skill_id": 7, "input_description": "a numeric skill_id", ` +
+			`"expected_keywords": ["k"]}`,
+	}
+	pyWS, goWS := t.TempDir(), t.TempDir()
+	for _, ws := range []string{pyWS, goWS} {
+		if err := os.MkdirAll(filepath.Dir(skillTestsPath(ws)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(skillTestsPath(ws),
+			[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var want testGateWant
+	pyprobe.Probe{Marker: "skills.py", Workspace: pyWS}.RunJSON(
+		t, pyTestGateSrc, &want, pyprobe.Arg(t, map[string]any{
+			"verb": "load", "skill_id": "", "script": []string{},
+			"skill": map[string]any{"id": "s1", "name": "n",
+				"description": "d", "steps_template": []any{"s"},
+				"trigger_patterns": []any{},
+				"created_at":       "2026-01-01T00:00:00+00:00"}}))
+	want.assertRaise(t, nil)
+	got, _ := LoadSkillTests(goWS, "")
+	cmpTestCases(t, got, want.Tests)
 }

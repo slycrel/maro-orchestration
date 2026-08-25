@@ -213,6 +213,18 @@ func TestNothingRoutesAroundTheAnnouncedReader(t *testing.T) {
 				"nothing, which is exactly the loss this helper exists to "+
 				"report", f)
 		}
+		// AND that the warning is not thrown away one frame up. The first
+		// version of this tripwire checked only the call above, and passed
+		// while `ValidateSkillMutation` did `tests, _ := LoadSkillTests(...)`
+		// — announcing into a return value nobody reads, which is the same
+		// silence with more code. A helper does not fix a class; it fixes
+		// the callers that reach it, and "reach" includes what they do with
+		// the answer.
+		if strings.Contains(string(src), ", _ := LoadSkillTests(") {
+			t.Errorf("%s discards LoadSkillTests' warnings at a call site "+
+				"— the announcement stops there and no differential over "+
+				"the returned rows can see it", f)
+		}
 	}
 }
 
