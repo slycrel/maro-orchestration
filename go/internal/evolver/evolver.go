@@ -182,7 +182,7 @@ func triState(o map[string]any) (bool, bool) {
 // into the user turn (recall.recent_learning_activity) — the Go recall
 // package has no learning-activity bridge yet; absent, named.
 func llmAnalyze(ctx context.Context, adapter llm.Adapter, outcomes []map[string]any,
-	dryRun bool) ([]string, []map[string]any) {
+	dryRun bool) ([]string, []pyval.Obj) {
 	if dryRun || adapter == nil || len(outcomes) == 0 {
 		return nil, nil
 	}
@@ -194,27 +194,49 @@ func llmAnalyze(ctx context.Context, adapter llm.Adapter, outcomes []map[string]
 		fmt.Fprintf(os.Stderr, "[evolver] LLM analysis failed: %v\n", err)
 		return nil, nil
 	}
-	data, jerr := jsonx.Object(resp.Content)
+	// ObjectOrdered, not Object.
+	//
+	// CPython's extract_json hands back a dict whose key order is the
+	// model's and whose numbers are ints or floats by their LITERAL, and
+	// the mint below renders four of these fields through str(). Both
+	// facts are load-bearing there and json.Unmarshal into `any` throws
+	// both away: `"suggestion": 5` becomes float64 and reads back "5.0"
+	// where Python writes "5", and a dict-valued field has no order at
+	// all, so pyval.Str can only refuse it. Decoding ordered is what makes
+	// the coercions in the mint answerable rather than approximate.
+	data, jerr := jsonx.ObjectOrdered(resp.Content)
 	if jerr != nil {
 		return nil, nil
 	}
 	var patterns []string
-	if items, ok := data["failure_patterns"].([]any); ok {
+	if items, ok := objList(data, "failure_patterns"); ok {
 		for _, it := range items {
 			if s, ok := it.(string); ok {
 				patterns = append(patterns, s)
 			}
 		}
 	}
-	var raw []map[string]any
-	if items, ok := data["suggestions"].([]any); ok {
+	var raw []pyval.Obj
+	if items, ok := objList(data, "suggestions"); ok {
 		for _, it := range items {
-			if m, ok := it.(map[string]any); ok {
+			if m, ok := it.(pyval.Obj); ok {
 				raw = append(raw, m)
 			}
 		}
 	}
 	return patterns, raw
+}
+
+// objList reads key as a decoded JSON array. LoadsOrdered spells one as
+// pyval.List, so the `[]any` assertion the map-decoded version used never
+// fires and every element filter downstream would silently see nothing.
+func objList(o pyval.Obj, key string) (pyval.List, bool) {
+	v, ok := o.Get(key)
+	if !ok {
+		return nil, false
+	}
+	l, ok := v.(pyval.List)
+	return l, ok
 }
 
 // safeConfidence is llm_parse.safe_float(default 0.5, clamped 0-1).
@@ -235,13 +257,36 @@ func llmAnalyze(ctx context.Context, adapter llm.Adapter, outcomes []map[string]
 func safeConfidence(v any) float64 { return pyval.SafeFloatUnit(v, 0.5) }
 
 // expectedSignal ports safe_list(..., element_type=dict).
+//
+// The rows are flattened to plain maps because Suggestion.ExpectedSignal
+// is `[]map[string]any` and that type is on the wire. NAMED DIVERGENCE:
+// a Go map marshals with its keys SORTED, so a model reply whose signal
+// row is `{"metric": "x", "direction": "down"}` is written back by
+// CPython in that order and by this port as `{"direction":...,
+// "metric":...}`. The rows compare equal to every reader (both runtimes
+// decode by key) and differ only as store BYTES. Closing it means
+// carrying pyval.Obj on the struct, which changes the marshalled shape
+// for graduation and scans too, and is not this tranche.
 func expectedSignal(v any) []map[string]any {
 	out := []map[string]any{}
-	if items, ok := v.([]any); ok {
-		for _, it := range items {
-			if m, ok := it.(map[string]any); ok {
-				out = append(out, m)
+	var items []any
+	switch t := v.(type) {
+	case pyval.List:
+		items = t
+	case []any:
+		items = t
+	default:
+		return out
+	}
+	for _, it := range items {
+		switch m := it.(type) {
+		case pyval.Obj:
+			// Plain() over an Obj is the map with the same pairs.
+			if pm, ok := pyval.Plain(m).(map[string]any); ok {
+				out = append(out, pm)
 			}
+		case map[string]any:
+			out = append(out, m)
 		}
 	}
 	return out
@@ -306,16 +351,25 @@ func Run(ctx context.Context, workspaceDir string, rec *record.Recorder,
 	var suggestions []Suggestion
 	for i, raw := range rawSuggestions {
 		suggestions = append(suggestions, Suggestion{
-			SuggestionID:     fmt.Sprintf("%s-%02d", runID, i),
-			Category:         stringDefault(raw["category"], "observation"),
-			Target:           stringDefault(raw["target"], "all"),
-			Suggestion:       stringOr(raw["suggestion"]),
-			FailurePattern:   stringOr(raw["failure_pattern"]),
-			Confidence:       safeConfidence(raw["confidence"]),
+			SuggestionID: fmt.Sprintf("%s-%02d", runID, i),
+			// `.get(k, default)` — PRESENCE, not truthiness. A model that
+			// answers `"target": ""` means the empty string, and CPython
+			// stores it; substituting "all" there changed the row AND its
+			// dedup identity, because category/target/suggestion are the
+			// three inputs to the content key (adversarial r3, HIGH).
+			Category:         objGetStr(raw, "category", "observation"),
+			Target:           objGetStr(raw, "target", "all"),
+			Suggestion:       objGetStr(raw, "suggestion", ""),
+			FailurePattern:   objGetStr(raw, "failure_pattern", ""),
+			Confidence:       safeConfidence(objGet(raw, "confidence", nil)),
 			OutcomesAnalyzed: len(outcomes),
 			GeneratedAt:      nowISO(),
-			ExpectedSignal:   expectedSignal(raw["expected_signal"]),
-			Pattern:          stringOr(raw["pattern"]),
+			ExpectedSignal:   expectedSignal(objGet(raw, "expected_signal", pyval.List{})),
+			// `str(raw.get("pattern","") or "")` — the truthiness gate AND
+			// the str(), which is pyval.StrOrEmpty. stringOr was a bare type
+			// assertion here, so a list pattern became "" and the guardrail
+			// it was meant to install could never match.
+			Pattern: pyval.StrOrEmpty(objGet(raw, "pattern", "")),
 		})
 	}
 
@@ -396,11 +450,47 @@ func Run(ctx context.Context, workspaceDir string, rec *record.Recorder,
 	return report
 }
 
-func stringDefault(v any, def string) string {
-	if s, ok := v.(string); ok && s != "" {
-		return s
+// objGet is Python's `d.get(key, default)` — PRESENCE only. A present
+// null is None, not the default.
+func objGet(o pyval.Obj, key string, def any) any {
+	if v, ok := o.Get(key); ok {
+		return v
 	}
 	return def
+}
+
+// objGetStr is `d.get(key, default)` narrowed to this port's string-typed
+// Suggestion fields.
+//
+// # The named divergence this carries
+//
+// CPython's Suggestion is a dataclass, and a dataclass does not enforce its
+// annotations: `suggestion=raw.get("suggestion","")` on a reply of
+// `"suggestion": 5` stores the INTEGER 5 and json.dumps writes `5`, not
+// `"5"`. The same goes for a present null, which is written as `null`.
+//
+// Go's field is a `string` and cannot hold either. The port therefore
+// renders a non-string through str(), which is where the two disagree:
+//
+//	reply                     CPython row        this port
+//	{"suggestion": 5}         "suggestion": 5    "suggestion": "5"
+//	{"failure_pattern": null} ...: null          ...: "None"
+//
+// Both remain STRING-SHAPED to every reader (`str(x or "")` at the read
+// sites collapses them identically), so this is a byte-level divergence in
+// a shared store rather than a behavioural one — and it is pinned as such
+// by TestTheMintsNonStringDivergenceIsPinned rather than left to be
+// rediscovered. Widening the five fields to `any` is what closes it; that
+// is a 38-call-site change and is not this tranche.
+//
+// The DEFAULT is returned unrendered, because Python's default is a literal
+// that never passes through str().
+func objGetStr(o pyval.Obj, key string, def string) string {
+	v, ok := o.Get(key)
+	if !ok {
+		return def
+	}
+	return pyval.Str(v)
 }
 
 // MarshalReport renders the report as JSON for the CLI's -format json.

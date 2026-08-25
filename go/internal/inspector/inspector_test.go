@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 func defaultThresholds() Thresholds {
@@ -29,11 +30,44 @@ func seedOutcomes(t *testing.T, ws string, lines ...string) {
 	}
 	content := ""
 	for _, l := range lines {
-		content += l + "\n"
+		content += fillOutcomeRow(t, l) + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, "outcomes.jsonl"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fillOutcomeRow supplies any of load_outcomes' required fields the fixture
+// left out.
+//
+// A row missing one cannot construct CPython's Outcome dataclass, so the
+// reader excludes it — which means a fixture without outcome_id and lessons
+// is a store BOTH runtimes read as empty, and a test over it asserts
+// whatever an empty corpus produces. Every fixture in this file predates
+// the filter and none of them carried the six; filling here keeps each
+// case's own fields the subject and stops the row from being unreadable
+// for a reason the case is not about.
+func fillOutcomeRow(t *testing.T, line string) string {
+	t.Helper()
+	var row map[string]any
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return line // a deliberately malformed fixture stays malformed
+	}
+	for _, f := range record.OutcomeRequiredFields() {
+		if _, ok := row[f]; ok {
+			continue
+		}
+		if f == "lessons" {
+			row[f] = []any{}
+		} else {
+			row[f] = "fixture-" + f
+		}
+	}
+	out, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 func TestThresholdPriorityEnvOverConfigOverDefault(t *testing.T) {

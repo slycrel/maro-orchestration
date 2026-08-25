@@ -15,11 +15,38 @@ func seedOutcomes(t *testing.T, ws string, lines ...string) {
 	}
 	content := ""
 	for _, l := range lines {
-		content += l + "\n"
+		content += fillOutcomeRow(t, l) + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, "outcomes.jsonl"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fillOutcomeRow supplies any required field the fixture left out, so a
+// case about ORDERING or FRAMING is not also a case about schema drift.
+// A row it cannot parse is left verbatim — the torn-line fixture depends
+// on staying torn.
+func fillOutcomeRow(t *testing.T, line string) string {
+	t.Helper()
+	var row map[string]any
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return line
+	}
+	for _, f := range outcomeRequiredFields {
+		if _, ok := row[f]; ok {
+			continue
+		}
+		if f == "lessons" {
+			row[f] = []any{}
+		} else {
+			row[f] = "fixture-" + f
+		}
+	}
+	out, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 // Must-detect: newest FIRST (M84 target: returning file order). The

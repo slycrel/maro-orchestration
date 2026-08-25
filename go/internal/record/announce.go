@@ -230,6 +230,27 @@ func CountLine(line string, rep *SkipReport) map[string]any {
 	return m
 }
 
+// CountLineOrdered is CountLine's ordered twin: one line, the same three
+// loss buckets, an ordered row.
+//
+// It exists for the callers that classify a line at a time inside a lock
+// (evolver_store's dedup scan) and then render a field of the row through
+// Python's str(). A map-decoded row cannot answer that for a dict-valued
+// field — pyval.Repr refuses an unordered map by construction — so the
+// scan would key a whole class of rows on a sentinel string.
+func CountLineOrdered(line string, rep *SkipReport) pyval.Obj {
+	o, bucket := classifyLineOrdered(line)
+	switch bucket {
+	case "undecodable":
+		rep.Undecodable++
+	case "malformed":
+		rep.Malformed++
+	case "non_dict":
+		rep.NonDict++
+	}
+	return o
+}
+
 // ReadAllAnnouncedOrdered is ReadAllAnnounced handing back rows that still
 // know their key ORDER.
 //

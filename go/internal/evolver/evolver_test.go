@@ -23,11 +23,44 @@ func seedOutcomes(t *testing.T, ws string, lines ...string) {
 	}
 	content := ""
 	for _, l := range lines {
-		content += l + "\n"
+		content += fillOutcomeRow(t, l) + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, "outcomes.jsonl"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fillOutcomeRow supplies any of load_outcomes' required fields the fixture
+// left out.
+//
+// A row missing one cannot construct CPython's Outcome dataclass, so the
+// reader excludes it — which means a fixture without outcome_id and lessons
+// is a store BOTH runtimes read as empty, and a test over it asserts
+// whatever an empty corpus produces. Every fixture in this file predates
+// the filter and none of them carried the six; filling here keeps each
+// case's own fields the subject and stops the row from being unreadable
+// for a reason the case is not about.
+func fillOutcomeRow(t *testing.T, line string) string {
+	t.Helper()
+	var row map[string]any
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return line // a deliberately malformed fixture stays malformed
+	}
+	for _, f := range record.OutcomeRequiredFields() {
+		if _, ok := row[f]; ok {
+			continue
+		}
+		if f == "lessons" {
+			row[f] = []any{}
+		} else {
+			row[f] = "fixture-" + f
+		}
+	}
+	out, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 func readAllRows(t *testing.T, path string) []map[string]any {
@@ -717,7 +750,9 @@ func TestApplyNonStringSuggestionIsKnownGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A numeric `suggestion` (schema drift / corrupt write / coerced LLM output).
-	row := `{"suggestion_id":"nonstr-1","category":"prompt_tweak","target":"all","suggestion":12345,"confidence":0.9}` + "\n"
+	row := `{"suggestion_id":"nonstr-1","category":"prompt_tweak","target":"all",` +
+		`"suggestion":12345,"failure_pattern":"f","outcomes_analyzed":3,` +
+		`"confidence":0.9}` + "\n"
 	if err := os.WriteFile(suggestionsPath(ws), []byte(row), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -984,8 +1019,12 @@ func TestRowToSuggestionPyTruthyCoercion(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// All seven no-default fields present: a row missing one is not a
+	// coercion case, it is a row CPython's get_suggestion answers as
+	// ABSENT, and the coercion this test is about would never be reached.
 	row := `{"suggestion_id":"m1","category":"new_guardrail","target":"all",` +
-		`"suggestion":"x","applied":true,"applied_manually":"true"}` + "\n"
+		`"suggestion":"x","failure_pattern":"f","confidence":0.9,` +
+		`"outcomes_analyzed":3,"applied":true,"applied_manually":"true"}` + "\n"
 	if err := os.WriteFile(p, []byte(row), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -7587,3 +7587,255 @@ Two rounds of correction later, the battery reads **38/38 DETECTED** — and
 of the ten mutants that survived along the way, two were answered by DELETING
 production code rather than by adding a test, which is the right answer more
 often than it feels like it should be.
+
+---
+
+## The post-notify maintenance tail, and a mutex that is not a design choice
+
+`loop_finalize`'s deferred-maintenance registry and its two observation-form
+mint texts. Small surface, three things worth recording.
+
+**The registry stays in this module for a reason that has evaporated, and
+that is fine.** Python's comment is a module-identity story: `handle.py` is
+also a `python -m handle` entry point, so run that way the module executes as
+`__main__` while an `import handle` elsewhere loads a SECOND copy with its
+own registry — the registrar and the drainer would hold different dicts and
+every deferred callable would strand. Go has no `__main__` twin and
+initialises a package once per binary, so the hazard does not exist. The
+PLACEMENT stays anyway: moving it would be a port that silently disagrees
+with its source about where a piece of state lives, for a benefit nobody
+asked for.
+
+**The lock is not a design choice.** Python's dict is unsynchronised because
+the GIL makes `setdefault`, `append` and `pop` atomic enough. A Go map is
+not, and the two call sites sit on either side of a notify. The mutex is the
+same safety Python was getting for free.
+
+**The count is ATTEMPTED, not succeeded.** `drain_deferred_maintenance`
+returns `len(fns)` after a loop that swallows every exception, so a drain of
+three where two raise still answers 3. A port that counted successes would
+agree on every fixture where nothing fails — which is every fixture anyone
+writes first.
+
+Two details the mutation battery forced. The `recover()` has to be
+PER-CALLABLE: one around the loop abandons the remaining callables where
+Python runs every one of them. And the pop happens under the lock while the
+callables run OUTSIDE it, because a callable is entitled to register more
+maintenance and Python cannot deadlock doing it.
+
+That second one was found the hard way. The first version of the test HUNG
+rather than failed, the battery timed out at ten minutes, and the timeout
+killed the script before its restore step — leaving the mutant on disk. **A
+deadlocked test is worse than a failing one.** The drain now runs on a
+goroutine behind a five-second deadline, and the assertion is about the
+deadline.
+
+The battery reads 12/12 DETECTED, after three mutants were rewritten for
+being equivalent: two spellings of M6 computed a count and returned
+`len(fns)` anyway, and M7's first spelling added an OUTER recover while
+keeping the inner ones. A mutant that cannot change an answer reads as MISS
+and is not a test gap — it is a bad mutant.
+
+---
+
+## Round 3 on the skill-rewrite chunk, and the evolver's four private copies
+
+Round 3 reviewed the whole chunk plus the r2 fixes, and reported eight
+findings. It verified the r2 depth-bound re-fix by running both runtimes over
+five container shapes at n ∈ {9997..10001} with zero disagreements, confirmed
+the audience census against Python's live 32-member frozenset, and correctly
+identified M13 (the content-hash restamp) as an equivalent mutant —
+`compute_skill_hash` covers name, description, steps_template and
+optimization_objective, and not tier.
+
+The two findings that changed behaviour both came from the same root, and it
+is the fourth lens verbatim: **a helper you did not look for is a helper you
+will write again.**
+
+`internal/pyval/str.go` has held `Str`, `Repr` and `StrOrEmpty` for several
+tranches. They are Python's `str()` and `repr()` over a decoded JSON value,
+they are documented, and `StrOrEmpty`'s own comment records that writing
+`Str(v)` where Python wrote `str(v or "")` was got wrong three times in one
+tranche in three packages. The evolver had nonetheless grown FOUR private
+re-implementations — `pyStrValue`, `pyStrGetV`, `pyStrKey` and a local
+`stringOr` — and three of the four were wrong in a way the shared one is not.
+
+### The mint coerced five fields, and four of them wrongly
+
+`raw.get("category", "observation")` asks about PRESENCE. The port spelled it
+`stringDefault`, which substituted the default when the value was missing OR
+EMPTY — that is `or`, not `.get`. Measured on one ordinary model reply,
+`{"category":"","target":"","suggestion":5,"failure_pattern":null,"pattern":["rm -rf"]}`:
+
+    CPython : {"category": "", "target": "", "suggestion": 5,
+               "failure_pattern": null, "pattern": "['rm -rf']"}
+    the port: {"category":"observation","target":"all","suggestion":"",
+               "failure_pattern":"","pattern":""}
+
+Five of five fields differ, and `"target": ""` is an ordinary reply rather
+than a pathological one. The damage is not only the row's contents: category,
+target and suggestion are the three inputs to `_content_key`, so the
+divergence changed the row's dedup IDENTITY — the two runtimes disagreed
+about which findings they already had, in a store they share.
+
+The fifth field is `str(raw.get("pattern","") or "")` — a truthiness gate AND
+a `str()`. The port asserted `.(string)`, so a `new_guardrail` whose pattern
+the model answered as `["rm -rf"]` reached the store with an EMPTY pattern:
+recorded as applied, matching nothing, for as long as it sat there.
+
+### The decode had to become ordered before the coercion could be right
+
+`str()` over a dict depends on INSERTION ORDER, and `str(5)` differs from
+`str(5.0)` by a literal that `json.Unmarshal` into `any` throws away. So
+`jsonx.Object` (a Go map, every number a float64) cannot answer the mint's
+questions at all: `pyval.Repr` refuses an unordered map by construction, and
+`"suggestion": 5` reads back as `"5.0"`. `llmAnalyze` now decodes with
+`jsonx.ObjectOrdered`, and the mint reads through `objGet`/`objGetStr`.
+
+The same argument applies to the dedup scan, which renders each row's
+category, target and suggestion through `str()` before keying on them. It
+borrowed `record.CountLine`; it now borrows `record.CountLineOrdered`, added
+here for that purpose.
+
+### What could NOT be fixed, and is pinned instead
+
+CPython's `Suggestion` is a dataclass, and a dataclass does not enforce its
+annotations: `suggestion=raw.get("suggestion","")` on a reply of
+`"suggestion": 5` stores the INT, and `json.dumps` writes `5`. Go's field is
+a `string` and cannot hold one, so the port renders through `str()` and
+writes `"5"`. Same for a present null, which CPython writes as `null` and the
+port as `"None"`.
+
+Both remain string-shaped to every reader — the read sites are all
+`str(x or "")` — so this is a byte divergence in a shared store, not a
+behavioural one. Widening the five fields to `any` closes it and is a
+38-call-site change. It is recorded as a NAMED DIVERGENCE with a known-gap
+pin (`TestTheMintsNonStringDivergenceIsPinned`) that fails, and says so, the
+day the fields are widened.
+
+A second named divergence rides along: `Suggestion.ExpectedSignal` is
+`[]map[string]any`, and a Go map marshals with its keys SORTED, so a signal
+row the model wrote as `{"metric": ..., "direction": ...}` comes back in the
+other order. Every reader decodes by key and sees the same thing; only the
+bytes differ.
+
+### The NUL-joined content key
+
+`_content_key` returns a 3-TUPLE. The port joined the three fields on U+0000,
+which a tuple cannot be confused by and a joined string can: category
+`"x\0y"` with an empty target produces the same bytes as category `"x"` with
+target `"y\0"`. It is now a comparable Go struct — the same equality, the
+same map-key behaviour, no separator to collide on.
+
+---
+
+## load_outcomes: the reader was half a reader
+
+Writing the mint differential surfaced something larger. The Python probe
+kept reporting ZERO suggestions, and the reason was that CPython had loaded
+zero OUTCOMES from a fixture the Go side read as three.
+
+`memory_ledger.load_outcomes` is TWO readers stacked: `read_jsonl_announced`,
+then `_rows_as`, which builds an `Outcome(**{k: d[k] for k in fields if k in
+d})` per row. `Outcome` has six fields with no default, so a row missing any
+of them raises `TypeError`, is EXCLUDED, and is counted as schema drift under
+its own warning — deliberately separate from the corruption buckets, because
+drift is the one that grows quietly as the schema moves.
+
+The port had the first reader only, and spelled even that as `strings.Split`
+plus `TrimSpace` plus a silent skip. On a three-row store whose rows lack
+`outcome_id` and `lessons`, CPython loads 0 and the evolver skips the cycle
+("only 0 outcomes (need 3)") while the port loaded 3 and minted suggestions
+off them. Same store, same knob, opposite decisions.
+
+Three things came out of fixing it, and two of them are about the port's own
+habits rather than about outcomes.
+
+**The filter already existed, one layer too low.** `internal/record/dailylog.go`
+had `loadableAsOutcome` and `outcomeRequiredFields`, written by someone who
+had MEASURED this exact divergence — the comment quotes CPython's warning —
+and applied the filter locally in the MEMORY.md renderer, reasoning that
+"LoadOutcomes' tolerance is right for its other consumers." It was not. A fix
+for the site that has the fixture is evidence about its siblings, not a fix
+for the class. The predicate now lives at the reader, where Python puts it,
+and the renderer just takes the head of ten.
+
+**Five packages' fixtures were rows the Python runtime would never read.**
+Turning the filter on failed twelve existing tests across `scans`,
+`inspector`, `selfimprove` and `record` — every outcome seeder in the port
+produced rows without `outcome_id`, `task_type` or `lessons`, because they
+had been written against the tolerant reader. Those tests had been asserting
+over a corpus CPython reads as empty. The seeders now fill the required
+fields, so each case's own fields stay the subject.
+
+**The row VALUE TYPES changed, and one test caught it.** Routing the read
+through the announced reader made every number a `json.Number`, and
+`intOf`'s `float64` arm stopped matching — MEMORY.md rendered "Total tokens:
+0" for a run with 1,234. The rows now go through `pyval.Plain`, which
+resolves an integral literal to an `int` and everything else to a `float64`:
+CPython's own `json.loads` typing, and strictly closer than the `float64`
+the old `json.Unmarshal` produced. A value arrives with a type, and something
+reads the type away.
+
+The drift warning quotes the exception that excluded the row, so
+`pyMissingArgsMessage` reproduces CPython's TypeError prose — singular at
+one, "and" with no comma at two, the Oxford comma at three or more — and is
+pinned against a live dataclass across eight subsets.
+
+One divergence in this reader is DELIBERATE and now written down:
+`load_outcomes(limit=0)` ends in `[:0]` and returns NOTHING in CPython, while
+the port reads `limit <= 0` as "everything" (the zero value degrades to all,
+never to none). No Python caller passes 0; the port has exactly one, the
+MEMORY.md renderer, which wants the whole ledger.
+
+### The sibling, found by asking
+
+A fix is evidence about its siblings. `_rows_as` has FIVE call sites in the
+Python source; three of them (`load_lessons`, `load_task_ledger`,
+`load_compressed_batches`) are unported, and the fourth is
+`evolver_store.load_suggestions` — same shape, same missing half.
+`Suggestion` has SEVEN fields with no default, and `rowToSuggestion` never
+fails, so the port kept and zero-filled rows CPython excludes.
+
+`get_suggestion` is the one that matters. Python catches the `TypeError` and
+treats the row as ABSENT, with its own differently-worded warning, and the
+docstring says why the function exists: it is the lookup the V2 auto-revert
+guard uses to re-confirm authority just before an irreversible revert. A
+zero-filled answer hands that guard an `applied_manually` of **false** —
+permission to revert a row a human applied. That is the same unsafe direction
+as the r1 security finding at this exact function, reached by a different
+missing coercion, and it is now a subtest of its own.
+
+Turning that filter on failed a further fourteen tests across four packages,
+for the same reason the outcomes filter failed twelve: every suggestion
+fixture in the port was missing `outcomes_analyzed` or `failure_pattern`.
+Two of them were tests OF `get_suggestion` — the truthy-coercion test and the
+non-string-suggestion known-gap pin — asserting against rows CPython answers
+as absent.
+
+`PyMissingArgsMessage` is exported from `record` rather than copied, because
+the sentence now appears at two loaders and a second private spelling is how
+the two start to drift. That is the same lens that produced this whole
+section.
+
+### The battery
+
+37 mutants over `evolver.go`, `evolver/store.go`, `record/outcomes.go` and
+`record/dailylog.go`, all DETECTED after two corrections. Two survived the
+first run and both were test gaps of the same kind — **a fixture that cannot
+tell two answers apart**:
+
+- Flattening the mint's decoded value through `pyval.Plain` before `str()`
+  changed nothing any fixture could see, because every non-string in the
+  known-gap pin was a NUMBER, and Plain preserves a number's rendering. The
+  pin now carries a dict and a list in those fields, which is the only shape
+  the ordered decode exists for.
+- Quoting the LAST schema-drift exception instead of the FIRST was invisible
+  because both drifted rows in the fixture were missing the same field set,
+  so the two sentences were byte-identical. They now drift differently, and
+  the assertion is the whole sentence rather than four substrings of it.
+
+Two more were faults in the battery, not the code: one mutant left an import
+unused, and one was written while the battery held a snapshot of the file it
+edited — restoring between mutants reverted work done in parallel, which is
+worth knowing before running one in the background.

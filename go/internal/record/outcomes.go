@@ -1,11 +1,12 @@
 package record
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // LoadOutcomes returns up to limit recent outcome rows, NEWEST FIRST —
@@ -34,18 +35,52 @@ func LoadOutcomes(workspaceDir string, limit int) ([]map[string]any, error) {
 		}
 		return nil, fmt.Errorf("load outcomes: %w", err)
 	}
+	// read_jsonl_announced, then the dataclass filter — Python's
+	// `_rows_as(path, "load_outcomes", lambda d: Outcome(**...))`, which is
+	// TWO readers stacked and was ported as neither.
+	//
+	// The old body split on "\n", stripped, and dropped anything that
+	// failed json.Unmarshal, silently. That differs from CPython twice:
+	//
+	//   - the LOSS was unannounced and unbucketed. A torn byte, an array
+	//     row and a truncated line are three different damages and CPython
+	//     says which; this said nothing at all, so a store quietly rotting
+	//     looked exactly like a store that was fine.
+	//   - the SCHEMA drift was not applied. Outcome has six fields with no
+	//     default, and a row missing any of them raises TypeError inside
+	//     _rows_as and is EXCLUDED. This port kept it. Measured on a
+	//     three-row fixture without outcome_id/lessons: CPython loads 0 and
+	//     the evolver skips the cycle ("only 0 outcomes (need 3)"), while
+	//     the port loads 3 and runs one. Same store, same knob, opposite
+	//     decisions — and the differential that found it had been reporting
+	//     agreement, because both sides minted from an empty list.
+	// Decoded ordered and then FLATTENED, rather than through CountLine
+	// directly, because the two readers type numbers differently and every
+	// consumer of these rows type-asserts.
+	//
+	// CountLine leaves a number as json.Number; pyval.Plain resolves it to
+	// an int for an integral literal and a float64 otherwise, which is
+	// CPython's own json.loads typing and what asdict(Outcome) hands the
+	// inspector. The old body used json.Unmarshal, whose every number is a
+	// float64 — so `tokens_in: 1200` arrived as 1200.0 where Python has the
+	// int 1200, and a renderer reaching for str() got "1200.0".
+	rep := SkipReport{}
 	var rows []map[string]any
 	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		o := CountLineOrdered(line, &rep)
+		if o == nil {
 			continue
 		}
-		var m map[string]any
-		if jerr := json.Unmarshal([]byte(line), &m); jerr != nil {
+		m, ok := pyval.Plain(o).(map[string]any)
+		if !ok {
 			continue
 		}
 		rows = append(rows, m)
 	}
+	if w := rep.Announce("load_outcomes", path); w != "" {
+		warn("%s", w)
+	}
+	rows = keepLoadableOutcomes(rows, path)
 	// Newest first: file order is append order (oldest first).
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
@@ -54,6 +89,88 @@ func LoadOutcomes(workspaceDir string, limit int) ([]map[string]any, error) {
 		rows = rows[:limit]
 	}
 	return rows, nil
+}
+
+// keepLoadableOutcomes applies the dataclass filter and announces the drift
+// in CPython's own sentence.
+//
+// Drift is announced SEPARATELY from framing loss on purpose, and the
+// Python docstring says why: a row that is not JSON is corruption, a row
+// that is JSON but the current dataclass rejects is schema drift, and
+// collapsing them hides which one is happening — drift being the one that
+// grows quietly as the schema moves.
+func keepLoadableOutcomes(rows []map[string]any, path string) []map[string]any {
+	kept := make([]map[string]any, 0, len(rows))
+	drifted, firstErr := 0, ""
+	for _, r := range rows {
+		missing := missingOutcomeFields(r)
+		if len(missing) == 0 {
+			kept = append(kept, r)
+			continue
+		}
+		drifted++
+		if firstErr == "" {
+			firstErr = "TypeError: " + PyMissingArgsMessage("Outcome", missing)
+		}
+	}
+	if drifted > 0 {
+		warn("load_outcomes: %d row(s) in %s are JSON but not loadable under "+
+			"the current schema — excluded from the %d returned (first: %s)",
+			drifted, path, len(kept), firstErr)
+	}
+	return kept
+}
+
+// missingOutcomeFields is the PRESENCE test the dataclass performs. A
+// present null is a value — `Outcome(outcome_id=None, ...)` constructs
+// fine, because a dataclass does not enforce its annotations — so only
+// absence excludes a row.
+func missingOutcomeFields(row map[string]any) []string {
+	var missing []string
+	for _, f := range outcomeRequiredFields {
+		if _, ok := row[f]; !ok {
+			missing = append(missing, f)
+		}
+	}
+	return missing
+}
+
+// PyMissingArgsMessage reproduces CPython's TypeError text for a call with
+// missing positional arguments, measured on this box:
+//
+//	missing 1 required positional argument: 'lessons'
+//	missing 2 required positional arguments: 'summary' and 'lessons'
+//	missing 5 required positional arguments: 'goal', 'task_type', 'status', 'summary', and 'lessons'
+//
+// Singular/plural, "and" with no comma at two, and the Oxford comma at
+// three or more. It is operator-facing prose in a warning both runtimes
+// emit about the same file, which is the class of divergence this port
+// keeps finding — a byte-different sentence about identical damage reads
+// as two different problems.
+//
+// Exported because the same sentence appears wherever a `_rows_as` loader
+// is ported — evolver_store's load_suggestions is the second — and a
+// second private copy of it is how the two spellings start to drift.
+func PyMissingArgsMessage(cls string, names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "'" + n + "'"
+	}
+	var list string
+	switch len(quoted) {
+	case 1:
+		list = quoted[0]
+	case 2:
+		list = quoted[0] + " and " + quoted[1]
+	default:
+		list = strings.Join(quoted[:len(quoted)-1], ", ") + ", and " + quoted[len(quoted)-1]
+	}
+	plural := "s"
+	if len(quoted) == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("%s.__init__() missing %d required positional argument%s: %s",
+		cls, len(names), plural, list)
 }
 
 // LockedRMW runs one read-modify-write of a whole file under the same

@@ -34,7 +34,7 @@ func TestVerifyCountsTrustFiltering(t *testing.T) {
 func TestScanEvolverImpactVerdicts(t *testing.T) {
 	ws := t.TempDir()
 	applyAt := "2026-08-20T12:00:00+00:00"
-	writeJSONL(t, memPath(ws, "suggestions.jsonl"), []map[string]any{
+	writeSuggestionsJSONL(t, ws, []map[string]any{
 		{"suggestion_id": "imp1", "category": "prompt_tweak", "target": "all",
 			"suggestion": "x", "confidence": 0.9, "applied": true,
 			"applied_at": applyAt},
@@ -58,7 +58,7 @@ func TestScanEvolverImpactVerdicts(t *testing.T) {
 			"recorded_at": fmt.Sprintf("2026-08-20T1%d:00:00+00:00", i+3),
 		})
 	}
-	writeJSONL(t, memPath(ws, "outcomes.jsonl"), rows)
+	writeOutcomesJSONL(t, ws, rows)
 
 	records := ScanEvolverImpact(ws, ImpactOptions{})
 	if len(records) != 1 {
@@ -83,14 +83,14 @@ func TestScanEvolverImpactVerdicts(t *testing.T) {
 
 func TestScanEvolverImpactInsufficientData(t *testing.T) {
 	ws := t.TempDir()
-	writeJSONL(t, memPath(ws, "suggestions.jsonl"), []map[string]any{
+	writeSuggestionsJSONL(t, ws, []map[string]any{
 		{"suggestion_id": "imp1", "category": "observation", "target": "all",
 			"suggestion": "x", "applied": true,
 			"applied_at": "2026-08-20T12:00:00+00:00"},
 	})
 	// Only 1 outcome per window — below the per-window minimum of 3: a
 	// 1-sample baseline must never verdict.
-	writeJSONL(t, memPath(ws, "outcomes.jsonl"), []map[string]any{
+	writeOutcomesJSONL(t, ws, []map[string]any{
 		{"status": "stuck", "recorded_at": "2026-08-20T11:00:00+00:00"},
 		{"status": "done", "recorded_at": "2026-08-20T13:00:00+00:00"},
 	})
@@ -112,7 +112,7 @@ func TestScanEvolverImpactCaptainsLogFallback(t *testing.T) {
 			"timestamp": "2026-08-20T12:00:00+00:00",
 			"context":   map[string]any{"suggestion_id": "legacy1", "category": "prompt_tweak"}},
 	})
-	writeJSONL(t, memPath(ws, "outcomes.jsonl"), []map[string]any{
+	writeOutcomesJSONL(t, ws, []map[string]any{
 		{"status": "done", "recorded_at": "2026-08-20T11:00:00+00:00"},
 	})
 	records := ScanEvolverImpact(ws, ImpactOptions{})

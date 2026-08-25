@@ -260,7 +260,20 @@ func pyTruthy(v any) bool { return pyval.Truthy(v) }
 
 // LoadSuggestions returns up to limit suggestions, newest first.
 func LoadSuggestions(workspaceDir string, limit int) []Suggestion {
-	rows := readRowsAnnounced(suggestionsPath(workspaceDir), "load_suggestions")
+	path := suggestionsPath(workspaceDir)
+	rows := readRowsAnnounced(path, "load_suggestions")
+	// `_rows_as(p, "load_suggestions", Suggestion.from_dict)` is TWO
+	// readers, and the port had only the first. from_dict is
+	// `cls(**{k: d[k] for k in fields if k in d})`, so a row missing any of
+	// the seven fields with no default raises TypeError, is EXCLUDED, and
+	// is counted as schema drift under its own warning. rowToSuggestion
+	// never fails, so the port kept the row and zero-filled it — the same
+	// half-a-reader shape that made load_outcomes count rows CPython
+	// excludes (see record.LoadOutcomes).
+	//
+	// The exclusion happens BEFORE the reversal and the limit, so a
+	// drifted row does not consume a window slot.
+	rows = keepLoadableSuggestions(rows, path, "load_suggestions")
 	var out []Suggestion
 	for i := len(rows) - 1; i >= 0; i-- {
 		out = append(out, rowToSuggestion(rows[i]))
@@ -271,12 +284,76 @@ func LoadSuggestions(workspaceDir string, limit int) []Suggestion {
 	return out
 }
 
+// suggestionRequiredFields are evolver_store.Suggestion's fields with NO
+// default, in declaration order — the order CPython names them in when it
+// says which arguments were missing.
+var suggestionRequiredFields = []string{
+	"suggestion_id", "category", "target", "suggestion", "failure_pattern",
+	"confidence", "outcomes_analyzed",
+}
+
+// missingSuggestionFields is the PRESENCE test from_dict performs. A
+// present null is a value, not an absence — a dataclass does not enforce
+// its annotations, so `Suggestion(confidence=None, ...)` constructs.
+func missingSuggestionFields(row map[string]any) []string {
+	var missing []string
+	for _, f := range suggestionRequiredFields {
+		if _, ok := row[f]; !ok {
+			missing = append(missing, f)
+		}
+	}
+	return missing
+}
+
+// keepLoadableSuggestions applies the dataclass filter and announces the
+// drift in CPython's own sentence — separate from the framing warning,
+// because a row that is not JSON is corruption and a row the dataclass
+// rejects is drift, and drift is the one that grows quietly as the schema
+// moves.
+func keepLoadableSuggestions(rows []map[string]any, path, what string) []map[string]any {
+	kept := make([]map[string]any, 0, len(rows))
+	drifted, firstErr := 0, ""
+	for _, r := range rows {
+		missing := missingSuggestionFields(r)
+		if len(missing) == 0 {
+			kept = append(kept, r)
+			continue
+		}
+		drifted++
+		if firstErr == "" {
+			firstErr = "TypeError: " + record.PyMissingArgsMessage("Suggestion", missing)
+		}
+	}
+	if drifted > 0 {
+		fmt.Fprintf(os.Stderr, "[evolver] %s: %d row(s) in %s are JSON but "+
+			"not loadable under the current schema — excluded from the %d "+
+			"returned (first: %s)\n", what, drifted, path, len(kept), firstErr)
+	}
+	return kept
+}
+
 // GetSuggestion returns the current on-disk row for one id, or nil —
 // a single-row uncapped lookup that never drops the row behind a
 // newest-N window (Python get_suggestion).
 func GetSuggestion(workspaceDir, suggestionID string) *Suggestion {
 	for _, m := range readRowsAnnounced(suggestionsPath(workspaceDir), "get_suggestion") {
 		if m["suggestion_id"] == suggestionID {
+			// from_dict RAISES on a drifted row here, and CPython catches
+			// it and treats the row as ABSENT. That is not a nicety: this
+			// is the lookup the V2 auto-revert guard uses to re-confirm
+			// authority just before an irreversible revert, and a port that
+			// zero-filled the row instead handed that guard an
+			// applied_manually of false — routing a human-applied row into
+			// the auto-revert branch. Same unsafe direction as the r1
+			// security finding at this same function, reached by a
+			// different missing coercion.
+			if missing := missingSuggestionFields(m); len(missing) > 0 {
+				fmt.Fprintf(os.Stderr, "[evolver] get_suggestion: row %s is "+
+					"JSON but not loadable as Suggestion (TypeError: %s) — "+
+					"treating as absent\n", suggestionID,
+					record.PyMissingArgsMessage("Suggestion", missing))
+				return nil
+			}
 			s := rowToSuggestion(m)
 			return &s
 		}
@@ -312,23 +389,38 @@ func GetSuggestion(workspaceDir, suggestionID string) *Suggestion {
 //     route as three sites in the pack importer (r5 review): the two
 //     spellings collapse into one Go expression, so a fix that looks
 //     total covers only the half the author had in mind.
-func contentKeyOf(row map[string]any) string {
+func contentKeyOf(row pyval.Obj) contentKeyTuple {
 	return contentKey(pyStrGetV(row, "category"), pyStrGetV(row, "target"),
 		pyStrGetV(row, "suggestion"))
 }
 
 // pyStrGetV is `str(d.get(k, ""))` — the presence rule and the coercion,
 // in one place so neither can be applied without the other.
-func pyStrGetV(row map[string]any, key string) string {
-	v, present := row[key]
+func pyStrGetV(row pyval.Obj, key string) string {
+	v, present := row.Get(key)
 	if !present {
 		return ""
 	}
 	return pyStrValue(v)
 }
 
-func contentKey(category, target, suggestion string) string {
-	return category + "\x00" + target + "\x00" + pytext.Strip(suggestion)
+// contentKeyTuple is Python's 3-TUPLE, which is what _content_key returns.
+//
+// It was a string joined on U+0000 for one round. A tuple cannot be
+// confused by its own field contents and a joined string can: category
+// "x\x00y" with an empty target produces the same bytes as category "x"
+// with target "y\x00", so one of the two suggestions was silently dropped
+// from the shared store as a duplicate of the other (adversarial r3,
+// MEDIUM). A Go comparable struct is the tuple, exactly — same equality,
+// same map-key behaviour, no separator to collide on.
+type contentKeyTuple struct {
+	category   string
+	target     string
+	suggestion string
+}
+
+func contentKey(category, target, suggestion string) contentKeyTuple {
+	return contentKeyTuple{category, target, pytext.Strip(suggestion)}
 }
 
 // pyStrValue is Python's `str(v)` on a value that is PRESENT — including a
@@ -352,22 +444,7 @@ func contentKey(category, target, suggestion string) string {
 // keeps re-finding — pack carries the same trio (asString / pyStrOr /
 // pyStrGet), and the r5 review found it at three sites in one file.
 func pyStrValue(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return "None"
-	case string:
-		return t
-	case bool:
-		if t {
-			return "True"
-		}
-		return "False"
-	case json.Number:
-		return pyNumStr(t)
-	case float64:
-		return pyjson.FloatRepr(t)
-	}
-	return fmt.Sprintf("%v", v)
+	return pyval.Str(v)
 }
 
 // pyNumStr is `str()` on a number CPython has already DECODED, which is
@@ -416,7 +493,7 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	// full-history dedup), bounded tail where the semantics are tail-N.
 	var marshalErr error
 	err := record.LockedRMW(p, func(old string) string {
-		seen := map[string]bool{}
+		seen := map[contentKeyTuple]bool{}
 		dedupReport := record.SkipReport{}
 		// THIS SCAN IS NOT ONE OF THE FOUR MERGES, and it was spelled like
 		// them for a round.
@@ -449,7 +526,12 @@ func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 		// reopens the bug — so it borrows the reader's own per-line step
 		// instead of re-deriving it.
 		for _, line := range record.SplitStoredLines(old) {
-			if m := record.CountLine(line, &dedupReport); m != nil {
+			// Ordered, because contentKeyOf renders each field through
+			// Python's str() and str() over a dict depends on insertion
+			// order. A map-decoded row makes pyval.Repr refuse, so every
+			// row with a dict-valued category/target/suggestion would key
+			// on one sentinel string and dedup against each other.
+			if m := record.CountLineOrdered(line, &dedupReport); m != nil {
 				seen[contentKeyOf(m)] = true
 			}
 		}
@@ -1061,30 +1143,19 @@ var playbookSection = map[string]string{
 // answer for an undefined input, and it is named as such (adversarial r2,
 // L3).
 func pyStrKey(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return t
-	case bool:
-		if t {
-			return "True"
-		}
-		return "" // falsey: the `or ""` collapses it before str()
-	case json.Number:
-		f, err := t.Float64()
-		if err == nil && f == 0 {
-			return "" // falsey — 0, 0.0 and -0.0 alike
-		}
-		return pyNumStr(t)
-	case float64:
-		if t == 0 {
-			return "" // falsey
-		}
-		return pyjson.FloatRepr(t)
-	default:
-		return ""
-	}
+	// pyval.StrOrEmpty IS `str(v or "")`, and delegating removes the arm
+	// that made this a live defect: the `default: return ""` below dropped
+	// LISTS and DICTS, so a new_guardrail whose pattern the model answered
+	// as ["rm -rf"] recorded as APPLIED with no constraint row installed,
+	// while CPython stored the pattern "['rm -rf']". The store said the
+	// guardrail was live and nothing could match against it (adversarial
+	// r3, MEDIUM/HIGH).
+	//
+	// The lossy float64 arm goes with it — pyval.Repr renders a float64
+	// through the same FloatRepr, and the int/float information is already
+	// gone before either of them is reached, which is a property of the
+	// caller's decoder and not of this function.
+	return pyval.StrOrEmpty(v)
 }
 
 func stringOr(v any) string {

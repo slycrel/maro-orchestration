@@ -158,32 +158,31 @@ func updateMemoryIndex(dir string) error {
 		matches = matches[:7]
 	}
 
-	// Python's load_outcomes is NOT the tolerant reader LoadOutcomes is: it
-	// rehydrates each row into the Outcome dataclass, so a row missing any
-	// of the six fields that have no default raises TypeError and is
-	// EXCLUDED. Measured by seeding partial rows — CPython announced "4
-	// row(s) ... are JSON but not loadable under the current schema".
+	// Python's load_outcomes rehydrates each row into the Outcome
+	// dataclass, so a row missing any of the six fields that have no
+	// default raises TypeError and is EXCLUDED. Measured by seeding partial
+	// rows — CPython announced "4 row(s) ... are JSON but not loadable
+	// under the current schema".
+	//
+	// That filter used to live HERE, applied locally by this renderer,
+	// under the reasoning that "LoadOutcomes' tolerance is right for its
+	// other consumers". It was not: the same tolerance made the evolver
+	// mint a cycle off three rows CPython excludes, where CPython skipped
+	// with "only 0 outcomes (need 3)". The filter belongs at the reader,
+	// which is where Python puts it, and it is there now — a fix for the
+	// site that has the fixture is evidence about its siblings, not a fix
+	// for the class.
 	//
 	// The exclusion happens BEFORE the last-10 slice, so a dropped row does
-	// not consume a window slot. Hence: load everything, filter, then take
-	// ten — not LoadOutcomes(dir, 10), which would count foreign rows in the
-	// window and render stats Python never would off the same shared file.
-	//
-	// Deliberately local to this renderer. LoadOutcomes' tolerance is right
-	// for its other consumers; what has to match here is the one function
-	// whose OUTPUT both runtimes write into the same MEMORY.md.
+	// not consume a window slot. LoadOutcomes filters before its own limit,
+	// so the head of the full read is the same ten rows Python renders.
 	all, err := LoadOutcomes(filepath.Dir(dir), 0)
 	if err != nil {
 		return err
 	}
-	rows := make([]map[string]any, 0, 10)
-	for _, row := range all {
-		if len(rows) == 10 {
-			break
-		}
-		if loadableAsOutcome(row) {
-			rows = append(rows, row)
-		}
+	rows := all
+	if len(rows) > 10 {
+		rows = rows[:10]
 	}
 	done, stuck, achieved, notAchieved, totalTokens := 0, 0, 0, 0, 0
 	for _, row := range rows {
@@ -258,17 +257,30 @@ var outcomeRequiredFields = []string{
 	"outcome_id", "goal", "task_type", "status", "summary", "lessons",
 }
 
+// OutcomeRequiredFields returns the field names load_outcomes requires, as
+// a fresh copy.
+//
+// Exported for TEST FIXTURES in other packages. A seeder that hand-lists
+// them re-spells a fact that lives here, and the failure mode is quiet:
+// the fixture stops being a row CPython would load, the reader excludes
+// it, and the test measures an empty corpus while reporting whatever an
+// empty corpus produces. Three packages seeded outcome rows missing
+// outcome_id and lessons before this filter existed, and every one of them
+// was asserting over a store the Python runtime would have read as empty.
+func OutcomeRequiredFields() []string {
+	return append([]string(nil), outcomeRequiredFields...)
+}
+
 // loadableAsOutcome reports whether Python's load_outcomes would keep this
 // row. Presence is the whole test — the rehydration passes values straight
 // through without type checking, so a `goal_achieved` of "yes" survives it
 // and is counted as unjudged downstream, exactly as it is here.
+//
+// LoadOutcomes now applies this at the read, so no renderer has to. It
+// stays as the single spelling of the predicate that missingOutcomeFields
+// answers, and as the thing a test can call directly.
 func loadableAsOutcome(row map[string]any) bool {
-	for _, f := range outcomeRequiredFields {
-		if _, ok := row[f]; !ok {
-			return false
-		}
-	}
-	return true
+	return len(missingOutcomeFields(row)) == 0
 }
 
 // thousands is Python's format(n, ",") — groups of three, comma-separated,

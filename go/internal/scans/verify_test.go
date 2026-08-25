@@ -70,7 +70,7 @@ func seedOutcomes(t *testing.T, ws string, applyAt time.Time, n, stuckBefore, st
 			"recorded_at": applyAt.Add(time.Duration(i+1) * time.Minute).UTC().Format("2006-01-02T15:04:05+00:00"),
 		})
 	}
-	writeJSONL(t, memPath(ws, "outcomes.jsonl"), rows)
+	writeOutcomesJSONL(t, ws, rows)
 }
 
 func seedSuggestion(t *testing.T, ws string, extra map[string]any) {
@@ -83,7 +83,7 @@ func seedSuggestion(t *testing.T, ws string, extra map[string]any) {
 	for k, v := range extra {
 		row[k] = v
 	}
-	writeJSONL(t, memPath(ws, "suggestions.jsonl"), []map[string]any{row})
+	writeSuggestionsJSONL(t, ws, []map[string]any{row})
 }
 
 func loadSuggestionRow(t *testing.T, ws, id string) map[string]any {
@@ -418,7 +418,7 @@ func TestStampVerificationKeyedMerge(t *testing.T) {
 		tainted,
 		`{"suggestion_id":"v1","applied":true,"category":"prompt_tweak"}`,
 	}
-	writeJSONL(t, memPath(ws, "suggestions.jsonl"), nil)
+	writeSuggestionsJSONL(t, ws, nil)
 	if err := os.WriteFile(memPath(ws, "suggestions.jsonl"),
 		[]byte(strings.Join(rows, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)

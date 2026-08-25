@@ -12,6 +12,35 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
+// writeOutcomesJSONL is writeJSONL for outcomes.jsonl, filling any of
+// load_outcomes' required fields the fixture left out. A row missing one
+// cannot construct CPython's Outcome dataclass, so the reader excludes it
+// and the cycle skips on "only 0 outcomes" — which is what these fixtures
+// did before the filter existed, unnoticed, because the tolerant reader
+// returned them anyway.
+func writeOutcomesJSONL(t *testing.T, path string, rows []map[string]any) {
+	t.Helper()
+	filled := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		row := map[string]any{}
+		for k, v := range r {
+			row[k] = v
+		}
+		for _, f := range record.OutcomeRequiredFields() {
+			if _, ok := row[f]; ok {
+				continue
+			}
+			if f == "lessons" {
+				row[f] = []any{}
+			} else {
+				row[f] = "fixture-" + f
+			}
+		}
+		filled = append(filled, row)
+	}
+	writeJSONL(t, path, filled)
+}
+
 func writeJSONL(t *testing.T, path string, rows []map[string]any) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -68,7 +97,7 @@ func TestCycleComposesScansGraduationAndVerify(t *testing.T) {
 			"loop_id": "l", "goal": "g", "status": "done",
 			"recorded_at": "2026-08-20T10:00:00+00:00"})
 	}
-	writeJSONL(t, mem("outcomes.jsonl"), outcomes)
+	writeOutcomesJSONL(t, mem("outcomes.jsonl"), outcomes)
 
 	// Calibration fixture → one scanner row.
 	var cal []map[string]any
@@ -127,7 +156,7 @@ func TestCycleComposesScansGraduationAndVerify(t *testing.T) {
 
 func TestCycleDryRunProposesOnly(t *testing.T) {
 	ws := t.TempDir()
-	writeJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"), []map[string]any{
+	writeOutcomesJSONL(t, filepath.Join(ws, "memory", "outcomes.jsonl"), []map[string]any{
 		{"status": "done"}, {"status": "done"}, {"status": "done"},
 	})
 	rec := record.New(ws)
@@ -153,7 +182,7 @@ func TestCycleSkippedIntervalSuppressesGraduationAndVerify(t *testing.T) {
 	mem := func(n string) string { return filepath.Join(ws, "memory", n) }
 
 	// ONE outcome — below the default MinOutcomes → evolver.Run skips.
-	writeJSONL(t, mem("outcomes.jsonl"), []map[string]any{
+	writeOutcomesJSONL(t, mem("outcomes.jsonl"), []map[string]any{
 		{"loop_id": "l", "goal": "g", "status": "done",
 			"recorded_at": "2026-08-20T10:00:00+00:00"}})
 
@@ -167,8 +196,12 @@ func TestCycleSkippedIntervalSuppressesGraduationAndVerify(t *testing.T) {
 	// An applied-unverified row the verify pass would render inconclusive
 	// (no window data) and bump toward the terminal "unverifiable" park.
 	writeJSONL(t, mem("suggestions.jsonl"), []map[string]any{
+		// The seven fields with no default are all present on purpose: a
+		// row missing one is excluded by load_suggestions as schema drift
+		// and the verify pass never sees it.
 		{"suggestion_id": "s1", "category": "observation", "target": "all",
-			"suggestion": "x", "confidence": 0.9, "applied": true,
+			"suggestion": "x", "failure_pattern": "f", "outcomes_analyzed": 3,
+			"confidence": 0.9, "applied": true,
 			"applied_at": "2026-08-20T09:00:00+00:00",
 			"expected_signal": []map[string]any{
 				{"metric": "success_rate", "direction": "up"}}},

@@ -1,6 +1,7 @@
 package evolver
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -464,32 +465,75 @@ d = json.loads(sys.argv[1])["row"]
 print(json.dumps(list((str(d.get("category", "")), str(d.get("target", "")),
                        str(d.get("suggestion", "")).strip()))))
 `
-	rows := []map[string]any{
-		{"category": "prompt_tweak", "target": "all", "suggestion": " padded "},
-		{"category": 0, "target": 1.5, "suggestion": true},
-		{"category": nil, "suggestion": "absent target"},
+	// The rows are LINES, not literals, because the scan that builds the
+	// dedup set reads them off disk. A literal-built row arrives with Go
+	// types the reader never produces — a fixture of `0` is an int here
+	// and a json.Number there, and the two render through different arms
+	// of pyval.Repr. Feeding both runtimes the same bytes is the only
+	// version of this test that measures the code that runs.
+	rows := []string{
+		`{"category": "prompt_tweak", "target": "all", "suggestion": " padded "}`,
+		// Numbers and a bool. `0` must key as "0" and not "" — a bare
+		// `.(string)` gave the latter, so an integer category collided
+		// with an absent one.
+		`{"category": 0, "target": 1.5, "suggestion": true}`,
+		// `1.0` is a FLOAT literal: str() is "1.0", not "1". Nothing but
+		// the source literal can tell it from the int, which is why the
+		// scan decodes with UseNumber.
+		`{"category": 1, "target": 1.0, "suggestion": 10000000000000000000000}`,
+		`{"category": null, "suggestion": "absent target"}`,
+		// A LIST-valued field, which is the shape a model actually
+		// produces for a pattern-ish key. Python renders it with repr
+		// INSIDE the container, so the quotes and the ", " separator are
+		// part of the key; Go's own `%v` spelling ("[rm -rf]") is a
+		// different string and would dedup against a different set.
+		`{"category": "c", "target": ["rm -rf", "sudo"], "suggestion": [1, null, true]}`,
+		// A DICT-valued field. str() over a dict depends on INSERTION
+		// order, so this row is the one that a map-decoded scan cannot
+		// answer at all.
+		`{"category": {"b": 1, "a": 2}, "target": "t", "suggestion": "s"}`,
 		// A trailing unit separator: str.strip() removes it, TrimSpace
 		// does not, so the two spellings key this row differently and the
 		// dedup misses.
-		{"category": "c", "target": "t", "suggestion": "trailing sep\x1f"},
-		{"category": "c", "target": "t", "suggestion": "trailing sep"},
+		`{"category": "c", "target": "t", "suggestion": "trailing sep\u001f"}`,
+		`{"category": "c", "target": "t", "suggestion": "trailing sep"}`,
 	}
-	keys := map[string]int{}
-	for i, row := range rows {
+	var got []contentKeyTuple
+	for i, line := range rows {
 		var want []string
 		pyprobe.Probe{Stdlib: true}.RunJSON(t, src, &want,
-			pyprobe.Arg(t, map[string]any{"row": row}))
-		got := contentKeyOf(row)
-		if wantKey := strings.Join(want, "\x00"); got != wantKey {
-			t.Errorf("row %d: contentKey %q, CPython %q", i, got, wantKey)
+			pyprobe.Arg(t, map[string]any{"row": json.RawMessage(line)}))
+		rep := record.SkipReport{}
+		row := record.CountLineOrdered(line, &rep)
+		if row == nil {
+			t.Fatalf("row %d did not decode: %+v", i, rep)
 		}
-		keys[got]++
+		k := contentKeyOf(row)
+		got = append(got, k)
+		wantKey := contentKeyTuple{want[0], want[1], want[2]}
+		if k != wantKey {
+			t.Errorf("row %d: contentKey %#v, CPython %#v", i, k, wantKey)
+		}
+	}
+	// Anti-vacuity: every row above is a DISTINCT finding except the last
+	// pair, which strip() collapses. If the keys stop being distinct the
+	// test is agreeing about a coercion that erased its own inputs — the
+	// exact failure a `.(string)` assertion produced, where four of these
+	// rows keyed as ("", "", "").
+	distinct := map[contentKeyTuple]bool{}
+	for _, k := range got {
+		distinct[k] = true
+	}
+	if len(distinct) != len(rows)-1 {
+		t.Errorf("%d distinct keys over %d rows, want %d — the coercion is "+
+			"collapsing findings that differ: %#v", len(distinct), len(rows),
+			len(rows)-1, got)
 	}
 	// Rows 3 and 4 differ only by a trailing U+001F, which str.strip()
 	// removes — so CPython considers them the SAME finding and the port
 	// must too. If this stops holding, the dedup has stopped working for
 	// exactly the rows a torn write produces.
-	if contentKeyOf(rows[3]) != contentKeyOf(rows[4]) {
+	if got[len(got)-2] != got[len(got)-1] {
 		t.Error("a trailing U+001F made two identical findings key differently")
 	}
 }

@@ -11,7 +11,67 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
+
+// writeOutcomesJSONL is writeJSONL for memory/outcomes.jsonl, filling any
+// of load_outcomes' required fields the fixture left out.
+//
+// A row missing one cannot construct CPython's Outcome dataclass, so the
+// reader excludes it — a fixture without outcome_id/task_type/lessons is a
+// store BOTH runtimes read as EMPTY, and the assertions over it are about
+// whatever an empty corpus produces. Every outcomes fixture in this package
+// predated the filter and none carried the six.
+func writeOutcomesJSONL(t *testing.T, ws string, rows []map[string]any) {
+	t.Helper()
+	filled := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		row := map[string]any{}
+		for k, v := range r {
+			row[k] = v
+		}
+		for _, f := range record.OutcomeRequiredFields() {
+			if _, ok := row[f]; ok {
+				continue
+			}
+			if f == "lessons" {
+				row[f] = []any{}
+			} else {
+				row[f] = "fixture-" + f
+			}
+		}
+		filled = append(filled, row)
+	}
+	writeJSONL(t, memPath(ws, "outcomes.jsonl"), filled)
+}
+
+// writeSuggestionsJSONL is writeJSONL for memory/suggestions.jsonl,
+// filling any of load_suggestions' required fields the fixture left out.
+//
+// Suggestion has SEVEN fields with no default; a row missing one cannot
+// construct the dataclass, so CPython excludes it from load_suggestions and
+// treats it as ABSENT in get_suggestion. A fixture without
+// outcomes_analyzed is a suggestion the Python runtime cannot see.
+func writeSuggestionsJSONL(t *testing.T, ws string, rows []map[string]any) {
+	t.Helper()
+	defaults := map[string]any{
+		"suggestion_id": "fixture-id", "category": "observation",
+		"target": "all", "suggestion": "s", "failure_pattern": "f",
+		"confidence": 0.5, "outcomes_analyzed": 3,
+	}
+	filled := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		row := map[string]any{}
+		for k, v := range defaults {
+			row[k] = v
+		}
+		for k, v := range r {
+			row[k] = v
+		}
+		filled = append(filled, row)
+	}
+	writeJSONL(t, memPath(ws, "suggestions.jsonl"), filled)
+}
 
 func writeJSONL(t *testing.T, path string, rows []map[string]any) {
 	t.Helper()
