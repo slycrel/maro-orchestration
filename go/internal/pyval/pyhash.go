@@ -3,7 +3,6 @@ package pyval
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 )
@@ -67,16 +66,48 @@ func HashKey(v any) (string, bool) {
 }
 
 // floatHashKey folds a float that is exactly an integer onto the integer's
-// key, which is what makes 1.0 and 1 the same bucket. A NaN is deliberately
-// NOT folded: Python hashes every NaN alike but compares them unequal, so
-// each one is its own bucket.
+// key, which is what makes 1.0 and 1 the same bucket — at any magnitude,
+// because Python's numeric hashing has no bound. The NaN arm is measured
+// rather than reasoned; see below.
 func floatHashKey(f float64) string {
 	if math.IsNaN(f) {
-		return fmt.Sprintf("nan:%p", new(int))
+		// ONE key for every NaN, and the reason is identity rather than
+		// equality. `nan != nan`, so two SEPARATELY CONSTRUCTED NaNs are
+		// two dict keys — but CPython's JSON scanner hands back the same
+		// cached object for every bare `NaN` token, and dict lookup
+		// short-circuits on `x is y` before it ever compares. Measured:
+		//
+		//	a = json.loads("NaN"); b = json.loads("NaN")
+		//	a is b                     -> True
+		//	{} counting a then b       -> {nan: 2}, len 1
+		//	{} counting two float("nan") -> {nan: 1, nan: 1}, len 2
+		//
+		// Every value that reaches this function came off a decoder, so the
+		// cached-object case is the only reachable one. The first cut keyed
+		// each NaN by a fresh pointer and reported two buckets of one where
+		// CPython reports one bucket of two (adversarial r11 round 7, found
+		// while pinning the fold's upper end).
+		return "nan:"
 	}
-	if !math.IsInf(f, 0) && f == math.Trunc(f) &&
-		f >= -9.2e18 && f <= 9.2e18 {
-		return "i:" + strconv.FormatInt(int64(f), 10)
+	if math.IsInf(f, 0) || f != math.Trunc(f) {
+		return "f:" + strconv.FormatFloat(f, 'g', -1, 64)
 	}
-	return "f:" + strconv.FormatFloat(f, 'g', -1, 64)
+	// -0.0 and 0 are ONE key in Python (`-0.0 == 0` is True), and 'f'
+	// spells a negative zero "-0", which would split them.
+	if f == 0 {
+		return "i:0"
+	}
+	// 'f' with precision -1 spells an integral float as its EXACT integer
+	// digits at any magnitude, so 1e19 keys as "10000000000000000000" and
+	// meets the JSON integer literal of the same value.
+	//
+	// The first cut folded only within ±9.2e18 and fell through to the
+	// float spelling above that, which split `1e19` from `10**19` — two
+	// buckets of one where CPython reports one bucket of two. The bound was
+	// the upper-end sibling of the fold that makes True/1/1.0 agree, and it
+	// was arbitrary in both directions: 9.2e18 is under 2^63-1, so
+	// 9.22e18 and 9220000000000000000 split as well (adversarial r11 round
+	// 7, LOW). There is no bound now, which is what Python's numeric
+	// hashing has.
+	return "i:" + strconv.FormatFloat(f, 'f', -1, 64)
 }

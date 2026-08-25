@@ -5306,6 +5306,54 @@ differently), the second slice guard (redundant with the first, the same
 shape as the escalation lane's), and `processed++` after a `complete()`
 that no fixture can make fail.
 
+### Round 11 round 7 — a zero value that must mean two things
+
+`.get(k, default)` on a key that is PRESENT and null returns None, not the
+default, so `make_task` receives a genuine None and writes `null`. The
+port read a nil field as "argument omitted" and substituted `""` — which
+made a `loop_escalation` row carrying `"reason": null` enqueue a
+continuation whose GOAL was `""` instead of `null`. `HasReason` and
+`HasParentJobID` carry the distinction the way `DrainOptions.HasMaxTasks`
+does; the same wall was hit by `notify`'s "state every raw field at every
+call site" and by round 6's `Model: ""`, and the rule that comes out of
+all three is that a zero value which must mean two things means neither.
+
+A float used as a dict KEY is not spelled by `str()`. `json.dumps` runs it
+through json's own float writer, so the three non-finites are `"NaN"`,
+`"Infinity"` and `"-Infinity"` where `str()` gives `nan`, `inf`, `-inf` —
+and both decoders accept the bare tokens, so a task file reaches the
+summary an operator reads.
+
+The numeric fold has no bound any more. It folded within ±9.2e18 and split
+`1e19` from `10**19`, which CPython counts as one key; `'f'` with
+precision −1 spells an integral float as its exact integer digits at any
+magnitude. `-0.0` is folded onto zero explicitly, because `'f'` writes it
+`"-0"` and `-0.0 == 0` is True.
+
+Every decoded NaN is ONE key, and the reason is identity rather than
+equality: CPython's JSON scanner returns the same cached object for every
+bare `NaN` token, and dict lookup short-circuits on `x is y` before it
+compares. Two `float("nan")` calls WOULD be two keys; nothing in either
+runtime constructs one here. The port's per-call pointer key was written
+from `nan != nan` and was wrong for the only reachable path — found
+because a fixture asserted the old behaviour and the interpreter refused
+it.
+
+`notify.runeHead` is gone: it was the third implementation of `s[:n]` and
+carried the negative-`n` bug `pyval.Clip`'s own comment records fixing.
+
+### r13.1 — the residual that gets a pin instead of a fix
+
+`pyval.ErrIntTooLarge` is the port refusing a value CPython computes, and
+three more sites let that refusal become control flow — `HandleTask`'s
+depth read, `CheckinFirstDepth`, `CheckinJitter`. A `continuation_depth`
+of `10**19` completes under CPython and FAILS the task here, and at all
+three the value is only logged or compared, so the abort buys nothing.
+Closing it needs a big-int carrier through `pyval` that nothing else wants
+yet, so it stays named — with a test that asserts the DIVERGENT behaviour
+and fails the day the gap closes, which is the standing convention for an
+accept-not-close residual.
+
 ### Named residuals after r11 round 3
 
 - **Arbitrary precision.** `ErrIntTooLarge` is the port refusing a value
@@ -5381,3 +5429,21 @@ that no fixture can make fail.
 - **`enqueue_goal` / `enqueue_goals` have a probe but no differential.**
   `pyDrainSrc` carries both verbs and `maskMinted` is written; no Go test
   drives them yet.
+- **`ErrIntTooLarge` is control flow at three more sites.** `HandleTask`'s
+  depth read, `CheckinFirstDepth` and `CheckinJitter` all let the port's
+  own refusal abort a branch CPython completes — a `continuation_depth` of
+  `10**19` fails the task here and completes there. Pinned as a known gap
+  by `TestAHugeDepthIsRefusedWhereCPythonComputesIt`, which fails the day
+  someone closes it. Closing needs a big-int carrier through `pyval`.
+- **A NaN constructed in Go, rather than decoded, would be its own dict
+  key in CPython and is not here.** `HashKey` folds every NaN to one key
+  because CPython's JSON scanner returns one cached object for the bare
+  token; two `float("nan")` calls would be two keys. No path constructs
+  one, and representing the difference needs object identity, which a
+  value-keyed fold does not have.
+- **`notify.Options.RunDir` is a seam Python does not have.** Two call
+  sites pass it through where Python hard-codes `run_dir=None`. No
+  non-test caller assigns it, so nothing diverges today.
+- **The goal's 200-rune clip is unobservable.** `observe.write_event`
+  clips the same string again at 80, so the inner bound never reaches
+  disk. Measured, labelled at the site, and scored as a justified miss.

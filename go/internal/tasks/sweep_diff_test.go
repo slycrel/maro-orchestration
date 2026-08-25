@@ -497,6 +497,66 @@ func TestTheQueueSweepsMatchCPython(t *testing.T) {
 					"blocked_by":[]}`,
 			}},
 
+		// json.dumps does NOT spell a float key with str(). The three
+		// non-finites go through json's own float writer — "NaN",
+		// "Infinity", "-Infinity" — where str() spells them "nan", "inf",
+		// "-inf", and both runtimes' decoders accept the bare tokens, so a
+		// task file can carry one (adversarial r11 round 7, LOW).
+		{"a non-finite status is spelled the way json writes it", "summary",
+			"", map[string]string{
+				"t1": `{"job_id":"t1","status":NaN,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":Infinity,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t3": `{"job_id":"t3","status":-Infinity,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+			}},
+		// Two NaNs are ONE bucket, and not for the reason a reading of
+		// `nan != nan` suggests. CPython's JSON scanner returns the same
+		// cached object for every bare `NaN` token, and dict lookup
+		// short-circuits on identity before it compares — so two decoded
+		// NaNs collide where two `float("nan")` calls would not. This
+		// fixture was written asserting the opposite and the interpreter
+		// corrected it.
+		{"two nan statuses are one bucket", "summary", "",
+			map[string]string{
+				"t1": `{"job_id":"t1","status":NaN,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":NaN,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+			}},
+		// The upper end of the numeric fold. `1e19 == 10**19` is True in
+		// CPython, so they are ONE key spelled by whichever arrived first;
+		// the port folded only within +/-9.2e18 and reported two buckets of
+		// one (adversarial r11 round 7, LOW).
+		{"a huge float and the integer it equals are one bucket", "summary",
+			"", map[string]string{
+				"t1": `{"job_id":"t1","status":1e19,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":10000000000000000000,
+					"lane":"agenda","attempt":0,"timestamps":{},
+					"blocked_by":[]}`,
+			}},
+		// And the same at a magnitude that sat just under the old bound, so
+		// the fixture set pins the fold rather than one number past it.
+		{"a float just under the old bound folds too", "summary", "",
+			map[string]string{
+				"t1": `{"job_id":"t1","status":9.22e18,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":9220000000000000000,
+					"lane":"agenda","attempt":0,"timestamps":{},
+					"blocked_by":[]}`,
+			}},
+		// A negative zero and a zero are one key, and "-0" would split
+		// them — the fold's own lower edge.
+		{"negative zero and zero are one bucket", "summary", "",
+			map[string]string{
+				"t1": `{"job_id":"t1","status":-0.0,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+				"t2": `{"job_id":"t2","status":0,"lane":"agenda",
+					"attempt":0,"timestamps":{},"blocked_by":[]}`,
+			}},
+
 		{"a float pid raises where os.kill refuses it", "recover", "",
 			map[string]string{
 				"t7": `{"job_id":"t7","status":"claimed",

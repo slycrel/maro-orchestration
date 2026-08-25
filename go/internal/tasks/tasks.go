@@ -172,8 +172,14 @@ type Options struct {
 	// f-string is.
 	Reason      any
 	ParentJobID any
-	BlockedBy   []string
-	Origin      pyval.Obj
+	// HasReason and HasParentJobID say "the caller passed this, and it was
+	// None". Without them a nil field is indistinguishable from an omitted
+	// one, and Python's default for both is "" — so a genuine None was
+	// written as "". Only a caller that means None sets these.
+	HasReason      bool
+	HasParentJobID bool
+	BlockedBy      []string
+	Origin         pyval.Obj
 	// ContinuationDepth is `any` rather than `int` because Python's
 	// annotation is a hint, not a coercion: `make_task` writes whatever the
 	// caller passed straight into the row. The director derives it from a
@@ -191,18 +197,33 @@ func (o Options) continuationDepth() any {
 	return o.ContinuationDepth
 }
 
-// reason and parentJobID substitute Python's "" parameter defaults. nil is
-// "not passed", which is a different thing from a caller passing nil — but
-// no Python caller passes None to either, so the two collapse safely.
+// reason and parentJobID substitute Python's "" parameter defaults.
+//
+// nil is "not passed" — and that is NOT the same as a caller passing None,
+// which is what the first cut of this comment claimed ("no Python caller
+// passes None to either, so the two collapse safely"). `handle_escalation`
+// reads `task.get("reason", "")` and `task.get("job_id", "unknown")`, and
+// `.get` on a key that is PRESENT and null returns None; both go straight
+// into `make_task`, which writes whatever it was handed. So a
+// loop_escalation row carrying `"reason": null` enqueues a continuation
+// whose reason is `null` in CPython and was `""` here — a different goal
+// for the next pass, and different bytes in the queue file (adversarial
+// r11 round 7, MEDIUM).
+//
+// HasReason/HasParentJobID are the same shape as DrainOptions.HasMaxTasks:
+// the zero value cannot carry "passed, and it was None". A caller with a
+// non-nil value needs neither flag; only a caller that means None does.
+// This is the same lesson as notify's "state every raw field at every call
+// site" — a zero value that must mean two things means neither.
 func (o Options) reason() any {
-	if o.Reason == nil {
+	if o.Reason == nil && !o.HasReason {
 		return ""
 	}
 	return o.Reason
 }
 
 func (o Options) parentJobID() any {
-	if o.ParentJobID == nil {
+	if o.ParentJobID == nil && !o.HasParentJobID {
 		return ""
 	}
 	return o.ParentJobID
@@ -1240,6 +1261,29 @@ func statusKey(v any) (string, bool) {
 		return "", false
 	}
 	// Numbers render as their Python repr, which is also their JSON key
-	// spelling: 5 is "5" and 2.0 is "2.0".
+	// spelling: 5 is "5" and 2.0 is "2.0", and 1e19 is "1e+19".
+	//
+	// The three non-finites are the exception, and they are NOT str(): a
+	// float KEY goes through json's own float writer, which spells them
+	// "NaN", "Infinity" and "-Infinity" where `str()` spells them "nan",
+	// "inf" and "-inf". Measured:
+	//
+	//	json.dumps({float("nan"): 1, float("inf"): 2, float("-inf"): 3})
+	//	  -> {"NaN": 1, "Infinity": 2, "-Infinity": 3}
+	//
+	// Reachable, because `json.loads` accepts the bare tokens and so does
+	// this port's decoder: a task file holding `"status": NaN` reads back
+	// as a status on both sides, and the summary an operator prints is
+	// where the two spellings meet (adversarial r11 round 7, LOW).
+	if f, ok := pyval.Float(v); ok {
+		switch {
+		case math.IsNaN(f):
+			return "NaN", true
+		case math.IsInf(f, 1):
+			return "Infinity", true
+		case math.IsInf(f, -1):
+			return "-Infinity", true
+		}
+	}
 	return pyval.Str(v), true
 }

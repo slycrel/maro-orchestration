@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -53,7 +54,7 @@ func DecisionLine(point, reason, step string) string {
 	// existing answer; using strings.Fields here would leave U+001C..1F
 	// (which arrive through pasted terminal output) embedded in one runtime
 	// and collapsed in the other.
-	short := runeHead(strings.Join(pytext.Split(reason), " "), reasonMax)
+	short := pyval.Clip(strings.Join(pytext.Split(reason), " "), reasonMax)
 	if short == "" {
 		// `... or "no reason recorded"` — the fallback fires on the EMPTY
 		// string, after the clip, so a reason of pure whitespace lands here
@@ -61,7 +62,7 @@ func DecisionLine(point, reason, step string) string {
 		short = "no reason recorded"
 	}
 	if step != "" {
-		short = runeHead(strings.Join(pytext.Split(step), " "), 120) + " — " + short
+		short = pyval.Clip(strings.Join(pytext.Split(step), " "), 120) + " — " + short
 	}
 	tmpl, ok := decisionTemplates[point]
 	if !ok {

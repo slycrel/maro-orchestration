@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // This file is the differential the r8 round said every shared emitter owes:
@@ -131,12 +133,12 @@ func TestDecisionLineMatchesCPython(t *testing.T) {
 	// separator cases. If this ever agrees, the cases above stopped
 	// exercising the gap and the test is testing nothing.
 	naive := func(point, reason, step string) string {
-		short := runeHead(strings.Join(strings.Fields(reason), " "), reasonMax)
+		short := pyval.Clip(strings.Join(strings.Fields(reason), " "), reasonMax)
 		if short == "" {
 			short = "no reason recorded"
 		}
 		if step != "" {
-			short = runeHead(strings.Join(strings.Fields(step), " "), 120) + " — " + short
+			short = pyval.Clip(strings.Join(strings.Fields(step), " "), 120) + " — " + short
 		}
 		if tmpl, ok := decisionTemplates[point]; ok {
 			return fmt.Sprintf(tmpl, short)
@@ -572,6 +574,22 @@ func TestEventRowMatchesCPython(t *testing.T) {
 		{"an empty payload", "escalation", map[string]any{}},
 		{"the double clip", "escalation", map[string]any{
 			"reason": strings.Repeat("g", 500), "summary": strings.Repeat("d", 500)}},
+		// The double clip again, in MULTI-BYTE runes. Both slices are
+		// `[:200]`/`[:400]` on a Python str, which counts RUNES — and the
+		// ASCII case above agrees whether the port counts runes or bytes,
+		// which is why replacing pyval.Clip with a byte slice at the goal
+		// site was a mutation NOTHING caught. A byte slice cuts these at a
+		// third of the characters and can land mid-sequence (adversarial
+		// r11 round 7, found by the battery rather than the review).
+		{"a goal and a detail past the clip in multi-byte runes", "escalation",
+			map[string]any{
+				"goal":    strings.Repeat("é", 300),
+				"summary": strings.Repeat("→", 300)}},
+		{"a goal whose clip boundary lands inside a rune", "escalation",
+			map[string]any{
+				// 199 ASCII then a 4-byte emoji: rune 200 is the emoji, so a
+				// rune slice keeps it whole and a byte slice tears it.
+				"goal": strings.Repeat("a", 199) + strings.Repeat("😀", 5)}},
 		{"a non-ASCII detail", "escalation", map[string]any{
 			"summary": "prefer a > b in the café path → retry",
 			"reason":  "the café path 😀"}},

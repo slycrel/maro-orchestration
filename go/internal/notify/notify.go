@@ -301,7 +301,15 @@ func writeEventRow(ws, eventType string, payload pyval.Obj,
 	} else if v, ok := payload.Get("reason"); ok {
 		goalSrc = v
 	}
-	goal := runeHead(pyval.Str(goalSrc), 200)
+	// UNOBSERVABLE at the row, and measured to be so: observe.write_event
+	// clips the same string again at `goal[:80]`, and 80 < 200, so the
+	// outer bound decides every byte that reaches disk. The battery scores
+	// a byte-slice mutation here as a miss for that reason — a duplicated
+	// guard is what makes a wrong bound unobservable, and this is the
+	// benign direction of it (Python has the same two clips). Left as
+	// pyval.Clip because it is what the Python slice IS; the 80-rune clip
+	// downstream is the one the multi-byte fixtures pin.
+	goal := pyval.Clip(pyval.Str(goalSrc), 200)
 
 	// Project, LoopID and Model are stated even though this projection
 	// carries none of them. Their Go zero is nil, which spells null, and
@@ -414,7 +422,7 @@ func WriteEvent(ws, eventType string, f EventFields) {
 		// RAW — see the note on EventFields. No slice, no str().
 		{Key: "project", Val: pyval.FromPlain(f.Project)},
 		{Key: "loop_id", Val: pyval.FromPlain(f.LoopID)},
-		{Key: "step", Val: runeHead(f.Step, 120)},
+		{Key: "step", Val: pyval.Clip(f.Step, 120)},
 		{Key: "step_idx", Val: f.StepIdx},
 		{Key: "status", Val: pyval.FromPlain(f.Status)},
 		{Key: "tokens_in", Val: f.TokensIn},
@@ -437,8 +445,8 @@ func WriteEvent(ws, eventType string, f EventFields) {
 		rows := make(pyval.List, 0, n)
 		for _, p := range f.ToolPathologies[:n] {
 			rows = append(rows, pyval.Obj{
-				{Key: "cls", Val: runeHead(p.Cls, 40)},
-				{Key: "evidence", Val: runeHead(p.Evidence, 160)},
+				{Key: "cls", Val: pyval.Clip(p.Cls, 40)},
+				{Key: "evidence", Val: pyval.Clip(p.Evidence, 160)},
 			})
 		}
 		entry = append(entry, pyval.Field{Key: "tool_pathologies", Val: rows})
@@ -660,7 +668,7 @@ func runHook(ctx context.Context, ws, eventType string, payload pyval.Obj,
 	}
 	if code != 0 {
 		opts.Log("notify.command exited %d for %s (%s): %s",
-			code, eventType, handleID, runeHead(stderr, 200))
+			code, eventType, handleID, pyval.Clip(stderr, 200))
 		return false
 	}
 	return true
@@ -790,20 +798,4 @@ func sortedKeys(m map[string]any) []string {
 		}
 	}
 	return out
-}
-
-// runeHead is a Python string slice `s[:n]` — RUNES, not bytes, and no
-// marker. Distinct from budget.Clip, which announces its cut.
-func runeHead(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	count := 0
-	for idx := range s {
-		if count == n {
-			return s[:idx]
-		}
-		count++
-	}
-	return s
 }

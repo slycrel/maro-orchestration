@@ -1301,6 +1301,32 @@ func TestTheEnqueuedTaskMatchesCPython(t *testing.T) {
 		// where CPython wrote an object, and `"4242"` where it wrote 4242;
 		// every fixture above used strings for both, so both survived
 		// (adversarial r11 round 2, HIGH 1).
+		// A key that is PRESENT and null. `.get(k, default)` returns None
+		// for it, not the default, and `make_task` writes what it is
+		// handed — so CPython enqueues `"reason": null` where a port that
+		// read a nil field as "argument omitted" wrote `"reason": ""`.
+		// `reason` IS the continuation's goal, so the next pass reads a
+		// different one, and the queue file's bytes differ either way
+		// (adversarial r11 round 7, MEDIUM).
+		{"a null reason and a null job id", map[string]any{
+			"job_id": nil, "parent_job_id": "loop-parent-9",
+			"reason": nil, "continuation_depth": 4,
+			"origin": map[string]any{
+				"parent_goal": "the original ask", "parent_handle_id": "h-1",
+				"next_checkin_depth": 5, "checkins_sent": 1,
+			},
+		}, reply(`"action": "continue", "decision_class": "mechanical",
+			"confidence": 9, "reasoning": "bounded", "summary_for_user": "next pass"`)},
+		// The narrow branch shares only the id: its reason is an f-string
+		// and can never be None, so this pins that the two fields are
+		// decided separately rather than by one flag.
+		{"a null job id on the narrow branch", map[string]any{
+			"job_id": nil, "parent_job_id": "loop-parent-9",
+			"reason": "audit the escalation lane", "continuation_depth": 0,
+		}, reply(`"action": "narrow", "decision_class": "mechanical",
+			"confidence": 9, "revised_goal": "port only the close branch",
+			"reasoning": "too broad", "summary_for_user": "narrowing"`)},
+
 		{"a reason and a job id that are not strings", map[string]any{
 			"job_id": 4242, "parent_job_id": "loop-parent-9",
 			"reason": map[string]any{

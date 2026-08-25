@@ -7736,3 +7736,162 @@ labelled unobservable, and every one of those four numbers is a finding:
   `new_depth + 1` is a number by construction. Both sites already carried
   that reasoning from r11 round 3; this round added a second mutation to
   the same unreachable branch and it is a miss for the same reason.
+
+### Round 7 — the interpreter corrected the reviewer, and then corrected me
+
+Reviewer: opus, whole-chunk (`tasks`, `handlequeue`, `pypath`, `pyval`,
+`notify`, `escalation`), with the round-6 fixes marked off-limits so it
+hunted siblings rather than re-reporting. Six findings: 2 MEDIUM, 4 LOW.
+All six verified against `src/` and the interpreter before anything was
+changed; all six held, which is the first round with no hallucinated code
+claim.
+
+It also came back with a list of things it had checked and found CLEAN,
+each with the measurement — a 64-combination `Join` sweep with a negative
+control that produced 5 failures when `filepath.Clean` was substituted, a
+full `_pid_alive` table, the poll bound re-measured to the millisecond.
+That half is worth as much as the findings: it says which claims are now
+evidence rather than assumption.
+
+**G1 (MEDIUM) — a present-null key is not an omitted argument.**
+`Options.reason()` read a nil field as "the caller did not pass this" and
+substituted Python's `""` default. The comment beside it said why that was
+safe: *"no Python caller passes None to either, so the two collapse
+safely."* That was the false claim. `handle_escalation` reads
+`task.get("reason", "")` and `task.get("job_id", "unknown")`, and `.get`
+on a key that is PRESENT and null returns None, not the default. Both go
+straight into `make_task`, which writes what it was handed.
+
+Measured, same enqueue on both sides:
+
+    CPython: "reason": null,   "parent_job_id": null
+    Go:      "reason": "",     "parent_job_id": ""
+
+A `loop_escalation` row carrying `"reason": null` therefore enqueues a
+continuation whose goal is `null` in CPython and `""` here — and `reason`
+IS the next pass's entire goal. The queue file's bytes differ either way.
+
+The fix is `HasReason`/`HasParentJobID`, the same shape as
+`DrainOptions.HasMaxTasks`: a zero value cannot carry "passed, and it was
+None". Only a caller that means None sets them, so the two escalation
+branches changed and nothing else did. This is the third time this chunk
+has hit the same wall — `notify`'s "state every raw field at every call
+site", round 6's `Model: ""`, and now this. **A zero value that must mean
+two things means neither.**
+
+**G2 (LOW) — `json.dumps` does not spell a float key with `str()`.**
+`statusKey` fell through to `pyval.Str` for every number, which is right
+for `5`, `2.0` and `1e+19` and wrong for exactly three values. A float KEY
+goes through json's own float writer:
+
+    json.dumps({float("nan"): 1, float("inf"): 2, float("-inf"): 3})
+      -> {"NaN": 1, "Infinity": 2, "-Infinity": 3}
+
+where `str()` gives `nan`, `inf`, `-inf`. Reachable: `json.loads` accepts
+the bare tokens and so does this port's decoder — verified by decoding
+`{"status":NaN}` on the Go side and getting a `json.Number` back, not an
+error. A task file can carry one, and the summary an operator prints is
+where the two spellings meet.
+
+**G3 (LOW) — the numeric fold had an arbitrary bound.** `floatHashKey`
+folded an integral float onto the integer key only within ±9.2e18. Python
+folds by numeric equality with no bound, so `1e19` and `10**19` are ONE
+key. The bound was also loose against its own intent — 9.2e18 is under
+2^63−1, so `9.22e18` and `9220000000000000000` split too, and nothing
+pinned either edge. This is the upper-end sibling of the round-6 fix that
+taught `HashKey` to fold `True`/`1`/`1.0` at the lower end: **lens 3
+again, and the fold had a boundary with no case at it — lens 11.**
+
+`strconv.FormatFloat(f, 'f', -1, 64)` spells an integral float as its exact
+integer digits at any magnitude, so the bound is gone rather than moved.
+One guard survives it: `-0.0` formats as `"-0"`, and `-0.0 == 0` is True in
+Python, so zero is folded explicitly.
+
+**G4 — the finding the interpreter handed me while I was pinning G3.** I
+wrote a fixture asserting that two NaN statuses stay two buckets, because
+`nan != nan` and the port's own comment said so. CPython disagreed:
+
+    two nan statuses: Go {"NaN": 1, "NaN": 1}   CPython {"NaN": 2}
+
+The reason is identity, not equality. `json.loads("NaN")` returns the SAME
+cached object every time, and dict lookup short-circuits on `x is y`
+before it ever compares:
+
+    a = json.loads("NaN"); b = json.loads("NaN")
+    a is b                        -> True
+    counting a then b             -> {nan: 2}, len 1
+    counting two float("nan")     -> {nan: 1, nan: 1}, len 2
+
+Every value that reaches `HashKey` came off a decoder, so the cached-object
+case is the only reachable one, and the port's per-call pointer key was
+wrong. The fixture I wrote to defend the old behaviour is now the fixture
+that pins the new one — **a case written to assert the wrong answer is
+still the case that finds it, provided the answer comes from the
+interpreter and not from the author.**
+
+**G5 (LOW) — the third implementation of `s[:n]`, and what the battery
+found underneath it.** `notify.runeHead` carried the exact negative-`n`
+bug that `pyval.Clip`'s own doc comment records having fixed ("Two
+implementations of one Python operation disagreeing is the defect even
+when no live caller passes a negative, because the doc comment is what the
+next caller reads"). There were three: `pyval.Clip`, `budget.Clip` (which
+announces its cut and is a different operation), and this one. Deleted;
+its nine call sites now call `pyval.Clip`.
+
+Then the battery mutated the goal site from a rune slice to a byte slice
+and **nothing failed** — with an existing fixture named "the double clip"
+sitting right there, feeding it 500 characters. The fixture was ASCII, so
+runes and bytes agreed.
+
+Adding a multi-byte fixture did not fix it either, and the reason is the
+finding: `observe.write_event` clips the same string a SECOND time at
+`goal[:80]`, and 80 < 200, so the outer bound decides every byte that
+reaches disk. Measured — a 300-`é` goal arrives on disk as 80 runes / 160
+bytes whichever way the 200 is spelled. **A duplicated guard is what makes
+a wrong bound unobservable**, and this is the benign direction of it:
+Python has both clips too, so the port is right and the inner one simply
+cannot be seen. It now says so at the site, and the battery records the
+mutation as a justified miss.
+
+The multi-byte fixtures stay, because they pin the clip that IS
+observable: mutating the 80-rune slice to bytes gives 40 `é` where CPython
+writes 80. Two of them — one at a clean boundary, one where rune 200 is a
+4-byte emoji so a byte slice tears it mid-sequence.
+
+**G6 (MEDIUM) — accepted as a known gap, and PINNED as one.**
+`pyval.ErrIntTooLarge` is not a CPython exception; it is the port refusing
+a value CPython computes. Rounds 3 and 6 taught two call sites to handle
+it. Three more let it become control flow:
+
+    handlequeue.HandleTask depth read  <- handle_queue.py:51
+    director.CheckinFirstDepth         <- director.py:1169
+    director.CheckinJitter             <- director.py:1178
+
+Measured in CPython, a `continuation_depth` of `10**19` logs
+`handle_task routing escalation job_id=j1 depth=10000000000000000000` and
+the drain COMPLETES the task. Here `HandleTask` returns the error, the
+drain's blanket recovery fails the task, and the row gets `"status":
+"failed"` with a Go-invented message in `"error"`. At all three sites the
+value is only logged or compared, so the abort buys nothing.
+
+Closing it means a big-int carrier through `pyval`, which nothing else
+needs yet — so it stays a named residual, and gets the treatment Jeremy's
+known-gap convention prescribes: a test that asserts the DIVERGENT
+behaviour. `TestAHugeDepthIsRefusedWhereCPythonComputesIt` fails the day
+someone closes the gap, and its failure message says which fixtures to
+rewrite. A residual with a pin cannot rot into an unrecorded one.
+
+**G7 (LOW) — noted, not changed.** `notify.Options.RunDir` is a
+caller-supplied field at two sites where Python hard-codes `run_dir=None`.
+No non-test caller assigns it, so no input makes the two differ; it is a
+seam the port chose rather than a translation error. Recorded because the
+Python value is a LITERAL, not a parameter — the kind of difference that
+is invisible until someone uses the seam.
+
+**Mutation battery (derived from the FILES):** 11 mutations over the six
+fixes — 11 caught, 0 missed, after the two that first came back as misses
+were each run down. One was a battery artifact (a mutation that failed to
+compile, which scores MISS while proving nothing) and one was the
+dominated clip above. Neither was a gap in the fixtures; both were the
+battery lying, in the two ways a battery can.
+

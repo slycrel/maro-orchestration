@@ -385,8 +385,12 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 				// Python-repr string and an integer id a quoted number, and
 				// `reason` IS the continuation's goal: the next pass would
 				// read a different goal than CPython's.
-				Reason:            reason,
-				ParentJobID:       jobIDRaw,
+				Reason:      reason,
+				ParentJobID: jobIDRaw,
+				// Both came from `.get` on a key that may be PRESENT and
+				// null, and `make_task` writes what it is handed.
+				HasReason:         true,
+				HasParentJobID:    true,
 				ContinuationDepth: newDepth,
 				Origin:            origin,
 			})
@@ -440,8 +444,11 @@ func HandleEscalation(ctx context.Context, ws string, task pyval.Obj,
 				// An f-string in Python, so a Go string is exactly right
 				// here — unlike the continue branch's raw pass-through one
 				// case up. The ID beside it is still raw.
-				Reason:            fmt.Sprintf("NARROWED from escalation %s:\n\n%s", jobID, revisedGoal),
-				ParentJobID:       jobIDRaw,
+				Reason:      fmt.Sprintf("NARROWED from escalation %s:\n\n%s", jobID, revisedGoal),
+				ParentJobID: jobIDRaw,
+				// The reason is an f-string, so it is never None; the id
+				// beside it came from `.get` and can be.
+				HasParentJobID:    true,
 				ContinuationDepth: newDepth,
 				Origin:            origin,
 			})
