@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 )
 
@@ -96,7 +98,12 @@ func reviewSection(cls, relPath, content string) string {
 	if len(flagged) > 0 {
 		section += "\n**Redacted lines:**\n"
 		for _, ln := range flagged {
-			section += fmt.Sprintf("- `%s`\n", strings.TrimSpace(ln))
+			// `ln.strip()`, not TrimSpace: this line is rendered into
+			// REVIEW.md and REVIEW.md is hashed into the seal
+			// (review_manifest_sha256), so a flagged line ending in an
+			// information separator seals to a different digest in the two
+			// runtimes.
+			section += fmt.Sprintf("- `%s`\n", pytext.Strip(ln))
 		}
 	}
 	return section
@@ -142,22 +149,35 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 	ids := scrub.BuildIdentifiers(opts.Home, opts.Hostname, denylist)
 	scrubText := func(s string) string { return ids.Apply(scrub.Secrets(s)) }
 
+	// `json.dumps(scrub_identifiers(scrub(obj), ...))` — a BARE json.dumps,
+	// which is not the canonical spelling and is not close to it.
+	//
+	// The first cut re-emitted these rows with CanonicalJSON, the encoder
+	// this package uses for the hashed pack.json metadata: sorted keys,
+	// `,`/`:` separators, ensure_ascii=False. A bare json.dumps is the
+	// opposite on all three counts — insertion order, `", "`/`": "`, and
+	// non-ASCII escaped to \uXXXX. Every scrubbed row therefore shipped as
+	// different BYTES in the two runtimes, so every artifact sha256
+	// differed, so no Go-exported pack could ever verify in Python. Caught
+	// by TestPackWhitespaceMatchesCPython comparing member bytes; nothing
+	// in the Go-only round-trip tests could see it, because both ends of
+	// those spoke the same wrong dialect.
+	//
+	// pyval.DumpsCompactPy is that encoder and it already existed — the
+	// third time this chunk that the fix was a helper nobody looked for.
 	scrubJSONLLine := func(line string) string {
-		dec := json.NewDecoder(strings.NewReader(line))
-		dec.UseNumber()
-		var obj any
-		if err := dec.Decode(&obj); err != nil {
-			return scrubText(line)
+		obj, err := pyval.LoadsOrdered(line)
+		if err != nil {
+			return scrubText(line) // `except json.JSONDecodeError`
 		}
 		walked := scrub.Walk(obj, scrubText)
-		canon, err := CanonicalJSON(walked)
-		if err != nil {
-			// A row whose decoded shape the canonical writer cannot render
-			// (should not happen — UseNumber covers numerics) degrades to
-			// raw-text scrubbing rather than silently dropping the row.
+		out, derr := pyval.DumpsCompactPy(walked)
+		if derr != nil {
+			// A row whose decoded shape the writer cannot render degrades
+			// to raw-text scrubbing rather than silently dropping the row.
 			return scrubText(line)
 		}
-		return string(canon)
+		return out
 	}
 
 	var artifacts []map[string]any
@@ -190,8 +210,16 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 			return err
 		}
 		var rows []string
-		for _, ln := range strings.Split(string(raw), "\n") {
-			if strings.TrimSpace(ln) != "" {
+		// `[ln for ln in text.splitlines() if ln.strip()]`, and BOTH halves
+		// of that are wrong when spelled with the strings package. Python
+		// splits on ten separators, not just "\n" — a row carrying \x0b or
+		// U+2028 is two rows there and one row here — and `ln.strip()` is
+		// falsy for a line of information separators that TrimSpace leaves
+		// non-empty. These rows are the pack payload: they are hashed into
+		// pack.json, so either divergence ships a pack the other runtime
+		// cannot verify.
+		for _, ln := range pytext.SplitLines(string(raw)) {
+			if pytext.Strip(ln) != "" {
 				rows = append(rows, ln)
 			}
 		}

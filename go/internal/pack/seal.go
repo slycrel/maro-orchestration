@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Seal refuses without explicit confirmation (the CLI's --yes). The
@@ -86,13 +88,21 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 	}
 	marker := fmt.Sprintf("Reviewed payload SHA-256: `%s`", payloadSHA)
 	oldMarker := "\n\n---\n\nReviewed payload SHA-256: `"
+	// pytext.Strip, not TrimSpace, and pytext.TrimRight, not
+	// TrimRight(" \t\n"): both spellings decide whether the OLD marker is
+	// removed and where the text ends, and the result is hashed into
+	// review_manifest_sha256. A REVIEW.md whose tail carries an information
+	// separator (Python strips it, TrimSpace does not) or a \r / \v / \f /
+	// U+00A0 (Python's bare rstrip() strips it, a three-cutset TrimRight
+	// does not) seals to two different digests, and the pack then fails
+	// verification on whichever runtime did not seal it.
 	if at := strings.LastIndex(reviewText, oldMarker); at >= 0 &&
-		strings.HasSuffix(strings.TrimSpace(reviewText[at+len(oldMarker):]), "`") {
+		strings.HasSuffix(pytext.Strip(reviewText[at+len(oldMarker):]), "`") {
 		reviewText = reviewText[:at]
 	}
 	// The digest lives in the human-reviewed artifact as well as pack.json.
 	// A payload+manifest swap that retains the reviewed copy therefore fails.
-	reviewText = strings.TrimRight(reviewText, " \t\n") +
+	reviewText = pytext.TrimRight(reviewText) +
 		fmt.Sprintf("\n\n---\n\n%s\n", marker)
 
 	manifest["review"] = map[string]any{

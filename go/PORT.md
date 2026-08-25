@@ -5860,3 +5860,84 @@ rather than gaps:
   not the loader — the day `from_dict` grows a required field, both runtimes
   start losing rows there and the branch that announces it should already
   exist.
+
+## The strip/lower sweep, tier 1 — and the encoder underneath it
+
+The queued sweep's first tier was the four `pack` sites where a Python
+whitespace operation reaches a HASHED artifact. All four were real; writing
+the differential that pins them turned up a fifth defect that is worse than
+all four together.
+
+### What the four were
+
+* `export.go` — the "Redacted lines" list renders `ln.strip()`, and REVIEW.md
+  is hashed into the seal.
+* `export.go` — `_read_jsonl_rows` is
+  `[ln for ln in text.splitlines() if ln.strip()]`, and BOTH halves were
+  wrong: `strings.Split(raw, "\n")` splits on one separator where Python
+  splits on ten, and `TrimSpace` leaves a line of information separators
+  non-empty where `ln.strip()` is falsy. These rows are the pack payload.
+* `seal.go` — the old-marker test's `.strip()` and the tail's bare
+  `.rstrip()`, the latter spelled `TrimRight(reviewText, " \t\n")`, which is
+  a three-character cutset where Python's bare `rstrip()` removes all 29.
+
+Each decides bytes that get hashed, so each turns a pack one runtime sealed
+into a pack the other refuses.
+
+### The fifth: every scrubbed JSONL row shipped in the wrong dialect
+
+`_scrub_jsonl_line` ends in a BARE `json.dumps(obj)`. The port re-emitted
+those rows with `CanonicalJSON` — this package's encoder for the hashed
+`pack.json` metadata, which is `sort_keys=True, separators=(",", ":"),
+ensure_ascii=False`. A bare `json.dumps` is the opposite on all three
+counts: insertion order, `", "` / `": "`, and non-ASCII escaped to `\uXXXX`.
+
+So every scrubbed row was different BYTES in the two runtimes, every
+artifact `sha256` differed, and no Go-exported pack could ever have verified
+in Python. Nothing in the Go-only round-trip tests could see it: both ends
+of those spoke the same wrong dialect, which is what a round trip is for and
+also what it cannot check. `pyval.DumpsCompactPy` — a bare `json.dumps`,
+insertion-ordered, ensure_ascii on — already existed. Third time this
+session that the fix was a helper nobody looked for.
+
+### Tier 2, the two that gate a write
+
+* `knowledge.AbsorbVariant` trimmed with `TrimSpace` where `_absorb_variant`
+  calls `.strip()`. `merged_variants` is a stored field on a shared
+  tiered-lessons row, so the same lesson carried two different variant lists
+  in the two runtimes, each re-absorbing the other's spelling as new.
+* `pack/import.go`'s `minted_from` normalizer is `raw_stamp.strip().lower()`
+  and **it is the provenance gate**: the retrieval quarantine matches the
+  exact string `"prompt"`, and this is what turns a foreign exporter's
+  spelling into it. `"prompt"` plus a trailing information separator
+  normalizes to `"prompt"` in CPython and to nothing here — so the port
+  discarded the incoming claim and imported the row unquarantined.
+
+### The differential, and the trap it fell into first
+
+`internal/pack/whitespace_diff_test.go` is the package's first CPython
+differential: it exports and seals the same seeded workspace on both sides
+and compares REVIEW.md byte for byte, the artifact row counts, the member
+bytes, and each side's stamped digest against the document that side
+actually shipped. A second test imports ONE Go-built pack with both
+runtimes, so an exporter difference cannot be credited to the importer.
+
+Two fixtures had to be repaired before they measured anything:
+
+* the separators-only row was spelled with `\x1c`, which `str.splitlines()`
+  BREAKS on — so the splitlines fix tore it into empty fragments before the
+  strip predicate ever saw it and the row filter went unpinned. It is
+  `\x1f` now: strip removes it, splitlines does not break on it.
+* the drifted `minted_from` stamp was a RAW control byte inside a JSON
+  string, which is illegal JSON — so both runtimes failed to parse the row,
+  both skipped it, and the test passed while testing nothing. It is a JSON
+  escape now.
+
+Mutation battery: 9 of 10 CAUGHT. The miss is the import-side variant gate,
+which cannot be pinned alone now that `AbsorbVariant` strips correctly —
+two guards, one observable. That pairing is written down at the site.
+
+**Still queued:** the sweep's tier-3 and tier-4 sites (planner, loop,
+closure, director, graduation, inspector, cmd), its six UNRESOLVED entries,
+and the port-wide migration of inline store scans onto
+`record.ReadAllAnnounced`.

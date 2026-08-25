@@ -17,9 +17,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -259,8 +259,16 @@ func AbsorbVariant(variants []string, text, canonical string) []string {
 	if len(variants) >= MergedVariantsCap {
 		return variants
 	}
-	trimmed := strings.TrimSpace(text)
-	canonical = strings.TrimSpace(canonical)
+	// pytext.Strip, not TrimSpace: `_absorb_variant` calls `.strip()`, and
+	// the difference lands in merged_variants — a stored field on a shared
+	// tiered-lessons row. A variant of only information separators is
+	// falsy in Python and dropped; TrimSpace leaves it non-empty and the
+	// port stored it. A variant ENDING in one is stored with the separator
+	// here and without it there, so the same lesson carries two different
+	// variant lists in the two runtimes and each keeps re-absorbing the
+	// other's spelling as new.
+	trimmed := pytext.Strip(text)
+	canonical = pytext.Strip(canonical)
 	if trimmed == "" || trimmed == canonical {
 		return variants
 	}

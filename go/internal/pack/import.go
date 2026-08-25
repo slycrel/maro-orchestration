@@ -29,6 +29,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/config"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
 	"github.com/slycrel/maro-orchestration/go/internal/provenance"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -581,7 +582,15 @@ func importVariants(raw any) []string {
 	var out []string
 	for _, v := range arr {
 		s, ok := v.(string)
-		if !ok || strings.TrimSpace(s) == "" {
+		// `not v.strip()`. NO MUTATION CAN PIN THIS SPELLING and the
+		// reason is the fix one frame down: knowledge.AbsorbVariant now
+		// strips with pytext.Strip too, so a variant of only separators is
+		// dropped there whether or not this gate saw it. Two guards, one
+		// observable — which is exactly the shape that hides a wrong bound
+		// (a duplicated guard is what makes the wrong one invisible), so
+		// the pairing is written down rather than left to be rediscovered
+		// the next time one of them is "simplified" away.
+		if !ok || pytext.Strip(s) == "" {
 			continue
 		}
 		out = knowledge.AbsorbVariant(out, s, "")
@@ -723,7 +732,13 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	// the local Tier-0 classifier too and take the conservative union.
 	incoming := ""
 	if s, ok := row["minted_from"].(string); ok {
-		incoming = strings.ToLower(strings.TrimSpace(s))
+		// `raw_stamp.strip().lower()`. Both halves matter and this one is
+		// a GATE: the retrieval quarantine matches the exact string
+		// "prompt", and the normalizer is what turns a foreign exporter's
+		// spelling into it. "prompt\x1c" strips to "prompt" in Python and
+		// stays outside the enum here, so the incoming claim is discarded
+		// and the row imports unquarantined on the port alone.
+		incoming = pytext.Lower(pytext.Strip(s))
 	}
 	if incoming != "prompt" && incoming != "outcome" {
 		incoming = ""
