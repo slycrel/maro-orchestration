@@ -343,6 +343,23 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 				row(today+"01:00:00+00:00", 1.0),
 				row(today+"02:00:00+00:00", 0.5)}},
 
+		// A COST float() REJECTS, on a row that PASSES both checks. The
+		// `or 0.0` gate only catches falsy values, so "abc" reaches float()
+		// and raises, and nothing sits between it and spend_today's outer
+		// bare except: the whole day answers 0.0, not the 1.0 from the row
+		// below it. spend_for_loops had this fixture and spend_today did
+		// not, so the same defect was pinned on one side of the file and
+		// open on the other (metrics r1 battery, M132).
+		{name: "an unparseable cost zeroes the whole day", rows: []string{
+			row(today+"01:00:00+00:00", 1.0),
+			row(today+"02:00:00+00:00", "abc")}},
+		// The same value on a row the STRICT check rejects is never
+		// converted, so the scan continues and the day still sums.
+		{name: "an unparseable cost on a yesterday row is never reached",
+			rows: []string{
+				row(today+"01:00:00+00:00", 1.0),
+				row(yday+"23:00:00+00:00", "abc")}},
+
 		// THE STRICT CHECK IS A PREFIX, not a substring. `recorded_at`
 		// carries today's date but not at position zero, so the cheap window
 		// check accepts the row and `startswith` then rejects its cost —
@@ -771,11 +788,77 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				row("research", 100, 0.01), row("build", 200, 0.01),
 				row("ops", 300, 0.01), row("general", 401, 0.01)}},
 
+		// NO cost_usd KEY AT ALL, so `e.get("cost_usd", 0.0)` supplies the
+		// DEFAULT for every row and the sum never leaves the value it
+		// started from. The default is the float 0.0, so total_cost_usd is
+		// 0.0; an int 0 default would make it the int 0, spelled "0". Every
+		// other case here carries the key, so the default was unmeasured
+		// (metrics r1 battery, M49).
+		{name: "no cost_usd key anywhere uses the float default",
+			limit: 100, nsteps: 2,
+			rows: []string{
+				`{"step_type": "research", "total_tokens": 1000}`,
+				`{"step_type": "research", "total_tokens": 2000}`}},
+
+		// THE ANALYSIS WINDOW IS USED, not merely declared. estimate_loop_cost
+		// loads its OWN entries with limit=500, independent of this case's
+		// `limit`, so the only way to see that number is a store deeper than
+		// the mutant's alternative. 150 rows with the OLDEST 50 an order of
+		// magnitude dearer: a 500-row window averages all of them, a 100-row
+		// window never sees the tail.
+		//
+		// TestTuningConstantsMatchCPython cannot cover this — it reads the
+		// constant and compares it, which catches a transcription error and
+		// not a constant that is correct and then ignored. Both halves are
+		// needed and they are different tests.
+		{name: "the analysis window reaches past a hundred rows",
+			limit: 100, nsteps: 2,
+			texts: []string{"research the options", "research the options"},
+			rows:  deepStore()},
+
+		// WHICH SUM RAISES FIRST, told apart by the ACCUMULATOR in the
+		// message. The per-group sums run before the grand total, so a bad
+		// row is always caught by its own group — but the two sums reach it
+		// with different accumulators. Here "build" carries a float and
+		// "research" carries only the null: the GROUP sum for research
+		// starts at int 0 and says 'int', while the grand total has already
+		// crossed to float and would say 'float'. A port that swallowed the
+		// group error and let the grand total raise instead reports the same
+		// exception with the wrong type, which is why every earlier raise
+		// fixture agreed with it (metrics r1 battery, M50).
+		//
+		// Row order is FILE order and load_step_costs hands entries back
+		// NEWEST FIRST, so the build row has to sit last in the file to be
+		// summed first.
+		{name: "the group sum raises before the grand total, with its own accumulator",
+			limit: 100, nsteps: 2,
+			rows: []string{row("research", 1000, nil), row("build", 2000, 0.5)}},
+
+		// ZERO AVERAGES CHANGING expensive_types. The earlier zero-average
+		// fixture proved the median value shifts, but the median is not in
+		// the output — only expensive_types is, and there both readings
+		// happened to answer empty. Two zero types plus 100 and 300 make
+		// them differ: the correct sample is {100,300} with lower median 100
+		// so 300 clears the 2x bar, while admitting the zeros gives {0,0,
+		// 100,300}, a median of 0, and the `median > 0` guard then empties
+		// the list (metrics r1 battery, M54).
+		{name: "zero averages change which types are expensive",
+			limit: 100, nsteps: 2,
+			rows: []string{
+				row("research", 0, 0.01), row("build", 0, 0.01),
+				row("ops", 100, 0.01), row("general", 300, 0.01)}},
+
 		// SIX DECIMALS, not eight. estimate_loop_cost rounds its answer to 6
 		// while avg_cost_usd is rounded to 8, and two different roundings in
 		// one file is the shape a port unifies by accident. The averages here
 		// are chosen so the seventh decimal is non-zero.
+		// `texts` is set because the rounding under test lives in the
+		// WITH-TEXTS branch; the no-texts branch has its own round() one
+		// line below. Leaving texts empty measured the wrong return
+		// (metrics r1 battery, M71).
 		{name: "the loop estimate rounds to six places", limit: 100, nsteps: 3,
+			texts: []string{"research the options", "research the options",
+				"research the options"},
 			rows: []string{
 				row("research", 1000, 0.012345678), row("research", 1000, 0.023456789)}},
 		// And the floor is a FLOOR: 2001.5 // 2 is 1000.0, not 1000.75.
@@ -1039,4 +1122,19 @@ func itoa(n int) string {
 		return "-" + string(d)
 	}
 	return string(d)
+}
+
+// deepStore builds 150 step-cost rows whose OLDEST 50 are far dearer than
+// the newest 100, so an analysis window of 500 and one of 100 give different
+// averages. Newest last: seedCosts writes in file order and load_step_costs
+// reverses it.
+func deepStore() []string {
+	var rows []string
+	for i := 0; i < 50; i++ {
+		rows = append(rows, `{"step_type": "research", "total_tokens": 9000, "cost_usd": 0.9}`)
+	}
+	for i := 0; i < 100; i++ {
+		rows = append(rows, `{"step_type": "research", "total_tokens": 100, "cost_usd": 0.01}`)
+	}
+	return rows
 }

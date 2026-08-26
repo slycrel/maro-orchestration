@@ -94,22 +94,90 @@ func ReverseReadline(path string, bufSize int, yield func(line string) bool) err
 	return nil
 }
 
-// decodeReplace is `bytes.decode("utf-8", errors="replace")`. Converting
-// []byte to string in Go keeps invalid bytes VERBATIM rather than
-// substituting U+FFFD, so a crash-torn append would compare equal here and
-// unequal in CPython — the exact case this reader exists to survive.
+// decodeReplace is `bytes.decode("utf-8", errors="replace")`.
 //
-// ToValidUTF8 is not quite CPython's replacement policy: it collapses a RUN
-// of invalid bytes into one U+FFFD where Python's replace emits one per
-// undecodable byte (or per maximal subpart). The difference is only visible
-// on a torn row, which then fails json.Unmarshal on both sides and is
-// skipped — but it is a difference, and it belongs in a comment rather than
-// in a claim that the two decoders agree.
+// Converting []byte to string in Go keeps invalid bytes VERBATIM rather than
+// substituting U+FFFD, so a crash-torn append would compare equal here and
+// unequal in CPython — the case this reader exists to survive.
+//
+// THE COUNT OF REPLACEMENTS MATTERS, which is why this is not
+// strings.ToValidUTF8. That collapses a RUN of invalid bytes into a single
+// U+FFFD; CPython emits one per MAXIMAL SUBPART, so b"\xff\xff" is two
+// characters to Python and one to ToValidUTF8. The port carried that as a
+// named divergence with the justification that it is "only visible on a torn
+// row, which then fails json.Unmarshal on both sides and is skipped".
+//
+// That justification was false, and false in the same way as two others in
+// this chunk: the row is skipped, but its LENGTH is not. spend_today's cheap
+// check is `today not in line[:60]` — sixty CODE POINTS — and a miss there
+// does not skip the row, it BREAKS THE SCAN. A torn row whose timestamp sits
+// near the window's edge therefore ends the day's scan in one runtime and
+// not the other, and every row below it goes uncounted.
+//
+// The maximal-subpart rule: at an ill-formed byte, consume the longest prefix
+// that could still have begun a well-formed sequence — the lead byte plus
+// each following byte in the continuation range that lead byte requires — and
+// emit one U+FFFD for the whole of it. So b"\xe2\x82" is ONE replacement (a
+// truncated three-byte sequence) while b"\xff\xfe" is TWO (neither byte can
+// lead). TestDecodeReplaceMatchesCPython sweeps this against the interpreter
+// rather than trusting the table below.
 func decodeReplace(s string) string {
 	if utf8.ValidString(s) {
 		return s
 	}
-	return strings.ToValidUTF8(s, "�")
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r != utf8.RuneError || size > 1 {
+			b.WriteString(s[i : i+size])
+			i += size
+			continue
+		}
+		b.WriteRune('\ufffd')
+		i += maximalSubpart(s[i:])
+	}
+	return b.String()
+}
+
+// maximalSubpart returns how many bytes of an ill-formed sequence CPython
+// folds into ONE U+FFFD: the lead byte, plus every following byte that falls
+// in the continuation range that lead byte demands. Always at least 1, so
+// decodeReplace cannot loop.
+func maximalSubpart(s string) int {
+	c := s[0]
+	var lo, hi byte = 0x80, 0xBF
+	var need int
+	switch {
+	case c >= 0xC2 && c <= 0xDF:
+		need = 1
+	case c == 0xE0:
+		need, lo = 2, 0xA0
+	case c >= 0xE1 && c <= 0xEC, c >= 0xEE && c <= 0xEF:
+		need = 2
+	case c == 0xED:
+		need, hi = 2, 0x9F
+	case c == 0xF0:
+		need, lo = 3, 0x90
+	case c >= 0xF1 && c <= 0xF3:
+		need = 3
+	case c == 0xF4:
+		need, hi = 3, 0x8F
+	default:
+		// A continuation byte with nothing to continue, or a lead byte no
+		// UTF-8 sequence may begin with (0xC0, 0xC1, 0xF5..0xFF).
+		return 1
+	}
+	n := 1
+	for ; n <= need && n < len(s); n++ {
+		if s[n] < lo || s[n] > hi {
+			break
+		}
+		// Only the FIRST continuation byte carries a narrowed range; the
+		// rest are the plain 0x80..0xBF.
+		lo, hi = 0x80, 0xBF
+	}
+	return n
 }
 
 // objGet is `d.get(key, default)` over an ordered row.
@@ -480,10 +548,21 @@ func AnalyzeStepCosts(entries []pyval.Obj) (StepCostAnalysis, error) {
 		}
 	}
 
-	// The FOURTH sum, over every entry rather than per type — and the fourth
-	// place a null cost_usd raises. It runs AFTER expensive_types, so a store
-	// whose only bad row is in a group that already summed cleanly still
-	// reaches here to fail.
+	// The FOURTH sum, over every entry rather than per type.
+	//
+	// Its error path is DEAD, and the comment that used to stand here said
+	// the opposite — that "a store whose only bad row is in a group that
+	// already summed cleanly still reaches here to fail". No such store
+	// exists. The per-type sums PARTITION the entries and read the same
+	// field with the same default, so a row that will not sum makes its own
+	// group raise, and the group loop finishes before this line. The error
+	// is checked anyway because Python does not check it either — this is a
+	// faithful port of an equally dead line, and inventing a difference
+	// would be worse than carrying one.
+	//
+	// TestGrandTotalRaiseIsUnreachable searches for the counterexample
+	// rather than trusting this paragraph, because the previous paragraph
+	// was wrong and read exactly as confident.
 	total, err := pyval.Sum(fieldsOf(entries, "cost_usd", 0.0))
 	if err != nil {
 		return StepCostAnalysis{}, err

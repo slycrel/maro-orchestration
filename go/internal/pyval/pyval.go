@@ -725,18 +725,23 @@ func SliceStop(size, n int) int {
 	return n
 }
 
-// Hashable is CPython's test for whether a value may be a set member or a
-// dict key: everything except list and dict. It exists because `x in
-// {"a","b"}` is not a total function — `[] in {"a"}` raises TypeError
-// rather than answering False, and a port that answers False turns a crash
-// into a silently different number.
-func Hashable(v any) bool {
-	switch v.(type) {
-	case List, []any, Obj, map[string]any, []string:
-		return false
-	}
-	return true
-}
+// Hashable was here, and is DELETED rather than kept for a future caller.
+//
+// It was added to guard `card.get("success_class") in
+// RUN_COST_SUCCESS_CLASSES` on the reading that the `in` would raise on an
+// unhashable value. That container is a TUPLE, so it does not; the guard was
+// the bug, and removing it left this function with no callers at all. Two
+// mutants of it survived a battery for exactly that reason — nothing could
+// observe it (metrics r1 battery, M131).
+//
+// HashKey is the function that was wanted all along: it answers the same
+// question AND returns the key, so a caller cannot test hashability and then
+// forget to use the result. An unhashable DICT KEY does raise, and
+// analyze_step_costs uses HashKey for it.
+//
+// Deleted rather than left unused because an unexported helper that nothing
+// calls reads as "not wired up yet" to the next author, and this one would
+// re-import a wrong reading of `in` along with itself.
 
 // Clip is Python's s[:n] — n CODE POINTS, not n bytes. Every truncation
 // in this package feeds a human-facing line, and slicing bytes both counts

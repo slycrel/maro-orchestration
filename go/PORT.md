@@ -9787,3 +9787,79 @@ existence of expiry.
 
 Reaching for the seam is a last resort in general and the right call here.
 The alternative was a fifteen-minute test.
+
+### Round 2 of the battery: 108/139, and the exemptions are executable
+
+Re-running the battery after the first triage needed the battery repaired
+first. **Nine of its 131 patterns matched zero times** once the fixes moved
+their code, and a zero-match mutant is indistinguishable from a detected one
+— the harness's `count(old) == 1` guard is the only thing standing between a
+stale battery and a clean-looking sweep over code it never touched. Nine
+sites repaired, eight new mutants added for what the fixes introduced (the
+raise flag, `RoundAny`, `UnhashableKeyMsg`, the clock seam, `rowIDFallback`,
+`globRunCards`), and the whole list re-verified unique before launch.
+
+**108 detected, 21 survived**, against a baseline the harness itself checks.
+
+One more real defect fell out, and it is the third instance in this chunk of
+the same shape. `decodeReplace` used `strings.ToValidUTF8`, which collapses a
+RUN of ill-formed bytes into one U+FFFD where CPython emits one per **maximal
+subpart** — `b"\xff\xff"` is two characters to Python and one to Go. The port
+carried this as a named divergence justified by "the difference is only
+visible on a torn row, which then fails json.Unmarshal on both sides and is
+skipped." The row is skipped. Its LENGTH is not: `spend_today`'s cheap check
+is `today not in line[:60]`, sixty CODE POINTS, and a miss there does not
+skip the row — it **breaks the backward scan**, so every row below it goes
+uncounted. Same failing-open direction as the other two, and the same tell: a
+divergence whose justification is a sentence about why the original's
+behaviour cannot matter here.
+
+The fix implements the maximal-subpart rule and
+`TestDecodeReplaceMatchesCPython` sweeps it against the interpreter — all 256
+single bytes, every narrowed continuation range (E0/ED/F0/F4), overlongs,
+truncated prefixes, and invalid bytes embedded in valid text — comparing both
+the decoded text AND the character count, separately, because the count is
+what the sixty-code-point window consumes.
+
+`pyval.Hashable` was **deleted**. Its only caller was the wrong tuple-as-set
+guard; removing that left it with none, which is why two mutants of it
+survived — nothing could observe it. `HashKey` is the function that was
+wanted all along, since it answers the same question and returns the key, so
+a caller cannot test hashability and then forget to use the result.
+
+**The exemptions are tests, not paragraphs.** Eight survivors are equivalent
+mutants — guards that cannot fire, ported faithfully from Python guards that
+cannot fire either. Recording that in a document is a claim about
+reachability, which is exactly the kind that reads as true and is false at
+one input nobody pictured; this chunk has already produced three such claims
+in comments, all confident and all wrong. So each exemption is a test that
+searches for the input that would make its guard matter and fails if it finds
+one:
+
+- `TestMedianGuardsAreUnreachable` — `max(0, (len(avgs)-1)//2)` never clamps
+  and `median_avg > 0` never changes the answer, both because `avgs` admits
+  only values > 0. Randomised over 3000 stores. Remove the `> 0` from that
+  filter and both guards come alive at once, and this test says so.
+- `TestGrandTotalRaiseIsUnreachable` — the fourth sum's error path is dead,
+  because the per-type sums PARTITION the entries and run first. The comment
+  above that sum used to claim the opposite in as many words.
+- `TestEmptyByTypeShortCircuitIsRedundant` — the early return saves a
+  traversal; the global-average closure answers 0.0 for an empty store anyway.
+- `TestMissingLedgerShortCircuitsAreRedundant` — both the `path.exists()` and
+  `if not wanted` guards, with an anti-vacuity call proving the fixture is
+  read at all.
+- `TestReverseReadlineChunkSizeCannotChangeAnswers` — a chunk size is a read
+  pattern, not a rule. The differential already sweeps eight sizes but only
+  over small files, so this one crosses the 64KB boundary the constant names.
+
+Three survivors are **not mintable** and are recorded rather than chased.
+`M109` needs a run card deleted between the glob and the stat — a race
+window, the family already documented. `M101` and `M104` both turn on mtime
+TIES: Python's `sorted(key=mtime, reverse=True)` is stable over glob order,
+Go's `globRunCards` walks `ReadDir(-1)` in directory order, and neither
+runtime promises the two orders agree. A fixture that pinned a tie would be
+pinning the filesystem. What IS pinned is that distinct mtimes sort correctly
+regardless of name, which the lexical-order-reverses-mtime fixture covers.
+`M99` and `M139` are equivalent for a duller reason: both mutants fall
+through to a glob or stat that fails on the same input, so the answer is the
+same by a longer route.

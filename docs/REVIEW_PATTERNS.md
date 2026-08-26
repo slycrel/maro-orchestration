@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**699**. The counts below are regenerated from the ledger, not recalled.
+**703**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 699
+**Two things the counts are not.** They are lower bounds: 314 of the 703
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -141,7 +141,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 27*
+*instances: 28*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -549,7 +549,7 @@ the thing it skipped is either counted or lost.
 
 ### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
 
-*instances: 7*
+*instances: 8*
 
 Distinct from L1, and the distinction is what makes it findable. L1 is a
 test whose *assertion* cannot fail. Here the assertion is fine and the
@@ -833,7 +833,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 5*
+*instances: 6*
 
 A port can get every DECISION of the original right and still be wrong,
 because the original's answer depends on the SHAPE the decisions are made
@@ -974,7 +974,7 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 3*
+*instances: 4*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
