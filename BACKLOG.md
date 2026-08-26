@@ -188,6 +188,59 @@ the dead branches deliberately (with the reasoning at the site) rather than
 cannot is the worse bug. Whichever resolution wins has to land in
 `src/sheriff.py` first and be re-ported after.
 
+### Python-side: the fabrication check misses any write claim that names a file BEFORE the preposition (FOUND 2026-08-26, artifactcheck slice 1 — MEASURED)
+
+`_OUTPUT_CLAIM_RE` spells the gap between the verb and the preposition as
+`[^.\n]*?`. A period in that window ends the match. Since the window is
+exactly where a source filename or a version number lives, the most
+natural phrasing an agent uses when it names both a source and a
+destination is not detected as a write claim **at all** — which means
+`check_fabrication` never runs on it, and a fabricated write goes
+unchallenged.
+
+Measured against `src/artifact_check.py` on CPython 3.14.3:
+
+```
+'I saved the report to output/results.txt'      -> ['output/results.txt']
+'I saved report.md to output/results.txt'       -> []
+'Wrote the summary.json contents to final.json' -> []
+'I saved results v1.2 to out.txt'               -> []
+```
+
+The first line is the only one of the four that a reviewer would call the
+unusual phrasing.
+
+**PYTHON-side, filed not fixed.** The Go port reproduces the gap exactly
+(fixture E36) and must keep reproducing it until the Python changes — a
+port that detects claims the original ignores would report fabrication the
+production system does not. The fix is a Python decision about the window:
+either allow a period inside it (and accept the false positives that
+sentence-crossing brings) or bound the window to the clause. Whichever
+wins lands in `src/artifact_check.py` first and is re-ported after.
+
+### Python-side: the stdout exclusion list is a bare prefix alternation (FOUND 2026-08-26, artifactcheck slice 1 — MEASURED)
+
+`_STDOUT_CLAIM_RE`'s exclusion arm is `(?:file|to|into|path|dir)` with no
+trailing word boundary, so it suppresses on a PREFIX, not a word. Measured:
+
+```
+'output to stdout'  -> stdout claim: True
+'output tomorrow'   -> False      ("to" prefix)
+'output files'      -> False      ("file" prefix)
+'output directory'  -> False      ("dir" prefix)
+'output pathology'  -> False      ("path" prefix)
+'output intoxicated'-> False      ("into" prefix)
+```
+
+Every line but the first is a suppression the list did not intend. This
+one is much lower stakes than the entry above — it only affects whether a
+claim is classified as *stdout* rather than as a file write — but it is
+the same species and should be decided in the same pass.
+
+**PYTHON-side, filed not fixed**, same reasoning: the port reproduces the
+prefix behaviour, and a mutation that adds `pytext.WordEnd` to the Go arm
+is caught by the fixture table, which is how it was found.
+
 ### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
 
 A per-package census of the Go tree — Go lines vs test lines, counted in
