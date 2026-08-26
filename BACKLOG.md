@@ -161,6 +161,32 @@ Jeremy's call rather than a quiet repair. **The port reproduces the bug
 as-written in the meantime**, with fixtures pinning it; a port that silently
 fixed it would hide the finding and break the differential.
 
+### Go port: `SuccessfulRunCostP90` has no default window, and no caller yet (FOUND 2026-08-26, go-port metrics r3)
+
+Python spells it `successful_run_cost_p90(limit=RUN_COST_CARD_LIMIT)` — the
+window is a KEYWORD DEFAULT, so every caller that does not think about it
+samples 200 cards. The Go port spells it `SuccessfulRunCostP90(ws string,
+limit int)`, so the default lives at the call sites instead. There are
+currently **no production call sites at all**: `RunCostCardLimit` is
+referenced only by its own declaration and `recorder_diff_test.go:805`.
+
+The constants differential therefore pins the NUMBER for parity while the
+behaviour it names is unexpressed. A future caller passing a different
+window makes the two runtimes sample different card sets — feeding
+different p90s into the warn line and the 4×p90 auto kill-line — and
+nothing in the differential would see it, because the differential asserts
+the constant matches CPython's, not that anything uses it.
+
+Fix before the first caller lands, not after: a defaulting wrapper
+(`SuccessfulRunCostP90Default(ws)`, or a negative-limit sentinel meaning
+"the default") so the default is expressed ONCE in the port the way it is
+expressed once in Python. Cheap now, and a silent sampling divergence
+later.
+
+Same family as the `AnalyzeStepCosts(nil)` sentinel already named in
+`analysisWindow`'s comment: both are Python keyword defaults that the port
+hoisted to the caller, and both are invisible until a second caller exists.
+
 ### Go port: decide whether `LoadsMap`'s non-object refusal should abort the call (FOUND 2026-08-26, go-port metrics r2 — L1)
 
 `pyval.LoadsMap` refuses a row that is valid JSON but not an object, and

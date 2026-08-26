@@ -209,7 +209,28 @@ func SpendToday(ws string, now time.Time) float64 {
 	// startswith below. The cheap check is allowed false positives; it is
 	// the false NEGATIVE that would end the scan early, and that is why the
 	// window is 60 rather than the length of the timestamp.
-	_ = ReverseReadline(path, reverseReadlineBufSize, func(line string) bool {
+	// The reader's error is NOT discardable. Python wraps this whole loop —
+	// `for line in _reverse_readline(path)` and all — in the function's outer
+	// `except Exception: return 0.0`, and _reverse_readline's `fh.read` sits
+	// INSIDE its while loop. So an I/O failure part way through a multi-chunk
+	// read propagates out of the generator, past the partial total, and the
+	// answer is 0.0.
+	//
+	// This port discarded it with `_ =` and returned the PARTIAL sum. Not
+	// theoretical: `remaining` is computed from one Stat, and ReadAt runs
+	// once per 64KB chunk afterwards, so a writer truncating a >64KB ledger
+	// between the Stat and a later ReadAt yields some lines and then fails —
+	// which is the concurrent-writer race spend_today's own docstring says it
+	// tolerates. Third instance of the raise-turned-into-a-skip family in
+	// this file, after costUSDOf and computeRunCostP90's float().
+	//
+	// NOTE the direction is the opposite of the usual one and it is still
+	// wrong: here CPython invents the SMALLER number (0.0 against a real
+	// partial sum), so matching it makes the daily budget gate LESS
+	// conservative. Fidelity is the contract — two runtimes reading one
+	// ledger must answer the same thing — and a port that keeps the safer
+	// number is still a port that disagrees.
+	rerr := ReverseReadline(path, reverseReadlineBufSize, func(line string) bool {
 		if !strings.Contains(pyval.Clip(line, 60), today) {
 			return false
 		}
@@ -253,7 +274,7 @@ func SpendToday(ws string, now time.Time) float64 {
 		}
 		return true
 	})
-	if raised {
+	if raised || rerr != nil {
 		return 0.0
 	}
 	return total

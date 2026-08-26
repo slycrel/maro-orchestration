@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**715**. The counts below are regenerated from the ledger, not recalled.
+**718**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 715
+**Two things the counts are not.** They are lower bounds: 314 of the 718
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -112,7 +112,7 @@ shape is real and the tripwire is cheap; treat it as a self-review prompt
 rather than as a measured recurrence.
 
 ### L4 — A guard that cannot fire is not evidence the danger is gone
-*instances: 12*
+*instances: 13*
 
 **Canonical instance.** Deleting the `is_error` check from
 `classify_tool_pathologies`' hallucination scan survived a 37-mutant
@@ -259,7 +259,7 @@ introspect port deliberately did not become the seventh.
 *instances: 7*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
-*instances: 6*
+*instances: 7*
 
 ### L36 — A hardening is a fork
 *instances: 3 attributed; ~4 in the mined cluster*
@@ -496,7 +496,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 5 attributed; ~6 in the mined cluster*
+*instances: 6 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
