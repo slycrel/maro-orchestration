@@ -188,6 +188,57 @@ the dead branches deliberately (with the reasoning at the site) rather than
 cannot is the worse bug. Whichever resolution wins has to land in
 `src/sheriff.py` first and be re-ported after.
 
+### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
+
+A per-package census of the Go tree — Go lines vs test lines, counted in
+Python after a first shell attempt reported a nonsense ratio for this very
+package (a `*_test.go` glob leaked through as a literal) — surfaced one
+package with **zero** test files. `internal/missionrun` is not a stub; it
+carries real behaviour and is imported by the command layer.
+
+Every other package in the tree has at least a differential or a pin. This
+one has neither, which means nothing in it is compared against CPython and
+nothing in it would notice a revert. It is the only place in the port where
+the honest coverage claim is "none".
+
+**Not a mechanical fix.** The work is a probe + fixture table like the ones
+the other packages carry, and it should be scheduled as its own slice rather
+than bolted onto whatever chunk notices it next.
+
+### Python-side: `artifact_check.py`'s three-literal token guard has a dead clause (FOUND 2026-08-26, artifactcheck slice 1 — L4)
+
+`extract_write_claims` guards its token with:
+
+```python
+if not tok or tok in ("/", "./", "../") or tok.endswith("/"):
+```
+
+All three literals end in `/`, so the middle test can never be the reason a
+token is rejected — the `endswith("/")` immediately after it subsumes every
+one of them. Found by mutation, not by reading: deleting the arm from the Go
+port left all 191 fixtures green, which is the only way a subsumed clause
+announces itself.
+
+**PYTHON-side, filed not fixed.** The port keeps three tests because the
+Python has three; a port that "cleans up" a dead branch is a port whose
+diff no longer explains itself. If the Python is ever tidied, the port
+follows — not the other way round.
+
+### Go port: `artifact_check.py` slice 2 — the scavenging detector (~250 lines)
+
+Slice 1 ported lines 1–483 (the fabrication check: write-claim extraction,
+the two regexes, the snapshot/compare walk, `check_execution_claim`). The
+package doc names the cut. What remains is the out-of-fence access
+detector — a separate mechanism with its own regex family:
+
+- `_in_fence`, `fence_allow_roots`, `goal_declared_roots`
+- `detect_out_of_fence_access`
+- `_ABS_PATH_RE`, `_BASH_CD_RE`, `_BASH_REL_WRITE_RE`
+
+The bash-command regexes are the risk: they are the third place in the port
+where a Python pattern has to survive translation to RE2, and the first two
+each produced a finding. Budget a probe-first pass (L49) before any Go.
+
 ### Go port: the `projects/` half of the mkdir-inside-a-name family (FOUND 2026-08-26, go-port chunk A scoping — L48)
 
 Chunk A ported the side effect for the **memory** family only:

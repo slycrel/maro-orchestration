@@ -112,7 +112,7 @@ shape is real and the tripwire is cheap; treat it as a self-review prompt
 rather than as a measured recurrence.
 
 ### L4 — A guard that cannot fire is not evidence the danger is gone
-*instances: 13*
+*instances: 14*
 
 **Canonical instance.** Deleting the `is_error` check from
 `classify_tool_pathologies`' hallucination scan survived a 37-mutant
@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 68*
+*instances: 71*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -856,7 +856,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 11*
+*instances: 13*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -942,6 +942,23 @@ flattening does not just lose the original's shape; it creates PRESSURE to
 diverge elsewhere, and the divergence looks locally justified because the
 justification is real. Look for a named divergence sitting next to a
 flattened control flow: it may be load-bearing only for the flattening.
+
+**Fourth instance — the shape lives in a library call.** (artifactcheck
+slice 1, 2026-08-26.) `os.walk` defaults to `followlinks=False`. That one
+default is a control-flow fact with two halves: a symlinked DIRECTORY is
+yielded in `dirnames` and is never descended into, so it contributes
+nothing at all — not its own name, not one file beneath it — while a
+symlinked FILE lands in `filenames` and is stat'd through the link. The
+port wrote the loop by hand with `os.ReadDir`, whose `DirEntry.IsDir()`
+answers about the LINK, and so descended into link targets and counted
+every file under them.
+
+There was no simplification to see. The Go is a faithful-looking
+transcription of a walk, and its own comment three lines above already
+stated the correct rule. What was flattened was a distinction the
+original never spells out because a default spells it for it: the port
+classified an entry ONCE where CPython classifies by following and then
+descends by not following. Two decisions collapsed into one.
 
 **Tripwire.** Port loops as loops and functions as functions, with the
 original's names, before simplifying anything. If the original defers an
@@ -1147,7 +1164,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 5*
+*instances: 7*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1173,6 +1190,19 @@ the suite set `MARO_WORKSPACE` to a `t.TempDir()` path — absolute,
 symlink-free, already clean. On that side of the input space, the two
 candidate behaviours give the same answer.
 
+**Instance 2** (artifactcheck slice 1, 2026-08-26) — the same shape one
+notch sharper, because the comment does not say "this does not matter",
+it says *"fixture E34 pins this"*. Two of them did. `extRE`'s trailing
+`\n?` (Python's `$` also matches before a final newline) named E34; E34's
+newline never reaches the token, because the tokeniser has already split
+on whitespace by then. `pyBasename` implied a reachable divergence from
+`filepath.Base`; there is none. Both mutants survived the whole suite,
+which is what a named-but-absent pin looks like from the outside.
+
+A comment naming a specific fixture is the most credible form this
+failure takes, and the cheapest to check: the fixture is right there.
+Nobody checked, twice, in a file written that hour.
+
 **The check.** For any comment asserting that a difference does not
 matter, ask: *what input would tell the two behaviours apart, and does
 the corpus contain one?* If the answer to the second half is no, the
@@ -1190,7 +1220,7 @@ value that renders identically as a Python int and a Go float64. A
 
 ### L53 — A correct assertion can still cover the wrong blast radius
 
-*instances: 3*
+*instances: 5*
 
 The ordinary missing-test finding is "nobody wrote one". This is not
 that. The assertion existed, it was correct, it ran on every suite, and
@@ -1239,12 +1269,46 @@ differential without copying the mode assertion that makes it
 observable. A side-effect test where something else performs the side
 effect first is measuring nothing.
 
+**Instance 4** (syshealth r5, 2026-08-26) — the sharpest one, and it is
+about the fix for instance 2's own round. r4 changed `Declaration.Probe`
+to take `prior` by POINTER and pinned it with a two-case table built to
+separate the halves a value receiver splits. The new-key case was real.
+The existing-key case asserted that the entry's `status` was the probe's
+VERDICT — which the cycle sets unconditionally one line later, from its
+own return value. The assertion holds for every implementation, including
+one handed a defensive copy where the prior channel does not exist at
+all; the reviewer built exactly that and watched the case pass.
+
+Instances 1 and 3 were assertions in the wrong PACKAGE. This one is in
+the right package, in the right test, in the case written for the
+purpose, under a comment explaining what it proves. The comment is what
+makes it worse: a reader finds the property named and the case present
+and stops looking. Underneath it, three further reads of the same object
+(`prev_status`, `_history_of(prior)`, `narrated` — all made AFTER the
+probe returns) were unpinned, and hoisting any of them above the probe
+call passed the entire suite.
+
+**Instance 5** (artifactcheck slice 1, 2026-08-26) — the fixture-name
+variant. `W9` is named "an mtime advance of exactly the epsilon is NOT a
+change" and does not land on the epsilon: `2000.0 - (2000.0 - 1e-4)` is
+not `1e-4` in float64, so it tests the under-side of the boundary twice
+and the boundary never. Flipping the comparison from `>` to `>=` survived
+the whole suite. A fixture NAME is a claim like any other.
+
 **Tripwire.** Derive the battery's mutation list from the FILE SET the
 change touched, not from the package the tests live in. That is what
 surfaced instance 1: the mutants were written per changed file, so three
 of them landed in packages the guard did not reach. For a *fixture*
 table, the sibling tripwire is one setup per row — shared setup is how
 one row's effect pays for another row's assertion.
+
+**Second tripwire, from instances 4 and 5.** For any assertion whose
+comment says what it PROVES, ask what else in the code path could make it
+true. If the value being asserted is one the code under test writes
+unconditionally on a later line, the assertion is about that line. The
+mechanical version is cheaper and catches both: write the mutant that
+reverts the property and run it. An assertion that has never failed is
+not yet an assertion — and neither instance was found by reading.
 
 ### P13 — A `try` split across a seam stops being one `try`
 *instances: 1 (`syshealth` r1)*
@@ -1432,7 +1496,7 @@ compile-kill is not a kill*, and *a test named for a differential must run
 the other side*.
 
 ### P14 — A mutant that does not compile is reported as caught and proves nothing
-*instances: 1 — one ledger row, but it covers six mutants across two batteries*
+*instances: 2 — one ledger row, but it covers six mutants across two batteries*
 
 `go test` exits non-zero for a build failure exactly as it does for a failed
 assertion, so a mutation battery that judges on the return code counts every
@@ -1451,6 +1515,20 @@ it compiles, because `Get` on an absent key returns nil and `Truthy(nil)` is
 already false. Three rounds of green had been asserting the opposite about a
 guard that turns out to be intent, not a decision.
 
+**Measured again, `syshealth` r5** — and this time the battery's own
+mutation SPEC was the bug, not a typo in it. Three mutants were meant to
+hoist a read of `prior` above the probe call, to prove the port really
+does read the object AFTER the probe has written to it. Each was written
+as a DELETION of the read at its original site, which leaves the variable
+undefined and kills the build. All three reported DID-NOT-COMPILE.
+
+A hoist is not a deletion. It is two edits — introduce the read early,
+and make the original site consume it — and the battery's record could
+not express that, because a mutation was a single `(old, new)` pair. The
+fix was to the data structure: a mutation is a LIST of edits. Run 2
+caught all three, which is the finding the first run was reaching for and
+could not state.
+
 The shape is identical to a mutation site that matches zero times: the
 battery reports on a mutant it never applied. Both are the harness scoring
 its own failures as findings.
@@ -1461,6 +1539,13 @@ Grep the output for `[build failed]` / `[setup failed]` and report those as
 battery bugs. Then, when repairing one, make the mutant consume what it
 orphans (`_ = ok`, `(recovered && false)`) rather than deleting the term —
 and re-check the verdict, because a compile-killed mutant has no history.
+
+The r5 half of the tripwire is upstream of all that: **let a mutation be
+a list of edits.** A one-pair `(old, new)` record can only express
+substitutions, so every mutant whose property needs two coordinated edits
+— a hoist, a move across a lock, a split of one statement into two —
+arrives at the runner already broken, and is reported as a build failure
+rather than as the battery bug it is.
 
 ### P12 — An expected value spelled with the thing under test is not an assertion
 *instances: 3*

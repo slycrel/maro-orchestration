@@ -11930,3 +11930,202 @@ missed `orch.py` entirely — 610 lines, imported by probes but never
 written out as "orch.py" in a comment. The probe census caught it. Two
 proxies disagreeing is the reason to run both.
 
+
+## The r5 review of `internal/syshealth` — a pin that could not fail
+
+r4 ended not-lows-only and r5 was supposed to close it. It did not: one
+MEDIUM, five LOW, and the MEDIUM is about a fix r4 had just landed.
+
+r4's F7 found that `Declaration.Probe` took `prior` by VALUE, which gets
+half of the Python's behaviour right in a way that is genuinely hard to
+see — `pyval.Obj.Set` on an EXISTING key writes through the shared backing
+array and propagates, while `Set` on a NEW key appends to a local header
+and vanishes. The fix was a pointer. The pin was a two-case table chosen
+to separate exactly those halves, and it was checked against a reverted
+copy before being believed.
+
+The new-key case was fine. The existing-key case asserted this:
+
+```go
+if got != OK {
+    t.Errorf("entry status = %v, want the probe's verdict %q", got, OK)
+}
+```
+
+The probe writes `prior["status"]`, and the cycle then does
+`entry.Set("status", status)` unconditionally, one line later, with its
+own return value. So the assertion is about the cycle's write, not the
+probe's, and it holds for every implementation — including one where the
+probe is handed a defensive copy and the prior channel does not exist at
+all. The reviewer proved it by building that implementation and watching
+the case pass.
+
+That is L53 again, one round after L53 was minted, and it is a sharper
+instance than the ones that minted it. Those were assertions in the wrong
+PACKAGE. This one is in the right package, in the right test, in the case
+written for the purpose, with a comment explaining what it proves — and it
+proves nothing. The comment is what makes it dangerous: someone reading
+the file finds the property named and the case present and stops looking.
+
+Underneath it was a second thing nobody had pinned. Python reads `prior`
+FOUR times after handing it to the probe — `prev_status`, `dict(prior)`,
+`_history_of(prior)`, and `narrated` — and only the `dict(prior)` copy was
+covered. Hoisting any of the other three above the probe call passed the
+entire suite. Each is observable:
+
+```
+prev_status  -> last_transition["from"], when a transition fires
+history      -> the entry's ring buffer
+narrated     -> whether the recovery is narrated AT ALL
+```
+
+The fix is three new cycle fixtures, C51 through C53, and they are full
+differentials rather than Go assertions: the scripted probe gained a
+`write` field on both sides, so a fixture can say "this probe overwrites
+`prior['narrated']`" and the snapshot FILE decides who is right. Each
+drives one read to a value only a post-probe read can produce, and each
+uses an EXISTING key so the read ORDER is isolated from the
+pointer-versus-value question r4 already covers.
+
+Battery, on a copy: all three hoists caught, the defensive copy caught.
+The first run of that battery expressed the hoists as DELETIONS, which do
+not compile — P14, reported by the battery about itself rather than by a
+reader afterwards.
+
+The five LOWs were four stale claims and one incomplete absence. Three of
+the four are counts: "the one lane where Ran is still 0" (there are
+three, and the table twenty lines up says so), "two of the four error
+lanes" (it is four of five now, and both halves drifted in opposite
+directions), and "three of its nine top-level omissions", which
+reconciles under no consistent reading at all — r4 added two bullets to a
+list of five, and the only expansion reaching nine makes it four restored
+rather than three. That last one is in the bullet whose stated subject is
+completeness. The count is now simply gone: a number in a growing list is
+a claim that has to be re-derived on every edit and never is.
+
+The fourth stale claim is the interesting one. "Each [of the seven
+probes] reads a DIFFERENT live store" is false — four go through
+`_recent_outcomes` to `memory/outcomes.jsonl` and two import
+`captains_log.query_log`. The tranche conclusion it supports survives, but
+the sentence is what a later tranche would have planned its fixtures from,
+and it would have planned seven fixture sets where four can share one.
+
+And `nextCycle`'s lane table was missing a lane. CPython's `int()` accepts
+any Unicode decimal digit, so a snapshot whose counter is the string
+`"٤١"` reads as 41 and the cycle proceeds; `pyval.Int` is ASCII-only and
+refuses, aborting the cycle and writing nothing. The residual is named
+where it lives, in `pyval/pyint.go` — and was absent from the table here,
+which is the failure mode a table has: a reader takes it for the list. The
+int64 gap next to it had a row, three paragraphs, and a `knowngap_test.go`
+pin. This one now has all three, including an ASCII control, because the
+assertion "a non-ASCII counter is refused" also holds for a port that
+refuses every string counter, and without the control the pin would not
+know the difference.
+
+## `artifact_check.py` slice 1 — two regexes that do not survive transcription
+
+The zero-LLM fabrication check: a build step reports `status="done"` and
+narrates "wrote fizzbuzz.py", and this decides whether the filesystem
+agrees. Slice 1 is Python lines 1-483 — claim extraction, the workspace
+diff, layer 1, and the execution-transcript contradiction. The scavenging
+detector below it is another ~250 lines and its own tranche.
+
+191 fixtures, no expected values written down anywhere: every row is an
+INPUT, CPython is asked at test time, and the two answers are compared.
+The fixture table itself predates the Go — it came from a capture written
+and run before any of this package existed — which is the only thing that
+keeps a differential from being a transcription of what the port already
+does.
+
+**The first regex has no zero-width assertions to spend.** `\b` is
+Unicode-aware in Python and ASCII in Go, and RE2 has no lookaround at all,
+so `pytext`'s stand-ins CONSUME the boundary character — safe only at the
+ends of a pattern. `_OUTPUT_CLAIM_RE` has two INTERIOR boundaries:
+
+```
+Python   VERB \b [^.\n]*? \b (?:to|into|at|as)
+RE2      VERB (?: NW | NW [^.\n]*? NW ) (?:to|into|at|as)
+```
+
+The window's first character carries the boundary after the verb and its
+last carries the one before the preposition — the same character when the
+window is one wide, hence two branches rather than a `{1,}` that would
+demand a minimum of two. Dropping the one-character branch is caught by
+the battery.
+
+The zero-width window is dropped entirely, and dropping a case is how a
+translation quietly narrows, so the argument is written down: with an
+empty window the two `\b`s are the same position, every verb alternative
+ends in a word character, and `t`/`i`/`a` are word characters — so Python
+cannot match there either. E19 is the fixture that would fail if that were
+wrong.
+
+**The second regex has a negative lookahead**, which RE2 cannot spell at
+all:
+
+```python
+output(?:s|ted|ting)?\b(?!\s+(?:file|to|into|path|dir))
+```
+
+It is decomposed into per-branch matching with the lookahead applied to
+the tail as an ordinary string check. That is sound ONLY because the
+caller needs a boolean: Python's engine backtracks past a failed lookahead
+and keeps looking, so "search succeeded" means "some branch matched
+somewhere with its own conditions met", which is what an OR over branches
+computes. It would not be sound for a caller wanting offsets, and there is
+no such caller — if one appears, the decomposition has to be revisited
+rather than reused.
+
+The exclusion list carries NO word boundary, which makes it a PREFIX test:
+"output tomorrow", "output files", "output directory" and "output
+pathology" are all suppressed. Nine fixtures cover that, and
+word-bounding the list — the obvious tidy-up — is caught.
+
+**What the differential found on its first run** was a symlink. `os.walk`
+defaults to `followlinks=False`, so a symlinked DIRECTORY lands in
+`dirnames` and is then never descended into: it contributes nothing at
+all. This port classified it correctly and then walked it anyway, adding
+every file under the link target. The comment three lines above said
+"neither descended into nor recorded". A comment can be right about the
+intent and wrong about the code beneath it, and only the fixture knows.
+
+**What the battery found afterwards** was two comments claiming pins that
+do not exist. `extRE` carries `\n?` because Python's `$` also matches
+before a trailing newline, and the comment said "E34 pins it" — E34's
+newline never reaches the token, and removing the `\n?` survives. Same
+shape for `pyBasename` versus `filepath.Base`: they differ in general and
+on nothing this package can reach. Both are now recorded as
+equivalent-under-reachable-input with the battery result as the evidence,
+which is a different and weaker claim than "pinned", and the weaker claim
+is the true one.
+
+It also found a fixture that does not test what it is named. W9 is "an
+mtime advance of exactly the epsilon is NOT a change", and
+`2000.0 - (2000.0 - 1e-4)` is not `1e-4` in float64 — catastrophic
+cancellation at that magnitude lands just below the boundary, so W9 tests
+the under-side twice and the boundary never. Flipping `>` to `>=`
+survived. W9b sits at a magnitude where the subtraction is exact.
+
+And one finding is about the Python rather than the port. The claim guard
+reads:
+
+```python
+if not tok or tok in ("/", "./", "../") or tok.endswith("/"):
+```
+
+Every one of those three literals ends in `/`, so the middle test cannot
+fire. Deleting it from the port leaves all 191 fixtures green, which is
+what sent someone to look. It is filed as a Python-side observation and
+kept in the port, because the two files disagreeing about something
+neither can observe is worse than a dead clause faithfully carried.
+
+Two things are left deliberately unpinned, both inside a region already
+declared uncomparable. At the 20000-file cap CPython's answer is not a
+function of its input — `os.scandir` returns hash order — so no
+differential can pin anything there, and that includes whether an
+unstattable file spends one of the 20000. And the fresh-candidate ORDER
+comes from iterating a Python set, so CPython has no stable answer either;
+the port sorts, that is a decision rather than a port, and what the suite
+asserts is only that the decision HOLDS — sixty-four calls, stable and
+sorted — because a Go map range would answer differently every run and
+every fixture above has at most one fresh candidate.
