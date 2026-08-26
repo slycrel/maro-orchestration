@@ -50,23 +50,37 @@ func runInspect(args []string) error {
 		return fmt.Errorf("-limit %d out of range [1,%d]", *limit, inspector.DeepPassLimit)
 	}
 
-	// Live-store discipline: the resolved workspace is printed before
-	// any write.
 	ws := config.Workspace()
-	fmt.Printf("workspace: %s\n", ws)
-	cfg, warnings := config.Load()
-	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "config warning:", w)
-	}
 
+	// `-summary` is the text lane of Python's `cli.py inspector-status`,
+	// which prints the summary and NOTHING else. This short-circuit used
+	// to sit below the workspace line and the config load, so the Go put
+	// an extra first line on stdout — and config warnings on stderr —
+	// that the Python never emits. The both-engines comparison caught it
+	// on its seventh row, and the comment below claims the discipline is
+	// "before any write": `-summary` performs none, so the print did not
+	// belong above it. Placement, not wording, is what makes that comment
+	// true.
 	if *summary {
 		s := inspector.FrictionSummary(ws)
 		if s == "" {
-			fmt.Println("no inspection recorded yet")
+			// Byte-for-byte cli.py's `_cmd_inspector_status` else-branch.
+			// The Go said "no inspection recorded yet", which is the same
+			// STATE spelled differently — the content-key prose family
+			// this port keeps rediscovering.
+			fmt.Println("No inspection report available. Run maro-inspector first.")
 			return nil
 		}
 		fmt.Println(s)
 		return nil
+	}
+
+	// Live-store discipline: the resolved workspace is printed before
+	// any write.
+	fmt.Printf("workspace: %s\n", ws)
+	cfg, warnings := config.Load()
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "config warning:", w)
 	}
 
 	var adapter llm.Adapter

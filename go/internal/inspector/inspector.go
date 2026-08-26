@@ -41,7 +41,9 @@ package inspector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1017,12 +1019,40 @@ func GetLatestInspection(workspaceDir string) *InspectionReport {
 			continue
 		}
 		var r InspectionReport
-		if json.Unmarshal([]byte(line), &r) == nil {
+		// UseNumber, not a plain Unmarshal. `top_friction_signals` is a
+		// []map[string]any, so a plain decode types every number in it as
+		// float64 — and FrictionSummary interpolates `count` into a line a
+		// human reads. Python's json.loads types `1000000` as an INT, so it
+		// renders "1000000"; a float64 through Go's default verb renders
+		// "1e+06". Measured, same row, both engines:
+		//
+		//	count      Python     Go (default verb on float64)
+		//	2          2          2            agree
+		//	1000000    1000000    1e+06        DIVERGE
+		//
+		// json.Number keeps the source literal, which is what pyval.Str
+		// needs to make the int/float call the way json.loads made it.
+		dec := json.NewDecoder(strings.NewReader(line))
+		dec.UseNumber()
+		if dec.Decode(&r) == nil && decoderAtEOF(dec) {
 			return &r
 		}
 		return nil // newest row is torn — same as Python's parse-fail → None
 	}
 	return nil
+}
+
+// decoderAtEOF is the strictness a plain json.Unmarshal gives for free and
+// a json.Decoder does not: Unmarshal rejects trailing content after the
+// value, Decode stops at the value and leaves the rest in the buffer. So
+// `{"run_id": "x"} junk` decodes CLEANLY through a Decoder while
+// json.Unmarshal — and CPython's json.loads, which raises "Extra data" —
+// both refuse it. Switching to a Decoder for UseNumber therefore had to
+// carry this check with it, or the reason the newest row is treated as
+// torn would have quietly widened.
+func decoderAtEOF(dec *json.Decoder) bool {
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
 }
 
 // FrictionSummary renders a brief human-readable summary of the latest
@@ -1043,8 +1073,15 @@ func FrictionSummary(workspaceDir string) string {
 		report.AlignmentScoreAvg)}
 	if len(report.TopFrictionSignals) > 0 {
 		top := report.TopFrictionSignals[0]
-		lines = append(lines, fmt.Sprintf("Top friction: %v (count=%v severity=%v)",
-			top["signal_type"], top["count"], top["severity"]))
+		// pyval.Str, not %v. An f-string's `{x}` is format(x, ""), which for
+		// every type these three fields can hold is str(x) — so a decoded
+		// int renders as digits, a decoded float carries Python's float
+		// repr, and a MISSING key renders "None" rather than Go's "<nil>".
+		// (Python's `top['count']` would raise KeyError on a missing key
+		// instead; see the knowngap pin. "None" is the closer of the two
+		// wrong answers and the one the rest of the port already spells.)
+		lines = append(lines, fmt.Sprintf("Top friction: %s (count=%s severity=%s)",
+			pyval.Str(top["signal_type"]), pyval.Str(top["count"]), pyval.Str(top["severity"])))
 	}
 	if len(report.ThresholdBreaches) > 0 {
 		lines = append(lines, "Threshold breaches: "+strings.Join(report.ThresholdBreaches, ", "))
