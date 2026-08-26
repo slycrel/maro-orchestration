@@ -1,0 +1,112 @@
+package pyval
+
+import "strings"
+
+// groupDigits inserts Python's thousands separators into a run of DECIMAL
+// DIGITS, which is the half of `{:,}` that has nothing to do with the type
+// being formatted.
+//
+// It takes a string rather than a number on purpose. Grouped's int64 is
+// wide enough for every integer a Python int can reach in practice, but
+// `{:,.0f}` of 1e308 renders a 309-digit expansion and groups every one of
+// them — no fixed-width integer can carry that, and truncating it would be
+// a silent wrong answer in an operator-facing line.
+//
+// Python groups from the RIGHT, so the leading group is 1-3 digits.
+func groupDigits(s string) string {
+	if len(s) <= 3 {
+		return s
+	}
+	out := make([]byte, 0, len(s)+len(s)/3)
+	lead := len(s) % 3
+	if lead == 0 {
+		lead = 3
+	}
+	out = append(out, s[:lead]...)
+	for i := lead; i < len(s); i += 3 {
+		out = append(out, ',')
+		out = append(out, s[i:i+3]...)
+	}
+	return string(out)
+}
+
+// splitSigned peels a leading "-" off, because Python never groups the sign
+// with the digits: -1234 is "-1,234", never "-,1234".
+func splitSigned(s string) (sign, rest string) {
+	if strings.HasPrefix(s, "-") {
+		return "-", s[1:]
+	}
+	return "", s
+}
+
+// GroupedF is Python's `{:,.<prec>f}` for a float.
+//
+// Three behaviours that a `fmt.Sprintf("%,.0f")` cannot express (Go has no
+// grouping verb at all) and that a hand-rolled version gets wrong:
+//
+//  1. Only the INTEGER part is grouped. `{:,.3f}` of 1234567.891 is
+//     "1,234,567.891" — the fraction keeps its digits ungrouped.
+//  2. Rounding is round-half-to-EVEN on the exact double, not
+//     half-away-from-zero: 0.5 renders "0", 1.5 renders "2", 2.5 renders
+//     "2" and 1234.5 renders "1,234". Go's strconv agrees, which is why
+//     the rounding is delegated rather than spelled.
+//  3. NEGATIVE ZERO SURVIVES. `{:,.0f}` of -0.5 is "-0", not "0" — the
+//     rounding produces -0.0 and the sign is printed. A port that
+//     normalised it would differ on every rate that rounds down from
+//     below zero.
+//
+// Non-finites go through PercentF, so they render Python's lowercase
+// "inf" / "-inf" / "nan" rather than Go's "+Inf" / "-Inf" / "NaN".
+func GroupedF(f float64, prec int) string {
+	s := PercentF(f, prec)
+	// PercentF has already spelled the non-finites Python's way, and there
+	// are no digits in them to group.
+	if s == "inf" || s == "-inf" || s == "nan" {
+		return s
+	}
+	sign, rest := splitSigned(s)
+	intPart, frac := rest, ""
+	if i := strings.IndexByte(rest, '.'); i >= 0 {
+		intPart, frac = rest[:i], rest[i:]
+	}
+	return sign + groupDigits(intPart) + frac
+}
+
+// PercentFmt is Python's `{:.<prec>%}` for a float: multiply by 100, format
+// at `prec` decimals, append a literal percent sign.
+//
+// The multiplication happens on the DOUBLE and before the rounding, which
+// is the whole reason this cannot be `PercentF(f, prec) `-with-a-sign-glued
+// -on: `{:.0%}` of 0.125 is "12%" and of 0.375 is "38%", because 12.5 and
+// 37.5 are exact halves and round to even in opposite directions. Doing the
+// rounding first would answer "13%" and "38%".
+//
+// The percent sign is appended to NON-FINITES too — Python renders
+// `{:.0%}` of infinity as "inf%", not "inf" — which looks like a bug and is
+// the measured behaviour. A rate computed as a quotient reaches it whenever
+// its denominator is zero, and the lens surfaces that string to an
+// operator, so the port renders what CPython renders.
+func PercentFmt(f float64, prec int) string {
+	return PercentF(f*100, prec) + "%"
+}
+
+// FloorDiv is Python's `//` for two ints.
+//
+// Go's `/` TRUNCATES toward zero and Python's floors toward negative
+// infinity, so the two agree on every non-negative pair and part company on
+// the first negative one: `-1 // 1000` is -1 in Python and 0 in Go, and
+// `-1500 // 1000` is -2 against -1. Every call site in the lenses divides a
+// millisecond count that a foreign writer could have stamped negative, so
+// this is reachable from the store rather than only in theory.
+//
+// A zero divisor PANICS, deliberately. Python raises ZeroDivisionError, and
+// a helper that answered 0 instead would turn an impossible input into a
+// plausible number — the failing-open shape the port has already been bitten
+// by. No call site can reach it: every divisor is a positive constant.
+func FloorDiv(a, b int) int {
+	q := a / b
+	if (a%b != 0) && ((a < 0) != (b < 0)) {
+		q--
+	}
+	return q
+}

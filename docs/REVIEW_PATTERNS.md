@@ -31,10 +31,10 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**596**. The counts below were regenerated from `report --by lens`, not
+**606**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 596
+**Two things the counts are not.** They are lower bounds: 309 of the 606
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -52,7 +52,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 50 — the most frequent single defect in the Go port*
+*instances: 51 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -263,7 +263,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 13*
+*instances: 14*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -329,7 +329,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 21*
+*instances: 22*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -344,7 +344,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 32*
+*instances: 36*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -361,7 +361,7 @@ pin comparing re-decoded numbers saw `1.0` come back as `1`. The fix was to
 emit the compared fields as a Python-side JSON *string*.
 
 ### L31 — Sometimes the answer to a survivor is DELETING production code
-*instances: 2*
+*instances: 3*
 
 A distinction nothing reads is a second guard making the first unobservable.
 
@@ -477,7 +477,7 @@ the thing it skipped is either counted or lost.
 
 ### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
 
-*instances: 4*
+*instances: 5*
 
 Distinct from L1, and the distinction is what makes it findable. L1 is a
 test whose *assertion* cannot fail. Here the assertion is fine and the
@@ -527,6 +527,45 @@ find the neighbour's small-input fallback before believing a MISS. The
 threshold is a number in someone else's source; measure it rather than
 reasoning about it.
 
+### L43 — A guard's threshold is not where its rule starts working
+
+*instances: 2*
+
+A rule sits behind a gate — `if len(xs) >= 3`, `if n > 0` — and the gate
+reads as the answer to "what is the smallest input that exercises this?".
+It usually is not. The arithmetic *inside* the rule can be unsatisfiable
+across part of the region the gate admits, and a fixture placed at the
+threshold then enters the branch, computes, finds nothing, and passes.
+Coverage tools count the branch as covered. Every mutation of the rule
+survives, and the fixtures that are supposed to cover it are the reason
+nobody looks.
+
+This is not L41. An over-determined fixture reaches its rule and is carried
+by a confound; here the fixture never reaches the rule at all, and no
+amount of splitting variables fixes it — the input is the wrong *size*. It
+is not L42 either: nothing about a library's internals is involved, the
+vacuity is in the reviewed code's own algebra.
+
+**Canonical instance.** The architecture lens's token-outlier rule: gate
+`len(tokens) >= 3`, bar `t > 3*(sum // len)`. With exactly three
+token-bearing steps no step can ever clear the bar, because
+`3*floor(S/3) > S-3` and `S >= t` together give a bar of at least `t`.
+Four steps is the first width that can fire, and only when the other three
+are small. Three fixtures sat here named "an outlier over both bars", "an
+outlier over the ratio but under 50000" and "a step over 50000 but under
+the ratio" — all three-step, and **none of them ever entered the finding**.
+Six separate mutations of the rule survived behind them. The same algebra
+retired a seventh mutant that relaxed the gate to 2: with two values the
+bar is at least `1.5x` the larger, so the relaxed gate admits a branch
+that can only find nothing.
+
+**Tripwire.** For any gated rule, solve for the smallest input that
+*satisfies the rule*, not the smallest that passes the gate — and assert
+the rule actually fired. A fixture named for a finding should fail if the
+finding is absent; three that quietly produced empty output is what this
+cost. When gate-width and rule-width disagree, that gap belongs in a
+comment, because it is a property of the source, not of the test.
+
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*
 
@@ -559,6 +598,40 @@ which no test-side bug can produce.
 before touching the package — and pipe its output to a file rather than
 through `tail`, which buffers everything until the run ends and makes
 "still running" indistinguishable from "produced nothing".
+
+### P7 — A battery that never proves its baseline reads a broken tree as a perfect score
+
+*instances: 1*
+
+A mutation battery reports DETECTED when the test suite fails with the
+mutant applied. It does not ask *why* it failed. If the tree was ALREADY
+failing before the mutant went on, every single mutant reports DETECTED and
+the run prints a flawless 100% kill rate while measuring nothing at all.
+The output of a perfect battery and the output of a broken one are
+byte-identical.
+
+**Canonical instance.** 2026-08-26, `internal/introspect/lens.go`. Two runs
+of the lens battery were stopped with `kill`, and **Python's default SIGTERM
+handler terminates the process outright — a `try/finally: restore()` does
+not run**. Each kill left the in-flight mutant on disk; the next run's
+`snapshot()` then copied that mutated file as its "clean" backup, and every
+`restore()` afterwards wrote the mutation back. The battery reported 85 of
+85 DETECTED. Adding a baseline gate turned the same battery into 68
+DETECTED and 22 MISS — twenty-two real fixture gaps that the flawless run
+had hidden.
+
+**Two tripwires, and both are needed.**
+
+1. Run the suite CLEAN before the first mutant and refuse to continue if it
+   fails. One extra run per battery buys the only evidence that a kill means
+   anything.
+2. Install a SIGTERM/SIGINT handler that raises, so the restore actually
+   happens. `finally` is not a promise the signal respects.
+
+A third habit falls out of the same incident: **a suspiciously perfect
+battery result deserves the same scepticism as a suspiciously perfect test
+suite.** This is L1 wearing a different hat — the battery is a test of the
+tests, and it agreed because nothing could disagree.
 
 ### P5 — Rounds converge to lows by round 3–4
 *standing*

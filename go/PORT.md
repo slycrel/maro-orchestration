@@ -8277,3 +8277,192 @@ fragments across a line break the source puts in a different place, and one
 left `pyval` imported and unused, which reports BUILDFAIL rather than a
 verdict. The pattern is now familiar enough to state plainly: **a battery
 run's first output is a report on the battery.**
+
+
+## The lens registry: five heuristics whose ORDER an operator reads
+
+`internal/introspect/lens.go` ports `LensResult`, `LensRegistry`, the five
+free heuristic lenses (`_execution_lens`, `_cost_lens`,
+`_architecture_lens`, `_operator_lens`, `_forensics_lens`),
+`get_lens_registry` and `run_lenses`.
+
+**The registry is two DICTS, and a dict preserves insertion order.**
+`run_heuristic` iterates `self._lenses.items()`, so registration order is
+the order lenses run, the order their findings concatenate, and — through
+`aggregate_lenses`' `max()` over the category dict — the tie-break that
+decides which single action an operator is shown. A Go map randomises all
+three on every process, so the port carries an explicit `order` slice.
+Re-registering an existing name replaces the function and KEEPS its
+original position, because that is what assigning to an existing dict key
+does; a port that appended again would move the lens to the back of the run
+order. `List()` sorts, and is a different order from the run order for the
+built-in set — alphabetical puts architecture first, registration puts
+execution first. Both are pinned.
+
+**`{:.0%}` multiplies before it rounds.** The execution lens renders a
+block rate as `f"{ratio:.0%}"`. A rate of 0.125 renders "12%" and 0.375
+renders "38%" — 12.5 and 37.5 are exact halves and round half-to-even in
+opposite directions. Rounding first and multiplying second answers "13%"
+and "38%", and nothing else in the lens separates the two orders. The port
+grew `pyval.PercentFmt` for it.
+
+**`{:,.0f}` is a grouped float, and negative zero survives.** The cost
+lens renders an average through it. Three things a hand-rolled version
+gets wrong: only the INTEGER part is grouped (`{:,.3f}` of 1234567.891 is
+"1,234,567.891"), the rounding is half-to-even on the exact double, and
+`{:,.0f}` of -0.5 is **"-0"**, not "0". `pyval.GroupedF` shares its
+separator rule with the existing `Grouped` rather than spelling it twice —
+and takes a digit STRING rather than an integer, because `{:,.0f}` of
+1e308 groups all 309 digits and no fixed-width integer carries that.
+
+**`//` is not `/`.** The operator lens divides millisecond counts by 1000
+in four places. Go truncates toward zero and Python floors toward negative
+infinity, so `-1 // 1000` is -1 there and 0 here. `elapsed_ms` comes
+straight out of `e.get("elapsed_ms", 0)`, so a negative stamp is a store
+value rather than a hypothetical. `pyval.FloorDiv` PANICS on a zero
+divisor rather than answering 0 — Python raises ZeroDivisionError, and a
+helper that invented a plausible number would be the fail-open shape L38
+names.
+
+**A dead guard that is not dead.** The cost lens returns early when
+`total == 0`, and then computes `(top.cost_usd / total * 100) if total > 0
+else 0`. The second test looks unreachable after the first and is not: a
+store carrying a negative cost sums to less than zero, passes the equality
+check, and lands there. Ported as written.
+
+**Three word sets that must NOT be unified.** The cost lens's
+`cheap_keywords`, the architecture lens's `_filler` and the forensics
+lens's stopword list are all different from each other and from
+`noteStopwords` — the forensics one alone contains "step". Each is tuned to
+the sentence its own lens reads. Merging them would change three
+heuristics at once to make one of them tidier, which is the opposite of
+the L14 helper rule and worth saying out loud next to code that looks
+duplicated.
+
+**A printed denominator that disagrees with the computed one.** The
+execution lens computes its ratio over `steps_done + steps_blocked` and
+prints `steps_total`. When a step is neither, the line reads "Block rate:
+50% (2/10)". Faithful to Python, and named in the file because it reads
+exactly like a typo.
+
+**What is NOT here.** Python's registry also holds `_quality_lens` (cost
+"cheap") and `_adversarial_lens` (cost "mid"). Both call `build_adapter`
+and spend tokens, and the adapter suite is not ported. They are EXCLUDED
+rather than stubbed: a registered lens that always returns nothing is
+indistinguishable from a working one that found nothing. `RunHeuristic`'s
+answer is unaffected — it skips non-free lenses anyway — and there is no
+`RunAll`. `aggregate_lenses` is the next slice, not this one.
+
+Python also memoises the registry in a module global and hands every
+caller the same mutable object, so a test that registers a lens changes
+every later caller's run order for the life of the process.
+`DefaultLensRegistry` returns a fresh one: nothing in the module mutates
+the shared instance, and a process-wide singleton whose contents tests can
+edit is a cross-test channel rather than a feature.
+
+### The battery, and a rule that was vacuous at its own threshold
+
+Ninety mutants across the registry and the five lenses. The differential
+was green against CPython on its first run — sixty-odd subtests — and the
+battery still found twenty-two survivors, which is the usual ratio for
+this arc and the reason the batteries keep being worth their wall-clock.
+
+Five were retired as unkillable, each with a proof rather than a shrug:
+
+- **The registry's cost default.** Python writes
+  `self._costs.get(name, "free")`, and no input reaches the default:
+  `register` is the only writer of either map and always writes both, so
+  a name found in `_lenses` is present in `_costs`. The port had carried
+  the fallback faithfully. It now **deletes** it — the third time this arc
+  that the answer to a survivor was removing production code rather than
+  adding a test.
+- **Floor division in the operator lens.** All three `FloorDiv` sites sit
+  behind guards that force both operands non-negative (the waste line
+  needs `blockedMS > 0.3*totalMS > 0`; the slow line needs
+  `ElapsedMS > 120000`; the progress line needs `totalMS > 60000`), and
+  floor equals truncation there. The spelling stays, because the guards
+  are what a later edit relaxes; the comment now says so instead of
+  implying a test could tell.
+- **The forensics stopword ordering.** Subtraction distributes over
+  intersection, so `(A ∩ B ∩ C) \ S` and `(A \ S) ∩ B ∩ C` hold the same
+  words for every input. The comment at that site had claimed the order
+  was observable. It was my own prose, and it was wrong.
+- **The done/blocked `else`.** `Status` is one string and blocked means
+  `stuck` or `blocked`, disjoint from `done`, so nothing satisfies both
+  arms.
+- **A two-step outlier gate**, for the reason below.
+
+The interesting one is what the remaining seventeen fixtures exposed.
+
+**The token-outlier rule is vacuous at its own threshold.** The gate is
+`len(tokens) >= 3`; the bar is `t > 3 * (sum // len)`. With exactly three
+token-bearing steps *no step can ever clear the bar*: `3*floor(S/3) > S-3`
+and `S >= t` together put the bar at `t` or above. Four steps is the first
+width that can fire, and only when the other three are small. The same
+algebra kills the relaxed gate — with two values the bar is at least 1.5×
+the larger.
+
+Three fixtures sat on that rule, named `an outlier over both bars`, `an
+outlier over the ratio but under 50000`, and `a step over 50000 but under
+the ratio`. All three had three steps. **None of them ever entered the
+finding.** They ran, computed an average, found nothing, and passed —
+against a CPython side doing exactly the same nothing, so the differential
+agreed perfectly. Six separate mutations of the rule survived behind them,
+and the fixtures' names are why nobody looked.
+
+That is not the over-determined-fixture shape already in the catalog: no
+confound is involved and splitting variables does not help, because the
+input is the wrong *size*. It is now **L43 — a guard's threshold is not
+where its rule starts working**. The tripwire is to solve for the smallest
+input that satisfies the *rule*, not the smallest that passes the *gate*,
+and to make a fixture named for a finding fail when the finding is absent.
+
+The rest were ordinary gaps of the kind the catalog already predicts: a
+cost tie that could not render (two tied positive steps can never exceed
+half a total containing them both — only a negative-cost third step gets
+`topPct` over the bar), a block rate where every fixture rounded the same
+before and after multiplying by 100 (`39/40` is the smallest ratio that
+separates them), and the usual missing multibyte and `\x1c` cases for
+rune-clipping and `str.split()`.
+
+Negative costs deserve their own line, because two separate survivors
+needed them and the port had reasoned about them only in a comment. A
+store carrying a negative `tokens_in` sums below zero, which passes
+`total == 0` and lands on the `total > 0` guard that reads as dead above
+it. With one such step that guard is the entire answer: it holds `topPct`
+at zero where dropping it divides a negative by itself and reports "100%
+of loop cost". The comment claiming the guard was live is now a fixture
+proving it.
+
+Final: **85 live mutants, 85 detected**, five retired with written proofs.
+Seventeen fixtures added, one production branch deleted, and three of the
+port's own comments corrected — two that claimed an observability the
+algebra denies, one that was silent about a rule it should have named.
+That ratio is worth stating plainly: across the six batteries this arc,
+nearly every survivor that was not a battery fault was a fixture that
+could not tell two answers apart. The batteries are finding more in the
+tests than in the code under test, which is what a differential suite that
+was green on its first run should make you expect.
+
+### The constant that was not the number
+
+The first differential for `GroupedF` failed on one row, and the helper
+was right: the FIXTURE was a different double.
+
+Go evaluates untyped constant arithmetic EXACTLY and rounds once at the
+conversion, so `0.1 + 0.2` written in a Go source file is the nearest
+double to 3/10 — 0.29999999999999998890. Python rounds 0.1 and 0.2 to
+doubles first and then adds, giving 0.30000000000000004441. Every fixture
+in the port that spells an inexact value as an arithmetic expression is
+measuring a value CPython never had. It only surfaces at a precision wide
+enough to print the difference, which is why a table that stopped at three
+decimals would have agreed forever.
+
+Division is unaffected — 2.0 and 3.0 are exactly representable, so the
+constant quotient and the runtime quotient round identically. Only
+operands that are themselves inexact diverge.
+
+`internal/record/r4fixes_test.go` already records this hazard. It was
+learned once, written down at the site that found it, and did not reach
+the next author — which is the whole argument for the lens catalog being a
+catalog rather than a comment.
