@@ -241,6 +241,48 @@ the same species and should be decided in the same pass.
 prefix behaviour, and a mutation that adds `pytext.WordEnd` to the Go arm
 is caught by the fixture table, which is how it was found.
 
+### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
+
+`datetime.fromisoformat` has a C accelerator in `_datetimemodule.c` and a
+pure-Python parser in `_pydatetime.py`, and they are not the same parser.
+Measured on CPython 3.14.3, three inputs where they part:
+
+```
+"2026-08-22T12:34:56.Z"          _pydatetime: ValueError   C: 12:34:56+00:00
+"2026-08-22T12:34:56.123456_Z"   _pydatetime: ValueError   C: ...123456+00:00
+"2026-08-22T12:34:56_Z"          _pydatetime: ValueError   C: 12:34:56+00:00
+```
+
+All three are the fraction/stray-character corner. The C one is what runs on
+every build this project will ever see, so the port matches the C and the
+differential drives the C — but the readable source being wrong is worth
+having written down, because reading `_pydatetime.py` is the obvious way to
+port this function and it produces a parser that is wrong in a direction no
+review would question.
+
+**Nothing to fix here.** Filed as a standing note for the next person who
+ports a datetime builtin: `python3 -c "import _datetime"` succeeding means
+the readable source is not the specification (L47).
+
+### Go port: the naive-datetime residuals `parseISO` reproduces narrowly (FOUND 2026-08-26, artifactcheck r1)
+
+Two named limits in `isoTimestamp`, both measured, both currently
+unreachable from this project's own producers:
+
+- A NAIVE `0001-01-01` has no `.timestamp()` at all — CPython's `_mktime`
+  probes the local UTC offset by constructing neighbouring datetimes, and
+  one of them lands in year 0. `0001-01-02` onward is fine, and the AWARE
+  form of the same instant is fine. The port reproduces the single failing
+  date rather than modelling `_mktime`'s probe.
+- Nothing in the port consults `fold`, so a naive stamp inside a DST repeat
+  hour takes CPython's first answer by construction rather than by choice.
+
+Every producer feeding this is aware — `datetime.now(timezone.utc)` at
+checkpoint.py:346, background.py:169, interrupt.py:821, mission.py:1274,
+proc_lock.py:92 — so the naive branch exists for hand-written stamps and old
+data only. If a naive producer ever appears, both of these stop being
+residuals and the `_mktime` probe has to be ported properly.
+
 ### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
 
 A per-package census of the Go tree — Go lines vs test lines, counted in

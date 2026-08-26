@@ -1,6 +1,9 @@
 package pytext
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Character classes for porting Python REGEXES.
 //
@@ -72,7 +75,115 @@ const DigitClass = `[\p{Nd}` + digitSupplementBody + `]`
 // The body is exported too: a pattern that needs \w INSIDE a larger
 // class (Python `[\w-]`) cannot use WordClass, which is already
 // bracketed.
-const WordClassBody = `\p{L}\p{N}_`
+//
+// UPDATE (artifactcheck r1, 2026-08-26). The paragraph above used to end
+// "the honest fix is a Go toolchain with newer tables, not a hand-copied
+// list that rots", and the sentence before it claimed the 5004 were "all
+// letters in recently-added scripts". Both were wrong, and the second one
+// was checkable from inside this file: 80 of the 5004 are Unicode 16.0
+// DECIMAL DIGITS, and digitSupplementBody five lines up already
+// hand-copies exactly those — so DigitClass matched U+10D40 while
+// WordClass did not, which is a state CPython has no spelling for.
+//
+// The argument against a hand-copied list had also already been overruled
+// twice, with measurements, by internal/metrics and internal/skills, each
+// of which carried its own byte-identical copy of the full 27-range
+// supplement. Three copies of one table is not restraint. The table lives
+// here now, once, and the two predicates that were duplicating it call
+// IsWordChar instead.
+const WordClassBody = `\p{L}\p{N}_` + wordSupplementBody
+
+// wordSupplementBody is the Unicode 16 minus Unicode 15 delta for `\w`,
+// as a character-class interior. It is the same 27 ranges as
+// wordSupplement below, in the other notation, and
+// TestTheTwoSpellingsOfTheWordSupplementAgree pins them to each other —
+// two spellings of one fact is exactly how the first version of this drifted.
+//
+// REGENERATE (do not hand-edit) when Go's unicode tables move. The skew
+// sweep re-derives the whole set from CPython, so a stale table fails
+// loudly rather than quietly narrowing.
+const wordSupplementBody = `\x{01C89}-\x{01C8A}\x{0A7CB}-\x{0A7CD}\x{0A7DA}-\x{0A7DC}` +
+	`\x{105C0}-\x{105F3}\x{10D40}-\x{10D65}\x{10D6F}-\x{10D85}` +
+	`\x{10EC2}-\x{10EC4}\x{11380}-\x{11389}\x{1138B}` +
+	`\x{1138E}\x{11390}-\x{113B5}\x{113B7}` +
+	`\x{113D1}\x{113D3}\x{116D0}-\x{116E3}` +
+	`\x{11BC0}-\x{11BE0}\x{11BF0}-\x{11BF9}\x{13460}-\x{143FA}` +
+	`\x{16100}-\x{1611D}\x{16130}-\x{16139}\x{16D40}-\x{16D6C}` +
+	`\x{16D70}-\x{16D79}\x{18CFF}\x{1CCF0}-\x{1CCF9}` +
+	`\x{1E5D0}-\x{1E5ED}\x{1E5F0}-\x{1E5FA}\x{2EBF0}-\x{2EE5D}`
+
+// wordSupplement is wordSupplementBody as ranges, for the PREDICATE half.
+// A compiled class cannot answer "is this rune a word character" without
+// a regexp match per rune, and boundaryAt asks that question in a loop.
+var wordSupplement = [...][2]rune{
+	{0x01C89, 0x01C8A}, // Cyrillic Tje
+	{0x0A7CB, 0x0A7CD}, // Latin extensions
+	{0x0A7DA, 0x0A7DC}, // Latin extensions
+	{0x105C0, 0x105F3}, // Todhri
+	{0x10D40, 0x10D65}, // Garay
+	{0x10D6F, 0x10D85}, // Garay
+	{0x10EC2, 0x10EC4}, // Arabic Extended-C
+	{0x11380, 0x11389}, // Tulu-Tigalari
+	{0x1138B, 0x1138B}, // Tulu-Tigalari
+	{0x1138E, 0x1138E}, // Tulu-Tigalari
+	{0x11390, 0x113B5}, // Tulu-Tigalari
+	{0x113B7, 0x113B7}, // Tulu-Tigalari
+	{0x113D1, 0x113D1}, // Tulu-Tigalari
+	{0x113D3, 0x113D3}, // Tulu-Tigalari
+	{0x116D0, 0x116E3}, // Myanmar Extended-C
+	{0x11BC0, 0x11BE0}, // Sunuwar
+	{0x11BF0, 0x11BF9}, // Sunuwar
+	{0x13460, 0x143FA}, // Egyptian Hieroglyphs Extended-A (3,995)
+	{0x16100, 0x1611D}, // Gurung Khema
+	{0x16130, 0x16139}, // Gurung Khema
+	{0x16D40, 0x16D6C}, // Kirat Rai
+	{0x16D70, 0x16D79}, // Kirat Rai
+	{0x18CFF, 0x18CFF}, // Khitan Small Script
+	{0x1CCF0, 0x1CCF9}, // Outlined digits
+	{0x1E5D0, 0x1E5ED}, // Ol Onal
+	{0x1E5F0, 0x1E5FA}, // Ol Onal
+	{0x2EBF0, 0x2EE5D}, // CJK Extension I (622)
+}
+
+// WordSupplementRanges is the supplement as inclusive rune ranges, copied
+// so a caller cannot edit the table through it.
+//
+// It exists for the SKEW TESTS in the packages that used to keep their own
+// copies: each of them sweeps a representative from every range against
+// CPython, and a fixture set drawn from anywhere else would not notice a
+// range going stale. Not for matching — use IsWordChar or WordClass.
+func WordSupplementRanges() [][2]rune {
+	out := make([][2]rune, len(wordSupplement))
+	copy(out, wordSupplement[:])
+	return out
+}
+
+// IsWordChar is Python's `\w` as a predicate: `str.isalnum() or "_"`.
+//
+// It is the same set WordClass matches, and that is not a coincidence to
+// be maintained by hand — TestTheWordPredicateAndTheWordClassAgree sweeps
+// the whole rune range and fails if they ever part company. A boundary
+// check and a class match disagreeing about one code point is a defect
+// with no CPython counterpart, and it is the defect this function was
+// added to make impossible.
+func IsWordChar(r rune) bool {
+	if r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) {
+		return true
+	}
+	lo, hi := 0, len(wordSupplement)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case r < wordSupplement[mid][0]:
+			hi = mid - 1
+		case r > wordSupplement[mid][1]:
+			lo = mid + 1
+		default:
+			return true
+		}
+	}
+	return false
+}
 
 // WordClass matches one code point that Python's `re` matches with `\w`.
 const WordClass = `[` + WordClassBody + `]`

@@ -31,8 +31,16 @@ import json, os, pathlib, shutil, sys, time
 import artifact_check as ac
 
 
-def mktree(root, files, mtimes=None):
-    """Build a tree. files maps relpath -> text (None makes a directory)."""
+def mktree(root, files, mtimes=None, parts=None):
+    """Build a tree. files maps relpath -> text (None makes a directory).
+
+    mtimes takes float seconds, the way most fixtures want them. parts
+    takes [sec, nsec] and goes through utime(ns=...) instead, because a
+    float second is not a portable way to ask for an exact timestamp and
+    two fixtures are about exact timestamps: one at the ulp where two
+    plausible float formulas differ, one past 2262 where a nanosecond
+    count no longer fits in a signed 64-bit integer at all.
+    """
     base = pathlib.Path(root)
     if base.exists():
         shutil.rmtree(base)
@@ -46,6 +54,9 @@ def mktree(root, files, mtimes=None):
         p.write_text(text, encoding="utf-8")
     for rel, ts in (mtimes or {}).items():
         os.utime(base / rel, (ts, ts))
+    for rel, sn in (parts or {}).items():
+        ns = int(sn[0]) * 10 ** 9 + int(sn[1])
+        os.utime(base / rel, ns=(ns, ns))
     return base
 
 
@@ -79,6 +90,10 @@ for c in json.loads(sys.argv[1]):
             out.append({"ok": sorted(snap.keys())})
         elif k == "snapshot_missing":
             out.append({"ok": sorted(ac.snapshot_dir(c["root"]).keys())})
+        elif k == "changed_parts":
+            base = mktree(ROOT, c["files"], None, c.get("mtime_parts"))
+            before = {k2: float(v2) for k2, v2 in c.get("before", {}).items()}
+            out.append({"ok": sorted(ac.changed_since(before, str(base)))})
         elif k == "changed":
             base = mktree(ROOT, c["files"], c.get("mtimes"))
             before = {k2: float(v2) for k2, v2 in c["before"].items()}
@@ -160,6 +175,77 @@ for c in json.loads(sys.argv[1]):
                                "MTIME_EPS": ac._MTIME_EPS,
                                "SKIP_DIRS": sorted(ac._SKIP_DIRS),
                                "EXECUTION_TOOLS": sorted(ac._EXECUTION_TOOLS)}})
+        elif k == "exists_via_symlinked_dir":
+            # Path(base) / claim leaves ".." for the KERNEL, which applies
+            # it after resolving base. filepath.Join would remove it
+            # TEXTUALLY, and the two name different files whenever base is
+            # a symlink -- which on macOS every /tmp and /var path is.
+            base = mktree(ROOT, c["files"])
+            outside = pathlib.Path(str(base) + "-real")
+            if outside.exists():
+                shutil.rmtree(outside)
+            (outside / "proj").mkdir(parents=True, exist_ok=True)
+            (outside / "x.py").write_text("x = 1", encoding="utf-8")
+            link = base / "link"
+            if link.is_symlink():
+                link.unlink()
+            os.symlink(str(outside / "proj"), str(link))
+            out.append({"ok": ac._exists_anywhere(c["claim"], str(link))})
+        elif k == "candidates_nonregular":
+            # p.is_file() is S_ISREG. A socket named like a module is not a
+            # candidate; "exists and is not a directory" says it is, and one
+            # such file makes ReadFile fail and DROPS a real inert verdict.
+            #
+            # The socket is bound in a SHORT directory and symlinked into
+            # place, because a unix socket path is capped near 108 bytes
+            # and a pytest-style temp dir named after this fixture is
+            # already longer than that. Path.is_file() follows the link and
+            # still answers False, which is the property under test.
+            import socket, tempfile
+            base = mktree(ROOT, c["files"])
+            short = tempfile.mkdtemp(prefix="s")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                target = os.path.join(short, "s")
+                srv.bind(target)
+                os.symlink(target, str(base / c["sock"]))
+                out.append({"ok": [os.path.relpath(str(p), str(base))
+                                   for p in ac._python_candidates(
+                                       c["claims"], str(base),
+                                       set(c.get("changed", [])))]})
+            finally:
+                srv.close()
+                shutil.rmtree(short, ignore_errors=True)
+        elif k == "candidates_via_symlinked_dir":
+            # The SECOND loop in _python_candidates joins the project dir to
+            # a CHANGED relative path. Walk-derived keys never carry "..",
+            # so the only way the two joins can disagree here is for the
+            # project DIR to carry one -- which is ordinary (macOS /tmp and
+            # /var are symlinks, and any caller may pass "<dir>/link/..").
+            base = mktree(ROOT, c["files"])
+            outside = base.parent / (base.name + "-cvsd")
+            if outside.exists():
+                shutil.rmtree(outside)
+            (outside / "proj").mkdir(parents=True, exist_ok=True)
+            (outside / "a.py").write_text("x = 1", encoding="utf-8")
+            link = base / "clink"
+            if link.is_symlink():
+                link.unlink()
+            os.symlink(str(outside / "proj"), str(link))
+            proj = os.path.join(str(link), "..")
+            out.append({"ok": [os.path.relpath(str(p), proj)
+                               for p in ac._python_candidates(
+                                   c["claims"], proj,
+                                   set(c.get("changed", [])))]})
+        elif k == "parse_iso":
+            from datetime import datetime
+            vals = []
+            for x in c["values"]:
+                try:
+                    vals.append(datetime.fromisoformat(x).timestamp())
+                except Exception:
+                    vals.append(None)
+            out.append({"ok": vals})
         elif k == "field_order":
             import dataclasses
             out.append({"ok": [f.name for f in

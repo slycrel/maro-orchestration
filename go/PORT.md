@@ -12129,3 +12129,145 @@ the port sorts, that is a decision rather than a port, and what the suite
 asserts is only that the decision HOLDS — sixty-four calls, stable and
 sorted — because a Go map range would answer differently every run and
 every fixture above has at most one fresh candidate.
+
+## The r1 review of `internal/artifactcheck` — three fail-open paths and a
+## parser that was a different language
+
+Every finding verified. That is worth stating plainly because the standing
+expectation is that 30–50% of adversarial findings are hallucinated, and
+the ones that survive are usually the small ones. Here the three largest
+were all real, all in the same direction, and all in a module whose job is
+to catch a step that says it wrote a file and did not.
+
+**A truthiness test that could not see its own input.** The Python is:
+
+```python
+if isinstance(te, dict) and te.get("type") == "tool_use":
+    if te.get("input"):
+        cmd = te["input"].get("command")
+```
+
+The port spelled both reads as Go type assertions to the package's own
+`ToolEvent` alias and to `map[string]any` respectively. A Go type switch
+needs identity, not structure — so a transcript that arrived through
+`json.Unmarshal` (a `map[string]any`, which is what every real caller
+produces) matched neither `case`, and the whole contradiction check
+silently found nothing. The check exists to catch a step that claims a
+write no shell command supports; failing to parse the transcript makes it
+answer "no contradiction" for every input. Both reads now go through one
+`asMapping` helper that accepts either spelling.
+
+The inner read carries a second thing the first port smoothed over.
+`te.get("input")` is a truthiness test on an arbitrary JSON value, and
+`te["input"].get(...)` on the line after is a mapping method. A truthy
+non-mapping — a string, a list — is an `AttributeError` in Python, not a
+skip. The port now reproduces that as a panic with the Python's own shape
+in the message, rather than quietly taking the branch the original cannot
+take. X14–X21 are the fixtures: truthy string, truthy list, `0`, empty
+dict, dict without a `command` key, and three raw `map[string]any`
+transcripts sent unconverted.
+
+**A directory test where CPython asks a different question.**
+`Path(p).is_file()` is False for a directory, a socket, a fifo, and a
+dangling symlink alike. The port asked `st.IsDir()` and negated it, which
+answers True for all four of the others. A unix socket in the project tree
+was enough to put a non-file into the candidate set. `!st.Mode().IsRegular()`
+now. P8b is the fixture, and getting it to exist took a detour: unix socket
+paths cap near 108 bytes, and the differential names its temp directories
+after the fixture, so the socket is bound inside a short `os.MkdirTemp`
+and symlinked into the tree on both sides. `is_file()` follows the link
+and still answers False, which is the property under test.
+
+**Eleven `time.Parse` layouts are not `fromisoformat`.** This one is its
+own story and the long version is in the `parseISO` doc comment. The short
+version: a list of layouts is a different LANGUAGE from a grammar, not a
+subset of it, and the measured gap ran both ways — seven forms CPython
+accepts that the port refused, and one the port accepted that CPython
+rejects. The refusals are not harmless, because `FilesModifiedSince` is
+the resume-side half of this guard and a refused stamp returns "nothing
+was touched" for a step that touched plenty.
+
+Transcribing CPython's own `_pydatetime.py` looked like the obvious fix
+and is a trap: `datetime.fromisoformat` has two implementations that
+disagree, the C accelerator is the one that runs, and the readable source
+is therefore not the specification. Three measured disagreements are in
+the comment. So the grammar was derived by measurement instead — a
+generate-and-diff loop that drove divergences 590 → 298 → 47 → 29 → 3 → 0,
+then held at 0 across four independent seeds and roughly 610k inputs. What
+that loop produced is now a permanent test: 78,115 inputs, 4,165 of them
+accepted by CPython, compared by `math.Float64bits` rather than a
+tolerance, because a differential that normalises before comparing has
+moved the assertion into the normaliser (L51).
+
+The corpus earned its keep inside the same minute it was written. A
+comment on the zero-length-fraction arm claimed the branch was
+unreachable; the fuzz falsified it immediately with 47 divergences, all of
+them `12:34:56.` followed by an offset. The comment now records that
+episode instead of the claim: another rationale recorded as deliberate
+that was a claim (L52), and the first one in this project falsified by a
+machine rather than by a reviewer.
+
+**`st_mtime` is not `UnixNano()/1e9`.** CPython builds it as
+`sec + 1e-9 * nsec` — two roundings in a different order — and 26.97% of
+ordinary timestamps come out an ulp apart from the Go spelling. Past the
+year 2262 it is worse than an ulp: `UnixNano` wraps silently. `pyMtime`
+does it CPython's way. Pinning this took its own fix, because Go's
+`os.Chtimes` also builds its syscall argument from `t.UnixNano()`, so the
+fixture that was meant to compare two engines on one tree was quietly
+building two DIFFERENT trees; `acSetMtimeParts` uses `syscall.UtimesNano`
+and the probe grew a `mtime_parts` arm to match.
+
+**`pathlib`'s `/` leaves `..` for the kernel; `filepath.Join` removes it.**
+Four sites. They agree on every path that has no `..` in it, and they
+resolve to different FILES whenever the base contains a symlink — which is
+the case A10 now covers. `pyJoin`/`pyNorm` do what `PurePath.__truediv__`
+does: drop empty and `.` segments, keep `..`. A comment nearby had
+asserted that every path reaching the inert-output reason was built by
+`filepath.Join`; it was true and it was also the reason nobody looked.
+
+**And one table that existed three times.** `isWordChar` here, and its
+twin in `internal/metrics`, and a third in `internal/skills`, each
+carrying its own copy of the Unicode-16-minus-15 `\w` supplement — 5004
+code points in 27 ranges — while `internal/pytext`, the package all three
+already import for exactly this class of skew, carried only the 80-digit
+subset under a comment arguing that hand-copied lists rot. Two siblings
+had already overruled that argument with measurements. Worse, the 80 in
+pytext are a SUBSET of the 5004, so `DigitClass` matched U+10D40 and
+`WordClass` did not — a state CPython has no spelling for. The table now
+lives in pytext once, in two notations (a class body for matching, a range
+table for the predicate), pinned to each other by
+`TestTheTwoSpellingsOfTheWordSupplementAgree`, with a second sweep
+asserting every digit-supplement code point is also a word-supplement one.
+The two skew tests that used to iterate the deleted local copies now
+iterate `pytext.WordSupplementRanges()`, which exists for them and says so.
+
+**The battery: 31 mutants, 26 caught, and four of the five survivors were
+equivalent.** The one that was not is the sharpest thing the battery
+found. `pyJoin` replaced `filepath.Join` at four sites; the fixture written
+for it (A10) drives the FIRST of them, and reverting the second — the
+changed-path loop in `pythonCandidates` — left the whole suite green. That
+is L13 exactly: a fix at the site that has the fixture is not a fix for the
+class. Walk-derived keys never carry `..`, so a divergence there has to
+come from the project DIR carrying one, which is not exotic — `<dir>/link/..`
+is what hand-composed paths look like, and on macOS `/tmp` and `/var` are
+symlinks. P8c drives that shape and catches the revert.
+
+The other four survivors were argued to be unobservable, and an argument is
+a claim. So they were proved instead: a Go-to-Go sweep of 414,589 inputs —
+every string up to length 5 over `01:.,xZ+-`, and up to length 9 over
+`0:.+` — with each edit applied ON ITS OWN, since three edits together can
+mask each other. Zero divergences, three times. `mag != 0 &&` is inert
+because int64 has no negative zero; the `!isASCIIDigit` half can only fire
+where no path out of the break can return true; the len-1/len-3 offset-body
+guard cannot admit anything `hhMMSSff` would accept; and `len(in) > 0` is
+subsumed by the `!found` fallback three lines later. All four are kept —
+they are CPython's own tests, and deleting a transcribed guard because Go's
+types make it redundant is how a port stops explaining itself — with the
+sweep's result recorded at each site so nobody re-derives it.
+
+Two comments in this file claimed "191 fixtures". The table reached 192
+the same day, which makes both of them stale on arrival, and re-counting a
+comment to keep it true is the wrong spelling of the conclusion — they now
+say "the whole fixture table". That is L28 arriving from a direction it
+had not come from before: not a count that was wrong when written, but a
+count that was CORRECT when written and had no way to stay that way.

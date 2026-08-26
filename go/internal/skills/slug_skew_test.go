@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // Slugify turns a skill NAME into a FILENAME. Two runtimes disagreeing about
@@ -68,7 +69,7 @@ func TestTheSlugWordClassIsCPythonsWordClass(t *testing.T) {
 	if dropped != 0 {
 		t.Errorf("%d code points CPython keeps in a slug and this runtime "+
 			"strips (first: %s) — the same skill name yields two filenames; "+
-			"extend pyWordSupplement", dropped, firstDropped)
+			"extend pytext's wordSupplement", dropped, firstDropped)
 	}
 	if kept != 0 {
 		t.Errorf("%d code points this runtime keeps and CPython strips "+
@@ -76,11 +77,12 @@ func TestTheSlugWordClassIsCPythonsWordClass(t *testing.T) {
 	}
 }
 
-// When Go's table catches up, pyWordSupplement is dead code that still looks
-// load-bearing.
+// When Go's table catches up, the supplement is dead code that still looks
+// load-bearing. Asserted here as well as in pytext because this package is
+// where a stale supplement writes a skill to two different filenames.
 func TestTheWordSupplementIsStillCarryingWeight(t *testing.T) {
 	live, total := 0, 0
-	for _, rg := range pyWordSupplement {
+	for _, rg := range pytext.WordSupplementRanges() {
 		for r := rg[0]; r <= rg[1]; r++ {
 			total++
 			if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
@@ -90,8 +92,8 @@ func TestTheWordSupplementIsStillCarryingWeight(t *testing.T) {
 	}
 	if live == 0 {
 		t.Errorf("Go unicode %s now knows every code point in "+
-			"pyWordSupplement; the table is dead code and its doc comment "+
-			"is wrong", unicode.Version)
+			"pytext's wordSupplement; the table is dead code and its doc "+
+			"comment is wrong", unicode.Version)
 	}
 	t.Logf("pyWordSupplement covers %d of %d code points Go's table still "+
 		"misses (Go unicode %s)", live, total, unicode.Version)

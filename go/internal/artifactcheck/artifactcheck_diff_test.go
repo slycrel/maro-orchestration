@@ -2,11 +2,13 @@ package artifactcheck
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -115,6 +117,26 @@ func acMktree(t *testing.T, base string, files map[string]any, mtimes map[string
 		tm := time.Unix(0, int64(ts*1e9))
 		if err := os.Chtimes(filepath.Join(base, rel), tm, tm); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// acSetMtimeParts is the probe's `os.utime(p, ns=(...))` arm: an EXACT
+// timestamp given as whole seconds plus nanoseconds.
+//
+// os.Chtimes cannot express one. It builds its syscall argument from
+// `t.UnixNano()`, which is undefined outside 1678-09-21..2262-04-11 and
+// reports no error when it wraps — so asking it for a year-2400 mtime
+// silently writes something near 1901, and the two sides of the
+// differential would then be comparing different trees rather than
+// different code. syscall.UtimesNano takes the seconds directly.
+func acSetMtimeParts(t *testing.T, base string, parts map[string][]int64) {
+	t.Helper()
+	for rel, sn := range parts {
+		ts := syscall.Timespec{Sec: sn[0], Nsec: sn[1]}
+		if err := syscall.UtimesNano(filepath.Join(base, rel),
+			[]syscall.Timespec{ts, ts}); err != nil {
+			t.Fatalf("setting mtime of %s to %d.%09d: %v", rel, sn[0], sn[1], err)
 		}
 	}
 }
@@ -470,6 +492,35 @@ func acCases() []acCase {
 			[]any{"nope", B(true, "pytest")}},
 		{"X13 several failures are all listed", "all tests passed",
 			[]any{B(true, "a"), B(true, "b"), B(true, "c")}},
+
+		// `(te.get("input") or {}).get(...)`. The `or {}` rescues a FALSY
+		// input; a TRUTHY non-dict keeps its own value and `.get` on it is
+		// an AttributeError, which the blanket except turns into the
+		// fail-open verdict — fabricated=False, judged=False. A port that
+		// quietly took the name default here would answer fabricated=TRUE,
+		// confidently, on adversary-shaped JSON, which is the one direction
+		// the module's docstring forbids. X14/X15 are the two spellings a
+		// transcript can actually carry.
+		{"X14 a failed event whose input is a truthy STRING", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": "rm -rf /"}}},
+		{"X15 a failed event whose input is a truthy LIST", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": []any{"pytest"}}}},
+		// The falsy side of the same line, one row per shape that reaches
+		// the `or {}`. X17 is the one a Go type switch gets wrong on its
+		// own: pyval.Truthy matches `map[string]any` by identity, so an
+		// EMPTY ToolEvent falls to its "unknown object is truthy" default
+		// and takes the branch `{} or {}` cannot take.
+		{"X16 a failed event whose input is the number 0", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true, "input": 0}}},
+		{"X17 a failed event whose input is an EMPTY dict", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{}}}},
+		{"X18 a failed event whose input is a dict with no command key",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"timeout": 5}}}},
 	} {
 		add(row.name,
 			map[string]any{"kind": "exec_claim", "text": row.text, "tool_events": row.events},
@@ -487,6 +538,42 @@ func acCases() []acCase {
 					events = nil
 				}
 				return acObjMap(CheckExecutionClaim(acStr(c, "text"), events))
+			})
+	}
+
+	// The rows above all reach CheckExecutionClaim as []any of ToolEvent,
+	// because the harness converts every map on the way in. That
+	// conversion is a REAL narrowing of what the fixtures can see: Python's
+	// filter is `isinstance(te, dict)` and Go has two spellings of one
+	// Python dict, so a transcript straight out of json.Unmarshal arrives
+	// as map[string]any at every level. Before asMapping existed, that
+	// spelling made the whole transcript invisible — every event skipped,
+	// the check silently answering "no execution in transcript" — and X12
+	// could not see it, because X12 proves WHERE the filter runs, not what
+	// it accepts. A correct assertion covering the wrong blast radius.
+	//
+	// These rows send the maps through unconverted. Same inputs, other
+	// spelling, same required answers.
+	for _, row := range []struct {
+		name   string
+		text   string
+		events []any
+	}{
+		{"X19 a transcript of raw map[string]any, as json.Unmarshal yields it",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": "pytest"}}}},
+		{"X20 a raw-map transcript with nothing to flag", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": false,
+				"input": map[string]any{"command": "pytest"}}}},
+		{"X21 a raw-map transcript of a non-execution tool", "all tests passed",
+			[]any{map[string]any{"name": "Read", "is_error": true}}},
+	} {
+		add(row.name,
+			map[string]any{"kind": "exec_claim", "text": row.text, "tool_events": row.events},
+			func(t *testing.T, c acCase, base string) any {
+				raw, _ := c.in["tool_events"].([]any)
+				return acObjMap(CheckExecutionClaim(acStr(c, "text"), raw))
 			})
 	}
 
@@ -539,6 +626,29 @@ func acCases() []acCase {
 	// float64 nearest 1e-4 — bit for bit the constant it is compared
 	// against. `>` says not-changed and `>=` says changed, and CPython
 	// decides which is right.
+	// W8/W9/W9b all sit at magnitudes 0-2000, where
+	// `float64(UnixNano())/1e9` and `Unix() + 1e-9*Nanosecond()` are
+	// bit-identical — so none of them can see WHICH formula produces the
+	// mtime. These two sit where they differ. W9c is an ordinary
+	// present-day timestamp whose nanoseconds make the two formulas one ulp
+	// apart, with the prior set so the difference straddles the epsilon;
+	// W9d is past 2262, where UnixNano silently wraps int64 and reports a
+	// NEGATIVE mtime for a file that exists.
+	partsAnswer := func(t *testing.T, c acCase, base string) any {
+		raw, _ := c.in["mtime_parts"].(map[string][]int64)
+		acSetMtimeParts(t, base, raw)
+		return acSortedSet(ChangedSince(acBefore(c), base))
+	}
+	add("W9c an ordinary present-day mtime, at the ulp where the two float formulas differ",
+		map[string]any{"kind": "changed_parts",
+			"files":       map[string]any{"a.txt": "a"},
+			"mtime_parts": map[string][]int64{"a.txt": {1785053848, 249024353}},
+			"before":      map[string]float64{"a.txt": 1785053848.2489243}}, partsAnswer)
+	add("W9d an mtime past 2262, where UnixNano wraps and reports a negative time",
+		map[string]any{"kind": "changed_parts",
+			"files":       map[string]any{"a.txt": "a"},
+			"mtime_parts": map[string][]int64{"a.txt": {13569465600, 0}},
+			"before":      map[string]float64{"a.txt": 0.0}}, partsAnswer)
 	add("W9b an mtime advance of EXACTLY the epsilon, at a magnitude where the subtraction is exact",
 		map[string]any{"kind": "changed",
 			"files": map[string]any{"a.txt": "a"}, "mtimes": map[string]float64{"a.txt": 1e-4},
@@ -596,6 +706,33 @@ func acCases() []acCase {
 				t.Fatal(err)
 			}
 			return acSortedKeys(SnapshotDir(base))
+		})
+
+	// `Path(base) / claim` leaves ".." for the kernel; `filepath.Join`
+	// removes it textually first. The two name the same file only when
+	// every component of base is a real directory, so the fixture makes
+	// base a SYMLINK — which is not an exotic setup: on macOS /tmp and
+	// /var are symlinks, so every project dir beneath them has this shape,
+	// and the port's answer was a false `missing-artifact` on a file
+	// plainly on disk.
+	add("A10 a '..' claim resolved through a SYMLINKED project dir",
+		map[string]any{"kind": "exists_via_symlinked_dir",
+			"files": map[string]any{"keep.txt": "k"}, "claim": "../x.py"},
+		func(t *testing.T, c acCase, base string) any {
+			outside := base + "-real"
+			if err := os.MkdirAll(filepath.Join(outside, "proj"), 0o777); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outside, "x.py"),
+				[]byte("x = 1"), 0o666); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(base, "link")
+			_ = os.Remove(link)
+			if err := os.Symlink(filepath.Join(outside, "proj"), link); err != nil {
+				t.Fatal(err)
+			}
+			return existsAnywhere(acStr(c, "claim"), link)
 		})
 
 	// --- _exists_anywhere -------------------------------------------------
@@ -689,6 +826,88 @@ func acCases() []acCase {
 		"files": map[string]any{"b.txt": "t"}}, candAnswer)
 	add("P8 a DIRECTORY named like a .py is not a candidate", map[string]any{"kind": "candidates",
 		"claims": []string{"d.py"}, "files": map[string]any{"d.py": nil}}, candAnswer)
+	// P8 covers the DIRECTORY half of `p.is_file()`. `is_file()` is S_ISREG,
+	// so it also excludes sockets, FIFOs and device nodes — and the port's
+	// "exists and is not a directory" admitted every one of them. The cost
+	// is not cosmetic: an admitted socket makes os.ReadFile fail, which
+	// takes inertOutputVerdict's fail-open exit and DROPS a real
+	// inert-output verdict the other files had earned.
+	add("P8b a SOCKET named like a .py is not a candidate either",
+		map[string]any{"kind": "candidates_nonregular",
+			"files": map[string]any{"a.py": "x = 1"}, "sock": "s.py",
+			"claims": []string{"a.py", "s.py"}},
+		func(t *testing.T, c acCase, base string) any {
+			// Bound in a SHORT directory and symlinked into place: a unix
+			// socket path is capped near 108 bytes and a temp dir named
+			// after this fixture is already past that. os.Stat follows the
+			// link and still reports a socket, which is the property.
+			short, err := os.MkdirTemp("", "s")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(short)
+			target := filepath.Join(short, "s")
+			l, err := net.Listen("unix", target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			if err := os.Symlink(target, filepath.Join(base, acStr(c, "sock"))); err != nil {
+				t.Fatal(err)
+			}
+			changed := map[string]bool{}
+			var out []string
+			for _, p := range pythonCandidates(acStrs(c, "claims"), base, changed) {
+				rel, rerr := filepath.Rel(base, p)
+				if rerr != nil {
+					rel = p
+				}
+				out = append(out, rel)
+			}
+			if out == nil {
+				out = []string{}
+			}
+			return out
+		})
+	// The first loop's join is pinned by A10; the SECOND one -- the changed
+	// -path loop -- was not, and reverting it to filepath.Join survived the
+	// whole suite. Walk-derived keys never carry "..", so the divergence has
+	// to come from the project DIR, which is not exotic: "<dir>/link/.." is
+	// what a caller composing paths by hand produces, and on macOS /tmp and
+	// /var are themselves symlinks.
+	add("P8c a CHANGED path joined onto a project dir that walks '..' through a symlink",
+		map[string]any{"kind": "candidates_via_symlinked_dir",
+			"files":  map[string]any{"keep.txt": "k"},
+			"claims": []string{}, "changed": []string{"a.py"}},
+		func(t *testing.T, c acCase, base string) any {
+			outside := base + "-cvsd"
+			if err := os.MkdirAll(filepath.Join(outside, "proj"), 0o777); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outside, "a.py"),
+				[]byte("x = 1"), 0o666); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(base, "clink")
+			_ = os.Remove(link)
+			if err := os.Symlink(filepath.Join(outside, "proj"), link); err != nil {
+				t.Fatal(err)
+			}
+			proj := pyJoin(link, "..")
+			changed := map[string]bool{}
+			for _, r := range acStrs(c, "changed") {
+				changed[r] = true
+			}
+			out := []string{}
+			for _, p := range pythonCandidates(acStrs(c, "claims"), proj, changed) {
+				rel, rerr := filepath.Rel(proj, p)
+				if rerr != nil {
+					rel = p
+				}
+				out = append(out, rel)
+			}
+			return out
+		})
 	add("P9 no project dir drops every relative claim", map[string]any{"kind": "candidates",
 		"claims": []string{"a.py"}, "files": map[string]any{"a.py": "x = 1"},
 		"with_dir": false}, candAnswer)

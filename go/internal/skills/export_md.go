@@ -27,68 +27,15 @@ import (
 const pySpaceClass = `\t\n\v\f\r \x1c-\x1f\x{0085}\x{00a0}\x{1680}` +
 	`\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 
-// pyWordSupplement is the code points CPython's \w matches and Go's
-// \p{L}\p{N} does not, because Go ships unicode 15.0.0 where CPython here
-// has 16.0.0 (adversarial r5, L4).
-//
-// The skew was measured, not estimated: 5,004 code points in 27 runs, and
-// ZERO in the other direction. It matters more here than anywhere else in
-// the port because the output of this function is a FILENAME — a skill
-// whose name contains any of these gets stripped to one slug by Go and
-// kept in another by Python, so the two runtimes write the same skill to
-// two different files, which this function's own doc calls worse than not
-// writing it at all.
-//
-// 4,617 of the 5,004 are two blocks (Egyptian Hieroglyphs Extended-A and
-// CJK Extension I); the rest are newly-encoded scripts. Enumerating 27
-// ranges closes it outright, and slug_skew_test.go re-derives the whole set
-// from CPython so a gap in either direction fails and a table that has gone
-// dead says so.
-var pyWordSupplement = [...][2]rune{
-	{0x01C89, 0x01C8A}, // Cyrillic Tje
-	{0x0A7CB, 0x0A7CD}, // Latin extensions
-	{0x0A7DA, 0x0A7DC}, // Latin extensions
-	{0x105C0, 0x105F3}, // Todhri
-	{0x10D40, 0x10D65}, // Garay
-	{0x10D6F, 0x10D85}, // Garay
-	{0x10EC2, 0x10EC4}, // Arabic Extended-C
-	{0x11380, 0x11389}, // Tulu-Tigalari
-	{0x1138B, 0x1138B}, // Tulu-Tigalari
-	{0x1138E, 0x1138E}, // Tulu-Tigalari
-	{0x11390, 0x113B5}, // Tulu-Tigalari
-	{0x113B7, 0x113B7}, // Tulu-Tigalari
-	{0x113D1, 0x113D1}, // Tulu-Tigalari
-	{0x113D3, 0x113D3}, // Tulu-Tigalari
-	{0x116D0, 0x116E3}, // Myanmar Extended-C
-	{0x11BC0, 0x11BE0}, // Sunuwar
-	{0x11BF0, 0x11BF9}, // Sunuwar
-	{0x13460, 0x143FA}, // Egyptian Hieroglyphs Extended-A (3,995)
-	{0x16100, 0x1611D}, // Gurung Khema
-	{0x16130, 0x16139}, // Gurung Khema
-	{0x16D40, 0x16D6C}, // Kirat Rai
-	{0x16D70, 0x16D79}, // Kirat Rai
-	{0x18CFF, 0x18CFF}, // Khitan Small Script
-	{0x1CCF0, 0x1CCF9}, // Outlined digits
-	{0x1E5D0, 0x1E5ED}, // Ol Onal
-	{0x1E5F0, 0x1E5FA}, // Ol Onal
-	{0x2EBF0, 0x2EE5D}, // CJK Extension I (622)
-}
-
-// pyWordClass renders pyWordSupplement as regexp character-class ranges.
-func pyWordClass() string {
-	var b strings.Builder
-	for _, rg := range pyWordSupplement {
-		if rg[0] == rg[1] {
-			fmt.Fprintf(&b, `\x{%04x}`, rg[0])
-			continue
-		}
-		fmt.Fprintf(&b, `\x{%04x}-\x{%04x}`, rg[0], rg[1])
-	}
-	return b.String()
-}
-
 var (
-	slugDropRE  = regexp.MustCompile(`[^\p{L}\p{N}_` + pyWordClass() + pySpaceClass + `-]`)
+	// `\p{L}\p{N}_` plus a 27-range Unicode-16-minus-15 supplement, which
+	// this file carried as its own table until 2026-08-26. internal/metrics
+	// carried a byte-identical second copy, and pytext — which both files
+	// already import for exactly this class of skew — carried neither.
+	// pytext.WordClassBody is that table now, in one place, swept against
+	// CPython there. slug_skew_test.go still re-derives the whole set here,
+	// so a regression in pytext fails in this package too.
+	slugDropRE  = regexp.MustCompile(`[^` + pytext.WordClassBody + pySpaceClass + `-]`)
 	slugSpaceRE = regexp.MustCompile(`[` + pySpaceClass + `_]+`)
 )
 

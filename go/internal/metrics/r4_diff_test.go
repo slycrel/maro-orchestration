@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // The r4 round's fixtures. Each one pins ONE finding, and each was written
@@ -121,7 +122,7 @@ func TestClassifyStepTypeOverUnicode16(t *testing.T) {
 	// already knows) — a fixture set drawn only from the disagreements
 	// would pass on a port that hardcoded "these all become general".
 	var texts []string
-	for _, rg := range wordSupplement {
+	for _, rg := range pytext.WordSupplementRanges() {
 		texts = append(texts, "find"+string(rg[0]), "find"+string(rg[1]))
 	}
 	texts = append(texts, "find", "findé", "fix中", "research now")

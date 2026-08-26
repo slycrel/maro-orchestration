@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 60 — the most frequent single defect in the Go port*
+*instances: 63 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -80,7 +80,7 @@ where the helper wanted `"introspect.py"`, so every probe took the honest
 comparison is derived from (`if len(keys) == 0 { t.Fatal(...) }`).
 
 ### L2 — An enumeration is not a class
-*instances: 1*
+*instances: 3*
 
 Sweeping the cases a fixture happens to name proves nothing about the ones
 it does not.
@@ -94,6 +94,25 @@ never being tested.
 
 **Tripwire.** Derive the sweep from the OTHER runtime, or from the source of
 truth — never from the list the code under test consults.
+
+**A Go type switch is an enumeration, and Python's `isinstance` is a class.**
+Found twice in one file by artifactcheck r1 (2026-08-26). `isinstance(te,
+dict)` admits every mapping; the port wrote `case ToolEvent` — one Go
+spelling of the same thing — and a transcript that arrived through
+`json.Unmarshal` (a plain `map[string]any`, which is what every real caller
+produces) matched no case at all. The fabrication check silently found
+nothing on real input while every fixture passed, because the fixture table
+is written in the OTHER spelling. The same shape at `te.get("input")` one
+level down.
+
+This is the enumeration failure with no list to look at: nothing in the Go
+reads like a list of cases the author chose, so the tripwire above does not
+fire. The one that does:
+
+> **Wherever the Python asks `isinstance(x, dict)` (or `list`, or `str`),
+> the port has as many arms as there are Go spellings of that class, and
+> the fixture table probably only builds ONE of them.** Send a fixture
+> through `json.Unmarshal` and see whether the answer changes.
 
 ### L3 — A fixture that derives its input from the list the code consults cannot disagree with it
 *instances: 0 recorded*
@@ -141,7 +160,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 29*
+*instances: 30*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -239,7 +258,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 5*
+*instances: 6*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -248,12 +267,32 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 17*
+*instances: 18*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
 `graduation`, `playbook`, `evolver`, `skills/utility`, `director`). The
 introspect port deliberately did not become the seventh.
+
+**The base package can be the one that did not look.** artifactcheck r1
+(2026-08-26): the Unicode-16-minus-15 `\w` supplement — 5004 code points in
+27 ranges — existed as three byte-identical hand copies, in `artifactcheck`,
+`internal/metrics` and `internal/skills`. `internal/pytext` is the package
+all three already import for exactly this class of skew, and it carried only
+the 80-code-point DIGIT subset, under a doc comment arguing that the honest
+fix was a newer Go toolchain rather than "a hand-copied list that rots".
+
+Two things make this worth its own instance. The argument in the base
+package had already been overruled twice, with measurements, by its own
+dependents — the comment was load-bearing in the wrong direction and nobody
+reading pytext could see that. And the partial helper was worse than none:
+the 80 digits are a SUBSET of the 5004, so `DigitClass` matched U+10D40 and
+`WordClass` did not, which is a state CPython has no spelling for. A helper
+that covers part of a class silently splits the class.
+
+> **When you find a private copy of something, grep for the OTHER copies
+> before writing the seventh — and when the base package declines to hold
+> it, read that refusal as a claim (L52) rather than as a decision.**
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
 *instances: 9*
@@ -403,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 71*
+*instances: 72*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -431,6 +470,21 @@ Decay needs history to diagnose. This does not, and the check is mechanical:
 Six numbers were stated in that chunk; six had never been counted; four were
 wrong. Counting them took minutes and one of the four led to a fix in a
 shared primitive eleven packages call. Cheapest lens in the list.
+
+**The third direction: correct when written, with no way to stay that way.**
+artifactcheck r1 (2026-08-26). Two comments in one file said "191
+fixtures"; both were exactly right the hour they were written, and the
+table reached 192 the same day. Neither decay nor a birth defect — a
+conclusion whose truth was made to depend on a count that nothing
+maintains. The fix is not to re-count it:
+
+> **If a comment's point survives without the number, delete the number.**
+> Both now say "the whole fixture table", which is what the sentence
+> actually meant and cannot go stale.
+
+A number earns its place only when the number IS the finding — "26.97% of
+timestamps differ by an ulp", "5004 code points" — and those should carry
+the measurement that produced them.
 
 ### L29 — An idiom is not a defect — the defect is a spelling that does not match the spelling at ITS OWN site
 *instances: 2*
@@ -856,7 +910,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 13*
+*instances: 14*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1164,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 7*
+*instances: 8*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
