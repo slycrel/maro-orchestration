@@ -31,10 +31,16 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**614**. The counts below were regenerated from `report --by lens`, not
+**626**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 614
+That regeneration is a claim this file has already failed once: at the
+2026-08-26 refresh, L23 read `8` against a ledger holding `10`. Two rounds
+had recorded rows without re-deriving the counts, and the sentence above
+went on asserting they were derived. Regenerate ALL of them every time —
+a per-lens edit is how the drift got in.
+
+**Two things the counts are not.** They are lower bounds: 309 of the 626
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -52,7 +58,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 51 — the most frequent single defect in the Go port*
+*instances: 53 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -128,7 +134,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 23*
+*instances: 25*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -263,7 +269,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 15*
+*instances: 16*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -284,7 +290,7 @@ calls the transcript clean.
 ## D. Boundaries and limits
 
 ### L23 — A limit with no case at its OWN boundary is a limit nothing pins
-*instances: 8*
+*instances: 12*
 
 A limit's NEIGHBOURS are not its boundary.
 
@@ -344,7 +350,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 36*
+*instances: 37*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -361,9 +367,22 @@ pin comparing re-decoded numbers saw `1.0` come back as `1`. The fix was to
 emit the compared fields as a Python-side JSON *string*.
 
 ### L31 — Sometimes the answer to a survivor is DELETING production code
-*instances: 3*
+*instances: 4*
 
 A distinction nothing reads is a second guard making the first unobservable.
+
+**And sometimes the answer is to KEEP it and say why** — the two cases look
+identical from the battery's side, so the lens has to carry both. Delete
+when the branch is unreachable *and the seam is closed*: the lens
+registry's `costs` lookup had a single writer of both maps and no plausible
+second one, so the dead default went. Keep, with the proof in a comment,
+when the guard states an intent at a seam a later edit will open.
+`internal/introspect/cli` r1 retired two unkillable mutants this way — the
+`healthy` guard in `RenderRecovery` (subsumed by the `PlanRecovery` lookup
+below it, which has no `healthy` row *yet*) and the graduation-candidate
+branch (a tautology, because an upstream `continue` already filtered on its
+negation). Deleting the first would make a future `healthy` row silently
+start emitting recovery plans for healthy loops.
 
 ### L34 — A clip marker is not the end of the string
 *instances: 3 attributed; ~5 in the mined cluster*
@@ -506,7 +525,7 @@ fixture has a confound — split it until every case has one variable.
 
 ### L42 — Two implementations that agree at small n need a fixture past the threshold
 
-*instances: 2*
+*instances: 3*
 
 Library internals routinely fall back to a simpler algorithm on small
 inputs, and the simpler algorithm often has the property the caller was
@@ -579,6 +598,46 @@ the rule actually fired. A fixture named for a finding should fail if the
 finding is absent; three that quietly produced empty output is what this
 cost. When gate-width and rule-width disagree, that gap belongs in a
 comment, because it is a property of the source, not of the test.
+
+### L44 — A fixture's name is a coverage claim, and nothing checks it
+
+*instances: 2*
+
+The fixture feeds the code through a field the code does not read. Its
+inputs are shaped like the real thing but keyed the way the *writer* names
+them rather than the way the *reader* reads them, so the case runs, both
+sides read the same nothing, and the differential agrees. The fixture's
+name goes on asserting coverage of a rule its input never reached.
+
+What makes this survive review is the second half: the mutants for that
+rule usually die anyway, to some *other* fixture that happens to supply
+the value properly. So the battery reports full detection, the case list
+reads as thorough, and the one fixture written for the rule is decorative.
+A green mutant is evidence that *some* fixture covers the rule — never
+evidence that the one named for it does.
+
+Distinct from L43: there the input reaches the code and is the wrong size
+for the rule's arithmetic. Here it never reaches the code at all. Distinct
+from L28: that is a comment asserting coverage; this is a *test name*
+doing it, which is worse, because a comment is at least read as prose
+while a test name is read as a fact.
+
+**Canonical instance.** `internal/introspect/cli` r1: the CLI
+differential's `loop-gamma` fixture — "the bar widths" — gave four steps
+`"tokens": 4999 / 5000 / 900000 / 0` to exercise the token bar's floor and
+its `min(50, ...)` clamp. `BuildStepProfiles` computes a step's tokens as
+`tokens_in + tokens_out` and never reads a `"tokens"` key, so all four
+steps profiled at **zero** and the fixture had never rendered a bar in its
+life. Four bar mutants (divisor, both clamp spellings, the `Grouped` call)
+died regardless — to `loop-alpha`, which prices its steps properly.
+
+**Tripwire.** For a fixture named after a rule, assert the rule's own
+intermediate, not the field you wrote: read back what the code computed
+(the profile, the parsed row, the derived key) and check it is non-trivial
+before trusting the case. And when a mutant dies, ask *which* fixture
+killed it — narrow the run to the case that claims the coverage. The
+cheapest version of this is a battery run filtered to one fixture; if the
+mutant survives that, the name is a lie even though the suite is green.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*

@@ -11,6 +11,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
 	"github.com/slycrel/maro-orchestration/go/internal/graduation"
 	"github.com/slycrel/maro-orchestration/go/internal/inspector"
+	"github.com/slycrel/maro-orchestration/go/internal/introspect"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -327,4 +328,20 @@ func clipLine(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// runIntrospect is the `maro introspect` subcommand — Python's
+// `maro-introspect` entry point (introspect.main).
+//
+// The whole body is a forward: the rendering lives in the introspect
+// package so a differential can diff CPython's stdout against it, and
+// splitting the assembly across the package boundary would leave the half
+// that decides blank lines and section order untested.
+//
+// Read-only and free by construction. Python's CLI can reach no LLM lens
+// either — `main` passes `include_llm=getattr(args, "llm", False)` and
+// argparse never defines `--llm` — so there is no spend flag to add here.
+func runIntrospect(args []string) error {
+	ws := config.Workspace()
+	return introspect.Main(ws, args, os.Stdout)
 }

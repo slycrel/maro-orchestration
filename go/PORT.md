@@ -8640,3 +8640,208 @@ answers apart — and that a meaningful share of the "survivors" are faults
 in the battery rather than gaps in the tests. Both halves are the point:
 the first is why the batteries are worth their wall-clock, and the second
 is why every MISS gets a proof before it gets a fixture.
+
+## The CLI: where a port stops being about values
+
+`maro-introspect` is the last piece of `introspect.py`, and it is a
+different kind of port from everything above it. The functions underneath
+return values a differential can compare field by field. `main` returns
+nothing. Its entire output is a block of text an operator reads, and the
+only faithful comparison is the bytes.
+
+So the test compares whole stdout. `introspect.main(argv)` runs under
+`contextlib.redirect_stdout`, the Go `Main` writes to a `bytes.Buffer`
+instead of `os.Stdout`, and the assertion is string equality on the
+result. Nothing is reconstructed field by field, because a reconstruction
+agrees with itself: it would compare the numbers and never notice a
+missing blank line, a pad that is one column narrow, or a section that
+did not render at all. Those are the defects this file can actually have.
+
+The failure output renders every space as `·` for the same reason. A
+trailing space is invisible in a terminal diff and this file emits one on
+purpose (below).
+
+### The flags parse differently, and it is not cosmetic
+
+`argparse` interleaves options and positionals. Go's `flag` package stops
+at the first non-flag token and hands back everything after it as
+positional arguments. So:
+
+```
+maro introspect loop-alpha --lenses
+```
+
+parses in Python as `loop_id="loop-alpha", lenses=True`, and in a
+straightforward Go port as `loop_id="loop-alpha"` with `--lenses` sitting
+unread in the positional tail. The lens block silently does not render.
+Nothing errors; the output is simply a shorter, entirely plausible
+diagnosis.
+
+This is not a hypothesis. It is how the first differential run failed, on
+the single fixture where the flag came second, and it would have been
+invisible to a test that called `RenderLenses` directly. `splitArgs`
+separates the two groups first, preserving each group's order, and knows
+that `--history` is the one option consuming a following token — spelled
+as a set rather than inferred, because getting that wrong turns a flag's
+value into a loop id and diagnoses a loop named `5`.
+
+### A read command that writes
+
+`diagnose_loop`'s `emit_log_event` defaults to `True`, so in Python
+`maro introspect <loop-id>` **appends a DIAGNOSIS event to the captain's
+log** for any non-healthy class. Diagnosing is a read; this is a write,
+inside a bare `try/except`, on the operator's live event stream.
+
+The port forwards with `emit_log_event=False` and says so at the call
+site. The write belongs with the captain's-log port, and until it lands,
+the honest thing is a named divergence rather than a quiet one.
+
+It has one immediate consequence for the test: **each runtime gets its own
+copy of the store.** Pointed at one directory, CPython's run would change
+what it reads on the next case, and the differential would be measuring
+its own side effect. `copyStore` duplicates the seeded workspace per case.
+This was also checked against the real ledger afterwards — the live
+`~/.maro/workspace` event log was unchanged by the comparison runs.
+
+### Three details the fixtures exist to pin
+
+**`tokens=` has two spellings.** The single-diagnosis view renders total
+tokens through `{:,}`; the `--history` list renders the same field bare.
+987654 appears as `987,654` in one and `987654` in the other. Both are
+Python's, and the port keeps both.
+
+**The space before `confidence=` is unconditional.** In the lens block,
+`[{name}]{cost} {conf}` puts a literal space before a fragment that is
+empty when a lens reports zero confidence — so such a lens renders a line
+with a trailing space. No heuristic lens produces zero confidence, so it
+is unreachable through this CLI; the port reproduces it anyway, because a
+port that tidies whitespace is a port whose diff has stopped being a diff.
+
+**`if args.history:` is a truthiness test.** `--history 0` is falsy and
+falls *through* to diagnosing a loop rather than printing an empty
+history. Go's `flag` has no `None`, and `> 0` reproduces both the unset
+case and the explicit zero — which are the same case in Python and had to
+be shown to be, with a fixture that passes `--history 0` and expects a
+diagnosis.
+
+And one that is not a detail at all: **`--llm` does not exist.** `main`
+calls `run_lenses(..., include_llm=getattr(args, "llm", False))` and
+argparse never defines the flag. The getattr default is the only value it
+can ever take, so the two LLM lenses are unreachable from this CLI in
+Python. That is exactly where the port leaves them.
+
+### The battery, and a fixture that had never rendered the thing it names
+
+Seventy-five mutants, derived from the file rather than the diff: every pad
+width, every separator, every blank line, each conditional section deleted
+as well as perturbed, both `Grouped` call sites, the bar's divisor and its
+clamp, the severity table's four arms, `splitArgs`' value-flag set, and the
+precedence between `--patterns` and `--history`.
+
+Sixty-eight died on the first run. The other seven are the chunk's actual
+findings, and only three of them turned out to be about the code.
+
+**Four fixtures could not reach the rule they were named for.** Three were
+predictable enough to fix before the run — the pattern loop ids were
+exactly eight characters, so `Clip(_, 8)` was the identity and a port that
+dropped the clip (or swapped `first:` with `last:`) rendered byte-for-byte
+correct output; every failure class was ASCII, so padding by bytes and
+padding by runes agreed everywhere; `--patterns` and `--history` were never
+passed together, so their precedence was unpinned in both directions; and
+no store held more than a handful of rows, so the 50-row read window was a
+formality. All four mutants died once the fixtures were widened.
+
+**The fifth was found by chasing a survivor, and it is the one worth
+writing down.** `BuildStepProfiles` computes a step's token count as
+`tokens_in + tokens_out`. It does not read a `"tokens"` key. The fixture
+named "the bar widths" — four steps carrying 4999, 5000, 900000 and 0
+`"tokens"` — had profiled every one of them at **zero** for its entire
+life, and had never rendered a bar at all.
+
+Nothing reported this. Four bar mutants (the divisor, both clamp
+spellings, the `Grouped` call) all died anyway, to a *different* fixture
+that happens to price its steps properly. The named fixture was decorative
+and the coverage was incidental, which is the combination that survives
+review: the diff was green, the case list read as thorough, and the one
+file whose whole job is the token bar was measuring nothing about it.
+
+The writer's field name and the reader's are two separate claims. This
+fixture checked one of them.
+
+**Two more fixtures were missing outright**, both hiding behind a comment I
+had written in the production file. The cost lens returns early when
+nothing in the loop was priced, and that early return names only
+`lens_name` and `findings` — so the confidence falls to the dataclass
+default of `0.0` and the action to `""`. The rendering comment asserted
+that a zero confidence was unreachable through `run_lenses`. It is not:
+any loop whose steps carry no model and no input tokens produces exactly
+that result, renders the trailing space the unconditional separator
+creates, and renders a findings block with no `->` line under it. Two
+mutants survived on the strength of that sentence. The comment is now
+corrected in place, and a fixture holds it.
+
+**And that fixture immediately demonstrated the lens on itself.** The first
+version of it reused `loop-gamma` — which qualified as unpriced only
+*because* of the `"tokens"` bug above. Fixing the field gave those steps a
+real cost, closed the `total == 0` branch, and silently un-covered the
+thing the new fixture had just been written to cover. Both mutants came
+back on the next run. Zero cost and a rendered token bar are mutually
+exclusive, so they cannot be the same loop; the unpriced case is its own
+fixture now, with the reason written beside it. The battery caught this in
+one round. Nothing else would have.
+
+The sixth gap was the `no notable findings` line, which needs **all five**
+lenses silent at once — and that needs both halves: no step profiles (which
+stops the four that read them) and a healthy class with no blocked steps
+(which stops the execution lens, the one that reads the diagnosis instead).
+A loop whose only event is its own completion is the smallest thing that is
+both.
+
+**One survivor was a bad mutant, not a gap.** Widening the bar's `tokens >
+0` guard to `>= 0` changes nothing at any input: the two differ only at
+exactly zero, and there the body computes `0 // 5000 = 0` and repeats `"="`
+zero times — the same empty bar the guard produces. The guard's real claim
+is that it stops a *negative* count from reaching `strings.Repeat`, which
+panics where Python's `"=" * -2` quietly yields `""`. Only deleting the
+guard outright puts that claim under test, and once a step with a negative
+token count existed, deleting it did.
+
+**Three are unkillable and retired with proofs:**
+
+- **`padLeft` counting bytes instead of runes.** Both call sites pass ASCII
+  by construction — a decimal step index and a `Grouped` token count, which
+  is digits and commas. No input to this CLI reaches the difference.
+  `padRight` is a different matter, which is why the multibyte fixture
+  above exists for it and not for this one.
+- **The graduation-candidate branch.** `GraduationCandidate` is
+  `len(diags) >= minOccurrences`, computed after a `continue` that already
+  skipped every class failing that same test. It is a tautology at every
+  reachable input, so the conditional around the marker can only ever take
+  one arm.
+- **The `healthy` guard in `RenderRecovery`.** Removing it changes nothing,
+  because `recoveryTable` has no `healthy` row and the `PlanRecovery`
+  lookup immediately below fails for that class anyway.
+
+The last two are the same shape — a guard whose condition is already
+guaranteed by something upstream — and in both cases the answer was to
+*keep* the code and name it, not delete it. That is a distinction worth
+making, because the lens these belong to is the one that says deleting is
+sometimes the answer. It is the answer when the branch is unreachable and
+the seam is closed: the lens registry's cost lookup, deleted last chunk,
+had a single writer of both maps and no plausible future second one. It is
+not the answer when the guard states an intent at a seam a later edit will
+touch. Add a `healthy` row to `recoveryTable` and the guard immediately
+starts earning its keep; drop it now, and that future edit silently begins
+emitting recovery plans for healthy loops.
+
+Final: **seventy-two live mutants, seventy-two detected**, three retired
+with written proofs.
+
+The arc-wide shape holds, and this chunk sharpened one half of it. Eight
+batteries in, the differentials still go green on their first run and the
+batteries still find that a quarter to a third of the fixtures cannot tell
+two answers apart. What changed here is the *kind* of gap: not a boundary
+without a case at it, but a fixture whose input never reached the code it
+was written for, passing for months underneath four mutants that died to
+something else entirely. A fixture's name is a claim about coverage, and
+it decays exactly like a comment does.
