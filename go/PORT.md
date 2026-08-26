@@ -7983,3 +7983,87 @@ nothing sane writes: CPython answers with a negative cost, and so must the
 port. The fixture is now there, and it pins the ORDER rather than pretending
 to be a defence. This is the limit-with-no-case-at-its-own-boundary lens
 reaching a place where the boundary is outside the realistic domain.
+
+## diagnose_loop: eight heuristics whose ORDER is the answer
+
+`internal/introspect/diagnose.go` ports the pure half of
+`introspect.diagnose_loop` — `StepProfile`, `LoopDiagnosis`, its `to_dict`
+and `summary`, `_build_step_profiles`, and the eight-check heuristic cascade
+— leaving the I/O half (`_events_path`, `_load_loop_events`,
+`save_diagnosis`, `diagnose_latest`) for its own slice.
+
+**The cascade is most-specific-first and the ordering is load-bearing in a
+way that is easy to lose.** Six of the eight checks are gated on
+`failure_class == "healthy"`; two deliberately are not. `adapter_timeout`
+(2) overwrites `setup_failure` (1), and `budget_exhaustion` (7) appends its
+evidence whatever the class is and only moves the severity if it also won
+the class. A port that gated all eight uniformly would read tidier and
+answer differently, so the gating is spelled out check by check and the
+divergence is pinned by fixtures that are both.
+
+**`pyval.Grouped` came out of this slice.** Python's `{:,}` renders the
+token counts in the cost evidence, and this is the fourth or fifth place a
+Python rendering would have gone into a private local copy. It groups from
+the RIGHT, so the leading group is 1–3 digits and an index-based `i % 3`
+gets 1000 wrong (`,1,000`); the sign stays outside the grouping. The
+differential sweeps every digit length 1–18 at both ends, both signs, and
+the int64 extremes.
+
+**Two named divergences carried forward.** `stuck_reason` is read with
+`evStr`, so a non-string `detail` reads as absent where CPython raises a
+TypeError out of `"max_iterations" in stuck_reason`; the same shape applies
+to a non-string `goal` on `loop_start`. CPython crashes and the port
+diagnoses. Pinned, not replicated.
+
+**Two nil guards were DELETED rather than fixed.** `pyjson.Ordered` already
+renders a nil slice as `[]` and not `null`, pinned by a test whose whole
+stated purpose is to let call sites stop re-checking it. A local `if ev ==
+nil` was a second guard for the same thing — and a second guard is exactly
+what makes a wrong bound unobservable. The mutant that removed it survived
+the battery *because* pyjson was correct underneath.
+
+### The battery
+
+45 mutants over `diagnose.go`. The first run: 29 detected, 15 survived, one
+failed to compile. One survivor (D41) was the duplicated nil guard above and
+was answered by deleting production code. The other fourteen were all one
+finding wearing different hats, and it is the most useful thing this slice
+produced:
+
+**Every cost and churn fixture in the differential was being classified by
+an earlier check and never reached the code it was written to exercise.**
+
+- The three `retry_churn` fixtures opened with a blocked, zero-token step —
+  which is precisely the shape check 1 calls `setup_failure`. Check 8 is
+  gated on `healthy`, so it was never reached, and the mutants on the churn
+  limit (`>= 2` → `> 2`), the 60-rune key clip, byte-vs-rune clipping and
+  the insertion-order evidence all survived in silence. The corridor that
+  actually arrives at check 8 is narrow: step 1 must NOT be blocked-and-fast
+  (check 1 reads `profiles[0]` only), the blocked steps must take ≥ 1s
+  (check 3) and must spend ZERO tokens (check 6).
+- The cost-threshold fixtures were priced by raw input volume — 625,000
+  Haiku tokens is exactly $0.50 — and 625,000 fresh tokens trips
+  `decomposition_too_broad` at check 4, four checks before the dollar
+  thresholds are evaluated. They are now priced with a large cache read
+  (grok-4.5, 700,000 in with 500,000 cached) so that fresh tokens land
+  exactly ON check 4's limit, which is `>`, and pass through to a cost of
+  exactly $0.50 in IEEE doubles.
+
+**The clamp that no fixture could see.** `StepProfile.fresh_tokens` is
+`max(0, tokens - cache_read_tokens)`, and every use of it inside
+`diagnose_loop` is a `>` against a positive threshold (200,000 / 50,000 /
+1,000) or a print of a value that already cleared one. A negative fresh
+count therefore cannot change any answer the function gives. The clamp is
+not dead — it is only observable to a caller of the PROPERTY, so the test is
+a direct differential of `fresh_tokens` and `cost_usd` against CPython's own
+`StepProfile`, with cases where the cache stamp exceeds both the total and
+the input.
+
+**And the battery committed the lens itself.** D35 reported MISS for an hour
+after that test existed, because the battery invoked
+`go test -run Diagnose`, which does not match
+`TestStepProfilePropertiesMatchCPython`. A filter that excludes the test
+which kills a mutant reports a survivor the battery caused. The `-run`
+filter is gone.
+
+Final state: 44 live mutants, 44 detected.

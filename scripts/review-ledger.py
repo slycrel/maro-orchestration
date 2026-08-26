@@ -225,6 +225,58 @@ def cmd_lenses(args) -> int:
     return 0
 
 
+PROMPT_HEAD = """\
+## Review output contract
+
+Return your findings as a JSON list, one object per finding, and NOTHING
+else after it. The list is fed straight to `review-ledger.py import`, so a
+field spelled wrong is a finding that never gets counted.
+
+Each object:
+
+  arc       {arc!r}
+  round     {round}                    (integer)
+  target    the package/file you reviewed
+  reviewer  {reviewer!r}
+  severity  one of: high | medium | low | nit
+  lens      a lens id from the catalog below, or null if none fits
+  verdict   one of: confirmed | hallucinated | known-gap | wontfix
+  fix_site  one of: production | test | battery | doc | none
+  summary   one sentence, past tense, naming the SITE and the CONSEQUENCE
+
+Two rules that make the data worth collecting:
+
+1. Record findings you RETRACT as `"verdict": "hallucinated"`. The
+   hallucination rate is the number this ledger exists to measure and it
+   cannot be measured from the findings that survived.
+2. If a finding fits no lens, set `"lens": null` and say so in the
+   summary. Do NOT stretch an existing lens to fit — an unattributed row
+   is a lens candidate, and a wrong attribution is noise forever.
+
+## The lens catalog
+
+Walk these against the whole chunk before writing findings. They are
+ordered by how often they have actually fired.
+"""
+
+
+def cmd_prompt(args) -> int:
+    lenses = known_lenses()
+    if not lenses:
+        print(f"no lens catalog found at {catalog_path()}", file=sys.stderr)
+        return 1
+    print(PROMPT_HEAD.format(arc=args.arc, round=args.round if args.round
+                             is not None else 1, reviewer=args.reviewer or "?"))
+    counts = Counter(r.get("lens") for r in load_rows())
+    for lens, title in sorted(lenses.items(),
+                              key=lambda kv: (-counts[kv[0]], kv[0][0],
+                                              int(kv[0][1:]))):
+        print(f"  {lens:<5} ({counts[lens]:>3} seen)  {title}")
+    print(f"\nFull text with canonical instances and tripwires: "
+          f"{catalog_path().relative_to(repo_root())}")
+    return 0
+
+
 def cmd_add(args) -> int:
     n = append_rows([{
         "arc": args.arc, "round": args.round, "target": args.target,
@@ -277,6 +329,14 @@ def main(argv=None) -> int:
 
     l = sub.add_parser("lenses", help="catalog ids with recorded counts")
     l.set_defaults(func=cmd_lenses)
+
+    pr = sub.add_parser("prompt",
+                        help="the block to paste into a review subagent: "
+                             "output contract + lens catalog, hottest first")
+    pr.add_argument("--arc", default="go-port")
+    pr.add_argument("--round", type=int)
+    pr.add_argument("--reviewer")
+    pr.set_defaults(func=cmd_prompt)
 
     args = ap.parse_args(argv)
     return args.func(args)

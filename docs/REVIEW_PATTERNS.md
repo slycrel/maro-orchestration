@@ -552,6 +552,26 @@ python3 scripts/review-ledger.py report
 python3 scripts/review-ledger.py report --arc go-port --by lens
 ```
 
+### Collecting it without remembering to
+
+A ledger that depends on someone typing `add` after each round collects
+nothing. `prompt` prints the block a review subagent is given — the output
+contract plus the whole catalog, ordered hottest-lens-first — so a round
+returns ledger-shaped JSON instead of prose and the round ends with an
+`import`, not with transcription:
+
+```bash
+python3 scripts/review-ledger.py prompt --arc go-port --round 5 --reviewer opus
+# ...paste into the review agent; it returns a JSON list...
+python3 scripts/review-ledger.py import /tmp/round5.json
+```
+
+Two things that block belongs to. It hands the reviewer the catalog, so a
+lens stops being something only the orchestrator remembers. And it asks for
+RETRACTED findings to be recorded as `hallucinated` — without those rows
+the denominator in (1) below never exists, which is exactly why the
+backfill could not supply it.
+
 Fields per row: `arc`, `round`, `target`, `reviewer`, `severity`, `lens`,
 `verdict` (`confirmed` | `hallucinated` | `known-gap` | `wontfix`),
 `fix_site` (`production` | `test` | `battery` | `doc` | `none`),
