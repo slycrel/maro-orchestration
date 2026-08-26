@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -341,7 +343,21 @@ func clipLine(s string, n int) string {
 // Read-only and free by construction. Python's CLI can reach no LLM lens
 // either — `main` passes `include_llm=getattr(args, "llm", False)` and
 // argparse never defines `--llm` — so there is no spend flag to add here.
+// runIntrospect exits 2 on a bad argument line, matching argparse. Every
+// other failure keeps main's exit 1. The two codes are distinct in CPython
+// and scripts branch on them, so collapsing both to 1 is a divergence a
+// caller can see without ever reading a message.
 func runIntrospect(args []string) error {
 	ws := config.Workspace()
-	return introspect.Main(ws, args, os.Stdout)
+	err := introspect.Main(ws, args, os.Stdout)
+	var ue *introspect.UsageError
+	if errors.As(err, &ue) {
+		// The whole argparse block — usage summary, then
+		// `maro-introspect: error: <message>` — because the message is what
+		// tells one refusal from another, and a script that greps stderr is
+		// reading text CPython wrote for years.
+		io.WriteString(os.Stderr, ue.Stderr())
+		os.Exit(2)
+	}
+	return err
 }

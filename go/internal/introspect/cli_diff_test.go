@@ -2,6 +2,7 @@ package introspect
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,19 +28,26 @@ const pyCLISrc = `
 import io, json, os, sys, contextlib
 import introspect
 
+# COLUMNS pins argparse's help formatter, which otherwise re-wraps to the
+# terminal width. 80 is what CPython falls back to when stdout is not a
+# terminal, so this is the rendering every scripted invocation sees — and
+# without it this differential would agree or disagree by terminal size.
+os.environ["COLUMNS"] = "80"
+
 args = json.loads(sys.argv[1])
 out = []
 for c in args:
     os.environ["MARO_WORKSPACE"] = c["ws"]
     import importlib
     importlib.reload(introspect)
-    buf = io.StringIO()
+    buf, ebuf = io.StringIO(), io.StringIO()
+    code = 0
     try:
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(ebuf):
             introspect.main(c["argv"])
-        out.append({"ok": True, "text": buf.getvalue()})
     except SystemExit as e:
-        out.append({"ok": False, "text": buf.getvalue(), "exit": str(e)})
+        code = e.code if isinstance(e.code, int) else 1
+    out.append({"code": code, "out": buf.getvalue(), "err": ebuf.getvalue()})
 print(json.dumps(out))
 `
 
@@ -86,15 +94,15 @@ func TestCLIMatchesCPython(t *testing.T) {
 	// floor decides. A healthy loop would exercise neither the recovery
 	// block nor most of the lens output.
 	explosion := []string{
-		evt("loop-alpha", "step_done", `"step_idx": 1, "step": "fetch the widget index", "status": "done", "tokens": 12000, "elapsed_ms": 900, "tokens_in": 11000, "tokens_out": 1000, "model": "grok-4.5"`),
-		evt("loop-alpha", "step_done", `"step_idx": 2, "step": "verify the parser output", "status": "done", "tokens": 640000, "elapsed_ms": 190000, "tokens_in": 639000, "tokens_out": 1000, "model": "grok-4.5"`),
-		evt("loop-alpha", "step_done", `"step_idx": 3, "step": "render report tables", "status": "blocked", "tokens": 0, "elapsed_ms": 140000`),
+		evt("loop-alpha", "step_done", `"step_idx": 1, "step": "fetch the widget index", "status": "done", "elapsed_ms": 900, "tokens_in": 11000, "tokens_out": 1000, "model": "grok-4.5"`),
+		evt("loop-alpha", "step_done", `"step_idx": 2, "step": "verify the parser output", "status": "done", "elapsed_ms": 190000, "tokens_in": 639000, "tokens_out": 1000, "model": "grok-4.5"`),
+		evt("loop-alpha", "step_done", `"step_idx": 3, "step": "render report tables", "status": "blocked", "elapsed_ms": 140000`),
 		evt("loop-alpha", "loop_done", `"status": "stuck", "detail": "token budget"`),
 	}
 	// A clean loop, so the healthy path (no recovery block, thin lens
 	// output) is measured too.
 	healthy := []string{
-		evt("loop-beta", "step_done", `"step_idx": 1, "step": "alpha", "status": "done", "tokens": 100, "elapsed_ms": 900, "tokens_in": 100, "model": "grok-4.5"`),
+		evt("loop-beta", "step_done", `"step_idx": 1, "step": "alpha", "status": "done", "elapsed_ms": 900, "tokens_in": 100, "model": "grok-4.5"`),
 		evt("loop-beta", "loop_done", `"status": "done"`),
 	}
 	// A step whose token count is under 5000 renders an EMPTY bar, and one
@@ -150,6 +158,21 @@ func TestCLIMatchesCPython(t *testing.T) {
 		argv  []string
 		store string // "events" | "diagnoses"
 		rows  []string
+		// wantExit is the exit code CPython must produce: 0 when it renders
+		// (help included — argparse exits 0 for that), 2 when argparse
+		// refuses the argument line.
+		//
+		// It is DECLARED and then cross-checked against CPython rather than
+		// simply read off it. A fixture whose name claims a refusal and whose
+		// argument line quietly became legal would otherwise keep passing
+		// while measuring nothing, which is exactly the failure L44 names.
+		//
+		// This field started out a bool meaning "exits somehow", and that
+		// shape is why the whole error surface went unmeasured: a case struct
+		// with no way to say "refuses with THIS message" cannot hold a
+		// fixture that checks one, so six argparse divergences sat outside a
+		// battery reporting 72/75.
+		wantExit int
 	}{
 		{name: "an empty store with no arguments", argv: nil, store: "events"},
 		{name: "the latest loop", argv: []string{"--latest"}, store: "events",
@@ -280,6 +303,200 @@ func TestCLIMatchesCPython(t *testing.T) {
 		{name: "patterns from past the twenty-fifth row",
 			argv: []string{"--patterns"}, store: "diagnoses",
 			rows: patternsPastRow25()},
+
+		// --- the argument line itself ---------------------------------
+		//
+		// Everything below was invisible to this file until a reviewer
+		// mutated the tree and found the guards unpinned. Each one is a
+		// place where argparse and Go's flag package disagree SILENTLY:
+		// the wrong reading produces plausible output, not an error.
+
+		// THE HISTORY WINDOW. Six rows read at 2 must render two. The only
+		// other history fixture asks for exactly as many rows as it seeded,
+		// so replacing `*history` with a constant changed nothing and the
+		// limit was never actually passed anywhere.
+		{name: "a history window smaller than the store",
+			argv: []string{"--history", "2"}, store: "diagnoses",
+			rows: []string{
+				diagRow("h1", "healthy", "info", 1, 1, 1),
+				diagRow("h2", "healthy", "info", 2, 2, 2),
+				diagRow("h3", "healthy", "info", 3, 3, 3),
+				diagRow("h4", "token_explosion", "warning", 4, 4, 4),
+				diagRow("h5", "adapter_timeout", "critical", 5, 5, 5),
+				diagRow("h6", "healthy", "info", 6, 6, 6)}},
+		// A NEGATIVE N is TRUTHY. `if args.history:` takes the branch, and
+		// load_diagnoses breaks on `1 >= -5` after one append — so CPython
+		// renders exactly one row where a `> 0` port renders a diagnosis.
+		{name: "a negative history is truthy and renders one row",
+			argv: []string{"--history", "-5"}, store: "diagnoses",
+			rows: []string{
+				diagRow("n1", "healthy", "info", 1, 1, 1),
+				diagRow("n2", "token_explosion", "warning", 2, 2, 2),
+				diagRow("n3", "adapter_timeout", "critical", 3, 3, 3)}},
+		// `--flag=value` — a whole branch of splitArgs that no case reached.
+		// `--history 0` is SUPPLIED and FALSY, so it falls through to the
+		// latest-loop branch exactly as an unsupplied flag does — the one
+		// input that separates "was it given" from "is it non-zero", and
+		// the reason both terms of that guard are written out.
+		{name: "a zero history window falls through to latest",
+			argv: []string{"--history", "0"}, store: "events", rows: explosion},
+		{name: "a value attached with an equals sign",
+			argv: []string{"--history=5"}, store: "diagnoses",
+			rows: []string{diagRow("e1", "healthy", "info", 1, 1, 1)}},
+		// `--` ends the options. Everything after it is a positional, even a
+		// token spelled exactly like a flag.
+		{name: "a double dash makes the next token a loop id",
+			argv: []string{"--", "--latest"}, store: "events", rows: explosion},
+		// ARGPARSE ABBREVIATES. A unique prefix resolves to its option, so
+		// `--lat` diagnoses the latest loop and `--hist 5` prints history.
+		// Go's flag package rejects both, which is a silent behaviour change
+		// for anything that already types them.
+		{name: "an abbreviated option", argv: []string{"--lat"},
+			store: "events", rows: explosion},
+		{name: "an abbreviated option with a value",
+			argv: []string{"--hist", "5"}, store: "diagnoses",
+			rows: []string{diagRow("p1", "healthy", "info", 1, 1, 1)}},
+		// A LEADING-DASH NEGATIVE NUMBER is a positional, because no option
+		// of this parser looks like one. `-5` diagnoses a loop named "-5".
+		{name: "a negative number is a loop id", argv: []string{"-5"},
+			store: "events", rows: explosion},
+
+		// --- argument lines CPython REFUSES ---------------------------
+		{name: "an ambiguous abbreviation", argv: []string{"--l"},
+			store: "events", rows: explosion, wantExit: 2},
+		{name: "an unknown option", argv: []string{"--bogus"},
+			store: "events", rows: explosion, wantExit: 2},
+		// A single-dash long name. Go's flag treats -latest and --latest as
+		// the same thing; argparse does not have the first at all.
+		{name: "a single-dash long name", argv: []string{"-latest"},
+			store: "events", rows: explosion, wantExit: 2},
+		// A store_true option given an explicit value.
+		{name: "a value attached to a boolean flag",
+			argv: []string{"--latest=true"}, store: "events",
+			rows: explosion, wantExit: 2},
+		{name: "a second positional", argv: []string{"a", "b"},
+			store: "events", rows: explosion, wantExit: 2},
+		{name: "a value-taking option with nothing after it",
+			argv: []string{"--history"}, store: "diagnoses", wantExit: 2},
+
+		// --- HELP, which argparse prints to stdout and exits 0 for --------
+		{name: "help", argv: []string{"-h"}, store: "events", rows: explosion},
+		{name: "help by its long name", argv: []string{"--help"},
+			store: "events", rows: explosion},
+		// A glued tail on a single-dash flag is argparse re-reading it as
+		// more single-dash options — and the help action exits before the
+		// tail is looked at, so `-hh` and `-hx` alike print help. A port that
+		// rejected every single-dash long name (this one did) refuses all of
+		// them.
+		{name: "help with a glued tail", argv: []string{"-hh"},
+			store: "events", rows: explosion},
+		// An unrecognized option is NOT an error where it appears: it is set
+		// aside and reported at the end, so a `-h` after it still wins.
+		{name: "help wins over a deferred unknown option",
+			argv: []string{"--bogus", "-h"}, store: "events", rows: explosion},
+
+		// --- the negative-number rule, which is not what it looks like ----
+		// CPython 3.14's matcher is `-\.?\d` applied with `.match`, anchored
+		// only at the START. Any token beginning with a dash and a digit is a
+		// positional, not just the wholly numeric ones.
+		{name: "a dash-digit token is a loop id, not a flag",
+			argv: []string{"-1latest"}, store: "events", rows: explosion},
+		// `\d` is Unicode-aware in a Python str pattern, so an Arabic-Indic
+		// digit takes the same branch. Go's `\d` is ASCII-only and would put
+		// this one on the error path.
+		{name: "a non-ascii digit counts as a number",
+			argv: []string{"-\u0665"}, store: "events", rows: explosion},
+
+		// --- abbreviation, values, and the terminator ---------------------
+		// An abbreviation WITH an attached value: the resolved name has to
+		// survive the rewrite, which `--history=5` alone cannot check because
+		// there the abbreviation and the full name are the same string.
+		{name: "an abbreviated option with an attached value",
+			argv: []string{"--hist=5"}, store: "diagnoses",
+			rows: []string{diagRow("q1", "healthy", "info", 1, 1, 1)}},
+		{name: "two abbreviated options", argv: []string{"--lat", "--len"},
+			store: "events", rows: explosion},
+		// Python's int() strips surrounding whitespace, so " 5" is 5 — where
+		// Go's strconv.Atoi refuses it. (pyval.Int carries the whole rule,
+		// underscores and all; the named residual is non-ascii digits.)
+		{name: "an int value with surrounding whitespace",
+			argv: []string{"--history", " 5"}, store: "diagnoses",
+			rows: []string{diagRow("r1", "healthy", "info", 1, 1, 1)}},
+		// Only the FIRST `--` terminates; a second one is an ordinary token.
+		{name: "a second double dash is a loop id",
+			argv: []string{"--", "--"}, store: "events", rows: explosion},
+
+		// --- refusals, compared by their MESSAGE --------------------------
+		{name: "an abbreviation ambiguous between help and history",
+			argv: []string{"--h"}, store: "events", rows: explosion, wantExit: 2},
+		// The message names the token AS TYPED and lists every candidate, so
+		// this one reports `--=x` and all five long options.
+		{name: "an empty abbreviation with a value",
+			argv: []string{"--=x"}, store: "events", rows: explosion, wantExit: 2},
+		// The action owns BOTH its option strings, and the message says so:
+		// "argument -h/--help", whichever spelling was typed.
+		{name: "a value attached to the short help flag",
+			argv: []string{"-h=x"}, store: "events", rows: explosion, wantExit: 2},
+		// ...and the LONG spelling reports the same label, because the label
+		// is the action's, not the token's.
+		{name: "a value attached to the long help flag",
+			argv: []string{"--help=x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		// A store_true given an EMPTY explicit value still refuses.
+		{name: "an empty value attached to a boolean flag",
+			argv: []string{"--latest="}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a triple dash", argv: []string{"---latest"},
+			store: "events", rows: explosion, wantExit: 2},
+		{name: "an unknown option with an attached value",
+			argv: []string{"--bogus=x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		// The int conversion is argparse's, and its failure is a usage error
+		// with its own wording — not a runtime error, and not exit 1.
+		{name: "a non-numeric value", argv: []string{"--history", "abc"},
+			store: "diagnoses", wantExit: 2},
+		// A lone "-" classifies as a POSITIONAL, so it is consumed as the
+		// value and fails the int conversion — where an option-looking token
+		// is not consumed at all and fails as a missing argument. Two
+		// different messages, one character apart in the input.
+		{name: "a lone dash as a value", argv: []string{"--history", "-"},
+			store: "diagnoses", wantExit: 2},
+		{name: "an option-looking token is not a value",
+			argv: []string{"--history", "--tory"}, store: "diagnoses",
+			wantExit: 2},
+		{name: "the terminator is not a value",
+			argv: []string{"--history", "--", "5"}, store: "diagnoses",
+			wantExit: 2},
+		// Extras are reported in the order the TOKENS appeared, mixing
+		// unknown options with surplus positionals.
+		{name: "a surplus positional and an unknown option",
+			argv: []string{"a", "b", "--bogus"}, store: "events",
+			rows: explosion, wantExit: 2},
+		// ...and a bare token after an unknown option is the loop id, so it
+		// is NOT in the extras.
+		{name: "an unknown option does not consume the loop id",
+			argv: []string{"--patterns", "--bogus", "extra"}, store: "events",
+			rows: explosion, wantExit: 2},
+		// The terminator itself never appears in the extras.
+		{name: "a surplus positional after the terminator",
+			argv: []string{"a", "--", "b"}, store: "events", rows: explosion,
+			wantExit: 2},
+		// A glued tail that itself starts with a dash is NOT re-read as more
+		// options — it is the one shape of `-h<tail>` argparse refuses.
+		{name: "a glued tail starting with a dash",
+			argv: []string{"-h-x"}, store: "events", rows: explosion,
+			wantExit: 2},
+
+		// --- one place the two runtimes cannot agree exactly -------------
+		// Python ints are arbitrary precision, so this is a valid (enormous)
+		// limit there and an overflow here. The port saturates rather than
+		// inventing a refusal: load_diagnoses runs out of store long before
+		// either number matters, so the RENDERING is identical — which is
+		// what this case checks.
+		{name: "an int value past every machine bound",
+			argv:  []string{"--history", "99999999999999999999999"},
+			store: "diagnoses",
+			rows:  []string{diagRow("s1", "healthy", "info", 1, 1, 1)}},
 	}
 
 	// Build both sides' stores up front: CPython gets its own copies.
@@ -304,9 +521,9 @@ func TestCLIMatchesCPython(t *testing.T) {
 	}
 
 	type answer struct {
-		OK   bool   `json:"ok"`
-		Text string `json:"text"`
-		Exit string `json:"exit"`
+		Code int    `json:"code"`
+		Out  string `json:"out"`
+		Err  string `json:"err"`
 	}
 	var want []answer
 	probe := pyprobe.Probe{Marker: "introspect.py"}
@@ -318,22 +535,52 @@ func TestCLIMatchesCPython(t *testing.T) {
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := want[i]
-			if !w.OK {
-				t.Fatalf("cpython exited: %s\n%s", w.Exit, w.Text)
+			if w.Code != c.wantExit {
+				t.Fatalf("cpython exited %d, fixture declares %d\n"+
+					"--- stdout ---\n%s\n--- stderr ---\n%s",
+					w.Code, c.wantExit, w.Out, w.Err)
 			}
-			// A rendering that is empty on BOTH sides is the shape L1 names,
-			// so say so rather than passing quietly.
-			if strings.TrimSpace(w.Text) == "" {
+			// Both anti-vacuity checks are the same guard as L1: a case that
+			// compares "" against "" agrees without measuring. A rendering
+			// case must render, and a refusal must say something.
+			if c.wantExit == 0 && strings.TrimSpace(w.Out) == "" {
 				t.Fatalf("cpython rendered nothing for %q — the fixture "+
 					"cannot tell two implementations apart", c.name)
 			}
+			if c.wantExit != 0 && strings.TrimSpace(w.Err) == "" {
+				t.Fatalf("cpython refused %q silently — nothing to compare",
+					c.name)
+			}
+
 			var buf bytes.Buffer
-			if err := Main(goWS[i], c.argv, &buf); err != nil {
+			err := Main(goWS[i], c.argv, &buf)
+			gotCode, gotErr := 0, ""
+			var ue *UsageError
+			switch {
+			case errors.As(err, &ue):
+				// UsageError is what carries the code: a plain error would
+				// exit 1 where argparse exits 2, and a script that branches
+				// on the difference would see a runtime failure where it
+				// should see a typo.
+				gotCode, gotErr = 2, ue.Stderr()
+			case err != nil:
 				t.Fatalf("go Main: %v", err)
 			}
-			if got := buf.String(); got != w.Text {
-				t.Errorf("rendering differs\n--- cpython ---\n%s\n--- go ---\n%s",
-					showWhitespace(w.Text), showWhitespace(got))
+			if gotCode != w.Code {
+				t.Errorf("exit code: cpython %d, go %d (%v)", w.Code, gotCode, err)
+			}
+			if got := buf.String(); got != w.Out {
+				t.Errorf("stdout differs\n--- cpython ---\n%s\n--- go ---\n%s",
+					showWhitespace(w.Out), showWhitespace(got))
+			}
+			// STDERR IS COMPARED IN FULL, usage block and all. Comparing only
+			// "did it refuse" is what let five distinct refusals collapse into
+			// one indistinguishable outcome: `-latest` and `--atest` are both
+			// exit 2, and only the message says the port cut the token in the
+			// wrong place.
+			if gotErr != w.Err {
+				t.Errorf("stderr differs\n--- cpython ---\n%s\n--- go ---\n%s",
+					showWhitespace(w.Err), showWhitespace(gotErr))
 			}
 		})
 	}

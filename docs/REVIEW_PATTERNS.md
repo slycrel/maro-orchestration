@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**626**. The counts below were regenerated from `report --by lens`, not
+**653**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
 That regeneration is a claim this file has already failed once: at the
@@ -40,7 +40,7 @@ had recorded rows without re-deriving the counts, and the sentence above
 went on asserting they were derived. Regenerate ALL of them every time —
 a per-lens edit is how the drift got in.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 626
+**Two things the counts are not.** They are lower bounds: 309 of the 653
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -58,7 +58,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 53 — the most frequent single defect in the Go port*
+*instances: 54 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -105,7 +105,7 @@ shape is real and the tripwire is cheap; treat it as a self-review prompt
 rather than as a measured recurrence.
 
 ### L4 — A guard that cannot fire is not evidence the danger is gone
-*instances: 7*
+*instances: 11*
 
 **Canonical instance.** Deleting the `is_error` check from
 `classify_tool_pathologies`' hallucination scan survived a 37-mutant
@@ -134,7 +134,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 25*
+*instances: 26*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -155,7 +155,7 @@ a fault in the battery, not a survivor.
 A guard derived from what changed cannot catch what was always wrong.
 
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
-*instances: 2*
+*instances: 1*
 
 ### L11 — A deadlocked test is worse than a failing one
 *instances: 2*
@@ -206,7 +206,7 @@ introspect port deliberately did not become the seventh.
 *instances: 5*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
-*instances: 5*
+*instances: 6*
 
 ### L36 — A hardening is a fork
 *instances: 3 attributed; ~4 in the mined cluster*
@@ -227,7 +227,7 @@ the same field. The hardening is not done until they agree or the
 disagreement is written down as a divergence.
 
 ### L37 — Two runtimes share a store and nothing tests the crossing
-*instances: 2 attributed; ~5 in the mined cluster*
+*instances: 3 attributed; ~5 in the mined cluster*
 
 The port and CPython write into the same JSONL. Each side's tests are
 self-consistent; the boundary is what nobody exercises.
@@ -262,14 +262,14 @@ Fixtures for a reader must be LINES, not literals.
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 20*
+*instances: 22*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 16*
+*instances: 21*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -290,7 +290,7 @@ calls the transcript clean.
 ## D. Boundaries and limits
 
 ### L23 — A limit with no case at its OWN boundary is a limit nothing pins
-*instances: 12*
+*instances: 13*
 
 A limit's NEIGHBOURS are not its boundary.
 
@@ -335,7 +335,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 23*
+*instances: 24*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -360,14 +360,14 @@ removed from the list.
 *instances: 2*
 
 ### L30 — A fixture travels through a channel, and the channel has opinions about what it carries
-*instances: 2*
+*instances: 3*
 
 **Canonical instance.** `pyprobe.RunJSON` has no `UseNumber`, so a known-gap
 pin comparing re-decoded numbers saw `1.0` come back as `1`. The fix was to
 emit the compared fields as a Python-side JSON *string*.
 
 ### L31 — Sometimes the answer to a survivor is DELETING production code
-*instances: 4*
+*instances: 5*
 
 A distinction nothing reads is a second guard making the first unobservable.
 
@@ -385,7 +385,7 @@ negation). Deleting the first would make a future `healthy` row silently
 start emitting recovery plans for healthy loops.
 
 ### L34 — A clip marker is not the end of the string
-*instances: 3 attributed; ~5 in the mined cluster*
+*instances: 2 attributed; ~5 in the mined cluster*
 
 Something appended AFTER a truncation is eaten by it, or the marker itself
 is miscounted — so the surface silently loses exactly the part that was
@@ -401,7 +401,7 @@ miscounting the marker.
 and anything that must survive. And count the marker in the budget.
 
 ### L35 — Row order is part of the answer
-*instances: 3 attributed; ~8 in the mined cluster*
+*instances: 4 attributed; ~8 in the mined cluster*
 
 Emitted rows carry an order that a consumer depends on — dedup identity,
 last-row-wins, a prompt's salience gradient, a human reading a report — and
@@ -601,7 +601,7 @@ comment, because it is a property of the source, not of the test.
 
 ### L44 — A fixture's name is a coverage claim, and nothing checks it
 
-*instances: 2*
+*instances: 3*
 
 The fixture feeds the code through a field the code does not read. Its
 inputs are shaped like the real thing but keyed the way the *writer* names
@@ -639,6 +639,118 @@ killed it — narrow the run to the case that claims the coverage. The
 cheapest version of this is a battery run filtered to one fixture; if the
 mutant survives that, the name is a lie even though the suite is green.
 
+### L45 — A battery measures only what the harness can EXPRESS
+
+*instances: 2*
+
+A mutation score is a statement about the fixtures. But the fixtures reach
+only as far as the harness lets them describe an outcome — and a case
+struct with no field for some result cannot hold a fixture that produces
+it. Every behaviour behind that wall is unmeasured, and the detection rate
+never says so. It reports a high number about a smaller space.
+
+The tell is an assertion branch that reads *"this shouldn't happen"*. A
+`t.Fatalf("the other runtime exited: %v")`, a `continue` past a shape the
+comparison "can't handle", a normalisation that folds two answers into one
+before comparing — each is a wall, and walls are invisible from inside.
+They look like defensive hygiene rather than scope.
+
+**Canonical instance.** `internal/introspect/cli` r2 (high): the CLI
+differential's probe captured CPython's `SystemExit` faithfully — and the
+assertion treated *any* exit as a test bug. So no fixture could describe an
+argument line CPython refuses, and the entire error-parity surface sat
+outside the battery. A 75-mutant battery reported 72 detected while six
+separate argparse-vs-`flag` divergences went unseen, four of them silent
+(wrong output, no error). The fix was one `wantExit bool` on the case
+struct; the six fixtures followed immediately, and so did the mutants.
+
+**Second instance, and it is the more useful one: a wall can MOVE instead
+of falling.** The `wantExit bool` that fixed the above was still a boolean,
+and the next round's battery found `C78` surviving because of it. Deleting
+the guard that refuses `-latest` left every fixture green — the mutant
+still *refused* the input, just at a different offset and with a different
+message, and "refuses" was the only thing the harness could say. One step
+back from where the wall had been. The real fix was to compare the exit
+code as a NUMBER and stderr in FULL, which then forced the port to render
+argparse's usage and help blocks verbatim — and, with the messages finally
+being compared, surfaced eight more behavioural divergences.
+
+So the enumeration has to go one level past the first answer. "Refuses" is
+not an outcome; "refuses with this message and this code" is. Any time a
+harness collapses a rich result into a boolean, the mutants can only ever
+probe the boolean.
+
+**Tripwire.** Before quoting a detection rate, ask what OUTCOMES the case
+struct can represent — not what inputs it can supply. Enumerate the result
+space of the thing under test (renders / refuses / raises / writes /
+returns empty) and check the harness has a way to say each one. Then ask
+the same question of each branch of that enumeration, because a boolean
+that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
+the comparison path as a scope declaration, because that is what it is.
+
+### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
+*instances: 6*
+
+A port that reaches for the host language's equivalent library — `flag`
+for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
+porting the original. It is encoding the differences its author happened to
+think of, and treating that enumeration as the class. Every rule of the
+original that nobody named survives as a silent divergence, and the ones
+that survive are by construction the ones nobody would think to test.
+
+The tell is a **normalizing pre-pass**: a function that fixes up the input
+before handing it to the local library. Its length is a measure of how much
+grammar is being approximated rather than ported, and each new case bolted
+onto it is evidence the approximation is not converging.
+
+**Canonical instance.** `internal/introspect/cli`. The argument layer was
+`splitArgs` — a pre-pass that rewrote argv and then called Go's `flag`. An
+outside review found six argparse-vs-`flag` divergences in it, four of them
+silent (wrong output, no error). Fixing those six left the pre-pass in
+place. Porting `_parse_optional` / `_get_option_tuples` / the consume loop
+wholesale — deleting `flag` from the file entirely — surfaced **eight
+more**: `-hh` prints help; unknown options are deferred to the end of
+parsing while ambiguous ones fail where they are consumed (so `-h --l`
+prints help and `--l -h` is an error); a value-taking option will not
+swallow an option-looking token but will swallow a lone dash; only the
+first `--` terminates; `_get_action_name` joins every option string the
+action owns. None of the eight is exotic and none was findable by
+enumeration, because the enumeration was the bug.
+
+**Tripwire.** When the port substitutes a library, port the ORIGINAL's
+control flow — its own function boundaries, in its own order — even when
+that means writing more code than the substitution would. Measure the
+grammar against the real interpreter rather than reasoning about it; every
+one of the fourteen rules above came out of a CPython transcript, and
+reasoning had produced confident wrong answers about several of them. If a
+pre-pass is unavoidable, its length is the finding.
+
+### L47 — The source you ported is not always the source you test against
+*instances: 2*
+
+A constant lifted from a standard library is pinned to the VERSION it was
+lifted from. The differential runs against whatever interpreter is on the
+box, so a port can be faithful to a source nobody in the room is running —
+and it fails in the one direction reviews are worst at, because both the
+code and the comment describing it are *correct*, about the wrong release.
+
+**Canonical instance.** `negativeNumber` carried
+`^-\d+$|^-\d*\.\d+$`, which is CPython **3.11**'s
+`_negative_number_matcher` — anchored at both ends. The box runs 3.14,
+where it is `-\.?\d` applied with `.match`, anchored only at the start:
+every token beginning with a dash and a digit is a positional, so
+`-1latest` is a loop id and not an unknown flag. Second instance in the
+same file: the help block's `options:` heading is 3.10+, where 3.9 says
+`optional arguments:`.
+
+**Tripwire.** When a constant or a regex comes out of a stdlib, write the
+VERSION it came from in the comment next to it, and check that version
+against the interpreter the differential actually invokes. `python3
+--version` is the cheapest review step in this catalog. Where the
+difference is real but out of scope, pin it in the comment (as the
+`options:` heading is) rather than leaving the reader to assume the
+newest.
+
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*
 
@@ -654,7 +766,7 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 3*
+*instances: 2*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.

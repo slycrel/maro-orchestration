@@ -8845,3 +8845,345 @@ without a case at it, but a fixture whose input never reached the code it
 was written for, passing for months underneath four mutants that died to
 something else entirely. A fixture's name is a claim about coverage, and
 it decays exactly like a comment does.
+
+### Round 1: everything the rendering got right, the argument line got wrong
+
+The r1 adversarial review found nothing in the rendering. It matched all
+thirty `print()` sites character for character — the `\n` prefixes, the
+two-space gaps, the space after the `:<28` pad that comes from the
+f-string concatenation rather than the format spec, the trailing space a
+zero-confidence lens leaves — and reported no divergence. Nothing at HIGH.
+
+Every finding was in the ARGUMENT LINE, and every one of the ten it
+measured reproduced exactly when checked against CPython. Zero
+hallucinated claims in the round, which is not the base rate.
+
+The shape they share: **argparse and Go's `flag` disagree in five places,
+and four of the five are silent** — the wrong reading produces plausible
+output rather than an error.
+
+- **argparse abbreviates.** A unique prefix resolves to its option, so
+  `--lat` is `--latest` and `--hist 5` is `--history 5`. Go's flag rejects
+  both. Worse, `splitArgs` did not know `--hist` took a value, so its `5`
+  became a positional and would have been read as a loop id.
+- **A leading-dash negative number is a POSITIONAL.** No option of this
+  parser looks like one, so argparse's `_negative_number_matcher` lets
+  `-5` through as a loop id; CPython prints a full `Loop -5` diagnosis.
+  Go answered `flag provided but not defined: -5`.
+- **`--history` is a truthiness test, and negative is truthy.** The port
+  read it as `> 0`. `--history -5` renders exactly one row in CPython —
+  `load_diagnoses` breaks the moment `1 >= -5` — where Go fell through
+  the branch entirely and diagnosed a loop. The old comment claimed `0`
+  "reproduces both the unset case and the explicit zero", which is true
+  and beside the point: the sign was the case it never considered.
+  Distinguishing unset from zero needs `fs.Visit`, because Go has no None.
+- **argparse REJECTS two spellings Go accepts**: a single-dash long name
+  (`-latest`) and an explicit value on a store_true flag
+  (`--latest=true`). Both exit 2 in CPython and ran normally in Go.
+- **Usage went to the wrong stream.** `fs.SetOutput(out)` with `out` =
+  stdout meant `maro introspect --bogus > report.txt` wrote a Go usage
+  block into the report, where CPython leaves stdout empty and puts
+  everything on stderr. And every argparse failure exits **2**, not 1 —
+  a code scripts branch on, which the port collapsed. `UsageError` now
+  carries it out to `cmd/maro`.
+
+`splitArgs` is a hand-written parser as a result, not a pre-pass over
+`flag`, and the option table is DATA — three behaviours read it (prefix
+resolution, value consumption, `=` legality) and a set that answered only
+the middle question is how `--hist 5` came to parse as a loop id.
+
+### And the tests it broke to prove they were empty
+
+Three of the review's findings came with a mutation the reviewer had
+actually applied to a scratch copy and watched survive. That is the
+standard this file's own batteries hold, applied from outside, and it
+found three gaps the 75-mutant battery had not:
+
+- **The `--history N` window was never exercised.** The only non-empty
+  history fixture seeded exactly five rows and asked for five, so the
+  limit never cut. Replacing `*history` with the constant `50` left the
+  suite green. The `--patterns` fixtures go to real trouble to make their
+  50-row window visible; `--history` had none of that care, and the
+  battery had no mutant for the argument at all.
+- **Two whole branches of `splitArgs` were dead.** No case contained `=`
+  or `--`. Deleting the `Contains(name, "=")` guard: green. Deleting the
+  entire `a == "--"` block: green. Both are behaviours CPython has —
+  `--history=5` prints history, `["--", "--latest"]` diagnoses a loop
+  named `--latest`.
+- **No fixture could express a CPython refusal.** The probe already
+  captured `SystemExit` faithfully, but the assertion treated any exit as
+  a test bug — so the entire error-parity surface was unmeasurable *by
+  construction*. That is why every argument finding above was invisible
+  to a battery that detected 72 of 75 mutants: the mutants could only
+  probe what the case struct could describe. A `wantExit` field was the
+  whole fix, and six refusal fixtures came with it.
+
+The last one is the lesson. A battery measures the fixtures' reach, and
+the fixtures reach only as far as the harness lets them describe an
+outcome. 72/75 was a true number about a space with a wall through it.
+
+### Round 2: the wall came down, and the room was bigger than the wall
+
+The `wantExit` field made refusals expressible, and six fixtures went in
+behind it. That is where round 1 stopped. Re-arming the battery against
+the new argument layer then produced five survivors and one BUILDFAIL —
+and chasing the first of them is what showed the field had opened the
+door onto a much larger room than anyone had looked into.
+
+`C78 a single-dash long name is accepted` was the survivor that gave it
+away. Deleting the guard that refuses `-latest` left every fixture green,
+because the mutant still *refused* the input — it fell through, cut the
+token two characters in, failed to resolve `atest`, and raised a
+different usage error. The harness could now say "CPython refuses this",
+which both spellings satisfied. It could not say **how**. So the wall had
+not come down; it had moved one step back.
+
+The fix is the same shape as the last one, one level deeper: compare
+stderr in full — usage block, `prog: error:`, message and all — and
+compare the exit code as a number rather than a boolean. That required
+CPython's `--help` and error text on the Go side, which required
+rendering argparse's usage and help blocks verbatim, which is what makes
+every refusal distinguishable from every other refusal.
+
+And then, with the messages actually being compared, the *behaviours*
+had to match. They did not, in eight more places nobody had named.
+
+### Eight more disagreements, all measured
+
+Nothing below was reasoned about. Each line is a CPython 3.14.3
+transcript, because the one thing round 1 proved beyond argument is that
+reasoning about argparse produces confident wrong answers — the reviewer
+who found the first six ran the interpreter for every claim and hit ten
+for ten, against a remembered 30–50% hallucination rate for review
+findings that are merely argued.
+
+- **`-hh` prints help and exits 0.** So does `-hx`, and `-h5`. A glued
+  tail on a single-dash flag is not an error: argparse re-reads it as
+  more single-dash options, and the help action fires and exits before
+  the tail is ever looked at. The port refused all of them.
+- **`-1latest` is a loop id.** CPython 3.14 spells
+  `_negative_number_matcher` as `-\.?\d` and applies it with `.match`,
+  which anchors only at the *start*. Every token beginning with a dash
+  and a digit is a positional. The port carried `^-\d+$|^-\d*\.\d+$` —
+  which is the **3.11** spelling, correct against a different
+  interpreter than the one it is tested against. `\d` is also Unicode
+  aware in a Python str pattern, so `-٥` takes the same branch and Go's
+  ASCII-only `\d` would not.
+- **`--history " 5"` is 5.** Python's `int()` strips surrounding
+  whitespace and allows PEP 515 underscores. `strconv.Atoi` does
+  neither. `pyval.Int` already carried the whole rule, including the
+  named residual that CPython also accepts non-ASCII digits.
+- **An unrecognized option is not an error where it appears.** It is set
+  aside and reported at the very end, after any error the rest of the
+  line produces — so `--bogus -h` prints help, and `--bogus --history`
+  complains about the missing argument, not the unknown flag. The port
+  returned at the first bad token.
+- **An ambiguous option IS an error where it is consumed.** Which is a
+  different point in the line than where it is classified, and the
+  difference is visible: `-h --l` prints help, `--l -h` is an error.
+  argparse builds the whole O/A pattern first without ever failing, then
+  consumes left to right. Two passes, and the order is observable.
+- **A value-taking option will not swallow an option-looking token.**
+  `--history --tory` is a missing argument, not a value of `"--tory"`;
+  `--history --` is missing too, because the terminator classifies as
+  neither. But `--history -` *is* consumed, because a lone dash is a
+  positional — and then fails the int conversion instead. Two adjacent
+  inputs, one character apart, with two different messages.
+- **Only the first `--` terminates.** A second one after it is an
+  ordinary token, so `maro introspect -- --` diagnoses a loop whose id
+  is two dashes. The terminator itself never appears in the extras:
+  `a -- b` reports `b`, not `-- b`.
+- **The message names the action, not the spelling.** `-h=x`,
+  `--help=x` and `--hel=x` all report `argument -h/--help`, because
+  `_get_action_name` joins every option string the action owns. And
+  `--=x` reports the token *as typed* while listing all five long
+  options it could have meant.
+
+The port that came out of this is not a pre-pass over `flag` any more.
+`flag` is gone from the file. What replaced it is `parseOptional` /
+`optionTuples` / `parseIntrospectArgs` — a port of `_parse_optional`,
+`_get_option_tuples` and the consume loop, structured the way CPython
+structures them, because the approximation kept being wrong in places
+that only an enumeration would find.
+
+Two conjuncts of argparse's own re-read condition are deliberately *not*
+written out, with the proof in a comment: `sepConcat` is produced only by
+the single-dash arm, and only for a token longer than the option string
+it matched, so "the option is single-dash" and "the tail is non-empty"
+cannot fail there. Writing them anyway would be two more guards that
+cannot fire — L4, in a file that now has enough of them.
+
+One difference is PINNED rather than fixed. argparse re-wraps usage and
+help to `shutil.get_terminal_size().columns - 2`; the constants here are
+the 80-column rendering, which is what CPython produces whenever stdout
+is not a terminal — a pipe, a redirect, a CI log, every scripted
+invocation — and what it falls back to when the width cannot be
+determined. The differential exports `COLUMNS=80` so both sides are
+pinned to it. In a terminal of some other width CPython rewraps the
+usage line and the port does not. Porting `HelpFormatter`'s usage
+grouping buys one cosmetic line at non-default widths and risks the
+common case; this is the trade, written down.
+
+The second pinned difference is arithmetic: Python ints are arbitrary
+precision, so `--history 99999999999999999999999` is a valid enormous
+limit there and an overflow here. The port **saturates** rather than
+inventing a refusal CPython does not make — `load_diagnoses` runs out of
+store long before either number matters, so the rendering is identical,
+and there is a fixture that says so.
+
+### What the battery says now
+
+The argument-layer mutants were rewritten against the new source — the
+old ones named `splitArgs`, which no longer exists, and would have
+reported SITEFAIL rather than a result. Twenty-seven take their place,
+one per rule above plus the message-rendering ones (`pyval.Repr` versus
+Go's `%q`, the usage block before the error line, the action label, the
+ambiguity token). **95 mutants, 92 detected**, and the three that are
+not are the three proven-unkillable ones carried forward with their
+proofs (`padLeft` counting bytes at two ASCII-only call sites, the
+graduation marker's tautology, the `healthy` guard subsumed by the
+lookup below it).
+
+Three of the new mutants reported BUILDFAIL on their first spelling and
+all three for the same reason, which is worth writing down once: **Go
+does not count an assignment as a use.** Replacing `if !loopIDSet` with
+`if true`, or deleting the `case o.str == shortPrefix` arm, orphans a
+variable and the package stops compiling — a fault in the battery, never
+a survivor. The mutations were re-spelled to keep the read (`if
+loopIDSet`, `shortPrefix := arg`), which tests the same claim. A fourth
+reported BUILDFAIL by orphaning the `errors` import, and became
+`errors.Is(err, nil)` — false for any non-nil error, so the same
+always-take-this-branch mutation with the import still live.
+
+`C84 history-supplied is not tracked` from the previous run is retired
+as a **bad mutant**, and the reason is worth keeping. It replaced
+`historySet && *history != 0` with `*history != 0`, and it was
+unkillable: the flag's zero default made the two expressions equivalent
+at every input. The dead conjunct was real, and the answer was not to
+delete it — it is the None-vs-0 distinction argparse actually makes.
+Modelling `history` as a `*int` made the distinction structural instead
+of decorative, and the same mutant is now a nil dereference. A guard
+that cannot fire is sometimes a guard written in the wrong type.
+
+## metrics' step-cost ledger: two reverse readers that are not the same reader
+
+`src/metrics.py`'s spend half — `_reverse_readline`, `spend_today`,
+`spend_for_loops`, `load_step_costs`, `analyze_step_costs`,
+`estimate_loop_cost` — is the cross-run budget gate. Per-run caps live in
+the loop; this is what stops an unattended substrate from burning a day
+one under-cap run at a time.
+
+The interesting thing about it is that the port already had a reverse
+line reader. `jsonl_utils._iter_lines_reverse` was ported chunks ago, and
+it is *almost* this function. Reusing it would have been the obvious
+move and it would have been wrong in two places at once:
+
+- `metrics._reverse_readline` drops empty lines **inside** the loop
+  (`for line in reversed(lines[1:]): if line: yield`), where the
+  jsonl_utils version filters somewhere else.
+- Its trailing `if leftover:` flush is **reachable**, where the
+  equivalent block in `jsonl_utils` was proved dead and removed. The
+  final iteration assigns `leftover = lines[0]`, which is the file's
+  first line — so a file whose first line is non-empty always has one
+  more line to yield after the loop ends. The proof that killed the
+  other one does not transfer, because the two functions arrive at that
+  line by different routes.
+
+Two functions that look like the same function, in the same repository,
+with a dead branch in one and a live branch in the other. `ReverseReadline`
+is a second implementation on purpose, and the comment says so.
+
+### `line[:60]` is a code-point slice and a substring test
+
+`spend_today` scans backward and stops at the first row that is not
+today's, which makes the cheap check load-bearing:
+
+```python
+if today not in line[:60]:
+    break
+```
+
+Three separate things a port gets wrong here. It is a **slice**, not a
+prefix, so `today` may appear anywhere in the first sixty characters —
+including inside a `step_text_preview` that happens to quote a date.
+It is sixty **code points**, not sixty bytes, so a row with a multibyte
+preview reaches further into the line in Go than a byte slice would.
+And the asymmetry matters: a false positive costs one wasted
+`json.loads`, while a false negative ends the scan early and silently
+under-reports the day's spend to a budget gate. `pyval.Clip` does the
+code-point slice; `strings.Contains` does the substring test.
+
+The authoritative check underneath is a different question again —
+`str(e.get("recorded_at","")).startswith(today)` — so a row that passes
+the cheap check and fails the real one is skipped without ending the
+scan. Both are ported, in that order.
+
+### A `None` dict key is a value, not the string "None"
+
+`analyze_step_costs` groups with
+`by_type.setdefault(e.get("step_type", "general"), [])`. The default only
+fires when the key is **absent**; a row carrying `"step_type": null`
+groups under Python's `None` — which is a perfectly good dict key, and
+is *not* the string `"None"`. A Go map keyed by string cannot tell those
+apart, and the difference is visible in the output: `by_type` is
+returned to callers and the type names are rendered.
+
+So `StepCostAnalysis` carries `ByType map[string]TypeStat` for lookup
+plus `ByTypeOrder []any` and `ExpensiveTypes []any` for the keys as
+VALUES, with `pyval.HashKey` doing the identity and `StatFor(key any)`
+reading through it. This is the same machinery the earlier dict-key
+chunks landed, and the reason it exists is exactly this: a store written
+by two runtimes will eventually contain a null where a string was
+expected.
+
+### The lower median, and two rounding precisions that are both right
+
+```python
+median_avg = sorted(avgs)[max(0, (len(avgs) - 1) // 2)] if avgs else 0
+```
+
+The comment in the Python calls it out — floor((n-1)/2) is the **lower**
+median, so at n=2 it is the *smaller* of the two values, and the
+`> 2 * median` test is against the cheaper half. An off-by-one here does
+not crash; it changes which step types an operator is told are
+expensive.
+
+And `analyze_step_costs` rounds at two different precisions in the same
+return value: `round(total_cost / count, 8)` for a per-type average and
+`round(total_cost, 6)` for the grand total. That is not a typo in either
+direction — a per-step average is small enough to need the extra digits
+and a total is not — so the port carries both, which means it also
+carries Python's banker's rounding at both.
+
+`estimate_loop_cost` has one thing worth naming and it is not a
+divergence: when a step's type has no recorded average it falls back to
+the mean of the per-type means — recomputing that list **inside the
+loop**, once per fallback step. Same answer, O(n·types) to get it. The
+port keeps the shape (a faithful port is not the place to optimize) and
+the comment records that the "global average" the docstring names is an
+unweighted mean of type means, not a mean over entries.
+
+### The battery
+
+`stepcosts_diff_test.go` runs five differentials, all against CPython:
+`ReverseReadline` over ten file shapes × eight buffer sizes (80 cases —
+the buffer boundary is where a chunked reverse reader breaks, so the
+sweep is over sizes that split lines at every offset), an early-stop
+case, `SpendToday` over eleven fixtures including a row stranded past
+the sixty-character window and a multibyte preview inside it,
+`SpendForLoops` over ten, and `AnalyzeStepCosts` over fifteen.
+
+Two real port bugs died on the first run, both of them type identity
+rather than arithmetic: a numeric `loop_id` did not match, because
+`encoding/json` makes every number a `float64` and `str(12.0)` is
+`"12.0"` where `str(12)` is `"12"` — fixed by reading through
+`pyval.LoadsMap`; and the null `step_type` grouped as `"None"`, which is
+what the `[]any` order slices exist to prevent.
+
+The timestamp census also fired on this file, for
+`.Format("2006-01-02")`. It is exempted with the Python read attached:
+`metrics.spend_today` computes
+`datetime.now(timezone.utc).date().isoformat()` at `src/metrics.py:227`,
+which is a comparison KEY matched against the prefix of each row's
+`recorded_at` — not a stamp it writes. `pyval.NowISO` there would never
+match anything. An exemption someone has to write down is the point.

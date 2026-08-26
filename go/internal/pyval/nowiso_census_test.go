@@ -110,6 +110,13 @@ func TestNoPackageSpellsItsOwnTimestamp(t *testing.T) {
 		"record/dailylog.go":   "day key + human display",
 		"record/rotate.go":     "rotated-file name slug",
 
+		// metrics.spend_today computes a COMPARISON KEY, not a stamp:
+		// `datetime.now(timezone.utc).date().isoformat()` at
+		// src/metrics.py:227, which is exactly "%Y-%m-%d". It is matched
+		// against the prefix of each row's recorded_at, so the day form is
+		// the whole point — NowISO here would never match anything.
+		"metrics/stepcosts.go": "metrics.spend_today — a day key it compares, not a stamp it writes",
+
 		// task_store.utc_now() is
 		// `.replace(microsecond=0).isoformat().replace("+00:00","Z")` —
 		// isoformat DELIBERATELY post-processed into second precision and
@@ -172,7 +179,7 @@ func TestNoPackageSpellsItsOwnTimestamp(t *testing.T) {
 			strings.Join(offenders, "\n  "))
 	}
 
-	// The allowlist above names ten files that DO render a layout. If the
+	// The allowlist above names every file that DOES render a layout. If the
 	// walk found none of them, it is not reading source any more.
 	if writersSeen < len(allowed) {
 		t.Errorf("the walk found %d layout writers but %d files are exempted "+

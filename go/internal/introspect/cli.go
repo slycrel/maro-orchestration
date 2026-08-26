@@ -1,12 +1,15 @@
 package introspect
 
 import (
-	"flag"
+	"errors"
 	"fmt"
 	"io"
+	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -261,40 +264,397 @@ func RenderRecovery(diag LoopDiagnosis) string {
 	return b.String()
 }
 
-// valueFlags are the options that consume the NEXT token when written
-// without an `=`. Only --history takes a value; the rest are store_true.
-// Spelled as a set rather than inferred, because getting it wrong turns a
-// flag's value into a loop_id and diagnoses a loop named "5".
-var valueFlags = map[string]bool{"history": true}
+// ---------------------------------------------------------------------------
+// The argument line
+// ---------------------------------------------------------------------------
+//
+// What follows is a port of argparse, not a use of Go's `flag`, and the
+// reason is that the two libraries disagree in more than a dozen places —
+// every one of them silent. `flag` stops at the first positional where
+// argparse interleaves; `flag` demands an exact option name where argparse
+// resolves any unambiguous prefix; `flag` reads `-5` as an unknown option
+// where argparse reads it as a positional; `flag` accepts `-latest` and
+// `--latest=true` where argparse refuses both; `flag` writes its complaints
+// to its own output and the caller collapses every failure to exit 1, where
+// argparse writes usage to stderr and exits 2.
+//
+// The first version of this port was a pre-pass that normalized argv and
+// then handed it to `flag`. That is what a reviewer found: the rendering was
+// character-perfect at all thirty print sites and every defect in the chunk
+// lived in the argument line. The pre-pass could not express argparse's real
+// grammar, so it kept approximating it — and an approximation of a parser is
+// a parser that is wrong on inputs nobody enumerated.
+//
+// Every rule below was MEASURED against CPython 3.14.3 rather than read out
+// of the docs or recalled. Several of them are surprising enough that
+// reasoning would have got them wrong: `-hh` prints help, `-1latest` is a
+// positional, `--history " 5"` is 5, and an ambiguous option is an error at
+// the point it is CONSUMED rather than where it is classified — which is why
+// `-h --l` prints help while `--l -h` is an error.
 
-// splitArgs separates options from positionals the way argparse does,
-// preserving each group's order.
-func splitArgs(argv []string) (flags, positional []string, err error) {
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		if a == "--" {
-			// argparse treats everything after `--` as positional.
-			positional = append(positional, argv[i+1:]...)
-			return flags, positional, nil
-		}
-		if len(a) < 2 || a[0] != '-' {
-			positional = append(positional, a)
-			continue
-		}
-		flags = append(flags, a)
-		name := strings.TrimLeft(a, "-")
-		if strings.Contains(name, "=") {
-			continue
-		}
-		if valueFlags[name] {
-			if i+1 >= len(argv) {
-				return nil, nil, fmt.Errorf("flag needs an argument: %s", a)
-			}
-			i++
-			flags = append(flags, argv[i])
+// UsageError is an argument line argparse would reject. argparse exits 2 for
+// every one of them — a distinct code from a runtime failure, and scripts
+// branch on it — so the type exists to carry that code out to the caller
+// rather than letting everything collapse to 1.
+type UsageError struct{ msg string }
+
+func (e *UsageError) Error() string { return e.msg }
+
+// Stderr is the whole block argparse writes to STDERR before exiting 2:
+// the usage summary, then `prog: error: <message>`. Rendering it here rather
+// than at the call site keeps the two halves of the divergence together —
+// the code and the text a script greps for.
+func (e *UsageError) Stderr() string {
+	return usageText + "maro-introspect: error: " + e.msg + "\n"
+}
+
+func usagef(format string, a ...any) error {
+	return &UsageError{msg: fmt.Sprintf(format, a...)}
+}
+
+// usageText and helpText are argparse's own output for this parser.
+//
+// PINNED DIFFERENCE, and the only one left in this file: argparse re-wraps
+// both blocks to `shutil.get_terminal_size().columns - 2`. These constants
+// are the 80-column rendering — what CPython produces whenever stdout is not
+// a terminal (a pipe, a redirect, a CI log, every scripted invocation) and
+// what it falls back to when the width cannot be determined. In a terminal
+// of some other width CPython rewraps the usage line and the port does not.
+// Reproducing the wrap would mean porting HelpFormatter's usage-grouping
+// algorithm; the value of that is one cosmetic line at non-default widths,
+// against a real risk of getting the common case wrong. Measured, not
+// assumed: the differential exports COLUMNS=80 so both sides are pinned.
+//
+// `options:` is the 3.10+ heading. On 3.9 argparse said `optional
+// arguments:`, so a port checked against an older interpreter would disagree
+// here for a reason that has nothing to do with this code.
+const usageText = "usage: maro-introspect [-h] [--latest] [--lenses] " +
+	"[--history N] [--patterns]\n" +
+	"                       [loop_id]\n"
+
+const helpText = usageText + `
+Diagnose execution traces — classify failures and recommend fixes
+
+positional arguments:
+  loop_id      Loop ID to diagnose (or --latest)
+
+options:
+  -h, --help   show this help message and exit
+  --latest     Diagnose the most recent loop
+  --lenses     Also run multi-lens analysis
+  --history N  Show last N diagnoses
+  --patterns   Show recurring failure patterns (graduation candidates)
+`
+
+// introspectOpt is one row of argparse's `_option_string_actions`, which is
+// a dict keyed by option STRING — so `-h` and `--help` are two rows sharing
+// one action, and that is why both spell their name `-h/--help` in an error
+// message. The slice order is the parser's insertion order, because it is
+// the order the ambiguity message lists candidates in.
+type introspectOpt struct {
+	str        string // the option string as typed
+	dest       string // the action it feeds
+	takesValue bool   // argparse nargs: 1 for --history, 0 for the flags
+	label      string // _get_action_name: every option string of the action
+}
+
+var introspectOpts = []introspectOpt{
+	{"-h", "help", false, "-h/--help"},
+	{"--help", "help", false, "-h/--help"},
+	{"--latest", "latest", false, "--latest"},
+	{"--lenses", "lenses", false, "--lenses"},
+	{"--history", "history", true, "--history"},
+	{"--patterns", "patterns", false, "--patterns"},
+}
+
+// How an explicit argument was attached to an option string. argparse keeps
+// these three states apart and BRANCHES on the difference: `--latest=x` (an
+// equals sign) is always an error on a flag, while `-hx` (glued to a
+// single-dash option) is argparse re-reading the tail as more single-dash
+// options. A port that collapsed them would reject `-hx`, which prints help.
+const (
+	sepNone   = iota // no explicit argument at all
+	sepConcat        // glued to a single-dash option: `-hx`
+	sepEquals        // `--history=5`
+)
+
+// optTuple is one candidate reading of a token: which option it names, which
+// option string matched (an abbreviation resolves to the full one), and any
+// argument attached to it.
+type optTuple struct {
+	opt      int // index into introspectOpts, or -1 for an unknown option
+	str      string
+	sep      int
+	explicit string
+}
+
+// negativeNumber is argparse's `_negative_number_matcher`, and it is NOT the
+// anchored pattern it looks like it should be. CPython 3.14 spells it
+// `-\.?\d` and applies it with `.match`, which anchors only at the START —
+// so every token beginning with a dash and a digit is a positional, not just
+// the ones that are entirely numeric. `-1latest` is a loop id.
+//
+// `\d` in a Python str pattern is Unicode-aware, so an Arabic-Indic digit
+// counts; Go's `\d` is ASCII-only, hence the explicit category class.
+//
+// This is version-dependent in a way worth writing down: through CPython
+// 3.11 the pattern was `^-\d+$|^-\d*\.\d+$`, which is anchored at both ends
+// and would make `-1latest` an unrecognized argument. The port matches the
+// interpreter it is differentially tested against.
+var negativeNumber = regexp.MustCompile(`^-\.?[\p{Nd}]`)
+
+// parseOptional is argparse's `_parse_optional`: given one token, either nil
+// (it is a positional) or the candidate options it could be naming. It never
+// reports an error — ambiguity is raised later, by the consumer.
+func parseOptional(arg string) []optTuple {
+	if arg == "" || arg[0] != '-' {
+		return nil
+	}
+	for i, o := range introspectOpts {
+		if o.str == arg {
+			return []optTuple{{opt: i, str: arg, sep: sepNone}}
 		}
 	}
-	return flags, positional, nil
+	// A lone "-" is a positional. It is also, once through `--history -`, an
+	// invalid int value rather than a missing argument.
+	if len(arg) == 1 {
+		return nil
+	}
+	// An exact option string before the `=`. KEPT although no input of THIS
+	// parser can tell it from the prefix search below, because the two
+	// disagree the moment one option name becomes a prefix of another: with
+	// `--his` and `--history` both defined, `--his=5` is exact here and
+	// ambiguous there. None of the five names is a prefix of another today,
+	// and adding one is an edit to the table three lines up.
+	if before, after, found := strings.Cut(arg, "="); found {
+		for i, o := range introspectOpts {
+			if o.str == before {
+				return []optTuple{{opt: i, str: before, sep: sepEquals, explicit: after}}
+			}
+		}
+	}
+	if tuples := optionTuples(arg); len(tuples) > 0 {
+		return tuples
+	}
+	if negativeNumber.MatchString(arg) {
+		return nil
+	}
+	// argparse's own comment: "if it contains a space, it was meant to be a
+	// positional". `maro introspect "-a b"` diagnoses a loop with a space in
+	// its id rather than failing on an unknown option.
+	if strings.Contains(arg, " ") {
+		return nil
+	}
+	return []optTuple{{opt: -1, str: arg, sep: sepNone}}
+}
+
+// optionTuples is argparse's `_get_option_tuples` — the abbreviation rule,
+// which works differently on the two dash forms.
+//
+// A double-dash token is a PREFIX of a long option: `--lat` is `--latest`,
+// `--l` is ambiguous between latest and lenses, and `--h` is ambiguous
+// between help and history. A single-dash token instead offers its first two
+// characters as a whole option and the rest as a glued argument, which is how
+// `-hx` reaches the help action.
+func optionTuples(arg string) []optTuple {
+	var out []optTuple
+	if len(arg) >= 2 && arg[1] == '-' {
+		prefix, explicit, found := strings.Cut(arg, "=")
+		sep := sepNone
+		if !found {
+			explicit = ""
+		} else {
+			sep = sepEquals
+		}
+		for i, o := range introspectOpts {
+			if strings.HasPrefix(o.str, prefix) {
+				out = append(out, optTuple{opt: i, str: o.str, sep: sep, explicit: explicit})
+			}
+		}
+		return out
+	}
+	shortPrefix, shortExplicit := arg[:2], arg[2:]
+	for i, o := range introspectOpts {
+		switch {
+		case o.str == shortPrefix:
+			out = append(out, optTuple{opt: i, str: o.str,
+				sep: sepConcat, explicit: shortExplicit})
+		case strings.HasPrefix(o.str, arg):
+			out = append(out, optTuple{opt: i, str: o.str, sep: sepNone})
+		}
+	}
+	return out
+}
+
+// introspectArgs is the argparse Namespace. `history` is a POINTER because
+// argparse's default is None and `main` tests it for truthiness: None and 0
+// are both falsy, and a negative N is truthy. An int with a zero default
+// answers two of those three correctly and the port would never notice.
+type introspectArgs struct {
+	loopID   string
+	latest   bool
+	lenses   bool
+	patterns bool
+	history  *int
+	help     bool
+}
+
+// parseIntrospectArgs is `parser.parse_args(argv)`.
+//
+// Two passes, because argparse takes two: every token is classified first,
+// and only then are they consumed left to right. The order is observable.
+// Classification never fails, so `--bogus -h` prints help instead of
+// complaining, and `-h --l` prints help even though `--l` is ambiguous —
+// while `--l -h` is an error, because consumption reaches the ambiguity
+// first. An unrecognized option is not an error where it appears either: it
+// is set aside and reported at the very end, after any error the rest of the
+// line produces.
+func parseIntrospectArgs(argv []string) (introspectArgs, error) {
+	var a introspectArgs
+
+	const (
+		kindPositional = iota
+		kindOption
+		kindSeparator // the `--` that ends option parsing
+	)
+	kind := make([]int, len(argv))
+	tuples := make([][]optTuple, len(argv))
+	terminated := false
+	for i, arg := range argv {
+		switch {
+		case terminated:
+			kind[i] = kindPositional
+		case arg == "--":
+			// Only the FIRST `--` is the terminator. A second one after it is
+			// an ordinary positional, and `maro introspect -- --` diagnoses a
+			// loop whose id is two dashes.
+			kind[i] = kindSeparator
+			terminated = true
+		default:
+			if t := parseOptional(arg); t != nil {
+				kind[i], tuples[i] = kindOption, t
+			}
+		}
+	}
+
+	loopIDSet := false
+	var extras []string
+	for i := 0; i < len(argv); i++ {
+		switch kind[i] {
+		case kindSeparator:
+			continue
+		case kindPositional:
+			// This parser declares exactly one optional positional, so the
+			// first bare token is the loop id and every later one is an
+			// unrecognized argument — reported at the end, in the order the
+			// tokens appeared, mixed in with any unknown options.
+			if !loopIDSet {
+				a.loopID, loopIDSet = argv[i], true
+			} else {
+				extras = append(extras, argv[i])
+			}
+			continue
+		}
+
+		ts := tuples[i]
+		if len(ts) > 1 {
+			names := make([]string, len(ts))
+			for j, t := range ts {
+				names[j] = t.str
+			}
+			// The message names the token AS TYPED, not the prefix it was cut
+			// down to, so `--=x` reports `--=x` and lists all five long
+			// options it could have meant.
+			return a, usagef("ambiguous option: %s could match %s",
+				argv[i], strings.Join(names, ", "))
+		}
+		t := ts[0]
+		if t.opt < 0 {
+			extras = append(extras, argv[i])
+			continue
+		}
+		o := introspectOpts[t.opt]
+
+		if !o.takesValue {
+			if t.sep != sepNone {
+				// argparse's escape hatch, and the reason `-hh` prints help:
+				// a glued argument on a single-dash flag is re-read as more
+				// single-dash options rather than rejected.
+				//
+				// CPython spells the test with four conjuncts — single-dash
+				// option string, non-empty tail, no `=`, and a tail not
+				// itself starting with a dash. Two of them are IMPLIED by
+				// sepConcat here and are left out rather than written as
+				// terms that cannot fire: sepConcat is produced only by the
+				// single-dash arm of optionTuples, and only for a token
+				// longer than the two characters of the option string it
+				// matched (a token of exactly that length took the exact
+				// match in parseOptional and never reached the arm at all).
+				reread := t.sep == sepConcat && !strings.HasPrefix(t.explicit, "-")
+				if !reread {
+					return a, usagef("argument %s: ignored explicit argument %s",
+						o.label, pyval.Repr(t.explicit))
+				}
+				// Falls through and takes the action. The tail would become
+				// the next option string to look up — but `-h` is the only
+				// single-dash option this parser has, and its action exits
+				// before the tail is ever read.
+			}
+			switch o.dest {
+			case "help":
+				// argparse's help action prints and exits DURING parsing, so
+				// nothing after it on the line is examined at all.
+				a.help = true
+				return a, nil
+			case "latest":
+				a.latest = true
+			case "lenses":
+				a.lenses = true
+			case "patterns":
+				a.patterns = true
+			}
+			continue
+		}
+
+		raw := t.explicit
+		if t.sep == sepNone {
+			// The value must be the next token AND that token must have
+			// classified as a positional. `--history --tory` is a missing
+			// argument, not a value of "--tory"; `--history -5` is -5,
+			// because a negative number classifies as a positional; and
+			// `--history --` is missing too, because the terminator is
+			// neither. An unconditional `argv[i+1]` gets all three wrong.
+			if i+1 >= len(argv) || kind[i+1] != kindPositional {
+				return a, usagef("argument %s: expected one argument", o.label)
+			}
+			i++
+			raw = argv[i]
+		}
+		n, err := pyval.Int(raw)
+		if err != nil {
+			if !errors.Is(err, pyval.ErrIntTooLarge) {
+				return a, usagef("argument %s: invalid int value: %s",
+					o.label, pyval.Repr(raw))
+			}
+			// Python ints are arbitrary precision, so `--history` followed by
+			// forty digits is a perfectly good (enormous) limit there and an
+			// overflow here. Saturating keeps the BEHAVIOUR identical —
+			// load_diagnoses stops at the end of the store either way, and
+			// the negative side takes the same one-row branch as -5 — where
+			// reporting an invalid value would invent a refusal CPython
+			// does not make.
+			n = math.MaxInt
+			if strings.HasPrefix(pytext.Strip(raw), "-") {
+				n = math.MinInt
+			}
+		}
+		a.history = &n
+	}
+
+	if len(extras) > 0 {
+		return a, usagef("unrecognized arguments: %s", strings.Join(extras, " "))
+	}
+	return a, nil
 }
 
 // Main is introspect.main(argv). It writes to `out` rather than stdout so
@@ -306,58 +666,38 @@ func splitArgs(argv []string) (flags, positional []string, err error) {
 // ever take. The LLM lenses are unreachable from this CLI in Python, which
 // is the same place the port leaves them.
 func Main(ws string, argv []string, out io.Writer) error {
-	fs := flag.NewFlagSet("introspect", flag.ContinueOnError)
-	fs.SetOutput(out)
-	latest := fs.Bool("latest", false, "diagnose the most recent loop")
-	lenses := fs.Bool("lenses", false, "also run multi-lens analysis")
-	history := fs.Int("history", 0, "show last N diagnoses")
-	patterns := fs.Bool("patterns", false,
-		"show recurring failure patterns (graduation candidates)")
-	// ARGPARSE INTERLEAVES; GO'S flag DOES NOT. `parse_args` accepts
-	// `loop-alpha --lenses` and `--lenses loop-alpha` alike, while Go's
-	// flag package stops at the first non-flag token and hands everything
-	// after it back as positionals — so `maro introspect <id> --lenses`
-	// would silently run without the lens block. Not a hypothetical: it is
-	// how this port's first differential failed, on the one case where the
-	// flag came second.
-	flags, positional, err := splitArgs(argv)
+	args, err := parseIntrospectArgs(argv)
 	if err != nil {
 		return err
 	}
-	if err := fs.Parse(flags); err != nil {
-		return err
-	}
-	loopID := ""
-	if len(positional) > 0 {
-		loopID = positional[0]
-	}
-	// argparse declares exactly one optional positional and REJECTS a
-	// second with exit code 2. The port refuses too; the message is not
-	// argparse's, and nothing depends on the text.
-	if len(positional) > 1 {
-		return fmt.Errorf("introspect takes at most one loop_id (got %q and %q)",
-			positional[0], positional[1])
+	if args.help {
+		// argparse prints help to STDOUT and exits 0 — the one case where a
+		// usage block belongs on the rendering stream. Errors go to stderr,
+		// which is why UsageError carries its own renderer instead.
+		io.WriteString(out, helpText)
+		return nil
 	}
 
-	if *patterns {
+	if args.patterns {
 		// find_recurring_patterns() with ITS defaults, not the CLI's — the
 		// 3-occurrence bar is what the "need 3+" message reports.
 		io.WriteString(out, RenderPatterns(FindRecurringPatterns(ws, 3, 50)))
 		return nil
 	}
 
-	// `if args.history:` is a TRUTHINESS test on an int-or-None, so
-	// `--history 0` is falsy and falls through to diagnosing a loop rather
-	// than printing an empty history. Ported as `> 0` — Go's flag package
-	// has no None, and 0 is the value that reproduces both the unset case
-	// and the explicit zero.
-	if *history > 0 {
-		io.WriteString(out, RenderHistory(LoadDiagnoses(ws, *history)))
+	// `if args.history:` is a truthiness test on an int-or-None, and both
+	// halves of the guard are load-bearing for a different input: an
+	// unsupplied flag is None and falsy, `--history 0` is 0 and falsy, and
+	// `--history -5` is TRUTHY and renders exactly one row (load_diagnoses
+	// breaks when `1 >= -5`). A plain `> 0` sends that last one down the
+	// wrong branch, which is how this read before it was measured.
+	if args.history != nil && *args.history != 0 {
+		io.WriteString(out, RenderHistory(LoadDiagnoses(ws, *args.history)))
 		return nil
 	}
 
 	var diag LoopDiagnosis
-	if *latest || loopID == "" {
+	if args.latest || args.loopID == "" {
 		d, ok := DiagnoseLatest(ws)
 		if !ok {
 			io.WriteString(out, "No loop events found.\n")
@@ -365,11 +705,11 @@ func Main(ws string, argv []string, out io.Writer) error {
 		}
 		diag = d
 	} else {
-		diag = DiagnoseLoop(ws, loopID, "")
+		diag = DiagnoseLoop(ws, args.loopID, "")
 	}
 
 	io.WriteString(out, RenderDiagnosis(diag))
-	if *lenses {
+	if args.lenses {
 		profiles := BuildStepProfiles(LoadLoopEvents(ws, diag.LoopID))
 		io.WriteString(out, RenderLenses(diag, RunLenses(diag, profiles)))
 	}
