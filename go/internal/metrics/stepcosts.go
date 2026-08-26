@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -134,6 +133,7 @@ func SpendToday(ws string, now time.Time) float64 {
 	}
 	today := now.UTC().Format("2006-01-02")
 	total := 0.0
+	raised := false
 	// `if today not in line[:60]` — a CODE POINT slice, not a byte slice, and
 	// a substring test rather than a prefix test. A row whose first 60 runes
 	// happen to contain today's date anywhere (a goal_preview quoting it, an
@@ -154,36 +154,58 @@ func SpendToday(ws string, now time.Time) float64 {
 			return true // `except: continue` — a torn row is not the end
 		}
 		if strings.HasPrefix(pyval.Str(pyval.GetOr(e, "recorded_at", "")), today) {
-			total += costUSDOf(e)
+			c, ok := costUSDOf(e)
+			if !ok {
+				// float() raised. Nothing catches it between here and the
+				// function's outer except, so the answer for the whole day
+				// is 0.0 — not the sum of the rows that parsed.
+				raised = true
+				return false
+			}
+			total += c
 		}
 		return true
 	})
+	if raised {
+		return 0.0
+	}
 	return total
 }
 
 // SpendTodayNow is spend_today() with the real clock.
 func SpendTodayNow(ws string) float64 { return SpendToday(ws, time.Now()) }
 
-// costUSDOf is `float(e.get("cost_usd", 0.0) or 0.0)`.
+// costUSDOf is `float(e.get("cost_usd", 0.0) or 0.0)`. The bool is FALSE
+// when Python would have RAISED.
 //
 // The `or 0.0` is a TRUTHINESS gate standing between the get and the float,
 // so a present null, a present 0, an empty string and `false` all become 0.0
 // without ever reaching float() — which is what keeps a null row from
-// raising. A non-numeric truthy value (the string "abc") WOULD raise in
-// Python and take the whole function's bare except, returning 0.0 for the
-// entire file. Go cannot reproduce a mid-loop abort by returning a float, so
-// that case is named here and left as a known divergence: a corrupt
-// cost_usd string zeroes one row in Go and the whole day in Python.
-func costUSDOf(e map[string]any) float64 {
+// raising. A non-numeric truthy value (the string "abc") raises ValueError,
+// and in BOTH callers that float() sits inside the function's outer bare
+// except with nothing between: the exception leaves the loop and the whole
+// call answers 0.0. Not this row — the whole file.
+//
+// This returned a bare float for one round, with a comment asserting "Go
+// cannot reproduce a mid-loop abort by returning a float" and naming the
+// result a known divergence. The premise was false; it is a second return
+// value. The consequence was not cosmetic: one corrupt row made the port
+// report a run's attributed spend as five dollars where CPython reports
+// zero, and the budget gate reads that number (metrics r1 battery, M29).
+//
+// Same family as computeRunCostP90's `vals.append(float(cost))` — a raise
+// that a port turns into a skip always fails OPEN, because the number it
+// invents is smaller than the one Python refuses to give.
+func costUSDOf(e map[string]any) (float64, bool) {
 	v := pyval.GetOr(e, "cost_usd", 0.0)
 	if !pyval.Truthy(v) {
-		return 0.0
+		return 0.0, true
 	}
 	f, ok := pyval.Float(v)
 	if !ok {
-		return 0.0
+		return 0, false
 	}
-	return f
+	return f, true
 }
 
 // SpendForLoops is metrics.spend_for_loops().
@@ -250,7 +272,13 @@ func SpendForLoops(ws string, loopIDs []string) float64 {
 		// row carrying the integer 12 matches a wanted "12", which is only
 		// true if the decoder kept it an integer (see SpendToday).
 		if wanted[pyval.Str(pyval.GetOr(e, "loop_id", ""))] {
-			total += costUSDOf(e)
+			c, ok := costUSDOf(e)
+			if !ok {
+				// Same outer-except abort as SpendToday: one unparseable
+				// cost_usd on a WANTED row and the whole call answers 0.0.
+				return 0.0
+			}
+			total += c
 		}
 	}
 	return total
@@ -318,7 +346,17 @@ type StepCostAnalysis struct {
 	ByType         map[string]TypeStat
 	ByTypeOrder    []any
 	ExpensiveTypes []any
-	TotalCostUSD   float64
+	// TotalCostUSD is `any`, not float64, for the same reason AvgTokens and
+	// TotalTokens are: `round(sum(...), 6)` KEEPS PYTHON'S TYPE. A store
+	// whose cost_usd values are all integers sums to an int, and round() of
+	// an int is an int, so this field is `2` in CPython and would be "2.0"
+	// from a float64 — a rendered-string divergence in an operator-facing
+	// report, and a content-key divergence anywhere it is written back.
+	//
+	// The port typed it float64 and the differential spelled it with %.17g,
+	// which renders 2 and 2.0 identically. Both halves had to change for the
+	// field to be measured at all.
+	TotalCostUSD any
 }
 
 // StatFor is `by_type.get(key, {})` — the zero TypeStat stands in for the
@@ -370,7 +408,7 @@ func AnalyzeStepCosts(entries []pyval.Obj) (StepCostAnalysis, error) {
 			// used to DROP the row and name the divergence, which was the
 			// best it could do while the signature returned no error.
 			return StepCostAnalysis{}, &pyval.PyErr{Class: "TypeError",
-				Msg: fmt.Sprintf("unhashable type: '%s'", pyval.TypeName(st))}
+				Msg: pyval.UnhashableKeyMsg(st)}
 		}
 		if _, seen := groups[h]; !seen {
 			order = append(order, st)
@@ -456,7 +494,7 @@ func AnalyzeStepCosts(entries []pyval.Obj) (StepCostAnalysis, error) {
 		ExpensiveTypes: expensive,
 		// Six places here, EIGHT in avg_cost_usd above. Not a typo in either
 		// direction; the two round to different precision in the source.
-		TotalCostUSD: pyval.Round(pyval.FloatOf(total), 6),
+		TotalCostUSD: pyval.RoundAny(total, 6),
 	}, nil
 }
 
@@ -494,11 +532,30 @@ func max0(n int) int {
 // result is identical and the cost is not the port's to fix — but named,
 // because a reader who "cleans it up" by hoisting is right and should know
 // they are changing nothing but the clock.
+// analysisWindow is the `limit=500` literal inside analyze_step_costs.
+// Named here so the constants differential can read Python's back out of the
+// source and compare — as a bare literal it was untestable, and the battery
+// moved it to 100 without failing anything.
+//
+// WHERE THE LOAD LIVES IS A DIVERGENCE, and a live one for the next caller.
+// Python's signature is `analyze_step_costs(entries=None)`, and passing None
+// LOADS the last 500 rows from the store; estimate_loop_cost relies on that
+// and calls it bare. This port hoisted the load to the caller, so
+// AnalyzeStepCosts(nil) analyses NOTHING and answers the empty summary.
+//
+// Today that is unobservable: EstimateLoopCost is the only caller and it
+// passes the loaded rows. It stops being unobservable the moment something
+// ports compute_metrics or identify_expensive_patterns, which is the next
+// chunk — so the sentinel is spelled out here rather than left as a shape
+// that reads like a simplification. A Go caller that means "the default
+// window" must call LoadStepCosts itself.
+const analysisWindow = 500
+
 func EstimateLoopCost(ws string, numSteps int, stepTexts []string) (float64, error) {
 	// No try here either, so analyze_step_costs's TypeError leaves this
 	// function too rather than becoming a 0.0 estimate — which the budget
 	// gate would read as "this loop is free".
-	analysis, err := AnalyzeStepCosts(LoadStepCosts(ws, 500))
+	analysis, err := AnalyzeStepCosts(LoadStepCosts(ws, analysisWindow))
 	if err != nil {
 		return 0, err
 	}

@@ -176,10 +176,18 @@ for c in cases:
     importlib.reload(orch_items)
     importlib.reload(metrics)
     # Freeze "today" the way the Go side takes it as a parameter.
+    #
+    # astimezone(tz), not a bare return: the code under test calls
+    # datetime.now(timezone.utc) and then .date(), so the CONVERSION is part
+    # of what is being measured. A freeze that handed back the fixture's own
+    # offset unchanged would make .date() the fixture's LOCAL date and quietly
+    # remove the UTC step from the differential — which is the one thing the
+    # non-UTC fixtures below exist to pin.
     class _FrozenDT(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime.fromisoformat(c["now"])
+            v = datetime.fromisoformat(c["now"])
+            return v.astimezone(tz) if tz is not None else v
     metrics.datetime = _FrozenDT
     out.append("%.17g" % metrics.spend_today())
 print(json.dumps(out))
@@ -225,6 +233,9 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 	cases := []struct {
 		name string
 		rows []string
+		// now overrides the shared clock for the cases whose subject IS the
+		// clock. Empty means the shared UTC one above.
+		now string
 	}{
 		{name: "no rows"},
 		{name: "one row today", rows: []string{row(today+"01:00:00+00:00", 0.5)}},
@@ -309,6 +320,39 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 			row(today+"01:00:00+00:00", 0.1),
 			row(today+"02:00:00+00:00", 0.2),
 			row(today+"03:00:00+00:00", 0.3)}},
+
+		// "TODAY" IS A UTC DATE, and this is the only case that can say so.
+		// `datetime.now(timezone.utc).date()` is not the local date, and on
+		// this box the two differ for six hours out of every twenty-four.
+		// Every case above passes a `now` that is already UTC, so dropping
+		// the conversion changed nothing and the battery's local-time mutant
+		// lived. Here `now` is 20:00 on the 25th at -06:00 — the 26th in UTC
+		// — and the rows are stamped the 26th, so a local reading finds
+		// nothing and answers 0.0 while the correct one sums them.
+		{name: "a now whose local date is yesterday in UTC",
+			now: "2026-08-25T20:00:00-06:00",
+			rows: []string{
+				row(today+"01:00:00+00:00", 1.0),
+				row(today+"02:00:00+00:00", 0.5)}},
+		// And the mirror, so the pair pins the DIRECTION rather than just
+		// "something about timezones": 19:00 on the 26th at +07:00 is still
+		// the 26th in UTC, and a local reading would answer off the 27th.
+		{name: "a now whose local date is tomorrow in UTC",
+			now: "2026-08-27T05:00:00+07:00",
+			rows: []string{
+				row(today+"01:00:00+00:00", 1.0),
+				row(today+"02:00:00+00:00", 0.5)}},
+
+		// THE STRICT CHECK IS A PREFIX, not a substring. `recorded_at`
+		// carries today's date but not at position zero, so the cheap window
+		// check accepts the row and `startswith` then rejects its cost —
+		// without ending the scan. Nothing else here separates the two: every
+		// row whose recorded_at contains the date also begins with it, so a
+		// substring test agreed everywhere.
+		{name: "todays date inside recorded_at but not at its start", rows: []string{
+			row(today+"01:00:00+00:00", 1.0),
+			`{"recorded_at": "backfilled ` + today + `03:00:00+00:00", "cost_usd": 40.0}`,
+			row(today+"02:00:00+00:00", 0.5)}},
 	}
 
 	type spendCase struct {
@@ -317,7 +361,11 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 	}
 	var payload []spendCase
 	for _, c := range cases {
-		payload = append(payload, spendCase{WS: seedCosts(t, c.rows, true), Now: now})
+		at := now
+		if c.now != "" {
+			at = c.now
+		}
+		payload = append(payload, spendCase{WS: seedCosts(t, c.rows, true), Now: at})
 	}
 
 	var want []string
@@ -327,12 +375,12 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
 	}
 
-	nowT, err := time.Parse(time.RFC3339, now)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			nowT, err := time.Parse(time.RFC3339, payload[i].Now)
+			if err != nil {
+				t.Fatal(err)
+			}
 			got := fmt17(SpendToday(payload[i].WS, nowT))
 			if got != want[i] {
 				t.Errorf("spend_today = %s, cpython = %s", got, want[i])
@@ -405,6 +453,36 @@ func TestSpendForLoopsMatchesCPython(t *testing.T) {
 		// comparing, so an integer 12 in the file matches the wanted "12".
 		{name: "a numeric loop id in the file", ids: []string{"12"},
 			rows: []string{`{"loop_id": 12, "cost_usd": 3.0}`}},
+
+		// A COST THAT float() REJECTS, on a wanted row. The `or 0.0` gate
+		// only catches FALSY values; "abc" is truthy, so float() runs and
+		// raises, and nothing sits between it and the function's outer bare
+		// except. The answer is 0.0 for the whole file — not 1.5, the sum of
+		// the rows that did parse. A port that scored the bad row as zero
+		// reports spend the budget gate then believes.
+		{name: "an unparseable cost zeroes the whole file", ids: []string{"a"},
+			rows: []string{
+				row("a", 1.0, ""),
+				row("a", "abc", ""),
+				row("a", 0.5, "")}},
+		// The same value on an UNWANTED row changes nothing: the exact
+		// comparison keeps float() from ever running on it. This is the pair
+		// that says the abort is driven by the match, not by the file.
+		{name: "an unparseable cost on an unwanted row is never reached",
+			ids:  []string{"a"},
+			rows: []string{row("a", 1.0, ""), row("b", "abc", "")}},
+		// A truthy non-numeric that is not even a string.
+		{name: "a structured cost raises too", ids: []string{"a"},
+			rows: []string{row("a", 1.0, ""), `{"loop_id": "a", "cost_usd": [1, 2]}`}},
+
+		// INVALID UTF-8 ANYWHERE IN THE FILE. `path.open(encoding="utf-8")`
+		// decodes strictly and the `for line in fh` loop has no break, so it
+		// reads to EOF and one bad byte makes CPython answer 0.0 for the
+		// entire file — including for rows BEFORE the corruption, and
+		// including when the corruption is on a row nothing wants. A port
+		// that split raw bytes answers 1.0 here.
+		{name: "one invalid byte zeroes the whole file", ids: []string{"a"},
+			rows: []string{row("a", 1.0, ""), "{\"loop_id\": \"b\", \"x\": \"\xff\"}"}},
 	}
 
 	type loopsCase struct {
@@ -481,7 +559,7 @@ for c in cases:
                         for kk, vv in v.items()}
                     for k, v in a["by_type"].items()},
         "expensive": a["expensive_types"],
-        "total": "%.17g" % a["total_cost_usd"],
+        "total": repr(a["total_cost_usd"]),
         "loop_cost_plain": plain,
         "loop_cost_texts": texts,
     })
@@ -540,6 +618,15 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 			rows: []string{row("", 1000, 0.01), row("research", 5000, 0.05)}},
 		// An EXPLICIT NULL step_type is not absence: `.get` returns None and
 		// the key becomes None, which renders as "None" once stringified.
+		// UNHASHABLE step_types. `by_type[step_type]` is a DICT KEY, so
+		// unlike the tuple membership in successful_run_cost_p90 this one
+		// really does raise — and the two shapes sit close enough together
+		// that the port applied the wrong reading to one of them. A dict and
+		// a list raise with different type names in the message.
+		{name: "a dict step_type raises unhashable", limit: 100, nsteps: 2,
+			rows: []string{`{"step_type": {"a": 1}, "total_tokens": 10, "cost_usd": 0.01}`}},
+		{name: "a list step_type raises unhashable", limit: 100, nsteps: 2,
+			rows: []string{`{"step_type": [1, 2], "total_tokens": 10, "cost_usd": 0.01}`}},
 		{name: "a null step_type", limit: 100, nsteps: 2,
 			rows: []string{`{"step_type": null, "total_tokens": 10, "cost_usd": 0.1}`,
 				row("research", 20, 0.2)}},
@@ -617,8 +704,16 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		// ORDER: both fields are bad in the same group, and total_tokens is
 		// summed first, so ITS message is the one that escapes. A port that
 		// interleaved the two sums in one loop reports cost_usd here.
+		//
+		// The two bad values must have DIFFERENT TYPES or the fixture cannot
+		// see the order it names. With null in both fields each sum raises
+		// "'int' and 'NoneType'" — the same string — so swapping the two
+		// sums changed nothing and the battery's swap mutant lived (metrics
+		// r1 battery, M47). A string in the cost field makes the escaping
+		// message say NoneType when the order is right and str when it is
+		// not.
 		{name: "total_tokens is summed before cost_usd", limit: 100, nsteps: 3,
-			rows: []string{row("research", nil, nil)}},
+			rows: []string{row("research", nil, "abc")}},
 		// The accumulator's type is in the message: a float has already been
 		// added by the time the null arrives, so this says 'float' where the
 		// case above says 'int'. Note the ROW ORDER — load_step_costs hands
@@ -635,6 +730,54 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		{name: "a float total_tokens keeps the whole type float",
 			limit: 100, nsteps: 3,
 			rows: []string{row("research", 1000.5, 0.01), row("research", 2000, 0.03)}},
+		// INTEGER COSTS. `round(sum(...), 6)` keeps Python's type, so a
+		// store whose cost_usd values are all ints makes total_cost_usd the
+		// INT 2 — spelled "2", not "2.0". Every other case here carries
+		// float costs, so the field could be typed float64 and formatted
+		// with %g and nothing noticed (metrics r1 battery, M49).
+		{name: "integer costs keep the total an int", limit: 100, nsteps: 2,
+			rows: []string{row("research", 1000, 1), row("research", 2000, 1)}},
+		// One float among the ints crosses to the float lane and the total
+		// is a float again — the pair is what pins the CROSSING rather than
+		// just the int case.
+		{name: "one float cost crosses the total back to float",
+			limit: 100, nsteps: 2,
+			rows: []string{row("research", 1000, 1), row("research", 2000, 0.5)}},
+
+		// A group whose average is ZERO is excluded from the median sample
+		// (`if s["avg_tokens"] > 0`), so the median is taken over the
+		// non-zero types only. Here two of the three types average zero: a
+		// port that admitted them would take the median of {0,0,900} — 0 —
+		// instead of the median of {900}.
+		{name: "zero-average groups stay out of the median sample",
+			limit: 100, nsteps: 2,
+			rows: []string{
+				row("research", 0, 0.01), row("build", 0, 0.01),
+				row("ops", 900, 0.01)}},
+		// And when EVERY average is zero the sample is empty, the median is
+		// 0, and the `median_avg > 0` guard is the only thing keeping every
+		// type out of expensive_types — `0 > 2*0` is false for a zero
+		// average but a type averaging anything at all would qualify.
+		{name: "every average zero leaves expensive empty",
+			limit: 100, nsteps: 2,
+			rows: []string{row("research", 0, 0.01), row("build", 0, 0.02)}},
+		// The LOWER median: with an even sample Python takes
+		// sorted(avgs)[(len-1)//2], the lower of the two middles, not their
+		// mean. Four types at 100/200/300/400 make the two answers 200 and
+		// 250, and the 2x threshold then differs on the 400 type.
+		{name: "an even median sample takes the lower middle",
+			limit: 100, nsteps: 2,
+			rows: []string{
+				row("research", 100, 0.01), row("build", 200, 0.01),
+				row("ops", 300, 0.01), row("general", 401, 0.01)}},
+
+		// SIX DECIMALS, not eight. estimate_loop_cost rounds its answer to 6
+		// while avg_cost_usd is rounded to 8, and two different roundings in
+		// one file is the shape a port unifies by accident. The averages here
+		// are chosen so the seventh decimal is non-zero.
+		{name: "the loop estimate rounds to six places", limit: 100, nsteps: 3,
+			rows: []string{
+				row("research", 1000, 0.012345678), row("research", 1000, 0.023456789)}},
 		// And the floor is a FLOOR: 2001.5 // 2 is 1000.0, not 1000.75.
 		{name: "a float token total floors rather than truncating",
 			limit: 100, nsteps: 3,
@@ -754,7 +897,10 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				t.Errorf("expensive_types differ\ncpython: %q\ngo:      %q",
 					w.Expensive, got.ExpensiveTypes)
 			}
-			if s := fmt17(got.TotalCostUSD); s != w.Total {
+			// pyval.Repr, not %.17g: the int/float distinction is the
+			// whole reason this field is `any`, and %g spells 2 and 2.0
+			// the same way.
+			if s := pyval.Repr(got.TotalCostUSD); s != w.Total {
 				t.Errorf("total_cost_usd = %s, cpython %s", s, w.Total)
 			}
 

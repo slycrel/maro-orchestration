@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**692**. The counts below are regenerated from the ledger, not recalled.
+**699**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 692
+**Two things the counts are not.** They are lower bounds: 314 of the 699
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 57 — the most frequent single defect in the Go port*
+*instances: 58 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -343,7 +343,7 @@ calls the transcript clean.
 ## D. Boundaries and limits
 
 ### L23 — A limit with no case at its OWN boundary is a limit nothing pins
-*instances: 15*
+*instances: 16*
 
 A limit's NEIGHBOURS are not its boundary.
 
@@ -549,7 +549,7 @@ the thing it skipped is either counted or lost.
 
 ### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
 
-*instances: 6*
+*instances: 7*
 
 Distinct from L1, and the distinction is what makes it findable. L1 is a
 test whose *assertion* cannot fail. Here the assertion is fine and the
@@ -833,7 +833,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 3*
+*instances: 5*
 
 A port can get every DECISION of the original right and still be wrong,
 because the original's answer depends on the SHAPE the decisions are made
@@ -900,7 +900,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 1*
+*instances: 3*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -933,6 +933,23 @@ fixture, added for an unrelated finding (floor division on a negative
 total), happened to sum to approximately zero. Had its four costs summed
 to anything else, the port would have shipped a folded `sum` and the
 catalog would have no L49.
+
+**A second instance, from the same chunk's battery.** `successful_run_cost_p90`
+tests `card.get("success_class") in RUN_COST_SUCCESS_CLASSES`. The port read
+`in` as SET membership, guarded it, and raised TypeError on an unhashable
+class. `RUN_COST_SUCCESS_CLASSES` is a **tuple**: membership walks the
+elements comparing with `==`, never hashes, and never raises. One structured
+`success_class` in the last two hundred run cards made the port answer "no
+opinion" where CPython answers a p90, dropping the budget gate to its static
+floors — silently, because "no opinion" is a legitimate answer.
+
+The operator was not the problem; the CONTAINER was, and the container was
+one line away in the same module. What made it survive review is that the
+port had a genuine instance of the set reading twenty lines off in the same
+package — `analyze_step_costs` uses `step_type` as a dict key, where the
+raise is real — so the wrong rule arrived with a correct sibling vouching for
+it. **`in`, `[]`, `+`, `*` and `%` all mean different things by operand type;
+resolving one call site does not resolve the next one.**
 
 **Tripwire.** List every Python BUILTIN the chunk reimplements — `sum`,
 `sorted`, `min`, `max`, `round`, `int`, `divmod`, `any`, `all` — and for

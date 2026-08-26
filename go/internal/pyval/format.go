@@ -126,6 +126,28 @@ func FloorDiv(a, b int) int {
 //
 // A non-numeric `a` is the caller's to reject before getting here; it
 // returns the same TypeError Sum would.
+// RoundAny is `round(x, n)` KEEPING PYTHON'S TYPE.
+//
+// round() of an int is an INT, at every ndigits — `round(2, 6)` is 2, not
+// 2.0 — because rounding an integer to decimal places cannot change it and
+// CPython short-circuits rather than converting. That matters wherever the
+// result is rendered or written back: metrics.analyze_step_costs returns
+// `round(sum(costs), 6)` as total_cost_usd, and a store whose cost_usd
+// values are integers makes that field an int the report spells "2".
+//
+// A non-numeric value is returned unchanged; the callers here have already
+// summed it, which is the operation that would have raised.
+func RoundAny(v any, n int) any {
+	i, f, isFloat, ok := numOf(v)
+	if !ok {
+		return v
+	}
+	if !isFloat {
+		return i
+	}
+	return Round(f, n)
+}
+
 func FloorDivAny(a any, b int) (any, error) {
 	i, f, isFloat, ok := numOf(a)
 	if !ok {

@@ -268,7 +268,11 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 		return ws
 	}
 
-	card := func(cost any, class string) map[string]any {
+	// class is `any`, not `string`, so a fixture can hand it a STRUCTURED
+	// value. RUN_COST_SUCCESS_CLASSES is a tuple, so such a value is simply
+	// not in it — and proving that it does not raise takes a fixture a
+	// string-typed helper cannot express.
+	card := func(cost any, class any) map[string]any {
 		m := map[string]any{"success_class": class}
 		if cost != nil {
 			m["total_cost_usd"] = cost
@@ -283,42 +287,167 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 		return out
 	}
 
+	// after reshapes the seeded workspace for the cases whose subject is the
+	// FILESYSTEM rather than the card contents — a `runs` that is not a
+	// directory, a run reached through a symlink, names whose lexical order
+	// disagrees with their mtimes. Those are decision sites in
+	// computeRunCostP90 (is_dir, glob, the stat-and-sort) that no card
+	// payload can reach.
 	cases := []struct {
 		name  string
 		cards []map[string]any
 		limit int
+		after func(*testing.T, string)
 	}{
 		// Below the sample floor: the answer is None, not a small-sample
 		// p90, and a caller must be able to tell those apart.
-		{"seven successes is too thin", n(7, 1.0, "success"), 200},
+		{"seven successes is too thin", n(7, 1.0, "success"), 200, nil},
 		// Exactly at the floor. int(0.9*(8-1)) is 6, so this is the SEVENTH
 		// smallest of eight — the index a rounding p90 would get wrong.
-		{"eight successes is exactly enough", n(8, 1.0, "success"), 200},
-		{"nine successes", n(9, 1.0, "success"), 200},
-		{"twenty successes", n(20, 0.5, "success"), 200},
+		{"eight successes is exactly enough", n(8, 1.0, "success"), 200, nil},
+		{"nine successes", n(9, 1.0, "success"), 200, nil},
+		{"twenty successes", n(20, 0.5, "success"), 200, nil},
 		// done-unverified counts; anything else does not.
-		{"done-unverified counts", n(9, 2.0, "done-unverified"), 200},
-		{"failures do not count", n(20, 2.0, "failed"), 200},
+		{"done-unverified counts", n(9, 2.0, "done-unverified"), 200, nil},
+		{"failures do not count", n(20, 2.0, "failed"), 200, nil},
 		// A zero cost is FALSY and drops out of the distribution entirely,
 		// so eight successes with one zero is seven samples: too thin.
 		{"a zero cost is not a sample",
-			append(n(7, 1.0, "success"), card(0.0, "success")), 200},
+			append(n(7, 1.0, "success"), card(0.0, "success")), 200, nil},
 		// A missing cost key, and a null one.
 		{"a missing cost is not a sample",
-			append(n(7, 1.0, "success"), card(nil, "success")), 200},
+			append(n(7, 1.0, "success"), card(nil, "success")), 200, nil},
 		// The LIMIT truncates by recency, so a window that excludes the
 		// cheap tail moves the answer.
 		{"the limit cuts the older half",
-			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), 10},
+			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), 10, nil},
 		{"the limit below the sample floor",
-			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), 7},
+			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), 7, nil},
 		// Mixed classes interleaved, so the filter runs against a real mix
 		// rather than a homogeneous list.
 		{"mixed classes",
 			append(append(n(6, 1.0, "success"), n(6, 50.0, "failed")...),
-				n(6, 3.0, "done-unverified")...), 200},
+				n(6, 3.0, "done-unverified")...), 200, nil},
 		// No runs directory at all.
-		{"an empty workspace", nil, 200},
+		{"an empty workspace", nil, 200, nil},
+
+		// ELEVEN. The index is `int(0.9 * (len - 1))`, and the plausible
+		// off-by-one next to it is `int(0.9 * len) - 1`. Those two agree at
+		// every sample size the cases above produce — 8, 9, 10, 12 and 20 —
+		// so the whole list pinned the p90 without pinning its INDEX. At
+		// eleven they part company for the first time: int(0.9*10) is 9 and
+		// int(0.9*11)-1 is 8. The costs step by 0.01 so neighbouring indices
+		// carry different values and the disagreement is visible.
+		{"eleven successes, where the two index formulas diverge",
+			n(11, 1.0, "success"), 200, nil},
+
+		// A cost that is TRUTHY but floats to ZERO. Python gates on `if
+		// cost` — the RAW value — and only then calls float(), so the string
+		// "0.0" is a real sample worth 0.0. A port that gated on the FLOAT
+		// would drop it and answer off a nine-sample distribution instead of
+		// ten. Nothing else here can tell those apart, because every other
+		// falsy cost is also zero after conversion.
+		{"a truthy cost that floats to zero",
+			append(n(9, 1.0, "success"), card("0.0", "success")), 200, nil},
+		// The same seam from the other side: `True` is truthy and floats to
+		// 1.0, and bools reach here because JSON has them.
+		{"a boolean cost", append(n(9, 1.0, "success"), card(true, "success")), 200, nil},
+
+		// A cost that float() REJECTS. Python has no per-card guard: the
+		// ValueError escapes to the function's outer `except Exception`, so
+		// ONE bad card discards the whole distribution and the answer is
+		// None — not "the other nine". A port that skipped the bad card
+		// would answer a number here, which is the failing-open shape.
+		{"a non-numeric cost discards the whole sample",
+			append(n(9, 1.0, "success"), card("abc", "success")), 200, nil},
+		// A STRUCTURED class, which does NOT raise: RUN_COST_SUCCESS_CLASSES
+		// is a tuple (metrics.py:249), so membership compares with `==` and
+		// an unhashable value is merely absent. The card is skipped and the
+		// other nine still answer. This port read the tuple as a set for a
+		// round — guarded, commented, and green, because no fixture had a
+		// non-string class — and answered None here. The cost must be truthy
+		// or `and` short-circuits before the membership test ever runs.
+		{"a structured success_class is skipped, not raised",
+			append(n(9, 1.0, "success"), card(1.0, []any{"success"})), 200, nil},
+
+		// A NEGATIVE limit. `cards[:-5]` drops the five most RECENT, which
+		// is a real slice in Python and a panic in any port that reached for
+		// `rows[:limit]`. The two halves differ by 90x so the window shows.
+		{"a negative limit drops the newest",
+			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), -5, nil},
+		// A negative limit LARGER than the list. `cards[:-20]` over nine
+		// cards is the empty list in Python — the floor at zero is a real
+		// rule, not defensive padding — where an unfloored size+n is -11 and
+		// slices backwards. The case above cannot see it: -5 against twenty
+		// cards stays in range.
+		{"a negative limit past the start of the list",
+			n(9, 1.0, "success"), -20, nil},
+
+		// `runs` EXISTS but is a regular file. `root.is_dir()` is False for
+		// it exactly as it is for a missing path, so the answer is the same
+		// None — but it is a different branch of the same `or`, and a port
+		// that only checked for existence would walk on and glob a file.
+		{"runs is a file, not a directory", n(9, 1.0, "success"), 200,
+			func(t *testing.T, ws string) {
+				runs := filepath.Join(ws, "runs")
+				if err := os.RemoveAll(runs); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(runs, []byte("not a directory"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}},
+
+		// A run directory reached through a SYMLINK. `Path.glob("*/...")`
+		// follows it, so the card counts. The natural Go spelling of "is
+		// this a directory" during a hand-rolled walk is Lstat, which does
+		// not follow and silently drops the run — a difference that only
+		// appears once a workspace has an archived or relocated run linked
+		// back in, which is what an operator does by hand at 2am.
+		{"a run directory reached through a symlink", n(9, 1.0, "success"), 200,
+			func(t *testing.T, ws string) {
+				runs := filepath.Join(ws, "runs")
+				real := filepath.Join(t.TempDir(), "elsewhere")
+				if err := os.MkdirAll(real, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				raw, _ := json.Marshal(map[string]any{
+					"total_cost_usd": 99.0, "success_class": "success"})
+				if err := os.WriteFile(filepath.Join(real, "run_card.json"), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, filepath.Join(runs, "run-linked")); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			}},
+
+		// LEXICAL ORDER DISAGREES WITH MTIME. Every case above names its
+		// runs run-0, run-1, … in the same order it stamps their mtimes, so
+		// a port that sorted by NAME, or that never sorted at all and
+		// relied on glob order, would agree with one that sorted by mtime.
+		// Here the newest run is named run-a and the oldest run-z, and the
+		// limit cuts the list in half, so only a real mtime sort keeps the
+		// right ten. The costs differ by 90x across the cut.
+		{"names whose lexical order reverses their mtimes",
+			append(n(10, 0.10, "success"), n(10, 9.00, "success")...), 10,
+			func(t *testing.T, ws string) {
+				runs := filepath.Join(ws, "runs")
+				ents, err := os.ReadDir(runs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// run-N is the newest; give it the lexically FIRST name.
+				for _, e := range ents {
+					i := 0
+					if _, err := fmt.Sscanf(e.Name(), "run-%d", &i); err != nil {
+						t.Fatalf("unexpected run dir %q", e.Name())
+					}
+					dst := filepath.Join(runs, fmt.Sprintf("run-%c", 'z'-rune(i)))
+					if err := os.Rename(filepath.Join(runs, e.Name()), dst); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}},
 	}
 
 	type payload struct {
@@ -329,6 +458,9 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 	wss := make([]string, len(cases))
 	for i, c := range cases {
 		wss[i] = seed(t, c.cards)
+		if c.after != nil {
+			c.after(t, wss[i])
+		}
 		pyArgs[i] = payload{WS: wss[i], Limit: c.limit}
 	}
 
@@ -445,6 +577,57 @@ func TestRunCostP90CachesByLimit(t *testing.T) {
 	if _, ok := SuccessfulRunCostP90(thin, 100); !ok {
 		t.Error("a different limit served another limit's cached answer")
 	}
+
+	// Property 4: the entry EXPIRES, and expires at 900 seconds.
+	//
+	// Nothing above can see this. Every call in this file happens within
+	// microseconds of the last, so a cache with a 900-second TTL, a
+	// 300-second TTL, and no expiry at all are indistinguishable — the
+	// battery shortened the TTL and dropped the staleness test entirely, and
+	// both mutants lived. The clock is a seam for exactly this reason.
+	//
+	// The pair of assertions is what pins the DURATION rather than merely
+	// the existence of expiry: just under the TTL must still serve the
+	// remembered answer, just over it must recompute.
+	realNow := runCostNow
+	defer func() { runCostNow = realNow }()
+	base := time.Now()
+	runCostNow = func() time.Time { return base }
+
+	// Its own workspace: `thin` has twelve priced cards by now, so a fresh
+	// compute there already has an opinion and the remembered one would be
+	// indistinguishable from a recomputed one.
+	aging := t.TempDir()
+	agingRuns := filepath.Join(aging, "runs")
+	if err := os.MkdirAll(agingRuns, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clearRunCostCache()
+	if _, ok := SuccessfulRunCostP90(aging, 200); ok {
+		t.Fatal("an empty runs dir should have no opinion")
+	}
+	for i := 0; i < 12; i++ {
+		dir := filepath.Join(agingRuns, "run-"+itoa(i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"total_cost_usd": 1.0 + float64(i), "success_class": "success"})
+		if err := os.WriteFile(filepath.Join(dir, "run_card.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One second SHORT of the TTL: the remembered no-opinion still stands,
+	// even though twelve priced cards are now on disk.
+	runCostNow = func() time.Time { return base.Add(runCostCacheTTL - time.Second) }
+	if _, ok := SuccessfulRunCostP90(aging, 200); ok {
+		t.Error("the entry expired early — a cached answer was dropped inside the TTL")
+	}
+	// One second PAST it: recomputed, and now the twelve cards are visible.
+	runCostNow = func() time.Time { return base.Add(runCostCacheTTL + time.Second) }
+	if _, ok := SuccessfulRunCostP90(aging, 200); !ok {
+		t.Error("a stale entry was served past the TTL — the gate never sees new runs")
+	}
 }
 
 func TestTailCostScope(t *testing.T) {
@@ -484,8 +667,11 @@ func TestTailCostScope(t *testing.T) {
 // not a hex digit, so every id it produced failed idShape, the regex the
 // differential above uses to recognise a well-formed row id.
 func TestRowIDFallbackKeepsTheShape(t *testing.T) {
+	// rowIDFallback, not a local copy of its format string. The earlier
+	// version of this loop re-typed the Sprintf here, which made it a test of
+	// itself: it stayed green under every mutation of the real one.
 	for _, n := range []int64{0, 1, 1 << 31, 1<<62 + 12345, 1756123456789012345} {
-		got := fmt.Sprintf("%08x-%03x", uint32(n), uint16(n>>32)&0xFFF)
+		got := rowIDFallback(n)
 		if !idShape.MatchString(got) {
 			t.Errorf("fallback id %q does not match %v", got, idShape)
 		}
@@ -494,6 +680,83 @@ func TestRowIDFallbackKeepsTheShape(t *testing.T) {
 	for i := 0; i < 64; i++ {
 		if id := newRowID(); !idShape.MatchString(id) {
 			t.Fatalf("newRowID produced %q, which does not match %v", id, idShape)
+		}
+	}
+}
+
+// pyConstantsSrc reads the tuning constants straight out of the module.
+const pyConstantsSrc = `
+import json, sys, inspect, re
+import metrics
+print(json.dumps({
+    "min_samples": metrics.RUN_COST_MIN_SAMPLES,
+    "card_limit": metrics.RUN_COST_CARD_LIMIT,
+    "cache_ttl_s": metrics._RUN_COST_CACHE_TTL_S,
+    "success_classes": list(metrics.RUN_COST_SUCCESS_CLASSES),
+    "classes_is_tuple": isinstance(metrics.RUN_COST_SUCCESS_CLASSES, tuple),
+    # The analysis window is a literal inside analyze_step_costs' own
+    # entries-is-None default, not a named constant, so it is read back out
+    # of the source rather than imported.
+    "analysis_window": int(re.search(
+        r"load_step_costs\(limit=(\d+)\)",
+        inspect.getsource(metrics.analyze_step_costs)).group(1)),
+}))
+`
+
+// TestTuningConstantsMatchCPython compares the numbers themselves, because
+// no fixture can.
+//
+// A TTL, a card limit and an analysis window are only observable through
+// inputs large enough or old enough to straddle them, and the differentials
+// in this file are neither: the battery moved the card limit from 200 to
+// 100, the TTL from 900s to 300s and the analysis window from 500 to 100,
+// and all three survived every test in the package. Building fixtures with
+// two hundred run cards and a fifteen-minute clock to catch a one-line
+// transcription error is the expensive way to do what reading the constant
+// does directly.
+//
+// This is the cheap half of covering a tuning constant. The expensive half —
+// proving the constant is USED, and used at the right comparison — stays
+// with the behavioural tests above; a constant that matches Python's and is
+// then ignored would pass here.
+func TestTuningConstantsMatchCPython(t *testing.T) {
+	var want struct {
+		MinSamples     int      `json:"min_samples"`
+		CardLimit      int      `json:"card_limit"`
+		CacheTTLS      float64  `json:"cache_ttl_s"`
+		SuccessClasses []string `json:"success_classes"`
+		ClassesIsTuple bool     `json:"classes_is_tuple"`
+		AnalysisWindow int      `json:"analysis_window"`
+	}
+	pyprobe.Probe{Marker: "metrics.py"}.RunJSON(t, pyConstantsSrc, &want)
+
+	if RunCostMinSamples != want.MinSamples {
+		t.Errorf("min samples: cpython %d, go %d", want.MinSamples, RunCostMinSamples)
+	}
+	if RunCostCardLimit != want.CardLimit {
+		t.Errorf("card limit: cpython %d, go %d", want.CardLimit, RunCostCardLimit)
+	}
+	if got := runCostCacheTTL.Seconds(); got != want.CacheTTLS {
+		t.Errorf("cache ttl: cpython %vs, go %vs", want.CacheTTLS, got)
+	}
+	if analysisWindow != want.AnalysisWindow {
+		t.Errorf("analysis window: cpython %d, go %d", want.AnalysisWindow, analysisWindow)
+	}
+	// The CONTAINER TYPE, not just its members. This port read the tuple as a
+	// set for a round and raised TypeError on an unhashable class where
+	// CPython skips the card; the members were right the whole time, so a
+	// membership-only check would have agreed with the bug.
+	if !want.ClassesIsTuple {
+		t.Error("RUN_COST_SUCCESS_CLASSES is no longer a tuple — membership " +
+			"may now raise on an unhashable class; re-read computeRunCostP90")
+	}
+	if len(runCostSuccessClasses) != len(want.SuccessClasses) {
+		t.Errorf("success classes: cpython %v, go %v",
+			want.SuccessClasses, runCostSuccessClasses)
+	}
+	for _, c := range want.SuccessClasses {
+		if !runCostSuccessClasses[c] {
+			t.Errorf("success class %q is missing from the port", c)
 		}
 	}
 }

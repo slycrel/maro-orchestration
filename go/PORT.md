@@ -9692,3 +9692,98 @@ same shape — the corpus straddled a boundary without landing on it:
 
 Three of those four are L28 as much as L23: the comment asserted the
 coverage, and the assertion was the only thing holding it.
+
+### What the battery says now, and what it said first
+
+The metrics battery walks 131 decision sites in `stepcosts.go`,
+`recorder.go` and the three `pyval` helpers the chunk added, top to bottom,
+derived from the FILES rather than from round 1's findings list. It scored
+**83 detected, 40 survived, 8 malformed** on its first run — against a
+baseline verified green, with `-count=1` and an unfiltered second phase, so
+the survivors are honest.
+
+Forty is not a rounding error, and where they clustered is the finding:
+**nearly every decision in `computeRunCostP90` survived.** The differential
+that covers it compares against CPython on thirteen fixtures and asserts a
+real value, so it is not a vacuous test — it simply pinned the p90's ANSWER
+while leaving the machinery that produces it unmeasured. The index formula
+is the clearest case. Every fixture sampled 8, 9, 10, 12 or 20 successful
+runs, and `int(0.9 * (n-1))` and the plausible off-by-one `int(0.9 * n) - 1`
+agree at all five. Eleven is the first size where they part company. A
+fixture list can cover a function's inputs generously and still never ask
+the one question that separates two implementations.
+
+Three real defects came out of chasing the survivors, and two of them are
+the same shape as round 1's:
+
+**`RUN_COST_SUCCESS_CLASSES` is a tuple, not a set.** The port guarded the
+membership test with `pyval.Hashable` and returned "no opinion" when a run
+card's `success_class` was unhashable, with a comment explaining that the
+`in` would raise. Tuple membership walks the elements comparing with `==`;
+it does not hash and it does not raise. The card is skipped and the other
+cards still answer. The consequence was not academic — one structured
+`success_class` anywhere in the last two hundred run cards made the budget
+gate fall back to its static floors, silently. The reading was carried over
+from `analyze_step_costs`, where `step_type` genuinely *is* a dict key and
+genuinely does raise. Two membership tests twenty lines apart, one of which
+raises; the port applied one rule to both. **Read the container, not the
+operator.**
+
+**A named divergence defended by a false premise, again.** `costUSDOf`
+returned a bare `float64` and scored an unparseable `cost_usd` as zero for
+that row, under a comment reading "Go cannot reproduce a mid-loop abort by
+returning a float, so that case is named here and left as a known
+divergence." Go reproduces it with a second return value. In CPython the
+`float()` sits inside both callers' outer bare `except` with nothing
+between, so one corrupt row makes `spend_today` and `spend_for_loops` answer
+`0.0` for the entire file — not for the row. The port handed the budget gate
+the sum of everything that parsed. This is round 1's `computeRunCostP90`
+lesson repeating: the divergence was honestly labelled, carefully argued,
+and wrong, and the label is what kept it out of review's way. **A comment
+explaining why the original's behaviour is unreachable here deserves the
+same scrutiny as the code.**
+
+Both failed in the same direction, which is worth naming on its own: a raise
+that a port converts into a skip **always fails open**, because the number
+it invents is smaller than the one CPython refuses to give.
+
+**A test that was a copy of the thing it tested.**
+`TestRowIDFallbackKeepsTheShape` re-typed `newRowID`'s `fmt.Sprintf` into its
+own body. It asserted that a format string matched a regex — both of which
+lived in the test — and stayed green under every mutation of the literal
+that ships. It had been written the round before to catch exactly the bug it
+could not have caught. The fallback is now `rowIDFallback`, and the test
+calls it.
+
+Four smaller ones followed the same thread: `total_cost_usd` is an INT in
+CPython when the store's costs are integers (`round()` keeps the type), and
+both the field and the probe's `%.17g` formatter had to change before the
+difference was even expressible; the unhashable-key message had been
+hand-written twice and the two copies had drifted to *different CPython
+versions*, 3.12's wording in one and 3.14's in the other; the `limit=500`
+window lives inside `analyze_step_costs`' own `entries=None` default rather
+than at its call site, so `AnalyzeStepCosts(nil)` in the port analyses
+nothing where Python analyses the last five hundred rows — harmless with
+one caller and a trap for the next chunk's.
+
+### Two ways a constant escapes a differential
+
+A TTL, a card limit and an analysis window share a property: they are only
+observable through inputs large enough or old enough to straddle them. The
+battery moved the cache TTL from 900s to 300s, the card limit from 200 to
+100 and the analysis window from 500 to 100, and every test in the package
+stayed green, because no fixture waits fifteen minutes or writes two hundred
+run cards.
+
+Both halves of the answer are here now, and they are different jobs.
+`TestTuningConstantsMatchCPython` reads the numbers out of the module and
+compares them — cheap, and it catches transcription drift, which is the
+failure that actually happens. It cannot catch a constant that is correct
+and then ignored. For the TTL, where "is it used, at the right comparison"
+is the whole question, the honest instrument is a clock seam: `runCostNow`
+is a package variable, and the test advances it to one second under the TTL
+and one second over, so the pair pins the DURATION rather than merely the
+existence of expiry.
+
+Reaching for the seam is a last resort in general and the right call here.
+The alternative was a fifteen-minute test.

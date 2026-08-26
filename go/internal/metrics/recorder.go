@@ -109,11 +109,22 @@ func newRowID() string {
 		// one, and a reader keyed on the shape would have dropped the row
 		// entirely. When the two goals conflict the shape wins — a row nobody
 		// can read is worse than a row nobody can attribute (metrics r1, LOW).
-		n := time.Now().UnixNano()
-		return fmt.Sprintf("%08x-%03x", uint32(n), uint16(n>>32)&0xFFF)
+		return rowIDFallback(time.Now().UnixNano())
 	}
 	h := hex.EncodeToString(b[:])
 	return h[:8] + "-" + h[8:11]
+}
+
+// rowIDFallback is the clock-derived arm of newRowID, split out for one
+// reason: it is otherwise UNTESTABLE, and the test that claimed to cover it
+// did so by re-typing this format string into itself. That test passed for
+// any implementation, including the broken "t%07x" one it was written to
+// prevent — a mutation of the real literal could not fail a test holding its
+// own copy (metrics r1 battery, M88).
+//
+// A seam exists here so the assertion can run against the code that ships.
+func rowIDFallback(n int64) string {
+	return fmt.Sprintf("%08x-%03x", uint32(n), uint16(n>>32)&0xFFF)
 }
 
 // RecordStepCost is metrics.record_step_cost.
@@ -209,6 +220,15 @@ var (
 	runCostCache = map[int]runCostEntry{}
 )
 
+// runCostNow is a TEST SEAM, and the only kind of seam that can pin a TTL.
+//
+// Expiry is invisible to a differential: every fixture runs in well under
+// fifteen minutes, so a cache that never expires and one that expires on
+// schedule return the same answers, and a battery that shortens the TTL from
+// 900s to 300s survives untouched. Sleeping past a real TTL is not a test, it
+// is a fifteen-minute test. Advancing the clock is.
+var runCostNow = time.Now
+
 type runCostEntry struct {
 	at  time.Time
 	val float64
@@ -223,7 +243,7 @@ type runCostEntry struct {
 // Never raises, and caches ~15 minutes per process: the distribution moves
 // per run rather than per step, and the gate runs once per loop.
 func SuccessfulRunCostP90(ws string, limit int) (float64, bool) {
-	now := time.Now()
+	now := runCostNow()
 	runCostMu.Lock()
 	hit, present := runCostCache[limit]
 	runCostMu.Unlock()
@@ -341,14 +361,19 @@ func computeRunCostP90(ws string, limit int) (val float64, ok, cacheable bool) {
 		if !pyval.Truthy(cost) {
 			continue
 		}
-		// `card.get("success_class") in RUN_COST_SUCCESS_CLASSES` — a set
-		// membership, so a non-string simply is not in it (no raise), but an
-		// UNHASHABLE value raises TypeError and leaves the function. That is
-		// the same uncached-None exit as float() below.
+		// `card.get("success_class") in RUN_COST_SUCCESS_CLASSES`.
+		//
+		// RUN_COST_SUCCESS_CLASSES is a TUPLE (metrics.py:249), not a set,
+		// and that distinction is the whole behaviour of this line: tuple
+		// membership walks the elements comparing with `==`, so an
+		// UNHASHABLE class is simply not in it and the card is skipped. It
+		// does NOT raise. A set would have raised TypeError and taken the
+		// whole distribution out through the outer except.
+		//
+		// This port asserted the set reading for one round, complete with a
+		// confident comment, and answered None where CPython answers a
+		// number. Read the container, not the operator.
 		cls := card["success_class"]
-		if !pyval.Hashable(cls) {
-			return 0, false, false
-		}
 		s, isStr := cls.(string)
 		if !isStr || !runCostSuccessClasses[s] {
 			continue

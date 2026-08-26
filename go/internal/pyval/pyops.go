@@ -318,9 +318,7 @@ func pairsOf(_ int, at func(int) any, n int) (Obj, error) {
 		}
 		key, hashable := dictKey(items[0])
 		if !hashable {
-			return nil, fmt.Errorf(
-				"cannot use '%s' as a dict key (unhashable type: '%s')",
-				TypeName(items[0]), TypeName(items[0]))
+			return nil, fmt.Errorf("%s", UnhashableKeyMsg(items[0]))
 		}
 		out.Set(key, items[1])
 	}
@@ -545,4 +543,28 @@ func Float(v any) (float64, bool) {
 		return ParseFloat(t)
 	}
 	return 0, false
+}
+
+// UnhashableKeyMsg is CPython's message for using an unhashable value as a
+// dict key.
+//
+// THE WORDING IS INTERPRETER-VERSION DEPENDENT, and both spellings are live
+// on this machine. Measured:
+//
+//	3.14.3  "cannot use 'dict' as a dict key (unhashable type: 'dict')"
+//	3.12.3  "unhashable type: 'dict'"
+//
+// The port matches whichever interpreter `python3` resolves to on PATH,
+// which here is linuxbrew's 3.14.3 — the same posture, and the same reason,
+// as the negative-modulo note in introspect/cli.go. Two call sites had
+// hand-written this string and they had drifted to DIFFERENT versions of
+// CPython, which is the argument for one spelling rather than for either
+// wording: analyze_step_costs raised the 3.12 message while Dict() raised
+// the 3.14 one, and no test compared them (metrics r1 battery, M131).
+//
+// If this ever goes red on an unhashable-key case, check `python3 --version`
+// before checking the code.
+func UnhashableKeyMsg(v any) string {
+	return fmt.Sprintf("cannot use '%s' as a dict key (unhashable type: '%s')",
+		TypeName(v), TypeName(v))
 }

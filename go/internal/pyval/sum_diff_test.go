@@ -69,6 +69,22 @@ func TestSumMatchesCPython(t *testing.T) {
 		// after it, so the crossing itself is uncompensated.
 		{"int then float", []any{1, 2.5}, "[1, 2.5]"},
 		{"float then int", []any{2.5, 1}, "[2.5, 1]"},
+		// THE OTHER COMPENSATION ARM. Neumaier picks which operand to
+		// recover the lost low bits from by comparing MAGNITUDES, and every
+		// cancelling fixture above leads with the large term — so |result|
+		// was always >= |x| and the second arm never ran. Collapsing the
+		// branch to one arm survived the battery on that list (M121). Here
+		// the running total is 1.0 when 1e100 arrives, which is the case the
+		// comparison exists for; taking the wrong arm cancels the 1.0 away
+		// and answers 0.0.
+		{"a small term before the large cancelling pair",
+			[]any{1.0, 1e100, -1e100}, "[1.0, 1e100, -1e100]"},
+		{"a tiny term before a large cancelling pair",
+			[]any{1e-10, 1e10, -1e10}, "[1e-10, 1e10, -1e10]"},
+		// Compensation surviving ACROSS a second cancellation, so the
+		// carried c is used rather than merely computed.
+		{"a term on either side of a cancelling pair",
+			[]any{1.0, 1e16, -1e16, 1.0}, "[1.0, 1e16, -1e16, 1.0]"},
 		{"ints then a cancelling pair", []any{3, 1e100, 1.0, -1e100},
 			"[3, 1e100, 1.0, -1e100]"},
 
