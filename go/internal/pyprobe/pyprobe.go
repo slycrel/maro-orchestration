@@ -78,6 +78,34 @@ if _real == _live or _os.path.commonpath([_real, _live]) == _live:
         % (_ws, _real, _live))
 `
 
+// perCaseGuard is liveGuard for a probe that writes to MORE THAN ONE
+// workspace in a single invocation — a table-driven differential with a
+// fresh tree per case, which is the shape every metrics probe has.
+//
+// Those probes could not use Workspace, which is one path, so they each set
+// `os.environ["MARO_WORKSPACE"]` in their own loop and the refusal never ran.
+// One of them substituted a hand-rolled `assert "/.maro/" not in ws` on the
+// UNRESOLVED path — the exact string comparison liveGuard's comment says a
+// symlink defeats — and another carried no guard at all (adversarial metrics
+// r1, MEDIUM). The answer is not more discipline in each snippet: it is a
+// door that does the switching, so a probe cannot set the variable and skip
+// the check without visibly not calling this.
+const perCaseGuard = `
+import os as _os
+def _pyprobe_use(_ws):
+    """Point MARO_WORKSPACE at _ws, refusing anything inside ~/.maro."""
+    if not _ws:
+        raise SystemExit("pyprobe: refusing an empty workspace")
+    _live = _os.path.realpath(_os.path.expanduser("~/.maro"))
+    _real = _os.path.realpath(_ws)
+    if _real == _live or _os.path.commonpath([_real, _live]) == _live:
+        raise SystemExit(
+            "pyprobe: refusing to run — workspace %r resolves to %r, inside "
+            "the live workspace %r" % (_ws, _real, _live))
+    _os.environ["MARO_WORKSPACE"] = _ws
+    return _ws
+`
+
 // Probe is one configured CPython probe.
 type Probe struct {
 	// Marker is the file SrcDir checks for; required unless Stdlib is set.
@@ -93,6 +121,12 @@ type Probe struct {
 	// Workspace, when set, is exported as MARO_WORKSPACE and turns on the
 	// live-workspace refusal. Leave it empty for a read-only probe.
 	Workspace string
+	// Workspaces is Workspace for a probe that writes to several trees in
+	// one invocation. Every path is checked here the way Workspace is, and
+	// the probe body switches between them by calling `_pyprobe_use(ws)`
+	// rather than assigning os.environ["MARO_WORKSPACE"] itself. Setting
+	// both this and Workspace is a mistake, and is refused.
+	Workspaces []string
 	// Guard is extra Python run before the snippet, for the caller's own
 	// "the resolved path is inside the workspace" assertion. It runs after
 	// the live-workspace refusal, so it can import freely.
@@ -127,18 +161,32 @@ type Probe struct {
 // stderr — see the package doc for why that distinction is the whole point.
 func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	t.Helper()
-	if p.Workspace != "" {
-		// The Go-side half of the same check: a caller that hands this a
-		// path outside the test's own temp tree has made a mistake the
-		// Python guard would also catch, and catching it here names the
-		// caller rather than the subprocess.
-		if !strings.HasPrefix(p.Workspace, os.TempDir()) &&
-			!strings.HasPrefix(p.Workspace, "/tmp/") {
+	// The Go-side half of the same check: a caller that hands this a path
+	// outside the test's own temp tree has made a mistake the Python guard
+	// would also catch, and catching it here names the caller rather than
+	// the subprocess.
+	ownedByTest := func(ws string) {
+		t.Helper()
+		if !strings.HasPrefix(ws, os.TempDir()) &&
+			!strings.HasPrefix(ws, "/tmp/") {
 			t.Fatalf("pyprobe: refusing to run a writing probe against %q — "+
-				"use t.TempDir()", p.Workspace)
+				"use t.TempDir()", ws)
 		}
+	}
+	if p.Workspace != "" && len(p.Workspaces) > 0 {
+		t.Fatal("pyprobe: set Workspace or Workspaces, not both — two " +
+			"answers to which tree the probe writes is the bug both guard against")
+	}
+	switch {
+	case p.Workspace != "":
+		ownedByTest(p.Workspace)
 		src = liveGuard + p.Guard + src
-	} else if p.Guard != "" {
+	case len(p.Workspaces) > 0:
+		for _, ws := range p.Workspaces {
+			ownedByTest(ws)
+		}
+		src = perCaseGuard + p.Guard + src
+	case p.Guard != "":
 		src = p.Guard + src
 	}
 	userDir := p.UserDir

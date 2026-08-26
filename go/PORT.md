@@ -9512,6 +9512,12 @@ raises if a card vanishes between the glob and the stat, and the outer
 skips the missing card instead. A run cleaned up mid-scan should not cost
 the budget gate its opinion.
 
+**Withdrawn in round 1, and the reason is the interesting part.** That
+argument was true only because the port cached the answer, which CPython
+does not for that exit. Once the two exits were restored the "next fifteen
+minutes" in the sentence above stopped existing, the divergence had nothing
+left to buy, and it was deleted. See the round-1 section below.
+
 `tail_cost_scope` is a ContextVar in Python, chosen over a global
 precisely so concurrent runs' tails cannot cross-attribute. Go has no
 implicit propagation, so the equivalent is a `context.Context` value: it
@@ -9536,3 +9542,153 @@ package the package under test can reach — which is not a set worth
 estimating. While a battery runs, the working tree is off limits. Prose
 is not: `docs/`, `review/` and this file are in no build graph, and that
 is the whole of the exemption.
+
+### Round 1: the flattening had grown a divergence to justify itself
+
+Fifteen confirmed findings, two self-retracted, one hallucinated claim
+about `read_jsonl_tail` that P1 killed before it cost a fix.
+
+Three were HIGH and two of those are the same defect seen from both
+sides. `successful_run_cost_p90` returns `None` in two places and caches
+only one of them — `if not root.is_dir(): return None` sits above the
+cache write, everything else below it. The port had a single `return` and
+cached whatever came back, so a workspace that had not run anything yet
+answered "no opinion" for fifteen minutes after its first run landed. The
+budget gate reads this to set its auto thresholds; a fresh install's first
+quarter hour ran ungated.
+
+The test that should have caught it instead pinned it. `TestRunCostP90-
+CachesByLimit` asserted "a cached no-opinion answer was recomputed" on an
+EMPTY WORKSPACE — the one no-opinion branch CPython does not cache. It was
+measuring the wrong branch under the right name, which is L1 in its purest
+form: the assertion was true, the fixture could not reach what the
+assertion was about, and the test would have gone on being green forever.
+It now drives both branches, in separate workspaces, saying which is which.
+
+And then the part worth remembering. Twenty lines below the flattened
+return sat a NAMED, DELIBERATE divergence: CPython's mtime sort raises
+when a card is deleted mid-glob, and the port skipped the card instead,
+under a comment arguing that losing the gate's opinion for fifteen minutes
+over one cleaned-up run was the worse trade. That argument was correct.
+It was also only reachable because the flattening cached that answer.
+Restoring the second exit made the trade vanish, and the divergence was
+deleted rather than re-defended. A flattened control flow does not only
+lose the original's shape — it creates pressure to diverge elsewhere, and
+the local justification for that divergence is genuine, which is why it
+survives review. L48 now says to look for exactly this pairing.
+
+The third HIGH was `estimated_cost_usd` spelled `float64` with
+`omitempty`. Python writes the key only when a provider figure displaced
+the estimate, and `tests/test_metrics.py:593` asserts its ABSENCE as the
+estimate-lane marker — so presence is the signal, and `omitempty` cannot
+express "present and zero". The port's comment defended the choice by
+asserting that no caller produces a zero estimate beside a positive
+provider cost; `llm.py:834` passes `input_tokens or 0`, so a provider that
+prices a call without reporting token counts produces exactly that row.
+Fourteen keys where CPython writes fifteen, and a presence-keyed reader
+counts priced spend as unpriced. Now a `*float64`.
+
+### `sum()` is not the loop you would write
+
+`analyze_step_costs` sums the store's RAW values — `sum(e.get("cost_usd",
+0.0) for e in entries)`, no `or 0.0`, no `try` anywhere in the function —
+so one row carrying `null` or `"1.5"` raises TypeError out to the caller.
+The port had used `spend_for_loops`' coercing expression, which lives four
+hundred lines away and DOES have the `or 0.0`, and so answered with a
+plausible number where CPython crashed. `AnalyzeStepCosts` and
+`EstimateLoopCost` now return an error, the three raise sites fire in
+Python's order (unhashable step_type, then `total_tokens`, then
+`cost_usd` — each summed over the whole group before the next begins), and
+the coercing helper was deleted rather than left unused, because a helper
+that reads right and is wrong is how it got used there to begin with.
+
+Writing `pyval.Sum` to replace it turned up something nobody was looking
+for. CPython's `sum()` has used Neumaier compensated summation since 3.12:
+
+```
+sum([1e100, 1.0, -1e100])        -> 1.0     a fold gives 0.0
+sum([0.05, 0.01, 0.01, -0.07])   -> -3.469446951953614e-18
+                                            a fold gives 0.0
+```
+
+The second line is four ordinary cost rows. `round(x, 6)` spells CPython's
+residue `-0.0` and the fold's `0.0`, and both runtimes append to one
+ledger. It surfaced only because a fixture added for an unrelated finding
+— floor division on a negative group total — happened to sum to
+approximately zero; four other costs and the folded `sum` would have
+shipped. That near-miss is now L49: a builtin's implementation exceeds its
+definition, and the differential goes in before the implementation, with
+an input chosen to be ill-conditioned for the obvious algorithm.
+`pyval.Sum` reproduces the compensated loop, the int→float lane crossing,
+the non-finite discard (`sum([1e308, 1e308, -1e308])` is `inf`, not `nan`)
+and all seven TypeError messages, pinned against the interpreter.
+
+### Four more in one function, and a third copy of one helper
+
+`computeRunCostP90` alone carried four of the remaining findings, which is
+what a function looks like when its shape was rewritten:
+
+- `rows[:limit]` PANICS on a negative limit, under a doc comment promising
+  the function never raises. The fix was not a third private slice helper:
+  `pyval.Clip`'s own comment already named "two implementations of one
+  Python operation disagreeing" as the defect, and `internal/orch` had a
+  private `pySliceLen` doing it right. Promoted to `pyval.SliceStop`.
+- `encoding/json` where the port has its own Python-shaped reader.
+  `json.loads` admits the bare tokens `NaN`, `Infinity`, `-Infinity`; Go's
+  decoder rejects them, so a card carrying `"total_cost_usd": NaN` was
+  dropped here and admitted there, where it makes the p90 itself `nan` and
+  every downstream budget comparison false.
+- `if !ok || f == 0` applied truthiness AFTER `float()`. Python's `if
+  cost` tests the RAW value: the string `"0"` is truthy and floats to a
+  real 0.0 sample, and `"abc"` is truthy and raises out of the function.
+  Two inputs the port answered 60.0 and 70.0 on, against CPython's 0.0-
+  sample and uncached `None`.
+- `filepath.Glob` sorts lexically; `Path.glob` yields DIRECTORY order and
+  never sorts. Both mtime sorts are stable, so the arrival order IS the
+  tiebreak, and the tiebreak decides which of two same-mtime cards
+  survives `[:limit]`. Sixteen tied cards at limit=8: 700 here, 1300 there.
+
+`spend_for_loops` was the fifth of that class. It read bytes where Python
+opens the file in TEXT mode with `encoding="utf-8"` inside a bare
+`except`, and the `for line in fh` loop has no break — so one crash-torn
+byte anywhere in the file makes CPython answer 0.0 for the WHOLE file,
+where the port answered with every other row's spend.
+
+### The probes were writing without the guard
+
+Five metrics probes each set `os.environ["MARO_WORKSPACE"]` in their own
+loop, because `pyprobe.Probe.Workspace` is one path and a table-driven
+differential has one tree per case. The consequence is that pyprobe's
+realpath live-workspace refusal never ran for the probes that WRITE. One
+of them substituted a hand-rolled `assert "/.maro/" not in ws` on the
+UNRESOLVED path — the exact string comparison `liveGuard`'s own comment
+says a symlinked temp dir walks past — and one carried no guard at all.
+
+The fix is not more discipline in five snippets. `pyprobe` grew a
+`Workspaces []string` field, checked Go-side the way `Workspace` is, and a
+`_pyprobe_use(ws)` door that realpaths both sides before it sets the
+variable. A probe now cannot point itself somewhere without visibly not
+calling it. This is the 2026-08-16 live-ledger rule finally having one
+door instead of a habit.
+
+### Battery gaps: four boundaries with a case on either side and none at it
+
+Four findings were mutants that survived, and every one of them is the
+same shape — the corpus straddled a boundary without landing on it:
+
+- `line[:60]` mutated to 59 and to 61 both survived. Closed with two rows
+  built by a `datedAt` helper that SIZES the padding and then asserts
+  where the date landed, because hand-counting a JSON prefix is how a
+  boundary case ends up at 49 under a name that says 60.
+- Replacing `spend_today`'s strict `recorded_at.startswith` check with
+  `if true` survived: every fixture had the cheap check and the strict
+  check agreeing. Closed with today's date in a `goal_preview` beside a
+  yesterday timestamp — CPython 1.5, unchecked 9.5.
+- `pyval.FloorDiv` → `/` survived, against a fixture whose comment claimed
+  to separate flooring from truncation. Its total was −6000 over 2, which
+  divides evenly. −5500 over 3 is −1834 against −1833.
+- `LoadStepCosts`' `limit > 0` had no case at zero, where `>= 0` slices
+  `rows[len:]` and answers empty.
+
+Three of those four are L28 as much as L23: the comment asserted the
+coverage, and the assertion was the only thing holding it.

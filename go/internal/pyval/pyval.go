@@ -696,6 +696,48 @@ func IntOf(v any) int {
 	return 0
 }
 
+// SliceStop is the length of `seq[:n]` for a Python sequence of length
+// size. Python CLAMPS rather than raising: a non-negative n is capped at
+// size, and a NEGATIVE n counts back from the end and floors at zero.
+//
+//	[a,b,c][:5]  -> 3      [a,b,c][:-1] -> 2
+//	[a,b,c][:0]  -> 0      [a,b,c][:-9] -> 0
+//
+// Go's t[:n] panics on both out-of-range ends, so every slice built from a
+// caller-supplied bound goes through here.
+//
+// This lived as internal/orch's private pySliceLen, which Clip's comment
+// below already named as the problem: one Python operation with two
+// implementations is a defect waiting for the two to drift. A third copy in
+// internal/metrics is what promoted it (adversarial metrics r1, LOW —
+// `rows[:limit]` panicked on a negative limit against a doc comment saying
+// the function never raises).
+func SliceStop(size, n int) int {
+	if n < 0 {
+		if size+n < 0 {
+			return 0
+		}
+		return size + n
+	}
+	if n > size {
+		return size
+	}
+	return n
+}
+
+// Hashable is CPython's test for whether a value may be a set member or a
+// dict key: everything except list and dict. It exists because `x in
+// {"a","b"}` is not a total function — `[] in {"a"}` raises TypeError
+// rather than answering False, and a port that answers False turns a crash
+// into a silently different number.
+func Hashable(v any) bool {
+	switch v.(type) {
+	case List, []any, Obj, map[string]any, []string:
+		return false
+	}
+	return true
+}
+
 // Clip is Python's s[:n] — n CODE POINTS, not n bytes. Every truncation
 // in this package feeds a human-facing line, and slicing bytes both counts
 // wrong and can split a rune into replacement characters.

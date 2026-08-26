@@ -1,6 +1,10 @@
 package pyval
 
-import "strings"
+import (
+	"fmt"
+	"math"
+	"strings"
+)
 
 // groupDigits inserts Python's thousands separators into a run of DECIMAL
 // DIGITS, which is the half of `{:,}` that has nothing to do with the type
@@ -109,4 +113,29 @@ func FloorDiv(a, b int) int {
 		q--
 	}
 	return q
+}
+
+// FloorDivAny is `a // b` where `a` came out of a store and may be a float.
+//
+// Python's `//` KEEPS THE WIDER TYPE while flooring: `5 // 2` is the int 2
+// and `5.0 // 2` is the float 2.0, which are different objects that render
+// as different text. metrics.analyze_step_costs computes `total_tok //
+// count` where total_tok is a `sum()` over a JSON field, so a row carrying
+// `"total_tokens": 2.5` makes avg_tokens a float in CPython — and a port
+// that coerced to int would answer 2 where CPython answers 2.0.
+//
+// A non-numeric `a` is the caller's to reject before getting here; it
+// returns the same TypeError Sum would.
+func FloorDivAny(a any, b int) (any, error) {
+	i, f, isFloat, ok := numOf(a)
+	if !ok {
+		return nil, &PyErr{Class: "TypeError",
+			Msg: fmt.Sprintf(
+				"unsupported operand type(s) for //: '%s' and 'int'",
+				TypeName(a))}
+	}
+	if isFloat {
+		return math.Floor(f / float64(b)), nil
+	}
+	return FloorDiv(i, b), nil
 }

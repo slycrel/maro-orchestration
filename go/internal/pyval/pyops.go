@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -150,6 +151,105 @@ func addN(v any, n int, op string) (any, error) {
 		return f + float64(n), nil
 	}
 	return i + n, nil
+}
+
+// Sum is Python's builtin `sum(iterable)`, RAISES AND ALL.
+//
+// It exists because `sum(e.get("cost_usd", 0.0) for e in entries)` is a
+// different function from `sum(float(e.get("cost_usd", 0.0) or 0.0) ...)`,
+// and metrics.py contains both — four lines apart in one case. The second
+// coerces and can only produce a number; the first adds whatever the store
+// holds, so one row carrying `"cost_usd": null` takes down the caller. A
+// port that used the coercing spelling for both fails OPEN: the crash
+// becomes a plausible small number and the corrupt row is never noticed.
+//
+// Two typing rules travel with it. The accumulator STARTS AS INT 0, so an
+// empty sum is `0` and not `0.0`, and the error message names the
+// accumulator's type at the moment it failed — `'int' and 'NoneType'` for a
+// null in the first position, `'float' and 'NoneType'` for one after a
+// float has been added. And a bool is an int: `sum([True, True])` is 2.
+//
+// The result is `any` — int or float64 — because Python's is. Collapsing it
+// to float64 would spell an integer token total `2.0` wherever it reaches a
+// string, and collapsing it to int would truncate.
+//
+// IT IS NOT A NAIVE FOLD. Since 3.12, CPython's sum() switches to a
+// compensated float loop — the improved Kahan–Babuška algorithm by Neumaier
+// — the moment the accumulator becomes a float, and the difference is not
+// academic:
+//
+//	sum([1e100, 1.0, -1e100])   -> 1.0     (a fold gives 0.0)
+//	sum([0.05, 0.01, 0.01, -0.07])
+//	                            -> -3.469446951953614e-18  (a fold gives 0.0)
+//
+// The second one is the shape that reaches this port: four ordinary cost
+// rows, and `round(total, 6)` turns CPython's residue into -0.0 while a
+// folded 0.0 stays +0.0. Two runtimes writing `-0` and `0` into one ledger
+// is exactly the divergence class this package exists to close. MEASURED on
+// python3 3.14.3, and pinned by TestSumMatchesCPython.
+//
+// Once the running total goes non-finite the compensation term is
+// meaningless — it goes NaN and would poison an honest infinity — so it is
+// dropped at the end rather than added: sum([1e308, 1e308, -1e308]) is inf,
+// not nan.
+//
+// The integer lane stays exact, and Go's int is 64 bits where Python's has
+// no bound. Every caller here sums token counts and costs off a JSON store,
+// which json.Number already bounds, so the limit is named rather than
+// worked around.
+func Sum(vals []any) (any, error) {
+	// The integer lane, exact, until the first float arrives.
+	acc := 0
+	idx := 0
+	for ; idx < len(vals); idx++ {
+		i, f, isFloat, ok := numOf(vals[idx])
+		if !ok {
+			return nil, sumTypeErr(acc, vals[idx])
+		}
+		if isFloat {
+			// CPython's generic `result + item` performs this one crossing,
+			// and the compensated loop starts AFTER it with c = 0.
+			return sumFloats(float64(acc)+f, vals[idx+1:])
+		}
+		acc += i
+	}
+	return acc, nil
+}
+
+// sumFloats is CPython's float fast path: Neumaier compensation over the
+// remaining items, whatever their numeric type.
+func sumFloats(start float64, rest []any) (any, error) {
+	result, c := start, 0.0
+	for _, v := range rest {
+		i, f, isFloat, ok := numOf(v)
+		if !ok {
+			return nil, sumTypeErr(result, v)
+		}
+		x := f
+		if !isFloat {
+			x = float64(i)
+		}
+		t := result + x
+		if math.Abs(result) >= math.Abs(x) {
+			c += (result - t) + x
+		} else {
+			c += (x - t) + result
+		}
+		result = t
+	}
+	if math.IsInf(result, 0) || math.IsNaN(result) {
+		return result, nil
+	}
+	return result + c, nil
+}
+
+// sumTypeErr names the ACCUMULATOR's type, not the sum's eventual type:
+// `sum([1.5, None])` says 'float' where `sum([None])` says 'int', because
+// the message is built from the object the addition was attempted on.
+func sumTypeErr(acc any, item any) error {
+	return &PyErr{Class: "TypeError",
+		Msg: fmt.Sprintf("unsupported operand type(s) for +: '%s' and '%s'",
+			TypeName(acc), TypeName(item))}
 }
 
 // DictOf is Python's `dict(v)` — the constructor, not a cast.

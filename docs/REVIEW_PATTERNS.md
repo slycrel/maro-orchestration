@@ -31,16 +31,23 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**674**. The counts below were regenerated from `report --by lens`, not
-recalled.
+**692**. The counts below are regenerated from the ledger, not recalled.
 
-That regeneration is a claim this file has already failed once: at the
-2026-08-26 refresh, L23 read `8` against a ledger holding `10`. Two rounds
-had recorded rows without re-deriving the counts, and the sentence above
-went on asserting they were derived. Regenerate ALL of them every time —
-a per-lens edit is how the drift got in.
+That regeneration is a claim this file has already failed twice: at the
+2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
+rounds later L37 had drifted the same way. Both times a round recorded
+rows without re-deriving the counts, and the sentence above went on
+asserting they were derived. It is no longer a discipline:
 
-**Two things the counts are not.** They are lower bounds: 313 of the 674
+```bash
+python3 scripts/review-ledger.py sync-catalog        # or --dry-run
+```
+
+rewrites every `*instances:*` line in this file from the ledger, preserving
+the editorial clause some of them carry. Run it after every import. The
+hand-editing that let the drift in twice is now the wrong way to do it.
+
+**Two things the counts are not.** They are lower bounds: 314 of the 692
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -58,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 56 — the most frequent single defect in the Go port*
+*instances: 57 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -105,7 +112,7 @@ shape is real and the tripwire is cheap; treat it as a self-review prompt
 rather than as a measured recurrence.
 
 ### L4 — A guard that cannot fire is not evidence the danger is gone
-*instances: 11*
+*instances: 12*
 
 **Canonical instance.** Deleting the `is_error` check from
 `classify_tool_pathologies`' hallucination scan survived a 37-mutant
@@ -134,7 +141,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 26*
+*instances: 27*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -219,7 +226,7 @@ family: every instance so far was a real behavioural divergence in
 production, not a test problem.
 
 ### L12 — Half a reader
-*instances: 6*
+*instances: 7*
 
 **Canonical instance.** Python's `_rows_as` is TWO readers stacked: an
 announced framing read AND a dataclass construction that EXCLUDES rows and
@@ -249,7 +256,7 @@ slicer. Six packages carry a private `clipRunes` copy (`scans`,
 introspect port deliberately did not become the seventh.
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 5*
+*instances: 6*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 6*
@@ -301,21 +308,21 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 12*
+*instances: 13*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 22*
+*instances: 23*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 22*
+*instances: 23*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -336,7 +343,7 @@ calls the transcript clean.
 ## D. Boundaries and limits
 
 ### L23 — A limit with no case at its OWN boundary is a limit nothing pins
-*instances: 13*
+*instances: 15*
 
 A limit's NEIGHBOURS are not its boundary.
 
@@ -396,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 41*
+*instances: 42*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -447,7 +454,7 @@ miscounting the marker.
 and anything that must survive. And count the marker in the budget.
 
 ### L35 — Row order is part of the answer
-*instances: 4 attributed; ~8 in the mined cluster*
+*instances: 5 attributed; ~8 in the mined cluster*
 
 Emitted rows carry an order that a consumer depends on — dedup identity,
 last-row-wins, a prompt's salience gradient, a human reading a report — and
@@ -489,7 +496,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 3 attributed; ~6 in the mined cluster*
+*instances: 4 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -542,7 +549,7 @@ the thing it skipped is either counted or lost.
 
 ### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
 
-*instances: 5*
+*instances: 6*
 
 Distinct from L1, and the distinction is what makes it findable. L1 is a
 test whose *assertion* cannot fail. Here the assertion is fine and the
@@ -735,7 +742,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 6*
+*instances: 7*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -826,7 +833,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 2*
+*instances: 3*
 
 A port can get every DECISION of the original right and still be wrong,
 because the original's answer depends on the SHAPE the decisions are made
@@ -861,14 +868,79 @@ the `--` is removed only when a positional's matched span happens to cover
 it. One line of "skip the separator" stood in for a regex match against a
 classification string, and six argument lines disagreed.
 
+**Third instance — and the one that shows what the flattening COSTS.**
+`successful_run_cost_p90` has two ways of saying "no opinion" and caches
+only one: `if not root.is_dir(): return None` returns BEFORE the cache
+write, every other answer after it. The port had ONE return and cached
+whatever came back, so a workspace that had not run anything yet stayed
+"no opinion" for fifteen minutes after its first run landed — the budget
+gate blind for a quarter hour of a fresh install's life.
+
+What makes this the instructive instance is the second defect it had
+already grown. The same function's mtime `stat()` raises in CPython when a
+card is deleted mid-glob, and the port deliberately DIVERGED there, with a
+comment arguing that fifteen minutes of no-opinion over one cleaned-up run
+was worse than losing the sample. That argument was true — but only because
+the flattened single exit cached the answer. Restoring the second exit made
+the divergence unnecessary, and it was deleted rather than defended. A
+flattening does not just lose the original's shape; it creates PRESSURE to
+diverge elsewhere, and the divergence looks locally justified because the
+justification is real. Look for a named divergence sitting next to a
+flattened control flow: it may be load-bearing only for the flattening.
+
 **Tripwire.** Port loops as loops and functions as functions, with the
 original's names, before simplifying anything. If the original defers an
 effect — collects work and runs it later — the deferral is a rule, not a
-style: write it down as one and find the input that observes it. When you
-catch yourself writing a comment that explains why the original's extra
+style: write it down as one and find the input that observes it. Two
+`return`s in the original are two returns here, even when they carry the
+same value, because what differs may be what happens on the way out. When
+you catch yourself writing a comment that explains why the original's extra
 structure is unnecessary here, that comment is the finding (L28); the
 structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
+
+### L49 — A builtin's implementation exceeds its definition
+*instances: 1*
+
+When a port hand-writes one of the original's BUILTINS, it implements the
+author's model of that builtin — the one-line definition anyone would give
+— and CPython's builtins routinely do more than their definition says.
+`sum` is not a left fold. `sorted(reverse=True)` does not reverse ties.
+`max` and `min` disagree with IEEE on NaN. `int()` walks every Unicode
+decimal digit, not `0-9`. None of these are documented at the call site,
+none are visible in the source being ported, and every one of them is the
+kind of thing a reviewer reads past because the Go line says exactly what
+the Python line says.
+
+This is L46 inverted. There the divergence comes from reaching for the
+host's library instead of porting; here it comes from NOT reaching for a
+library and porting a definition instead of an implementation. Both end in
+the same place — a set of rules the author enumerated standing in for a set
+nobody did — and this one is worse camouflaged, because the hand-written
+version is the "careful port" the reviewer was hoping to see.
+
+**Canonical instance.** `analyze_step_costs` sums `cost_usd` over the
+entries. The port accumulated with `+=` in a loop; CPython's `sum()` has
+used Neumaier compensated summation since 3.12, so it is not that loop.
+`sum([0.05, 0.01, 0.01, -0.07])` — four ordinary cost rows off a real
+ledger — is `-3.469446951953614e-18` in CPython and `0.0` under a fold,
+and `round(x, 6)` spells those `-0.0` and `0.0`. Two runtimes writing
+different bytes into one shared store for the same four rows. Nothing in
+metrics.py hints at this; the only way to find it was to run the fixture.
+
+The near-miss is worth recording: the divergence surfaced because a NEW
+fixture, added for an unrelated finding (floor division on a negative
+total), happened to sum to approximately zero. Had its four costs summed
+to anything else, the port would have shipped a folded `sum` and the
+catalog would have no L49.
+
+**Tripwire.** List every Python BUILTIN the chunk reimplements — `sum`,
+`sorted`, `min`, `max`, `round`, `int`, `divmod`, `any`, `all` — and for
+each one write the differential BEFORE the implementation, with at least
+one input chosen to be ill-conditioned for the obvious algorithm: a
+cancelling pair for a sum, a tie for a sort, a NaN for a comparison, a
+half-way value for a round. "I know what sum does" is the claim being
+tested, and it is the claim that has never once survived contact.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*

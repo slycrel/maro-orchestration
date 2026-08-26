@@ -297,43 +297,22 @@ func decomposeViaLLM(
 // follows iterates it CHARACTER by character, so `"features": "abc"` with
 // n=3 produces three features named `a`, `b` and `c` (measured). A dict
 // raises KeyError and null raises TypeError; both leave the function.
-// pySliceLen is the length of `seq[:n]` for a Python sequence of length
-// size. Python clamps rather than raising: a non-negative n is capped at
-// size, and a NEGATIVE n counts back from the end and floors at zero.
-//
-//	[a,b,c][:5]  -> 3      [a,b,c][:-1] -> 2
-//	[a,b,c][:0]  -> 0      [a,b,c][:-9] -> 0
-//
-// Go's t[:n] panics on both out-of-range ends, so every slice built from
-// a caller-supplied bound goes through here.
-func pySliceLen(size, n int) int {
-	if n < 0 {
-		if size+n < 0 {
-			return 0
-		}
-		return size + n
-	}
-	if n > size {
-		return size
-	}
-	return n
-}
 
 func sliceForFeatures(v any, n int) ([]any, error) {
 	switch t := v.(type) {
 	case pyval.List:
-		// pySliceLen, not `if len(t) > n`: a NEGATIVE n made this evaluate
+		// pyval.SliceStop, not `if len(t) > n`: a NEGATIVE n made this evaluate
 		// t[:-1] and PANIC, taking the whole process down where Python's
 		// [:-1] simply drops the last element (adversarial mission-r1
 		// MEDIUM). Both bounds are plain ints on an exported function.
-		t = t[:pySliceLen(len(t), n)]
+		t = t[:pyval.SliceStop(len(t), n)]
 		return []any(t), nil
 	case string:
 		// The string arm slices too, and it had the mirror of the list
 		// arm's bug: `len(out) == n` never fires for a negative n, so Go
 		// returned every character where Python's "abc"[:-1] returns "ab".
 		// Counting RUNES, because Python slices a str by code point.
-		limit := pySliceLen(utf8.RuneCountInString(t), n)
+		limit := pyval.SliceStop(utf8.RuneCountInString(t), n)
 		var out []any
 		for _, r := range t {
 			if len(out) == limit {
@@ -431,7 +410,7 @@ func safeListOfObjects(data pyval.Obj, key string, n int) []pyval.Obj {
 	// either way — for n > 0 the break stops at exactly n, and for n <= 0
 	// it never fires. That mutant survives the suite and is meant to.
 	// The break was only ever wrong when it was the ONLY bound.
-	return out[:pySliceLen(len(out), n)]
+	return out[:pyval.SliceStop(len(out), n)]
 }
 
 // heuristicMilestones is the fallback: split the goal's WORDS in half and

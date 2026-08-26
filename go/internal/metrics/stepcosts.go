@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -214,6 +215,21 @@ func SpendForLoops(ws string, loopIDs []string) float64 {
 	if err != nil {
 		return 0.0
 	}
+	// `path.open(encoding="utf-8")` is a STRICT TEXT read, and the whole
+	// scan sits inside the function's bare except. So one non-UTF-8 byte
+	// anywhere in the file — a crash-torn append is the realistic way that
+	// happens — makes CPython answer 0.0 for the ENTIRE file, not skip the
+	// line. The port read bytes and split them, which answered with every
+	// other row's spend: a run's attributed cost that CPython reports as
+	// zero, reported here as five dollars.
+	//
+	// Validity of the whole file is the right test rather than of the lines
+	// reached, because the `for line in fh` loop has no break: it decodes
+	// through to EOF even after the last wanted row (adversarial metrics r1,
+	// MEDIUM — L12).
+	if _, derr := pyval.DecodeUTF8Strict(data); derr != nil {
+		return 0.0
+	}
 	total := 0.0
 	for _, line := range strings.Split(string(data), "\n") {
 		hit := false
@@ -261,11 +277,26 @@ func LoadStepCosts(ws string, limit int) []pyval.Obj {
 }
 
 // TypeStat is one row of analyze_step_costs()'s by_type map.
+//
+// AvgTokens and TotalTokens are `any` — int or float64 — because Python's
+// are. `total_tokens` is summed straight off the store with no coercion, so
+// one row carrying `2.5` makes the type's total a float and `total_tok //
+// count` a float too. Typing them `int` truncated that silently.
 type TypeStat struct {
 	Count       int
-	AvgTokens   int
-	TotalTokens int
+	AvgTokens   any
+	TotalTokens any
 	AvgCostUSD  float64
+}
+
+// numTokens reads AvgTokens/TotalTokens as a float for COMPARISON only.
+// Every comparison analyze_step_costs makes on them (`> 0`, `> 2 * median`,
+// and the sort) is numeric, and Python compares an int against a float
+// numerically too. Token counts are far below 2^53, so the widening is
+// exact — this is a reading of the value, never a replacement for it.
+func numTokens(v any) float64 {
+	f, _ := pyval.Float(v)
+	return f
 }
 
 // StepCostAnalysis is analyze_step_costs()'s return dict.
@@ -301,9 +332,25 @@ func (a StepCostAnalysis) StatFor(key any) TypeStat {
 }
 
 // AnalyzeStepCosts is metrics.analyze_step_costs().
-func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
+//
+// IT RETURNS AN ERROR, and the error is the point. Python sums the store's
+// raw values — `sum(e.get("cost_usd", 0.0) for e in type_entries)`, with no
+// `or 0.0` and no try anywhere in the function — so a single row carrying
+// `"cost_usd": null` or `"cost_usd": "1.5"` raises TypeError straight out to
+// the caller. The port used costUSDOf's COERCING expression here, which
+// belongs to spend_for_loops four hundred lines away and has an `or 0.0`
+// that this one does not. That is failing open twice over: the crash became
+// a number, and the number was wrong in a way nothing would ever surface.
+//
+// Three sites raise, and their ORDER is observable because only the first
+// one fires: an unhashable step_type in the grouping pass, then per group
+// total_tokens, then per group cost_usd — Python sums each field over the
+// whole group before starting the next, so a group with both a bad token
+// count and a bad cost reports the token count (adversarial metrics r1,
+// MEDIUM — L38).
+func AnalyzeStepCosts(entries []pyval.Obj) (StepCostAnalysis, error) {
 	if len(entries) == 0 {
-		return StepCostAnalysis{ByType: map[string]TypeStat{}, TotalCostUSD: 0.0}
+		return StepCostAnalysis{ByType: map[string]TypeStat{}, TotalCostUSD: 0.0}, nil
 	}
 
 	groups := map[string][]pyval.Obj{}
@@ -319,10 +366,11 @@ func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
 		if !ok {
 			// An unhashable step_type (a list, a dict) raises TypeError in
 			// Python and takes no except — analyze_step_costs has none — so
-			// the whole call propagates. Go cannot raise through this
-			// signature; the row is dropped and the divergence named here
-			// rather than pretended away.
-			continue
+			// the whole call propagates. It propagates here too now: the port
+			// used to DROP the row and name the divergence, which was the
+			// best it could do while the signature returned no error.
+			return StepCostAnalysis{}, &pyval.PyErr{Class: "TypeError",
+				Msg: fmt.Sprintf("unhashable type: '%s'", pyval.TypeName(st))}
 		}
 		if _, seen := groups[h]; !seen {
 			order = append(order, st)
@@ -334,25 +382,33 @@ func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
 	for _, key := range order {
 		st, _ := pyval.HashKey(key)
 		typeEntries := groups[st]
-		totalTok := 0
-		totalCost := 0.0
-		for _, e := range typeEntries {
-			totalTok += pyval.IntOf(objGet(e, "total_tokens", 0))
-			totalCost += costUSDOfObj(e)
+		// Two separate passes, in Python's order: `sum(... total_tokens ...)`
+		// completes before `sum(... cost_usd ...)` begins. Interleaving them
+		// in one loop, as the port did, reports the wrong field first when a
+		// group holds two bad values.
+		totalTok, err := pyval.Sum(fieldsOf(typeEntries, "total_tokens", 0))
+		if err != nil {
+			return StepCostAnalysis{}, err
+		}
+		totalCost, err := pyval.Sum(fieldsOf(typeEntries, "cost_usd", 0.0))
+		if err != nil {
+			return StepCostAnalysis{}, err
 		}
 		count := len(typeEntries)
 		// `total_tok // count if count else 0` — count is len() of a list
 		// that exists because something was appended to it, so the else is
-		// unreachable. Kept as Python spells it; FloorDiv rather than `/`
+		// unreachable. Kept as Python spells it; FloorDivAny rather than `/`
 		// because a negative total (a refunded row) floors toward -inf in
 		// Python and truncates toward zero in Go.
-		avgTok := 0
+		var avgTok any = 0
 		if count > 0 {
-			avgTok = pyval.FloorDiv(totalTok, count)
+			if avgTok, err = pyval.FloorDivAny(totalTok, count); err != nil {
+				return StepCostAnalysis{}, err
+			}
 		}
 		avgCost := 0.0
 		if count > 0 {
-			avgCost = pyval.Round(totalCost/float64(count), 8)
+			avgCost = pyval.Round(pyval.FloatOf(totalCost)/float64(count), 8)
 		}
 		stats[st] = TypeStat{Count: count, AvgTokens: avgTok,
 			TotalTokens: totalTok, AvgCostUSD: avgCost}
@@ -361,17 +417,17 @@ func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
 	// `[s["avg_tokens"] for s in type_stats.values() if s["avg_tokens"] > 0]`
 	// — dict values, so insertion order again, though the list is sorted
 	// immediately after and only its LENGTH and contents matter.
-	var avgs []int
+	var avgs []float64
 	for _, key := range order {
 		st, _ := pyval.HashKey(key)
-		if stats[st].AvgTokens > 0 {
-			avgs = append(avgs, stats[st].AvgTokens)
+		if numTokens(stats[st].AvgTokens) > 0 {
+			avgs = append(avgs, numTokens(stats[st].AvgTokens))
 		}
 	}
-	medianAvg := 0
+	medianAvg := 0.0
 	if len(avgs) > 0 {
-		sorted := append([]int(nil), avgs...)
-		sort.Ints(sorted)
+		sorted := append([]float64(nil), avgs...)
+		sort.Float64s(sorted)
 		// LOWER median: floor((n-1)/2), not the mean of the middle two. At
 		// n=2 that is the SMALLER value, so the bar is set by the cheaper of
 		// two types — which is the documented intent ("expensive types are
@@ -381,14 +437,18 @@ func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
 	var expensive []any
 	for _, key := range order {
 		st, _ := pyval.HashKey(key)
-		if medianAvg > 0 && stats[st].AvgTokens > 2*medianAvg {
+		if medianAvg > 0 && numTokens(stats[st].AvgTokens) > 2*medianAvg {
 			expensive = append(expensive, key)
 		}
 	}
 
-	total := 0.0
-	for _, e := range entries {
-		total += costUSDOfObj(e)
+	// The FOURTH sum, over every entry rather than per type — and the fourth
+	// place a null cost_usd raises. It runs AFTER expensive_types, so a store
+	// whose only bad row is in a group that already summed cleanly still
+	// reaches here to fail.
+	total, err := pyval.Sum(fieldsOf(entries, "cost_usd", 0.0))
+	if err != nil {
+		return StepCostAnalysis{}, err
 	}
 	return StepCostAnalysis{
 		ByType:         stats,
@@ -396,8 +456,19 @@ func AnalyzeStepCosts(entries []pyval.Obj) StepCostAnalysis {
 		ExpensiveTypes: expensive,
 		// Six places here, EIGHT in avg_cost_usd above. Not a typo in either
 		// direction; the two round to different precision in the source.
-		TotalCostUSD: pyval.Round(total, 6),
+		TotalCostUSD: pyval.Round(pyval.FloatOf(total), 6),
+	}, nil
+}
+
+// fieldsOf is the generator expression `(e.get(key, def) for e in entries)`,
+// materialised. The default applies to ABSENCE only — a present null is a
+// null, which is exactly the value that makes the sum raise.
+func fieldsOf(entries []pyval.Obj, key string, def any) []any {
+	out := make([]any, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, objGet(e, key, def))
 	}
+	return out
 }
 
 func max0(n int) int {
@@ -407,18 +478,12 @@ func max0(n int) int {
 	return n
 }
 
-// costUSDOfObj is costUSDOf over an ordered row.
-func costUSDOfObj(e pyval.Obj) float64 {
-	v := objGet(e, "cost_usd", 0.0)
-	if !pyval.Truthy(v) {
-		return 0.0
-	}
-	f, ok := pyval.Float(v)
-	if !ok {
-		return 0.0
-	}
-	return f
-}
+// costUSDOfObj — costUSDOf over an ordered row — used to live here, and its
+// only callers were in analyze_step_costs, which does not coerce. Deleting
+// it rather than leaving it unused is the point: it is the WRONG expression
+// for every remaining reader of an ordered row, and a helper that reads
+// right and is wrong is how it got used there in the first place. spend_today
+// and spend_for_loops keep costUSDOf, whose `or 0.0` they actually have.
 
 // EstimateLoopCost is metrics.estimate_loop_cost().
 //
@@ -429,10 +494,16 @@ func costUSDOfObj(e pyval.Obj) float64 {
 // result is identical and the cost is not the port's to fix — but named,
 // because a reader who "cleans it up" by hoisting is right and should know
 // they are changing nothing but the clock.
-func EstimateLoopCost(ws string, numSteps int, stepTexts []string) float64 {
-	analysis := AnalyzeStepCosts(LoadStepCosts(ws, 500))
+func EstimateLoopCost(ws string, numSteps int, stepTexts []string) (float64, error) {
+	// No try here either, so analyze_step_costs's TypeError leaves this
+	// function too rather than becoming a 0.0 estimate — which the budget
+	// gate would read as "this loop is free".
+	analysis, err := AnalyzeStepCosts(LoadStepCosts(ws, 500))
+	if err != nil {
+		return 0, err
+	}
 	if len(analysis.ByType) == 0 {
-		return 0.0
+		return 0.0, nil
 	}
 
 	globalAvg := func() float64 {
@@ -466,7 +537,7 @@ func EstimateLoopCost(ws string, numSteps int, stepTexts []string) float64 {
 				total += globalAvg()
 			}
 		}
-		return pyval.Round(total, 6)
+		return pyval.Round(total, 6), nil
 	}
-	return pyval.Round(float64(numSteps)*globalAvg(), 6)
+	return pyval.Round(float64(numSteps)*globalAvg(), 6), nil
 }

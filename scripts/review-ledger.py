@@ -225,6 +225,68 @@ def cmd_lenses(args) -> int:
     return 0
 
 
+def cmd_sync(args) -> int:
+    """Rewrite the catalog's `*instances: N*` lines from the ledger.
+
+    The catalog opens by promising these counts are "re-derived from data
+    rather than from memory", and until now the deriving was done by a
+    throwaway script in a scratch directory — which is to say, by memory,
+    once, and then not again. Two rounds later the counts were stale and
+    one lens (L37) had drifted without anyone noticing.
+
+    A suffix after the number is PRESERVED: several lines read
+    `*instances: 56 — the most frequent single defect in the Go port*`,
+    and that clause is editorial commentary the ledger has no opinion
+    about. Only the digits are the ledger's to own. A line reading
+    `*instances: 0 recorded*` keeps its "recorded" once the count moves,
+    because the distinction it draws (no rows yet, vs a real zero) is
+    exactly what a rewrite would erase — so a zero that becomes non-zero
+    drops the word and anything else is left alone.
+    """
+    path = catalog_path()
+    if not path.exists():
+        print(f"no lens catalog at {path}", file=sys.stderr)
+        return 1
+    counts = Counter(r.get("lens") for r in load_rows())
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+
+    current: str | None = None
+    changed: list[tuple[str, int, int]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^###\s+((?:L|P)\d+)\s+—", line.strip())
+        if m:
+            current = m.group(1)
+            continue
+        if current is None:
+            continue
+        m = re.match(r"^(\*instances:\s*)(\d+)(.*)$", line.strip())
+        if not m:
+            continue
+        head, old, tail = m.group(1), int(m.group(2)), m.group(3)
+        new = counts[current]
+        if new != old:
+            if tail.startswith(" recorded") and new:
+                tail = tail[len(" recorded"):]
+            lines[i] = f"{head}{new}{tail}\n"
+            changed.append((current, old, new))
+        current = None
+
+    if not changed:
+        print(f"{path.name}: all instance counts already match the ledger")
+        return 0
+    if args.dry_run:
+        for lens, old, new in changed:
+            print(f"{lens:<6} {old:>3} -> {new:<3}")
+        print(f"({len(changed)} line(s) would change; re-run without --dry-run)")
+        return 0
+    path.write_text("".join(lines), encoding="utf-8")
+    for lens, old, new in changed:
+        print(f"{lens:<6} {old:>3} -> {new}")
+    print(f"updated {len(changed)} line(s) in {path.name}")
+    return 0
+
+
 PROMPT_HEAD = """\
 ## Review output contract
 
@@ -329,6 +391,13 @@ def main(argv=None) -> int:
 
     l = sub.add_parser("lenses", help="catalog ids with recorded counts")
     l.set_defaults(func=cmd_lenses)
+
+    sy = sub.add_parser("sync-catalog",
+                        help="rewrite REVIEW_PATTERNS.md's instance counts "
+                             "from the ledger")
+    sy.add_argument("--dry-run", action="store_true",
+                    help="report what would change and write nothing")
+    sy.set_defaults(func=cmd_sync)
 
     pr = sub.add_parser("prompt",
                         help="the block to paste into a review subagent: "

@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,9 +28,11 @@ import io, json, os, sys, importlib
 args = json.loads(sys.argv[1])
 out = []
 for c in args:
-    ws = c["ws"]
-    assert "/.maro/" not in ws, "refusing to write outside the fixture"
-    os.environ["MARO_WORKSPACE"] = ws
+    # _pyprobe_use is pyprobe's door: it realpaths BOTH sides before it
+    # sets the variable. The hand-rolled assert "/.maro/" not in ws that
+    # used to stand here compared unresolved strings, which a symlinked
+    # temp dir walks straight past (metrics r1, MEDIUM).
+    ws = _pyprobe_use(c["ws"])
     import metrics
     importlib.reload(metrics)
     entry = metrics.record_step_cost(
@@ -58,7 +61,7 @@ import io, json, os, sys, importlib
 args = json.loads(sys.argv[1])
 out = []
 for c in args:
-    os.environ["MARO_WORKSPACE"] = c["ws"]
+    _pyprobe_use(c["ws"])
     import metrics
     importlib.reload(metrics)
     metrics._run_cost_p90_cache.clear()
@@ -154,7 +157,7 @@ func TestRecordStepCostMatchesCPython(t *testing.T) {
 		Path     string `json:"path"`
 	}
 	var want []answer
-	probe := pyprobe.Probe{Marker: "metrics.py"}
+	probe := pyprobe.Probe{Marker: "metrics.py", Workspaces: wsOf(pyArgs)}
 	probe.RunJSON(t, pyRecordSrc, &want, pyprobe.Arg(t, pyArgs))
 	if len(want) != len(cases) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
@@ -334,7 +337,7 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 		Value float64 `json:"value"`
 	}
 	var want []answer
-	probe := pyprobe.Probe{Marker: "metrics.py"}
+	probe := pyprobe.Probe{Marker: "metrics.py", Workspaces: wsOf(pyArgs)}
 	probe.RunJSON(t, pyP90Src, &want, pyprobe.Arg(t, pyArgs))
 	if len(want) != len(cases) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
@@ -368,14 +371,27 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 	}
 }
 
-// TestRunCostP90CachesByLimit pins the two properties the TTL cache has
-// that a plain memo would not: a "no opinion" answer is cached (Python's
-// `if _hit` is true for the (t, None) tuple, so it does NOT recompute), and
-// two different limits do not share an entry.
+// TestRunCostP90CachesByLimit pins the three properties the TTL cache has
+// that a plain memo would not:
+//
+//  1. a THIN-SAMPLE "no opinion" is cached — Python's `if _hit` is true for
+//     the `(t, None)` tuple, so it does not recompute;
+//  2. a MISSING-RUNS-DIR "no opinion" is NOT, because `if not
+//     root.is_dir(): return None` returns before the cache write;
+//  3. two different limits do not share an entry.
+//
+// Property 1 is what the earlier version of this test claimed to check, and
+// it checked it on an EMPTY WORKSPACE — the one branch of the two that
+// Python does not cache. So it asserted the port's flattened single exit was
+// correct, and would have gone on doing that after the bug was found. Both
+// no-opinion branches now appear here, separately, because "returns None"
+// was never the property that distinguished them (adversarial metrics r1,
+// HIGH — L1: a test whose fixture cannot reach the branch it names).
 func TestRunCostP90CachesByLimit(t *testing.T) {
 	ws := t.TempDir()
+	runs := filepath.Join(ws, "runs")
 	write := func(i int, cost float64) {
-		dir := filepath.Join(ws, "runs", "run-"+itoa(i))
+		dir := filepath.Join(runs, "run-"+itoa(i))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -385,6 +401,9 @@ func TestRunCostP90CachesByLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	// Property 2: no runs directory at all. The answer must NOT stick, or a
+	// workspace's first run is invisible to the budget gate for 15 minutes.
 	clearRunCostCache()
 	if _, ok := SuccessfulRunCostP90(ws, 200); ok {
 		t.Fatal("an empty workspace should have no opinion")
@@ -392,13 +411,38 @@ func TestRunCostP90CachesByLimit(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		write(i, 1.0+float64(i))
 	}
-	// The None answer is cached, so the freshly written cards are NOT seen
-	// at the same limit...
-	if _, ok := SuccessfulRunCostP90(ws, 200); ok {
-		t.Error("a cached no-opinion answer was recomputed inside the TTL")
+	if _, ok := SuccessfulRunCostP90(ws, 200); !ok {
+		t.Error("a missing runs dir was cached; the first run is invisible")
 	}
-	// ...but a different limit is a different question and recomputes.
-	if _, ok := SuccessfulRunCostP90(ws, 100); !ok {
+
+	// Property 1: the directory exists but holds too few priced cards. More
+	// cards are what would change that, and cards arrive per run, so this
+	// answer IS remembered — the newly written twelve are not seen.
+	clearRunCostCache()
+	thin := t.TempDir()
+	thinRuns := filepath.Join(thin, "runs")
+	if err := os.MkdirAll(thinRuns, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := SuccessfulRunCostP90(thin, 200); ok {
+		t.Fatal("an empty runs dir should have no opinion")
+	}
+	for i := 0; i < 12; i++ {
+		dir := filepath.Join(thinRuns, "run-"+itoa(i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"total_cost_usd": 1.0 + float64(i), "success_class": "success"})
+		if err := os.WriteFile(filepath.Join(dir, "run_card.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := SuccessfulRunCostP90(thin, 200); ok {
+		t.Error("a cached thin-sample answer was recomputed inside the TTL")
+	}
+	// Property 3: a different limit is a different question and recomputes.
+	if _, ok := SuccessfulRunCostP90(thin, 100); !ok {
 		t.Error("a different limit served another limit's cached answer")
 	}
 }
@@ -428,5 +472,28 @@ func TestTailCostScope(t *testing.T) {
 	}
 	if s, _ := TailCostScopeActive(outer); s.LoopID != "loop-a" || s.Phase != "closure" {
 		t.Errorf("outer scope did not survive the inner one: %+v", s)
+	}
+}
+
+// TestRowIDFallbackKeepsTheShape drives newRowID's unreachable arm the only
+// way a test can — by reproducing its formatting — because a fallback that
+// emits an unreadable id is worse than no fallback, and nothing else in this
+// package would ever notice.
+//
+// It exists because the fallback DID emit one for months: a leading 't' is
+// not a hex digit, so every id it produced failed idShape, the regex the
+// differential above uses to recognise a well-formed row id.
+func TestRowIDFallbackKeepsTheShape(t *testing.T) {
+	for _, n := range []int64{0, 1, 1 << 31, 1<<62 + 12345, 1756123456789012345} {
+		got := fmt.Sprintf("%08x-%03x", uint32(n), uint16(n>>32)&0xFFF)
+		if !idShape.MatchString(got) {
+			t.Errorf("fallback id %q does not match %v", got, idShape)
+		}
+	}
+	// And the real path, which is what actually runs.
+	for i := 0; i < 64; i++ {
+		if id := newRowID(); !idShape.MatchString(id) {
+			t.Fatalf("newRowID produced %q, which does not match %v", id, idShape)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,7 +171,7 @@ import metrics
 cases = json.loads(sys.argv[1])
 out = []
 for c in cases:
-    os.environ["MARO_WORKSPACE"] = c["ws"]
+    _pyprobe_use(c["ws"])
     import importlib, orch_items
     importlib.reload(orch_items)
     importlib.reload(metrics)
@@ -183,6 +184,32 @@ for c in cases:
     out.append("%.17g" % metrics.spend_today())
 print(json.dumps(out))
 `
+
+// datedAt builds a step-costs row whose `recorded_at` DATE begins at exactly
+// byte `start`, by sizing a leading pad field to put it there — and then
+// asserting that it did.
+//
+// The assertion is the reason this is a function instead of a literal. The
+// boundary being pinned is `line[:60]`, ten characters wide, so the two
+// fixtures that matter differ by ONE character of padding. Hand-counting the
+// braces and quotes of a JSON prefix is exactly the kind of arithmetic that
+// looks right, lands at 49 or 52, and leaves the boundary untested while the
+// case name claims otherwise.
+func datedAt(t *testing.T, start int, cost float64) string {
+	t.Helper()
+	const stamp = "2026-08-26T03:00:00+00:00"
+	head, tail := `{"g": "`, `", "recorded_at": "`
+	pad := start - len(head) - len(tail)
+	if pad < 0 {
+		t.Fatalf("start=%d is inside the row's own framing", start)
+	}
+	line := head + strings.Repeat("p", pad) + tail + stamp +
+		fmt.Sprintf(`", "cost_usd": %g}`, cost)
+	if got := strings.Index(line, stamp[:10]); got != start {
+		t.Fatalf("date landed at %d, wanted %d: %s", got, start, line)
+	}
+	return line
+}
 
 func TestSpendTodayMatchesCPython(t *testing.T) {
 	const now = "2026-08-26T12:00:00+00:00"
@@ -251,6 +278,31 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 			`{"g": "` + strings.Repeat("あ", 20) + `", "recorded_at": "` +
 				today + `03:00:00+00:00", "cost_usd": 4.0}`,
 			row(today+"02:00:00+00:00", 0.5)}},
+		// THE WINDOW'S EXACT EDGE. `today` is ten characters, so the cheap
+		// check sees it when its last character lands at index 59 and misses
+		// it at 60. Both fixtures below are built by measuring, not by
+		// counting braces: the padding is sized so the date occupies exactly
+		// [50,60) in the first and [51,61) in the second. Mutating the clip
+		// to 59 and to 61 BOTH survived the earlier list, which had cases on
+		// either side of the boundary but none at it (metrics r1, L23).
+		{name: "the date ending exactly at the sixtieth character", rows: []string{
+			row(today+"01:00:00+00:00", 1.0),
+			datedAt(t, 50, 4.0),
+			row(today+"02:00:00+00:00", 0.5)}},
+		{name: "the date ending one character past the window", rows: []string{
+			row(today+"01:00:00+00:00", 1.0),
+			datedAt(t, 51, 4.0),
+			row(today+"02:00:00+00:00", 0.5)}},
+		// THE TWO CHECKS DISAGREEING. The cheap check finds today's date in a
+		// goal_preview while recorded_at is YESTERDAY, so the strict check
+		// rejects the row's cost — and, crucially, does NOT break: the scan
+		// goes on to the older rows below it. Every other fixture here has
+		// the two checks agreeing, so replacing the strict one with `if true`
+		// survived the battery (metrics r1, L41).
+		{name: "todays date in a preview beside a yesterday timestamp", rows: []string{
+			row(today+"01:00:00+00:00", 1.5),
+			`{"goal_preview": "ship ` + strings.TrimSuffix(today, "T") +
+				`", "recorded_at": "` + yday + `23:00:00+00:00", "cost_usd": 8.0}`}},
 		// A cost that only sums correctly in one order would expose a port
 		// that accumulated forward; float addition is not associative.
 		{name: "costs that do not associate", rows: []string{
@@ -269,7 +321,7 @@ func TestSpendTodayMatchesCPython(t *testing.T) {
 	}
 
 	var want []string
-	probe := pyprobe.Probe{Marker: "metrics.py"}
+	probe := pyprobe.Probe{Marker: "metrics.py", Workspaces: wsOf(payload)}
 	probe.RunJSON(t, pySpendTodaySrc, &want, pyprobe.Arg(t, payload))
 	if len(want) != len(cases) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
@@ -298,7 +350,7 @@ import metrics
 cases = json.loads(sys.argv[1])
 out = []
 for c in cases:
-    os.environ["MARO_WORKSPACE"] = c["ws"]
+    _pyprobe_use(c["ws"])
     import importlib, orch_items
     importlib.reload(orch_items)
     importlib.reload(metrics)
@@ -370,7 +422,7 @@ func TestSpendForLoopsMatchesCPython(t *testing.T) {
 	}
 
 	var want []string
-	probe := pyprobe.Probe{Marker: "metrics.py"}
+	probe := pyprobe.Probe{Marker: "metrics.py", Workspaces: wsOf(payload)}
 	probe.RunJSON(t, pySpendLoopsSrc, &want, pyprobe.Arg(t, payload))
 	if len(want) != len(cases) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
@@ -394,23 +446,44 @@ import metrics
 cases = json.loads(sys.argv[1])
 out = []
 for c in cases:
-    os.environ["MARO_WORKSPACE"] = c["ws"]
+    _pyprobe_use(c["ws"])
     import importlib, orch_items
     importlib.reload(orch_items)
     importlib.reload(metrics)
     entries = metrics.load_step_costs(limit=c["limit"])
-    a = metrics.analyze_step_costs(entries)
+    # analyze_step_costs and estimate_loop_cost have NO try of their own, so
+    # a store row that will not sum takes the caller down. Which exception,
+    # and with which message, is the answer being compared — recording only
+    # "it failed" would let the port raise for a different reason.
+    try:
+        a = metrics.analyze_step_costs(entries)
+    except Exception as exc:
+        out.append({"entries": entries,
+                    "raised": "%s: %s" % (type(exc).__name__, exc)})
+        continue
+    try:
+        plain = "%.17g" % metrics.estimate_loop_cost(c["nsteps"])
+        texts = "%.17g" % metrics.estimate_loop_cost(
+            c["nsteps"], c["texts"] or None)
+    except Exception as exc:
+        out.append({"entries": entries,
+                    "raised": "%s: %s" % (type(exc).__name__, exc)})
+        continue
     out.append({
         "entries": entries,
         "by_type_order": list(a["by_type"].keys()),
-        "by_type": {k: {kk: ("%.17g" % vv if isinstance(vv, float) else vv)
+        # repr(), not "%.17g", for the TOKEN fields: they are the two values
+        # analyze_step_costs does not coerce, so 2 and 2.0 are different
+        # answers and a formatter that spelled both "2" would hide the one
+        # divergence these fields can have.
+        "by_type": {k: {kk: ("%.17g" % vv if kk == "avg_cost_usd"
+                             else repr(vv) if kk.endswith("_tokens") else vv)
                         for kk, vv in v.items()}
                     for k, v in a["by_type"].items()},
         "expensive": a["expensive_types"],
         "total": "%.17g" % a["total_cost_usd"],
-        "loop_cost_plain": "%.17g" % metrics.estimate_loop_cost(c["nsteps"]),
-        "loop_cost_texts": "%.17g" % metrics.estimate_loop_cost(
-            c["nsteps"], c["texts"] or None),
+        "loop_cost_plain": plain,
+        "loop_cost_texts": texts,
     })
 print(json.dumps(out))
 `
@@ -432,6 +505,13 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		texts  []string
 	}{
 		{name: "no rows", limit: 100, nsteps: 3},
+		// limit=0 is the boundary of `if limit > 0`. read_jsonl_tail takes
+		// its FULL-SCAN path for a non-positive limit, so zero means "all
+		// rows" and not "no rows" — `limit >= 0` would slice rows[len:] and
+		// answer with an empty analysis. Nothing else in this list sits at
+		// the boundary, and the mutant survived (metrics r1, L23).
+		{name: "a limit of zero loads everything", limit: 0, nsteps: 2,
+			rows: []string{row("research", 1000, 0.01), row("verify", 3000, 0.03)}},
 		{name: "one type", limit: 100, nsteps: 3,
 			rows: []string{row("research", 1000, 0.01), row("research", 3000, 0.03)}},
 		// INSERTION ORDER of by_type is first-appearance in the ENTRY list,
@@ -472,6 +552,17 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		{name: "a negative group total", limit: 100, nsteps: 2,
 			rows: []string{row("refund", -7000, -0.07), row("refund", 1000, 0.01),
 				row("research", 5000, 0.05)}},
+		// The case above says it separates FLOOR division from truncation and
+		// does not: -7000 + 1000 is -6000, which divides evenly by 2, so `//`
+		// and `/` agree. Three rows summing to -5500 do not — Python floors to
+		// -1834 and Go's `/` truncates to -1833. Replacing pyval.FloorDiv with
+		// `/` survived the whole battery until this row existed (adversarial
+		// metrics r1, MEDIUM — L28: a fixture whose comment names a boundary
+		// it does not reach).
+		{name: "a negative group total that does not divide evenly",
+			limit: 100, nsteps: 2,
+			rows: []string{row("refund", -7000, -0.07), row("refund", 1000, 0.01),
+				row("refund", 500, 0.01), row("research", 5000, 0.05)}},
 		// A cost that needs round(x, 8) to agree: half-to-even on the exact
 		// double, not half-away-from-zero.
 		{name: "an average that lands on a rounding boundary",
@@ -509,6 +600,45 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		{name: "loop cost when every average is zero",
 			limit: 100, nsteps: 3, texts: []string{"anything at all"},
 			rows: []string{row("research", 1000, 0.0), row("verify", 200, 0.0)}},
+
+		// --- the sums are RAW, and these are the shapes that prove it ------
+		//
+		// analyze_step_costs sums the store's values with no coercion and no
+		// try. Every case below crashed CPython and answered a plausible
+		// number in the port, which is the worst possible pair of behaviours
+		// (adversarial metrics r1, MEDIUM).
+		{name: "a null cost_usd raises", limit: 100, nsteps: 3,
+			rows: []string{row("research", 1000, 0.01), row("research", 2000, nil)}},
+		{name: "a string cost_usd raises even though it looks numeric",
+			limit: 100, nsteps: 3,
+			rows: []string{row("research", 1000, "1.5")}},
+		{name: "a null total_tokens raises", limit: 100, nsteps: 3,
+			rows: []string{row("research", nil, 0.01)}},
+		// ORDER: both fields are bad in the same group, and total_tokens is
+		// summed first, so ITS message is the one that escapes. A port that
+		// interleaved the two sums in one loop reports cost_usd here.
+		{name: "total_tokens is summed before cost_usd", limit: 100, nsteps: 3,
+			rows: []string{row("research", nil, nil)}},
+		// The accumulator's type is in the message: a float has already been
+		// added by the time the null arrives, so this says 'float' where the
+		// case above says 'int'. Note the ROW ORDER — load_step_costs hands
+		// entries over NEWEST FIRST, so the file's LAST row is summed first
+		// and the null has to sit at the TOP of the file to be summed last.
+		{name: "the accumulator type reaches the message", limit: 100, nsteps: 3,
+			rows: []string{row("research", 2000, nil), row("research", 1000, 0.5)}},
+		// A bool sums as an int — True is 1 — and does NOT raise.
+		{name: "a bool cost sums as one", limit: 100, nsteps: 3,
+			rows: []string{row("research", 1000, true), row("research", 2000, 0.5)}},
+		// A FLOAT total_tokens makes total_tokens and avg_tokens floats, so
+		// they render "3000.0" and "1500.0". The port typed both int and
+		// truncated silently.
+		{name: "a float total_tokens keeps the whole type float",
+			limit: 100, nsteps: 3,
+			rows: []string{row("research", 1000.5, 0.01), row("research", 2000, 0.03)}},
+		// And the floor is a FLOOR: 2001.5 // 2 is 1000.0, not 1000.75.
+		{name: "a float token total floors rather than truncating",
+			limit: 100, nsteps: 3,
+			rows: []string{row("verify", -1000.5, 0.01), row("verify", -1000, 0.03)}},
 	}
 
 	type analyzeCase struct {
@@ -536,9 +666,10 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 		Total       string                    `json:"total"`
 		LoopPlain   string                    `json:"loop_cost_plain"`
 		LoopTexts   string                    `json:"loop_cost_texts"`
+		Raised      string                    `json:"raised"`
 	}
 	var want []answer
-	probe := pyprobe.Probe{Marker: "metrics.py"}
+	probe := pyprobe.Probe{Marker: "metrics.py", Workspaces: wsOf(payload)}
 	probe.RunJSON(t, pyAnalyzeSrc, &want, pyprobe.Arg(t, payload))
 	if len(want) != len(cases) {
 		t.Fatalf("probe returned %d answers for %d cases", len(want), len(cases))
@@ -552,13 +683,43 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				t.Fatalf("load_step_costs returned %d rows, cpython %d",
 					len(entries), len(w.Entries))
 			}
+			got, err := AnalyzeStepCosts(entries)
+			// The raise lane. A store row that will not sum is the one
+			// answer a coercing port cannot give, so it is compared by
+			// MESSAGE — an error for a different reason is not a match.
+			// Checked BEFORE the L1 tripwire below, which reads a by_type
+			// map a raising case never produced.
+			if w.Raised != "" {
+				if err == nil {
+					t.Fatalf("cpython raised %q; go returned %+v", w.Raised, got)
+				}
+				// `type(exc).__name__ + ": " + str(exc)`, spelled here
+				// rather than in Error(), which is str(exc) ALONE on
+				// purpose — every ported `except ... as exc` renders it
+				// with %s and would gain a class prefix CPython does not
+				// print. The type assertion is part of the assertion: a
+				// plain fmt.Errorf with the right words is not the same
+				// answer, because no caller could except on it.
+				var pe *pyval.PyErr
+				if !errors.As(err, &pe) {
+					t.Fatalf("raised %T (%v), not a *pyval.PyErr", err, err)
+				}
+				if got := pe.Class + ": " + pe.Msg; got != w.Raised {
+					t.Errorf("raised %q, cpython %q", got, w.Raised)
+				}
+				if _, lerr := EstimateLoopCost(payload[i].WS, c.nsteps, nil); lerr == nil {
+					t.Error("estimate_loop_cost swallowed the TypeError")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("go raised %v; cpython did not", err)
+			}
 			// L1 tripwire: a case with rows whose analysis came back empty on
 			// both sides would pass every assertion below without measuring.
 			if len(c.rows) > 0 && len(w.ByTypeOrder) == 0 {
 				t.Fatalf("cpython grouped nothing from %d rows", len(c.rows))
 			}
-
-			got := AnalyzeStepCosts(entries)
 			if !equalAnys(got.ByTypeOrder, w.ByTypeOrder) {
 				t.Errorf("by_type ORDER differs\ncpython: %q\ngo:      %q",
 					w.ByTypeOrder, got.ByTypeOrder)
@@ -573,11 +734,16 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				if n := intOfAny(ws["count"]); gs.Count != n {
 					t.Errorf("%s count = %d, cpython %d", k, gs.Count, n)
 				}
-				if n := intOfAny(ws["avg_tokens"]); gs.AvgTokens != n {
-					t.Errorf("%s avg_tokens = %d, cpython %d", k, gs.AvgTokens, n)
+				// repr, not an int: `2` and `2.0` are different answers,
+				// and the int comparison this replaced could not tell them
+				// apart in either direction.
+				if r := pyval.Repr(gs.AvgTokens); r != strOfAny(ws["avg_tokens"]) {
+					t.Errorf("%s avg_tokens = %s, cpython %s",
+						k, r, strOfAny(ws["avg_tokens"]))
 				}
-				if n := intOfAny(ws["total_tokens"]); gs.TotalTokens != n {
-					t.Errorf("%s total_tokens = %d, cpython %d", k, gs.TotalTokens, n)
+				if r := pyval.Repr(gs.TotalTokens); r != strOfAny(ws["total_tokens"]) {
+					t.Errorf("%s total_tokens = %s, cpython %s",
+						k, r, strOfAny(ws["total_tokens"]))
 				}
 				if s := strOfAny(ws["avg_cost_usd"]); fmt17(gs.AvgCostUSD) != s {
 					t.Errorf("%s avg_cost_usd = %s, cpython %s",
@@ -592,10 +758,18 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				t.Errorf("total_cost_usd = %s, cpython %s", s, w.Total)
 			}
 
-			if s := fmt17(EstimateLoopCost(payload[i].WS, c.nsteps, nil)); s != w.LoopPlain {
+			plain, perr := EstimateLoopCost(payload[i].WS, c.nsteps, nil)
+			if perr != nil {
+				t.Fatalf("estimate_loop_cost(n) raised %v", perr)
+			}
+			if s := fmt17(plain); s != w.LoopPlain {
 				t.Errorf("estimate_loop_cost(n) = %s, cpython %s", s, w.LoopPlain)
 			}
-			if s := fmt17(EstimateLoopCost(payload[i].WS, c.nsteps, c.texts)); s != w.LoopTexts {
+			texts, terr := EstimateLoopCost(payload[i].WS, c.nsteps, c.texts)
+			if terr != nil {
+				t.Fatalf("estimate_loop_cost(n, texts) raised %v", terr)
+			}
+			if s := fmt17(texts); s != w.LoopTexts {
 				t.Errorf("estimate_loop_cost(n, texts) = %s, cpython %s",
 					s, w.LoopTexts)
 			}
@@ -646,6 +820,33 @@ func pyDictKey(k any) string {
 		return "false"
 	}
 	return pyval.Str(k)
+}
+
+// wsOf pulls the `ws` field out of any probe payload, so the workspaces a
+// probe will write to are DECLARED to pyprobe rather than only appearing
+// inside the Python snippet.
+//
+// Generic over the payload type on purpose: each probe here has its own
+// case struct, and five hand-written loops is five chances for one of them
+// to drift out of sync with the snippet it feeds — which is the shape of
+// the finding this exists to close. It reads the json tag rather than a Go
+// field name because the tag is what the snippet indexes by.
+func wsOf[T any](payload []T) []string {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	var rows []struct {
+		WS string `json:"ws"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		panic(err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.WS)
+	}
+	return out
 }
 
 func equalStrings(a, b []string) bool {
