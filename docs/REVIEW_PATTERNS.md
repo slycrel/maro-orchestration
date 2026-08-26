@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**667**. The counts below were regenerated from `report --by lens`, not
+**674**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
 That regeneration is a claim this file has already failed once: at the
@@ -40,7 +40,7 @@ had recorded rows without re-deriving the counts, and the sentence above
 went on asserting they were derived. Regenerate ALL of them every time —
 a per-lens edit is how the drift got in.
 
-**Two things the counts are not.** They are lower bounds: 310 of the 667
+**Two things the counts are not.** They are lower bounds: 313 of the 674
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -149,6 +149,17 @@ a fault in the battery, not a survivor.
 **Tripwire.** Before recording a MISS, prove the mutant changes behaviour on
 *some* input. If it cannot, fix the mutant.
 
+**And the reviewer's half of it, added round 4: an exemption is a claim,
+so execute it.** A battery that skips sites "because no input can observe
+them" is asserting something about the whole input space, in a comment,
+usually from reading. Round 4 took the six exemptions written into the
+introspect battery, turned each back into a real mutant in a scratch tree,
+and fuzzed it over 11,620 argument lines: all six held at 0 diffs. That is
+a different fact from the argument that produced them, and it is the one
+worth writing down — so the comments now carry the number rather than the
+reasoning. A reasoned exemption and a measured one are indistinguishable
+in prose, which is exactly the gap L28 names.
+
 ### L9 — Derive must-detect mutations from the FILE, not the diff
 *instances: 2 — plus standing (Jeremy, 2026-08-16)*
 
@@ -169,7 +180,28 @@ the battery, in a comment, next to the sites it covers (L8); an unexplained
 absence and a considered exemption look identical six weeks later.
 
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
-*instances: 1*
+*instances: 2*
+
+The sharpest form: the test does not merely repeat a guard, it
+**re-implements the production mapping and then asserts its own copy**
+against the reference. Both sides of the comparison are then the test's,
+and the code the operator runs is not in the picture at all.
+
+**Canonical instance.** `runIntrospect` exists for one reason, stated in
+its own comment: map a usage error onto argparse's stderr block and exit
+code 2. It had no test. Next door, `cli_diff_test.go` wrote its own
+`errors.As` → `2, ue.Stderr()` switch and compared THAT to CPython —
+which passes whatever the wrapper does. Round 4 proved it: `os.Exit(2)` →
+`os.Exit(1)` and `ue.Stderr()` → a bare `"error\n"` both left
+`go test ./cmd/maro/ ./internal/introspect/` green.
+
+**Tripwire.** When a test needs a piece of production logic to interpret
+the result, CALL the production function — do not restate it. If it is
+not exported or not callable, that is the finding: extract it, so the
+comparison runs through the same code the binary does. And a wrapper
+whose whole job is a mapping needs a test that EXECUTES the mapping; if
+`os.Exit` is in the way, re-exec the test binary as a child rather than
+skipping the two claims only the wrapper makes.
 
 ### L11 — A deadlocked test is worse than a failing one
 *instances: 2*
@@ -241,7 +273,7 @@ the same field. The hardening is not done until they agree or the
 disagreement is written down as a divergence.
 
 ### L37 — Two runtimes share a store and nothing tests the crossing
-*instances: 3 attributed; ~5 in the mined cluster*
+*instances: 4 attributed; ~5 in the mined cluster*
 
 The port and CPython write into the same JSONL. Each side's tests are
 self-consistent; the boundary is what nobody exercises.
@@ -364,7 +396,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 40*
+*instances: 41*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -750,7 +782,7 @@ the substitution is one way to lose the original's shape, and rewriting it
 by hand is another.
 
 ### L47 — The source you ported is not always the source you test against
-*instances: 2*
+*instances: 4*
 
 A constant lifted from a standard library is pinned to the VERSION it was
 lifted from. The differential runs against whatever interpreter is on the
@@ -759,18 +791,36 @@ and it fails in the one direction reviews are worst at, because both the
 code and the comment describing it are *correct*, about the wrong release.
 
 **Canonical instance.** `negativeNumber` carried
-`^-\d+$|^-\d*\.\d+$`, which is CPython **3.11**'s
-`_negative_number_matcher` — anchored at both ends. The box runs 3.14,
-where it is `-\.?\d` applied with `.match`, anchored only at the start:
-every token beginning with a dash and a digit is a positional, so
-`-1latest` is a loop id and not an unknown flag. Second instance in the
-same file: the help block's `options:` heading is 3.10+, where 3.9 says
-`optional arguments:`.
+`^-\d+$|^-\d*\.\d+$`, the anchored-at-both-ends
+`_negative_number_matcher`. The box's `python3` is 3.14, where it is
+`-\.?\d` applied with `.match`, anchored only at the start: every token
+beginning with a dash and a digit is a positional, so `-1latest` is a loop
+id and not an unknown flag. Second instance in the same file: the help
+block's `options:` heading is 3.10+, where 3.9 says `optional arguments:`.
+
+**Round 4 sharpened this twice, and the second one is the real lesson.**
+First, the *fix's own comment* got the boundary wrong — it said the
+anchored spelling held "through CPython 3.11", and `python3.12` still
+carries it, so the change landed in 3.13. A version claim written while
+fixing a version bug is not automatically measured.
+
+Second, and worse: **python3.12 is installed on this machine**, and the
+probe invokes bare `python3` off PATH. The port is correct for whichever
+interpreter PATH resolves to today and would fail its own differential
+under the other one — an interpreter sitting one PATH entry away. The
+third instance is the same shape one layer down: `_get_nargs_pattern`
+*builds then strips* the `-*` runs through 3.12 and *selects the pattern
+directly* in 3.14. Same result for the nargs this parser uses, different
+mechanism — and the comment beside the ported code named 3.12's.
 
 **Tripwire.** When a constant or a regex comes out of a stdlib, write the
 VERSION it came from in the comment next to it, and check that version
 against the interpreter the differential actually invokes. `python3
---version` is the cheapest review step in this catalog. Where the
+--version` is the cheapest review step in this catalog — and follow it
+with `ls /usr/bin/python3.*`, because the versions that are merely
+INSTALLED are the ones a PATH change turns into a silent red suite.
+Bisect the boundary instead of asserting it: run the snippet under every
+interpreter on the box rather than trusting a changelog reading. Where the
 difference is real but out of scope, pin it in the comment (as the
 `options:` heading is) rather than leaving the reader to assume the
 newest.

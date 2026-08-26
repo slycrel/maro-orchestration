@@ -44,6 +44,37 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Go port: `maro introspect` never writes its captain's-log DIAGNOSIS event (FOUND 2026-08-26, go-port r4)
+
+`introspect.diagnose_loop` takes `emit_log_event: bool = True`, and on any
+non-healthy class it writes a captain's-log DIAGNOSIS event
+(`src/introspect.py:599-611`). The Go port hard-codes the FALSE path in
+both `DiagnoseLoop` and `DiagnoseLatest`, so `maro introspect <loop-id>`
+mutates the event log in Python and does not in Go.
+
+This was a considered deferral once — the reason given was "it belongs
+with the captain's-log port". **That reason expired.** The captain's-log
+port landed as `record.Recorder.EventNoted` writing
+`memory/captains_log.jsonl`, and graduation and scans already use it.
+Nothing is in the way but the work, and for three review rounds the
+comment read as a decision rather than a gap. (Round 4's lens: a deferral
+whose rationale has expired is indistinguishable from a live one.)
+
+What the port has to reproduce, all of it differential-worthy:
+
+- summary `f"Loop {loop_id}: {failure_class} ({severity}). {len(done)}/{len(profiles)} steps done."`
+- context keys `severity`, `steps_done`, `steps_blocked`, `tokens`
+- `note=recommendation[:200] if recommendation else None` — a CODE POINT
+  clip, and empty-string-to-None
+- the bare `except Exception: pass` that makes the whole write
+  best-effort, so a broken log must not fail a diagnosis
+
+Note the test consequence, which is the reason this is worth doing rather
+than documenting forever: `cli_diff_test.go` gives each runtime its own
+store copy PRECISELY because Python writes here and Go does not, and it
+now pins that asymmetry with a before/after workspace snapshot. Closing
+this gap turns that pin red — which is the pin working, not a regression.
+
 ### Go port: outcome rows are written without `cost_usd`, and a Python consumer DROPS them (FOUND 2026-08-26, go-port scoping)
 
 `record.WriteOutcome` omits `cost_usd` with a comment saying the Python

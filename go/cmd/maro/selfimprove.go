@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -350,14 +349,20 @@ func clipLine(s string, n int) string {
 func runIntrospect(args []string) error {
 	ws := config.Workspace()
 	err := introspect.Main(ws, args, os.Stdout)
-	var ue *introspect.UsageError
-	if errors.As(err, &ue) {
-		// The whole argparse block — usage summary, then
-		// `maro-introspect: error: <message>` — because the message is what
-		// tells one refusal from another, and a script that greps stderr is
-		// reading text CPython wrote for years.
-		io.WriteString(os.Stderr, ue.Stderr())
-		os.Exit(2)
+	// The whole argparse block — usage summary, then
+	// `maro-introspect: error: <message>` — because the message is what
+	// tells one refusal from another, and a script that greps stderr is
+	// reading text CPython wrote for years. The mapping lives in
+	// introspect.ExitStatus so that the differential and this wrapper
+	// cannot disagree about it; all that is left here is which stream it
+	// goes to and the exit itself.
+	stderr, code, handled := introspect.ExitStatus(err)
+	if !handled {
+		return err
 	}
-	return err
+	if code != 0 {
+		io.WriteString(os.Stderr, stderr)
+		os.Exit(code)
+	}
+	return nil
 }

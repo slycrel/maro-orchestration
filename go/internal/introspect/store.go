@@ -248,9 +248,10 @@ func diagnosisFromRow(r pyval.Obj) (LoopDiagnosis, bool) {
 // This is `diagnose_loop`'s emit_log_event=FALSE path. Python's default is
 // True and writes a captain's-log DIAGNOSIS event for every non-healthy
 // class, inside a bare try/except. That write is a side effect of
-// diagnosing rather than part of the answer, and it belongs with the
-// captain's-log port; naming it here so the omission stays a decision
-// instead of becoming a discovery.
+// diagnosing rather than part of the answer — and it is an OPEN GAP, not a
+// blocked one: the captain's-log port landed as `record.Recorder.EventNoted`
+// and nothing is in the way but the work. See DiagnoseLoop in cli.go for
+// the shape it has to reproduce, and BACKLOG for the entry.
 func DiagnoseLatest(ws string) (LoopDiagnosis, bool) {
 	loopID, ok := LatestLoopID(ws)
 	if !ok {

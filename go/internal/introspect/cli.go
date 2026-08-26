@@ -28,10 +28,24 @@ import (
 //
 // Python's default is True: diagnosing a non-healthy loop WRITES a
 // captain's-log DIAGNOSIS event, inside a bare try/except. That write is a
-// side effect of diagnosing rather than part of the answer, and it belongs
-// with the captain's-log port — the same decision `DiagnoseLatest` already
-// records. It matters here because the CLI is a read path: `maro introspect
-// <loop-id>` mutates the event log in Python and does not in Go.
+// side effect of diagnosing rather than part of the answer, and it matters
+// here because the CLI is a read path: `maro introspect <loop-id>` mutates
+// the event log in Python and does not in Go.
+//
+// THIS IS AN OPEN GAP, NOT A BLOCKED ONE, and the distinction is the whole
+// point of writing it down. The original rationale — "it belongs with the
+// captain's-log port" — expired: that port has since landed as
+// `record.Recorder.EventNoted`, writing `memory/captains_log.jsonl`, and
+// graduation and scans already use it. Nothing stands in the way now
+// except the work, which is a differential of its own: the summary
+// f-string (`Loop <id>: <class> (<severity>). <n>/<m> steps done.`), the
+// four context keys, `note=recommendation[:200]` as a CODE POINT clip with
+// empty-to-None, and the bare `except Exception: pass` that makes the
+// write best-effort. Filed in BACKLOG; recorded in PORT.md's divergence
+// list rather than left as a comment nobody re-reads.
+//
+// A deferral whose reason has expired reads exactly like a considered
+// decision, which is why round 4 found it and three rounds did not.
 //
 // Note what Python does NOT do: a loop_id matching no events is not an
 // absence, it is the `artifact_missing` class with its own evidence line.
@@ -310,6 +324,28 @@ func (e *UsageError) Stderr() string {
 	return usageText + "maro-introspect: error: " + e.msg + "\n"
 }
 
+// ExitStatus maps a Main error onto the (stderr, exit code) pair argparse
+// produces: a usage error is the whole usage block plus `prog: error: msg`
+// on stderr and exit 2, and anything else is not this function's to
+// answer.
+//
+// It exists because there were two copies of that mapping — the `maro
+// introspect` wrapper's, and one the differential wrote for itself and
+// then asserted against CPython. The test was measuring its own copy, so
+// the wrapper could have exited 1, or printed `err.Error()` without the
+// usage block, and the suite stayed green. One function, two callers,
+// and the differential now pins the one the operator actually runs.
+func ExitStatus(err error) (stderr string, code int, handled bool) {
+	if err == nil {
+		return "", 0, true
+	}
+	var ue *UsageError
+	if errors.As(err, &ue) {
+		return ue.Stderr(), 2, true
+	}
+	return "", 0, false
+}
+
 func usagef(format string, a ...any) error {
 	return &UsageError{msg: fmt.Sprintf(format, a...)}
 }
@@ -399,10 +435,19 @@ type optTuple struct {
 // `\d` in a Python str pattern is Unicode-aware, so an Arabic-Indic digit
 // counts; Go's `\d` is ASCII-only, hence the explicit category class.
 //
-// This is version-dependent in a way worth writing down: through CPython
-// 3.11 the pattern was `^-\d+$|^-\d*\.\d+$`, which is anchored at both ends
-// and would make `-1latest` an unrecognized argument. The port matches the
-// interpreter it is differentially tested against.
+// This is version-dependent in a way worth writing down, and the boundary
+// is NOT where an earlier version of this comment put it. Measured on this
+// box: `python3.12` still carries `^-\d+$|^-\d*\.\d+$`, anchored at both
+// ends, under which `-1latest`, `-.5` and `-٥` are all unrecognized
+// arguments. `python3.14` carries `-\.?\d` applied with `.match`, anchored
+// only at the start. The change landed in 3.13, not 3.12.
+//
+// That matters here rather than being trivia: python3.12 IS installed on
+// this machine, and pyprobe invokes bare `python3` off PATH. The port is
+// correct for whichever interpreter PATH resolves to today (3.14.3) and
+// would fail its own differential under the other one — so if this
+// differential ever goes red on the negative-number cases, check
+// `python3 --version` before checking the code.
 var negativeNumber = regexp.MustCompile(`^-\.?[\p{Nd}]`)
 
 // parseOptional is argparse's `_parse_optional`: given one token, either nil
@@ -777,9 +822,16 @@ loop:
 }
 
 // matchArgument is `_match_argument` for the two nargs this parser uses. For
-// an OPTIONAL, `_get_nargs_pattern` strips the `-*` runs, so a flag matches
-// the empty string and takes nothing while `--history` matches exactly one
-// POSITIONAL token. That stripping is why `--history -- 5` is a missing
+// an OPTIONAL, `_get_nargs_pattern` yields a pattern with no `-` in it at
+// all, so a flag matches the empty string and takes nothing while
+// `--history` matches exactly one POSITIONAL token.
+//
+// HOW it yields that differs by interpreter, and only 3.14's is described
+// here: it selects `'([A])' if option else '(-*A-*)'` directly, and
+// `'([AO]{0})'` for a zero-nargs optional. Through 3.12 the positional
+// pattern was built first and then stripped with two `.replace` calls. Same
+// result for these two nargs; a different mechanism, and python3.12 is on
+// this box. The absence of `-` from the pattern is why `--history -- 5` is a missing
 // argument rather than 5: the terminator classifies as '-', which the
 // stripped pattern cannot consume — and so are `--history --tory` and
 // `--history -x`, which classify as 'O'.

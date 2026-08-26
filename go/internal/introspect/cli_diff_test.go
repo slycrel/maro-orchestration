@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -80,6 +82,17 @@ func copyStore(t *testing.T, src string) string {
 	return dst
 }
 
+// diagRow builds one diagnoses.jsonl row. Package-level rather than a
+// closure so every test in this file seeds its store through one builder —
+// a second, hand-rolled row literal is a fixture that can drift from the
+// reader it is meant to feed.
+func diagRow(id, class, sev string, done, total, tokens int) string {
+	return `{"loop_id": "` + id + `", "failure_class": "` + class +
+		`", "severity": "` + sev + `", "steps_done": ` +
+		itoa(done) + `, "steps_total": ` + itoa(total) +
+		`, "total_tokens": ` + itoa(tokens) + `}`
+}
+
 func evt(loopID, kind string, fields string) string {
 	s := `{"loop_id": "` + loopID + `", "event_type": "` + kind + `"`
 	if fields != "" {
@@ -126,13 +139,6 @@ func TestCLIMatchesCPython(t *testing.T) {
 		// had never once executed. Zero tokens is not the same test: at
 		// zero both spellings agree and the guard looks decorative.
 		evt("loop-gamma", "step_done", `"step_idx": 13, "step": "a refunded step", "status": "done", "tokens_in": -7000, "elapsed_ms": 10`),
-	}
-
-	diagRow := func(id, class, sev string, done, total, tokens int) string {
-		return `{"loop_id": "` + id + `", "failure_class": "` + class +
-			`", "severity": "` + sev + `", "steps_done": ` +
-			itoa(done) + `, "steps_total": ` + itoa(total) +
-			`, "total_tokens": ` + itoa(tokens) + `}`
 	}
 
 	// Thirty rows, oldest first: three of a class that only exists at the
@@ -651,18 +657,31 @@ func TestCLIMatchesCPython(t *testing.T) {
 					c.name)
 			}
 
+			// The header above says the Go side is deliberately not a
+			// writer, and that claim is why the two runtimes need separate
+			// store copies at all. Nothing checked it until round 4:
+			// goWS[i] was passed to Main and never looked at again, so a
+			// Go-side write would have left the suite green and the
+			// chunk's headline divergence pinned on only one of its two
+			// sides. When DiagnoseLoop starts emitting its captain's-log
+			// event, THIS is what goes red.
+			before := snapshotDir(t, goWS[i])
+
 			var buf bytes.Buffer
 			err := Main(goWS[i], c.argv, &buf)
-			gotCode, gotErr := 0, ""
-			var ue *UsageError
-			switch {
-			case errors.As(err, &ue):
-				// UsageError is what carries the code: a plain error would
-				// exit 1 where argparse exits 2, and a script that branches
-				// on the difference would see a runtime failure where it
-				// should see a typo.
-				gotCode, gotErr = 2, ue.Stderr()
-			case err != nil:
+
+			if after := snapshotDir(t, goWS[i]); !reflect.DeepEqual(before, after) {
+				t.Errorf("Main wrote to its workspace\nbefore: %v\nafter:  %v",
+					keysOf(before), keysOf(after))
+			}
+			// ExitStatus is PRODUCTION code — the same call `maro
+			// introspect` makes. This switch used to be a second copy of
+			// that mapping written here in the test, which meant CPython
+			// was being compared against the copy: the wrapper could have
+			// exited 1, or printed the message without its usage block,
+			// and every case below stayed green.
+			gotErr, gotCode, handled := ExitStatus(err)
+			if !handled {
 				t.Fatalf("go Main: %v", err)
 			}
 			if gotCode != w.Code {
@@ -693,4 +712,161 @@ func showWhitespace(s string) string {
 		lines[i] = "|" + strings.ReplaceAll(l, " ", "·") + "|"
 	}
 	return strings.Join(lines, "\n")
+}
+
+// TestNonASCIIDigitIsAKnownGap pins a divergence the port does NOT close,
+// which is why it is a test of its own rather than a row in the table
+// above: every case there asserts AGREEMENT, and this one asserts the
+// disagreement so that closing the gap turns the pin red instead of
+// leaving it quietly measuring nothing.
+//
+// Python's `int()` accepts any Unicode decimal digit — `int("٥")` is 5 —
+// because the conversion walks Unicode's Nd category. pyval.Int scans
+// ASCII only. So `--history ٥` renders a history in CPython and is a usage
+// error in Go, and `--history -٥` renders one row where Go refuses.
+//
+// The gap was named in prose from the round it was found and re-measured
+// by hand every round since. Round 4's finding was that a residual with no
+// executable pin is a residual nobody can tell has moved: prose does not
+// go red. When pyval.Int learns Unicode digits, THIS is what fails, and
+// the fix is to delete this test and add the two lines to the table.
+func TestNonASCIIDigitIsAKnownGap(t *testing.T) {
+	rows := []string{
+		diagRow("k1", "healthy", "info", 1, 1, 1),
+		diagRow("k2", "token_explosion", "warning", 2, 2, 2),
+	}
+	type payload struct {
+		WS   string   `json:"ws"`
+		Argv []string `json:"argv"`
+	}
+	// U+0665 ARABIC-INDIC DIGIT FIVE, bare and negated.
+	argvs := [][]string{{"--history", "٥"}, {"--history", "-٥"}}
+
+	goWS := make([]string, len(argvs))
+	pyArgs := make([]payload, len(argvs))
+	for i, argv := range argvs {
+		ws := seedStore(t, "diagnoses.jsonl", rows)
+		goWS[i] = ws
+		pyArgs[i] = payload{WS: copyStore(t, ws), Argv: argv}
+	}
+	type answer struct {
+		Code int    `json:"code"`
+		Out  string `json:"out"`
+		Err  string `json:"err"`
+	}
+	var want []answer
+	probe := pyprobe.Probe{Marker: "introspect.py"}
+	probe.RunJSON(t, pyCLISrc, &want, pyprobe.Arg(t, pyArgs))
+	if len(want) != len(argvs) {
+		t.Fatalf("probe returned %d answers for %d cases", len(want), len(argvs))
+	}
+
+	for i, argv := range argvs {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			// CPython side: it must RENDER. If a future interpreter starts
+			// refusing non-ASCII digits, the gap closed from the other
+			// direction and this pin is what says so.
+			if want[i].Code != 0 || strings.TrimSpace(want[i].Out) == "" {
+				t.Fatalf("cpython no longer reads %q as a number "+
+					"(exit %d, stdout %q) — the gap closed on the PYTHON "+
+					"side; re-measure before deleting anything",
+					argv[1], want[i].Code, want[i].Out)
+			}
+
+			var buf bytes.Buffer
+			gotErr, gotCode, handled := ExitStatus(Main(goWS[i], argv, &buf))
+			if !handled {
+				t.Fatalf("go Main returned a non-usage error")
+			}
+			if gotCode != 2 {
+				t.Fatalf("KNOWN GAP CLOSED: go now accepts %q (exit %d). "+
+					"Delete this test and add both lines to the table in "+
+					"TestCLIMatchesCPython.", argv[1], gotCode)
+			}
+			// And the refusal is argparse's own wording, not a Go one —
+			// the gap is in the CONVERSION, not in the error surface.
+			if wantMsg := "invalid int value: '" + argv[1] + "'"; !strings.Contains(gotErr, wantMsg) {
+				t.Errorf("go refused for the wrong reason\nwant substring: %s\ngot:\n%s",
+					wantMsg, gotErr)
+			}
+		})
+	}
+}
+
+// snapshotDir maps every file under root to its contents. Comparing two
+// snapshots catches a write that ADDS a file, one that appends to an
+// existing one, and one that rewrites it in place — where checking the
+// file list alone would see only the first.
+func snapshotDir(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		out[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+// TestExitStatus pins ExitStatus's three answers directly, because one of
+// them cannot be reached through Main.
+//
+// Main returns a *UsageError or nil and nothing else today, so the
+// `handled=false` arm is a guard that cannot fire from the CLI — a battery
+// mutant flipping it to `true` survived the whole suite. The arm is kept
+// rather than deleted: without it, a Main that later grows a real error
+// return (an unreadable store, say) would have that error silently
+// swallowed by the wrapper and reported as a clean exit, which is the
+// failure that fails OPEN. Keeping a guard means pinning it, and the input
+// it needs is a synthetic error rather than an argument line.
+func TestExitStatus(t *testing.T) {
+	t.Run("nil is handled and says nothing", func(t *testing.T) {
+		stderr, code, handled := ExitStatus(nil)
+		if !handled || code != 0 || stderr != "" {
+			t.Errorf("ExitStatus(nil) = (%q, %d, %v), want (\"\", 0, true)",
+				stderr, code, handled)
+		}
+	})
+	t.Run("a usage error is argparse's block and code 2", func(t *testing.T) {
+		err := usagef("unrecognized arguments: %s", "--bogus")
+		stderr, code, handled := ExitStatus(err)
+		if !handled || code != 2 {
+			t.Fatalf("ExitStatus(usage) = (_, %d, %v), want (_, 2, true)",
+				code, handled)
+		}
+		if !strings.HasPrefix(stderr, "usage: maro-introspect") ||
+			!strings.Contains(stderr, "maro-introspect: error: unrecognized arguments: --bogus") {
+			t.Errorf("stderr is not the argparse block:\n%s", stderr)
+		}
+	})
+	t.Run("any other error is not this function's to answer", func(t *testing.T) {
+		stderr, code, handled := ExitStatus(errors.New("the store is unreadable"))
+		if handled {
+			t.Errorf("a non-usage error was reported as handled, which is how "+
+				"the wrapper would exit 0 on a real failure (got %q, %d)",
+				stderr, code)
+		}
+	})
 }

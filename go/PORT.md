@@ -9218,6 +9218,117 @@ byte-identical duplicate fixture was removed, along with the last mention
 of `splitArgs` anywhere in the Go tree — a comment describing a branch of
 a function round 2 had deleted.
 
+### Round 4: the chunk is exact, and the wrapper around it was untested
+
+Round 4 fuzzed **~30,000 argument lines** Go-against-CPython — every
+single token, all 9,216 pairs, and 12,000 random lines of length 1..5 over
+a 96-token alphabet built to stress each argparse rule — plus 840
+rendering comparisons over 120 randomized stores. The only divergence in
+any of it is the non-ASCII-digit `int()` residual named below. After three
+rounds of finding rules, the argument layer is exact.
+
+It also **measured the six exemptions** the round-3 battery had written
+down as arguments. Each was turned into a real mutant and re-fuzzed over
+11,620 lines; all six produced 0 diffs. Those comments now carry the
+number instead of the reasoning, because an exemption that has been
+executed and one that has been reasoned about look identical in a comment.
+
+What it found instead was one layer out.
+
+`runIntrospect` is a wrapper whose entire job — stated in its own comment
+— is mapping a usage error onto argparse's stderr block and exit code 2.
+It had **no test**. The differential next door wrote its own copy of that
+mapping:
+
+```go
+switch {
+case errors.As(err, &ue):
+    gotCode, gotErr = 2, ue.Stderr()
+```
+
+…and compared *that* against CPython. So both sides of the comparison
+belonged to the test, and the binary was not in the picture. Proved by
+mutation: `os.Exit(2)` → `os.Exit(1)`, and `ue.Stderr()` → a bare
+`"error\n"`, each left the whole suite green.
+
+The fix is one production function with two callers:
+
+```go
+func ExitStatus(err error) (stderr string, code int, handled bool)
+```
+
+The differential now asserts the mapping the operator actually runs, and
+`cmd/maro/introspect_test.go` re-execs the test binary as a child for the
+two claims only the wrapper makes — *stderr, not stdout* and *exit 2*.
+Five mutants cover it; before this round every one of them was a MISS.
+
+One of the five then survived, and it was the fix's own new code. `Main`
+returns a `*UsageError` or nil and nothing else, so `ExitStatus`'s
+`handled=false` arm cannot be reached from the CLI at all — flipping it to
+`true` passed the whole suite. That is L4 inside a round-4 fix, which is
+P6's shape.
+
+Deleting the arm is the wrong answer here, though, and worth saying why:
+without it a `Main` that later grows a real error return — an unreadable
+store — would have that error swallowed by the wrapper and reported as a
+clean exit. A failure that fails OPEN is worse than an unreachable guard.
+So the guard stays and gets pinned directly, with a synthetic error rather
+than an argument line, because the input it needs is one the CLI cannot
+produce. **The battery now stands at 120 mutants, 117 detected**, and the
+three survivors are the same carried-forward equivalents as before.
+
+### Two comments that named the wrong interpreter
+
+Both L47, and the second is the one worth remembering.
+
+The round-2 fix for `negativeNumber` carried a comment saying the anchored
+`^-\d+$|^-\d*\.\d+$` spelling held "through CPython 3.11". Measured:
+`python3.12` still carries it, so the change landed in **3.13**. A version
+claim written while fixing a version bug is not automatically measured.
+
+Worse: **python3.12 is installed on this box**, and `pyprobe` invokes bare
+`python3` off PATH. The port is correct for whichever interpreter PATH
+resolves to (3.14.3 today) and would fail its own differential under the
+other one — an interpreter one PATH entry away. The comment now says so,
+and says to check `python3 --version` before checking the code when those
+cases go red.
+
+The third instance is the same shape one layer down. `_get_nargs_pattern`
+*builds the positional pattern and then strips* the `-*` runs through
+3.12; 3.14 *selects* `'([A])' if option else '(-*A-*)'` directly. Identical
+result for the two nargs this parser uses — and `matchArgument`'s comment
+described 3.12's mechanism beside code differentially tested against 3.14.
+
+### A residual pinned by prose, and a deferral whose reason expired
+
+Two findings with no lens between them, and both are about the difference
+between a decision and a gap.
+
+The non-ASCII-digit divergence (`--history ٥` is 5 in CPython, a usage
+error in Go) had been named in a fixture comment and re-measured by hand
+every round. Prose does not go red. It now has a **known-gap pin**
+(`TestNonASCIIDigitIsAKnownGap`) asserting the divergence in both
+directions: it fails if Go starts accepting the digit *and* if CPython
+stops reading it, and it tells whoever hits it to delete the test and move
+the two lines into the main table.
+
+And `DiagnoseLoop` skips Python's captain's-log DIAGNOSIS write with the
+rationale that it "belongs with the captain's-log port". **That port
+landed.** `record.Recorder.EventNoted` writes `memory/captains_log.jsonl`
+and graduation and scans already use it, so for three rounds an unclosed
+gap read as a considered decision. Corrected at both sites — `DiagnoseLatest`
+carried the same expired sentence — and filed with the shape it has to
+reproduce (the summary f-string, four context keys,
+`note=recommendation[:200]` as a code-point clip, and the bare
+`except Exception: pass`).
+
+The related test claim was unpinned in the same way. The differential's
+header explains that each runtime gets its own store copy *because Python
+writes here and Go does not* — and nothing checked the Go half: `goWS[i]`
+went into `Main` and was never looked at again. It now snapshots the
+workspace before and after every case. Closing the captain's-log gap will
+turn that pin red, which is the pin working.
+
 ## metrics' step-cost ledger: two reverse readers that are not the same reader
 
 `src/metrics.py`'s spend half — `_reverse_readline`, `spend_today`,
