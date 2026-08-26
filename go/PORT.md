@@ -10199,3 +10199,177 @@ NEAR-equivalent: a naive fold for `typeAvg` differs by one ULP, and
 random 3-to-6-row token sets found no case where the two land on opposite
 sides of the `1.5x` threshold. `pyval.Sum` stays because Python's is
 `sum()`, not because a test can tell.
+
+## heartbeat.py slice 1 — the deterministic half, and three raises
+
+The heartbeat is 1653 lines and most of it is orchestration: five
+background threads, a daemon pidfile, a SlowUpdateScheduler, an LLM call
+per stuck project. **Slice 1 is the part that is a function of its
+arguments** — the recovery-action model, tier 1's scripted table, tier 2's
+COOLDOWN (not the call it guards), tier 3's escalation message, the log
+row, and the two cadence resolvers. The package doc names the other half
+by function so absence is never read as coverage.
+
+**The tripwire was honoured this time.** L49 says the differential comes
+first; here the CPython probe was written and run *before a line of Go
+existed*, and `scratchpad/hb_truth.txt` is that capture. The probe source
+is then carried into `heartbeat_diff_test.go` VERBATIM rather than
+paraphrased, so the ground-truth pass and the differential cannot drift.
+
+### The six forced decisions
+
+1. **`checks` is an ordered map, not a `map[string]string`.** Its order is
+   observable *twice* — tier 1 emits one action per failing check in CHECK
+   order, and tier 3's `Failed checks:` line joins the failing names in the
+   same order. A Go map would randomise two rendered strings. The fixture
+   that proves it is T9: the same four checks fed in reverse produce the
+   four actions in reverse. A port that walked its own rule table instead
+   would pass T1 and fail T9.
+
+2. **Its VALUES are `any`, and a non-string one raises.** Python annotates
+   `Dict[str, str]` and does not enforce it. A non-string detail reaches
+   `detail.startswith(...)` and raises
+   `AttributeError: 'int' object has no attribute 'startswith'` — measured
+   — from inside *both* tiers. `map[string]string` makes that
+   unrepresentable, which is the quiet way a port loses a failure mode.
+   Three fixtures (T10–T13) plus E13.
+
+3. **The raise in tier 3 is NOT the swallowed one.** `_tier3_escalate` has
+   a bare `except Exception: return False` — but it wraps only the
+   `telegram_notify` call. The failed-checks scan sits *above* the `try:`,
+   so its AttributeError propagates while a notifier that blows up becomes
+   `False`. E12 and E13 are the pair that tell those apart; a port that put
+   the whole body in one error path passes E12 and fails E13.
+
+4. **`{self.stuck_projects or 'none'}` is two renderers.** Empty list →
+   the literal string `none`. Non-empty → Python's *list repr*, so one
+   stuck project prints `['alpha']` with the brackets and quotes, an
+   apostrophe in a name flips repr to double quotes (`["it's"]`), and a
+   non-ASCII name stays literal (`['каф']`). Six fixtures, R1–R6.
+
+5. **`telegram_sent` is spelled two ways in one object.** `summary()`
+   renders `str(bool)` → `True`; the adjacent `to_dict()` writes JSON's
+   `true`. Both are right in their own place, and R8 pins it.
+
+6. **The two cadence resolvers differ in two constants and it matters at
+   every input.** Merging them is the natural refactor and it is wrong:
+
+   ```
+                    shadow      backlog
+     floor          max(0, n)   max(1, n)
+     default        0 (off)     5
+   ```
+
+   The floor and the default are not the same number for backlog, so an
+   explicit `-3` clamps to **1** while an explicit `"abc"` raises inside
+   `int()` and falls all the way back to **5**. Measured across 21 inputs
+   × 2 resolvers: `None→0/5`, `0→0/1`, `-3→0/1`, `False→0/1`, `2.9→2/2`,
+   `"1_0"→10/10` (PEP 515), `"abc"→0/5`. The `except` is a *blanket*
+   `except Exception` wrapping the import, the get and the `int()`
+   together, so the config read is a thunk here — a config backend that
+   fails must not be consulted on a path that never reads it.
+
+### The one named divergence
+
+CPython's `int()` accepts any Unicode decimal digit, so
+`_resolve_backlog_every("١٧")` is **17**. `pyval.intFromString` is ASCII-only
+and raises ValueError, which the blanket catch turns into the DEFAULT — so
+Go answers **5**. The fix belongs in pyval's int lane, where it is already
+a named residual with other consumers, not in a workaround here.
+`TestNonAsciiDigitCadenceIsANamedDivergence` pins it *and* carries an
+anti-vacuity half (`"17"` must still be 17), so it goes RED the day the
+real fix lands rather than passing quietly against a resolver that
+defaults on everything.
+
+### Two things the differential could not cover, and what covers them
+
+The cooldown's input is a monotonic clock and the log's output is a file,
+so neither has a CPython fixture. Both get a Go test that asserts the
+BEHAVIOUR the Python comment warns about:
+
+- `Cooldown.Due` on a never-diagnosed project must be true **at clock
+  zero**. Python's comment says why — `time.monotonic()` counts from boot
+  on Linux, so a `0.0` sentinel suppresses the first diagnosis for the
+  first thirty minutes of system uptime, on a freshly booted box or a CI
+  runner, which is where nobody looks. Go's monotonic clock has the same
+  hazard with a different origin. The test also pins `>=` at the exact
+  boundary and one nanosecond before it.
+- `Log` writes to `memory/heartbeat-log.jsonl`, one line per append, in
+  `json.dumps`' DEFAULT separators (`", "` / `": "`, so
+  `pyval.DumpsCompactPy` and not the compact renderer). A reader splitting
+  on lines does not care; a byte-for-byte ledger comparison between the two
+  runtimes does.
+
+### Deliberately not ported, and why the slice still has no CLI
+
+There is no `maro heartbeat` yet, because the *loop* is not ported —
+shipping a command that runs one tick and exits would be a different
+program wearing the name. Slice 1 is a library slice on purpose. The
+consumer arrives with the loop; until then the differential is the
+consumer, which is the honest version of "no consumer yet".
+
+### Two narrowings, stated rather than hidden
+
+- `StuckProjects` is `[]string`, so a report carrying `[1, None]` — which
+  CPython renders verbatim, measured — cannot be built. The annotation is
+  `List[str]`, every writer honours it, and widening it would put a
+  repr-any requirement on the whole package to model a shape nothing
+  produces.
+- The notify seam is typed `func(string) (bool, error)`. Python returns
+  `telegram_notify(message)` *unchanged*, so a notifier answering a truthy
+  string makes `_tier3_escalate` return that string despite its `-> bool`
+  annotation (measured: `"yes"`). Every real notifier returns a bool; the
+  pass-through is an artifact of what a monkeypatch can reach, not a
+  behaviour anything relies on.
+
+### The mutation battery: 70 mutants, and four tests that could not fail
+
+Derived from the FILE, not the diff. Three rounds:
+
+**Round 1 — 57/70.** Thirteen survivors, and the triage split them cleanly
+into *bad mutants* and *real gaps*, which is the whole value of doing the
+triage rather than counting:
+
+- **Four bad mutants of my own making.** M4 multiplied by zero (equivalent
+  by construction), M5's site did not match the file, M60 named a renderer
+  that does not exist (`pyval.Dumps`), M64 folded `max(floor, def)` where
+  both resolvers already satisfy it. A battery is code, and code derived
+  from a file you just wrote inherits the same blind spots.
+- **Three EQUIVALENT, measured not assumed.** M11/M12/M13 turned the empty
+  `stuck_projects` / `checks` / `recovery_actions` containers into nil. A
+  one-off probe settled it: `pyval` renders a nil `List` as `[]` and a nil
+  `Obj` as `{}`. The explicit empties are style. The nil-GUARD standing
+  beside them (`if checks == nil { checks = pyval.Obj{} }`) was real dead
+  code and is now deleted — it read like a safety net and caught nothing.
+- **One EQUIVALENT through the API.** M32 returned the actions gathered
+  before a mid-walk raise instead of nil. Every caller checks `err` first,
+  so no answer changes. Kept in the battery *labelled*, so the next round
+  does not re-derive it and file it as a gap.
+- **Four REAL gaps, and all four were tests that could not fail:**
+
+  | mutant | why the test could not fail |
+  |---|---|
+  | M34 unknown status treated as healthy | every escalate fixture with an odd status also had a stuck project |
+  | M56 cooldown halved to 15 min | every assertion was spelled `DiagnosisCooldown`, the thing under test |
+  | M58/M59 log moved and renamed | the assertion was `path != LogPath(ws)` — both sides call the function |
+  | M61 a failed append still reports its path | no test ever made the write fail |
+
+  M56 and M58 are the same mistake twice: **an expected value spelled with
+  the function under test is not an assertion.** The fixes are a literal
+  `30*time.Minute`, a literal `filepath.Join(ws, "memory",
+  "heartbeat-log.jsonl")`, an escalate fixture with an unknown status and
+  nothing stuck, and a `Log` into a workspace where `memory` is a regular
+  file.
+
+**Round 2 — 65/70.** M64, rewritten as "an unparseable CONFIG value falls
+to the floor", survived — and that exposed a whole BRANCH the differential
+structurally cannot reach. `pyprobe` points `MARO_USER_DIR` at a temp
+directory on purpose, so CPython's `config.get` always answers the default
+and every `None` fixture exercises the same line. `TestResolverConfigLane`
+covers it on the Go side: a failing read lands on the DEFAULT (invisible
+for shadow, wrong by four for backlog), a usable value is read and floored,
+and the thunk must not be *called at all* when an explicit value was given.
+
+**Round 3 — 66/69, and the three survivors are the three labelled
+EQUIVALENT.** That is the shape a converged battery has: every survivor
+carries a measured reason, and none of them is "we should test this".

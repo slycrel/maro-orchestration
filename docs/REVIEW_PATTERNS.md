@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**732**. The counts below are regenerated from the ledger, not recalled.
+**734**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 732
+**Two things the counts are not.** They are lower bounds: 314 of the 734
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -1080,6 +1080,41 @@ Generalised: **when a harness delegates its verdict to something outside the
 process, "no failure" and "no verdict" look identical from the outside.**
 Ask what the harness prints when the external thing is absent. If the answer
 is the same string it prints on success, the harness has no verdict.
+
+This SHARPENS an existing rule rather than repeating it. `go/PORT.md`'s
+"a test named for a differential must RUN the other side" already says a
+differential that skips when `python3` is missing is *fine* — and it is,
+in ordinary use, which is why the skip survived. What that rule does not
+say is that the same skip is lethal to any caller whose result is a
+statement ABOUT the tests. The false-green family gains a fourth member
+alongside *a fixture both sides refuse is not a differential*, *a
+compile-kill is not a kill*, and *a test named for a differential must run
+the other side*.
+
+### P12 — An expected value spelled with the thing under test is not an assertion
+*instances: 2*
+
+Two findings, one file, one battery round. The heartbeat log test asserted
+`path != LogPath(ws)` — both sides call `LogPath`, so moving the log out of
+`memory/` and renaming the file were BOTH invisible. The cooldown test
+spelled every boundary as `DiagnosisCooldown`, so halving the constant
+changed the expectation in lockstep and nothing failed.
+
+This is not the same as P7's vacuous fixture. The fixtures here are real,
+the code paths run, the values are compared. What is missing is an
+INDEPENDENT statement of the answer: the test says "the function agrees
+with itself", which it always will.
+
+The tell is syntactic and cheap to grep for: **the identifier under test
+appearing on the RIGHT of a comparison**, or a constant exported by the
+package under test standing in for a number the specification fixes. The
+fix is the literal — `30*time.Minute`, `filepath.Join(ws, "memory",
+"heartbeat-log.jsonl")` — with the specification's own value in a comment
+if it needs one.
+
+Corollary for ports specifically: the literal must come from the ORIGINAL,
+not from the port. A Go constant transcribed wrong from Python is exactly
+the mistake this catches, and only if the test names Python's number.
 
 ### P11 — The tie fixture must have the shape the sort actually reorders
 *instances: 1*
