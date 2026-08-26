@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strings"
 )
 
@@ -161,59 +160,166 @@ func ExpandUser(p string) (string, error) {
 	return Str(home + rest), nil
 }
 
-// Realpath is os.path.Realpath(strict=False): every symlink resolved, and
-// a DANGLING one resolved to the path it points at rather than refused.
-// filepath.EvalSymlinks cannot be used alone for that — it fails on a
-// dangling link, which is one of the two cases this is called for.
+// Realpath is os.path.realpath(strict=False) — the function
+// `Path.resolve()` delegates to (measured: the two agree on all 25 rows of
+// the differential table, 3.14.3).
+//
+// This is a TRANSLATION of CPython 3.14's posixpath.realpath, not an
+// approximation of it, because two rounds of approximation were wrong in
+// three different ways. What the previous version did was: filepath.Abs,
+// then EvalSymlinks on the parent, then walk the final component's links.
+// The differential that covered it asked only about single-component
+// paths under an existing directory — `<dir>/<name>` — and under that
+// shape all three defects are invisible:
+//
+//   - A MISSING INTERMEDIATE component made it REFUSE. EvalSymlinks fails
+//     outright on a path that is not there, so `<ws>/missing/a/b` came
+//     back "unresolvable" where CPython answers the path itself. Every
+//     caller reads false as "no such path" and skips work CPython does —
+//     and an operator's MARO_WORKSPACE pointing at a tree that does not
+//     exist YET is the ordinary case, not the exotic one.
+//   - `..` was collapsed LEXICALLY, by filepath.Abs (which Cleans) before
+//     any link was followed. CPython pops the ALREADY-RESOLVED path
+//     instead, so a link pointing deeper than itself answers its target's
+//     parent: with deeplink -> <r>/real/deep, `deeplink/..` is <r>/real,
+//     not <r>. Two engines sharing a workspace reached through a symlink
+//     would have disagreed about which directory that is.
+//   - Only the FINAL component's links were walked, so a symlink in the
+//     middle of a longer path was followed by EvalSymlinks (fine) but a
+//     dangling one in the middle was not (not fine).
+//
+// The algorithm below is CPython's own, spelled the same way: a stack of
+// unresolved parts, a `path` that is absolute throughout, and a `seen`
+// map with THREE states — absent, present-but-unresolved (a loop), and
+// present-with-a-value (a cache). The marker entries pushed onto the
+// stack are how CPython records a resolved target, and they are kept
+// rather than restructured because the loop case reads that map.
+//
+// It returns false only when the process has no working directory to
+// resolve a relative path against, which is where CPython raises.
 func Realpath(p string) (string, bool) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", false
-	}
-	dir, base := filepath.Split(abs)
-	rd, err := filepath.EvalSymlinks(filepath.Clean(dir))
-	if err != nil {
-		return "", false
-	}
-	cur := filepath.Join(rd, base)
-	// A SEEN SET, not a hop counter, because that is what CPython does and
-	// the two answer differently in both directions. `os.path.realpath` is
-	// pure Python walking lstat/readlink itself, so the kernel's ELOOP
-	// never enters into it:
-	//
-	//   - It has NO depth limit. A chain of 60 distinct links resolves to
-	//     its end (measured on 3.14.3). This loop stopped at 40 — the old
-	//     comment cited MAXSYMLINKS and asserted "so does Python", which
-	//     is simply not true of this function — and refused.
-	//   - On a CYCLE it does not refuse either. `_joinrealpath` keeps a
-	//     seen dict and, with strict=False, returns the path at which the
-	//     repeat was detected: a→b→a answers a, and a chain ENTERING a
-	//     cycle answers the cycle's first node (start→g→h→i→g answers g).
-	//     This returned "unresolvable" for all of them.
-	//
-	// The refusal is not a harmless conservatism: callers read false as
-	// "no such path" and skip work CPython performs.
-	seen := map[string]bool{}
-	for {
-		if seen[cur] {
-			// The repeat itself is the answer, exactly as strict=False
-			// spells it.
-			return cur, true
-		}
-		seen[cur] = true
-		fi, err := os.Lstat(cur)
-		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			return cur, true
-		}
-		t, err := os.Readlink(cur)
+	const sep = "/"
+
+	// "The resolved path, which is absolute throughout this function."
+	// CPython seeds it from getcwd() for a relative input; Go's os.Getwd
+	// goes to the kernel, which — like CPython's comment says of its own —
+	// returns a normalised, symlink-free path.
+	var path string
+	if strings.HasPrefix(p, sep) {
+		path = sep
+	} else {
+		wd, err := os.Getwd()
 		if err != nil {
 			return "", false
 		}
-		if !filepath.IsAbs(t) {
-			t = filepath.Join(filepath.Dir(cur), t)
-		}
-		cur = filepath.Clean(t)
+		path = wd
 	}
+
+	parts := strings.Split(p, sep)
+	rest := make([]rpPart, 0, len(parts)+16)
+	for i := len(parts) - 1; i >= 0; i-- {
+		rest = append(rest, rpPart{name: parts[i]})
+	}
+	// CPython's `part_count`: the number of REAL parts still on the stack,
+	// which stops matching len(rest) as soon as a marker pair is pushed.
+	//
+	// Honest note, because the mutation battery asked: spelling the loop
+	// `len(rest) > 0` instead is EQUIVALENT for the answer. The marker arm
+	// only writes to `seen`, never to `path`, and when partCount hits zero
+	// everything left on the stack is marker pairs — so the difference is
+	// a little wasted work after the result is already final, not a
+	// different result. The count is kept because it is CPython's, and
+	// because `seen` becoming a cache with a lifetime would make the
+	// difference real.
+	partCount := len(parts)
+
+	seen := map[string]*string{}
+
+	for partCount > 0 {
+		it := rest[len(rest)-1]
+		rest = rest[:len(rest)-1]
+		if it.marker {
+			// The entry below a marker is the symlink whose target has
+			// just been fully resolved; `path` is that resolution.
+			sym := rest[len(rest)-1]
+			rest = rest[:len(rest)-1]
+			resolved := path
+			seen[sym.name] = &resolved
+			continue
+		}
+		name := it.name
+		partCount--
+		if name == "" || name == "." {
+			continue
+		}
+		if name == ".." {
+			// CPython: `path = path[:path.rindex(sep)] or sep`. A pure
+			// STRING pop of the resolved path — no lstat, and nothing
+			// lexical about the ORIGINAL path. path always starts with a
+			// separator, so the index is always found.
+			if i := strings.LastIndex(path, sep); i > 0 {
+				path = path[:i]
+			} else {
+				path = sep
+			}
+			continue
+		}
+		var newpath string
+		if path == sep {
+			newpath = sep + name
+		} else {
+			newpath = path + sep + name
+		}
+		fi, err := os.Lstat(newpath)
+		if err != nil {
+			// strict=False sets ignored_error = OSError, and the ignored
+			// branch ends at `path = newpath`. THIS is the arm that lets
+			// a missing component keep resolving.
+			path = newpath
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			path = newpath
+			continue
+		}
+		if cached, ok := seen[newpath]; ok {
+			if cached != nil {
+				path = *cached
+				continue
+			}
+			// Seen but unresolved: a symlink loop. strict=False answers
+			// the path at which the repeat was detected rather than
+			// raising ELOOP.
+			path = newpath
+			continue
+		}
+		target, rerr := os.Readlink(newpath)
+		if rerr != nil {
+			path = newpath
+			continue
+		}
+		if strings.HasPrefix(target, sep) {
+			// "Symlink target is absolute; reset resolved path."
+			path = sep
+		}
+		seen[newpath] = nil
+		rest = append(rest, rpPart{name: newpath})
+		rest = append(rest, rpPart{marker: true})
+		tp := strings.Split(target, sep)
+		for i := len(tp) - 1; i >= 0; i-- {
+			rest = append(rest, rpPart{name: tp[i]})
+		}
+		partCount += len(tp)
+	}
+	return path, true
+}
+
+// rpPart is one entry on Realpath's stack. CPython pushes a bare None as
+// the marker; Go has no such value in a []string, so the flag is carried
+// beside the name.
+type rpPart struct {
+	name   string
+	marker bool
 }
 
 // Join is pathlib's `/`, and the half of it that differs from

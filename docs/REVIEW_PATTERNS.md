@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 59 — the most frequent single defect in the Go port*
+*instances: 60 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -256,7 +256,7 @@ slicer. Six packages carry a private `clipRunes` copy (`scans`,
 introspect port deliberately did not become the seventh.
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 7*
+*instances: 8*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 7*
@@ -308,7 +308,7 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 14*
+*instances: 15*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
@@ -322,7 +322,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 24*
+*instances: 25*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -388,7 +388,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 25*
+*instances: 26*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -856,7 +856,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 8*
+*instances: 9*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1144,6 +1144,49 @@ see it"; hand-editing a copy showed all thirty-seven cycle fixtures fail at
 once. Same defect class as the `pySeconds` rationale retracted one tranche
 earlier: **a plausible claim nobody measured is a test that cannot fail,
 written in prose.** Mutate the copy and find out; it costs one minute.
+
+### L52 — A rationale recorded as deliberate is still a claim
+
+*instances: 1*
+
+A comment that says "deliberately NOT ported, named so the next reader
+knows it was a decision" reads as settled. It is not evidence. It is an
+assertion about behaviour, and it decays — or is wrong at birth — exactly
+the way L28's coverage counts do, with one difference that makes it
+harder: a stale enumeration is falsified by READING the file, while a
+stale rationale is falsified only by RUNNING something.
+
+**Instance 1** (paths, 2026-08-26). `config.Workspace()` skipped the
+`.resolve()` half of `Path(val).expanduser().resolve()`, under a comment
+giving two grounds. Both were false. "It only changes an answer when a
+caller chdirs between two resolutions" — no: resolve absolutizes a
+relative path, follows symlinks, and pops `..` against the followed path,
+all on the first call. "Resolving would make Go disagree with Python
+about which path STRING a probe asserts" — backwards, since Python
+resolves.
+
+What made it survive a review round is the part worth keeping: the
+comment was specific, cited the correct standing rule
+(`feedback_live_store_probes`), and named itself as a decision. It had no
+fixture, and it could not have had a failing one, because every test in
+the suite set `MARO_WORKSPACE` to a `t.TempDir()` path — absolute,
+symlink-free, already clean. On that side of the input space, the two
+candidate behaviours give the same answer.
+
+**The check.** For any comment asserting that a difference does not
+matter, ask: *what input would tell the two behaviours apart, and does
+the corpus contain one?* If the answer to the second half is no, the
+claim is untested regardless of how carefully it is worded. This is the
+same move as L51's ("what distinction is the normaliser erasing"), one
+level up — there the assertion had moved into a helper, here it has moved
+into prose.
+
+**Corollary, from the same chunk.** A green suite over production data is
+evidence about the corpus at least as much as about the code. The
+both-engines comparison reported six byte-identical rows; the seventh
+differed, and chasing it showed the live workspace held `count=2`, a
+value that renders identically as a Python int and a Go float64. A
+`count` of 1000000 would have differed on the same line the same day.
 
 ### P13 — A `try` split across a seam stops being one `try`
 *instances: 1 (`syshealth` r1)*

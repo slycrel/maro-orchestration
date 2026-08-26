@@ -10,12 +10,12 @@ package config
 import (
 	"fmt"
 	"os"
-	osuser "os/user"
 	"path/filepath"
 	"strings"
 
 	yaml "gopkg.in/yaml.v3"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -45,10 +45,60 @@ func Home() string {
 // (feedback_live_store_probes, 2026-08-16: a session assumed the wrong
 // env var and overwrote a live ledger; the resolved path must be
 // asserted before any write, which cmd/maro does by printing it first).
+// The env branch is `Path(val).expanduser().resolve()` — BOTH calls. The
+// resolve half was missing, and it is not cosmetic:
+//
+//	MARO_WORKSPACE      CPython                Go before this
+//	./ws                <cwd>/ws               ./ws
+//	a symlink to <t>    <t>                    the symlink path
+//	<w>/a/../b          <w>/b, via a's target  <w>/b, lexically
+//
+// Same files on disk in the easy cases, different STRINGS — and the
+// string is what gets printed as `workspace:`, embedded in error text,
+// and used as lock-file identity, so two engines pointed at one
+// configured workspace could take two different locks over it. The
+// dot-segment row is the one that is not merely cosmetic: if `a` is a
+// symlink, lexical collapse and CPython's follow-then-pop name different
+// directories (see pypath.Realpath).
+//
+// The DEFAULT branch is deliberately NOT resolved: `Path.home() / ".maro"
+// / "workspace"` has no .resolve() on it in the Python either.
+//
+// An earlier round declined to port `.resolve()`, on two stated grounds,
+// and BOTH are wrong — recorded rather than quietly deleted, because the
+// shape of the mistake is reusable:
+//
+//   - "It only changes an answer when a caller chdirs between two
+//     resolutions." Measured false, three ways: resolve absolutizes a
+//     relative path, follows symlinks, and pops `..` against the FOLLOWED
+//     path. A workspace given as `./ws`, or reached through a symlink,
+//     differs on the FIRST resolution, with nobody chdiring at all.
+//   - "Resolving symlinks here would make Go disagree with Python about
+//     which path STRING a probe should assert." Backwards: Python
+//     resolves, so NOT resolving is what made the strings disagree.
+//
+// The claim survived a round because no fixture set MARO_WORKSPACE to
+// anything but an absolute, symlink-free, already-clean path — which is
+// every path t.TempDir() hands out on this box. The decision READ as
+// considered; what was missing was a measurement, and the measurement is
+// now a 30-row differential in internal/pypath plus paths_diff_test here.
+//
+// One consequence, named: where the temp root is itself a symlink (macOS
+// /tmp -> /private/tmp), Workspace() now returns the resolved form, so a
+// test comparing it against its own t.TempDir() string must resolve that
+// too. CPython's tests face exactly this, which is the point.
 func Workspace() string {
 	for _, name := range []string{"MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"} {
 		if v := os.Getenv(name); v != "" {
-			return expandUser(v)
+			e := expandUser(v)
+			// Realpath refuses only when the process has no working
+			// directory to resolve a relative path against, which is where
+			// CPython raises. There is no error channel here, so the
+			// un-resolved path is the closest non-raising answer.
+			if p, ok := pypath.Realpath(e); ok {
+				return p
+			}
+			return e
 		}
 	}
 	h, err := os.UserHomeDir()
@@ -73,12 +123,6 @@ func Workspace() string {
 // memory/ and playbook.md. That is the failure feedback_live_store_probes
 // records, in a second spelling.
 //
-// Python also calls .resolve() on the workspace (not on _maro_dir), which
-// absolutizes and follows symlinks. Deliberately NOT ported: it only
-// changes an answer when a caller chdirs between two resolutions, and
-// resolving symlinks here would make Go disagree with Python about which
-// path STRING a probe should assert — the thing that rule is for. Named
-// so the next reader knows it was a decision.
 // The `~user` form is expanded too. The first cut handled only a leading
 // `~` / `~/` under a comment asserting that "~user is a different lookup
 // and this box has no such user, so Python leaves it alone too" — false
@@ -97,22 +141,34 @@ func Workspace() string {
 // inventing one here would be a larger change than the finding; the
 // unexpanded path at least cannot be mistaken for a real home. Pinned as
 // a divergence rather than left silent.
+//
+// It is now a thin call into pypath rather than a second implementation.
+// The private copy that stood here was built on filepath.Join, which
+// CLEANS — and Python's `Path(val).expanduser()` does not remove `..`:
+//
+//	MARO_USER_DIR=<w>/real/       py <w>/real     go <w>/real/
+//	MARO_USER_DIR=~x/a/../b       py <hx>/a/../b  go <hx>/b
+//
+// The first row is what the differential caught. Workspace() hid both,
+// because `.resolve()` runs afterwards and washes them out on any tree
+// without a symlink at `a` — Home() has no such second chance, and Home()
+// is where the user config is read from. Two private implementations of
+// one Python operation disagreeing is the defect pypath's own package doc
+// names; this was the third copy.
 func expandUser(p string) string {
-	if !strings.HasPrefix(p, "~") {
-		return p
+	// Python spells it `Path(str(raw)).expanduser()`: the pathlib
+	// normalisation happens FIRST, so `~//a` is `~/a` before the tilde is
+	// looked at, and a plain path is normalised even though no expansion
+	// occurs.
+	s := pypath.Str(p)
+	e, err := pypath.ExpandUser(s)
+	if err != nil {
+		// The named residual, unchanged: CPython RAISES here and neither
+		// Workspace nor Home has an error channel, so the un-expanded —
+		// but now normalised — path is the closest non-raising answer.
+		return s
 	}
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		if h, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(h, strings.TrimPrefix(p, "~"))
-		}
-		return p
-	}
-	name, rest, _ := strings.Cut(p[1:], "/")
-	u, err := osuser.Lookup(name)
-	if err != nil || u.HomeDir == "" {
-		return p
-	}
-	return filepath.Join(u.HomeDir, rest)
+	return e
 }
 
 // Load reads and merges the two config tiers. A missing or unparseable

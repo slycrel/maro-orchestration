@@ -11477,3 +11477,161 @@ are their own console entry points in the Python (`maro-introspect =
 introspect:main`, `maro-task = task_store:main`), not `cli.py` subcommands —
 only `metrics` is in `_COMMAND_HANDLERS`. The Go folded all three under one
 binary. The argv shapes differ on purpose; only the output is compared.
+
+## What the seventh comparison row was actually hiding
+
+The both-engines harness answered six rows identical and then differed on
+the seventh. The divergence itself was one line — a `workspace:` print in
+a read-only lane — and it took ten minutes to fix. What took the rest of
+the day was the question it raised: *why did six rows agree?*
+
+The answer is that a comparison row runs against whatever the live
+workspace happens to contain, and this one contained `count=2`. Two
+renders as `2` whether the number arrived as a Python int or as a Go
+float64. Every other value in that report was a string. So the row was
+byte-identical for a reason that had nothing to do with the code being
+right, and `count=1000000` — which renders `1e+06` through Go's default
+verb — would have differed on the same line the same day.
+
+That is the general shape, and it is worth stating plainly because the
+comparison harness is the most persuasive instrument this port has:
+
+> A differential over PRODUCTION DATA tests the code against the values
+> that data happens to hold. Agreement is evidence about the corpus at
+> least as much as about the code.
+
+The fix for the render is the one this port keeps arriving at: the bug
+was in the DECODE, not in the format verb. A plain `json.Unmarshal` into
+`[]map[string]any` types every number as float64, and a float64 has
+already forgotten whether it was written with a decimal point. Fixing the
+verb would have moved the wrongness somewhere else. Decoding with
+`UseNumber` keeps the literal, and `pyval.Str` then makes the int/float
+call the way `json.loads` made it.
+
+`UseNumber` needs a `json.Decoder`, and a Decoder is not a drop-in for
+`json.Unmarshal`: it stops at the end of the first value, where Unmarshal
+refuses trailing content and `json.loads` raises `Extra data`. Reaching
+for a Decoder therefore silently widened what counts as a well-formed
+row. `decoderAtEOF` carries that strictness across, and has its own
+four-case pin — a reminder that a mechanical-looking substitution can
+change a behaviour nobody was thinking about.
+
+### Twelve fixtures, four of which are the test
+
+The friction-summary differential has twelve rows. Eight of them pass
+against the *broken* code once `UseNumber` is in place, because
+`json.Number`'s default rendering agrees with Python for every literal
+already spelled the way Python respells it — and most literals are.
+
+The four that discriminate are the ones CPython RE-SPELLS:
+
+| literal | `json.loads` → `str` | `%v` over `json.Number` |
+|---|---|---|
+| `1e21` | `1e+21` | `1e21` |
+| `1.50` | `1.5` | `1.50` |
+| `-0` | `0` | `-0` |
+| `null` | `None` | `<nil>` |
+
+Without those four rows the render fix survives its own mutation. The
+battery said so: the first run of it reported `MI-1 SURVIVED`, and the
+finding was not in the code but in the fixtures.
+
+## A resolution that was never measured, and a comment that said it was
+
+Chasing the mkdir question one level down led to
+`config.workspace_root()`, which is `Path(val).expanduser().resolve()`.
+The port did the `expanduser` half. A comment on the Go function recorded
+the omission as a decision:
+
+> Python also calls .resolve() on the workspace... Deliberately NOT
+> ported: it only changes an answer when a caller chdirs between two
+> resolutions, and resolving symlinks here would make Go disagree with
+> Python about which path STRING a probe should assert — the thing that
+> rule is for. Named so the next reader knows it was a decision.
+
+Both grounds are false, and measurably so:
+
+- `.resolve()` absolutizes a relative path, follows symlinks, and pops
+  `..` against the followed path. A workspace given as `./ws`, or reached
+  through a symlink, differs on the FIRST resolution. Nobody has to
+  chdir.
+- Python resolves. So *not* resolving is what made the two runtimes
+  disagree about the string. Porting the call is what makes a probe's
+  assertion mean the same thing on both sides.
+
+The comment is the interesting part. It is specific, it cites the right
+standing rule, and it reads exactly like a considered decision — which is
+what let it survive a review round. What it never had was a fixture. And
+it could not have had one that failed, because every test in the suite
+set `MARO_WORKSPACE` to a `t.TempDir()` path: absolute, symlink-free,
+already clean. On such a path, resolving and not resolving give the same
+answer.
+
+> **L52.** A decision recorded as deliberate is still a claim. The
+> comment's confidence is not evidence, and neither is a green suite when
+> every fixture sits on the side of the input space where the two
+> candidate behaviours agree. Ask what input would tell them apart, then
+> check whether the corpus contains one.
+
+This is L28's other half again — *wrong at birth, not by decay* — but
+about a rationale rather than a count, and it is worse in one specific
+way: a stale enumeration is falsified by reading the file, while a stale
+rationale is falsified only by running something.
+
+### Two bugs in the primitive underneath
+
+`pypath.Realpath` already existed, documented as
+`os.path.realpath(strict=False)`, and had been through an adversarial
+round that fixed its cycle handling. It was built on `filepath.Abs`, then
+`EvalSymlinks` on the parent, then a walk of the final component's links.
+Under the existing differential — a farm of `<dir>/<name>` entries, one
+component, under a directory that exists — that is indistinguishable from
+the real thing. Two components tell them apart immediately:
+
+| path | CPython | this port |
+|---|---|---|
+| `<r>/missing/a/b` | `<r>/missing/a/b` | *refused* |
+| `<r>/deeplink/..` (deeplink → `<r>/real/deep`) | `<r>/real` | `<r>` |
+
+The first is the function's own documented failure mode — its comment
+says callers read a refusal as "no such path" and skip work CPython
+performs — reached by a path that simply does not exist yet, which is the
+ordinary case for a workspace root, not an exotic one. The second is
+`filepath.Abs` calling `Clean`: `..` collapsed lexically before any link
+was followed, where CPython pops the ALREADY-RESOLVED path.
+
+Both are gone now, by translating CPython 3.14's `posixpath.realpath`
+rather than approximating it again: a stack of unresolved parts, a `path`
+that is absolute throughout, and a `seen` map with three states (absent /
+unresolved / cached). Thirty rows in the differential, and the anti-vacuity
+check requires CPython itself to have produced the two discriminating
+answers before any comparison runs.
+
+One mutation survived — replacing CPython's `part_count` with the stack
+length — and it survived because it is genuinely equivalent: the marker
+entries only write to `seen`, never to `path`. The comment I had written
+claimed conflating them "is how a marker gets processed as a path
+component", which the battery falsified. That correction is in the file,
+because a comment that asserts a mechanism is a claim like any other, and
+this port has now been wrong about one twice in one chunk.
+
+### And a third private copy of expanduser
+
+The differential was written to cover `workspace_root` and `_maro_dir`
+*together*, since the two differ by exactly that one `.resolve()` call and
+a test covering only one cannot tell a missing resolve from a spurious
+one. That pairing immediately caught something neither function was
+suspected of:
+
+    MARO_USER_DIR=<w>/real/     py  <w>/real     go  <w>/real/
+
+`config.expandUser` was built on `filepath.Join`, which Cleans. Python's
+`Path(val).expanduser()` normalises (a trailing slash goes, `//`
+collapses) but does NOT remove `..`. `Workspace()` hid this, because
+`.resolve()` runs afterwards and washes it out on any tree without a
+symlink in the way. `Home()` has no second chance — and `Home()` is where
+the user config tier is read from.
+
+It was the third private implementation of one Python operation in this
+tree, which is the defect `pypath`'s own package doc names. It is now a
+call into `pypath`.

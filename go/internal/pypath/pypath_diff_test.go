@@ -3,6 +3,7 @@ package pypath
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -284,5 +285,147 @@ func TestRealpathMatchesCPythonOnCyclesAndDeepChains(t *testing.T) {
 		if got != w {
 			t.Errorf("Realpath(%s)\n go: %q\n py: %q", n, got, w)
 		}
+	}
+}
+
+// pyRealpathTableSrc is the SECOND Realpath probe, and it exists because
+// the first one asks only about single-component paths under a directory
+// that already exists. Every entry in that farm is `<dir>/<name>`, so it
+// could not see either of the two things this one is about:
+//
+//   - a MISSING intermediate component. CPython keeps resolving lexically
+//     past it; a resolver built on filepath.EvalSymlinks cannot, because
+//     EvalSymlinks fails outright on a path that is not there.
+//   - `..` AFTER a symlink. CPython follows the link and then pops the
+//     resolved path, so a link pointing DEEPER than itself answers its
+//     target's parent. Anything that cleans the path first — filepath.Abs
+//     does, and so does filepath.Clean — pops the LINK's parent instead
+//     and lands somewhere else entirely.
+//
+// Both matter here and not only in the abstract: config.workspace_root()
+// is `Path(val).expanduser().resolve()` over an operator-supplied
+// MARO_WORKSPACE, which is exactly a path that may not exist yet and may
+// be reached through a symlink.
+//
+// (Measured first: Path.resolve() and os.path.realpath(strict=False)
+// agree on all 24 rows of this table on 3.14.3, so the probe may ask the
+// cheaper of the two.)
+const pyRealpathTableSrc = `
+import json, os, os.path, sys
+
+root = sys.argv[1]
+os.makedirs(os.path.join(root, "real", "deep"), exist_ok=True)
+open(os.path.join(root, "real", "deep", "file.txt"), "w").close()
+
+def link(name, target):
+    p = os.path.join(root, name)
+    if not os.path.islink(p) and not os.path.exists(p):
+        os.symlink(target, p)
+
+link("link_to_real", os.path.join(root, "real"))
+link("link_to_missing", os.path.join(root, "nope"))
+link("deeplink", os.path.join(root, "real", "deep"))
+link("updown", "../real/deep")
+link("loop_a", os.path.join(root, "loop_b"))
+link("loop_b", os.path.join(root, "loop_a"))
+# A link whose target passes THROUGH a directory that does not exist, and
+# a dangling link with real components after it -- the middle-of-path
+# shapes the single-component farm cannot express.
+link("via_missing", os.path.join(root, "gone", "onward"))
+link("dangle_mid", os.path.join(root, "nowhere"))
+
+os.chdir(sys.argv[2])
+print(json.dumps([os.path.realpath(p, strict=False)
+                  for p in json.loads(sys.argv[3])]))
+`
+
+func TestRealpathMatchesCPythonOnMissingComponentsAndDotDot(t *testing.T) {
+	root := t.TempDir()
+	// The probe chdirs here for the relative rows; the Go side chdirs to
+	// the same place, so "relative to cwd" means one thing in this test.
+	cwd := filepath.Join(root, "real")
+
+	type row struct{ name, in string }
+	rows := []row{
+		{"an absolute existing dir", root + "/real"},
+		{"an absolute missing dir", root + "/missing"},
+		{"a missing dir several levels deep", root + "/missing/a/b"},
+		{"a relative path", "./relws"},
+		{"a bare relative name", "relws"},
+		{"a parent-relative path", "../relws"},
+		{"dot segments through an existing dir", root + "/real/deep/../other"},
+		{"dot segments through a missing dir", root + "/gone/../other"},
+		{"a symlink to a directory", root + "/link_to_real"},
+		{"a symlink to a missing target", root + "/link_to_missing"},
+		{"a symlink with a suffix under it", root + "/link_to_real/deep"},
+		{"a trailing slash", root + "/real/"},
+		{"a doubled slash", root + "//real"},
+		{"a symlink loop", root + "/loop_a"},
+		{"a path through a FILE", root + "/real/deep/file.txt/under"},
+		{"the root directory", "/"},
+		{"a single dot", "."},
+		// The discriminating pair. deeplink -> <root>/real/deep, so
+		// follow-then-pop answers <root>/real while clean-then-follow
+		// answers <root>.
+		{"dot-dot after a symlink pointing deeper", root + "/deeplink/.."},
+		{"dot-dot twice after that symlink", root + "/deeplink/../.."},
+		{"a relative symlink target with its own dot-dot", root + "/updown"},
+		{"more dot-dots than components", root + "/../../../../../../../../.."},
+		{"dot-dot at the filesystem root", "/.."},
+		{"dot-dot through a symlink to a missing target", root + "/link_to_missing/.."},
+		{"an empty component in the middle", root + "/real//deep"},
+		{"a single-dot component in the middle", root + "/real/./deep"},
+		{"a leading double slash", "//" + strings.TrimPrefix(root, "/") + "/real"},
+		{"the empty string", ""},
+		{"a symlink whose target passes through a missing dir", root + "/via_missing"},
+		{"a dangling symlink with components after it", root + "/dangle_mid/a/b"},
+		{"dot-dot after a dangling mid-path symlink", root + "/dangle_mid/a/.."},
+	}
+
+	ins := make([]string, len(rows))
+	for i, r := range rows {
+		ins[i] = r.in
+	}
+	var want []string
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyRealpathTableSrc, &want,
+		root, cwd, pyprobe.Arg(t, ins))
+	if len(want) != len(rows) {
+		t.Fatalf("probe answered %d rows, want %d", len(want), len(rows))
+	}
+
+	// Anti-vacuity, from CPython's own answers: this table is worthless
+	// unless the two discriminating rows actually landed where
+	// follow-then-pop puts them. If the farm failed to build, deeplink is
+	// not a link, and both rows would come back as the lexical answer —
+	// agreeing with a wrong implementation.
+	byName := map[string]string{}
+	for i, r := range rows {
+		byName[r.name] = want[i]
+	}
+	for _, check := range []struct{ name, want string }{
+		{"dot-dot after a symlink pointing deeper", root + "/real"},
+		{"dot-dot twice after that symlink", root},
+		{"a missing dir several levels deep", root + "/missing/a/b"},
+	} {
+		// Looked up by NAME, not by index. An earlier version pinned
+		// positions 17 and 18, which silently stops guarding the moment a
+		// row is inserted above them — and rows were inserted above them.
+		if got, ok := byName[check.name]; !ok || got != check.want {
+			t.Fatalf("the fixture tree did not produce the case this test is "+
+				"about: %q -> %q (want %q)", check.name, got, check.want)
+		}
+	}
+
+	t.Chdir(cwd)
+	for i, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			got, ok := Realpath(r.in)
+			if !ok {
+				t.Fatalf("Realpath(%q) refused; CPython answers %q", r.in, want[i])
+			}
+			if got != want[i] {
+				t.Errorf("Realpath(%q)\n go: %q\n py: %q", r.in, got, want[i])
+			}
+		})
 	}
 }
