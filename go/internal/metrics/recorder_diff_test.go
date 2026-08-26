@@ -92,6 +92,16 @@ func TestRecordStepCostMatchesCPython(t *testing.T) {
 		// negative cost_usd into the ledger the budget gate sums.
 		{StepText: "write the report", TokensIn: 100, TokensOut: 100,
 			Status: "blocked", ProviderCostUSD: -5, LoopID: "loop-c"},
+		// ZERO TOKENS WITH A REAL PROVIDER COST — the row that made
+		// estimated_cost_usd a pointer in the first place. llm.py:834's
+		// `input_tokens or 0` estimates 0.0 for a row the provider still
+		// billed for, so the two fields disagree and the estimate must still
+		// be PRESENT and spelled "0.0", not omitted and not the int 0. Every
+		// other case here carries non-zero tokens, so the reachable row that
+		// motivated the pointer was not in the differential.
+		{StepText: "cached completion", TokensIn: 0, TokensOut: 0,
+			Status: "done", Model: "claude-sonnet-4-6",
+			ProviderCostUSD: 0.4237, LoopID: "loop-z"},
 		// A provider cost of exactly zero is the estimate lane: the test is
 		// `> 0`, not `is not None`.
 		{StepText: "check the mail", TokensIn: 10, TokensOut: 10,
