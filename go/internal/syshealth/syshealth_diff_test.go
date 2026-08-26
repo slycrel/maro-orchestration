@@ -634,8 +634,20 @@ func syCases() []syCase {
 		// get wrong. Every other fixture narrates at most once.
 		{name: "C35 two silences narrate in declaration order",
 			probes: `[["p1", ` + sip + `], ["p2", {"status": "SILENT", "evidence": "also quiet"}]]`},
-		// The only fixture where the 200-char error clip does anything: the
-		// int() message embeds the repr of the whole offending string.
+		// One of the three fixtures that reach the 200-CODE-POINT error clip
+		// (C36 here, C39's non-ASCII cycle, C47's long config message).
+		//
+		// r2 corrected what this comment used to claim. CPython does NOT
+		// embed the repr of the whole offending string: PyErr_Format uses
+		// `%.200R`, so the repr is truncated to 200 code points and the
+		// message tops out at 240 characters — losing the repr's own
+		// closing quote for any value of 199 characters or more. Measured
+		// on 3.14.3, `str(e) == prefix + repr(s)[:200]` exactly, for ASCII,
+		// Latin-1, astral and quote-containing values alike. The port built
+		// the message from an untruncated repr; that is fixed in
+		// pyval.intFromString and pinned there, not here, because it is not
+		// observable from this module: every clip taken here is 120 or 200,
+		// and the two messages agree on their first 240 characters.
 		{name: "C36 an int() message longer than 200 chars is clipped",
 			probes: `[["p1", ` + okp + `]]`,
 			prior:  `{"cycle": "` + strings.Repeat("z", 300) + `", "processes": {}}`},
@@ -820,8 +832,13 @@ func TestSystemHealthMatchesCPython(t *testing.T) {
 	// branches — the ones a tolerant port would replace with a placeholder.
 	// `narrated` covers the edge-trigger: a port that never narrates and a
 	// fixture set that never transitions look identical from here.
-	// `wroteFile` covers the write itself — C22 and C27 both answer
-	// `"file": null`, and a port that wrote nothing ever would match them.
+	// `wroteFile` covers the write itself — the fixtures that write nothing
+	// answer `"file": null` (C27 and C44 among them), and a port that wrote
+	// nothing EVER would match every one of them. r2 caught this comment
+	// naming C22 instead: C22 SEEDS a corrupt snapshot and aborts at the
+	// counter, so its `file` is the seeded text, not null. A guard justified
+	// by a fixture that does not do what the justification says is the r1
+	// F10 class again — a stated observation nobody re-derived.
 	// It counts snapshots carrying THIS cycle's frozen stamp, not merely
 	// files that exist; see the count site.
 	if raised < 3 {
@@ -1058,11 +1075,10 @@ func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 	}
 }
 
-
 // TestSummaryToDictKeepsCPythonsInsertionOrder pins the one contract the
 // differential is structurally unable to see. syGo routes every summary
 // through a Go map on its way to encoding/json, and a Go map has no order,
-// so all 46 cycle fixtures would pass with the keys emitted in any order at
+// so all 47 cycle fixtures would pass with the keys emitted in any order at
 // all. r1 found the cost of that blind spot: ToDict's doc asserted insertion
 // order while battery mutant M6 was labelled "the summary key order changes
 // — equivalent, nothing reads it", two opposite claims with nothing
@@ -1147,7 +1163,6 @@ func TestRunAndPersistDiscardsNarrationsWhenTheWriteFails(t *testing.T) {
 			"(message: %q)", n, sum.Error)
 	}
 }
-
 
 // TestWriteSnapshotCreatesTheMemoryDirTheWayPathMkdirDoes guards r1's F3.
 // Python's Path.mkdir passes 0o777 and lets the process umask narrow it, so

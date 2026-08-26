@@ -44,6 +44,7 @@ package syshealth
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -277,12 +278,26 @@ func asDict(v any) (pyval.Obj, bool) {
 	return nil, false
 }
 
+// asList carries a []string arm because pyval does: Truthy, TypeName and
+// Repr all call a []string a Python list (str.go:283, pyops.go, str.go:102),
+// and r2 found the one site where leaving it out diverged — a process
+// `status` of []string fell to the rank switch's `default` and ranked 3,
+// where CPython raises the unhashable-key TypeError. pyval knows exactly two
+// Go-native container shapes, `map[string]any` and `[]any`/`[]string`, so
+// with this arm the pair covers the hand-built-caller lane completely rather
+// than merely claiming to.
 func asList(v any) (pyval.List, bool) {
 	switch t := v.(type) {
 	case pyval.List:
 		return t, true
 	case []any:
 		return pyval.List(t), true
+	case []string:
+		out := make(pyval.List, len(t))
+		for i, s := range t {
+			out[i] = s
+		}
+		return out, true
 	}
 	return nil, false
 }
@@ -503,14 +518,30 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 //	"41" / 41 / 2.9 / True          -> that value + 1, TRUNCATED toward zero
 //	"abc"                           -> ValueError, and the whole cycle aborts
 //	[1] / {"a": 1}                  -> TypeError, likewise
+//	9223372036854775807 / 1e19      -> REFUSED, a known gap; CPython computes
 //
-// The last two lanes are why this returns an error instead of defaulting: a
+// The middle two lanes are why this returns an error instead of defaulting: a
 // port that quietly restarted the counter on a corrupt value would write a
 // snapshot CPython refuses to write. They are DIFFERENT exception classes
 // with different messages, and the summary carries the message, so both are
 // pinned — fixtures C36/C37 (ValueError), C40/C41 (TypeError), C42 (True is
 // an int, not a rejection). r1 found the TypeError arm named here and reached
 // by nothing, which is a doc claiming coverage the fixtures did not have.
+//
+// The FOURTH lane is this port's own, and r2 found it unnamed: CPython's int
+// is arbitrary precision, so a counter at 9223372036854775807 simply becomes
+// 9223372036854775808 and the snapshot is written. A Go int cannot hold that,
+// and `n + 1` WRAPS silently — it would durably write -9223372036854775808,
+// which is the one outcome pyval.ErrIntTooLarge's own doc forbids for a
+// value that gets WRITTEN ("it refuses and skips the write rather than
+// emitting a number CPython would never produce"). So the increment is
+// range-checked and takes the refusal, which is the lane a counter PAST
+// int64 already took through pyval.Int. It is a known gap, not a fix:
+// knowngap_test.go asserts the divergence so closing it fails a test.
+//
+// The asymmetry is worth naming: RenderSnapshot prints such a counter
+// correctly, because pyval.reprNumber keeps an integer literal verbatim
+// rather than forcing it through an int64. Only the WRITER is bounded.
 func nextCycle(snapshot pyval.Obj) (int, error) {
 	v, ok := snapshot.Get("cycle")
 	if !ok || !pyval.Truthy(v) {
@@ -519,6 +550,9 @@ func nextCycle(snapshot pyval.Obj) (int, error) {
 	n, err := pyval.Int(v)
 	if err != nil {
 		return 0, err
+	}
+	if n == math.MaxInt {
+		return 0, pyval.ErrIntTooLarge
 	}
 	return n + 1, nil
 }
@@ -589,7 +623,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 			} else {
 				rank[i] = 3
 			}
-		case pyval.List, pyval.Obj, []any, map[string]any:
+		case pyval.List, pyval.Obj, []any, []string, map[string]any:
 			// `order.get(unhashable)` is a TypeError, not a miss. Ported for
 			// the same reason as the AttributeErrors above: the alternative
 			// is inventing a rank CPython never computes.

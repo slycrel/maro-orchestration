@@ -316,9 +316,14 @@ MUTANTS = [
     ("M76", "the offending type is hard-coded as str",
      "\"'%s' object has no attribute 'get'\", pyval.TypeName(f.Val))",
      "\"'%s' object has no attribute 'get'\", \"str\")"),
-    ("M77", "an unhashable status falls to rank 3 instead of raising",
-     "\t\tcase pyval.List, pyval.Obj, []any, map[string]any:",
-     "\t\tcase pyval.List, []any:"),
+    # r2 moved this site: the arm gained []string. M77 keeps its own job —
+    # dropping the DICT spellings — and M108 covers the []string one, so the
+    # two do not overlap. The stale site cost a battery-bug row, which is the
+    # detector working: a mutant whose site has moved matches zero times and
+    # is reported as a bug rather than silently counted as caught.
+    ("M77", "an unhashable DICT status falls to rank 3 instead of raising",
+     "\t\tcase pyval.List, pyval.Obj, []any, []string, map[string]any:",
+     "\t\tcase pyval.List, []any, []string:"),
     ("M78", "SILENT and OK swap places in the ordering",
      "order := map[string]int{Silent: 0, Unknown: 1, OK: 2}",
      "order := map[string]int{Silent: 2, Unknown: 1, OK: 0}"),
@@ -393,12 +398,27 @@ MUTANTS = [
      "\tif snap == nil {\n\t\t// The cycle aborted", "\tif false {\n\t\t// The cycle aborted"),
 
     # --- asDict / asList ---------------------------------------------------
-    # EQUIVALENT-BY-CONSTRUCTION, both of them, and labelled rather than
-    # deleted: pyval's decoder never produces a Go map or a []any, so no
-    # fixture can reach these arms without a hand-built caller, and there is
-    # no hand-built caller in the tree yet. They exist because every pyval
-    # helper this package calls in the same breath accepts both spellings
-    # (r1 F9), and the day a caller appears the arms are already right.
+    # M103/M104/M105 are EQUIVALENT-BY-CONSTRUCTION and labelled rather than
+    # deleted: pyval's decoder never produces a Go map, so no fixture can
+    # reach asDict's map arm at all. They exist because every pyval helper
+    # this package calls in the same breath accepts both spellings (r1 F9).
+    #
+    # r2 added a hand-built caller (knowngap_test.go), and these three still
+    # survive — which is the point of re-stating the reason rather than
+    # leaving the old one standing. That caller hands in a []string and a
+    # pyval.Obj; it reaches asList's NEW arm (M107 catches it) and the rank
+    # switch (M108), and it does not touch asDict's map arm or asList's
+    # []any arm, both of which the type switch above them already matches
+    # directly. "There is no hand-built caller yet" would now be false, and
+    # a survivor's label is only worth what its reason is worth.
+    #
+    # r2 falsified the sentence that used to end this comment — "the day a
+    # caller appears the arms are already right". They were not: []string was
+    # missing, and pyval calls a []string a list in Truthy, TypeName and
+    # Repr. M107/M108 are the guards for the arms that closed it, and they
+    # are expected CAUGHT, not equivalent, because knowngap_test.go is the
+    # hand-built caller. A label is a claim; this one was checkable and
+    # wrong.
     ("M103", "asDict rejects a plain map",
      "\tcase map[string]any:\n\t\tkeys := make([]string, 0, len(t))",
      "\tcase map[string]any:\n\t\treturn nil, len(t) < 0\n\tcase map[string]string:\n\t\tkeys := make([]string, 0, len(t))"),
@@ -411,6 +431,25 @@ MUTANTS = [
     ("M105", "asDict does not sort a plain map's keys, so its order is "
      "whatever the runtime feels like",
      "\t\tsort.Strings(keys)", "\t\t_ = sort.Strings"),
+
+    # --- r2 -----------------------------------------------------------------
+    ("M107", "asList drops its []string arm, so pyval calls a []string a "
+     "list and this package does not",
+     "\tcase []string:\n\t\tout := make(pyval.List, len(t))",
+     "\tcase []int:\n\t\tout := make(pyval.List, len(t))"),
+    ("M108", "the unhashable-key arm drops []string, so a []string status "
+     "falls to default and RANKS 3 where CPython raises",
+     "\t\tcase pyval.List, pyval.Obj, []any, []string, map[string]any:",
+     "\t\tcase pyval.List, pyval.Obj, []any, map[string]any:"),
+    ("M109", "the cycle increment is not range-checked, so a counter at "
+     "MaxInt64 WRAPS and a negative cycle is written",
+     "\tif n == math.MaxInt {\n\t\treturn 0, pyval.ErrIntTooLarge\n\t}",
+     "\tif n == math.MaxInt {\n\t\t_ = pyval.ErrIntTooLarge\n\t}"),
+    # EQUIVALENT-BY-CONSTRUCTION: pyval.Int already refuses anything ABOVE
+    # MaxInt, so `>=` and `==` select the same set. Kept because the guard
+    # reads as if it were a bounds check and the next reader will wonder.
+    ("M110", "the range check uses >= instead of ==",
+     "\tif n == math.MaxInt {", "\tif n >= math.MaxInt {"),
 ]
 
 # M58 and M83 reference helpers that do not exist in the original — a mutant

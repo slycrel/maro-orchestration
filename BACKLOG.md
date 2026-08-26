@@ -78,11 +78,23 @@ fabricated claim.
    different check that agrees most of the time. L46 in its purest form,
    with an unbounded divergence count.
 
-**Not blocking now.** `artifact_check`'s layers 1 and 3 (missing-artifact,
-execution-contradiction) are pure string and filesystem work, so the tranche
-is takeable with layer 2 excluded and NAMED in the package doc — the same
-discipline `check_system_health`'s environment probes got. The full write-up
-is in `go/PORT.md`, last section.
+**Not blocking now, and SMALLER than first stated (measured 2026-08-26).**
+The first version of this entry said layer 2 was out of scope. Capturing the
+ground truth says something better: **layer 2 is portable except for the one
+predicate.** Patching `_python_is_inert` with a scripted per-file answer lets
+a probe measure the whole of `_python_candidates` and `_inert_output_verdict`
+— the two-part claim gate, candidate collection, dedup by resolved path, all
+three fail-open returns — with `ast` nowhere in the picture. 191 fixtures
+were captured that way before any Go was written.
+
+So the Go seam is an injected predicate,
+`IsInert func(source string) (inert bool, known bool)`, and roughly **twenty
+lines** of CPython stay un-portable, not 735. The boundary is still real and
+the decision is still yours; what changes is its size. Option 2 shrinks to
+one question about one file rather than a module living behind a subprocess,
+and option 1 leaves a predicate in Python rather than a check.
+
+The full write-up is in `go/PORT.md`.
 
 ### system_health.render_snapshot dies on a hand-edited snapshot (FOUND 2026-08-26, go-port system_health slice 1)
 

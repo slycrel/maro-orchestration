@@ -403,11 +403,34 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 51*
+*instances: 56*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
 removed from the list.
+
+**The other half: an enumeration can be wrong at BIRTH, not only by decay.**
+Found by r2 of `internal/syshealth` (2026-08-26), where four of five
+findings were this and none of them had drifted. `nextCycle`'s doc said
+"three lanes" and there were four — the missing one silently wrapped a
+counter past int64 and WROTE the negative. `asDict`/`asList`'s doc ended
+"the day a caller appears the arms are already right"; `[]string` was
+missing, and `pyval` calls a `[]string` a list in three helpers. A fixture
+comment said "the only fixture where the 200-char clip does anything" when
+three fixtures reach it — and correcting it uncovered a real unported
+`%.200R` truncation in `pyval.intFromString`. Two counts in `PORT.md` were
+off (five constants for seven, 37 fixtures for 47), and a guard's
+justification named a fixture that does not do what the justification says.
+
+Decay needs history to diagnose. This does not, and the check is mechanical:
+
+> **For every number a comment states, count it against the file as it
+> stands today.** Not against the diff, not against what it said last
+> round — against the file.
+
+Six numbers were stated in that chunk; six had never been counted; four were
+wrong. Counting them took minutes and one of the four led to a fix in a
+shared primitive eleven packages call. Cheapest lens in the list.
 
 ### L29 — An idiom is not a defect — the defect is a spelling that does not match the spelling at ITS OWN site
 *instances: 2*

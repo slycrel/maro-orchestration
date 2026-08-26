@@ -78,6 +78,22 @@ var (
 //     would never produce.
 var ErrIntTooLarge = errors.New("pyval: integer past the int64 range")
 
+// intReprLimit is the `%.200R` in CPython's own PyErr_Format for the
+// invalid-literal ValueError: the REPR of the offending value is truncated
+// to 200 CODE POINTS before the message is built, so the message tops out
+// at 240 characters and — for a value of 199 characters or more — loses the
+// repr's own closing quote. Measured on 3.14.3, where
+// `str(e) == "invalid literal for int() with base 10: " + repr(s)[:200]`
+// holds exactly for ASCII, Latin-1, astral and quote-containing values.
+//
+// The port built the message from an UNTRUNCATED repr, which agreed with
+// CPython for every short value and diverged past 199. Found by r2 of
+// syshealth, where it is NOT observable — every clip that module takes is
+// 120 or 200 code points, and the two messages share their first 240 — but
+// this helper is shared, and the next caller to surface the message whole
+// would have carried the divergence with it.
+const intReprLimit = 200
+
 // Int is CPython's int(v), with the exception CLASS when it raises.
 //
 // Truncation is toward zero for floats (int(2.9) == 2, int(-2.9) == -2),
@@ -116,7 +132,7 @@ func Int(v any) (int, error) {
 			// so reaching here means something else.
 			return 0, &PyErr{Class: "ValueError",
 				Msg: fmt.Sprintf("invalid literal for int() with base 10: %s",
-					Repr(t.String()))}
+					Clip(Repr(t.String()), intReprLimit))}
 		}
 		// ErrRange already produced the correctly-signed ±Inf, which is
 		// what CPython's float() gives for 1e400 — and int(inf) is an
@@ -160,7 +176,8 @@ func intFromFloat(f float64) (int, error) {
 func intFromString(s string) (int, error) {
 	bad := func() (int, error) {
 		return 0, &PyErr{Class: "ValueError",
-			Msg: "invalid literal for int() with base 10: " + Repr(s)}
+			Msg: "invalid literal for int() with base 10: " +
+				Clip(Repr(s), intReprLimit)}
 	}
 	t := pytext.Strip(s)
 	if t == "" {

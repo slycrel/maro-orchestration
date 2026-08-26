@@ -946,3 +946,99 @@ func TestIntLiteralMatchesCPython(t *testing.T) {
 		}
 	}
 }
+
+// pyIntMsgSrc asks CPython for the invalid-literal ValueError MESSAGE, and
+// nothing else. It is separate from pyIntSrc because the values it needs are
+// hundreds of characters long and `eval` is the wrong door for them: these
+// are strings handed to int() verbatim, not expressions.
+const pyIntMsgSrc = `
+import json, sys
+out = []
+for s in json.loads(sys.argv[1]):
+    try:
+        int(s)
+        out.append({"raised": False, "msg": ""})
+    except ValueError as e:
+        out.append({"raised": True, "msg": str(e)})
+print(json.dumps(out))
+`
+
+// TestIntInvalidLiteralMessageIsTruncatedTheWayCPythonTruncatesIt pins the
+// `%.200R` in CPython's PyErr_Format.
+//
+// The port built the message from an untruncated repr, which agrees with
+// CPython for every value short enough to matter and diverges at 199
+// characters — where CPython's message stops at 240 characters and drops
+// the repr's own closing quote. r2 of syshealth found it while checking a
+// fixture comment that asserted the opposite ("the int() message embeds the
+// repr of the whole offending string"). It was not observable there, since
+// every clip that module takes is 120 or 200 and the two messages agree on
+// their first 240 characters — which is exactly why it needed a test HERE,
+// in the shared helper, rather than a fixture in the module that found it.
+//
+// The truncation is by CODE POINT, not by byte and not by UTF-16 unit: the
+// astral row is the one that tells those three apart.
+func TestIntInvalidLiteralMessageIsTruncatedTheWayCPythonTruncatesIt(t *testing.T) {
+	rows := []struct {
+		name string
+		s    string
+	}{
+		{"short enough that nothing truncates", strings.Repeat("z", 100)},
+		{"exactly at the boundary", strings.Repeat("z", 198)},
+		{"one past the boundary loses the closing quote", strings.Repeat("z", 199)},
+		{"well past the boundary", strings.Repeat("z", 300)},
+		{"latin-1 truncates by code point, not byte", strings.Repeat("é", 250)},
+		{"astral truncates by code point, not UTF-16 unit",
+			strings.Repeat("\U0001F600", 250)},
+		{"an apostrophe flips repr to double quotes first",
+			"a'" + strings.Repeat("z", 250)},
+	}
+	vals := make([]string, len(rows))
+	for i, r := range rows {
+		vals[i] = r.s
+	}
+	var want []struct {
+		Raised bool   `json:"raised"`
+		Msg    string `json:"msg"`
+	}
+	pyprobe.Probe{Stdlib: true}.RunJSON(t, pyIntMsgSrc, &want, pyprobe.Arg(t, vals))
+	if len(want) != len(rows) {
+		t.Fatalf("probe returned %d answers for %d rows", len(want), len(rows))
+	}
+
+	// Anti-vacuity: a row CPython accepts would make the comparison below
+	// trivially pass, and at least one row must actually be truncated —
+	// otherwise this test is a restatement of the untruncated behaviour.
+	truncated := 0
+	for i, w := range want {
+		if !w.Raised {
+			t.Fatalf("row %q did not raise in CPython; every row here is "+
+				"meant to be an invalid literal", rows[i].name)
+		}
+		if len([]rune(w.Msg)) == 240 {
+			truncated++
+		}
+	}
+	if truncated < 4 {
+		t.Fatalf("only %d rows reached CPython's 240-character cap; this "+
+			"test exists for the cap and is not exercising it", truncated)
+	}
+
+	for i, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			_, err := pyval.Int(r.s)
+			var pe *pyval.PyErr
+			if !errors.As(err, &pe) {
+				t.Fatalf("pyval.Int returned %v; CPython raises ValueError", err)
+			}
+			if pe.Class != "ValueError" {
+				t.Fatalf("class %q, CPython says ValueError", pe.Class)
+			}
+			if pe.Msg != want[i].Msg {
+				t.Errorf("message differs\n go: %q (%d runes)\n py: %q (%d runes)",
+					pe.Msg, len([]rune(pe.Msg)),
+					want[i].Msg, len([]rune(want[i].Msg)))
+			}
+		})
+	}
+}

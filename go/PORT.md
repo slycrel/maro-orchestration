@@ -10734,7 +10734,10 @@ that cannot fail.
 
 `internal/syshealth` ports the portable core of the 693-line
 `src/system_health.py`: `load_snapshot`, `_write_snapshot`, `_history_of`,
-the `run_health_probes` cycle, `render_snapshot`, and the five constants.
+the `run_health_probes` cycle, `render_snapshot`, and the seven constants
+(`OK`, `SILENT`, `UNKNOWN`, `HISTORY_KEEP`, `STREAK_FOR_SILENT`,
+`CANDIDATE_STARVATION_HOURS`, `VARIANT_STALE_DAYS` — fixture Z1 compares
+all seven).
 
 The module is the liveness registry for Maro's own dynamic processes — a
 writer whose consumer never runs is the defect class it exists to catch —
@@ -10749,7 +10752,8 @@ module-level list, `DECLARED_PROCESSES`, and the consequence is that the
 cycle **cannot be exercised at all** without monkey-patching it — which is
 precisely what the ground-truth probe does. The Go side takes them as a
 parameter. That is not a convenience: it is the seam that makes the state
-machine testable, and the same seam that made 37 cycle fixtures possible.
+machine testable, and the same seam that made the cycle fixtures possible — 47 of
+them as of r2.
 
 `_narrate_transition` is the other one. `RunCycle` RETURNS the narrations
 it decided on instead of performing them, and the Python's own comment says
@@ -10840,10 +10844,12 @@ appended after the first reallocation was dropped from the written file.
 
 I first wrote here that the differential could not see it. That was a
 guess, and hand-editing a copy into exactly that shape disproved it: every
-cycle fixture fails at once, all thirty-seven reporting `"processes": {}`
-against CPython's populated map. `TestRunCycleKeepsEveryProcessItAppended`
-stays because it names the cause in one line rather than in thirty-seven
-diffs and needs no interpreter — but it is a convenience, not the guard,
+cycle fixture fails at once, all thirty-seven of the day's fixtures
+reporting `"processes": {}` against CPython's populated map (there are 47
+now; the numbers in this paragraph are the measurement as it stood, not a
+current count). `TestRunCycleKeepsEveryProcessItAppended` stays because it
+names the cause in one line rather than in thirty-seven diffs and needs no
+interpreter — but it is a convenience, not the guard,
 and the honest version of this paragraph is the one that got measured.
 
 Same defect class as the retracted `pySeconds` comment two tranches ago:
@@ -11070,6 +11076,132 @@ equivalent-by-construction from earlier rounds, M65 as above, and three
 (M103–M105) for the `asDict`/`asList` map arms, which no fixture can reach
 until a hand-built caller exists.
 
+## The r2 review of `internal/syshealth` — six enumerations, none of them counted
+
+r2 returned five findings: two production divergences, both **low**, and
+three nits. Nothing high, nothing medium, which is what P5 predicts for a
+third pass. What makes the round worth writing down is that **four of the
+five are the same defect**, and it is not a code defect.
+
+Every one of them is a comment that ENUMERATES something — three lanes, the
+arms are already right, the only fixture, five constants, 37 fixtures, C22
+answers `"file": null` — and in every case the number was wrong the day it
+was written. Not decayed. Wrong at birth, in a file whose entire method is
+measuring before claiming.
+
+### F1 — a fourth lane, and the one outcome pyval says is forbidden
+
+`nextCycle`'s doc enumerated three lanes: restart, increment, raise. There
+are four. `cycle` is the one field in this snapshot that is *guaranteed to
+grow* — it is `int(snapshot.get("cycle", 0) or 0) + 1` on every pass — and
+CPython's int is arbitrary precision, so a counter at 9223372036854775807
+simply becomes 9223372036854775808 and the snapshot is written.
+
+The port did `return n + 1`. On a 64-bit int that WRAPS, silently, to
+-9223372036854775808, and then writes it. `pyval.ErrIntTooLarge`'s own doc
+says exactly what a value that gets written must do instead:
+
+> a value that is WRITTEN (the reopen payload's depth) may not. It refuses
+> and skips the write rather than emitting a number CPython would never
+> produce.
+
+So the increment is range-checked and takes the refusal — which is the lane
+a counter *already past* int64 has always taken, through `pyval.Int`. The
+two now agree, and `knowngap_test.go` asserts the divergence in the
+established convention: closing the gap fails a test rather than passing
+unnoticed.
+
+The asymmetry is the part worth keeping in mind: `RenderSnapshot` prints
+such a counter correctly, because `pyval.reprNumber` keeps an integer
+literal verbatim rather than forcing it through an int64. **Only the writer
+is bounded.** The test pins both halves, so a later "fix" that clamps in the
+renderer is caught too.
+
+### F2 — "the day a caller appears the arms are already right"
+
+r1 added `asDict`/`asList` because six sites were asserting `v.(pyval.Obj)`
+inline while every pyval helper called in the same breath also accepts a
+plain `map[string]any`. The comment I wrote for them ended with the sentence
+above. It was a prediction, it was checkable, and it was false.
+
+`pyval` knows exactly two Go-native container shapes, and the list one has
+**two spellings**: `[]any` and `[]string`. `Truthy`, `TypeName` and `Repr`
+all call a `[]string` a Python list. `asList` did not. At five of the six
+sites that costs nothing; at the sixth — the rank switch's unhashable-key
+arm — a process `status` of `[]string` fell past the `TypeError` case into
+`default` and quietly **ranked 3**, where CPython raises
+`cannot use 'list' as a dict key`.
+
+There can be no differential fixture for this: the probe feeds both runtimes
+through JSON, and JSON never produces a `[]string`. It is the hand-built
+caller's lane, and a Go unit test is the only door it has — which is also
+why the original claim went unchecked. **A claim about a lane no fixture can
+reach needs a test written specifically to reach it, or it is decoration.**
+
+### F4 — the nit that was a real bug in a shared primitive
+
+C36's comment said the 200-code-point clip existed because "the `int()`
+message embeds the repr of the whole offending string." Two claims, both
+false. C39 and C47 also reach that clip. And CPython does not embed the
+whole repr: `PyErr_Format` uses `%.200R`, so the repr is truncated to 200
+code points and the message tops out at 240 characters — **losing the
+repr's own closing quote** for any value of 199 characters or more.
+Measured on 3.14.3:
+
+```
+str(e) == "invalid literal for int() with base 10: " + repr(s)[:200]
+```
+
+exactly, for ASCII, Latin-1, astral and quote-containing values alike. The
+truncation is by code point: the astral row is the one that tells code
+points, bytes and UTF-16 units apart.
+
+`pyval.intFromString` built the message from an untruncated repr. That is
+**not observable from `syshealth`** — every clip this module takes is 120 or
+200, and the two messages agree on their first 240 characters — which is
+precisely why it is worth recording. A wrong comment in one module named a
+real divergence in a shared helper that eleven packages call, and the fix
+and its pin live in `pyval`, not here. The finding travelled further than
+the file it was found in.
+
+### The battery, r5: 99/110, and a battery bug the detector was built for
+
+Four new mutants for the r2 fixes — the `[]string` arm in `asList` (M107),
+the `[]string` arm in the rank switch (M108), the range check on the cycle
+increment (M109) — all **caught**. M110 (`>=` for `==` in the range check)
+survives and is labelled EQUIVALENT-BY-CONSTRUCTION: `pyval.Int` already
+refuses anything above `MaxInt`, so the two spellings select the same set.
+
+M77 came back a **battery bug** — "site matches 0 times" — because the F2
+fix moved the line it targeted. That is the P14 detector doing its job one
+level up: a mutant whose site has moved would otherwise have been reported
+as caught forever, and nobody would have noticed the arm it was guarding no
+longer existed in that spelling. Repaired so M77 keeps its own job (dropping
+the DICT spellings) while M108 covers the `[]string` one.
+
+The other thing worth doing while there: **M103/M104/M105's survivor label
+had a reason that r2 falsified.** It said "there is no hand-built caller in
+the tree for them" — and r2 added one, `knowngap_test.go`. They still
+survive, for a different and now-stated reason: that caller hands in a
+`[]string` and a `pyval.Obj`, which the type switches above match directly,
+so it never reaches `asDict`'s map arm or `asList`'s `[]any` arm. A
+survivor's label is only worth what its reason is worth, and this is the
+same lens as the rest of the round.
+
+Final: **99 caught / 110, 0 battery bugs, 11 labelled survivors.**
+
+### What the round is actually about
+
+L28 already says a comment asserting coverage decays. This round is the
+other half of it: **an enumeration can be wrong at birth**, and the check is
+mechanical — count it. Six numbers were stated in this chunk's prose and
+comments; six were never counted; four were wrong. Counting them took
+minutes, and one of the four led to a fix in `pyval`.
+
+The reviewer-facing version, now folded into L28: *for every number a
+comment states, count it against the file as it stands today.* Decay needs
+history to diagnose. This does not.
+
 ## The first thing in this tree that Go cannot port at all
 
 Every divergence recorded above is a decision one runtime makes differently
@@ -11114,9 +11246,106 @@ the first place the port's ceiling is a property of the LANGUAGE rather than
 of how much has been ported. Everything else on the ledger is work;
 this is a boundary.
 
-Worth noting what it does NOT block. `artifact_check`'s layers 1 and 3
-(missing-artifact and execution-contradiction) are pure string and
-filesystem work, and the module is portable minus one function. So the
-tranche is still worth taking — with the exclusion named in the package
-doc, which is the same discipline `check_system_health`'s environment
-probes got.
+Worth noting what it does NOT block, and this got sharper once the ground
+truth was actually captured. The first draft of this paragraph said
+`artifact_check`'s layers 1 and 3 are portable and layer 2 is not. Measuring
+it says something better: **layer 2 is portable except for the one
+predicate.**
+
+Patching `_python_is_inert` with a scripted per-file answer lets the probe
+measure the whole of `_python_candidates` and `_inert_output_verdict` — the
+two-part claim gate, candidate collection, dedup by resolved path, and all
+three fail-open returns — with `ast` nowhere in the picture. 191 fixtures
+were captured that way, before any Go was written (L49). So the Go seam is
+an injected predicate:
+
+```go
+IsInert func(source string) (inert bool, known bool)   // nil = layer 2 off
+```
+
+and roughly **twenty lines** of CPython stay un-portable, not 735. The
+boundary above is real and the decision is still Jeremy's; what changes is
+its size. Option 2 (shell out) shrinks to one question about one file rather
+than a module living behind a subprocess, and option 1 leaves a predicate in
+Python rather than a check.
+
+The exclusion still gets named in the package doc, which is the same
+discipline `check_system_health`'s environment probes got.
+
+
+## Both engines, one workspace, six commands — the first real comparison
+
+Everything above this line is a differential against CPython running
+*fixtures*. This is the other question, and the one the standing goal
+actually asks: point both runtimes at the **live workspace** and see whether
+they say the same thing.
+
+`go/tools/engine-compare.py` does it. Six read-only renderers, both engines,
+byte-compared:
+
+| command | Python entry point | Go | result |
+|---|---|---|---|
+| `metrics` | `cli.py metrics` | `maro metrics` | identical (1,732 B) |
+| `introspect --latest` | `python -m introspect` | `maro introspect --latest` | identical (1,605 B) |
+| `introspect --patterns` | `python -m introspect` | `maro introspect --patterns` | identical (671 B) |
+| `introspect --history 5` | `python -m introspect` | `maro introspect --history 5` | identical (356 B) |
+| `task list` | `python -m task_store` | `maro task list` | identical (**117,489 B**) |
+| `task status` | `python -m task_store` | `maro task status` | identical (47 B) |
+
+**6 identical, 0 differ, 0 refused**, against ~30 directories of real
+workspace data — 117 KB of task rows on the largest, which is a far denser
+sample than any fixture set in this file.
+
+Three things about the harness are load-bearing, and two of them are lessons
+this port paid for already.
+
+**One workspace path, not two.** The obvious design gives each engine its
+own copy so neither can see the other's writes. It also makes every command
+that prints its resolved workspace — `maro inspect` does, deliberately —
+differ on the *path alone*, and the only way to compare them again is to
+normalise the path out. That is L51 exactly: the assertion moves into the
+normaliser. So both engines get the SAME path, and the pristine tree is laid
+down again before each run. Neither can see the other's writes because
+neither is running when the other's tree is created.
+
+**A live reading is elided by SHAPE, on both sides, and reported.** The
+metrics report embeds `Computed: <now>`, and the two engines run seconds
+apart. The first version of this table said `metrics` was identical — it was
+not; the two runs had simply landed in the same second, and the next run
+caught it. The fix is not to strip the line: it is to elide it only when it
+matches a positive shape on *both* sides, require the counts to agree, and
+print what was elided on every run:
+
+```
+metrics   identical (1732 bytes)  [elided metrics report header timestamp
+                                   py='Computed: 2026-08-26T19:29:06Z'
+                                   go='Computed: 2026-08-26T19:29:10Z']
+```
+
+A port that stopped printing its timestamp fails here rather than passing
+quietly. Same discipline as `syElideWriteError` in the syshealth
+differential.
+
+**`~/.maro` is asserted out of reach before anything runs**, and the live
+workspace is only ever the source of a copy. The box's real ledgers were
+overwritten once by a probe that wrote where it read; that is a rule now,
+not a habit.
+
+### What this does and does not show
+
+It shows that on real stored data, the ported readers agree with the Python
+byte for byte — including the JSON-shaped task rows, which is where a
+key-order or float-formatting divergence would surface first, and including
+`metrics`' computed percentages.
+
+It does not exercise the loop, spend a token, or write anything. A
+divergence that only appears while WRITING is invisible here, and that is
+the next harness, not this one. The honest summary is: **the read path is
+comparable and it matches**; the write path has fixtures but no live
+comparison yet.
+
+Also worth recording because it cost ten minutes: `introspect` and `task`
+are their own console entry points in the Python (`maro-introspect =
+introspect:main`, `maro-task = task_store:main`), not `cli.py` subcommands —
+only `metrics` is in `_COMMAND_HANDLERS`. The Go folded all three under one
+binary. The argv shapes differ on purpose; only the output is compared.
