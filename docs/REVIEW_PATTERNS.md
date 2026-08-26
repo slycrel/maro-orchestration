@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 56*
+*instances: 65*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -856,7 +856,39 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 7*
+*instances: 8*
+
+**The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
+arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
+looks like a getter and is not:
+
+```python
+def memory_dir() -> Path:
+    p = workspace_root() / "memory"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+```
+
+`run_health_probes` spells its critical section
+`with locked_write(_snapshot_path())`, so the directory is created while
+CPython is still evaluating the ARGUMENT — before the load, before the probe
+loop. The port had the path as a pure `filepath.Join` and the only `MkdirAll`
+inside the writer, which runs after every probe. Result: on a workspace whose
+`memory/` cannot be created, CPython reports `ran=0` with **zero probes
+called** and the port ran all of them.
+
+Nothing about the Go read as a flattening. There was no collapsed `if`, no
+merged return, no rewritten loop — the divergence was a **side effect that
+lived inside a name**.
+
+> **Read the helpers the original calls, not just the original.** A function
+> whose name is a noun can still mutate the world, and when it does, WHERE it
+> is called is part of the control flow.
+
+Corollary on fixtures: 47 of them shared an unstated assumption ("the memory
+dir exists") because the two that touch it chmod a directory that is already
+there. A shared assumption looks exactly like coverage. When a fixture set
+sets something up the same way every time, that setup is an untested premise.
 
 A port can get every DECISION of the original right and still be wrong,
 because the original's answer depends on the SHAPE the decisions are made
@@ -1031,7 +1063,26 @@ can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
 
 ### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
-*instances: 5*
+*instances: 6*
+
+**Instance 6 is the one no fixture can reach** (syshealth r3, 2026-08-26).
+The first five erased a value or a question on ONE side. This one erased a
+distinction **symmetrically**: `canon` rendered every `json.Number` through
+`Float64()`, so two integers differing only past 2^53 compared equal — and
+because the normaliser runs over BOTH sides, applying it to two agreeing
+sides leaves them agreeing. Adding a big-number fixture does nothing; the
+fixtures added alongside the fix passed against the broken normaliser.
+
+> **A normaliser needs its own test, and it needs both halves: what it MUST
+> equate, and what it must NOT.** Nothing downstream of it can supply
+> either.
+
+The must-not half is the one that gets forgotten, and it is where the
+regression lives. Watch also for the fix that trades one blindness for
+another — canonicalising numbers to bare text would have made the number `1`
+and the string `"1"` compare equal, on a record whose `status`, `evidence`
+and `narrated` fields all hold strings that can be digits. The fix carries a
+`"num:"` prefix for exactly that reason.
 
 A cross-runtime differential almost always has a shim between the two
 answers: something that turns the port's native shapes into whatever the

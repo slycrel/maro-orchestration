@@ -112,6 +112,12 @@ COMMANDS = [
     ("task-status",
      ["python3", "-m", "task_store", "status"],
      ["task", "status"]),
+    # The Go has no `inspector-status` command: it folded that text lane into
+    # `inspect -summary`. Whether the fold is faithful is exactly what this
+    # row asks, so it is here rather than assumed either way.
+    ("inspector-status",
+     ["python3", "src/cli.py", "inspector-status"],
+     ["inspect", "-summary"]),
 ]
 
 

@@ -97,7 +97,7 @@ func TestACycleCounterAtTheInt64CeilingIsRefusedWhereCPythonCountsOn(t *testing.
 	}
 }
 
-// TestAStringSliceIsALiSTEverywherePyvalSaysItIs closes the arm r2 found
+// TestAStringSliceIsAListEverywherePyvalSaysItIs closes the arm r2 found
 // missing from asList.
 //
 // pyval knows exactly two Go-native container shapes — `map[string]any` for

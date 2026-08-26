@@ -11202,6 +11202,134 @@ The reviewer-facing version, now folded into L28: *for every number a
 comment states, count it against the file as it stands today.* Decay needs
 history to diagnose. This does not.
 
+## The r3 review of `internal/syshealth` — a mkdir hiding inside a path
+
+Eleven findings, and the first one is the arc's first **high**. Rounds three
+and four are supposed to converge to lows; this one did not, and the reason
+is worth more than the fix.
+
+### F1 — `config.memory_dir()` is not a getter
+
+```python
+def memory_dir() -> Path:
+    p = workspace_root() / "memory"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+```
+
+The directory comes into existence **as a side effect of asking for the
+path**. `_snapshot_path()` calls it, and `run_health_probes` spells its
+critical section
+
+```python
+with locked_write(_snapshot_path()):
+```
+
+so the mkdir happens while Python is still evaluating the ARGUMENT — before
+`load_snapshot`, before the probe loop, before anything. The port had
+`SnapshotPath` as a pure `filepath.Join` and the only `MkdirAll` inside
+`WriteSnapshot`, which runs *after* every probe.
+
+Measured on CPython 3.14.3 against a workspace whose `memory/` cannot be
+created:
+
+| | CPython | the port |
+|---|---|---|
+| read-only workspace root | `ran=0, silent=[]`, **0 probes called** | `ran=2, silent=["p1","p2"]`, 2 probes called |
+| `memory` shadowed by a file | `ran=0, silent=[]`, **0 probes called** | `ran=2, silent=["p1"]`, 2 probes called |
+
+Two runtimes disagreeing about whether seven live-store probes execute at
+all. Every decision in the module was right; the SHAPE was wrong — L48 at
+its plainest, and this time the flattening was not even visible as code. It
+was a mkdir hiding inside something that reads like a getter.
+
+**Why 47 fixtures could not see it.** C45 and C46 reach the failed-write
+lane by chmod-ing a memory directory that already EXISTS. Nothing in the set
+ever removed it. "The memory dir is there" was an assumption forty-seven
+fixtures shared and none stated — the most expensive kind, because a shared
+assumption looks like coverage.
+
+The fix moves the mkdir into `SnapshotPath`, which now returns an error, and
+`LoadSnapshot` returns one too: five failures collapse to `{}` on purpose,
+and the sixth — the path itself — does not, because CPython raises there.
+`RunAndPersist` re-check the path before the load, reproducing the argument
+evaluation rather than relying on `LoadSnapshot` to discover the same thing
+one line later. That pre-check is provably redundant (the mkdir is
+idempotent) and it is kept anyway, labelled: L48 says port the shape.
+
+Two fixtures pin it, deliberately by different mechanisms. **C48** chmods
+the workspace root; **C49** puts a regular FILE where `memory/` belongs and
+needs no chmod at all — so it still means something under a root test
+runner, where `chmod 0555` stops stopping anything. Reverting the fix fails
+both, with `ran=2` against CPython's `ran=0`.
+
+### F7 — the normaliser needed its own test, and no fixture could have given it one
+
+`canon` rendered every `json.Number` through `Float64()`. Past 2^53 that
+makes 9007199254740992 and 9007199254740993 the same value — on `cycle`, the
+one field this module guarantees grows.
+
+The part worth keeping: **a fixture cannot catch this, ever.** `canon` runs
+over both sides, so a lossy transform applied to two agreeing sides leaves
+them agreeing. Adding a big-counter fixture (S8, S9) does nothing — they
+passed against the broken `canon`. The only thing that catches it is
+asserting the normaliser's contract directly, which is now
+`TestCanonKeepsTheDistinctionsItIsAllowedToKeep`: what it MUST equate (the
+spellings a JSON round trip changes) and what it must NOT. Reverting `canon`
+fails four of its assertions.
+
+`canon` now renders numbers to a `"num:"`-prefixed canonical text. The
+prefix is not decoration — without it the number `1` and the string `"1"`
+compare equal, and `evidence`, `status` and `narrated` all hold strings that
+can be digits. Trading one blindness for another is not a fix.
+
+This is L51's sixth instance and its sharpest: instances 1–2 erased a value,
+3–5 erased the question, and this one erased a distinction *symmetrically*,
+which is the version no differential fixture can reach.
+
+### F8 — "equivalent" and "nothing calls it" are different claims
+
+M103–M105 were labelled EQUIVALENT-BY-CONSTRUCTION. They are not equivalent:
+M103 makes `RenderSnapshot(map[string]any)` raise where CPython renders it
+fine, and M105 makes its output order non-deterministic. They survive
+because nothing calls them that way. Relabelled UNREACHED-BY-ANY-TEST, which
+is the weaker and true statement — and the distinction matters because a
+reader who sees "equivalent" stops looking, which is precisely how r1's M6
+got mislabelled one lane over.
+
+### The other seven
+
+All low or nit, all the same lens r2 minted, and all confirmed by counting:
+`nextCycle`'s doc still said "three lanes" over a five-row table after r1 and
+r2 each added one; `asDict`'s said six inline assertions where there were
+seven; `Summary`'s four-row `except` table listed a fourth row that is
+**unreachable by construction** — `_narrate_transition` wraps its entire body
+including the import in `try/except Exception: pass`, so no input produces it,
+which makes "measured" the wrong word; the package doc justified leaving the
+lock to the caller "because RunCycle does not touch the disk at all", a reason
+r1's own restructure had already falsified; `R8 pins both halves at once` when
+R8 has one process and a rank is unobservable with one process; C39's byte
+count described the clipped result while C38's described the message; and the
+package doc cited C26 for a stale `evidence` the fixture did not carry.
+
+That last one was fixed by adding the evidence to C26 rather than trimming
+the sentence — the doc's claim was right, the fixture was short.
+
+### The battery, r6: 114 mutants
+
+Six sites moved under the F1 fix and were repaired before the run, not
+after — running the uniqueness pre-check first is the only reason they were
+not six silent false CAUGHTs. Four new mutants: M111 is the F1 finding
+itself (caught by C48/C49), M112 and M114 are the error lanes the fix
+introduced, and M113 is the redundant pre-check, labelled.
+
+M112 and M114 survived the first pass, and both were the same shape: the new
+error had exactly one tested caller-path. `TestTheMemoryDirFailureReachesEveryEntryPoint` closes them by calling `LoadSnapshot`, `WriteSnapshot` and
+`RunAndPersist` directly on a broken workspace. M114 needed one more turn of
+the screw — a `WriteSnapshot` that ignores the path error still fails, just
+further downstream, so the test asserts the error **names the directory it
+failed on**. "Some error came back" could not tell the two apart.
+
 ## The first thing in this tree that Go cannot port at all
 
 Every divergence recorded above is a decision one runtime makes differently

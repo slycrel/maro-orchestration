@@ -28,8 +28,15 @@
 //     SILENT.
 //   - The locked_write around the whole cycle. Python holds the snapshot's
 //     lock across read-modify-write so concurrent finalizers serialise
-//     instead of both reading narrated=None and double-narrating; that is the
-//     CALLER's job here, because RunCycle does not touch the disk at all.
+//     instead of both reading narrated=None and double-narrating; that is
+//     still the CALLER's job here, and r3 corrected the reason given for it.
+//     It used to say "because RunCycle does not touch the disk at all",
+//     which stopped being the point when r1 introduced RunAndPersist:
+//     RunAndPersist DOES perform the load..write, so a caller reading that
+//     sentence and concluding this package needs no lock would reproduce
+//     exactly the double-narration race the Python comment
+//     (system_health.py:539-543) exists to prevent. The rule is that the
+//     lock must be held across the whole RunAndPersist CALL.
 //   - `verbose`, which prints `[health] name: STATUS — evidence` per
 //     declaration AS THE CYCLE RUNS. Nothing branches on it — it is the
 //     --probe flag's progress output. A caller wanting it must print from
@@ -114,9 +121,24 @@ type Narration struct {
 // first row:
 //
 //	config.get raises          ran=0, transitions=0, nothing written
+//	_snapshot_path mkdirs      ran=0, transitions=0, NO PROBE CALLED
 //	an unparseable cycle       ran=N, transitions=0, nothing written
 //	_write_snapshot raises     ran=N, transitions=0, NOTHING NARRATED
-//	the narration loop raises  ran=N, transitions already assigned
+//
+// A fifth thing is inside the try and cannot contribute a row: the
+// narration loop. `_narrate_transition` wraps its ENTIRE body — the import
+// included — in `try: ... except Exception: pass`, so nothing it does can
+// reach this handler. An earlier version of this table listed it as a
+// measured row ("ran=N, transitions already assigned"); r3 pointed out that
+// no input produces it, which makes "measured" the wrong word for a lane
+// that does not exist. It is named here so the next reader does not go
+// looking for the fixture.
+//
+// The SECOND row is r3 F1 and it is the one a port is most likely to miss,
+// because `config.memory_dir()` mkdirs as a side effect of resolving a path
+// and `run_health_probes` resolves that path as the ARGUMENT to
+// locked_write. A workspace whose memory/ cannot be created therefore fails
+// before the load and before the loop — fixtures C48/C49.
 //
 // The third row is the one a split port drops on the floor: the probes ran,
 // the cycle produced narrations, and the write failed — so `transitions`
@@ -160,9 +182,51 @@ func (s Summary) ToDict() pyval.Obj {
 	return o
 }
 
-// SnapshotPath is `config.memory_dir() / "system_health.json"`.
-func SnapshotPath(ws string) string {
-	return filepath.Join(orch.MemoryDir(ws), "system_health.json")
+// SnapshotPath is `_snapshot_path()`: `config.memory_dir() / "system_health.json"`.
+//
+// It CREATES the memory directory, and that is not a convenience — it is
+// where Python does it. `config.memory_dir()` is
+//
+//	def memory_dir() -> Path:
+//	    p = workspace_root() / "memory"
+//	    p.mkdir(parents=True, exist_ok=True)
+//	    return p
+//
+// so the directory comes into existence as a side effect of ASKING FOR THE
+// PATH, and every caller of `_snapshot_path()` — `load_snapshot`,
+// `_write_snapshot`, and `run_health_probes`' own `with
+// locked_write(_snapshot_path())` — inherits it. r3 found the port had made
+// this a pure `filepath.Join` with the only mkdir inside WriteSnapshot,
+// which moves the directory's creation from BEFORE the probe loop to AFTER
+// it. Measured on CPython 3.14.3 with a read-only workspace root:
+//
+//	CPython: {"ran": 0, "silent": [], "transitions": 0,
+//	          "error": "[Errno 13] Permission denied: '<ws>/memory'"}
+//	         probes called: 0
+//	Go (before this fix): ran=1, silent=["p1"], probes called: 1
+//
+// Two runtimes disagreeing on whether seven live-store probes execute at
+// all is the L48 shape at its plainest: every decision was right and the
+// SHAPE was wrong.
+//
+// record.NewDirMode, not 0o755: Python's Path.mkdir passes 0o777 and lets
+// the umask narrow it, so on this box (umask 0002) CPython creates memory/
+// as 0o775 and a hard-coded 0o755 creates it 0o755 — a group-writable store
+// becoming group-read-only, which is exactly the difference that bites a
+// second user or a container uid. That is r1's F3, and it lives here now
+// rather than in WriteSnapshot because this is where Python's mkdir is.
+//
+// NAMED residual: the error TEXT. Python's is
+// `[Errno 13] Permission denied: '<path>'` and Go's is
+// `mkdir <path>: permission denied` — the same residual `dispatch/
+// envelope.go`'s `oserr` names, and the differential elides it by shape on
+// both sides rather than pretending the two agree.
+func SnapshotPath(ws string) (string, error) {
+	dir := orch.MemoryDir(ws)
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "system_health.json"), nil
 }
 
 // LoadSnapshot is `load_snapshot`: the file's object, or an EMPTY one.
@@ -173,27 +237,36 @@ func SnapshotPath(ws string) string {
 // A port that distinguished them would have to invent a caller for the
 // distinction, and there is none: every caller reads "no snapshot" as
 // "first cycle".
-func LoadSnapshot(ws string) pyval.Obj {
-	path := SnapshotPath(ws)
-	if _, err := os.Stat(path); err != nil {
-		return pyval.Obj{}
-	}
-	raw, err := os.ReadFile(path)
+//
+// The SIXTH failure does not collapse, and it is why this returns an error
+// at all: `path = _snapshot_path()` is the first statement, and it MKDIRS.
+// A workspace whose memory/ cannot be created makes `load_snapshot` RAISE,
+// where all five lanes below return {}. Callers must not read that error as
+// "first cycle" — CPython's does not.
+func LoadSnapshot(ws string) (pyval.Obj, error) {
+	path, err := SnapshotPath(ws)
 	if err != nil {
-		return pyval.Obj{}
+		return nil, err
+	}
+	if _, err := os.Stat(path); err != nil {
+		return pyval.Obj{}, nil
+	}
+	raw, rerr := os.ReadFile(path)
+	if rerr != nil {
+		return pyval.Obj{}, nil
 	}
 	text, derr := pyval.DecodeUTF8Strict(raw)
 	if derr != nil {
-		return pyval.Obj{}
+		return pyval.Obj{}, nil
 	}
 	v, jerr := pyval.LoadsOrdered(text)
 	if jerr != nil {
-		return pyval.Obj{}
+		return pyval.Obj{}, nil
 	}
 	if o, ok := v.(pyval.Obj); ok {
-		return o
+		return o, nil
 	}
-	return pyval.Obj{}
+	return pyval.Obj{}, nil
 }
 
 // WriteSnapshot is `_write_snapshot`: indent=1, sort_keys=True, one trailing
@@ -206,15 +279,9 @@ func LoadSnapshot(ws string) pyval.Obj {
 // nested dicts; the trailing newline is added by the CALLER in Python
 // (`... + "\n"`), not by dumps.
 func WriteSnapshot(ws string, snap pyval.Obj) error {
-	path := SnapshotPath(ws)
-	// record.NewDirMode, not 0o755: Python's Path.mkdir passes 0o777 and lets
-	// the umask narrow it, so on this box (umask 0002) CPython creates
-	// memory/ as 0o775 and a hard-coded 0o755 creates it 0o755 — a
-	// group-writable store becoming group-read-only, which is exactly the
-	// difference that bites a second user or a container uid. AtomicWrite one
-	// line down already spells the rule; this MkdirAll runs first, so the
-	// narrower constant was winning.
-	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
+	// SnapshotPath performs Python's mkdir — see r1's F3 and r3's F1 there.
+	path, err := SnapshotPath(ws)
+	if err != nil {
 		return err
 	}
 	body, err := pyval.DumpsIndentNSorted(snap, 1)
@@ -245,8 +312,9 @@ func HistoryOf(prior pyval.Obj) pyval.List {
 
 // asDict and asList are `isinstance(v, dict)` / `isinstance(v, list)`.
 //
-// They exist because this package was asserting `v.(pyval.Obj)` inline at six
-// sites while every pyval helper it calls in the same breath — Truthy, Str,
+// They exist because this package was asserting `v.(pyval.Obj)` inline at
+// SEVEN sites — r3 counted; the comment said six — while every pyval helper
+// it calls in the same breath — Truthy, Str,
 // TypeName — ALSO accepts a plain `map[string]any` as a dict. r1 found the
 // contradiction in one expression: RenderSnapshot handed a map[string]any
 // would fail its assertion and then build the error message
@@ -487,7 +555,25 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 		return summary, nil
 	}
 
-	snap, pending, summary := RunCycle(LoadSnapshot(ws), decls, now)
+	// `with locked_write(_snapshot_path())`: the path expression is evaluated
+	// BEFORE the lock and before load_snapshot, and evaluating it mkdirs. A
+	// workspace whose memory/ cannot be created therefore fails HERE, with
+	// ran=0 and silent=[] and not one probe called — fixtures C48/C49.
+	// Reaching it through LoadSnapshot alone would already have run them.
+	if _, perr := SnapshotPath(ws); perr != nil {
+		summary.Error = pyval.Clip(perr.Error(), 200)
+		return summary, nil
+	}
+	prior, lerr := LoadSnapshot(ws)
+	if lerr != nil {
+		// Unreachable while SnapshotPath is idempotent and just succeeded,
+		// and ported anyway: in Python this is the same statement raising
+		// inside the same try, and a port that dropped the lane would be
+		// deciding the mkdir cannot fail twice.
+		summary.Error = pyval.Clip(lerr.Error(), 200)
+		return summary, nil
+	}
+	snap, pending, summary := RunCycle(prior, decls, now)
 	if snap == nil {
 		// The cycle aborted (an unparseable `cycle` counter). Its summary
 		// already carries Ran, Silent and Error; there is nothing to write
@@ -511,8 +597,9 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 
 // nextCycle is `int(snapshot.get("cycle", 0) or 0) + 1`.
 //
-// Three lanes, and the middle one is the same `or` collapse sheriff's
-// dormancy threshold has:
+// Four lanes — restart, increment, raise, refuse — and the increment is the
+// same `or` collapse sheriff's dormancy threshold has. The two raising rows
+// are one lane with two exception classes:
 //
 //	absent / 0 / "" / None / False  -> 1   (the counter restarts)
 //	"41" / 41 / 2.9 / True          -> that value + 1, TRUNCATED toward zero
@@ -520,7 +607,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 //	[1] / {"a": 1}                  -> TypeError, likewise
 //	9223372036854775807 / 1e19      -> REFUSED, a known gap; CPython computes
 //
-// The middle two lanes are why this returns an error instead of defaulting: a
+// The raising lane is why this returns an error instead of defaulting: a
 // port that quietly restarted the counter on a corrupt value would write a
 // snapshot CPython refuses to write. They are DIFFERENT exception classes
 // with different messages, and the summary carries the message, so both are
@@ -528,7 +615,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 // an int, not a rejection). r1 found the TypeError arm named here and reached
 // by nothing, which is a doc claiming coverage the fixtures did not have.
 //
-// The FOURTH lane is this port's own, and r2 found it unnamed: CPython's int
+// The refusing lane is this port's own, and r2 found it unnamed: CPython's int
 // is arbitrary precision, so a counter at 9223372036854775807 simply becomes
 // 9223372036854775808 and the snapshot is written. A Go int cannot hold that,
 // and `n + 1` WRAPS silently — it would durably write -9223372036854775808,
@@ -571,7 +658,8 @@ func nextCycle(snapshot pyval.Obj) (int, error) {
 // "an empty snapshot" are distinguishable arguments there and would both be
 // a nil Obj here. Its only caller in the tree is `main()`, which omits the
 // argument, and `main()` is not ported — so the load belongs at the call
-// site as `RenderSnapshot(LoadSnapshot(ws))`.
+// site as `RenderSnapshot(LoadSnapshot(ws))` — whose error is the mkdir
+// lane, not a missing snapshot.
 //
 // The header's `.get(key, "?")` is the trap worth the comment: a default
 // applies only when the key is ABSENT. `{"updated_at": null}` renders the
@@ -602,7 +690,9 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 	// Note the two different defaults for the same field: the sort key reads
 	// `.get("status")` with NO default, so a MISSING status ranks under None
 	// (3, beside the unrecognised ones), while the display reads
-	// `.get("status", "?")`. R8 pins both halves at once.
+	// `.get("status", "?")`. R17 pins the SORT half — it needs two processes,
+	// because with one process every rank produces the same single line — and
+	// R8 pins the display half.
 	order := map[string]int{Silent: 0, Unknown: 1, OK: 2}
 	rank := make([]int, len(procs))
 	for i, f := range procs {

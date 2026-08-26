@@ -3,8 +3,10 @@ package syshealth
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -106,9 +108,36 @@ for c in json.loads(sys.argv[1]):
             if c.get("readonly"):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 os.chmod(str(path.parent), 0o555)
+            # ro_root is a DIFFERENT lane from readonly, and the difference
+            # is the whole of r3 F1. Here memory/ does not exist and cannot
+            # be created, so config.memory_dir() raises while
+            # run_health_probes is still evaluating the argument to
+            # locked_write -- before load_snapshot, before the probe loop.
+            # ran stays 0 and not one probe is called. readonly (above)
+            # leaves memory/ in place, so the cycle runs to completion and
+            # only the WRITE fails.
+            if c.get("ro_root"):
+                import shutil as _shutil
+                if path.parent.exists():
+                    _shutil.rmtree(str(path.parent))
+                os.chmod(os.environ["MARO_WORKSPACE"], 0o555)
+            # Same statement, different errno, and no chmod involved: a
+            # regular file where memory/ belongs makes mkdir raise
+            # FileExistsError. It is the witness that survives a root test
+            # runner, where a chmod-based fixture would quietly pass.
+            if c.get("shadow_dir"):
+                import shutil as _shutil2
+                if path.parent.is_dir():
+                    _shutil2.rmtree(str(path.parent))
+                with open(str(path.parent), "w") as _f:
+                    _f.write("not a dir")
             try:
                 summary = sh.run_health_probes()
             finally:
+                if c.get("shadow_dir") and os.path.isfile(str(path.parent)):
+                    os.unlink(str(path.parent))
+                if c.get("ro_root"):
+                    os.chmod(os.environ["MARO_WORKSPACE"], 0o755)
                 if c.get("readonly"):
                     os.chmod(str(path.parent), 0o775)
                 sh._narrate_transition, sh.DECLARED_PROCESSES, sh.datetime = (
@@ -165,10 +194,17 @@ type syCase struct {
 	name string
 	spec any
 	run  func(t *testing.T, ws string) (any, error)
-	// elideWriteError routes both sides through syElideWriteError before
+	// elideOSError routes both sides through syElideOSError before
 	// comparing. Set by exactly the two failed-write fixtures; read the
 	// helper's doc for what it gives up.
-	elideWriteError bool
+	// elideOSError is the lowercase substring BOTH runtimes' messages must
+	// contain for the elision to be allowed. Empty means no elision. It is a
+	// string rather than a bool because r3 added a second OS-error lane
+	// whose two messages share no wording at all ("[Errno 17] File exists"
+	// vs "not a directory"), and a single boolean would have had to widen
+	// the check until it asserted nothing — which is the L51 failure the
+	// elision exists to avoid.
+	elideOSError string
 }
 
 // syProbes turns the fixture's [[name, spec], ...] into Declarations whose
@@ -279,8 +315,8 @@ func syGo(v any) any {
 
 func syWriteSnap(t *testing.T, ws, raw string) {
 	t.Helper()
-	path := SnapshotPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	path, err := SnapshotPath(ws)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
@@ -294,10 +330,10 @@ func syWriteSnap(t *testing.T, ws, raw string) {
 // one try covers. It used to drive RunCycle and perform the write itself,
 // which is exactly the split r1 found: a harness shaped that way cannot
 // express a failing write at all, so the lane went unported and untested.
-func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any, cfgRaise string, readonly bool) (any, error) {
+func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any, cfgRaise string, readonly, roRoot, shadowDir bool) (any, error) {
 	t.Helper()
-	path := SnapshotPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
+	path, err := SnapshotPath(ws)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if priorRaw != "" {
@@ -315,6 +351,30 @@ func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any, cfgRaise st
 			t.Fatal(err)
 		}
 		defer os.Chmod(filepath.Dir(path), 0o775)
+	}
+	if roRoot {
+		// r3 F1's lane: memory/ ABSENT and uncreatable, so the mkdir inside
+		// _snapshot_path() fails before load_snapshot and before the probe
+		// loop. Distinct from `readonly`, which leaves memory/ in place and
+		// only breaks the write — and the distinction is exactly what a
+		// port with a pure filepath.Join cannot express.
+		if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(ws, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Chmod(ws, 0o755)
+	}
+	if shadowDir {
+		dir := filepath.Dir(path)
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dir, []byte("not a dir"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(dir)
 	}
 	cfg := func() (any, error) {
 		if cfgRaise != "" {
@@ -339,27 +399,29 @@ func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any, cfgRaise st
 	}, nil
 }
 
-// syElideWriteError is the ONE place this differential looks away, and per
+// syElideOSError is the ONE place this differential looks away, and per
 // L51 it names exactly what it collapses and why the collapse is not hiding
 // the thing under test.
 //
-// It collapses the `error` string of the failed-write lane, and nothing
-// else. Two things live in there that cannot match. The tempfile name is
-// random — atomic_write writes through mkstemp, so the two runtimes could
-// not agree even if they were the same runtime. And the WORDING is a named
-// port residual, the same one dispatch/envelope.go's `oserr` records:
+// It collapses the `error` string of the two PERMISSION lanes — the failed
+// write (C45/C46) and, since r3, the failed mkdir (C48) — and nothing else.
+// Two things live in there that cannot match. The tempfile name is random
+// — atomic_write writes through mkstemp, so the two runtimes could not
+// agree even if they were the same runtime. And the WORDING is a named port
+// residual, the same one dispatch/envelope.go's `oserr` records:
 // str(OSError) is "[Errno 13] Permission denied: '/p/tmpX'" and Go's is
 // "open /p/tmpX: permission denied". This port does not emulate OSError
 // formatting, so a fixture comparing the text would be asserting a
 // divergence we chose.
 //
-// What survives the collapse is everything the lane exists to pin: that an
+// What survives the collapse is everything the lanes exist to pin: that an
 // error IS set (empty fails), that it is a permission error and not some
 // other failure that happened to abort the cycle, and — untouched — `ran`,
 // `silent`, `transitions`, `told` and `file`. A port that swallowed the
 // write failure, or narrated anyway, or reported transitions, still fails
-// here.
-func syElideWriteError(t *testing.T, name string, v any) any {
+// here. And for C48 the untouched `ran` is the whole finding: 0 on both
+// sides means neither runtime called a probe.
+func syElideOSError(t *testing.T, name, want string, v any) any {
 	t.Helper()
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -371,13 +433,51 @@ func syElideWriteError(t *testing.T, name string, v any) any {
 	}
 	msg, _ := sum["error"].(string)
 	if msg == "" {
-		t.Fatalf("%s: the failed-write lane produced no error message", name)
+		t.Fatalf("%s: the permission lane produced no error message", name)
 	}
-	if !strings.Contains(strings.ToLower(msg), "permission denied") {
-		t.Fatalf("%s: aborted on something other than the lane under test: %q", name, msg)
+	if !strings.Contains(strings.ToLower(msg), want) {
+		t.Fatalf("%s: the message does not contain %q, so this is not the "+
+			"lane under test: %q", name, want, msg)
 	}
-	sum["error"] = "<permission denied; wording and tempfile name elided>"
+	sum["error"] = "<OS error naming " + want + "; wording and any tempfile name elided>"
 	return m
+}
+
+func canonNum(text string) any { return "num:" + text }
+
+// canonFloat renders a float the way canonNum renders an int wherever the
+// two can agree: an integral magnitude inside 2^53 is exact in both
+// representations, so 1.0 and 1 must canonicalise identically or canon stops
+// doing the one job its name claims. Everything else goes through 'g' with
+// -1 precision, which round-trips.
+func canonFloat(f float64) any {
+	if f == math.Trunc(f) && math.Abs(f) <= 1<<53 && !math.IsInf(f, 0) {
+		return canonNum(strconv.FormatInt(int64(f), 10))
+	}
+	return canonNum(strconv.FormatFloat(f, 'g', -1, 64))
+}
+
+// isIntegralLiteral is "does this JSON number text spell an integer" — an
+// optional sign then digits, nothing else. A literal past int64 takes this
+// path so its exact digits survive; CPython's int has no ceiling and
+// rendering it through a float64 would be the very loss canon exists to
+// avoid.
+func isIntegralLiteral(s string) bool {
+	if s == "" {
+		return false
+	}
+	if s[0] == '+' || s[0] == '-' {
+		s = s[1:]
+	}
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func syCases() []syCase {
@@ -402,7 +502,11 @@ func syCases() []syCase {
 	// is the only case that looks at the location itself.
 	add("Z2 where the snapshot lives", map[string]any{"kind": "path"},
 		func(t *testing.T, ws string) (any, error) {
-			rel, err := filepath.Rel(ws, SnapshotPath(ws))
+			sp, sperr := SnapshotPath(ws)
+			if sperr != nil {
+				t.Fatal(sperr)
+			}
+			rel, err := filepath.Rel(ws, sp)
 			return rel, err
 		})
 
@@ -417,6 +521,19 @@ func syCases() []syCase {
 		{"S5 a json string is not a dict", `"hello"`},
 		{"S6 json null is not a dict", "null"},
 		{"S7 a real snapshot", `{"cycle": 3, "processes": {}}`},
+		// r3 F7's actual witness. The `file` field of a cycle fixture is a
+		// STRING and always compared exactly, so it could never have caught
+		// canon's precision loss; load_snapshot returns the decoded NUMBERS,
+		// which is the only place in this differential where canon's number
+		// path is the thing under test. 2^53+1 is the first integer a
+		// float64 cannot represent, and the value past int64 is the one
+		// Float64 would render as "1e+20".
+		{"S8 an integer past 2^53 survives the load exactly",
+			`{"cycle": 9007199254740993, "processes": {}}`},
+		{"S9 an integer past int64 keeps its digits",
+			`{"cycle": 99999999999999999999, "processes": {}}`},
+		{"S10 a genuinely fractional value still compares",
+			`{"cycle": 1.5, "processes": {}}`},
 	} {
 		raw := tc.raw
 		spec := map[string]any{"kind": "load", "raw": raw}
@@ -425,11 +542,19 @@ func syCases() []syCase {
 		}
 		add(tc.name, spec, func(t *testing.T, ws string) (any, error) {
 			if raw == "\x00" {
-				os.Remove(SnapshotPath(ws))
+				sp, sperr := SnapshotPath(ws)
+				if sperr != nil {
+					t.Fatal(sperr)
+				}
+				os.Remove(sp)
 			} else {
 				syWriteSnap(t, ws, raw)
 			}
-			return syGo(LoadSnapshot(ws)), nil
+			loaded, lerr := LoadSnapshot(ws)
+			if lerr != nil {
+				t.Fatal(lerr)
+			}
+			return syGo(loaded), nil
 		})
 	}
 
@@ -547,6 +672,20 @@ func syCases() []syCase {
 		enabled  any
 		cfgRaise string // config.get itself raises: the ran=0 error lane
 		readonly bool   // chmod the memory dir: the failed-WRITE error lane
+		// roRoot removes memory/ AND chmods the workspace root, so
+		// config.memory_dir()'s mkdir fails while run_health_probes is still
+		// evaluating `locked_write(_snapshot_path())` — before the load and
+		// before the probe loop. r3 F1: the port had made SnapshotPath a
+		// pure join, so the same workspace ran every probe and then failed
+		// at the write, reporting ran=N where CPython reports ran=0.
+		roRoot bool
+		// shadowDir replaces memory/ with a regular FILE. Same statement
+		// raises, different errno: CPython says "[Errno 17] File exists" and
+		// Go's MkdirAll says "not a directory". The lane matters because the
+		// two disagree on nothing else — ran is 0 on both sides once the
+		// port has the mkdir in the right place, which is what makes it a
+		// second, independent witness for r3 F1.
+		shadowDir bool
 	}
 	// The ring-buffer fixture needs a prior history of exactly HISTORY_KEEP,
 	// so it is built rather than spelled: eight entries n=0..7, plus the new
@@ -611,7 +750,11 @@ func syCases() []syCase {
 			probes: `[["p1", ` + okp + `]]`, prior: `{"mine": 1, "processes": {}}`},
 		{name: "C26 a process absent from this cycle's declarations is left alone",
 			probes: `[["p1", ` + okp + `]]`,
-			prior:  `{"processes": {"gone": {"status": "SILENT", "narrated": "silent"}}}`},
+			// `evidence` is here because the package doc cites this fixture
+			// for "still carrying their stale status AND EVIDENCE", and r3
+			// found the entry had no evidence key at all — half the cited
+			// claim was unfixtured.
+			prior: `{"processes": {"gone": {"status": "SILENT", "narrated": "silent", "evidence": "stale from an earlier cycle"}}}`},
 		{name: "C27 probes_enabled=False skips the whole cycle",
 			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: false},
 		{name: "C28 probes_enabled=0 is falsy too",
@@ -659,7 +802,10 @@ func syCases() []syCase {
 		// these, a port slicing bytes passed the whole differential: every
 		// clipped message in the set was ASCII. C38's probe message is 201
 		// runes / 601 bytes and clips to 120 runes; C39's int() message is
-		// 359 bytes and clips to 200 runes. A byte-slicing port also emits
+		// 240 runes / 439 bytes and clips to 200 runes (359 bytes). r3
+		// caught the parallel construction: the old text gave C38's number
+		// for the MESSAGE and C39's for the CLIPPED RESULT, so a reader
+		// recomputing 439 could not reconcile it. A byte-slicing port also emits
 		// an invalid UTF-8 tail, which then makes WriteSnapshot refuse the
 		// ENTIRE snapshot — so this is not a cosmetic divergence.
 		{name: "C38 a probe message is clipped at 120 CODE POINTS, not bytes",
@@ -702,6 +848,42 @@ func syCases() []syCase {
 			probes: `[["p1", ` + okp + `]]`, readonly: true},
 		{name: "C33 non-ascii evidence and description",
 			probes: `[["p1", {"status": "SILENT", "evidence": "café", "description": "d é", "expectation": "e é"}]]`},
+
+		// r3 F1. Python's `config.memory_dir()` mkdirs as a side effect of
+		// resolving the path, and `run_health_probes` evaluates
+		// `_snapshot_path()` as the ARGUMENT to locked_write — so a
+		// workspace whose memory/ cannot be created fails before the load
+		// and before the probe loop, with ran=0 and silent=[]. The port had
+		// only a mkdir inside WriteSnapshot, which runs AFTER every probe.
+		//
+		// The fixture that could not see it is C45: it chmods a memory dir
+		// that already EXISTS, so both runtimes reach the write. Nothing in
+		// the set removed the directory first, and "the memory dir exists"
+		// was an assumption 47 fixtures shared without stating it.
+		//
+		// Two probes rather than one, so `ran` and `silent` both have room
+		// to be wrong: a port that ran the loop reports ran=2, silent has
+		// two names, and both differ from CPython's 0 and [].
+		{name: "C48 an uncreatable memory dir aborts BEFORE any probe runs",
+			probes: `[["p1", ` + sip + `], ["p2", ` + sip + `]]`,
+			roRoot: true},
+		// The second witness, and it needs no chmod at all — which matters
+		// because a chmod-based fixture is one `sudo`/root test runner away
+		// from silently passing for the wrong reason. A regular file where
+		// memory/ should be makes the same statement raise for a different
+		// reason, and CPython still reports ran=0.
+		{name: "C49 a FILE where the memory dir should be aborts the same way",
+			probes:    `[["p1", ` + sip + `], ["p2", ` + okp + `]]`,
+			shadowDir: true},
+		// r3 F7's witness. A counter at 2^53 is the first place a float64
+		// cannot count: 9007199254740992 and 9007199254740993 are the SAME
+		// float. Both runtimes must write ...993, and until r3 the harness
+		// could not have told the difference because canon rendered every
+		// number through Float64. Int64 holds it exactly, so this is a
+		// fixture the port passes — the point is that it can now FAIL.
+		{name: "C50 a cycle counter at 2^53 increments exactly",
+			probes: `[["p1", ` + okp + `]]`,
+			prior:  `{"cycle": 9007199254740992, "processes": {}}`},
 	} {
 		tc := tc
 		spec := map[string]any{"kind": "cycle", "probes": json.RawMessage(tc.probes)}
@@ -724,14 +906,30 @@ func syCases() []syCase {
 		if tc.readonly {
 			spec["readonly"] = true
 		}
+		if tc.roRoot {
+			spec["ro_root"] = true
+		}
+		if tc.shadowDir {
+			spec["shadow_dir"] = true
+		}
 		add(tc.name, spec, func(t *testing.T, ws string) (any, error) {
 			seed := tc.prior
 			if tc.rawFile != "" {
 				seed = tc.rawFile
 			}
-			return syCycle(t, ws, seed, tc.probes, enabled, tc.cfgRaise, tc.readonly)
+			return syCycle(t, ws, seed, tc.probes, enabled, tc.cfgRaise,
+				tc.readonly, tc.roRoot, tc.shadowDir)
 		})
-		cs[len(cs)-1].elideWriteError = tc.readonly
+		if tc.readonly || tc.roRoot {
+			cs[len(cs)-1].elideOSError = "permission denied"
+		}
+		if tc.shadowDir {
+			// The two messages here are "[Errno 17] File exists: '<ws>/
+			// memory'" and "mkdir <ws>/memory: not a directory" — no shared
+			// wording, so the shape asserted is that each names the
+			// directory it failed on.
+			cs[len(cs)-1].elideOSError = "memory"
+		}
 	}
 	return cs
 }
@@ -806,17 +1004,17 @@ func TestSystemHealthMatchesCPython(t *testing.T) {
 			}
 		}
 		wantJSON := string(py["ok"])
-		if c.elideWriteError {
+		if c.elideOSError != "" {
 			var pyVal any
 			if err := json.Unmarshal(py["ok"], &pyVal); err != nil {
 				t.Fatal(err)
 			}
-			b, err := json.Marshal(syElideWriteError(t, c.name, pyVal))
+			b, err := json.Marshal(syElideOSError(t, c.name, c.elideOSError, pyVal))
 			if err != nil {
 				t.Fatal(err)
 			}
 			wantJSON = string(b)
-			goVal = syElideWriteError(t, c.name, goVal)
+			goVal = syElideOSError(t, c.name, c.elideOSError, goVal)
 		}
 		gotJSON, err := json.Marshal(goVal)
 		if err != nil {
@@ -877,6 +1075,19 @@ func sameJSON(t *testing.T, a, b string) bool {
 // canon normalises numbers so that 1, 1.0 and json.Number("1") compare
 // equal, and recurses. Everything else is left alone — in particular STRING
 // content, which is where every real divergence in this chunk lives.
+//
+// It renders every number to a "num:"-prefixed canonical TEXT rather than to
+// a float64, and r3 F7 is why. The old version called Float64() on every
+// json.Number, so any two integers differing only past 2^53 compared EQUAL —
+// on the one field this module guarantees grows. A fixture seeded with
+// `{"cycle": 9007199254740992}` expects 9007199254740993 back, and a port
+// that emitted 9007199254740992 would have passed. The prefix is not
+// decoration: without it the STRING "1" and the NUMBER 1 would compare
+// equal, which would trade one blindness for another.
+//
+// An integer literal past int64 keeps its text verbatim, because CPython's
+// int is arbitrary precision and Float64 would render 99999999999999999999
+// as "1e+20". Only genuinely non-integral values go through a float at all.
 func canon(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -890,14 +1101,20 @@ func canon(v any) any {
 		}
 		return t
 	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return canonNum(strconv.FormatInt(i, 10))
+		}
+		if isIntegralLiteral(t.String()) {
+			return canonNum(t.String())
+		}
 		if f, err := t.Float64(); err == nil {
-			return f
+			return canonFloat(f)
 		}
 		return t.String()
 	case float64:
-		return t
+		return canonFloat(t)
 	case int:
-		return float64(t)
+		return canonNum(strconv.FormatInt(int64(t), 10))
 	}
 	return v
 }
@@ -909,21 +1126,28 @@ func canon(v any) any {
 // after the first into a first cycle, silently.
 func TestWriteSnapshotRoundTripsThroughLoad(t *testing.T) {
 	ws := t.TempDir()
-	if got := LoadSnapshot(ws); len(got) != 0 {
+	if got, err := LoadSnapshot(ws); err != nil || len(got) != 0 {
 		t.Fatalf("an empty workspace loaded %v", got)
 	}
 	snap := syObj(t, `{"cycle": 7, "processes": {"p": {"status": "OK", "é": [1, {}]}}}`)
 	if err := WriteSnapshot(ws, snap); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(SnapshotPath(ws))
+	sp, sperr := SnapshotPath(ws)
+	if sperr != nil {
+		t.Fatal(sperr)
+	}
+	raw, err := os.ReadFile(sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(string(raw), "}\n") {
 		t.Errorf("the snapshot must end with exactly one newline: %q", string(raw))
 	}
-	back := LoadSnapshot(ws)
+	back, berr := LoadSnapshot(ws)
+	if berr != nil {
+		t.Fatal(berr)
+	}
 	a, _ := json.Marshal(syGo(snap))
 	b, _ := json.Marshal(syGo(back))
 	if !sameJSON(t, string(a), string(b)) {
@@ -965,15 +1189,15 @@ func TestRunCycleReadsTheClockOncePerDeclarationPlusOnce(t *testing.T) {
 // cannot quietly start doing Go's replacement-character thing instead.
 func TestLoadSnapshotTreatsUndecodableBytesAsNoSnapshot(t *testing.T) {
 	ws := t.TempDir()
-	path := SnapshotPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+	path, sperr := SnapshotPath(ws)
+	if sperr != nil {
+		t.Fatal(sperr)
 	}
 	// Valid JSON structurally; invalid UTF-8 inside the string.
 	if err := os.WriteFile(path, []byte("{\"a\": \"\x80\"}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := LoadSnapshot(ws); len(got) != 0 {
+	if got, err := LoadSnapshot(ws); err != nil || len(got) != 0 {
 		t.Errorf("undecodable bytes loaded as %v, want an empty snapshot", got)
 	}
 }
@@ -1133,7 +1357,11 @@ func TestRunAndPersistDiscardsNarrationsWhenTheWriteFails(t *testing.T) {
 	if err := os.MkdirAll(ws, record.NewDirMode); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Dir(SnapshotPath(ws))
+	sp0, sperr0 := SnapshotPath(ws)
+	if sperr0 != nil {
+		t.Fatal(sperr0)
+	}
+	dir := filepath.Dir(sp0)
 	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		t.Fatal(err)
 	}
@@ -1180,7 +1408,11 @@ func TestWriteSnapshotCreatesTheMemoryDirTheWayPathMkdirDoes(t *testing.T) {
 	if err := WriteSnapshot(ws, pyval.Obj{}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.Stat(filepath.Dir(SnapshotPath(ws)))
+	sp1, sperr1 := SnapshotPath(ws)
+	if sperr1 != nil {
+		t.Fatal(sperr1)
+	}
+	got, err := os.Stat(filepath.Dir(sp1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1196,4 +1428,157 @@ func TestWriteSnapshotCreatesTheMemoryDirTheWayPathMkdirDoes(t *testing.T) {
 		t.Errorf("memory/ created %o, Path.mkdir would create %o",
 			got.Mode().Perm(), want.Mode().Perm())
 	}
+}
+
+// TestCanonKeepsTheDistinctionsItIsAllowedToKeep is the normaliser's own
+// test, and L51 is why it has to exist.
+//
+// canon runs over BOTH sides of every comparison, so a value it collapses is
+// a question this differential can no longer ask — and, critically, no
+// differential FIXTURE can catch that: applying the same lossy transform to
+// two agreeing sides leaves them agreeing. r3 F7 found canon rendering every
+// json.Number through Float64(), which makes 9007199254740992 and
+// 9007199254740993 the same value, on the one field this module guarantees
+// grows. Adding a fixture with a big counter would not have caught it (S8
+// and S9 were added anyway, and they passed against the broken canon); only
+// asserting the normaliser's contract directly does.
+//
+// Two halves, and both are load-bearing. canon MUST equate the spellings a
+// JSON round trip legitimately changes, or every fixture fails for nothing.
+// It MUST NOT equate values CPython would print differently.
+func TestCanonKeepsTheDistinctionsItIsAllowedToKeep(t *testing.T) {
+	// Compared through json.Marshal because that is how the differential
+	// compares: canon's output is marshalled and the TEXTS are diffed. A
+	// direct `!=` would also panic on a map.
+	render := func(v any) string {
+		b, err := json.Marshal(canon(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	eq := func(name string, a, b any) {
+		t.Helper()
+		if ca, cb := render(a), render(b); ca != cb {
+			t.Errorf("%s: canon(%#v)=%s and canon(%#v)=%s differ; these are "+
+				"the same value and every fixture would fail on the spelling",
+				name, a, ca, b, cb)
+		}
+	}
+	ne := func(name string, a, b any) {
+		t.Helper()
+		if ca, cb := render(a), render(b); ca == cb {
+			t.Errorf("%s: canon collapses %#v and %#v to %s — a question "+
+				"this differential can no longer ask", name, a, b, ca)
+		}
+	}
+
+	eq("int and float spelling of one", 1, 1.0)
+	eq("int and json.Number spelling of one", 1, json.Number("1"))
+	eq("float and json.Number spelling of one", 1.0, json.Number("1"))
+	eq("a negative in two spellings", -7, json.Number("-7"))
+	eq("a fraction in two spellings", 1.5, json.Number("1.5"))
+
+	ne("2^53 and 2^53+1", json.Number("9007199254740992"),
+		json.Number("9007199254740993"))
+	ne("two integers past int64", json.Number("99999999999999999999"),
+		json.Number("100000000000000000000"))
+	ne("an integer and its successor at the int64 ceiling",
+		json.Number("9223372036854775806"), json.Number("9223372036854775807"))
+	ne("one and one-and-a-bit", json.Number("1"), json.Number("1.0000000001"))
+
+	// The prefix earns its keep here: without it a number and the STRING of
+	// that number would compare equal, which would trade r3 F7's blindness
+	// for a different one — and `evidence`, `status` and `narrated` are all
+	// strings that can hold digits.
+	ne("the number 1 and the string \"1\"", json.Number("1"), "1")
+	ne("the number 0 and the string \"0\"", 0, "0")
+
+	// Recursion, because the values that matter are always nested.
+	eq("nested in a map",
+		map[string]any{"cycle": json.Number("1")},
+		map[string]any{"cycle": 1.0})
+	ne("nested in a map, past 2^53",
+		map[string]any{"cycle": json.Number("9007199254740992")},
+		map[string]any{"cycle": json.Number("9007199254740993")})
+}
+
+// TestTheMemoryDirFailureReachesEveryEntryPoint closes the two lanes r3's
+// fix opened and the battery immediately found unreached (M112, M114).
+//
+// C48 and C49 exercise the failure through RunAndPersist, which meets it at
+// the pre-check. That leaves LoadSnapshot and WriteSnapshot with a brand new
+// error return and exactly zero tests calling them directly on a broken
+// workspace — and both are exported, so a caller can reach them without
+// RunAndPersist ever running. In CPython both raise there: `load_snapshot`
+// and `_write_snapshot` each open with `path = _snapshot_path()`, and that
+// is the statement that mkdirs.
+//
+// The shadow-FILE shape is used rather than a chmod so the test means the
+// same thing under a root test runner, where chmod 0555 stops stopping
+// anything.
+func TestTheMemoryDirFailureReachesEveryEntryPoint(t *testing.T) {
+	shadow := func(t *testing.T) string {
+		t.Helper()
+		ws := t.TempDir()
+		if err := os.WriteFile(filepath.Join(ws, "memory"),
+			[]byte("not a dir"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return ws
+	}
+
+	t.Run("SnapshotPath", func(t *testing.T) {
+		if _, err := SnapshotPath(shadow(t)); err == nil {
+			t.Fatal("SnapshotPath returned no error; Python's " +
+				"config.memory_dir() raises FileExistsError here")
+		}
+	})
+
+	t.Run("LoadSnapshot", func(t *testing.T) {
+		got, err := LoadSnapshot(shadow(t))
+		if err == nil {
+			t.Fatalf("LoadSnapshot returned (%v, nil); the path failure is "+
+				"the one lane that does NOT collapse to an empty snapshot — "+
+				"CPython raises, and a caller reading this as \"first cycle\" "+
+				"would write a fresh snapshot over a workspace it cannot "+
+				"even resolve", got)
+		}
+		if got != nil {
+			t.Errorf("LoadSnapshot returned a snapshot alongside its error: %v", got)
+		}
+	})
+
+	t.Run("WriteSnapshot", func(t *testing.T) {
+		ws := shadow(t)
+		err := WriteSnapshot(ws, pyval.Obj{{Key: "cycle", Val: 1}})
+		if err == nil {
+			t.Fatal("WriteSnapshot reported success on a workspace whose " +
+				"memory dir cannot exist")
+		}
+		// The error must name the PATH IT FAILED ON, and that is not
+		// pedantry: a WriteSnapshot that ignored SnapshotPath's error would
+		// carry an empty path onward and still fail — down in AtomicWrite,
+		// after trying to create a temp file in the process's CWD. Asserting
+		// only "some error came back" cannot tell the two apart, and battery
+		// mutant M114 is exactly that mutation.
+		if !strings.Contains(err.Error(), filepath.Join(ws, "memory")) {
+			t.Errorf("the error does not name the memory dir, so the failure "+
+				"was discovered somewhere downstream of the path: %v", err)
+		}
+	})
+
+	t.Run("RunAndPersist", func(t *testing.T) {
+		ws := shadow(t)
+		sum, told := RunAndPersist(ws, nil,
+			func() (any, error) { return true, nil },
+			func() string { return syFrozen })
+		if sum.Error == "" {
+			t.Fatal("RunAndPersist reported no error")
+		}
+		if sum.Ran != 0 || len(sum.Silent) != 0 || sum.Transitions != 0 || told != nil {
+			t.Errorf("RunAndPersist got past the path failure: %+v told=%v",
+				sum, told)
+		}
+	})
 }

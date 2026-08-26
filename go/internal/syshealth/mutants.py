@@ -60,15 +60,15 @@ MUTANTS = [
 
     # --- SnapshotPath / LoadSnapshot ---------------------------------------
     ("M7", "the snapshot file is named differently",
-     'orch.MemoryDir(ws), "system_health.json")',
-     'orch.MemoryDir(ws), "health.json")'),
+     'filepath.Join(dir, "system_health.json"), nil',
+     'filepath.Join(dir, "health.json"), nil'),
     # `ws` alone would leave the orch import unused, and a mutant that fails
     # to COMPILE is reported as caught while proving nothing — the same
     # false positive class as a site that matches zero times. Keep orch in
     # the expression.
     ("M8", "the snapshot lives beside the workspace, not in memory/",
-     "orch.MemoryDir(ws), \"system_health.json\")",
-     "filepath.Dir(orch.MemoryDir(ws)), \"system_health.json\")"),
+     "\tdir := orch.MemoryDir(ws)",
+     "\tdir := filepath.Dir(orch.MemoryDir(ws))"),
     # EQUIVALENT-BY-CONSTRUCTION: os.ReadFile on a path that does not exist
     # fails, and that lane returns the same empty Obj. The stat stays because
     # the Python spells `path.exists()` explicitly and this port states
@@ -76,18 +76,18 @@ MUTANTS = [
     ("M9", "a missing file is not special-cased",
      "if _, err := os.Stat(path); err != nil {", "if false {"),
     ("M10", "unparseable json returns the raw text's type instead of {}",
-     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{}\n\t}",
-     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{pyval.Field{Key: \"raw\", Val: text}}\n\t}"),
+     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{}, nil\n\t}",
+     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{pyval.Field{Key: \"raw\", Val: text}}, nil\n\t}"),
     ("M11", "a non-object json value is returned as an empty-but-present obj",
-     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o\n\t}\n\treturn pyval.Obj{}",
-     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o\n\t}\n\treturn pyval.Obj{pyval.Field{Key: \"v\", Val: v}}"),
+     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o, nil\n\t}\n\treturn pyval.Obj{}, nil",
+     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o, nil\n\t}\n\treturn pyval.Obj{pyval.Field{Key: \"v\", Val: v}}, nil"),
     # r1 labelled this EQUIVALENT on the grounds that no FIXTURE can hold
     # invalid UTF-8 (the probe's cases travel as JSON). True, and beside the
     # point: encoding/json silently replaces bad bytes with U+FFFD where
     # CPython's read_text raises, so the two runtimes really do differ. The
     # guard is a unit test, not a differential case.
     ("M12", "the strict utf-8 decode is skipped",
-     "\ttext, derr := pyval.DecodeUTF8Strict(raw)\n\tif derr != nil {\n\t\treturn pyval.Obj{}\n\t}",
+     "\ttext, derr := pyval.DecodeUTF8Strict(raw)\n\tif derr != nil {\n\t\treturn pyval.Obj{}, nil\n\t}",
      "\ttext := string(raw)"),
 
     # --- WriteSnapshot -----------------------------------------------------
@@ -398,19 +398,25 @@ MUTANTS = [
      "\tif snap == nil {\n\t\t// The cycle aborted", "\tif false {\n\t\t// The cycle aborted"),
 
     # --- asDict / asList ---------------------------------------------------
-    # M103/M104/M105 are EQUIVALENT-BY-CONSTRUCTION and labelled rather than
-    # deleted: pyval's decoder never produces a Go map, so no fixture can
-    # reach asDict's map arm at all. They exist because every pyval helper
-    # this package calls in the same breath accepts both spellings (r1 F9).
+    # M103/M104/M105 are UNREACHED-BY-ANY-TEST, which is NOT the same as
+    # equivalent, and r3 was right to make the distinction. An equivalent
+    # mutant produces identical output for every input — M9, M20, M41, M65,
+    # M110, M26b all do. These three do not: M103 makes
+    # RenderSnapshot(map[string]any) raise AttributeError where CPython
+    # renders it fine, and M105 makes its output order non-deterministic.
+    # They survive because nothing CALLS them that way, and a reader who
+    # sees "EQUIVALENT" stops looking — which is exactly how r1's M6 got
+    # mislabelled one lane over.
     #
-    # r2 added a hand-built caller (knowngap_test.go), and these three still
-    # survive — which is the point of re-stating the reason rather than
-    # leaving the old one standing. That caller hands in a []string and a
-    # pyval.Obj; it reaches asList's NEW arm (M107 catches it) and the rank
-    # switch (M108), and it does not touch asDict's map arm or asList's
+    # They exist because every pyval helper this package calls in the same
+    # breath accepts both spellings (r1 F9). r2 added a hand-built caller
+    # (knowngap_test.go) and they still survive: that caller hands in a
+    # []string and a pyval.Obj, reaching asList's NEW arm (M107) and the
+    # rank switch (M108), and never touching asDict's map arm or asList's
     # []any arm, both of which the type switch above them already matches
-    # directly. "There is no hand-built caller yet" would now be false, and
-    # a survivor's label is only worth what its reason is worth.
+    # directly. Closing them means extending that caller with a
+    # map[string]any snapshot and a []any history — worth doing when
+    # something in the tree actually builds one.
     #
     # r2 falsified the sentence that used to end this comment — "the day a
     # caller appears the arms are already right". They were not: []string was
@@ -426,8 +432,8 @@ MUTANTS = [
      "\tcase []any:\n\t\treturn pyval.List(t), true", "\tcase []any:\n\t\treturn nil, len(t) < 0"),
     ("M106", "the memory dir is created 0o755 instead of Path.mkdir's "
      "0o777-narrowed-by-umask",
-     "os.MkdirAll(filepath.Dir(path), record.NewDirMode)",
-     "os.MkdirAll(filepath.Dir(path), 0o755)"),
+     "os.MkdirAll(dir, record.NewDirMode)",
+     "os.MkdirAll(dir, 0o755)"),
     ("M105", "asDict does not sort a plain map's keys, so its order is "
      "whatever the runtime feels like",
      "\t\tsort.Strings(keys)", "\t\t_ = sort.Strings"),
@@ -450,6 +456,35 @@ MUTANTS = [
     # reads as if it were a bounds check and the next reader will wonder.
     ("M110", "the range check uses >= instead of ==",
      "\tif n == math.MaxInt {", "\tif n >= math.MaxInt {"),
+
+    # --- r3 -----------------------------------------------------------------
+    # M111 is the r3 F1 finding as a mutant: SnapshotPath without Python's
+    # mkdir side effect. C48 and C49 both catch it, and neither could have
+    # existed before r3 because every fixture in the set assumed memory/ was
+    # already there.
+    ("M111", "SnapshotPath is a pure join, so the memory dir is created "
+     "AFTER the probe loop instead of before it",
+     "\tif err := os.MkdirAll(dir, record.NewDirMode); err != nil {",
+     "\tif err := os.MkdirAll(dir, record.NewDirMode); err != nil && false {"),
+    ("M112", "LoadSnapshot swallows the path error and reports no snapshot, "
+     "the way it reports the other five failures",
+     "\tpath, err := SnapshotPath(ws)\n\tif err != nil {\n\t\treturn nil, err\n\t}",
+     "\tpath, err := SnapshotPath(ws)\n\tif err != nil {\n\t\treturn pyval.Obj{}, nil\n\t}"),
+    # EQUIVALENT-BY-CONSTRUCTION, and deliberately kept: the pre-check is a
+    # SHAPE port. Python evaluates `_snapshot_path()` as the argument to
+    # locked_write, before load_snapshot, and this reproduces that order.
+    # Removing it changes nothing observable, because LoadSnapshot's own
+    # SnapshotPath call fails identically one line later — the mkdir is
+    # idempotent. L48 says port the shape anyway; the label says why the
+    # mutant survives.
+    ("M113", "the pre-check before the load is removed, leaving LoadSnapshot "
+     "to discover the same failure",
+     "\tif _, perr := SnapshotPath(ws); perr != nil {",
+     "\tif _, perr := SnapshotPath(ws); perr != nil && false {"),
+    ("M114", "WriteSnapshot ignores the path error and writes to the empty "
+     "string",
+     "\tpath, err := SnapshotPath(ws)\n\tif err != nil {\n\t\treturn err\n\t}\n\tbody, err := pyval.DumpsIndentNSorted(snap, 1)",
+     "\tpath, _ := SnapshotPath(ws)\n\tbody, err := pyval.DumpsIndentNSorted(snap, 1)"),
 ]
 
 # M58 and M83 reference helpers that do not exist in the original — a mutant
