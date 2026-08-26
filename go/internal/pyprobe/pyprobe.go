@@ -56,6 +56,24 @@ func SrcDir(t *testing.T, marker string) string {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(p, marker)); err != nil {
+		// MARO_PYPROBE_REQUIRED turns the skip into a failure, for any
+		// caller whose whole point is that the differentials RAN.
+		//
+		// The skip is right on a machine without the Python tree. It is
+		// catastrophic in a mutation battery: the battery copies the Go
+		// module to a scratch directory (P4 — a Go module builds through
+		// its import graph, so a battery owns the whole tree it runs in),
+		// `../../../src` no longer resolves, every differential skips, and
+		// `go test` prints `ok`. The 2026-08-26 SystemMetrics battery
+		// reported 34 of 42 mutants surviving — including one the
+		// differential had CAUGHT live an hour earlier — because none of
+		// the differentials ran at all. A baseline-green gate does not
+		// catch this: the baseline really is green, and empty.
+		if os.Getenv("MARO_PYPROBE_REQUIRED") != "" {
+			t.Fatalf("MARO_PYPROBE_REQUIRED is set but the python source "+
+				"tree is unavailable (%s): %v — this run would have skipped "+
+				"every differential and reported ok", marker, err)
+		}
 		t.Skipf("python source tree unavailable (%s): %v", marker, err)
 	}
 	return p

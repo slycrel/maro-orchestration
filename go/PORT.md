@@ -10035,3 +10035,167 @@ as unresolved rather than equivalent: `sort.Slice` insertion-sorts below
 twelve elements and kept the tied pair ordered above it, so a single tie
 among distinct keys does not expose instability at any size tried. It needs
 a many-ties fixture.
+
+---
+
+## metrics.py — the SystemMetrics half
+
+`compute_metrics`, `get_metrics`, `identify_expensive_patterns`,
+`format_metrics_report`, and the three dataclasses behind them. Wired to
+`maro metrics [-limit N]`, which is `cli._cmd_metrics`' text lane.
+
+The arithmetic is trivial. What is not trivial is that **nothing in this
+path coerces anything**: `load_outcomes` builds `Outcome(**{k: d[k] ...})`
+from a JSONL store the Python runtime also writes, applies the dataclass
+DEFAULTS, and applies no conversions at all. So the two runtimes have to
+agree about which rows are *impossible* as precisely as they agree about
+the answers, and a typed Go struct would have decided most of those
+questions silently and wrongly.
+
+Six decisions were forced before a line was written, each measured against
+CPython 3.14.3 and each with the fixture that fails if it is wrong:
+
+1. **The row is a `map[string]any`, not a struct.** `goal_achieved` is
+   tested with `is True` / `is False`, so a stored `1` is UNJUDGED — a Go
+   `bool` collapses that. `tokens_in` typed `int` invents a parse CPython
+   does not do. `model` typed `string` cannot hold the `0`, `[]`, `{}` and
+   `nil` that all collapse to `"unknown"`, nor the `[1]` that raises.
+2. **`by_task_type` needs a dict keyed by anything hashable.** `pyval.Obj`
+   is ordered but string-keyed. An int `task_type` survives compute and
+   kills only the RENDER; an unhashable one raises at the setdefault,
+   before anything is priced.
+3. **The two accumulators must stay different.** `by_task_type` uses
+   `sum()`, which is compensated; `by_model` uses `+=`, which is a naive
+   fold. Over eight ordinary rows they disagree inside one returned object
+   — `0.14001` against `0.14001000000000002` — and the report prints both
+   at `:.6f`, so the divergence is invisible in the output and live in the
+   data. Unifying them is wrong in whichever field loses.
+4. **Statement order is the contract** (lens P9). The per-type loop is
+   total → done → avg_elapsed → avg_in → avg_out → total_cost, and
+   `identify_expensive_patterns` runs after the map is built. One row with
+   `tokens_in: "5"` raises `+: 'int' and 'str'` through `compute_metrics`
+   and `'<' not supported between instances of 'str' and 'int'` through
+   `identify_expensive_patterns` — because the second prices before it
+   averages. A port that priced first would return every correct value and
+   every wrong error.
+5. **`estimate_cost` has THREE distinct errors in the untyped lane**, one
+   per parameter: a bad `tokens_in` dies inside `min(cache, tokens_in)`
+   naming `'str' and 'int'`; a bad `cache_read_tokens` dies in the same
+   `min` with the operands the other way round; a bad `tokens_out` survives
+   the clamp entirely and dies at the multiply with
+   `can't multiply sequence by non-int of type 'float'`, naming neither
+   operand. A single generic TypeError matches none of them.
+6. **The render has three conversions a reasonable port gets wrong.**
+   `{x}ms` is `str()` and never raises (a `None` prints `Nonems`) while the
+   adjacent `${x:.6f}` DOES raise on a str; `computed_at[:19]` is a code
+   point slice and the `Z` is a literal, so an empty stamp renders a bare
+   `Z`; and `{:,}` has an int lane and a float lane that print `1,234,567`
+   and `1,234.5` for the same magnitude.
+
+### What the differential caught on its first run
+
+48 fixtures, 46 agreeing. Both disagreements were real.
+
+**The str-`cost_usd` gate used `pyval.Float`, three lines under a comment
+saying a str `cost_usd` raises.** `pyval.Float` is `float(x)`, so it
+answers `3.0` for `"3"` and the renderer printed `$3.000000` where CPython
+raises `ValueError: Unknown format code 'f' for object of type 'str'`.
+This file has an `isNumber` helper whose doc comment warns about exactly
+this substitution — and the mistake was made in the same file, at a site
+whose own comment states the rule. Writing the warning is not the same as
+applying it.
+
+**The harness handed the two sides different values.** Fixture 27c meant to
+reach `{:,}`'s scientific branch with `1e20`. But `encoding/json` writes
+`1e20` as twenty-one digits, CPython loads that as an INT, and the fixture
+tested the int lane on one side and the float lane on the other — reported
+as a port bug. The fix is that a differential's INPUTS have to cross the
+same wire its subject does: the whole fixture now goes through
+`pyval.LoadsOrdered` + `pyval.Plain` before either side sees it, the same
+typing `record.LoadOutcomes` applies. `1e21` is the first magnitude Go
+writes in exponent form, so that is what the fixture uses now.
+
+That second one also surfaced a **new named divergence**: CPython's int is
+arbitrary precision, `pyval.Plain` resolves an integral literal through
+`ParseInt` (int64), so a stored token count past 2^63 is an int to CPython
+and a float64 to the port — and `{:,}` prints
+`100,000,000,000,000,000,000` against `1e+20`. It is NOT worked around in
+the renderer: the hole is in `pyval` and every reader in the port has it.
+Filed, and pinned by a test that goes red when a big-int lane lands.
+
+### Two guards that could not fail, found by mutating the fixtures
+
+- The four-row cost-tie fixture could not tell `SliceStable` from `Slice`:
+  Go insertion-sorts below twelve elements and happens to preserve order.
+  A thirteen-row all-tied fixture crosses into pdqsort, where it cannot.
+  This is the same shape as round 4's still-open **M101**, and the fix
+  generalises — a single tie proves nothing about stability at any size.
+- The `can't multiply sequence` message is unreachable through
+  `compute_metrics`, which sums `tokens_out` into `avg_out` first and
+  raises the addition error instead. It needed its own
+  `identify_expensive_patterns` fixture, plus the `compute_metrics` twin
+  that proves the two paths report differently on the identical row.
+
+### Deliberately not ported
+
+`maro metrics -format json` is REFUSED by name rather than silently
+ignored. Python's is `json.dumps(asdict(metrics), indent=2)`, and `asdict`
+walks two nested dataclass maps whose keys can be non-strings — which
+`json.dumps` coerces for an int and refuses for a tuple. That is its own
+measurement job; shipping a plausible-looking JSON lane before doing it is
+how a port acquires a divergence nobody has a fixture for. `metrics pass-k`
+is absent too: it reads `skill-stats.jsonl` and lands with the rest of
+`skills.py`.
+
+### The mutation battery, and the two ways it lied first
+
+53 fixtures, then 42 mutants derived from the FILE rather than the diff.
+Final: **37 caught, 5 survivors, all five accounted for.** Getting there
+took four runs, and the first two were wrong in ways worth writing down.
+
+**Run 1 reported 34 of 42 surviving — because none of the differentials
+ran.** The battery copies the Go module to a scratch directory (P4: a Go
+module builds through its import graph, so a battery owns the whole tree
+it runs in). One level deeper than the previous battery's copy,
+`../../../src` no longer resolved, `pyprobe.SrcDir` called `t.Skipf`, and
+`go test` printed `ok`. Among the 34 "survivors" was the str-`cost_usd`
+mutant the differential had CAUGHT live an hour earlier.
+
+The baseline-green gate (P7) does not catch this. It asks whether the
+suite passes before the first mutant. It did. **The baseline was green and
+empty.** `MARO_PYPROBE_REQUIRED=1` now turns the skip into a `t.Fatalf`,
+and the battery sets it — a door rather than a habit. New lens **P10**.
+
+**Run 3 filed a KILLED mutant as "did not compile"** because the
+classifier decided by grepping the test output for `cannot use` — which is
+also the opening of CPython's own `cannot use 'dict' as a dict key`. The
+battery now asks the compiler with `go vet` instead of reading prose to
+decide what happened. That is the same mistake this port keeps finding in
+the code it ports, made in the tool that looks for it.
+
+**The tie fixture was wrong twice, the second time for a reason worth
+measuring.** Four tied rows is below Go's insertion-sort threshold, which
+is the known half. Thirteen IDENTICAL rows is above it and still cannot
+fail — measured, `sort.Slice` preserves an all-equal list at every size
+tried, because pdqsort detects the duplicates and takes an equal-partition
+path. Only two or more interleaved groups above thirteen actually reorder:
+
+	n:              4     12    13    16    40
+	all equal:    keeps keeps keeps keeps keeps
+	two groups:   keeps keeps SCRAM SCRAM SCRAM
+
+Round 4's still-open **M101** is this finding one chunk earlier, recorded
+then as "needs a many-ties fixture" — the fix that does not work. New lens
+**P11**.
+
+**The five survivors.** Three are UNREACHABLE GUARDS, now labelled as such
+in the source: `pyDict.set`'s unhashable raise (every caller does `get`
+first, which raises), `ratesFor`'s falsy-model collapse and
+`estimateCostAny`'s cache_read lane (both dead from this file's callers,
+kept because `estimate_cost` is public in Python). One is EQUIVALENT:
+`pyval.Sum` over two operands is a plain addition. One is
+NEAR-equivalent: a naive fold for `typeAvg` differs by one ULP, and
+`typeAvg`'s only consumers are a `>` and a `:.6f` — a search over 400,000
+random 3-to-6-row token sets found no case where the two land on opposite
+sides of the `1.5x` threshold. `pyval.Sum` stays because Python's is
+`sum()`, not because a test can tell.

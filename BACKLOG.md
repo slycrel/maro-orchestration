@@ -44,6 +44,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Go port: `pyval` has no big-int lane (FOUND 2026-08-26, SystemMetrics chunk)
+
+CPython's `int` is arbitrary precision. `pyval.Plain` resolves an integral
+JSON literal through `ParseInt`, which is int64, so **any stored integer
+past 2^63 silently becomes a float64**. It is not a rendering bug in one
+consumer — every reader in the port that goes through `Plain` has it.
+
+Measured, live: a `total_tokens_in` of `100000000000000000000` renders
+`100,000,000,000,000,000,000` under CPython's `{:,}` and `1e+20` under the
+port, because the value reached the float lane. Token counts are the
+reachable case (a corrupt or synthesised stamp), but ids and byte counts
+are the same shape.
+
+Not worked around in the renderer on purpose — a local patch there would
+hide the hole from every other reader that has it. Pinned by
+`TestWideIntegerTokenTotalIsANamedDivergence` in `internal/metrics`, which
+goes red the day a big-int lane lands.
+
+Open question when someone picks this up: whether the lane is
+`*big.Int` in `Plain`'s output (which every type switch in the port then
+has to handle) or a narrower "keep the literal" value that only the
+formatters understand. The second is cheaper and leaves arithmetic
+broken; the first is correct and touches everything.
+
 ### Go port: port CPython's `list.sort` to `pyval` (FOUND 2026-08-26, metrics r4 finding 1)
 
 Go has no sort that reproduces CPython's when the comparator is

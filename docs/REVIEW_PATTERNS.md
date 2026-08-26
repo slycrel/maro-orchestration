@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**727**. The counts below are regenerated from the ledger, not recalled.
+**732**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 727
+**Two things the counts are not.** They are lower bounds: 314 of the 732
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -578,7 +578,7 @@ fixture has a confound — split it until every case has one variable.
 
 ### L42 — Two implementations that agree at small n need a fixture past the threshold
 
-*instances: 4*
+*instances: 5*
 
 Library internals routinely fall back to a simpler algorithm on small
 inputs, and the simpler algorithm often has the property the caller was
@@ -742,7 +742,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 8*
+*instances: 9*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -900,7 +900,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 5*
+*instances: 6*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -1049,6 +1049,63 @@ A third habit falls out of the same incident: **a suspiciously perfect
 battery result deserves the same scepticism as a suspiciously perfect test
 suite.** This is L1 wearing a different hat — the battery is a test of the
 tests, and it agreed because nothing could disagree.
+
+### P10 — A harness whose subject is an external process must prove it ran
+*instances: 1*
+
+Every differential in this port is `go test` plus a live CPython. When the
+Python side cannot be found, `pyprobe.SrcDir` calls `t.Skipf` — the right
+answer on a machine without the source tree, and catastrophic anywhere the
+whole point is that the differentials RAN.
+
+Measured, 2026-08-26: the SystemMetrics mutation battery copied the Go
+module to a scratch directory (P4 — a Go module builds through its import
+graph, so a battery owns the whole tree it runs in), one level deeper than
+the previous battery's copy. `../../../src` no longer resolved, every
+differential skipped, `go test` printed `ok`, and the battery reported **34
+of 42 mutants surviving — including one the differential had CAUGHT live an
+hour earlier.**
+
+**The baseline-green gate does not catch this.** That gate (P7) asks whether
+the suite passes before the first mutant. It did. The baseline was green
+*and empty*. A green baseline proves the tests do not fail; it says nothing
+about whether they ran.
+
+The fix is a door, not discipline: `MARO_PYPROBE_REQUIRED=1` turns the skip
+into a `t.Fatalf`, and every battery sets it. A caller whose result depends
+on the differentials having run now says so, once, in one place — rather
+than each battery author remembering to check a skip count they cannot see.
+
+Generalised: **when a harness delegates its verdict to something outside the
+process, "no failure" and "no verdict" look identical from the outside.**
+Ask what the harness prints when the external thing is absent. If the answer
+is the same string it prints on success, the harness has no verdict.
+
+### P11 — The tie fixture must have the shape the sort actually reorders
+*instances: 1*
+
+"A tie test needs more elements than the insertion-sort threshold" is half
+the rule, and the missing half is the one that bites. MEASURED on Go 1.24,
+`sort.Slice` against the stable answer:
+
+	n:              4     12    13    16    40
+	all equal:    keeps keeps keeps keeps keeps
+	two groups:   keeps keeps SCRAM SCRAM SCRAM
+
+An **all-equal** list never exposes instability at any size — pdqsort
+detects the duplicates and takes an equal-partition path that happens to
+preserve order. Only **two or more interleaved groups**, above the
+twelve-element insertion-sort threshold, actually reorder.
+
+Both drafts of the SystemMetrics tie fixture were wrong in this way: four
+tied rows (below the threshold), then thirteen identical rows (above it, but
+the wrong shape). Neither could fail. Round 4's still-open **M101** is the
+same finding one chunk earlier, recorded then as "needs a many-ties fixture"
+— which is exactly the fix that does not work.
+
+The construction rule: **at least 13 elements, at least two distinct key
+values, interleaved, and the assertion must read the order WITHIN one key
+group.** Asserting the group boundaries only tests the comparator.
 
 ### P9 — The exception MESSAGE names which statement ran first
 *instances: 1*

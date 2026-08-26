@@ -153,6 +153,46 @@ func addN(v any, n int, op string) (any, error) {
 	return i + n, nil
 }
 
+// Add is Python's binary `+` over two arbitrary values, restricted to the
+// numeric lane and raising the way CPython does everywhere else.
+//
+// It exists because `AddN` only takes a Go int on the right, and
+// `mm.total_tokens_in += o.tokens_in` adds two values that both arrive
+// untyped from a JSON store. The INT/FLOAT distinction is the point: the
+// running total starts as int 0 and stays an int until a float row arrives,
+// and the report renders it with `{:,}`, which has an int lane
+// (`1,234,567`) and a float lane (`1,234.5`).
+//
+// `op` names the operator for the error message, because Python's augmented
+// assignment says "for +=" where a bare sum says "for +", and both spellings
+// exist in metrics.py within a few lines of each other.
+//
+// NOT compensated, deliberately: this is the `+=` fold, and CPython's `+=`
+// is a fold. `Sum` is the compensated one. compute_metrics uses BOTH over
+// the same costs — `sum()` for by_task_type and `+=` for by_model — and
+// they disagree on ordinary inputs, so collapsing them into one helper is
+// a divergence in whichever field loses.
+func Add(a, b any, op string) (any, error) {
+	ai, af, aFloat, aOK := numOf(a)
+	bi, bf, bFloat, bOK := numOf(b)
+	if !aOK || !bOK {
+		return nil, &PyErr{Class: "TypeError",
+			Msg: fmt.Sprintf(
+				"unsupported operand type(s) for %s: '%s' and '%s'",
+				op, TypeName(a), TypeName(b))}
+	}
+	if aFloat || bFloat {
+		if !aFloat {
+			af = float64(ai)
+		}
+		if !bFloat {
+			bf = float64(bi)
+		}
+		return af + bf, nil
+	}
+	return ai + bi, nil
+}
+
 // Sum is Python's builtin `sum(iterable)`, RAISES AND ALL.
 //
 // It exists because `sum(e.get("cost_usd", 0.0) for e in entries)` is a
