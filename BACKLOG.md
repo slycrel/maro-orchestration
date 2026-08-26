@@ -113,9 +113,29 @@ closely enough to port it turned up. Measured against the real
 `tokens_in` is negative, so `fresh_in` keeps the negative value and the cost
 goes negative with it. `identify_expensive_patterns` then computes a negative
 `avg_cost`, and its `type_avg > avg_cost * 1.5` test **inverts** — measured,
-`1.0 > -1.0 * 1.5` is True. The function recommends MODEL_CHEAP for the
-*cheapest* task type and renders a negative multiplier into
-`f"({type_avg/avg_cost:.1f}x the overall average)"`.
+`1.0 > -1.0 * 1.5` is True.
+
+Run end-to-end against the real functions — two outcomes, one at 1M input
+tokens under task_type `cheap`, one at -5M under task_type `neg` — this is
+what `format_metrics_report` actually prints:
+
+```
+--- By Task Type ---
+  cheap: 1 runs, 100% success, avg 0ms, $3.000000 total
+  neg: 1 runs, 100% success, avg 0ms, $-15.000000 total
+
+--- Cost Optimization Suggestions ---
+  ! 'cheap' tasks cost 3.000000 USD avg (-0.5x the overall average).
+    Consider using MODEL_CHEAP or reducing max_tokens.
+
+--- By Model ---
+  unknown: 2 runs, $-12.000000 total, -4,000,000 tokens
+```
+
+The advice names the CHEAPER of the two task types, quotes "-0.5x the
+overall average" as its justification, and the model line reports negative
+spend over a negative token count. Nothing raises; the report is confident
+and wrong end to end.
 
 The `if avg_cost == 0.0: return []` gate does not catch it; that gate exists
 to make the division safe, and it only excludes exact zero.
