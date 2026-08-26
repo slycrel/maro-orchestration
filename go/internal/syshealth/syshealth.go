@@ -13,11 +13,23 @@
 //   - The seven declared probes (_probe_run_ref_index,
 //     _probe_skill_attribution, _probe_contradiction_lifecycle,
 //     _probe_variant_ab, _probe_lesson_receipts, _probe_closure_verdicts,
-//     _probe_container_auth). Each reads a DIFFERENT live store, so each is
-//     its own tranche with its own fixtures. They arrive here as injected
-//     Declarations, which is the seam that makes the state machine testable
-//     at all — in Python they are a module-level list, and the cycle cannot
-//     be exercised without monkey-patching it.
+//     _probe_container_auth). Each is its own tranche with its own
+//     fixtures, because each answers a different question about a
+//     different subsystem. They do NOT each read a different store, which
+//     is what this said until r5 and is the sentence a later tranche would
+//     have planned its fixtures from: FOUR of them go through
+//     `_recent_outcomes` to memory/outcomes.jsonl (_probe_run_ref_index
+//     :150, _probe_skill_attribution :171, _probe_lesson_receipts :314,
+//     _probe_closure_verdicts :352) and TWO import captains_log.query_log
+//     (_probe_contradiction_lifecycle :204, _probe_variant_ab :247). A
+//     shared reader means shared fixtures are possible, and it means a
+//     change to _recent_outcomes moves four probes at once.
+//
+//     They arrive here as injected Declarations, which is the seam that
+//     makes the state machine testable at all — in Python they are a
+//     module-level list, and the cycle cannot be exercised without
+//     monkey-patching it.
+//
 //   - _narrate_transition, a captains_log write. RunCycle RETURNS the
 //     narrations it decided on instead of performing them, which is also
 //     what the Python's own ordering demands: narrate only AFTER the
@@ -26,6 +38,28 @@
 //     forever. The reverse trade — write lands, log append fails, the line is
 //     lost — is accepted there and inherited here: the snapshot still says
 //     SILENT.
+//
+//     The ORDERING was all this bullet used to say, and ordering is not
+//     enough to rebuild the function from (r5 F6, the same shape as r4's
+//     logger finding). The rest of what it does, from
+//     system_health.py:613-637:
+//
+//     Both log_event calls run inside `with loop_id_scope(None)`, and the
+//     Python comment says why it is load-bearing — health transitions are
+//     global process state, not evidence produced by whichever run's
+//     finalization happened to host the cycle, so the ambient scope is
+//     SHED or run reports claim them as attributed run events. A caller
+//     that rebuilds the narration half from the ordering alone gets every
+//     transition stamped with the hosting run's loop_id, which is the
+//     exact misattribution that `with` exists to prevent.
+//
+//     The events are captains_log's SUBSYSTEM_SILENT and
+//     SUBSYSTEM_RECOVERED, chosen on `status == SILENT`. Each carries
+//     subject=decl.name, summary=f"{decl.description} went silent:
+//     {evidence}" (or "recovered:"), and context={"expectation":
+//     decl.expectation, "evidence": evidence}. The whole body is wrapped in
+//     `except Exception: pass` — narration is best-effort by design.
+//
 //   - The locked_write around the whole cycle. Python holds the snapshot's
 //     lock across read-modify-write so concurrent finalizers serialise
 //     instead of both reading narrated=None and double-narrating; that is
@@ -37,6 +71,7 @@
 //     exactly the double-narration race the Python comment
 //     (system_health.py:539-543) exists to prevent. The rule is that the
 //     lock must be held across the whole RunAndPersist CALL.
+//
 //   - `verbose`, which prints `[health] name: STATUS — evidence` per
 //     declaration AS THE CYCLE RUNS. Nothing branches on it — it is the
 //     --probe flag's progress output. A caller wanting it must print from
@@ -46,7 +81,9 @@
 //     their stale status and evidence (fixture C26). An earlier draft of
 //     this note said "print from the returned snapshot, in the same order",
 //     which is wrong on both counts.
+//
 //   - main, the CLI.
+//
 //   - The module LOGGER, and it is an observable emission rather than an
 //     absence. `logger = logging.getLogger(__name__)` (system_health.py:47)
 //     and `logger.debug("health probe cycle failed (non-fatal): %s", exc)`
@@ -55,7 +92,18 @@
 //     This package has no logging seam at all, so a caller reproducing the
 //     error lanes from this file would never learn that line exists. Found
 //     by r4 (F5) — the list's entire value is completeness, and it was
-//     silently missing three of its nine top-level omissions.
+//     silently incomplete.
+//
+//     The sentence here used to end "silently missing three of its nine
+//     top-level omissions", and that number reconciles under no consistent
+//     reading: r4 added TWO bullets (this one and the helpers one) to a
+//     list of five, and the only expansion reaching nine counts the three
+//     helpers individually — under which r4 restored four items, not
+//     three. It is the enumeration-wrong-at-birth class this port keeps
+//     hitting, in the doc bullet whose subject is completeness. The list
+//     is not numbered any more, on purpose: a count in a growing list is a
+//     claim that has to be re-derived on every edit and never is.
+//
 //   - The three shared probe HELPERS `_memory_dir`, `_recent_outcomes` and
 //     `_run_source` (system_health.py:101-131). The first bullet says the
 //     seven declared probes are each their own tranche; these sit BELOW
@@ -615,7 +663,10 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, now func() string) (pyval
 // config gate, the load, the cycle, the write, and the ONE blanket `except`
 // that covers all four. It returns the narrations to perform rather than
 // performing them (see the package doc), and it is the entry point callers
-// should use — RunCycle alone cannot see two of the four error lanes.
+// should use — RunCycle alone cannot see four of the five error lanes the
+// Summary doc tabulates. (This said "two of the four" until r5, having
+// been written when the table had four rows and two of them were reachable
+// from here; both halves drifted, in opposite directions.)
 //
 // `cfg` is `config.get("health.probes_enabled", True)`, returning the raw
 // value rather than a bool because Python spells the gate `bool(cfg_get(...))`
@@ -623,7 +674,15 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, now func() string) (pyval
 // the STRING "no" is a non-empty string and therefore RUNS it. It may return
 // an error, because the import-and-call is inside the try and a config layer
 // that raises is measured to give {"ran": 0, "transitions": 0, "error": ...}
-// with nothing written — the one lane where Ran is still 0 when Error is set.
+// with nothing written.
+//
+// That is not the ONLY lane where Ran is 0 and Error is set, which is what
+// this sentence used to claim. It was true when it was written and stopped
+// being true twice without anyone re-deriving it: r3 added the failed
+// mkdir (implemented twenty lines below, fixtures C48/C49) and r4 added the
+// lock timeout. Three lanes end with ran=0 and an error, and the Summary
+// doc's table above is the list. A count in prose is a claim with a
+// shelf life.
 //
 // The lock is still the caller's (package doc): Python holds the snapshot's
 // lock across load..write, and nothing here takes it.
@@ -691,6 +750,8 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 //	"abc"                           -> ValueError, and the whole cycle aborts
 //	[1] / {"a": 1}                  -> TypeError, likewise
 //	9223372036854775807 / 1e19      -> REFUSED, a known gap; CPython computes
+//	"٤١" (Arabic-Indic 41) -> REFUSED, a SECOND known gap; CPython
+//	                                   reads it as 41 and counts on
 //
 // The raising lane is why this returns an error instead of defaulting: a
 // port that quietly restarted the counter on a corrupt value would write a
@@ -714,6 +775,19 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 // The asymmetry is worth naming: RenderSnapshot prints such a counter
 // correctly, because pyval.reprNumber keeps an integer literal verbatim
 // rather than forcing it through an int64. Only the WRITER is bounded.
+//
+// There is a SECOND refusing lane, and it went unnamed here for five
+// rounds (r5 F3) while the first one had a table row, three paragraphs and
+// a knowngap pin. CPython's `int()` accepts any Unicode decimal digit, so
+// a snapshot whose counter is the string "٤١" reads as 41 and the cycle
+// proceeds; pyval.Int accepts ASCII only and refuses, which aborts the
+// cycle with a ValueError message and writes nothing. The residual is
+// named where it lives (pyval/pyint.go:174) and was simply absent from
+// this table — which is the failure mode a table has, since a reader
+// takes it for the list. It is a REAL input: the snapshot is an
+// operator-editable file and a string counter is already an acknowledged
+// lane (fixture C18). Now pinned in knowngap_test.go beside the int64 one,
+// so closing either fails a test.
 func nextCycle(snapshot pyval.Obj) (int, error) {
 	v, ok := snapshot.Get("cycle")
 	if !ok || !pyval.Truthy(v) {

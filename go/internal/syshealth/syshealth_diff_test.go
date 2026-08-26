@@ -59,6 +59,14 @@ def _decl(name, spec):
     def probe(prior, _s=spec):
         if "raise" in _s:
             raise RuntimeError(_s["raise"])
+        # A probe holds the LIVE entry and can write to it. Every read the
+        # cycle makes of prior happens after this returns -- prev_status,
+        # dict(prior), _history_of(prior), narrated -- so what a probe
+        # writes here is what those four reads see. That ordering is the
+        # subject of C51-C53. (No backtick in this comment: the whole
+        # probe lives in a Go raw string literal and one would end it.)
+        for _k, _v in (_s.get("write") or {}).items():
+            prior[_k] = _v
         return (_s["status"], _s["evidence"], _s.get("obs") or {})
     return sh.ProcessDeclaration(
         name=name, description=spec.get("description", "d:" + name),
@@ -240,6 +248,17 @@ func syProbes(t *testing.T, raw string) []Declaration {
 			Probe: func(prior *pyval.Obj) (string, string, pyval.Obj, error) {
 				if v, ok := s.Get("raise"); ok {
 					return "", "", nil, fmt.Errorf("%s", pyval.Str(v))
+				}
+				// `for k, v in (spec.get("write") or {}).items():
+				//      prior[k] = v` — see the Python `_decl`. This runs
+				// before the return for the same reason it does there:
+				// every read of `prior` in the cycle happens afterwards.
+				if w, ok := s.Get("write"); ok {
+					if wo, isObj := w.(pyval.Obj); isObj {
+						for _, f := range wo {
+							prior.Set(f.Key, f.Val)
+						}
+					}
 				}
 				st, _ := s.Get("status")
 				ev, _ := s.Get("evidence")
@@ -884,6 +903,45 @@ func syCases() []syCase {
 		{name: "C50 a cycle counter at 2^53 increments exactly",
 			probes: `[["p1", ` + okp + `]]`,
 			prior:  `{"cycle": 9007199254740992, "processes": {}}`},
+
+		// C51-C53 are r5 F1's witnesses, and they exist because the r4 pin
+		// did not hold. `TestAProbeWritingIntoPriorIsSeenByTheCycle` proved
+		// that a probe's write to a NEW key survives `entry = dict(prior)`,
+		// and its other half — a write to an EXISTING key — asserted only
+		// that the entry's status is the probe's VERDICT, which the cycle
+		// sets unconditionally one line later. That assertion is true of
+		// every implementation. Meanwhile the SHAPE it was supposed to
+		// cover was unpinned in three places: hoisting `prevStatus`,
+		// `HistoryOf(prior)`, or the `narrated` read above the probe call
+		// passed the entire suite (measured, on a scratch copy).
+		//
+		// Each of these three drives ONE of those reads to a value only a
+		// post-probe read can produce, and each is a full differential —
+		// the snapshot FILE is compared byte for byte, so CPython decides
+		// what the answer is rather than this comment.
+		//
+		// prev_status is observable only through `last_transition["from"]`,
+		// and only when a transition fires. prior carries status=OK so the
+		// probe OVERWRITES rather than appends: that isolates the read
+		// ORDER from the pointer-vs-value question the r4 case covers.
+		{name: "C51 prev_status is read AFTER the probe, so a probe's overwrite reaches it",
+			probes: `[["p1", {"status": "SILENT", "evidence": "e",
+			           "write": {"status": "WRITTEN-BY-PROBE"}}]]`,
+			prior: `{"processes": {"p1": {"status": "OK"}}}`},
+		// _history_of(prior) likewise. An existing history is replaced by
+		// the probe, so a read-before port writes the OLD list.
+		{name: "C52 the history is read AFTER the probe, so a probe's overwrite reaches it",
+			probes: `[["p1", {"status": "OK", "evidence": "e",
+			           "write": {"history": [{"tag": "written-by-probe"}]}}]]`,
+			prior: `{"processes": {"p1": {"status": "OK",
+			         "history": [{"tag": "was-here-first"}]}}}`},
+		// `narrated` decides whether a recovery is narrated at all, so a
+		// probe overwriting it changes the summary, the told list and the
+		// file. A read-before port narrates a recovery this one does not.
+		{name: "C53 narrated is read AFTER the probe, so a probe's overwrite suppresses the recovery",
+			probes: `[["p1", {"status": "OK", "evidence": "e",
+			           "write": {"narrated": "ok"}}]]`,
+			prior: `{"processes": {"p1": {"status": "SILENT", "narrated": "silent"}}}`},
 	} {
 		tc := tc
 		spec := map[string]any{"kind": "cycle", "probes": json.RawMessage(tc.probes)}
@@ -1627,7 +1685,22 @@ func TestAProbeWritingIntoPriorIsSeenByTheCycle(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, want string
 	}{
-		{"a key that is already there", "status", Silent},
+		// Both cases now write a key the CYCLE does not overwrite, which is
+		// the whole reason the earlier "status" row was worthless: the
+		// cycle sets `entry["status"] = status` unconditionally, so the
+		// value asserted there was the probe's VERDICT and not its WRITE,
+		// and the assertion held for every implementation including one
+		// with no prior channel at all (r5 F1, proved with a mutant).
+		//
+		// "evidence" is the existing-key half: a prior carrying it means
+		// Obj.Set writes through the shared backing array. "scratch" is the
+		// new-key half, where Set appends to a local header and a value
+		// receiver loses it. What survives to the entry here is the
+		// probe's write in both cases, because the cycle overwrites neither
+		// name — it sets `evidence` from its own return value, so this
+		// asserts the copy in `entry = dict(prior)` saw the write, not that
+		// the field survived.
+		{"a key that is already there", "seen", "written-by-probe"},
 		{"a key the entry has never had", "scratch", "written-by-probe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1638,10 +1711,13 @@ func TestAProbeWritingIntoPriorIsSeenByTheCycle(t *testing.T) {
 					return OK, "e", pyval.Obj{}, nil
 				},
 			}}
-			// A prior carrying `status` so the first case overwrites rather
-			// than appends, which is what makes the two cases different.
+			// A prior carrying `seen` so the first case OVERWRITES an
+			// existing key and the second APPENDS a new one — the two
+			// halves a value receiver splits. Neither name is one the
+			// cycle writes, so what reaches the entry is the probe's own
+			// value or nothing.
 			prior := pyval.Obj{}
-			prior.Set("status", Unknown)
+			prior.Set("seen", "was-here-first")
 			procs := pyval.Obj{}
 			procs.Set("p1", prior)
 			snap := pyval.Obj{}
@@ -1660,16 +1736,6 @@ func TestAProbeWritingIntoPriorIsSeenByTheCycle(t *testing.T) {
 				t.Fatalf("the p1 entry is not an object: %#v", ev)
 			}
 			got, present := entry.Get(tc.key)
-			if tc.key == "status" {
-				// The cycle overwrites status with the probe's verdict, so
-				// what this case proves is that the probe's write REACHED
-				// prev_status — visible as the transition decision, not as
-				// a surviving value. Assert the observable half instead.
-				if got != OK {
-					t.Errorf("entry status = %v, want the probe's verdict %q", got, OK)
-				}
-				return
-			}
 			if !present {
 				t.Fatalf("the probe's new key %q never reached `entry = "+
 					"dict(prior)` — prior is being passed by value, so the "+
