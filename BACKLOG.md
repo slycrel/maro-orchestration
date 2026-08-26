@@ -44,6 +44,29 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Go port: outcome rows are written without `cost_usd`, and a Python consumer DROPS them (FOUND 2026-08-26, go-port scoping)
+
+`record.WriteOutcome` omits `cost_usd` with a comment saying the Python
+estimator was not ported yet. It is now — `metrics.EstimateCost` landed
+with the pricing table — and Python's `record_outcome`
+(`memory_ledger.py:574`) writes
+`estimate_cost(tokens_in, tokens_out, model=model or None)` on every row.
+
+The consequence is worse than a zero. `evolver_scans.py:488` builds its
+cost sample as
+`[o.get("cost_usd", 0.0) for o in outcomes if isinstance(o.get("cost_usd"), (int, float))]`
+— a missing key fails the isinstance test, so a Go-written outcome falls
+OUT of the sample rather than reading as zero spend. Every cost analysis
+over a mixed store silently measures only the Python-written rows.
+
+Blocked on an import cycle: `internal/metrics` imports `internal/record`
+for the jsonl append helpers, so `record` cannot import `metrics` back.
+The fix is to lift the pricing table and `EstimateCost` into a leaf
+package (`internal/pricing`) that both import — small, and it also stops
+the cost constants living in the same package as the ledger readers.
+
+Do this before any Go-side runtime writes real outcomes.
+
 ### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
 
 Surfaced as a byproduct of a documented PASS: the round-3 assessment declined
