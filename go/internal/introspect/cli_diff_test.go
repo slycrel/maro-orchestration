@@ -257,7 +257,10 @@ func TestCLIMatchesCPython(t *testing.T) {
 					"warning", 1, 2, 42),
 			}},
 		// `if args.history:` is TRUTHINESS, so 0 is falsy and falls through
-		// to diagnosing rather than printing an empty history.
+		// to diagnosing rather than printing an empty history. It is also
+		// SUPPLIED, which makes it the one input separating "was it given"
+		// from "is it non-zero" — the reason both terms of that guard are
+		// written out.
 		{name: "a history of zero falls through", argv: []string{"--history", "0"},
 			store: "events", rows: explosion},
 
@@ -333,13 +336,6 @@ func TestCLIMatchesCPython(t *testing.T) {
 				diagRow("n1", "healthy", "info", 1, 1, 1),
 				diagRow("n2", "token_explosion", "warning", 2, 2, 2),
 				diagRow("n3", "adapter_timeout", "critical", 3, 3, 3)}},
-		// `--flag=value` — a whole branch of splitArgs that no case reached.
-		// `--history 0` is SUPPLIED and FALSY, so it falls through to the
-		// latest-loop branch exactly as an unsupplied flag does — the one
-		// input that separates "was it given" from "is it non-zero", and
-		// the reason both terms of that guard are written out.
-		{name: "a zero history window falls through to latest",
-			argv: []string{"--history", "0"}, store: "events", rows: explosion},
 		{name: "a value attached with an equals sign",
 			argv: []string{"--history=5"}, store: "diagnoses",
 			rows: []string{diagRow("e1", "healthy", "info", 1, 1, 1)}},
@@ -384,11 +380,18 @@ func TestCLIMatchesCPython(t *testing.T) {
 		{name: "help by its long name", argv: []string{"--help"},
 			store: "events", rows: explosion},
 		// A glued tail on a single-dash flag is argparse re-reading it as
-		// more single-dash options — and the help action exits before the
-		// tail is looked at, so `-hh` and `-hx` alike print help. A port that
-		// rejected every single-dash long name (this one did) refuses all of
-		// them.
+		// more single-dash options. The tail IS read — an earlier comment
+		// here claiming the help action exits first was wrong, and `-hh=x`
+		// below is the input that disproves it. `-hh` resolves its tail to a
+		// second `-h`; `-hx` fails to resolve it and sets `-x` aside; both
+		// then run the help action they collected, so both print help. A
+		// port that rejected every single-dash long name (this one did)
+		// refuses all of them.
 		{name: "help with a glued tail", argv: []string{"-hh"},
+			store: "events", rows: explosion},
+		{name: "help with an unresolvable glued tail", argv: []string{"-hx"},
+			store: "events", rows: explosion},
+		{name: "help with a glued tail three deep", argv: []string{"-hhh"},
 			store: "events", rows: explosion},
 		// An unrecognized option is NOT an error where it appears: it is set
 		// aside and reported at the end, so a `-h` after it still wins.
@@ -477,15 +480,100 @@ func TestCLIMatchesCPython(t *testing.T) {
 		{name: "an unknown option does not consume the loop id",
 			argv: []string{"--patterns", "--bogus", "extra"}, store: "events",
 			rows: explosion, wantExit: 2},
-		// The terminator itself never appears in the extras.
+		// The terminator is dropped only when the POSITIONAL's matched span
+		// covers it. `loop_id` is nargs='?', whose pattern is `(-*A?-*)`, so
+		// in `a -- b` the match runs "A-" and swallows the `--`; the extras
+		// are just `b`.
 		{name: "a surplus positional after the terminator",
 			argv: []string{"a", "--", "b"}, store: "events", rows: explosion,
 			wantExit: 2},
+		// ...but one token further out, the span is only "A" and the
+		// terminator STAYS, reported among the extras exactly as typed. The
+		// port used to skip every `--` unconditionally, which is right for
+		// the case above and wrong for all five of these.
+		{name: "the terminator survives in the extras",
+			argv: []string{"a", "b", "--", "c"}, store: "events",
+			rows: explosion, wantExit: 2},
+		{name: "a trailing terminator survives in the extras",
+			argv: []string{"a", "b", "--"}, store: "events",
+			rows: explosion, wantExit: 2},
+		{name: "the terminator survives past an option",
+			argv: []string{"a", "--latest", "b", "--", "c"}, store: "events",
+			rows: explosion, wantExit: 2},
+		{name: "the terminator survives past an unknown option",
+			argv: []string{"--bogus", "a", "b", "--", "c"}, store: "events",
+			rows: explosion, wantExit: 2},
+		{name: "the terminator survives past a consumed value",
+			argv:  []string{"--history", "5", "a", "b", "--", "c"},
+			store: "diagnoses", wantExit: 2},
 		// A glued tail that itself starts with a dash is NOT re-read as more
 		// options — it is the one shape of `-h<tail>` argparse refuses.
 		{name: "a glued tail starting with a dash",
 			argv: []string{"-h-x"}, store: "events", rows: explosion,
 			wantExit: 2},
+		// The re-read LOOPS, and a refusal on the second pass beats an action
+		// collected on the first. `-hh=x` resolves its first tail character
+		// to another `-h`, and the `=x` left over is an explicit argument a
+		// flag cannot take — so this exits 2 with the help action collected
+		// but never run. Every one of these printed help before the loop was
+		// ported.
+		{name: "a looped re-read refuses on its second pass",
+			argv: []string{"-hh=x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a looped re-read refuses a dashed tail",
+			argv: []string{"-hh-x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a looped re-read refuses an empty explicit value",
+			argv: []string{"-hh="}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a looped re-read refuses a bare dash tail",
+			argv: []string{"-hh-"}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a re-read three deep still refuses",
+			argv: []string{"-hhh=x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		// The single-dash abbreviation test is against the part BEFORE the
+		// `=`, not the whole token. `-=x` cuts to `-`, which every option in
+		// the table starts with, so it is AMBIGUOUS — six candidates, short
+		// and long spellings alike. Testing the whole token instead makes it
+		// an unrecognized argument, a different message and a different
+		// exit path.
+		{name: "a single dash with a value is ambiguous, not unknown",
+			argv: []string{"-=x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a single dash with an empty value is ambiguous",
+			argv: []string{"-="}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a single dash with a numeric value is ambiguous",
+			argv: []string{"-=5"}, store: "events", rows: explosion,
+			wantExit: 2},
+		{name: "a single dash with a doubled equals is ambiguous",
+			argv: []string{"-==x"}, store: "events", rows: explosion,
+			wantExit: 2},
+		// A tail that spells a real long option changes NOTHING: the cut is
+		// still at the `=`, so this is the same six-way ambiguity.
+		{name: "a single dash with an option-shaped value is ambiguous",
+			argv: []string{"-=latest"}, store: "events", rows: explosion,
+			wantExit: 2},
+
+		// --- rules that had no fixture at all -----------------------------
+		// `--latest` and a loop id TOGETHER. `if args.latest or not
+		// args.loop_id:` takes the latest branch, so the named loop is
+		// ignored and loop-beta renders. Without this, the guard's first
+		// term is unpinned and `args.loopID == ""` alone passes the suite.
+		{name: "an explicit latest outranks a named loop",
+			argv: []string{"--latest", "loop-alpha"}, store: "events",
+			rows: explosion},
+		// argparse's own rule: "if it contains a space, it was meant to be a
+		// positional". A dash-led token with a space in it is a loop id, not
+		// an unknown option — the only input that reaches that branch.
+		{name: "a dash-led token with a space is a loop id",
+			argv: []string{"-a b"}, store: "events", rows: explosion},
+		// The `\.?` in the negative-number matcher. `-.5` starts with a dash,
+		// a dot and a digit, so it classifies as a positional; without the
+		// optional dot it would be an unrecognized option instead.
+		{name: "a leading-dot number is a loop id",
+			argv: []string{"-.5"}, store: "events", rows: explosion},
 
 		// --- one place the two runtimes cannot agree exactly -------------
 		// Python ints are arbitrary precision, so this is a valid (enormous)
@@ -497,6 +585,17 @@ func TestCLIMatchesCPython(t *testing.T) {
 			argv:  []string{"--history", "99999999999999999999999"},
 			store: "diagnoses",
 			rows:  []string{diagRow("s1", "healthy", "info", 1, 1, 1)}},
+		// The NEGATIVE bound, which saturates the other way and lands on the
+		// one-row branch a plain `-5` takes. Saturating both directions to
+		// MaxInt renders the whole store here and passes every other case,
+		// so this is what separates the two arms.
+		{name: "an int value past the negative machine bound",
+			argv:  []string{"--history", "-99999999999999999999999"},
+			store: "diagnoses",
+			rows: []string{
+				diagRow("t1", "healthy", "info", 1, 1, 1),
+				diagRow("t2", "token_explosion", "warning", 2, 2, 2),
+				diagRow("t3", "adapter_timeout", "critical", 3, 3, 3)}},
 	}
 
 	// Build both sides' stores up front: CPython gets its own copies.

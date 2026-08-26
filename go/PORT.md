@@ -9065,6 +9065,159 @@ Modelling `history` as a `*int` made the distinction structural instead
 of decorative, and the same mutant is now a nil dereference. A guard
 that cannot fire is sometimes a guard written in the wrong type.
 
+### Round 3: every decision was right and the program was still wrong
+
+Round 2 deleted Go's `flag` package and ported argparse's rules. Round 3
+found five more divergences, and not one of them is a rule I got wrong.
+They are all the same defect: I ported argparse's *decisions* and wrote
+them in a control flow of my own.
+
+CPython's `consume_optional` is a `while True`. It collects actions into
+`action_tuples` and takes **none** of them until the whole token is
+understood. My version took each action as it found it. Every branch
+agreed with CPython's; the deferral did not exist. So:
+
+```
+$ maro-introspect -hh=x
+usage: maro-introspect [-h] [--latest] [--lenses] [--history N] [--patterns]
+                       [loop_id]
+maro-introspect: error: argument -h/--help: ignored explicit argument 'x'
+$ echo $?
+2
+```
+
+where the port printed the help screen and exited 0. `-hh=x` resolves its
+first tail character to a second `-h`, and the `=x` left over is an
+explicit argument a flag cannot take. The help action *is* collected —
+it is simply never run, because the token turns out to be an error. Five
+inputs of that shape (`-hh=x`, `-hh-x`, `-hh=`, `-hh-`, `-hhh=x`) were
+wrong together.
+
+Worse than the bug: I had written a comment asserting the opposite.
+
+```go
+// Falls through and takes the action. The tail would become
+// the next option string to look up — but `-h` is the only
+// single-dash option this parser has, and its action exits
+// before the tail is ever read.
+```
+
+That is the flattening stated as a fact about CPython. It is false —
+`take_action` runs after the loop breaks, always — and it is the reason
+the shape survived a round of review and a 92/95 battery. A comment
+explaining why the original's extra structure is unnecessary here is the
+finding, not the justification (L28, and now L48).
+
+### The terminator does not have a rule of its own
+
+The second one has the same shape. My consume loop had `case
+kindSeparator: continue` — skip the `--`, it is a marker, not a token.
+CPython has no such case. `--` never reaches `consume_optional` at all;
+it falls through to `consume_positionals`, whose nargs pattern for
+`loop_id` (an `nargs='?'` positional) is `(-*A?-*)` matched against the
+classification string. The terminator is removed only when a positional's
+matched span happens to *cover* it:
+
+| argv | pattern | span | extras |
+|---|---|---|---|
+| `a -- b` | `A-A` | `A-` | `b` |
+| `a b -- c` | `AA-A` | `A` | `b -- c` |
+| `a b --` | `AA-` | `A` | `b --` |
+
+One line of "skip the separator" is right for the first row and wrong for
+the other two, and for three more shapes past an option. Six argument
+lines disagreed with CPython, all silently — the exit code was already 2,
+so only the message differed, and until round 2 taught the harness to
+compare stderr in full, nothing could have seen it.
+
+The fix in both cases was to stop paraphrasing. `consumeOptional` is now
+argparse's `while True` with its `action_tuples`; `consumePositionals` is
+its span match and its `args.remove('--')`; `matchArgument` is
+`_match_argument` for the two nargs this parser uses. Longer, and the
+five inputs are right for the reason CPython gets them right.
+
+### Three smaller ones, and a comment that was exactly backwards
+
+`_get_option_tuples`' single-dash arm tests the abbreviation against the
+part **before** the `=`, not the whole token. So `-=x` cuts to `-`, which
+every option in the table starts with, and CPython reports
+
+```
+maro-introspect: error: ambiguous option: -=x could match -h, --help, --latest, --lenses, --history, --patterns
+```
+
+where the port said `unrecognized arguments: -=x`. Five tokens of that
+shape.
+
+The reviewer also disproved a comment I had written defending the
+exact-option-before-`=` block in `parseOptional`:
+
+> KEPT although no input of THIS parser can tell it from the prefix
+> search below…
+
+Deleting the block **fails the suite**. `-h=x` is exact there and comes
+out `sepEquals`, which is what makes the consumer refuse it; without the
+block the same token resolves through `optionTuples` as `sepConcat` and
+prints help. The code was load-bearing and the justification was wrong —
+the same defect as the `-hh` comment, in the opposite direction. Both are
+now corrected in place rather than merely fixed around.
+
+And `pyval.Int`'s ASCII-only digit scan remains the one named residual:
+`--history ٥` is a usage error where CPython reads 5. Re-measured this
+round, unchanged.
+
+### What the battery says now, and how it was derived
+
+The round-2 battery scored 92/95 and missed all five of these, which is
+the most useful thing about it. It was derived from *the previous
+review's findings list* — the inversion of L9, one level up from the diff
+it warns about. Every rule nobody had listed went unmutated: the `\.?` in
+the negative-number matcher, the negative overflow bound, the
+terminator's fate in the extras, the single-dash `=` cut, the re-read
+loop.
+
+Round 3's argument mutants were derived by walking the file's decision
+sites top to bottom. That produced **17 new mutants** on sites that had
+none — the battery now stands at **115 mutants, 112 detected** — and six
+sites deliberately left unmutated with the reason written next to them
+(L8): the `runeAt(optionString, 1) != "-"` term and the `explicit != ""`
+term, both of which raise the identical message with or without them in
+*this* parser; the extras append in the unresolved-tail branch, only
+reachable through `-h<tail>` and so always ending in the help action
+exiting; rune-vs-byte slicing for the short prefix, where a multi-byte
+first token matches no option either way; the ORDER the collected actions
+are taken in, since every action a re-read collects is the help action;
+and first-vs-last of the positional span, since `-*A?-*` admits at most
+one `A` and only the first `--` classifies as `-`, so after the removal
+the span holds one token and the two spellings coincide.
+
+The last two of those six were *written as mutants first* and retired
+after the run reported MISS — which is the honest way round. A survivor
+is a question, and the answer is sometimes "this mutant cannot change an
+answer". The three carried-forward survivors from earlier rounds
+(`padLeft` counting bytes at two ASCII-only call sites, the graduation
+marker's tautology, the `healthy` guard subsumed by the lookup below it)
+are unchanged and still carry their proofs. An unexplained absence and a
+considered exemption look identical six weeks later, so all six are
+written down in the battery next to the sites they cover.
+
+Three mutants reported BUILDFAIL on their first spelling, all for the
+reason this file has now recorded three times: **Go does not count an
+assignment as a use.** Dropping `prefix` from the abbreviation case
+orphans it; `if false` orphans the `pytext` import. Each was re-spelled to
+keep the read while making the same change (`&& prefix == arg`, and a `+`
+prefix a negative overflow can never carry).
+
+Twenty-two fixtures were added, every one of them a CPython transcript:
+the five `-hh…` refusals, the five `-=…` ambiguities, five terminator
+shapes, `-hx`/`-hhh`, `--latest` with a loop id (which pins the first
+term of `args.latest || args.loopID == ""` — deleting it had left the
+suite green), `-a b` (the space rule, which had a comment and no
+fixture), `-.5` (the `\.?`), and the negative overflow bound. One
+byte-identical duplicate fixture was removed, along with the last mention
+of `splitArgs` anywhere in the Go tree — a comment describing a branch of
+a function round 2 had deleted.
+
 ## metrics' step-cost ledger: two reverse readers that are not the same reader
 
 `src/metrics.py`'s spend half — `_reverse_readline`, `spend_today`,

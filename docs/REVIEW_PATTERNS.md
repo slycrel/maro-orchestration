@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**655**. The counts below were regenerated from `report --by lens`, not
+**667**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
 That regeneration is a claim this file has already failed once: at the
@@ -40,7 +40,7 @@ had recorded rows without re-deriving the counts, and the sentence above
 went on asserting they were derived. Regenerate ALL of them every time —
 a per-lens edit is how the drift got in.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 655
+**Two things the counts are not.** They are lower bounds: 310 of the 667
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -58,7 +58,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 55 — the most frequent single defect in the Go port*
+*instances: 56 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -150,9 +150,23 @@ a fault in the battery, not a survivor.
 *some* input. If it cannot, fix the mutant.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: standing (Jeremy, 2026-08-16)*
+*instances: 2 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
+
+**Canonical instance.** The round-2 battery for `internal/introspect/cli.go`
+derived its 27 argument-layer mutants from the *findings list* of the review
+that preceded it — the inversion this lens names, one level up. It scored
+92/95 and every rule nobody had listed went unmutated: the `\.?` in the
+negative-number matcher, the negative overflow bound, the terminator's fate
+in the extras. Round 3 found all three by walking the file's decision sites
+in order.
+
+**Tripwire.** Write the battery by reading the file top to bottom and
+mutating each decision — not by reading what the last round found. If a
+site is deliberately unmutated because no input can observe it, say so in
+the battery, in a comment, next to the sites it covers (L8); an unexplained
+absence and a considered exemption look identical six weeks later.
 
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
 *instances: 1*
@@ -269,7 +283,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 21*
+*instances: 22*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -335,7 +349,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 24*
+*instances: 25*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -350,7 +364,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 37*
+*instances: 40*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -601,7 +615,7 @@ comment, because it is a property of the source, not of the test.
 
 ### L44 — A fixture's name is a coverage claim, and nothing checks it
 
-*instances: 3*
+*instances: 4*
 
 The fixture feeds the code through a field the code does not read. Its
 inputs are shaped like the real thing but keyed the way the *writer* names
@@ -725,6 +739,16 @@ one of the fourteen rules above came out of a CPython transcript, and
 reasoning had produced confident wrong answers about several of them. If a
 pre-pass is unavoidable, its length is the finding.
 
+**Round 3 postscript, and why this lens grew a sibling.** The rewrite that
+deleted `flag` obeyed half the tripwire and not the other half: it ported
+`_parse_optional` and `_get_option_tuples` as their own functions, and then
+folded `consume_optional` and `consume_positionals` — a nested loop and a
+pattern match — into one flat pass over the tokens. Five more divergences
+came out of that flattening, and they were the LAST five, found only when
+the loop and the span were written the way CPython writes them. See L48:
+the substitution is one way to lose the original's shape, and rewriting it
+by hand is another.
+
 ### L47 — The source you ported is not always the source you test against
 *instances: 2*
 
@@ -750,6 +774,51 @@ against the interpreter the differential actually invokes. `python3
 difference is real but out of scope, pin it in the comment (as the
 `options:` heading is) rather than leaving the reader to assume the
 newest.
+
+### L48 — A flattened control flow is a different program
+*instances: 2*
+
+A port can get every DECISION of the original right and still be wrong,
+because the original's answer depends on the SHAPE the decisions are made
+in: what loops, what defers, what runs before what. Flattening a nested
+loop into one pass, or two mutually-recursive consumers into a single
+switch, preserves each rule and loses their sequencing — and sequencing is
+observable whenever an action has an effect (printing, exiting, consuming
+a token) that a later rule would have prevented.
+
+This is L46's sibling. There the original's shape is lost to a library
+substitution; here it is lost to an author who read the original, understood
+each branch, and then wrote the branches in a structure of their own. The
+second is harder to catch, because the code looks like a careful port and
+every individual line can be defended.
+
+**Canonical instance.** `parseIntrospectArgs` consumed each option token in
+one pass. CPython's `consume_optional` is a `while True` that collects
+actions into `action_tuples` and takes NONE of them until the token is
+fully understood. Every decision inside my flat version matched; the
+deferral did not. `-hh=x` collects a help action, re-reads the tail to
+another `-h`, and then refuses the leftover `=x` — CPython exits 2, and the
+flat port printed help and exited 0, because it took the help action the
+moment it found it. Five inputs of that shape were wrong, and a comment I
+had written asserting "`-h`'s action exits before the tail is ever read"
+was the flattening stated as a fact.
+
+**Second instance, same rewrite.** `--` was skipped unconditionally, which
+is the right answer for `a -- b` and the wrong one for `a b -- c`. CPython
+never special-cases the terminator at consumption at all: it falls to
+`consume_positionals`, whose nargs pattern for `loop_id` is `(-*A?-*)`, and
+the `--` is removed only when a positional's matched span happens to cover
+it. One line of "skip the separator" stood in for a regex match against a
+classification string, and six argument lines disagreed.
+
+**Tripwire.** Port loops as loops and functions as functions, with the
+original's names, before simplifying anything. If the original defers an
+effect — collects work and runs it later — the deferral is a rule, not a
+style: write it down as one and find the input that observes it. When you
+catch yourself writing a comment that explains why the original's extra
+structure is unnecessary here, that comment is the finding (L28); the
+structure is load-bearing until an input proves otherwise, and the proof is
+a fixture, not an argument.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*

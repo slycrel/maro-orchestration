@@ -1,6 +1,7 @@
 package introspect
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
@@ -420,12 +422,12 @@ func parseOptional(arg string) []optTuple {
 	if len(arg) == 1 {
 		return nil
 	}
-	// An exact option string before the `=`. KEPT although no input of THIS
-	// parser can tell it from the prefix search below, because the two
-	// disagree the moment one option name becomes a prefix of another: with
-	// `--his` and `--history` both defined, `--his=5` is exact here and
-	// ambiguous there. None of the five names is a prefix of another today,
-	// and adding one is an edit to the table three lines up.
+	// An exact option string before the `=`. This block is LOAD-BEARING, and
+	// an earlier comment here claiming no input could tell it from the prefix
+	// search below was simply wrong: `-h=x` is exact here and comes out
+	// sepEquals, which is what makes the consumer refuse it. Delete the block
+	// and the same token resolves through optionTuples' single-dash arm as
+	// sepConcat instead, and a refusal turns into a help screen.
 	if before, after, found := strings.Cut(arg, "="); found {
 		for i, o := range introspectOpts {
 			if o.str == before {
@@ -473,17 +475,55 @@ func optionTuples(arg string) []optTuple {
 		}
 		return out
 	}
-	shortPrefix, shortExplicit := arg[:2], arg[2:]
+	// Both halves of the single-dash arm cut on `=`, and they cut for
+	// different reasons. The abbreviation test is against the part BEFORE the
+	// `=` — not the whole token — which is how `-=x` matches every option in
+	// the table (they all start with `-`) and comes out ambiguous rather than
+	// unrecognized. The glued-argument test is against the first two code
+	// points regardless of any `=`.
+	prefix, explicit, found := strings.Cut(arg, "=")
+	sep := sepNone
+	if found {
+		sep = sepEquals
+	} else {
+		explicit = ""
+	}
+	shortPrefix, shortExplicit := cutRunes(arg, 2)
 	for i, o := range introspectOpts {
 		switch {
 		case o.str == shortPrefix:
 			out = append(out, optTuple{opt: i, str: o.str,
 				sep: sepConcat, explicit: shortExplicit})
-		case strings.HasPrefix(o.str, arg):
-			out = append(out, optTuple{opt: i, str: o.str, sep: sepNone})
+		case strings.HasPrefix(o.str, prefix):
+			out = append(out, optTuple{opt: i, str: o.str,
+				sep: sep, explicit: explicit})
 		}
 	}
 	return out
+}
+
+// cutRunes splits s after its first n code points. Python slices strings by
+// code point, so `option_string[:2]` of `-٥x` is the dash and the digit —
+// where a byte slice would cut the digit in half.
+func cutRunes(s string, n int) (string, string) {
+	i := 0
+	for ; n > 0 && i < len(s); n-- {
+		_, w := utf8.DecodeRuneInString(s[i:])
+		i += w
+	}
+	return s[:i], s[i:]
+}
+
+// firstRune splits s into its first code point and the rest, the pair
+// argparse spells `explicit_arg[0]` and `explicit_arg[1:]`.
+func firstRune(s string) (string, string) { return cutRunes(s, 1) }
+
+// runeAt is `s[i]` by code point, or "" if s is shorter. argparse tests
+// `option_string[1]` to tell a single-dash option from a double-dash one.
+func runeAt(s string, i int) string {
+	_, rest := cutRunes(s, i)
+	first, _ := cutRunes(rest, 1)
+	return first
 }
 
 // introspectArgs is the argparse Namespace. `history` is a POINTER because
@@ -510,151 +550,352 @@ type introspectArgs struct {
 // is set aside and reported at the very end, after any error the rest of the
 // line produces.
 func parseIntrospectArgs(argv []string) (introspectArgs, error) {
-	var a introspectArgs
+	p := &parseState{
+		argv:    argv,
+		pattern: make([]byte, len(argv)),
+		optIdx:  map[int][]optTuple{},
+		// The one optional positional this parser declares, `loop_id`.
+		positionalsLeft: 1,
+	}
+	err := p.parse()
+	if errors.Is(err, errHelpAction) {
+		// The help action is a SystemExit in CPython — it unwinds the parser
+		// from wherever it fired, which is why nothing later on the line is
+		// examined and why extras already collected go unreported.
+		return p.a, nil
+	}
+	return p.a, err
+}
 
-	const (
-		kindPositional = iota
-		kindOption
-		kindSeparator // the `--` that ends option parsing
-	)
-	kind := make([]int, len(argv))
-	tuples := make([][]optTuple, len(argv))
+// parseState is the local state of `_parse_known_args`: the classification
+// string, the options found in it, the actions still unfilled, and the
+// tokens nothing claimed.
+type parseState struct {
+	argv    []string
+	pattern []byte // one byte per token: 'A', 'O', or '-'
+	optIdx  map[int][]optTuple
+	extras  []string
+
+	positionalsLeft int
+	a               introspectArgs
+}
+
+// actionTuple is one entry of argparse's `action_tuples` — an action and the
+// strings it consumed, held until the whole option token is understood.
+type actionTuple struct {
+	opt  int
+	args []string
+}
+
+// errHelpAction stands in for the SystemExit argparse's help action raises.
+var errHelpAction = errors.New("help action")
+
+func (p *parseState) parse() error {
+	// Pass one: classify every token. argparse builds a STRING of one
+	// character per token and every later decision matches against that
+	// string rather than against the tokens themselves.
 	terminated := false
-	for i, arg := range argv {
+	for i, arg := range p.argv {
 		switch {
 		case terminated:
-			kind[i] = kindPositional
+			p.pattern[i] = 'A'
 		case arg == "--":
 			// Only the FIRST `--` is the terminator. A second one after it is
 			// an ordinary positional, and `maro introspect -- --` diagnoses a
 			// loop whose id is two dashes.
-			kind[i] = kindSeparator
+			p.pattern[i] = '-'
 			terminated = true
 		default:
 			if t := parseOptional(arg); t != nil {
-				kind[i], tuples[i] = kindOption, t
-			}
-		}
-	}
-
-	loopIDSet := false
-	var extras []string
-	for i := 0; i < len(argv); i++ {
-		switch kind[i] {
-		case kindSeparator:
-			continue
-		case kindPositional:
-			// This parser declares exactly one optional positional, so the
-			// first bare token is the loop id and every later one is an
-			// unrecognized argument — reported at the end, in the order the
-			// tokens appeared, mixed in with any unknown options.
-			if !loopIDSet {
-				a.loopID, loopIDSet = argv[i], true
+				p.pattern[i], p.optIdx[i] = 'O', t
 			} else {
-				extras = append(extras, argv[i])
+				p.pattern[i] = 'A'
 			}
-			continue
+		}
+	}
+
+	// Pass two: alternate between the positionals preceding the next option
+	// and the option itself, left to right. Classification never fails, so
+	// `--bogus -h` prints help and `-h --l` prints help even though `--l` is
+	// ambiguous — while `--l -h` is an error, because consumption reaches
+	// the ambiguity first.
+	maxOption := -1
+	for i := range p.optIdx {
+		if i > maxOption {
+			maxOption = i
+		}
+	}
+	start := 0
+	for start <= maxOption {
+		nextOption := start
+		for nextOption <= maxOption {
+			if _, ok := p.optIdx[nextOption]; ok {
+				break
+			}
+			nextOption++
+		}
+		if start != nextOption {
+			end := p.consumePositionals(start)
+			if end > start {
+				start = end
+				continue
+			}
+			start = end
+		}
+		if _, ok := p.optIdx[start]; !ok {
+			// Positionals nothing could take. They are set aside rather than
+			// refused here, and reported at the very end.
+			p.extras = append(p.extras, p.argv[start:nextOption]...)
+			start = nextOption
+		}
+		var err error
+		if start, err = p.consumeOptional(start); err != nil {
+			return err
+		}
+	}
+
+	stop := p.consumePositionals(start)
+	p.extras = append(p.extras, p.argv[stop:]...)
+
+	if len(p.extras) > 0 {
+		return usagef("unrecognized arguments: %s", strings.Join(p.extras, " "))
+	}
+	return nil
+}
+
+// consumeOptional is argparse's function of the same name. One token can name
+// SEVERAL actions — `-hh` is `-h -h` — so it loops, collecting actions and
+// re-reading the tail, and takes none of them until the token is fully
+// understood. That deferral is observable: `-hh=x` collects one help action
+// and then refuses the `=x`, so it exits 2 instead of printing help. An
+// earlier port took the help action the moment it was found and got every
+// input of that shape wrong.
+func (p *parseState) consumeOptional(startIndex int) (int, error) {
+	tuples := p.optIdx[startIndex]
+	if len(tuples) > 1 {
+		names := make([]string, len(tuples))
+		for j, t := range tuples {
+			names[j] = t.str
+		}
+		// The message names the token AS TYPED, not the prefix it was cut
+		// down to, so `--=x` reports `--=x` and lists every long option it
+		// could have meant.
+		return 0, usagef("ambiguous option: %s could match %s",
+			p.argv[startIndex], strings.Join(names, ", "))
+	}
+	t := tuples[0]
+	opt, optionString, sep, explicit := t.opt, t.str, t.sep, t.explicit
+	// `explicit_arg is not None` is a different question from whether it is
+	// empty: `--latest=` HAS an explicit argument, the empty string, and
+	// argparse refuses it.
+	hasExplicit := sep != sepNone
+
+	var actions []actionTuple
+	stop := 0
+loop:
+	for {
+		if opt < 0 {
+			// No action matched. The token is set aside whole and reported at
+			// the end, after any error the rest of the line produces.
+			p.extras = append(p.extras, p.argv[startIndex])
+			return startIndex + 1, nil
+		}
+		o := introspectOpts[opt]
+
+		if !hasExplicit {
+			// No glued argument, so the values are the FOLLOWING tokens.
+			s := startIndex + 1
+			n, err := matchArgument(o, p.pattern[s:])
+			if err != nil {
+				return 0, err
+			}
+			stop = s + n
+			actions = append(actions, actionTuple{opt: opt, args: p.argv[s:stop]})
+			break loop
 		}
 
-		ts := tuples[i]
-		if len(ts) > 1 {
-			names := make([]string, len(ts))
-			for j, t := range ts {
-				names[j] = t.str
+		argCount := 0
+		if o.takesValue {
+			argCount = 1
+		}
+		switch {
+		case argCount == 0 && runeAt(optionString, 1) != "-" && explicit != "":
+			// A single-dash flag with a tail. argparse re-reads the tail as
+			// more single-dash options — this is why `-hh` is `-h -h` — but
+			// only when the tail could BE options: an `=` separator, or a
+			// leading dash, means the user meant it as a value, and a value
+			// is what a flag cannot take.
+			//
+			// Python's `sep` is '' for a glued tail and '=' for an explicit
+			// one, so its `if sep or ...` tests for the `=` form alone. The
+			// constants here are numbers and would ALL be truthy, so the test
+			// has to name the case.
+			head, tail := firstRune(explicit)
+			if sep == sepEquals || head == "-" {
+				return 0, usagef("argument %s: ignored explicit argument %s",
+					o.label, pyval.Repr(explicit))
 			}
-			// The message names the token AS TYPED, not the prefix it was cut
-			// down to, so `--=x` reports `--=x` and lists all five long
-			// options it could have meant.
-			return a, usagef("ambiguous option: %s could match %s",
-				argv[i], strings.Join(names, ", "))
+			actions = append(actions, actionTuple{opt: opt})
+			dash, _ := firstRune(optionString)
+			optionString = dash + head
+			next := lookupOption(optionString)
+			if next < 0 {
+				// The tail names no option: it joins the extras whole, and
+				// the actions collected so far still run. `-hx` prints help
+				// and never reports the `-x`.
+				p.extras = append(p.extras, dash+explicit)
+				stop = startIndex + 1
+				break loop
+			}
+			opt, explicit = next, tail
+			switch {
+			case explicit == "":
+				sep, hasExplicit = sepNone, false
+			case strings.HasPrefix(explicit, "="):
+				sep = sepEquals
+				_, explicit = firstRune(explicit)
+			default:
+				sep = sepConcat
+			}
+		case argCount == 1:
+			// The glued text IS the value: `--history=5`.
+			stop = startIndex + 1
+			actions = append(actions, actionTuple{opt: opt, args: []string{explicit}})
+			break loop
+		default:
+			return 0, usagef("argument %s: ignored explicit argument %s",
+				o.label, pyval.Repr(explicit))
 		}
-		t := ts[0]
-		if t.opt < 0 {
-			extras = append(extras, argv[i])
-			continue
-		}
-		o := introspectOpts[t.opt]
+	}
 
-		if !o.takesValue {
-			if t.sep != sepNone {
-				// argparse's escape hatch, and the reason `-hh` prints help:
-				// a glued argument on a single-dash flag is re-read as more
-				// single-dash options rather than rejected.
-				//
-				// CPython spells the test with four conjuncts — single-dash
-				// option string, non-empty tail, no `=`, and a tail not
-				// itself starting with a dash. Two of them are IMPLIED by
-				// sepConcat here and are left out rather than written as
-				// terms that cannot fire: sepConcat is produced only by the
-				// single-dash arm of optionTuples, and only for a token
-				// longer than the two characters of the option string it
-				// matched (a token of exactly that length took the exact
-				// match in parseOptional and never reached the arm at all).
-				reread := t.sep == sepConcat && !strings.HasPrefix(t.explicit, "-")
-				if !reread {
-					return a, usagef("argument %s: ignored explicit argument %s",
-						o.label, pyval.Repr(t.explicit))
-				}
-				// Falls through and takes the action. The tail would become
-				// the next option string to look up — but `-h` is the only
-				// single-dash option this parser has, and its action exits
-				// before the tail is ever read.
-			}
-			switch o.dest {
-			case "help":
-				// argparse's help action prints and exits DURING parsing, so
-				// nothing after it on the line is examined at all.
-				a.help = true
-				return a, nil
-			case "latest":
-				a.latest = true
-			case "lenses":
-				a.lenses = true
-			case "patterns":
-				a.patterns = true
-			}
-			continue
+	for _, at := range actions {
+		if err := p.takeAction(at); err != nil {
+			return 0, err
 		}
+	}
+	return stop, nil
+}
 
-		raw := t.explicit
-		if t.sep == sepNone {
-			// The value must be the next token AND that token must have
-			// classified as a positional. `--history --tory` is a missing
-			// argument, not a value of "--tory"; `--history -5` is -5,
-			// because a negative number classifies as a positional; and
-			// `--history --` is missing too, because the terminator is
-			// neither. An unconditional `argv[i+1]` gets all three wrong.
-			if i+1 >= len(argv) || kind[i+1] != kindPositional {
-				return a, usagef("argument %s: expected one argument", o.label)
+// matchArgument is `_match_argument` for the two nargs this parser uses. For
+// an OPTIONAL, `_get_nargs_pattern` strips the `-*` runs, so a flag matches
+// the empty string and takes nothing while `--history` matches exactly one
+// POSITIONAL token. That stripping is why `--history -- 5` is a missing
+// argument rather than 5: the terminator classifies as '-', which the
+// stripped pattern cannot consume — and so are `--history --tory` and
+// `--history -x`, which classify as 'O'.
+func matchArgument(o introspectOpt, pattern []byte) (int, error) {
+	if !o.takesValue {
+		return 0, nil
+	}
+	if len(pattern) == 0 || pattern[0] != 'A' {
+		return 0, usagef("argument %s: expected one argument", o.label)
+	}
+	return 1, nil
+}
+
+// consumePositionals is argparse's function of the same name, narrowed to the
+// single optional positional this parser declares. Its nargs pattern is
+// `(-*A?-*)`: any terminator, then at most one token, then any terminator.
+//
+// The trailing `-*` is why the terminator cannot simply be dropped. `--` is
+// removed only when a positional's matched span COVERS it, so `a -- b`
+// matches "A-" and reports `unrecognized arguments: b`, while `a b -- c`
+// matches only "A" and reports `b -- c` — terminator included. An earlier
+// port skipped every `--` unconditionally and disagreed with CPython on the
+// whole second shape.
+func (p *parseState) consumePositionals(startIndex int) int {
+	if p.positionalsLeft == 0 {
+		return startIndex
+	}
+	i := startIndex
+	for i < len(p.pattern) && p.pattern[i] == '-' {
+		i++
+	}
+	if i < len(p.pattern) && p.pattern[i] == 'A' {
+		i++
+	}
+	for i < len(p.pattern) && p.pattern[i] == '-' {
+		i++
+	}
+	args := p.argv[startIndex:i]
+	if bytes.IndexByte(p.pattern[startIndex:i], '-') >= 0 {
+		// `args.remove('--')` — the first occurrence only.
+		kept := make([]string, 0, len(args))
+		dropped := false
+		for _, s := range args {
+			if !dropped && s == "--" {
+				dropped = true
+				continue
 			}
-			i++
-			raw = argv[i]
+			kept = append(kept, s)
 		}
-		n, err := pyval.Int(raw)
+		args = kept
+	}
+	// The positional is consumed even when it matched NOTHING, which is what
+	// makes a second bare token an extra rather than a loop id.
+	p.positionalsLeft = 0
+	if len(args) > 0 {
+		p.a.loopID = args[0]
+	}
+	return i
+}
+
+// takeAction runs one collected action. argparse converts a value here, at
+// the point of consumption, so an invalid `--history` is reported in the
+// order the tokens appeared rather than after the whole line is read.
+func (p *parseState) takeAction(at actionTuple) error {
+	o := introspectOpts[at.opt]
+	switch o.dest {
+	case "help":
+		p.a.help = true
+		return errHelpAction
+	case "latest":
+		p.a.latest = true
+	case "lenses":
+		p.a.lenses = true
+	case "patterns":
+		p.a.patterns = true
+	case "history":
+		n, err := historyValue(o, at.args[0])
 		if err != nil {
-			if !errors.Is(err, pyval.ErrIntTooLarge) {
-				return a, usagef("argument %s: invalid int value: %s",
-					o.label, pyval.Repr(raw))
-			}
-			// Python ints are arbitrary precision, so `--history` followed by
-			// forty digits is a perfectly good (enormous) limit there and an
-			// overflow here. Saturating keeps the BEHAVIOUR identical —
-			// load_diagnoses stops at the end of the store either way, and
-			// the negative side takes the same one-row branch as -5 — where
-			// reporting an invalid value would invent a refusal CPython
-			// does not make.
-			n = math.MaxInt
-			if strings.HasPrefix(pytext.Strip(raw), "-") {
-				n = math.MinInt
-			}
+			return err
 		}
-		a.history = &n
+		p.a.history = &n
 	}
+	return nil
+}
 
-	if len(extras) > 0 {
-		return a, usagef("unrecognized arguments: %s", strings.Join(extras, " "))
+// lookupOption is the `option_string in self._option_string_actions` test.
+func lookupOption(s string) int {
+	for i, o := range introspectOpts {
+		if o.str == s {
+			return i
+		}
 	}
-	return a, nil
+	return -1
+}
+
+// historyValue is `type=int` — argparse's `_get_value`, which reports the
+// exception's own text as `invalid int value: <repr>`.
+func historyValue(o introspectOpt, raw string) (int, error) {
+	n, err := pyval.Int(raw)
+	if err == nil {
+		return n, nil
+	}
+	if !errors.Is(err, pyval.ErrIntTooLarge) {
+		return 0, usagef("argument %s: invalid int value: %s",
+			o.label, pyval.Repr(raw))
+	}
+	// Python ints are arbitrary precision, so `--history` followed by forty
+	// digits is a perfectly good (enormous) limit there and an overflow here.
+	// Saturating keeps the BEHAVIOUR identical — load_diagnoses stops at the
+	// end of the store either way, and the negative side takes the same
+	// one-row branch as -5 — where reporting an invalid value would invent a
+	// refusal CPython does not make.
+	if strings.HasPrefix(pytext.Strip(raw), "-") {
+		return math.MinInt, nil
+	}
+	return math.MaxInt, nil
 }
 
 // Main is introspect.main(argv). It writes to `out` rather than stdout so
