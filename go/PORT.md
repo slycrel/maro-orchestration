@@ -9187,3 +9187,88 @@ The timestamp census also fired on this file, for
 which is a comparison KEY matched against the prefix of each row's
 `recorded_at` — not a stamp it writes. `pyval.NowISO` there would never
 match anything. An exemption someone has to write down is the point.
+
+### The writer half, and a store both runtimes append to
+
+`record_step_cost` / `successful_run_cost_p90` / `tail_cost_scope` are the
+other side of the same ledger, and the side where a mistake is durable: a
+reader that is wrong gives a wrong answer once; a writer that is wrong
+puts a wrong answer into a file the other runtime reads back forever.
+
+Three details the differential exists to pin, none of which is arithmetic:
+
+- **The id is `str(uuid.uuid4())[:12]`, and that slice is taken from the
+  HYPHENATED spelling.** Eight hex digits, a hyphen, three more — not
+  twelve hex digits. A generator producing twelve hex characters looks
+  right in every eyeball check and matches nothing keyed on the shape.
+- **The row's key order is the wire format.** Python builds a dict
+  literal and `json.dumps` preserves insertion order, so the port's
+  struct field order IS the JSON. `estimated_cost_usd` is the one
+  conditional key, written only when a provider figure displaced the
+  estimate — which is what keeps the two pricing lanes distinguishable in
+  the store rather than by inference.
+- **`json.dumps` defaults to `ensure_ascii=True`.** The row on disk
+  escapes every non-ASCII rune to `\uXXXX`. This is where the test itself
+  was wrong first: the probe serialized the returned dict with
+  `ensure_ascii=False` and compared it against the line the writer had
+  put on disk one statement earlier, so the differential's first failure
+  was the harness comparing the port against a spelling of the row that
+  nothing in the system ever writes.
+
+`max(0.0, float(provider or 0.0))` clamps BEFORE the `> 0` test, which is
+what makes a negative provider figure fall through to the estimate rather
+than displace it with a negative cost. The two languages' `max` disagree
+on NaN — CPython replaces its running maximum only when `item > current`
+and `nan > 0.0` is False, so `max(0.0, nan)` is `0.0`, where Go's
+`math.Max` propagates the NaN — and it is unobservable here, because both
+then fail `provider > 0` and `provider` is read nowhere else. Written
+down rather than normalised: a normalisation would be a line no input
+could exercise.
+
+`successful_run_cost_p90` returns Python's `Optional`, and the bool is
+not decoration. "History too thin" is not 0.0, and a caller that
+collapsed them would gate every run. The index is
+`vals[int(0.9 * (len(vals) - 1))]` — `int()` truncates, so it is a floor
+and not a round, and it indexes the sorted list directly rather than
+interpolating: at n=8 that is the seventh smallest, not the eighth. There
+is a fixture at exactly the sample floor for that reason.
+
+The cache has a property worth a test of its own. Python's guard is
+`if _hit and _now - _hit[0] < TTL`, and a cached "no opinion" is stored
+as the tuple `(t, None)` — which is TRUTHY. So a None answer is served
+from cache for the full fifteen minutes, and a run that finishes in that
+window does not change the answer. The port keeps that (a `cached` flag,
+because a Go zero-value struct cannot express the difference between
+"absent" and "cached None") and pins it, along with the fact that two
+different limits are two different questions and do not share an entry.
+
+One deliberate divergence, named: Python's `sorted(..., key=st_mtime)`
+raises if a card vanishes between the glob and the stat, and the outer
+`except` turns that into `None` for the next fifteen minutes. The port
+skips the missing card instead. A run cleaned up mid-scan should not cost
+the budget gate its opinion.
+
+`tail_cost_scope` is a ContextVar in Python, chosen over a global
+precisely so concurrent runs' tails cannot cross-attribute. Go has no
+implicit propagation, so the equivalent is a `context.Context` value: it
+flows down and it does not flow sideways, which are the same two
+properties. The cost is that a Go caller must thread the ctx — visible
+where Python's was invisible, and the honest spelling, since a tail phase
+that forgets to propagate records nothing in Python either. It just has
+nowhere for a reader to notice.
+
+### P4, amended by a wasted run
+
+The battery over the rewritten argument layer reported twenty-eight
+consecutive BUILDFAILs, every one of which had been individually DETECTED
+minutes earlier. The cause was a new file being written in
+`internal/metrics` while the battery ran over `internal/introspect`, on
+the reasoning that `go test ./internal/introspect/` does not compile
+another package.
+
+It does. `internal/introspect` imports `internal/metrics`. A Go module
+builds through its import graph, so the tree a battery owns is every
+package the package under test can reach — which is not a set worth
+estimating. While a battery runs, the working tree is off limits. Prose
+is not: `docs/`, `review/` and this file are in no build graph, and that
+is the whole of the exemption.

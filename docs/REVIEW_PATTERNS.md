@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**653**. The counts below were regenerated from `report --by lens`, not
+**655**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
 That regeneration is a claim this file has already failed once: at the
@@ -40,7 +40,7 @@ had recorded rows without re-deriving the counts, and the sentence above
 went on asserting they were derived. Regenerate ALL of them every time —
 a per-lens edit is how the drift got in.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 653
+**Two things the counts are not.** They are lower bounds: 309 of the 655
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -58,7 +58,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 54 — the most frequent single defect in the Go port*
+*instances: 55 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -766,10 +766,25 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 2*
+*instances: 3*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
+
+**And "a different package" is not an exemption.** The 2026-08-26 argparse
+round wrote a new file in `internal/metrics` while a battery ran over
+`internal/introspect`, on the reasoning that the battery's `go test
+./internal/introspect/` does not compile another package. It does:
+`internal/introspect` IMPORTS `internal/metrics`. Twenty-eight consecutive
+mutants reported BUILDFAIL — every one of which had been individually
+DETECTED minutes earlier — because a half-written file three directories
+away was in the same build graph. The whole run was wasted.
+
+A Go module builds through its import graph, so the tree a battery owns is
+every package the package under test can reach, transitively, plus every
+package that reaches IT. That set is not something to estimate: while a
+battery runs, the working tree is off limits, full stop. Prose is fine —
+`docs/`, `review/`, `PORT.md` are not in any build graph.
 
 **And do not run the suite either.** The 2026-08-26 notes round spent three
 exchanges diagnosing a "misaligned fixture list" that was a live mutant: a
