@@ -6034,6 +6034,15 @@ to "how much is left". This is that answer, measured rather than estimated:
 26 Python modules, **30,338 lines**, are not referenced anywhere in the Go
 tree — no port, no stub, no named divergence.
 
+**Updated 2026-08-26:** `heartbeat.py` (1653) comes off this list — its
+deterministic half is ported and its orchestration half is NAMED in the
+package doc, which is the difference between "not started" and "scoped".
+That leaves **25 modules, 28,685 lines**, one of which
+(`correspondence.py`, 1174) is dev tooling by decree. So the honest
+remaining first-pass surface is **24 modules, ~27,500 lines** — about the
+size of everything ported so far, and not a one-session job. Recorded
+plainly because the standing goal is measured against it.
+
 Measured by `grep -rl "<module>.py" internal/ cmd/`. That is a weak test
 (it finds modules the port has NAMED, not ones it has finished), so it
 overstates coverage and cannot understate it: anything on this list has not
@@ -6045,7 +6054,6 @@ been started.
 | `run_curation.py` | 2135 | post-run curation, re-render |
 | `introspect.py` | 1775 | failure classifier, lenses, recovery planner |
 | `container_exec.py` | 1676 | containerized worker lane |
-| `heartbeat.py` | 1653 | the periodic driver |
 | `orch_bridges.py` | 1522 | orchestration bridges |
 | `loop_finalize.py` | 1319 | the loop's finalize phase |
 | `navigator_shadow.py` | 1231 | shadow-lane navigator |
@@ -10373,3 +10381,111 @@ and the thunk must not be *called at all* when an explicit value was given.
 **Round 3 — 66/69, and the three survivors are the three labelled
 EQUIVALENT.** That is the shape a converged battery has: every survivor
 carries a measured reason, and none of them is "we should test this".
+
+## The r1 review of internal/tasks — three HIGH, and three tests pinning the wrong runtime
+
+Every finding's code claim was re-measured against CPython 3.14.3 before a
+line was changed; all five held, which is unusually high for an adversarial
+round and worth recording as such. Two of the three HIGHs were **the port
+asserting its own behaviour and calling it the specification.**
+
+### HIGH 1 — `Path.exists()` swallows every stat failure, not just ENOENT
+
+`_read_task` is `if not path.exists(): return None`, and CPython's
+`Path.exists()` is `try: self.stat() except (OSError, ValueError): return
+False`. ENAMETOOLONG, ENOTDIR, ELOOP, EACCES-on-a-parent and an embedded
+NUL all mean *"no such task"* there. `os.IsNotExist` is true for ENOENT
+alone, so each was a hard error out of the verb here.
+
+Reachable because `blocked_by` is a **foreign-writable list**, and the cycle
+check reads every dependency path. Measured, both sides:
+
+	enqueue(blocked_by=["d"*300])          CPython writes n1.json   Go writes nothing
+	enqueue(blocked_by=["t.json/inner"])   CPython writes n2.json   Go writes nothing
+	enqueue(blocked_by=["dep\0x"])         CPython writes n3.json   Go writes nothing
+
+The two runtimes disagreed about **which rows the queue will ever run**.
+Fix: `os.Stat` first and return "absent" on ANY error, which is what
+`Path.exists()` does.
+
+**And the first version of the test could not fail.** Two of its three
+fixtures passed against the unfixed source, because the queue DIRECTORY
+does not exist yet when the cycle check runs — the path walk died at the
+missing parent with ENOENT, which `os.IsNotExist` does catch. Seeding the
+directory is what makes the fixture reach the case. This is P12 again from
+the other side: an assertion can be independent of the code and still not
+touch it. **Run the new test against the OLD source. Every time.**
+
+### HIGH 2 — the emitter echoed a foreign float's source literal
+
+`pyval.LoadsOrdered` keeps `json.Number`, and `pyjson.Value`'s rule was "a
+`json.Number` keeps its source literal". That is right for INTEGERS —
+Python's ints are unbounded, and a 24-digit id through `float64` comes back
+wrong — and **wrong for floats**: `json.loads` produces a float and
+`json.dumps` writes `float.__repr__`. Measured:
+
+	2.50 -> 2.5      1E5   -> 100000.0      1e19  -> 1e+19
+	1e23 -> 1e+23    1.0e2 -> 100.0         1e400 -> Infinity
+
+`0.30000000000000004` and `-0.0` agree either way, which is exactly why a
+spot check missed it. It was found by a randomised cross-runtime
+differential that compared the resulting FILE BYTES, not just return
+values — 10 hits in 120 fixtures, one of them a `fail` whose on-disk row
+diverged.
+
+The fix is four lines in the shared emitter, and **the blast radius was
+three test failures — all three asserting the wrong side**:
+
+| test | asserted | CPython |
+|---|---|---|
+| `orch`'s `TestLoadsOrderedKeepsOrderAndLiterals` | `"s": 0.250` | `0.25` |
+| `record`'s `TestVerdictStampPreservesWholeFloatLiterals` | `"score": 0.250` | `0.25` |
+| `tasks`' `TestAForeignFieldSurvivesARewrite` | `2.50` survives | `2.5` |
+
+Each was written to pin "a foreign file is not reformatted", which is a
+real and correct goal — for integers and for `1.0`, both of which still
+hold. The tests generalised it to floats without measuring, and then
+**defended the bug for months**. All three now assert both ends: the
+re-render AND the integer literal that must survive verbatim.
+
+### HIGH 3 — an escaped lone surrogate, filed rather than fixed
+
+`{"note": "x\ud800y"}` is seven ASCII bytes on disk; no decoder refuses it.
+CPython's `json.loads` produces a str holding U+D800, and then
+`write_text(encoding="utf-8")` **cannot encode it** — so `fail()` raises
+`UnicodeEncodeError`, `_atomic_write` unlinks its temp file, and the row is
+byte-identical and still `claimed`. Go substitutes U+FFFD at decode, so the
+verb SUCCEEDS, the row becomes `failed`, and the original bytes are gone.
+
+The existing `pyval` residual describes the `ensure_ascii=TRUE` writer,
+where the surrogate is re-escaped and the write succeeds — a byte
+difference. `task_store` writes with `ensure_ascii=False`, where the
+outcome is a **state** difference. Same input, different class of problem,
+and the note that was supposed to cover it did not.
+
+Filed with a test that measures CPython every run and fails in EITHER
+direction — if CPython changes, or if this port stops diverging. Not
+guarded in `readRaw`: CPython's read SUCCEEDS, so refusing there would
+break `list_tasks` and `status_summary`, which is a third behaviour
+matching neither runtime.
+
+### The two LOWs
+
+**The differential's Python half was not in the repo.** `probe_test.go`
+pointed at `scratchpad/ts_measure.py`, which had been deleted, so the
+101-line byte-identity claim in `REVIEW.md` rested on a file nobody had and
+`go test` reported one honest skip. Both halves now live beside each other,
+with `ts_diff.sh` owning the temp workspaces, the normalisation and the
+diff — one command, re-run here: **identical across 101 lines**. Its
+normaliser masks only three fields and each keeps its SHAPE
+(`task-<stamp>-<hex8>`, not `<id>`), so a port that minted a UUID still
+diffs. The sibling `internal/orch` probe has the same missing half; that is
+now a known, named gap rather than an invisible one.
+
+**"Nothing depends on the sweep order" was wrong for two of three.**
+`StatusSummary` returns an ordered `Obj` *because* the CLI json.dumps'es
+it, so its printed key order is sorted-filename here and readdir there —
+and when two statuses compare equal but spell differently (`1` and `true`,
+`5` and `5.0`), the bucket takes the label of whichever ARRIVED FIRST. Go's
+answer is deterministic; CPython's is not. Comment corrected; the
+divergence cannot be closed, only named.

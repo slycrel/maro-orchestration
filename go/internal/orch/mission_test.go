@@ -134,15 +134,24 @@ func TestLoadsOrderedKeepsOrderAndLiterals(t *testing.T) {
 	if got := strings.Join(keys, ","); got != "zulu,alpha,cost,n,s" {
 		t.Errorf("key order lost: %s", got)
 	}
-	// Re-rendering must give the literals back untouched: a stored 1.0
-	// that comes back as 1 changes the TYPE json.loads parses on the
-	// Python side, and 0.250 losing its zero is a byte diff on a file
-	// nobody edited.
+	// Re-rendering matches what CPython's json.dumps writes for the value
+	// json.loads parsed — which is NOT "the literals back untouched".
+	// INTEGER literals survive verbatim (Python's ints are unbounded, so
+	// a 40-digit counter must not go through int64), and a stored 1.0
+	// keeps its ".0" because repr(1.0) is "1.0". But a FLOAT literal is
+	// re-rendered from the parsed double, so `0.250` comes back `0.25`:
+	//
+	//	>>> json.dumps(json.loads("0.250"))
+	//	'0.25'
+	//
+	// This assertion said `0.250` for months. It was pinning THIS port's
+	// behaviour, not CPython's, and every writer inherited the divergence
+	// (adversarial tasks-r1 HIGH, measured on 3.14.3).
 	out, err := DumpsCompactPy(obj)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"zulu": 1, "alpha": 2, "cost": 1.0, "n": 42, "s": 0.250}`; out != want {
+	if want := `{"zulu": 1, "alpha": 2, "cost": 1.0, "n": 42, "s": 0.25}`; out != want {
 		t.Errorf("\n got %s\nwant %s", out, want)
 	}
 }

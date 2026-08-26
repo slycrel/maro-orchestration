@@ -443,6 +443,24 @@ func encodeString(s string, ea bool) (string, error) {
 // pyjson.IsCleanText accepts U+FFFD — it is valid UTF-8 — so nothing
 // downstream refuses it.
 //
+// AND IT IS WORSE ON AN ensure_ascii=False WRITER, which the paragraph
+// above does not cover and which nothing here noticed for months. The
+// CPython half quoted above is json.dumps' DEFAULT (ensure_ascii=True),
+// where the surrogate is re-escaped and the write succeeds. task_store
+// writes with ensure_ascii=False, so CPython must actually UTF-8-ENCODE
+// the string — and a lone surrogate cannot be encoded. There the outcome
+// is not a byte difference at all:
+//
+//	CPython  UnicodeEncodeError; _atomic_write unlinks its temp file, so
+//	         the row is byte-identical and the task keeps its old status
+//	Go       succeeds, changes the status, and rewrites the field as
+//	         U+FFFD — the original bytes are unrecoverable
+//
+// Two runtimes disagreeing about whether a verb ran is a different class
+// of problem from two runtimes spelling one character differently
+// (adversarial tasks-r1 HIGH). Pinned by internal/tasks'
+// TestAnEscapedLoneSurrogateIsANamedDivergence as well.
+//
 // NOT fixed here, and the reason is scope rather than doubt. A real fix
 // decodes string tokens with a surrogate-preserving decoder AND teaches
 // encodeString to re-emit `\udXXX`, which is a rewrite of this file's

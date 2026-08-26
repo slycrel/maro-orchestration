@@ -98,7 +98,7 @@ func TestVerdictStampPreservesWholeFloatLiterals(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "outcomes.jsonl")
-	row := `{"loop_id":"mine","cost":1.0,"steps":3,"score":0.250}`
+	row := `{"loop_id":"mine","cost":1.0,"steps":3,"score":0.250,"big":123456789012345678901234}`
 	if err := os.WriteFile(path, []byte(row+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,13 @@ func TestVerdictStampPreservesWholeFloatLiterals(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.TrimSpace(string(raw))
-	for _, lit := range []string{`"cost": 1.0`, `"steps": 3`, `"score": 0.250`} {
+	// `cost: 1.0` keeps its ".0" (repr(1.0) is "1.0") and `steps: 3` and the
+	// 24-digit `big` keep their integer spellings (Python's ints are
+	// unbounded). But `score: 0.250` is RE-RENDERED from the parsed double
+	// and comes back `0.25`, because json.dumps writes float.__repr__ —
+	// this test asserted 0.250 and was pinning the port, not CPython.
+	for _, lit := range []string{`"cost": 1.0`, `"steps": 3`, `"score": 0.25`,
+		`"big": 123456789012345678901234`} {
 		if !strings.Contains(got, lit) {
 			t.Errorf("literal %s did not survive the rewrite:\n%s", lit, got)
 		}

@@ -13,9 +13,17 @@ import (
 // differential. It is a PROBE, not a test: skipped unless the harness
 // names a workspace, so `go test ./...` never runs it.
 //
-// Its output is line-for-line what scratchpad/ts_measure.py prints from
-// Python, so the harness can diff them after normalising the two volatile
-// fields (run_id and the clock).
+// Its output is line-for-line what ts_measure.py — its sibling in THIS
+// directory — prints from CPython, and ts_diff.sh owns the two temp
+// workspaces, the normalisation and the diff. One command:
+//
+//	bash go/internal/tasks/ts_diff.sh     -> "identical across 101 lines"
+//
+// Both halves used to be described in REVIEW.md with only the Go half
+// existing: the scratch driver it named had been deleted, so `go test`
+// reported one honest skip and the interop claim rested on nothing anyone
+// could re-run (adversarial tasks-r1 LOW). A claim that cannot be
+// re-checked is not a claim, so the Python half lives in the repo now.
 func TestTaskStoreDriveProbe(t *testing.T) {
 	ws := os.Getenv("MARO_TASKS_DRIVE_WS")
 	if ws == "" {

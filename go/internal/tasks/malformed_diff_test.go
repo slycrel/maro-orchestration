@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
@@ -226,10 +227,10 @@ func TestMalformedTaskRowsRaiseTheWayPythonDoes(t *testing.T) {
 		// RuntimeError where CPython raises KeyError (adversarial r11
 		// round 6, MEDIUM).
 		{"an archive on a row with no status", "archive", `{
-			"job_id": "task-mal29", "lane": "agenda",
+			"job_id": "task-mal33", "lane": "agenda",
 			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
 		{"an archive on a row whose status is a number", "archive", `{
-			"job_id": "task-mal30", "lane": "agenda", "status": 5,
+			"job_id": "task-mal34", "lane": "agenda", "status": 5,
 			"attempt": 0, "timestamps": {}, "blocked_by": []}`},
 		{"an archive on a row whose status is null", "archive", `{
 			"job_id": "task-mal31", "lane": "agenda", "status": null,
@@ -466,3 +467,204 @@ if not _d.startswith(_o.path.realpath(_o.environ["MARO_WORKSPACE"])) and \
 `
 
 var _ = filepath.Join
+
+// pyDepSrc measures what `_read_task` does when the dependency path cannot
+// even be STATTED. `Path.exists()` is
+//
+//	try: self.stat() except (OSError, ValueError): return False
+//
+// so it swallows every stat failure, not just ENOENT — and `blocked_by` is
+// a foreign-writable list, so those paths are reachable from a file another
+// box wrote. Three shapes cover the classes: a component past NAME_MAX
+// (ENAMETOOLONG), a path descending through a regular file (ENOTDIR), and
+// an embedded NUL (ValueError, which is not an OSError at all).
+const pyDepSrc = `
+import json, sys
+import task_store
+
+deps = json.loads(sys.argv[1])
+task_store._tasks_dir().mkdir(parents=True, exist_ok=True)
+(task_store._tasks_dir() / "seed.json").write_text("{}")
+out = {}
+try:
+    task_store.enqueue("dep probe", job_id="n1", blocked_by=deps)
+    out["ok"] = True
+except BaseException as e:
+    out["ok"] = False
+    out["cls"] = type(e).__name__
+    out["msg"] = str(e)
+out["written"] = task_store.task_path("n1").exists()
+print(json.dumps(out))
+`
+
+// TestAnUnstattableDependencyIsAbsentNotAnError pins the ENOENT-only guard
+// that adversarial tasks-r1 found: CPython accepts these rows and this port
+// refused them, so the two runtimes disagreed about which work the queue
+// would ever run.
+func TestAnUnstattableDependencyIsAbsentNotAnError(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		dep  string
+	}{
+		{"a dependency id past NAME_MAX", strings.Repeat("d", 300)},
+		{"a dependency id descending through a regular file", "seed.json/inner"},
+		{"a dependency id with an embedded NUL", "dep\x00x"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// The queue DIRECTORY has to exist before the cycle check runs.
+			// Without it the path walk fails at the missing parent with
+			// ENOENT — which os.IsNotExist DOES catch — so two of the three
+			// fixtures passed against the unfixed code and tested nothing.
+			// (Caught by running them against the pre-fix source, which is
+			// the only thing that distinguishes a guard from a decoration.)
+			// The ENOTDIR case additionally needs a regular file to descend
+			// through, and seeding both in BOTH trees is what makes the two
+			// runtimes comparable.
+			seed := func(root string) {
+				td := filepath.Dir(TaskPath(root, "seed"))
+				if err := os.MkdirAll(td, 0o777); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(td, "seed.json"),
+					[]byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			seed(dir)
+
+			pyWS := t.TempDir()
+			seed(pyWS)
+			probe := pyprobe.Probe{Marker: "task_store.py", Workspace: pyWS,
+				Guard: tasksGuard}
+			var py struct {
+				OK      bool   `json:"ok"`
+				Cls     string `json:"cls"`
+				Msg     string `json:"msg"`
+				Written bool   `json:"written"`
+			}
+			probe.RunJSON(t, pyDepSrc, &py, pyprobe.Arg(t, []string{c.dep}))
+			if !py.OK || !py.Written {
+				t.Fatalf("CPython refused the row (%s: %s) — if that is now "+
+					"true, this port's ENOENT-only guard was right and the "+
+					"stat-swallow in readRaw must come back out", py.Cls, py.Msg)
+			}
+
+			if _, err := Enqueue(dir, Options{JobID: "n1", BlockedBy: []string{c.dep}}); err != nil {
+				t.Fatalf("CPython accepted this row and wrote n1.json; Go "+
+					"raised %v", err)
+			}
+			if _, err := os.Stat(TaskPath(dir, "n1")); err != nil {
+				t.Fatalf("n1.json was not written: %v", err)
+			}
+		})
+	}
+}
+
+// pySurrogateSrc drives `fail` over a row carrying an ESCAPED lone
+// surrogate. The escape is valid UTF-8 in the file — it is seven ASCII
+// bytes — so no decoder refuses it on the way in.
+const pySurrogateSrc = `
+import json, sys
+import task_store
+
+p = task_store.task_path("t1")
+before = p.read_bytes()
+out = {}
+try:
+    task_store.fail("t1", "boom")
+    out["ok"] = True
+except BaseException as e:
+    out["ok"] = False
+    out["cls"] = type(e).__name__
+    out["msg"] = str(e)
+after = p.read_bytes()
+out["unchanged"] = before == after
+out["status"] = json.loads(after.decode("utf-8", "replace"))["status"]
+print(json.dumps(out))
+`
+
+// TestAnEscapedLoneSurrogateIsANamedDivergence pins a divergence this port
+// cannot close without a rewrite it has not earned yet — and pins it in the
+// direction that makes the day it IS closed loud.
+//
+// CPython: `json.loads` happily produces the str `x\ud800y` (Python strings
+// may hold lone surrogates), and then `write_text(encoding="utf-8")` cannot
+// ENCODE it. `_atomic_write`'s `except BaseException` unlinks the temp file,
+// so the verb raises UnicodeEncodeError and the row is byte-identical
+// afterwards — still `claimed`.
+//
+// This port: `encoding/json` substitutes U+FFFD at decode, Go strings cannot
+// hold a lone surrogate at all, and by write time the information is gone.
+// The verb SUCCEEDS, the row becomes `failed`, and `x\ud800y` is rewritten
+// as `x�y` — bytes nobody can recover.
+//
+// So the two runtimes disagree about whether the verb succeeded, about the
+// task's state, and about the row's contents. That is worse than the
+// cosmetic residual `pyval` already names (which describes the
+// ensure_ascii=TRUE writer, a different writer with a different outcome).
+//
+// The fix is a surrogate-preserving decoder in pyval plus an encodeString
+// that can re-emit `\udXXX` — named in pyval.go and in BACKLOG. It is NOT
+// a guard in readRaw: CPython's READ succeeds, so refusing here would break
+// list_tasks and status_summary, which is a THIRD behaviour rather than
+// either runtime's.
+func TestAnEscapedLoneSurrogateIsANamedDivergence(t *testing.T) {
+	const row = `{"job_id": "t1", "status": "claimed", "attempt": 1,` +
+		` "timestamps": {"queued_at_utc": "2026-01-01T00:00:00Z"},` +
+		` "note": "x\ud800y"}`
+
+	// --- what CPython does, measured every run rather than recalled ---
+	pyWS := t.TempDir()
+	pyPath := filepath.Join(pyWS, "output", "queues", "tasks", "t1.json")
+	if err := os.MkdirAll(filepath.Dir(pyPath), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pyPath, []byte(row+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := pyprobe.Probe{Marker: "task_store.py", Workspace: pyWS,
+		Guard: tasksGuard}
+	var py struct {
+		OK        bool   `json:"ok"`
+		Cls       string `json:"cls"`
+		Unchanged bool   `json:"unchanged"`
+		Status    string `json:"status"`
+	}
+	probe.RunJSON(t, pySurrogateSrc, &py)
+	if py.OK || py.Cls != "UnicodeEncodeError" || !py.Unchanged ||
+		py.Status != "claimed" {
+		t.Fatalf("CPython's behaviour CHANGED: ok=%v cls=%s unchanged=%v "+
+			"status=%s — want a UnicodeEncodeError over an untouched, "+
+			"still-claimed row. Re-derive this divergence before trusting "+
+			"the assertion below.", py.OK, py.Cls, py.Unchanged, py.Status)
+	}
+
+	// --- what this port does, and the day it stops, this test goes red ---
+	dir := t.TempDir()
+	goPath := TaskPath(dir, "t1")
+	if err := os.MkdirAll(filepath.Dir(goPath), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(goPath, []byte(row+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fail(dir, "t1", "boom"); err != nil {
+		t.Fatalf("the divergence is CLOSING: Fail raised %v where it used "+
+			"to succeed. If pyval grew a surrogate-preserving decoder, this "+
+			"test is what should now assert AGREEMENT — check the class is "+
+			"UnicodeEncodeError and the row is untouched, then delete this "+
+			"whole test in favour of an ordinary malformed_diff fixture.", err)
+	}
+	after, err := os.ReadFile(goPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "�") {
+		t.Fatalf("the surrogate no longer becomes U+FFFD; the decoder "+
+			"changed and this divergence needs re-deriving:\n%s", after)
+	}
+	if !strings.Contains(string(after), `"status": "failed"`) {
+		t.Fatalf("Go wrote the row but not the status change:\n%s", after)
+	}
+}

@@ -306,7 +306,7 @@ func TestAForeignFieldSurvivesARewriteAtItsOwnPosition(t *testing.T) {
 	}
 	raw := `{
   "job_id": "task-foreign-0001",
-  "from_the_future": {"nested": [1, 2.50, null]},
+  "from_the_future": {"nested": [1, 2.50, null], "sci": 1E5, "wide": 123456789012345678901234},
   "status": "queued",
   "timestamps": {"queued_at_utc": "2026-01-01T00:00:00Z", "finished_at_utc": ""},
   "claimed_by_pid": null
@@ -322,10 +322,28 @@ func TestAForeignFieldSurvivesARewriteAtItsOwnPosition(t *testing.T) {
 	if !strings.Contains(got, `"from_the_future"`) {
 		t.Fatalf("the unknown field was dropped:\n%s", got)
 	}
-	// A stored 2.50 must not come back 2.5: LoadsOrdered keeps the source
-	// literal, which is the only reason a foreign file is not reformatted.
-	if !strings.Contains(got, "2.50") {
-		t.Errorf("a foreign number literal was reformatted:\n%s", got)
+	// A stored 2.50 DOES come back 2.5, and this assertion used to say the
+	// opposite. CPython's json.loads parses a float and json.dumps writes
+	// float.__repr__, so a foreign FLOAT literal is re-rendered on every
+	// rewrite — measured on 3.14.3:
+	//
+	//	json.dumps(json.loads("2.50"))  -> '2.5'
+	//	json.dumps(json.loads("1E5"))   -> '100000.0'
+	//
+	// Only an INTEGER literal survives verbatim, and it must: Python's ints
+	// are unbounded, so a 24-digit id that went through float64 would come
+	// back wrong. The old assertion pinned this port's behaviour, and every
+	// writer in the tree inherited the divergence (adversarial tasks-r1
+	// HIGH). Both ends are asserted here so the fix cannot regress in
+	// either direction.
+	if strings.Contains(got, "2.50") || !strings.Contains(got, "2.5") {
+		t.Errorf("a foreign float literal must be re-rendered as 2.5:\n%s", got)
+	}
+	if !strings.Contains(got, "100000.0") {
+		t.Errorf("1E5 must be re-rendered the way repr does, 100000.0:\n%s", got)
+	}
+	if !strings.Contains(got, "123456789012345678901234") {
+		t.Errorf("a wide INTEGER literal must survive verbatim:\n%s", got)
 	}
 	order := keyOrder(t, got)
 	if order[1] != "from_the_future" {

@@ -146,6 +146,25 @@ func writeTask(path string, task Task) error {
 // callers: `.get` and `task[...]` do not raise the same exception, and
 // `if dep and dep.get(...)` does not raise at all for a falsy row.
 func readRaw(path string) (any, error) {
+	// `_read_task` is `if not path.exists(): return None`, and
+	// `Path.exists()` is `try: self.stat() except (OSError, ValueError):
+	// return False` — it swallows EVERY stat failure, not just ENOENT.
+	// ENAMETOOLONG, ENOTDIR, ELOOP, EACCES on a parent and an embedded NUL
+	// all mean "no such task" to CPython.
+	//
+	// `os.IsNotExist` is true for ENOENT alone, so each of those was a hard
+	// error out of the verb here. That is not cosmetic: the only caller
+	// reaching this with an ATTACKER-shaped path is the `blocked_by`
+	// dependency read, which is a foreign-writable field, and the two
+	// runtimes disagreed about which rows the queue accepts —
+	// `enqueue(blocked_by=["d"*300])` writes a row in CPython and writes
+	// nothing here (adversarial tasks-r1 HIGH, measured both sides).
+	//
+	// Stat first, then read. A file that stats and then fails to open is a
+	// genuine error in both runtimes: CPython's read_text raises there too.
+	if _, serr := os.Stat(path); serr != nil {
+		return nil, nil
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

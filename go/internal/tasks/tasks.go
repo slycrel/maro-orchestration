@@ -719,10 +719,22 @@ func resolveDependents(ws string, completedJobID any) error {
 //
 // The same fact runs the other way in the three unsorted sweeps:
 // resolveDependents, StatusSummary and RecoverStaleClaims iterate in
-// sorted order here and in arbitrary directory order in Python. Nothing
-// depends on it — none of the three is order-sensitive — except that
-// RecoverStaleClaims RETURNS its ids, so a caller diffing the two
-// runtimes' lists would see the same set in a different order.
+// sorted order here and in arbitrary readdir order in Python. This used to
+// say "nothing depends on it", and that was wrong for two of the three
+// (adversarial tasks-r1 LOW):
+//
+//   - RecoverStaleClaims RETURNS its ids, so a caller diffing the two
+//     runtimes' lists sees the same set in a different order.
+//   - StatusSummary returns an ORDERED Obj precisely because order is
+//     observable — the CLI json.dumps'es it — so its printed key order is
+//     sorted-filename order here and readdir order there. Worse, when two
+//     rows' statuses compare equal but SPELL differently (1 and true, 5 and
+//     5.0), the bucket takes the label of whichever ARRIVED FIRST. Go's
+//     answer is deterministic; CPython's depends on readdir.
+//
+// Neither can be closed, only named: CPython's order is unspecified. The
+// sweep differential monkeypatches _tasks_dir to sort, which pins the
+// MERGING behaviour and deliberately does not pin the order.
 func List(ws, statusFilter string) ([]any, error) {
 	dir := TasksDir(ws)
 	if err := os.MkdirAll(dir, 0o777); err != nil {

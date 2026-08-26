@@ -44,6 +44,54 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Go port: an escaped lone surrogate is a STATE divergence, not a byte one (FOUND 2026-08-26, tasks r1 HIGH)
+
+`pyval`'s existing lone-surrogate residual describes the `ensure_ascii=True`
+writer, where CPython re-escapes `\ud800` and the write succeeds — a byte
+difference. On an **`ensure_ascii=False`** writer (which `task_store` is)
+CPython must actually UTF-8-ENCODE the string, and a lone surrogate cannot
+be encoded. Measured on 3.14.3, driving `fail("t1")` over a row whose
+`note` is `"x\ud800y"`:
+
+| | CPython | Go |
+|---|---|---|
+| the verb | `UnicodeEncodeError` | succeeds |
+| the row | byte-identical, still `claimed` | rewritten, now `failed` |
+| the field | untouched | `x\ufffdy` — original bytes gone |
+
+So the two runtimes disagree about whether the verb RAN, about the task's
+state, and about the row's contents — and this runtime's write is
+unrecoverable. That is a different class of problem from the cosmetic
+residual already recorded.
+
+**The fix** is the one `pyval.go` already names: decode string tokens with a
+surrogate-preserving decoder AND teach `encodeString` to re-emit `\udXXX`,
+so the encoder can refuse the way CPython's does. It is a rewrite of that
+file's two ends, which is why it is here and not done.
+
+**Not** a guard in `readRaw`: CPython's READ succeeds, so refusing at read
+time breaks `list_tasks` and `status_summary` — a third behaviour, matching
+neither runtime.
+
+Pinned by `internal/tasks`' `TestAnEscapedLoneSurrogateIsANamedDivergence`,
+which measures CPython every run and fails loudly in EITHER direction: if
+CPython changes, or if this port stops diverging.
+
+### Go port: `json.Number` non-finite literals — decide allow_nan per writer (FOUND 2026-08-26, tasks r1)
+
+`pyjson.Value` now re-renders float literals through `FloatRepr` (the tasks
+r1 HIGH fix), which closed `2.50 -> 2.5`, `1E5 -> 100000.0` and the rest.
+One arm is deliberately left alone: a literal that parses to inf or nan is
+still ECHOED verbatim, so `1e400` stays `1e400` where CPython's
+`json.dumps` writes `Infinity`.
+
+Both are valid JSON and both read back as `inf` in Python, so nothing is
+lost today — but the adjacent `float64` arm REFUSES non-finite instead, and
+having two answers in one function is a decision waiting to be made. The
+real question is per-WRITER: `json.dumps` defaults to `allow_nan=True`, and
+which of this port's writers should carry `allow_nan=False` has never been
+enumerated. Do that enumeration first; the code change is small either way.
+
 ### Go port: `pyval` has no big-int lane (FOUND 2026-08-26, SystemMetrics chunk)
 
 CPython's `int` is arbitrary precision. `pyval.Plain` resolves an integral

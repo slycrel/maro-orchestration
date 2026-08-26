@@ -35,9 +35,11 @@ package pyjson
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -139,7 +141,46 @@ func Value(v any) (string, error) {
 		return String(s)
 	}
 	if n, ok := v.(json.Number); ok {
-		return n.String(), nil // keep the source literal (7 stays 7)
+		lit := n.String()
+		if !strings.ContainsAny(lit, ".eE") {
+			// An INTEGER literal keeps its source spelling. Python's ints
+			// are unbounded, json.loads keeps a 40-digit counter exact and
+			// json.dumps re-emits it, so forcing it through int64 would
+			// lose digits no round trip should lose. `7` stays `7`.
+			return lit, nil
+		}
+		// A FLOAT literal does NOT keep its spelling, and echoing it was a
+		// real divergence in every writer in this port. json.loads produces
+		// a float and json.dumps writes `float.__repr__`, so the file is
+		// REFORMATTED on every rewrite. Measured on CPython 3.14.3:
+		//
+		//	2.50   -> 2.5        1E5    -> 100000.0
+		//	1e23   -> 1e+23      1.0e2  -> 100.0
+		//	1e19   -> 1e+19      1e400  -> Infinity
+		//
+		// (0.30000000000000004 and -0.0 agree either way, which is why a
+		// spot check missed it.) Found by a randomised cross-runtime
+		// differential over task_store — one of the fixtures diverged in
+		// the ON-DISK BYTES after `fail`, not merely in a returned value
+		// (adversarial tasks-r1 HIGH).
+		f, ferr := n.Float64()
+		if ferr != nil && !errors.Is(ferr, strconv.ErrRange) {
+			// Not a float at all. Nothing produces this — json.Number holds
+			// what a decoder accepted — so echo rather than invent.
+			return lit, nil
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// NAMED DIVERGENCE, deliberately left alone. CPython's
+			// json.dumps defaults to allow_nan=True and writes `Infinity`;
+			// this arm echoes `1e400`, which is valid JSON that both
+			// runtimes read back as inf. The float64 arm below REFUSES
+			// non-finite instead, because a Go-constructed inf is a bug in
+			// the caller while a foreign literal is a file CPython wrote.
+			// Making the two agree is a decision about allow_nan that
+			// belongs with the writers, not here — BACKLOG.
+			return lit, nil
+		}
+		return FloatRepr(f), nil
 	}
 	if f, ok := v.(float64); ok {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
