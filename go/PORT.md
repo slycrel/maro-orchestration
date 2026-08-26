@@ -8067,3 +8067,89 @@ which kills a mutant reports a survivor the battery caused. The `-run`
 filter is gone.
 
 Final state: 44 live mutants, 44 detected.
+
+### introspect's I/O half: two readers, one writer, and a limit that lies
+
+`internal/introspect/store.go` finishes the module's runtime surface —
+`_events_path`, `_diagnoses_path`, `_load_loop_events`,
+`_load_latest_loop_id`, `save_diagnosis`, `load_diagnoses` and
+`diagnose_latest`.
+
+**`load_diagnoses(limit=0)` returns ONE row.** Python appends and *then*
+checks `len(results) >= limit`, so the first valid row is already in the
+list when the check fires; the same holds for any negative limit
+(measured, both). This is the second appearance of the zero-that-must-mean-
+two-things shape in this port — `load_outcomes(limit=0)` returns nothing
+where the port reads `limit <= 0` as "everything" — and it resolved the
+other way: replicated exactly, because the port that tidies it disagrees
+with the runtime it shares a store with.
+
+**It reads the WHOLE store and limits afterwards**, deliberately, and
+Python says why: a raw record can fail `LoopDiagnosis` construction, so the
+caller wants `limit` VALID rows, not `limit` raw lines. A tail read would
+quietly return fewer and look correct.
+
+**Rehydration is a dataclass constructor, which type-checks nothing.** A
+present null in a required field is still PRESENT, so it does not raise —
+the row rehydrates with `severity=None` and `summary()` renders
+`severity=None`. Only a MISSING key makes `LoopDiagnosis(**subset)` a
+TypeError, which is what skips the row. So the port tests presence
+separately from value, and reads the string fields through `pyval.Str`
+rather than a `.(string)` assertion: `Str` IS Python's `str()`, so None
+becomes "None", 5 becomes "5" and 5.0 becomes "5.0" — the same bytes
+CPython's f-string produces. An assertion would have rendered all three as
+"" and made three different rows look identical.
+
+**One divergence is unavoidable and is recorded rather than chased.** The
+port's numeric fields are typed `int`, so a row carrying
+`"total_tokens": "many"` reads 0 where CPython renders `tokens=many`, and a
+JSON 5.0 reads 5 where CPython renders `tokens=5.0`. Making five fields
+`any` to be faithful about rows no writer produces would push the
+untypedness through Diagnose, Summary and every caller. What makes that
+safe is containment: nothing rehydrated here is ever written back, so a
+mistyped row in the shared store cannot be REWRITTEN by this runtime into a
+differently mistyped one. The test that pins both exact strings is where
+the decision gets revisited if a writer ever appears.
+
+**The `Path.cwd()` fallbacks are not ported.** Both path helpers wrap the
+`orch_items` import in a bare try/except and fall back to
+`Path.cwd() / "memory" / ...`. That branch fires only when the import
+raises, and when it does it silently repoints the whole store at whatever
+directory the process happens to be in — a second store-routing rule
+disagreeing with the first, which is the exact shape of the 2026-08-16
+live-ledger incident. One resolution order, passed in as an argument.
+
+### The battery
+
+35 mutants over `store.go`, of which one was retired: 34 live, 34 detected
+after four fixture gaps were closed.
+
+The four gaps are worth listing because three of them are the same mistake
+— a fixture that omits ONE thing proves nothing about a rule that names
+several:
+
+- The prefix match had a case for an exact id and a case for a longer id,
+  but none where the query is a SUBSTRING and not a prefix. `HasPrefix` and
+  `Contains` were indistinguishable until `"L1"` had to *not* match
+  `"xL1y"`.
+- The required-field set is three names and the fixture omitted only
+  `loop_id`, so a list short by one still passed. There is now a row
+  missing each of the three.
+- `recorded_at` appears in no `summary()` and in no other assertion, so a
+  rehydration that dropped it was invisible to every text comparison. It is
+  the field the per-class rate windows sort on, which makes it the worst
+  one to lose quietly.
+- `diagnose_latest` passes no project, and nothing checked that. A port
+  that filled in a plausible slug would stamp every unattributed diagnosis
+  with a project it was never told — and project is a RANKING input in
+  `find_relevant_failure_notes`.
+
+The retired mutant is the more interesting one. It swapped the ordered
+event reader for the plain one, and there is no input on which that changes
+an answer: nothing writes an event back, and Diagnose reads every field by
+NAME. Chasing it found that the production comment justifying the ordered
+read said the diagnosis is "written back from" these rows — a mechanism
+that does not exist. The fix was to the comment. The real reason is that
+Diagnose takes `pyval.Obj` and the fixtures decode through the same
+decoder; giving one store two readers that resolve numbers differently is
+the divergence those readers' own parity test exists to prevent.
