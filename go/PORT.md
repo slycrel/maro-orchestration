@@ -11864,3 +11864,69 @@ emission (the module logger fires on every error lane), and a `prior`
 passed by value — which propagates a probe's write to an EXISTING key
 and silently loses a NEW one. That last is fixed by a pointer, and the
 pin was checked against a reverted copy before being believed.
+
+## Where the port actually is: three numbers, two of them ceilings
+
+Twenty-six chunks in, "how far along is this?" had never been measured.
+It had been *estimated* — a remaining-scope figure carried forward in the
+backlog and adjusted by feel each time a module landed. That is the shape
+L28 warns about: a number that nobody has counted since it was born.
+
+So count it. Three different questions, three different answers, and the
+gap between them is the interesting part.
+
+**The Go side.** Forty-five packages, 57,706 lines of source and 77,839
+lines of test. The test-to-source ratio is 1.35 overall, which is what a
+differential port looks like — most of those test lines are embedded
+CPython probe sources and fixture tables, not assertions.
+
+Two packages have no test file at all: `internal/pyprobe` (275 lines) and
+`internal/missionrun` (97 lines). `pyprobe` is the differential harness
+itself and is exercised by every probe in the tree, with
+`MARO_PYPROBE_REQUIRED=1` as its proof-of-life; `missionrun` is a real
+hole and is filed. Nothing else in the tree is untested, though "has a
+test file" and "is tested" are different claims and this census only
+answers the first.
+
+**The Python side, loosest ceiling.** Of 183 modules totalling 132,730
+lines, 61 modules (70,841 lines, 53.4%) are *mentioned anywhere* in the
+Go tree — a filename in a comment counts. That is an upper bound on
+progress and a weak one: `knowledge_web.py` is 4,828 lines and is
+mentioned twice.
+
+**The Python side, better ceiling.** 38 modules (50,321 lines, 37.9%) are
+`import`ed by at least one embedded CPython probe. A probe means someone
+actually measured CPython's answer for something in that module, which is
+much stronger evidence than a mention. It is still a ceiling, because it
+credits a module's whole line count for one probed function — `handle.py`
+is 4,309 lines and its probes reach a fraction of them.
+
+**The floor.** 122 modules, 61,889 lines — 46.6% of the Python — are
+never mentioned in the Go tree in any form. That number is not a ceiling
+and not an estimate. It is the part that is definitely untouched, and the
+largest single items in it are `loop_report.py` (2,705),
+`run_curation.py` (2,135), `container_exec.py` (1,676),
+`orch_bridges.py` (1,522), and `navigator_shadow.py` (1,231).
+
+The honest headline is the floor, not either ceiling: **at least 47% of
+the Python by line has no Go reference of any kind.** Everything between
+37.9% and 53.4% is unresolved by this measurement and would need a
+per-function census to settle.
+
+This does not contradict the **23 modules, ~26,800 lines** burndown
+earlier in this file, and the two must not be added or compared. That
+table counts only modules above ~690 lines and only asks "has this module
+been NAMED"; this census counts every module in `src/` and asks three
+sharper questions. The burndown answers *what large tranche is next*; the
+floor here answers *how much is left*. A reader who takes 26,800 as the
+remaining total is off by more than a factor of two.
+
+A caveat about the method, because it is the kind of thing this file
+exists to record. The mention census is a regex over `*.py` in Go source
+text; the probe census is a regex for `import X` / `from X import` inside
+Go test files, filtered to names that exist in `src/`. Both undercount
+a module reached only through a package alias, and the mention census
+missed `orch.py` entirely — 610 lines, imported by probes but never
+written out as "orch.py" in a comment. The probe census caught it. Two
+proxies disagreeing is the reason to run both.
+
