@@ -6051,6 +6051,14 @@ appeared in the table below, because that table lists only modules above
 understates progress for anything under its cut, which is worth knowing
 before reading it as a burndown.
 
+**Also 2026-08-26, later still:** `system_health.py` (693) is ported to the
+same standard, and it IS the last row of the table. So the remaining
+first-pass surface is now **23 modules, ~26,800 lines**. Its seven declared
+probes are named-not-ported — each reads a different live store and is its
+own tranche — so the row is retired the way `sheriff.py`'s
+`check_all_projects` is: the deterministic half done, the orchestration half
+written down.
+
 Measured by `grep -rl "<module>.py" internal/ cmd/`. That is a weak test
 (it finds modules the port has NAMED, not ones it has finished), so it
 overstates coverage and cannot understate it: anything on this list has not
@@ -6082,10 +6090,9 @@ been started.
 | `artifact_check.py` | 735 | artifact checking |
 | `delta_replay.py` | 729 | delta replay |
 | `worktree.py` | 722 | worktree management |
-| `system_health.py` | 693 | self-health lane |
 
 `correspondence.py` is dev tooling by decree and does not belong in a
-runtime port at all; the other 25 do.
+runtime port at all; the other 23 do.
 
 ### What the list changes about the sweep's tiering
 
@@ -10722,3 +10729,195 @@ compare at finer resolution than a day — but the comment now carries the
 measurement instead of the story, and M46b is a labelled near-equivalent.
 A plausible rationale nobody measured is the same defect class as a test
 that cannot fail.
+
+## `system_health.py` slice 1 — a state machine whose only output is a file
+
+`internal/syshealth` ports the portable core of the 693-line
+`src/system_health.py`: `load_snapshot`, `_write_snapshot`, `_history_of`,
+the `run_health_probes` cycle, `render_snapshot`, and the five constants.
+
+The module is the liveness registry for Maro's own dynamic processes — a
+writer whose consumer never runs is the defect class it exists to catch —
+and SILENT is a finding rather than an error. Nothing it does changes
+runtime behaviour, which is exactly why a port can get it subtly wrong for
+a long time without anything going red.
+
+**What is deliberately not here** is in the package doc, and one omission
+is load-bearing rather than lazy: the seven declared probes each read a
+DIFFERENT live store, so each is its own tranche. In Python they are a
+module-level list, `DECLARED_PROCESSES`, and the consequence is that the
+cycle **cannot be exercised at all** without monkey-patching it — which is
+precisely what the ground-truth probe does. The Go side takes them as a
+parameter. That is not a convenience: it is the seam that makes the state
+machine testable, and the same seam that made 37 cycle fixtures possible.
+
+`_narrate_transition` is the other one. `RunCycle` RETURNS the narrations
+it decided on instead of performing them, and the Python's own comment says
+why: narrate only after the snapshot recording `narrated` has persisted, or
+a failed write leaves the captain's log claiming the user was told while
+the state machine re-narrates forever. Returning them puts the ordering in
+the type instead of in a comment.
+
+### Three seams, three clocks, and what each one hides
+
+The probe patches three things, and each patch is a question the port had
+to answer:
+
+- **`sh.datetime` frozen.** `datetime.now(timezone.utc).isoformat()` is
+  called **once per declaration and once more for `updated_at`**. Freezing
+  it is what makes the fixtures comparable — and is also what would let a
+  port that reads the clock once, or fifty times, pass every one of them.
+  So `now` is a `func() string` on the Go side, not a string, and
+  `TestRunCycleReadsTheClockOncePerDeclarationPlusOnce` pins the count at
+  n+1. This is L48 in its smallest form: the SHAPE is observable even when
+  the values are not.
+- **`config.get` patched only for `health.probes_enabled`, and only on the
+  cases that ask.** An unconditional patch would make the enabled-by-default
+  cases test the patch. The gate is spelled `bool(cfg_get(...))`, so
+  `enabled` is an `any` on the Go side and runs through `pyval.Truthy`:
+  `0`, `""` and `False` skip the cycle, and the STRING `"no"` runs it.
+- **`_narrate_transition` captured into a list.** What the differential
+  needs is WHICH transitions were decided, not that a log file grew.
+
+### The narration edge is a field, not a status pair
+
+The one decision most likely to be ported wrong, because the wrong version
+passes almost everything:
+
+```go
+wentSilent := status == Silent && narrated != "silent"
+recovered  := status == OK     && narrated == "silent"
+```
+
+Reading `prevStatus != Silent` instead of `narrated != "silent"` agrees
+with CPython on every fixture that existed until C34 was written for it.
+The case that separates them is a process that was told-silent, dipped to
+UNKNOWN when its probe broke, and came back SILENT: the status pair says
+"new silence", the field says "the user already knows". C34 is that case,
+and the battery's M47 is the mutant that proves the fixture works.
+
+The mirror case is C5 — SILENT → UNKNOWN → OK still owes the user a
+recovery line — which is why the recovery arm reads the field too.
+
+### Six things CPython does here that a reasonable port would not
+
+Measured before any Go existed (L49); each one is a fixture:
+
+- `int(snapshot.get("cycle", 0) or 0) + 1` has **three** lanes, not two.
+  Absent / `0` / `""` / `None` / `False` restart at 1; `"41"` and `2.9`
+  advance; `"abc"` **raises**, and the raise is inside the blanket `except`,
+  so the cycle aborts *before the write*. `ran` still counts the probes that
+  already ran, `transitions` stays 0, and the file on disk keeps its corrupt
+  counter. C22, C36 and C37 pin all three of those consequences separately.
+- `if obs:` — an **empty** observation is falsy, so it appends nothing AND
+  takes no timestamp. A probe with nothing to say leaves the ring buffer
+  alone (C11).
+- `{**obs, "at": now}` **overwrites** a probe-supplied `at` in place, keeping
+  its ordinal (C13). `pyval.Obj.Set` is that rule exactly.
+- `entry = dict(prior)` is a **shallow copy**, so keys this module has never
+  heard of survive (C15). That is the data-retention rule, not tidiness.
+- `render_snapshot` **raises** three different ways on a hand-edited
+  snapshot: a list `processes` dies on `.items()`, a string entry dies on
+  `.get`, and — the one nobody guesses — an **unhashable status** dies in
+  the SORT KEY, because `order.get(status, 3)` is a dict lookup and a list
+  is not a key. R12, R11/R15 and R14.
+- `.get(key, "?")` returns the default only when the key is **ABSENT**. A
+  present-and-null `updated_at` renders the four characters `None` (R6 vs
+  R7).
+
+The unhashable-status message is the one place this differential is pinned
+to an interpreter version: CPython 3.14 says `cannot use 'list' as a dict
+key (unhashable type: 'list')` where 3.12 said the bare second half. That is
+recorded at the site, so a future failure there reads as a fixture question
+rather than a port defect.
+
+### The bug the differential could not have found
+
+`processes` is a `pyval.Obj`, which is a **slice**. The first draft assigned
+it into the snapshot before the loop, the way Python does — but Python
+mutates one dict in place, and `Obj.Set` reallocates. Every process the loop
+appended after the first reallocation was dropped from the written file.
+
+I first wrote here that the differential could not see it. That was a
+guess, and hand-editing a copy into exactly that shape disproved it: every
+cycle fixture fails at once, all thirty-seven reporting `"processes": {}`
+against CPython's populated map. `TestRunCycleKeepsEveryProcessItAppended`
+stays because it names the cause in one line rather than in thirty-seven
+diffs and needs no interpreter — but it is a convenience, not the guard,
+and the honest version of this paragraph is the one that got measured.
+
+Same defect class as the retracted `pySeconds` comment two tranches ago:
+**a claim about what a test can and cannot catch is itself testable, and
+writing it down without running it is how a battery inherits a fiction.**
+
+Two more hazards exist only because the Go seam is wider than the Python
+one, and both got unit tests for the same reason:
+
+- A Python probe **either** returns a triple **or** raises. Go's returns a
+  value AND an error, so "raised and handed back a half-written
+  observation" is a state the Python cannot express and the port must
+  still refuse.
+- `{**obs, ...}` builds a new dict; `stamped := obs` would alias the
+  probe's own value and stamp it in place. The real probes will return
+  cached objects — they read a store once — so the second cycle would see
+  an `at` the first one wrote.
+
+### The differential's own renderer, again
+
+`syGo` converts `pyval.Obj`/`List` into what `encoding/json` compares. Its
+first draft turned a **nil** `List` into `make([]any, 0)`, which marshals to
+`[]` — erasing exactly the nil-vs-empty difference that decides whether
+`summary["silent"]` comes out as `[]` or `null`. Battery M1 survived on the
+first round for that reason and nothing else.
+
+This is the second time in three tranches that the test's own renderer was
+the guard that failed (sheriff's M76 was the first). The pattern is worth a
+name: **a differential that normalises before comparing has moved the
+assertion into the normaliser**, and the normaliser is not under test.
+
+### The battery: 94 mutants, three rounds, and two that were caught for the wrong reason
+
+`go/internal/syshealth/mutants.py`, derived from the FILE. **r1 77/93 with
+1 battery bug; r2 85/94; r3 87/94 with 0 battery bugs and seven labelled
+survivors.** Converged.
+
+What the rounds actually bought, beyond the count:
+
+- **r1's M1/M17 were the `syGo` bug above** — a survivor that was a TEST
+  defect, not a coverage gap.
+- **r1's M26 and M62 were bad mutants of my own making** (L8). M26 *added*
+  an early `snapshot.Set` while leaving the real one below the loop, so the
+  original behaviour was still reachable; M62 moved one line from below the
+  cycle-counter write to above it, both of which are already past the error
+  return. Neither could change an answer. M26 is now split — "the store is
+  removed" (a mutant) and "the store is duplicated" (labelled equivalent) —
+  and M62 moved to the position that actually probes the decision.
+- **r2's M32 and M38 named two hazards the seam INVENTED.** Neither exists
+  in Python: a probe there either returns a triple or raises, and
+  `{**obs, ...}` always builds a new dict. Go's four-value return and slice
+  semantics make both expressible, so both got unit tests.
+- **M38 took two attempts, and the second attempt is the interesting one.**
+  The first pin handed the probe `{"n": 1}` and asserted it was unchanged —
+  and passed against the aliasing mutant, because `Obj.Set` on a NEW key
+  appends, and append on a full slice reallocates. The corruption only
+  happens on Set's in-place lane, so the fixture has to hand over an
+  observation that already carries `"at"`. **A pin that depends on
+  `append` reallocating is a coin flip written as an assertion.**
+- **r2's M7/M8 were the honest kind of gap.** Nothing pinned WHERE the
+  snapshot lives, because every other fixture both writes and reads through
+  `SnapshotPath` — rename the file consistently and the differential shrugs.
+  Worse, M8's r1 "caught" was a **compile failure**: replacing
+  `orch.MemoryDir(ws)` with `ws` left the `orch` import unused. A mutant
+  that does not build is reported as caught and proves nothing — the same
+  false positive as a site matching zero times, and it needs the same
+  treatment. Both are fixed, and the fix is a new differential case (Z2)
+  that asks CPython where `_snapshot_path()` resolves, relative to the
+  workspace: `memory/system_health.json`.
+
+The seven r3 survivors are all labelled at their sites. Five are
+equivalent-by-construction because a nil fallback or an identity slice
+follows two lines later (M9, M20, M24, M26b, M27); M41 is `>` vs `>=` at a
+length where the trim is the identity; M6 is the summary's key order, which
+the differential compares semantically because CPython hands the summary
+back as a dict and neither runtime promises an order there. The snapshot
+FILE is where order is pinned, and `sort_keys` decides it.

@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**734**. The counts below are regenerated from the ledger, not recalled.
+**742**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 734
+**Two things the counts are not.** They are lower bounds: 314 of the 742
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 46*
+*instances: 47*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -833,7 +833,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 6*
+*instances: 7*
 
 A port can get every DECISION of the original right and still be wrong,
 because the original's answer depends on the SHAPE the decisions are made
@@ -900,7 +900,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 7*
+*instances: 8*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -1006,6 +1006,49 @@ wrong, and would look tidier for it.
 the order of the argument and say which Go call promises it. If the key
 can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
+
+### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
+*instances: 2*
+
+A cross-runtime differential almost always has a shim between the two
+answers: something that turns the port's native shapes into whatever the
+comparison eats. That shim is production-adjacent code that nothing tests,
+and every simplification it makes is a divergence the differential can no
+longer see.
+
+The failure is silent in the worst way. The suite is green, the fixture
+count is high, and the specific distinction the shim erased is exactly the
+one a reader would assume the differential covers.
+
+**Instance 1 (`sheriff`, M76).** The test's `cpOut` copied `Report.Evidence`
+into a fresh `[]any`. A nil slice marshals to `null` and an empty one to
+`[]` — CPython's distinction between "no evidence key" and "evidence: []" —
+and the copy made them the same. `evidence = []string{}` could be deleted
+from the port with every fixture still passing.
+
+**Instance 2 (`syshealth`, M1/M17).** `syGo` turned a nil `pyval.List` into
+`make([]any, 0)`, so `var sil pyval.List` in `Summary.ToDict` — which would
+write `"silent": null` where CPython always writes `[]` — survived the whole
+first battery round.
+
+Both are the same shape: **the normaliser rounded off a distinction the
+code under test is responsible for making.**
+
+**Tripwire.** For every conversion the harness performs, name what it
+collapses, then ask whether the port is allowed to collapse the same thing.
+The three that recur: nil vs empty (`null` vs `[]`/`{}`), int vs float
+(`1` vs `1.0`), and key order. A collapse is fine only where BOTH runtimes
+are free — semantic key order in a dict both sides build — and never where
+one of them commits to an answer in a file.
+
+**Corollary — a claim about what a test can catch is itself testable.**
+Twice now a comment asserted that some guard was the only thing standing
+between the port and a bug, without anyone running the experiment. The
+`syshealth` slice-header note said "the differential's own fixtures cannot
+see it"; hand-editing a copy showed all thirty-seven cycle fixtures fail at
+once. Same defect class as the `pySeconds` rationale retracted one tranche
+earlier: **a plausible claim nobody measured is a test that cannot fail,
+written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*

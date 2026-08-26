@@ -237,6 +237,62 @@ func DumpsIndentN(v any, n int) (string, error) {
 	return sb.String(), nil
 }
 
+// DumpsIndentNSorted is json.dumps(v, indent=n, sort_keys=True).
+//
+// sort_keys is a THIRD per-writer decision, alongside indent and
+// ensure_ascii, and 23 call sites in the Python tree pass it. It is not a
+// cosmetic one: the snapshot files written this way are compared, diffed
+// and read by people, and an unsorted port rewrites every line of one on
+// its first touch.
+//
+// CPython sorts with `sorted(dct.items())`, which compares str by CODE
+// POINT. Go compares strings by BYTE, and UTF-8 byte order is code-point
+// order, so sort.SliceStable on the raw keys is the same permutation —
+// measured on the case that separates them, `{"z":.., "\u00e0":.., "\u00e9":..}`,
+// which CPython orders z, à, é and not alphabetically.
+//
+// The sort is applied at EVERY level, because Python's is: a nested dict
+// inside a sorted dump comes out sorted too.
+//
+// v is not mutated. The Obj is copied before sorting, so a caller holding
+// an ordered snapshot in memory keeps its order — which matters here,
+// because the in-memory shape is what the next cycle's `dict(prior)`
+// reads.
+//
+// Its differential fixtures live where its first caller does, in
+// internal/syshealth (J1–J8): eight `json.dumps(v, indent=1,
+// sort_keys=True)` comparisons against CPython covering nested dicts, an
+// empty key, non-ASCII keys, empty containers and the empty object. Named
+// here because a helper whose only tests are in another package looks
+// untested from this one.
+func DumpsIndentNSorted(v any, n int) (string, error) {
+	var sb strings.Builder
+	if err := renderUnit(&sb, sortedDeep(v), 0, true, strings.Repeat(" ", n)); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// sortedDeep returns v with every Obj key-sorted, recursively.
+func sortedDeep(v any) any {
+	switch t := v.(type) {
+	case Obj:
+		out := make(Obj, len(t))
+		for i, f := range t {
+			out[i] = Field{Key: f.Key, Val: sortedDeep(f.Val)}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+		return out
+	case List:
+		out := make(List, len(t))
+		for i, e := range t {
+			out[i] = sortedDeep(e)
+		}
+		return out
+	}
+	return v
+}
+
 // DumpsIndent2Raw is json.dumps(v, indent=2, ensure_ascii=False): the same
 // shape with non-ASCII written as raw UTF-8 rather than \uXXXX.
 //

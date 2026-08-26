@@ -44,6 +44,49 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### system_health.render_snapshot dies on a hand-edited snapshot (FOUND 2026-08-26, go-port system_health slice 1)
+
+`memory/system_health.json` is operator-editable by design — it is the seed
+of the maro-level systemic-metadata store, and `_history_of` goes out of its
+way to tolerate a hand-edit (a non-list `history`, non-dict entries inside
+one, all dropped silently). `load_snapshot` is the same: five different
+kinds of corruption all collapse to "no snapshot yet".
+
+`render_snapshot` is not. Measured against CPython 3.14:
+
+| edit | result |
+|---|---|
+| `"processes": [ ... ]` | `AttributeError: 'list' object has no attribute 'items'` |
+| `"processes": {"a": "note to self"}` | `AttributeError: 'str' object has no attribute 'get'` |
+| `"processes": {"a": {"status": []}}` | `TypeError: cannot use 'list' as a dict key (unhashable type: 'list')` |
+
+The third is the one nobody would guess: the sort key is
+`order.get(p.get("status"), 3)`, a DICT LOOKUP, so an unhashable status is a
+raise rather than a miss that falls to rank 3.
+
+So `python3 -m system_health` — the only way an operator reads this file —
+tracebacks on exactly the input the rest of the module was written to
+survive. And the CLI's `--probe` path runs the cycle FIRST and renders
+second, so a corrupt entry also means the operator never sees the report of
+the cycle that just ran.
+
+Reproduced faithfully in the Go port (fixtures R11, R12, R14, R15, R16) and
+filed rather than fixed, because "make the renderer tolerant" is a Python-
+side decision with a UX question in it. Three candidate resolutions:
+
+1. **Tolerate, like the readers do** — a non-dict entry renders as
+   `[?] name — <unreadable entry>`. Consistent with `_history_of`, and the
+   operator sees which key is broken.
+2. **Fail with a pointer** — catch and print
+   `snapshot is malformed at processes.<key>: <repr>`, since a traceback
+   from a status CLI is never the right output.
+3. **Leave it.** The snapshot is machine-written; a hand-edit that breaks it
+   is the operator's problem and a traceback names the line.
+
+Worth noting the module already has an opinion: everything else here
+tolerates. The renderer is the outlier, and it is the only part an operator
+touches.
+
 ### sheriff.check_project can never return "warning" (FOUND 2026-08-26, go-port sheriff slice 1)
 
 `SheriffReport.status` is documented as
