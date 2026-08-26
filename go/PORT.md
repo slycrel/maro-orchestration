@@ -9970,3 +9970,68 @@ battery should have had before:
    own fixes — `decodeReplace` was rewritten in the same commit that repaired
    nine other stale patterns, and no pre-check ran afterwards. A stale mutant
    matches zero sites and scores exactly like a detected one.
+
+### Round 4: 216/269 on the battery, and a fix from round 3 that was itself the bug
+
+The battery finished at **216 detected, 51 survivors** (81%). The r4 review
+ran on the whole chunk at an escalated tier and returned two mediums and
+four lows. All six code claims verified — 0% hallucination, the fourth
+straight round at zero — but three of the six named a mechanism correctly
+and an EXAMPLE that did not reproduce. Verification is no longer mostly
+about whether a finding is real; it is about whether its demonstration is.
+
+**The round's worst finding was the previous round's fix.** r3 noticed that
+`SpendToday` discarded its reader's error and returned a partial sum where
+CPython's outer `except` answers 0.0. True, and the fix was right for a
+real I/O error. But the comment justifying it named a concurrent
+truncation, and that example is backwards: measured, `fh.read()` past a
+truncated EOF returns `b""` with **no exception**, so CPython keeps looping
+and answers the partial sum. Go's `ReadAt` reports the same short read as
+`io.EOF`, so the new check answered 0.0 — a divergence the fix INTRODUCED
+on the one input it was written for.
+
+It shipped with no fixture, because neither case is constructible without
+losing a race against a writer. That is the whole lesson: the fix was
+argued rather than pinned, and the argument was wrong. `reverseReadAt` is
+now a seam and both halves have tests — a short read continues, a real
+error propagates.
+
+**Second: a supplement that existed and was never carried one predicate
+over.** `isWordRune` hand-rolls Python's `\b` because RE2's is ASCII-only,
+which the port argues for at length. It still used Go's Unicode **15**
+tables against this box's CPython **16**. Swept: 5004 code points are `\w`
+to CPython and not to Go, **zero** the other way, and 5002 of them bucket
+`classify_step_type` differently. `pytext.Lower` already carried a
+`lowerSupplement` for exactly this skew — and it is complete, 0 mismatches
+over the entire rune range. The sibling predicate, in the same code path,
+never got the same treatment. The existing differential probed `fixé`,
+`fix٠`, `fix中`, `fix́` — every one Unicode 15 or older, so nothing in the
+battery could see it.
+
+**Third: the obvious spelling of a float key is the wrong one.** CPython
+sorts run cards by `p.stat().st_mtime`, a float, and the port compared
+`time.Time` nanoseconds. The natural fix — `float64(UnixNano())/1e9` —
+still disagrees, at deltas of 127ns, 128ns and 2000ns from a 1.7e9 base,
+because it rounds the whole nanosecond count into a double first. CPython
+builds the float from the two halves, so the port does too.
+
+**A fixture that could not fail, twice in one test.** The mtime tie test
+passed against both spellings until it used a base where the collapse
+actually happens (it is exponent-dependent: 127ns collapses at 1.7e9 and
+not at a 2026 stamp), and then passed against a reverted comparator until
+the tie was moved to 100ns — 127 is the delta that separates the two
+SPELLINGS, which is a different question from where CPython TIES. Both
+mistakes had the same shape as the one the round was reporting.
+
+**One finding was NOT fixed.** A NaN cost makes the sort comparator
+inconsistent, and no Go sort reproduces CPython's answer there: over 153
+NaN-bearing lists, `sort.Float64s` disagrees on 136 and `sort.SliceStable`
+with a `<` comparator on 78. Matching needs a real timsort, which is filed
+as its own chunk with two waiting consumers, and the divergence is pinned
+by a test that goes red when it lands.
+
+Battery survivor **M101** (unstable mtime sort) stays open and is recorded
+as unresolved rather than equivalent: `sort.Slice` insertion-sorts below
+twelve elements and kept the tied pair ordered above it, so a single tie
+among distinct keys does not expose instability at any size tried. It needs
+a many-ties fixture.

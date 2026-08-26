@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**718**. The counts below are regenerated from the ledger, not recalled.
+**727**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 718
+**Two things the counts are not.** They are lower bounds: 314 of the 727
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -308,7 +308,7 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 13*
+*instances: 14*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
@@ -322,7 +322,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 23*
+*instances: 24*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 45*
+*instances: 46*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -496,7 +496,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 6 attributed; ~6 in the mined cluster*
+*instances: 7 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -530,7 +530,7 @@ and package-level config lookups. The argument is a promise about where the
 whole operation happens.
 
 ### L40 — A counter that reports success while losing rows
-*instances: 2 attributed; ~6 in the mined cluster*
+*instances: 3 attributed; ~6 in the mined cluster*
 
 Something is dropped on a path with no signal, and the summary line the
 operator reads is computed from what survived.
@@ -578,7 +578,7 @@ fixture has a confound — split it until every case has one variable.
 
 ### L42 — Two implementations that agree at small n need a fixture past the threshold
 
-*instances: 3*
+*instances: 4*
 
 Library internals routinely fall back to a simpler algorithm on small
 inputs, and the simpler algorithm often has the property the caller was
@@ -742,7 +742,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 7*
+*instances: 8*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -1050,6 +1050,61 @@ battery result deserves the same scepticism as a suspiciously perfect test
 suite.** This is L1 wearing a different hat — the battery is a test of the
 tests, and it agreed because nothing could disagree.
 
+### P9 — The exception MESSAGE names which statement ran first
+*instances: 1*
+
+When two statements read two different fields and either can raise, the
+error text says WHICH RAN FIRST. That makes statement order testable with
+no value-level assertion at all — and statement order is observable
+behaviour a port can get wrong while every value it returns is right.
+
+**The construction rule.** To pin the order of lines A and B, build ONE
+input where both fields are bad **in different ways**, so the two candidate
+messages differ. Two fields bad the SAME way pin nothing:
+
+```
+Outcome(elapsed_ms="5", tokens_in="5")
+  -> TypeError: unsupported operand type(s) for +: 'int' and 'str'
+```
+
+`sum(o.elapsed_ms ...)` and `sum(o.tokens_in ...)` are consecutive lines
+and produce identical text, so a port that swapped them passes. Make them
+differ and the fixture discriminates:
+
+```
+Outcome(elapsed_ms=None, tokens_in="5")
+  -> ... for +: 'int' and 'NoneType'    (elapsed_ms won)
+Outcome(goal=None,       tokens_in="5")
+  -> ... for +: 'int' and 'str'         (tokens_in won, goal[:80] lost)
+```
+
+**The stronger form: the ENTRY POINT decides the message.** The same row,
+`tokens_in="5"`, through two functions over the same data:
+
+```
+compute_metrics([o])              +: 'int' and 'str'                 (sum runs first)
+identify_expensive_patterns([o])  '<' not supported: 'str' and 'int' (estimate_cost runs first)
+```
+
+Neither is `estimate_cost`'s own message in the first case. A port that
+priced before averaging would return every correct value and every wrong
+error.
+
+**Canonical instance.** 2026-08-26, scoping metrics.py's SystemMetrics
+half. Found before any code was written, which is the point — the port's
+loop order was chosen from this rather than discovered by a later round.
+
+**Where it applies.** Any ported function whose body is a sequence of
+independent reads over one record: loaders, formatters, aggregators. Ask
+which field it touches first, and whether you can prove it. If two
+orderings give the same message, the fixture is coverage, not a
+differential.
+
+Sharpens L48 ("a port can get every DECISION right and still be wrong,
+because the original's SHAPE is observable") from an observation into a
+technique. Same family as P8: both are about WHEN something happens, not
+what it computes.
+
 ### P8 — `open(path, "w")` truncates before the argument is evaluated
 *instances: 1*
 
@@ -1104,7 +1159,7 @@ The fixpoint is real and it arrives. Rounds after that are cheap insurance,
 not discovery.
 
 ### P6 — The round's HIGH lives inside the previous round's own fix
-*instances: 1 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
+*instances: 2 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
 
 The single most common shape in the whole record. A round fixes something;
 the next round's most severe finding is *in that fix*. It recurs at

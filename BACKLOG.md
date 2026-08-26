@@ -44,6 +44,56 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Go port: port CPython's `list.sort` to `pyval` (FOUND 2026-08-26, metrics r4 finding 1)
+
+Go has no sort that reproduces CPython's when the comparator is
+INCONSISTENT, which is what a NaN makes it. Measured over 153 NaN-bearing
+lists: `sort.Float64s` disagrees with `list.sort()` on 136,
+`sort.SliceStable` with a `<` comparator on 78. There is no cheap spelling
+that agrees — the answer is a faithful timsort (binary insertion below the
+minrun threshold, then the merge policy), which is a bounded, highly
+testable piece of work: the corpus above already exists at
+`scratchpad/nan_sort_cases.json` and can be regenerated at any size.
+
+TWO consumers are already waiting, which is what lifts this above a
+curiosity:
+
+1. `computeRunCostP90` — a run card with a NaN `total_cost_usd` (writable:
+   `json.dumps` emits bare `NaN` by default and `json.loads` accepts it)
+   moves the p90 by one index. Measured on 8 cards `1..7, NaN`: CPython
+   answers 7.0, the port answers 6.0. Pinned as a NAMED DIVERGENCE by
+   `TestRunCostP90NaNSortIsANamedDivergence` — that test goes RED when this
+   lands, which is the signal to delete it.
+2. `format_metrics_report` (NOT YET PORTED) sorts `by_model` on `-cost`,
+   where a NaN lands in the MIDDLE: `[ma=nan, mb=1.0, mc=5.0]` renders
+   `mc, ma, mb`. The next chunk hits this immediately.
+
+Do it before the SystemMetrics chunk, or that chunk ships its own named
+divergence for the same missing primitive.
+
+### Go port: `pyval.DumpsStruct` refuses values `json.dumps` accepts, and the row is silently dropped (FOUND 2026-08-26, metrics r4 finding 3)
+
+`RecordStepCost` does `line, err := pyval.DumpsStruct(row); if err != nil {
+return row }` (`internal/metrics/recorder.go:181`). CPython's
+`json.dumps` has no refusal for these inputs, so Python writes a row where
+Go writes NOTHING and reports success by returning the built row.
+
+Two measured triggers:
+
+- a non-finite `cost_usd`: `record_step_cost(..., provider_cost_usd=inf)`
+  appends a 16-key row with `"cost_usd": Infinity` in CPython. Reachability
+  is thin but not closed — `step_exec.py:1690`, `loop_blocked.py:533`,
+  `loop_parallel.py:195` and `loop_execute.py:1937` all reach
+  `provider_cost_usd` through a bare `float(...)` with no non-finite guard.
+- INVALID UTF-8 in `StepText`/`Goal` (e.g. raw subprocess stdout): CPython
+  writes `"caf\udce9"` and never refuses on string content.
+
+The fix is a `pyval` contract decision, not a metrics one: give
+`DumpsStruct` an `Infinity`/`-Infinity`/`NaN` lane and a lone-surrogate
+lane matching `json.dumps`. Same shape as the filed `LoadsMap`
+skip-vs-abort question — decide the two together, since both are "the port
+refuses where CPython proceeds".
+
 ### Go port: `maro introspect` never writes its captain's-log DIAGNOSIS event (FOUND 2026-08-26, go-port r4)
 
 `introspect.diagnose_loop` takes `emit_log_event: bool = True`, and on any

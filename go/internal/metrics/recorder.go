@@ -331,8 +331,19 @@ func computeRunCostP90(ws string, limit int) (val float64, ok, cacheable bool) {
 	// iteration order instead of recency. reverse=True is STABLE in CPython
 	// (it reverses, sorts, and reverses back), so ties keep the order they
 	// arrived in rather than flipping — SliceStable, never Slice.
+	//
+	// The key is `p.stat().st_mtime`, a FLOAT of seconds, not the nanosecond
+	// stamp. float64's ULP at 1.7e9 is about 477ns, so two cards written
+	// less than that apart collapse to the SAME key in CPython and tie —
+	// where Go's time.After sees the nanoseconds and orders them strictly.
+	// Measured: st_mtime_ns 1700000000000000000 and ...100 compare equal as
+	// st_mtime. Sub-microsecond stamps do not come from ordinary writes on
+	// this box (the clock is ~1ms coarse) but do come from os.utime(ns=),
+	// `cp -p`/`rsync -t`, and restored archives — i.e. from a replayed
+	// runs/ tree, which is exactly what a replay-the-workspace debug
+	// session is. Comparing the float reproduces the tie. (r4 finding 5.)
 	sort.SliceStable(rows, func(i, j int) bool {
-		return rows[i].mtime.After(rows[j].mtime)
+		return mtimeSortKey(rows[i].mtime) > mtimeSortKey(rows[j].mtime)
 	})
 	rows = rows[:pyval.SliceStop(len(rows), limit)]
 
@@ -529,4 +540,19 @@ func clearRunCostCache() {
 	runCostMu.Lock()
 	runCostCache = map[int]runCostEntry{}
 	runCostMu.Unlock()
+}
+
+// mtimeSortKey is `p.stat().st_mtime` — seconds as a FLOAT, which is the
+// sort key Python actually uses. Package-level rather than a closure so the
+// collapse it reproduces can be asserted directly: the observable
+// consequence (which card falls off the `[:limit]` cut) needs a readdir
+// order to be reproducible, and the KEY does not.
+// The spelling matters and the obvious one is WRONG. `float64(UnixNano())
+// / 1e9` rounds the whole nanosecond count into a double first, which
+// collapses stamps CPython keeps apart — measured, it disagrees with
+// st_mtime at deltas of 127ns, 128ns and 2000ns from a 1.7e9 base. CPython
+// builds the float from the two halves (`sec + nsec/1e9`), so the port
+// does too: 0 mismatches over the same sweep.
+func mtimeSortKey(t time.Time) float64 {
+	return float64(t.Unix()) + float64(t.Nanosecond())/1e9
 }

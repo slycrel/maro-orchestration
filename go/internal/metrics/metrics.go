@@ -178,8 +178,60 @@ func hasAt(text []rune, i int, lit string) bool {
 // text "fixé" has a word boundary after "fix" in Go and none in Python —
 // Go calls it implement, CPython calls it general, and the two runtimes
 // bucket the same step's cost under different keys in a shared store.
+//
+// And the same argument has a second edge, found in r4: Go's `unicode`
+// tables are Unicode 15.0.0 while this box's CPython is 16.0.0, so
+// hand-rolling `\b` correctly still leaves 5004 code points that CPython
+// calls word characters and `unicode.IsLetter`/`IsNumber` do not. Measured
+// by sweeping `re.match(r"\w", chr(c))` over every non-surrogate code point
+// against this function: 5004 py-only, ZERO go-only — a pure supplement,
+// which is why a table of additions is sufficient and no subtractions are
+// needed. `classify_step_type("find"+chr(c))` then disagrees on 5002 of
+// them (the other two fold into a Go-known rune under str.lower()).
+//
+// `pytext.Lower` already carries a `lowerSupplement` for exactly this
+// version skew; this is its sibling predicate, in the same code path,
+// which never got the same treatment until now.
 func isWordRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
+	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) ||
+		inWordSupplement(r)
+}
+
+// wordSupplement is the Unicode 16 minus Unicode 15 delta for `\w`, as
+// ranges. REGENERATE (do not hand-edit) when Go's unicode tables move:
+// the differential sweeps the whole rune range, so a stale table fails
+// loudly rather than drifting.
+var wordSupplement = [...][2]rune{
+	{0x1C89, 0x1C8A}, {0xA7CB, 0xA7CD}, {0xA7DA, 0xA7DC},
+	{0x105C0, 0x105F3}, {0x10D40, 0x10D65}, {0x10D6F, 0x10D85},
+	{0x10EC2, 0x10EC4}, {0x11380, 0x11389}, {0x1138B, 0x1138B},
+	{0x1138E, 0x1138E}, {0x11390, 0x113B5}, {0x113B7, 0x113B7},
+	{0x113D1, 0x113D1}, {0x113D3, 0x113D3}, {0x116D0, 0x116E3},
+	{0x11BC0, 0x11BE0}, {0x11BF0, 0x11BF9}, {0x13460, 0x143FA},
+	{0x16100, 0x1611D}, {0x16130, 0x16139}, {0x16D40, 0x16D6C},
+	{0x16D70, 0x16D79}, {0x18CFF, 0x18CFF}, {0x1CCF0, 0x1CCF9},
+	{0x1E5D0, 0x1E5ED}, {0x1E5F0, 0x1E5FA}, {0x2EBF0, 0x2EE5D},
+}
+
+func inWordSupplement(r rune) bool {
+	// The table is sorted and every entry is above U+1C88, so the common
+	// ASCII path costs one comparison.
+	if r < 0x1C89 {
+		return false
+	}
+	lo, hi := 0, len(wordSupplement)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case r < wordSupplement[mid][0]:
+			hi = mid - 1
+		case r > wordSupplement[mid][1]:
+			lo = mid + 1
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // wordBoundaryContains reports whether lit occurs in text delimited by

@@ -1,6 +1,9 @@
 package metrics
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,6 +53,17 @@ const reverseReadlineBufSize = 65536
 // The callback returns false to stop early, which is the whole point of the
 // function: `spend_today` breaks at the first pre-midnight row and must not
 // pay for the file's lifetime.
+// reverseReadAt is a seam, and it exists because r3 shipped a reader-error
+// fix with no fixture and got the behaviour backwards. The two cases it
+// separates — a SHORT read (Python: no error, keep going) and a REAL I/O
+// error (Python: propagate, answer 0.0) — are indistinguishable from the
+// outside without one, because both require losing a race against a
+// concurrent writer. A test that cannot construct the input cannot pin the
+// behaviour, and an unpinned fix is how the wrong one survived a round.
+var reverseReadAt = func(f *os.File, b []byte, off int64) (int, error) {
+	return f.ReadAt(b, off)
+}
+
 func ReverseReadline(path string, bufSize int, yield func(line string) bool) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -69,10 +83,22 @@ func ReverseReadline(path string, bufSize int, yield func(line string) bool) err
 		}
 		remaining -= readSize
 		buf := make([]byte, readSize)
-		if _, err := f.ReadAt(buf, remaining); err != nil {
-			return err
+		// A SHORT read is not an error here, and getting that wrong is what
+		// r3's SpendToday fix got wrong (r4 finding 6, measured): Python's
+		// `fh.read(n)` after a concurrent truncate returns b"" and the
+		// generator simply keeps looping, so `spend_today` answers whatever
+		// partial total it had. Go's ReadAt reports the same short read as
+		// io.EOF, and treating that as failure made SpendToday answer 0.0
+		// where CPython answers the partial sum — a divergence the previous
+		// round INTRODUCED while fixing a real one.
+		//
+		// Use the bytes that arrived, exactly as `read()` does. A genuine
+		// I/O error still propagates, which is the case r3 was right about.
+		n, rerr := reverseReadAt(f, buf, remaining)
+		if rerr != nil && !errors.Is(rerr, io.EOF) {
+			return rerr
 		}
-		chunk := append(buf, leftover...)
+		chunk := append(buf[:n], leftover...)
 		// Splitting on the single byte '\n' can never land inside a
 		// multi-byte rune: every UTF-8 continuation byte is >= 0x80. A chunk
 		// boundary only ever splits BETWEEN lines, so no line is corrupted
@@ -216,13 +242,9 @@ func SpendToday(ws string, now time.Time) float64 {
 	// read propagates out of the generator, past the partial total, and the
 	// answer is 0.0.
 	//
-	// This port discarded it with `_ =` and returned the PARTIAL sum. Not
-	// theoretical: `remaining` is computed from one Stat, and ReadAt runs
-	// once per 64KB chunk afterwards, so a writer truncating a >64KB ledger
-	// between the Stat and a later ReadAt yields some lines and then fails —
-	// which is the concurrent-writer race spend_today's own docstring says it
-	// tolerates. Third instance of the raise-turned-into-a-skip family in
-	// this file, after costUSDOf and computeRunCostP90's float().
+	// This port discarded it with `_ =` and returned the PARTIAL sum. Third
+	// instance of the raise-turned-into-a-skip family in this file, after
+	// costUSDOf and computeRunCostP90's float().
 	//
 	// NOTE the direction is the opposite of the usual one and it is still
 	// wrong: here CPython invents the SMALLER number (0.0 against a real
@@ -230,6 +252,18 @@ func SpendToday(ws string, now time.Time) float64 {
 	// conservative. Fidelity is the contract — two runtimes reading one
 	// ledger must answer the same thing — and a port that keeps the safer
 	// number is still a port that disagrees.
+	//
+	// r3 justified this with a concurrent-truncation example and r4
+	// FALSIFIED it (measured): `fh.read()` past a truncated EOF returns b""
+	// with no exception, so CPython answers the partial sum on that input,
+	// not 0.0. The example was backwards and the check built on it turned a
+	// short read into a zero — see ReverseReadline, where the short-read
+	// lane is now handled the way `read()` handles it. What survives is the
+	// GENERAL rule above, which is what this check is for: a real I/O error
+	// inside the generator propagates to Python's outer except and yields
+	// 0.0. Eighth "this divergence is harmless/known" paragraph in this
+	// chunk to name a reachable case wrongly, and the first written by the
+	// port rather than inherited.
 	rerr := ReverseReadline(path, reverseReadlineBufSize, func(line string) bool {
 		if !strings.Contains(pyval.Clip(line, 60), today) {
 			return false
@@ -405,8 +439,32 @@ func SpendForLoops(ws string, loopIDs []string) float64 {
 // read_jsonl_tail, and the reason it is spelled out rather than assumed: a
 // bounded read that stops early can return fewer rows than an unbounded one
 // on a file with a torn prefix, and this one cannot.
+// warn is this package's stand-in for Python's logger.warning, a named var
+// for the same reason record's is: so a test can capture what was said.
+var warn = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
 func LoadStepCosts(ws string, limit int) []pyval.Obj {
-	rows, _ := record.ReadAllCountedOrdered(StepCostsPath(ws))
+	path := StepCostsPath(ws)
+	rows, rep := record.ReadAllCountedOrdered(path)
+	// Python's read_jsonl_tail announces its own loss
+	// (jsonl_utils.py:161-164) and this call site discarded the report with
+	// a `_`, which is the exact regression record.SkipReport.Announce was
+	// built to stop — "silently to the CALLER, not silently to the
+	// OPERATOR" is that module's stated doctrine. A store quietly rotting
+	// looked identical to a healthy one. (r4 finding 4.)
+	//
+	// One nuance NOT fixed here: Python's tail read stops early, so its
+	// report can carry the " in the scanned tail" qualifier; this reads the
+	// whole file and takes a suffix, so its read is never partial and that
+	// clause can never appear. Same rows either way — see the note above on
+	// why the whole-file read returns the same ANSWER — but the WORDING can
+	// differ on a torn prefix, and closing that needs the bounded tail
+	// reader, not a change here.
+	if w := rep.Announce("read_jsonl_tail", path); w != "" {
+		warn("%s", w)
+	}
 	if limit > 0 && len(rows) > limit {
 		rows = rows[len(rows)-limit:]
 	}
