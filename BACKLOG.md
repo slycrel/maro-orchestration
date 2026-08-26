@@ -44,6 +44,55 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### sheriff.check_project can never return "warning" (FOUND 2026-08-26, go-port sheriff slice 1)
+
+`SheriffReport.status` is documented as
+`healthy|warning|stuck|dormant|failed|paused|unknown`, and `check_project`
+has two branches that assign `"warning"`. **Neither is reachable.**
+
+The proof is three lines of the function:
+
+- `no_artifacts` is appended only `if doing_items:`
+- `artifact_stale` is appended only `if age_min > window and doing_items:`
+- `items_stuck_doing` is appended whenever `doing_items`
+
+So any run that records a stall problem has also recorded
+`items_stuck_doing`, and the status ladder tests
+`"repeated_decisions" in problems or "items_stuck_doing" in problems`
+FIRST. The stall branch and the catch-all `else` below it are both dead.
+Confirmed empirically as well: the 41-fixture CPython ground-truth pass for
+this chunk reaches `healthy`, `stuck`, `dormant`, `failed`, `paused` and
+`unknown` — six of the seven — and no fixture reaches `warning`, including
+the ones written specifically to try (an empty `artifacts/` with items in
+progress comes back `stuck`).
+
+Consequences worth deciding on, not just noting:
+
+- An operator reading `docs`/`--help` is told to expect a status the system
+  cannot emit, and `maro sheriff --all` output can never show it.
+- The stall diagnosis text — *"items in progress but no recent artifact
+  activity"* — is strictly more informative than the loop text that
+  displaces it, and it is the one that never prints.
+- Anything downstream branching on `warning` (dashboards, the heartbeat
+  rollup's consumers) has a dead arm.
+
+**Three candidate resolutions**, none taken:
+
+1. Accept and document: drop `warning` from the status vocabulary for
+   projects, and delete both branches. Cheapest, loses the diagnosis text.
+2. Reorder the ladder so a stall outranks a bare `items_stuck_doing`, and
+   keep `stuck` for the repetition signal. Changes live behaviour on this
+   box — every currently-`stuck` stalled project would start reporting
+   `warning`, which is a real change to what heartbeat escalates.
+3. Stop recording `items_stuck_doing` when a stall problem is also present,
+   so the two are mutually exclusive by construction.
+
+**This is a Python-side defect, not a port defect.** The Go port reproduces
+the dead branches deliberately (with the reasoning at the site) rather than
+"fixing" them, because a port that silently emits a status the original
+cannot is the worse bug. Whichever resolution wins has to land in
+`src/sheriff.py` first and be re-ported after.
+
 ### Go port: an escaped lone surrogate is a STATE divergence, not a byte one (FOUND 2026-08-26, tasks r1 HIGH)
 
 `pyval`'s existing lone-surrogate residual describes the `ensure_ascii=True`

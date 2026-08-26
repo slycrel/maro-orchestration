@@ -6043,6 +6043,14 @@ remaining first-pass surface is **24 modules, ~27,500 lines** — about the
 size of everything ported so far, and not a one-session job. Recorded
 plainly because the standing goal is measured against it.
 
+**Also 2026-08-26, later:** `sheriff.py` (641) is ported to the same
+standard — deterministic half done, orchestration half named — but it never
+appeared in the table below, because that table lists only modules above
+~690 lines. So the headline number is unchanged at **24 modules,
+~27,500 lines**; what changed is one seam, not one row. The table
+understates progress for anything under its cut, which is worth knowing
+before reading it as a burndown.
+
 Measured by `grep -rl "<module>.py" internal/ cmd/`. That is a weak test
 (it finds modules the port has NAMED, not ones it has finished), so it
 overstates coverage and cannot understate it: anything on this list has not
@@ -10489,3 +10497,228 @@ and when two statuses compare equal but spell differently (`1` and `true`,
 `5` and `5.0`), the bucket takes the label of whichever ARRIVED FIRST. Go's
 answer is deterministic; CPython's is not. Comment corrected; the
 divergence cannot be closed, only named.
+
+## `sheriff.py` slice 1 — the producer side of the heartbeat seam
+
+`internal/sheriff` ports the deterministic half of the 641-line
+`src/sheriff.py`: `SheriffReport` and `SystemHealth` with both renderers,
+`check_project`, `detect_no_progress`, `fingerprint_project_state`,
+`project_lifecycle_state`, `project_activity_age_days`, `_dormant_days`,
+and the checks→status rollup lifted out of `check_system_health`.
+
+The tranche was chosen for the SEAM rather than for the line count.
+`check_system_health` produces the `checks` dict and `check_all_projects`
+the `stuck_projects` list that the heartbeat chunk's `Report` consumes, so
+this closes a boundary that was ported at one end only.
+
+**What is deliberately not here, and why**, is in the package doc: four of
+`check_system_health`'s five probes measure the ENVIRONMENT (a socket to
+127.0.0.1:18789, `shutil.disk_usage("/")`, an `__import__`,
+`llm.detect_backends()`), so a differential over that function would
+compare two machines rather than two implementations. The fifth thing it
+does — the rollup — is pure, is the value heartbeat branches on, and is
+here as `RollupStatus`.
+
+### The tripwire again: probe first, carry it verbatim
+
+`scratchpad/sh_probe.py` was written and run **before a line of Go
+existed** (L49), and its `PROBE` body is now the `shPySrc` constant in
+`sheriff_diff_test.go`, byte for byte. The ground-truth pass and the
+differential cannot drift because they are the same source.
+
+It earned its keep three times before any Go was written, and twice more
+after:
+
+- **C1b** — the `mkproj` helper was creating the project directory even
+  for the "does not exist" case, so the fixture named a branch it did not
+  reach. The probe's answer disagreed with the case name.
+- **C9** — my guess was `warning`; CPython said `stuck`. `items_stuck_doing`
+  wins the status ladder over `no_artifacts`.
+- **C22/C23** — written as dormancy fixtures, they came back `stuck`.
+  `project_activity_age_days` takes the MAX over the directory AND its
+  files, so ageing only the directory leaves a just-written `NEXT.md`
+  holding the real clock. The dormancy fixtures had to age everything, with
+  the `"."` entry applied LAST because writing a file inside a directory
+  resets that directory's own mtime.
+
+### The clock is a fixture, not a mask
+
+`check_project` reads the wall clock twice — the dormancy age and the
+artifact age — and both reach the output as rendered numbers. Two processes
+cannot agree on `time.time()`, and the easy answer is to mask both lines in
+the comparison. That would have left the `%.0f` rounding, the dormancy
+threshold and the window comparison untested, which is most of what the
+function decides.
+
+Instead the probe patches `sheriff.time.time` for the duration of one case
+and the Go side takes `now` as a parameter. C24 (exactly 13.5 days), C34
+(exactly 14.0) and C39 (an artifact exactly at the window) exist only
+because that seam does.
+
+### Three measured things a reasonable port gets wrong
+
+**`repr` inside f-strings.** The evidence lines are
+`f"...: {[i.text for i in doing_items[:3]]}"` — a LIST repr, brackets and
+quotes included, flipping the whole list to double quotes for one
+apostrophe (`["it's"]`) and leaving non-ASCII literal (`['café → naïve']`).
+The repeated-log line is `{text[:60]!r}` — sixty CODE POINTS, then repr.
+
+**Two spellings of the same object.** `SheriffReport.format("json")` is
+`json.dumps(..., indent=2)` with ensure_ascii at its DEFAULT, so a
+diagnosis reads `café` there and `café` in the text form one branch
+up. And `format(mode)` tests `if mode == "json"`, so every other value —
+a typo, `""`, `"zzz"` — falls through to text. A Go enum with a
+default-case error would have been a third behaviour.
+
+**None and `""` are one state in text and two in JSON.** The text renderer
+tests `if self.recommended_action:` — truthiness — so both print no action
+line. The JSON renderer writes `null` versus `""`. `Report.HasAction`
+carries the distinction a `*string` would have carried badly.
+
+### `_dormant_days` is three lanes, and the middle one is the trap
+
+`float(get("sheriff.dormant_days", DORMANT_DAYS_DEFAULT) or 0)` inside a
+blanket `try`:
+
+| setting | answer | meaning |
+|---|---|---|
+| unset | 14.0 | on, at the default |
+| `0` / `""` / `null` / `False` / `[]` | **0.0** | **off** |
+| `"abc"` / `[1]` | 14.0 | on, at the default |
+| `7` / `"  7  "` / `"1e3"` / `-3` / `True` | that value | on |
+
+A port that answers "the default" for both of the last two rows silently
+re-enables a check the operator switched off. All fifteen rows measured.
+`ResolveDormantDays` takes the config read as a thunk, the way heartbeat's
+cadence resolvers do, so a config backend that RAISES lands on 14 rather
+than on 0 — a lane the probe cannot reach, and one the battery walked
+straight through until a Go-side unit test closed it (M52).
+
+### The finding: `check_project` can never return `"warning"`
+
+Both branches that assign `"warning"` are dead. `no_artifacts` and
+`artifact_stale` are each recorded only when `doing_items` is non-empty,
+and a non-empty `doing_items` always also records `items_stuck_doing`,
+whose branch is tested first. The 41-fixture ground-truth pass reaches six
+of the seven documented statuses and never that one, including the
+fixtures written specifically to try.
+
+This is a **Python-side** defect. The port reproduces both dead branches
+with the reasoning at the site, because a port that emits a status the
+original cannot is the worse bug. Three candidate resolutions and their
+consequences are in BACKLOG; whichever wins has to land in `src/sheriff.py`
+first and be re-ported after. The differential's anti-vacuity gate asserts
+six statuses and says in its own comment why not seven, so a later fixture
+pass does not spend an afternoon trying to reach it.
+
+### The other finding: a sort is only as faithful as its input (new lens L50)
+
+`sorted(artifacts_dir.glob("*"), key=mtime, reverse=True)[0]` was ported as
+`filepath.Glob` + `sort.SliceStable`. The sort was right — CPython's
+`sorted(reverse=True)` does NOT reverse ties, measured — and the INPUT was
+wrong: `pathlib`'s glob yields readdir order, Go's `filepath.Glob` sorts by
+name.
+
+On this box's ext4, two files written `aaa.txt` then `bbb.txt` come back
+from readdir as **`bbb.txt`, `aaa.txt`** — name-hash order, independent of
+creation order. With equal mtimes CPython reported `bbb.txt` and the port
+reported `aaa.txt`. Fixed by reading the directory raw with
+`Readdirnames(-1)`.
+
+Matching readdir is also what makes the fixture STABLE rather than lucky.
+Sorting gave the Go side a deterministic answer and the CPython side a
+filesystem-dependent one; reading raw makes both ask the same filesystem
+the same question, so C30 and C40 pass on ext4 (hash order) and on a tmpfs
+`/tmp` (insertion order) alike without either being written into the test.
+
+Twenty lines away in the same Python file, `project_activity_age_days` does
+`sorted(artifacts.iterdir())[:50]` — explicitly sorted, by path. One
+function sorts and its neighbour does not; a port that unified them behind
+one helper would necessarily have got one of them wrong, and would have
+looked tidier for it.
+
+### The mutation battery — and the trap the harness documents
+
+85 mutants derived from `sheriff.go` itself, run against a COPY of the
+whole module (P4).
+
+**Round 1 reported every single mutant surviving.** The battery built its
+environment dict and never passed it to `subprocess.run`, so
+`MARO_PYPROBE_REQUIRED` was unset; `pyprobe.SrcDir` could not resolve
+`../../../src` from the scratch copy, every differential SKIPPED, and
+`go test` printed `ok`. This is the exact failure `SrcDir`'s own comment
+was written about after the SystemMetrics battery — and the comment did not
+prevent it, because the battery was a new file that never read it. The fix
+is two lines (pass the env, symlink `src` beside the copied `go/`) and it
+is now the first thing the harness's docstring says.
+
+A second run raced the first onto the same log file and produced a
+plausible-looking interleaving of both. Two batteries, one log, one set of
+conclusions that meant nothing.
+
+**Round 1 (real): 64 caught of 85, 19 survivors, 2 battery bugs.**
+Thirteen survivors were genuine test gaps and produced sixteen new
+fixtures:
+
+| survivor | what was missing |
+|---|---|
+| prefix → `Contains` | a check reading `"ok: 0 failures"` |
+| the equality scan's start index | a window whose MIDDLE differs (`X,A,B,A`) |
+| unreadable-vs-absent | a `DECISIONS.md` that is a DIRECTORY |
+| the project dir as a candidate | an old project with a freshly-touched dir |
+| `newest <= 0` → `< 0` | everything at epoch zero |
+| the dormancy comparison | an age of exactly 14.0 days |
+| `%g` → `%.0f` | a FRACTIONAL threshold (7.5) — 14 renders the same both ways |
+| blank-line dropping | blanks that push real lines out of the last twenty |
+| the 60-code-point clip | a repeated line of 80 characters |
+| stale-without-doing | a stale artifact and NO items in progress |
+| the window comparison | an artifact exactly at the window |
+| `SliceStable` → `Slice` | 20 tied artifacts + 1 older (P11's shape) |
+| a failing config read | a Go-side unit test; the probe cannot raise |
+
+The `SliceStable` fixture is worth its own line: **CPython answers
+`t02.txt`**, which is neither first nor last by name. It is readdir order,
+and it is the same fixture that pins L50.
+
+**One survivor was the TEST's fault, not the port's.** `cpOut` copied
+`Evidence` into a fresh `[]any`, which erased nil-versus-empty — so
+`evidence = []string{}` could be deleted from the port and the differential
+stayed green (M76). The renderer that was supposed to expose the difference
+was the thing hiding it.
+
+**Round 2: 79 caught of 86.** Six survivors, every one labelled
+EQUIVALENT or NEAR-EQUIVALENT at its site so the next round does not
+re-derive them:
+
+- `clipTail`'s `<=` → `<` — at `len == n` the slice branch returns the
+  whole string, the same value the guard returns.
+- the byte-slicing variant — pre-trimming to `n*4` BYTES can never drop a
+  rune the tail of `n` runes needs. A bad mutant of my own making.
+- `sort.Strings` on the readdir names — `os.ReadDir` already promises
+  filename order. The call stays because Python spells the sort explicitly
+  and this port states requirements rather than inheriting them (L48).
+- the decision window's `>` → `>=` — at exactly twenty, `recent[0:]` is
+  `recent`.
+- the complete-diagnosis conjunct — that branch is only reached when
+  `problems` is empty, and a non-empty doing list always records a problem,
+  so `len(doing) == 0` already holds. The Python has the same redundancy
+  and the port keeps it (L48).
+- `pySeconds` → `UnixNano/1e9` — see below.
+
+**Round 3: 80 caught of 86, 0 battery bugs, the same six labelled
+survivors.** Converged. The battery lives at
+`go/internal/sheriff/mutants.py` rather than in a scratch directory, for
+the reason the `tasks` r1 LOW gave: a claim that can only be re-checked by
+a script nobody has is not a claim.
+
+**A comment I had to retract in the same session I wrote it.**
+`pySeconds` splits seconds from nanoseconds because that is CPython's
+`sec + 1e-9*nsec`. The first draft of its doc comment justified this by
+claiming `float64(t.UnixNano())/1e9` rounds enough to flip an
+exactly-fourteen-day comparison. Measured, that is **false**: the two agree
+on every whole-second timestamp and differ by ~1e-12 DAYS on sub-second
+ones. The expression stays — it is the original's, and the next caller may
+compare at finer resolution than a day — but the comment now carries the
+measurement instead of the story, and M46b is a labelled near-equivalent.
+A plausible rationale nobody measured is the same defect class as a test
+that cannot fail.

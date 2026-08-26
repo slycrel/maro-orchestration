@@ -900,7 +900,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 6*
+*instances: 7*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -958,6 +958,54 @@ one input chosen to be ill-conditioned for the obvious algorithm: a
 cancelling pair for a sum, a tie for a sort, a NaN for a comparison, a
 half-way value for a round. "I know what sum does" is the claim being
 tested, and it is the claim that has never once survived contact.
+
+### L50 — A sort is only as faithful as the order of its input
+*instances: 1*
+
+`sorted(X, key=k)` is two decisions, not one: the key, and the order X
+already had. Reviewers check the key. The port gets X from whichever Go
+call "obviously" does the same thing as the Python one — and the
+difference between *returns the entries* and *returns the entries sorted*
+is not in either name.
+
+Python's listing calls do NOT sort. `os.listdir`, `os.scandir`,
+`Path.iterdir` and `Path.glob` all yield readdir order. Go's do:
+`filepath.Glob` sorts, `os.ReadDir` sorts by filename. So a port that
+reads `sorted(dir.glob("*"), key=mtime, reverse=True)` and writes
+`filepath.Glob` + a stable sort has faithfully reproduced the sort and
+silently replaced its input — invisible until two keys tie, and then the
+two runtimes name different files.
+
+This is distinct from P11, which is about the FIXTURE (how many elements,
+what shape) needed to expose an unstable sort. Here the sort is correct
+and stable; what diverged is what it was handed.
+
+**Canonical instance.** `sheriff.check_project` picks the newest artifact
+with `sorted(artifacts_dir.glob("*"), key=lambda p: p.stat().st_mtime,
+reverse=True)[0]`. The port used `filepath.Glob` + `sort.SliceStable`.
+Measured on this box: two files written as `aaa.txt` then `bbb.txt` come
+back from readdir as **`bbb.txt`, `aaa.txt`** — ext4 orders by name hash,
+not by name and not by creation. With equal mtimes CPython reports
+`bbb.txt` and the port reported `aaa.txt`. Fixed by reading the directory
+raw (`f.Readdirnames(-1)`).
+
+The fix is also what makes the differential *stable* rather than lucky.
+Sorting made the Go answer deterministic and the CPython answer
+filesystem-dependent — two rules that agree nowhere in particular. Reading
+raw makes both runtimes ask the same filesystem the same question, so the
+fixture passes on ext4 (hash order) and on a tmpfs `/tmp` (insertion
+order) alike, without either being written into the test.
+
+**The same file argues both ways, twenty lines apart.**
+`project_activity_age_days` does `sorted(artifacts.iterdir())[:50]` —
+explicitly sorted, by path. `check_project` does not. A port that unified
+the two listings behind one helper would necessarily get one of them
+wrong, and would look tidier for it.
+
+**Tripwire.** For every `sorted(...)`/`min`/`max`/`[0]` in the chunk, name
+the order of the argument and say which Go call promises it. If the key
+can tie — mtimes, counts, scores, anything quantised — the tie fixture is
+required (P11), and it is the ONLY thing that can catch this.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*
@@ -1092,7 +1140,7 @@ compile-kill is not a kill*, and *a test named for a differential must run
 the other side*.
 
 ### P12 — An expected value spelled with the thing under test is not an assertion
-*instances: 2*
+*instances: 3*
 
 Two findings, one file, one battery round. The heartbeat log test asserted
 `path != LogPath(ws)` — both sides call `LogPath`, so moving the log out of

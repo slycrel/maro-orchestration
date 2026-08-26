@@ -466,6 +466,31 @@ func PercentF(f float64, prec int) string {
 	return strconv.FormatFloat(f, 'f', prec, 64)
 }
 
+// FormatG is Python's `format(f, "g")` / f-string `{f:g}`.
+//
+// The default precision for `g` is SIX SIGNIFICANT DIGITS, not the shortest
+// round-trip Go gives for a precision of -1: Python renders 123456789.0 as
+// "1.23457e+08" and 0.1+0.2 as "0.3". Passing -1 here would produce
+// "1.23456789e+08" and "0.30000000000000004" — the second of which is the
+// number people notice. Go's 'g' at an explicit precision of 6 agrees with
+// Python on every finite value measured, including the trailing-zero strip
+// ("14.0" -> "14"), the switch to exponent form at 1e+06 and 1e-05, and
+// negative zero ("-0").
+//
+// Non-finites are spelled by hand for the same reason PercentF spells them:
+// Python says "inf"/"-inf"/"nan" and Go says "+Inf"/"-Inf"/"NaN".
+func FormatG(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "nan"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(f, 'g', 6, 64)
+}
+
 // IntLiteral reports whether a decoded number was written as an integer,
 // and returns it the way Python's int would print it.
 //
