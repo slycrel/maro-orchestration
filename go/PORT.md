@@ -7839,3 +7839,147 @@ Two more were faults in the battery, not the code: one mutant left an import
 unused, and one was written while the battery held a snapshot of the file it
 edited — restoring between mutants reverted work done in parallel, which is
 worth knowing before running one in the background.
+
+## The classifier the port only ever read
+
+`diagnoses.jsonl` has been a read-only store for the Go side since the
+graduation tranche. Three consumers query it — graduation, `scans/verify`,
+`notify/escalation_context` — and not one line in that file was ever written
+by this runtime. Every row in it came from CPython. `internal/introspect/`
+is the beginning of the writing half.
+
+The first slice is the part with no I/O in it at all: `FAILURE_CLASSES`, the
+nine named thresholds, `_TOOL_ARG_ERROR_SIGNATURES`, and
+`classify_tool_pathologies` — the mechanical model—tool edge classifiers
+that `step_exec` stamps onto a step outcome and that ride `step_done` events
+into `diagnose_loop`.
+
+Four things in eighty lines of Python needed care, and all four are the same
+kind of thing: a Go spelling that is close enough to look right.
+
+- **`te.get("is_error")` is TRUTHINESS**, not `is True`. A stamp of the
+  string `"no"` is truthy in Python. A port reading it through `v.(bool)`
+  calls that transcript clean, and the transcript is the evidence for a
+  lesson both runtimes read.
+- **`{name!r}` and `str(name)` are different functions and cannot share a
+  helper**, because `repr(None)` and `str(None)` agree (`None`, unquoted)
+  while `repr("bash")` and `str("bash")` do not. The hallucination evidence
+  quotes; the streak names do not.
+- **`[:120]` and `[:6]` are RUNE slices.** `pyval.Clip` is the shared
+  helper, and this package is deliberately not the seventh private
+  `clipRunes` — there are already six (`scans`, `graduation`, `playbook`,
+  `evolver`, `skills/utility`, `director`), which is lens 4 with a tally.
+- **The signature list is a TUPLE and `next()` takes the first MEMBER that
+  matches, not the earliest match in the text.** An output reading
+  `invalid argument -- q; usage: g [OPTS]` reports `'usage:'`. A port that
+  scanned for the earliest offset would report `'invalid argument'`, and
+  that string is what an operator reads.
+
+The descriptions in `FAILURE_CLASSES` are carried verbatim rather than
+dropped, because they are not documentation: `maro-introspect` prints them,
+the recovery planner keys off the names, and `diagnose_loop` assigns
+`recommendation = FAILURE_CLASSES.get(failure_class, "")` — the prose IS a
+field on a persisted row. This is the content-key PROSE divergence family
+again, one store further along.
+
+The thresholds are read out of the module by the differential rather than
+restated, so a calibration change on the Python side fails a test instead of
+becoming a silent disagreement about what "too broad" means.
+
+### The battery, and what a fixture cannot see
+
+37 mutants over `classify.go`. Four survived the first run; two were real
+gaps and two were faults in the battery.
+
+The real gaps were both **a gate with no negative fixture**. Deleting the
+`is_error` check from the hallucination scan survived, because every fixture
+carrying the phrase `No such tool available` also carried `is_error: true` —
+so the guard could not fail. The fix is two cases: the phrase in a
+successful call (a worker echoing a previous failure), and a clean phrase
+that must not shadow a real hallucination later in the same transcript.
+
+The second was **nil versus empty**, and it survived because the test
+normalized it away. An earlier draft of the comparison read
+
+    if len(want) == 0 && len(got) == 0 { return }
+
+with a comment explaining that a nil-vs-empty difference should not
+masquerade as a real one. That is exactly backwards: `json.dumps([])` is
+`"[]"` and a nil Go slice marshals to `null`, and this list gets stamped
+onto a step outcome and written to the shared events store. Python's own
+reader tolerating `null` (`list(e.get("tool_pathologies") or [])`) is not a
+reason for the port to write it. The normalization is gone.
+
+Of the two battery faults, one is worth naming because it is a shape that
+recurs: **aliasing `worstNames` to the live streak is unkillable on its
+own.** Python's `list(streak_names)` is a copy, and the Go copy is right —
+but the else-branch resets with `streakNames = nil`, so every later streak
+appends into a fresh backing array and the alias can never be written
+through. The plausible port is the PAIR — reset by truncation AND alias —
+and only the pair is observable. A mutant that cannot change an answer says
+nothing about the tests; the battery now applies both edits as one mutant,
+and the existing eight-event fixture kills it.
+
+## metrics: two pure functions and a Unicode word boundary
+
+`classify_tool_pathologies` was the slice with no dependencies.
+`diagnose_loop` is the next one, and it reads `StepProfile.cost_usd`, which
+calls `metrics.estimate_cost` — and `metrics.py` (827 lines) appeared in
+exactly two Go comments and no code. So the cost half came first.
+
+`internal/metrics/` ports the pure part: `COST_BY_MODEL`, the fallback
+rates, `CACHE_READ_MULTIPLIER`, `estimate_cost`, and `classify_step_type`.
+The ledger half (`step-costs.jsonl`, `spend_today`, the p90 run-cost card)
+is a separate slice — it writes, and a writer belongs with its store.
+
+**The pricing table is three naming systems for the same models**: full
+versioned IDs, the short-form aliases the subprocess adapter emits, and the
+tier constants config resolves to. The model string on a step event is
+whatever the adapter that ran it wrote. A key mistyped in the port does not
+fail — it falls through to the Sonnet default, pricing an Opus step at a
+fifth and a Haiku step at nearly four times. So the differential sweeps
+every key in the CPYTHON table rather than sampling the Go one: an
+enumeration is not a class.
+
+**The arithmetic is spelled in Python's own term order** rather than
+factored over a single division. Float addition is not associative, and
+this number is compared against named dollar thresholds
+(`_STEP_COST_WARN_USD = 0.50`). The comparison in the test is on seventeen
+significant digits, not a tolerance — and it earned that: the regrouping
+mutant is DETECTED, and a tolerance would have accepted it while still
+letting the two runtimes disagree about whether a step tripped the alarm.
+
+**`classify_step_type` does not use Go's `regexp`, on purpose.** Python's
+`_STEP_TYPE_PATTERNS` are `\b(a|b|c)\b` over literal words, and RE2 supports
+`\b` — but RE2's `\b` is ASCII-only while Python's `\w` for a str pattern is
+`str.isalnum()` plus underscore. The step text `fixé` therefore has a word
+boundary after `fix` in Go and none in Python: Go buckets the step as
+`implement`, CPython as `general`, and the evolver's per-step-type cost
+grouping in a shared store gets two different answers about the same step.
+The port does the boundary test directly, with `isWordRune` spelled as
+`'_' || unicode.IsLetter || unicode.IsNumber`. A combining mark is not
+alnum, so `fix` + U+0301 keeps its boundary — the one place the predicate
+must not simply say "is a letter".
+
+The same reasoning applies to the one non-literal alternative, `look\s*up`.
+Measured on this box, Python's `\s` matches across `\x1c`, `\x1d`, `\x1e`,
+`\x1f`, `\xa0`, U+2007 and U+3000 — exactly `str.isspace()` — and not across
+U+200B. `pytext.IsSpace` is `str.isspace()`; Go's `unicode.IsSpace` omits
+the four `\x1c`–`\x1f` separators. The matcher belongs to the RESEARCH row
+and must be consulted before any later row's literals, or
+`look up and build the image` classifies as `implement`.
+
+### The battery
+
+37 mutants over `metrics.go`: 33 detected on the first run, three failed to
+compile (a mutant that leaves an identifier unused is a fault in the
+battery, not a survivor), and one genuinely survived.
+
+The survivor is worth recording. Python clamps with
+`max(0, min(cache_read_tokens, tokens_in))`, and **the two clamps commute
+for every `tokens_in >= 0`** — so swapping them is invisible to any fixture
+built from plausible inputs. They part only on a NEGATIVE input count, which
+nothing sane writes: CPython answers with a negative cost, and so must the
+port. The fixture is now there, and it pins the ORDER rather than pretending
+to be a defence. This is the limit-with-no-case-at-its-own-boundary lens
+reaching a place where the boundary is outside the realistic domain.
