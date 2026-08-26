@@ -31,10 +31,10 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**606**. The counts below were regenerated from `report --by lens`, not
+**614**. The counts below were regenerated from `report --by lens`, not
 recalled.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 606
+**Two things the counts are not.** They are lower bounds: 309 of the 614
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -128,7 +128,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 18*
+*instances: 23*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -263,7 +263,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 14*
+*instances: 15*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -329,7 +329,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 22*
+*instances: 23*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -506,7 +506,7 @@ fixture has a confound — split it until every case has one variable.
 
 ### L42 — Two implementations that agree at small n need a fixture past the threshold
 
-*instances: 1*
+*instances: 2*
 
 Library internals routinely fall back to a simpler algorithm on small
 inputs, and the simpler algorithm often has the property the caller was
@@ -522,10 +522,24 @@ with every key TIED its partitioning happens to leave the order alone at
 permutes: twelve tied rows plus one scoring higher. The fixture is now 13
 rows with the higher-scoring one oldest.
 
+**Second instance, same threshold.** `find_recurring_patterns` sorts
+failure classes by count with `sort.SliceStable`, and the stability IS the
+tie-break Python's `list.sort` gives it — equal counts come back
+most-recently-seen first. Swapping in `sort.Slice` survived a battery whose
+largest fixture had four classes. The fixture is now thirteen: twelve tied
+at one occurrence plus one ahead, with the leader written OLDEST so the
+sort has to move it and leave the other twelve alone.
+
+That two unrelated ports of two unrelated Python functions both landed on
+this exact boundary is the argument for the lens: it is not a quirk of one
+sort call, it is what happens whenever a Go port relies on stability and
+tests it at the size a fixture is comfortable to write.
+
 **Tripwire.** When a mutant swaps one library call for a near-neighbour,
 find the neighbour's small-input fallback before believing a MISS. The
 threshold is a number in someone else's source; measure it rather than
-reasoning about it.
+reasoning about it. For Go's sort that number is 13 — and with every key
+tied it is unbounded, so the fixture needs a non-tied element too.
 
 ### L43 — A guard's threshold is not where its rule starts working
 

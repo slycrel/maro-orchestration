@@ -8466,3 +8466,177 @@ operands that are themselves inexact diverge.
 learned once, written down at the site that found it, and did not reach
 the next author — which is the whole argument for the lens catalog being a
 catalog rather than a comment.
+
+## The recovery table, and a second slot with nothing in it
+
+`internal/introspect/recovery.go` ports `RecoveryPlan`, `_RECOVERY_TABLE`,
+`plan_recovery`, `plan_recovery_all`, `RecurringPattern` and
+`find_recurring_patterns`.
+
+The table is fifteen failure classes mapped to lists of plans, and Python's
+comment says the lists are "ordered by preference (cheapest/safest first)".
+**Every list has exactly one entry.** That is not a tidy-up waiting to
+happen: `plan_recovery`'s advisor branch returns `plans[1]` when the
+advisor's reply contains `"(b)"`, so the second slot is a reachable code
+path with no data behind it. `len(plans) > 1` is what keeps it from
+raising. The branch is dead *by data*, not by construction, and the first
+two-plan entry anyone adds wakes it up. The port keeps the lists.
+
+The advisor path itself is not ported — it calls `llm.advisor_call`, spends
+an Opus round trip, and is off by default. It fires only for plans that are
+medium-or-high risk AND not auto-apply, which is nine of the fifteen.
+
+`plan_recovery_all` returns `list(...)` — a copy. The port copies for a
+reason Python does not have to think about: a returned Go slice header
+aliases the table's backing array, and one `plans[0].Action = ...` from a
+caller would rewrite operator-facing prose for every later diagnosis in the
+process. `TestPlanRecoveryAllReturnsACopy` is the only thing that pins it,
+and the mutation that returns the table slice directly is invisible to
+every other test in the package.
+
+`Params` is an ordered `pyval.Obj` rather than a map, because Python's is a
+plain dict and every consumer that renders a plan does so through
+`str()`/`json.dumps` of that dict — where key order is the byte order of
+the output. No plan carries more than one key today, which is exactly why
+the ordered type is cheap insurance rather than an argument.
+
+### The tie-break is insertion order, again
+
+`find_recurring_patterns` is the third place in this module where a Go map
+would have silently changed an operator-facing answer. Python builds
+`counts` with `setdefault`, so its keys are ordered by each class's FIRST
+appearance in a list `load_diagnoses` returns NEWEST FIRST. The sort key is
+`-len(x[1])` alone and `list.sort` is stable, so **two classes with equal
+counts come back most-recently-seen first**.
+
+Two more things a single-occurrence fixture cannot see. `first_seen` is
+`diags[-1].loop_id` and `last_seen` is `diags[0].loop_id` — reversed
+relative to how they read, because the list is reverse-chronological. And
+`graduation_candidate` is `len(diags) >= min_occurrences`, evaluated after
+a `continue` that already skipped every class failing that same test: it is
+**always True**. Ported as a field rather than dropped, because it is part
+of the record other code reads, and named in a comment so nobody reads a
+false one as meaningful. There isn't one.
+
+The stability of that sort is a live L42 trap, and the battery names it:
+swapping `sort.SliceStable` for `sort.Slice` needs thirteen-plus classes to
+observe, because Go's pdqsort delegates to insertion sort below that.
+
+## aggregate_lenses: four orderings and one asymmetry
+
+`internal/introspect/aggregate.go` ports `AggregatedDiagnosis`, its
+`summary()`, and `aggregate_lenses` — the function that turns several
+lenses into the one sentence an operator acts on.
+
+**Four orderings decide the answer and every one of them is insertion
+order in Python.** `all_evidence` starts as a copy of the diagnosis's own
+evidence and extends with each lens's findings in lens order.
+`all_actions` is appended in lens order and returned whole. `categories`
+is a dict keyed by first-meaningful-word, so its values come back in the
+order each category was first seen. And `max()` returns the FIRST maximum,
+so a tie on `(count, best confidence)` goes to the category seen first —
+that is, to the lens registered earliest. A Go map randomises the last two.
+
+The category key is the action's first word that is not in
+`{the, a, an, to, into, for}`, so "Split step 3 …" and "Split the loop …"
+vote together. An action made ENTIRELY of stopwords keys to the empty
+string, which is a real category other empty-keyed actions join — not a
+guard to add, because two of them genuinely do agree with each other, and
+they can outvote a real category and become the primary action.
+
+**The asymmetry.** The no-actions branch returns `all_evidence` UNCAPPED
+while the main branch truncates at 20. A loop with no actionable lens can
+therefore return a longer evidence list than one with several. It reads
+like an oversight; it is faithful, it is named at the site, and moving the
+cap up there would change what a caller renders today. The differential
+runs the same twenty-five evidence lines down both branches, which is the
+only way the two answers are visible at once.
+
+`min(1.0, x)` is spelled as a negated less-than — `if !(boosted < 1.0)` —
+rather than `if boosted > 1.0`. Python's `min` returns its first argument
+unless the second compares strictly less, so `min(1.0, nan)` is 1.0, where
+`> 1.0` would let a NaN through unchanged. Not reachable from the built-in
+lenses, whose confidences are five finite literals; spelled correctly
+because the cheap spelling and the right one are the same length. The
+battery retires the mutant that swaps them, since no fixture in a JSON
+differential can carry a NaN.
+
+`round(x, 2)` is half-to-even on the exact double, not half-away-from-zero:
+`round(0.125, 2)` is 0.12 and `round(0.375, 2)` is 0.38. `pyval.Round` is
+that; `math.Round` is not, and the two fixtures at those values are the
+only ones that tell them apart. `summary()` then renders the *already
+rounded* value through `{:.2f}`, a different formatter — so it gets its own
+assertion rather than being derived from the confidence check.
+
+One documentation divergence, left alone and pinned: `all_actions` is
+documented as "every unique action recommended" and the code appends every
+action without deduplicating. Two identical actions prove which of the two
+is true. The port matches the code.
+
+### The battery for both
+
+Fifty-nine mutants across `recovery.go` and `aggregate.go` — every
+threshold, comparison direction, index, ordering and format spec, plus a
+sample of the table's prose (one action, one risk, one auto_apply flag, one
+param key, one param value). The table itself is compared character for
+character by the differential, so re-checking each of its fifteen rows with
+a mutant would only re-measure that.
+
+Eleven survived the first pass, and the split is the one this arc keeps
+producing: **one real gap, four faults in the battery, and six mutants that
+no input can distinguish.**
+
+The real gap is `sort.SliceStable`. Swapping it for `sort.Slice` survived
+every fixture, because the largest had four failure classes and Go's
+pdqsort delegates to insertion sort below thirteen — and with every key
+tied its partitioning leaves the order alone at any size. This is the
+second unrelated function in this port to land on that exact boundary (the
+first was the notes ranking), which is what turned it from a footnote into
+a catalog entry. The fixture is now thirteen classes: twelve tied at one
+occurrence plus one ahead, and the leader is written OLDEST so that after
+`load_diagnoses` reverses the list it sits LAST in `counts` and the sort
+has to move it.
+
+Two of the battery's four faults are worth naming because they are a Go
+rule rather than a typo. Mutating `if n > bestCount || (n == bestCount &&
+c > bestConf)` down to either half leaves `bestCount` or `bestConf`
+*assigned but never read* — and Go does not count assignment as use, so the
+mutant does not build. A BUILDFAIL is a fault in the mutant, never a
+survivor, and reading it as one is how a battery talks itself into a number
+it did not earn.
+
+The six retirements, each with a proof rather than a shrug:
+
+- **The empty-store short-circuit.** Without it the grouping loop runs zero
+  times and the function returns the same `nil`. It is a fast path, not a
+  behaviour.
+- **`PlanRecovery(diags[0])` versus the last occurrence.** `PlanRecovery`
+  reads only `FailureClass`, and every member of a group shares it by
+  construction — that is what the group *is*.
+- **The `seen` check on `catOrder`.** A duplicated key re-visits a category
+  and compares it against *itself* under strict inequalities, so the second
+  visit can never displace the first. The check saves work; it does not
+  break a tie.
+- **`!(boosted < 1.0)` versus `boosted > 1.0`.** They differ only at NaN,
+  and at exactly 1.0 both leave the value alone. No lens produces a NaN
+  confidence and JSON cannot carry one, so nothing a differential can build
+  reaches the difference.
+- **The evidence cap's `>` versus `>=`.** At exactly twenty the mutant
+  slices `allEvidence[:20]`, which is the identity. Above twenty both
+  truncate; below, neither does.
+- **`strings.Fields` in the action key** — *unspellable*, not unkillable.
+  `aggregate.go` does not import `strings`, so the mutation cannot build.
+  The behaviour it was meant to probe is real and is now carried by a
+  fixture instead: an action glued with `\x1c` groups at agreement 2 under
+  Python's `str.split()` and at 1 under `Fields`, which was measured before
+  the fixture was written rather than after it passed.
+
+Final: **53 live mutants, 53 detected**, six retired with written proofs.
+
+Across the seven batteries this arc the shape has not moved. The
+differentials keep going green on their first run and the batteries keep
+finding that a third to a quarter of the fixtures could not tell two
+answers apart — and that a meaningful share of the "survivors" are faults
+in the battery rather than gaps in the tests. Both halves are the point:
+the first is why the batteries are worth their wall-clock, and the second
+is why every MISS gets a proof before it gets a fixture.
