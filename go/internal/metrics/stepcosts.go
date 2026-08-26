@@ -219,7 +219,26 @@ func SpendToday(ws string, now time.Time) float64 {
 		// which silently unmatches every numeric id in the store.
 		e, err := pyval.LoadsMap(line)
 		if err != nil {
-			return true // `except: continue` — a torn row is not the end
+			// TWO error classes arrive here and only one of them is
+			// `except: continue`:
+			//
+			//   - unparseable JSON — a torn row — which is what the
+			//     `except Exception: continue` around json.loads catches, and
+			//     skipping it is exact.
+			//   - VALID JSON that is not an object, e.g. `[1,2]`. CPython's
+			//     json.loads SUCCEEDS on that; the AttributeError comes from
+			//     the `.get()` on the NEXT line, which is OUTSIDE the try
+			//     (metrics.py:234-239), so it aborts the whole call and the
+			//     function answers 0.0. Skipping the row instead keeps every
+			//     other row's spend.
+			//
+			// The second is a standing, deliberate divergence named at
+			// pyval.go's LoadsMap, not an accident — but it is a divergence,
+			// and this comment used to call it `except: continue`. Reachable
+			// only from a hand-edited or foreign-written row; a crash-torn
+			// append does not produce valid non-object JSON. Whether to match
+			// the abort is filed, not decided here.
+			return true
 		}
 		if strings.HasPrefix(pyval.Str(pyval.GetOr(e, "recorded_at", "")), today) {
 			c, ok := costUSDOf(e)
@@ -301,27 +320,32 @@ func SpendForLoops(ws string, loopIDs []string) float64 {
 		return 0.0
 	}
 	path := StepCostsPath(ws)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0.0
-	}
-	// `path.open(encoding="utf-8")` is a STRICT TEXT read, and the whole
-	// scan sits inside the function's bare except. So one non-UTF-8 byte
-	// anywhere in the file — a crash-torn append is the realistic way that
-	// happens — makes CPython answer 0.0 for the ENTIRE file, not skip the
-	// line. The port read bytes and split them, which answered with every
-	// other row's spend: a run's attributed cost that CPython reports as
-	// zero, reported here as five dollars.
+	// `path.open(encoding="utf-8")` is a STRICT TEXT read, and TEXT is two
+	// separate behaviours the port needs both halves of. pyval.ReadText is
+	// exactly that pair; this call site had hand-rolled only the first half.
 	//
-	// Validity of the whole file is the right test rather than of the lines
-	// reached, because the `for line in fh` loop has no break: it decodes
-	// through to EOF even after the last wanted row (adversarial metrics r1,
-	// MEDIUM — L12).
-	if _, derr := pyval.DecodeUTF8Strict(data); derr != nil {
+	//  1. STRICT DECODE. The whole scan sits inside the function's bare
+	//     except, so one non-UTF-8 byte anywhere in the file — a crash-torn
+	//     append is the realistic way that happens — makes CPython answer 0.0
+	//     for the ENTIRE file, not skip the line. Validity of the whole file
+	//     is the right test rather than of the lines reached, because the
+	//     `for line in fh` loop has no break: it decodes through to EOF even
+	//     after the last wanted row (adversarial metrics r1, MEDIUM — L12).
+	//
+	//  2. UNIVERSAL NEWLINES. `newline=None` translates \r\n AND a lone \r to
+	//     \n before iteration, so a CR-separated ledger is many lines to
+	//     CPython and ONE line to a byte split. That fails open: the split
+	//     finds no wanted loop_id in the single glued line and answers 0.0
+	//     where CPython answers the real spend.
+	//
+	// SpendToday must NOT get this treatment — Python opens that one "rb"
+	// (metrics.py:189), so it really is a byte split, and the port matches.
+	text, rerr := pyval.ReadText(path)
+	if rerr != nil {
 		return 0.0
 	}
 	total := 0.0
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		hit := false
 		for _, w := range order {
 			if strings.Contains(line, w) {
@@ -642,8 +666,24 @@ func EstimateLoopCost(ws string, numSteps int, stepTexts []string) (float64, err
 		return 0.0, nil
 	}
 
+	// `sum(all_costs) / len(all_costs)`, and the sum is CPython's `sum()`,
+	// which is Neumaier-COMPENSATED. A naive `s += c` fold lived here and was
+	// wrong: on 8-decimal per-type averages the two disagree at the double
+	// level about a quarter of the time, and roughly one list in 150 still
+	// disagrees AFTER `round(·, 6)`. Measured counterexample, three types:
+	//
+	//	[2.57474094, 2.0052634, 2.03212616], num_steps=1
+	//	  sum()/n -> 2.204043     naive fold/n -> 2.204044
+	//
+	// This is not cosmetic. loop_planning.py:214-240 compares this value
+	// against the cost budget as a HARD ABORT gate (over budget → the run is
+	// declared stuck) and records it on a durable trace edge, so two runtimes
+	// reading one ledger would disagree about whether a loop was affordable.
+	//
+	// Note the OTHER accumulations in this function are honest `+=` folds,
+	// because Python spells them `total += avg` — only this one is a `sum()`.
 	globalAvg := func() float64 {
-		var costs []float64
+		var costs []any
 		for _, key := range analysis.ByTypeOrder {
 			if c := analysis.StatFor(key).AvgCostUSD; c > 0 {
 				costs = append(costs, c)
@@ -652,11 +692,13 @@ func EstimateLoopCost(ws string, numSteps int, stepTexts []string) (float64, err
 		if len(costs) == 0 {
 			return 0.0
 		}
-		s := 0.0
-		for _, c := range costs {
-			s += c
+		// Every element is a float64 we just read, so Sum cannot raise here.
+		s, err := pyval.Sum(costs)
+		if err != nil {
+			return 0.0
 		}
-		return s / float64(len(costs))
+		f, _ := pyval.Float(s)
+		return f / float64(len(costs))
 	}
 
 	// `if step_texts:` is a TRUTHINESS test, so an EMPTY list takes the

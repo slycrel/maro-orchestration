@@ -194,9 +194,20 @@ func addN(v any, n int, op string) (any, error) {
 // not nan.
 //
 // The integer lane stays exact, and Go's int is 64 bits where Python's has
-// no bound. Every caller here sums token counts and costs off a JSON store,
-// which json.Number already bounds, so the limit is named rather than
-// worked around.
+// no bound. The limit is NAMED rather than worked around — but the reason
+// once given for that was false and is worth correcting rather than deleting:
+// "json.Number already bounds" it. json.Number is a STRING; it bounds
+// nothing. What actually happens to an out-of-range literal is that IsInt
+// rejects it and numOf falls through to Float64, so a token count past
+// 2^63 arrives here as a float and takes the compensated lane.
+//
+// Inside the int lane, `acc += i` wraps SILENTLY, and the wrap flips the
+// sign: two rows of math.MaxInt64 sum to 18446744073709551614 in CPython and
+// to -2 here. A negative total then changes which types clear the `> 0`
+// median filter and which land in expensive_types — a wrong answer rather
+// than a crash. Reaching it needs absurd token counts, which is why this is
+// a named limit and not a defect, but "absurd" is not "impossible" for a
+// field a foreign writer controls.
 func Sum(vals []any) (any, error) {
 	// The integer lane, exact, until the first float arrives.
 	acc := 0

@@ -431,6 +431,65 @@ func TestSuccessfulRunCostP90MatchesCPython(t *testing.T) {
 				}
 			}},
 
+		// A DANGLING `run_card.json` SYMLINK — the other half of the pair
+		// above, and the port had both halves the same way.
+		//
+		// The directory test follows symlinks (is_dir does). The CARD test
+		// does NOT: measured on 3.14.3, `glob("*/run_card.json")` yields a
+		// dead link, because the check is that the NAME is there, not that
+		// the target is readable. CPython then reaches
+		// `key=lambda p: p.stat().st_mtime`, which raises FileNotFoundError,
+		// and the whole distribution comes back None — and is NOT cached.
+		//
+		// os.Stat on the card silently dropped it, which reads like the safe
+		// choice and answers a confident p90 from the surviving ten cards,
+		// then caches that for fifteen minutes. One dead link is the
+		// difference between "no opinion" and a budget breaker computed from
+		// a silently truncated sample (metrics r2, MEDIUM — M3).
+		{"a dangling run card symlink", n(10, 1.0, "success"), 200,
+			func(t *testing.T, ws string) {
+				dir := filepath.Join(ws, "runs", "brokencard")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(ws, "no-such-target"),
+					filepath.Join(dir, "run_card.json")); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			}},
+
+		// A CARD WITH ONE NON-UTF-8 BYTE, in a field nothing here reads.
+		//
+		// `card_path.read_text(encoding="utf-8")` decodes STRICTLY and runs
+		// BEFORE json.loads, so the UnicodeDecodeError is caught by the
+		// `except Exception: continue` and the card is not a sample. Go's
+		// JSON decoder instead substitutes U+FFFD and hands back a perfectly
+		// good map, so without an explicit strict decode the junk card is
+		// ADMITTED.
+		//
+		// The cost is 500.0 deliberately: it fails OPEN in the direction that
+		// matters, raising the p90, which raises both the warn line and the
+		// 4x-p90 auto kill-line. SpendForLoops learned this in r1 and the fix
+		// was never carried across the file (metrics r2, MEDIUM — M2).
+		{"a run card with an invalid utf-8 byte", n(10, 1.0, "success"), 200,
+			func(t *testing.T, ws string) {
+				dir := filepath.Join(ws, "runs", "tornbyte")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				raw := []byte("{\"total_cost_usd\": 500.0, " +
+					"\"success_class\": \"success\", \"goal\": \"caf\xe9\"}")
+				p := filepath.Join(dir, "run_card.json")
+				if err := os.WriteFile(p, raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				// Newest, so a limit could not be what excludes it.
+				mt := time.Now()
+				if err := os.Chtimes(p, mt, mt); err != nil {
+					t.Fatal(err)
+				}
+			}},
+
 		// LEXICAL ORDER DISAGREES WITH MTIME. Every case above names its
 		// runs run-0, run-1, … in the same order it stamps their mtimes, so
 		// a port that sorted by NAME, or that never sorted at all and

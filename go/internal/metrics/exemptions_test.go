@@ -131,7 +131,9 @@ func TestGrandTotalRaiseIsUnreachable(t *testing.T) {
 	rnd := rand.New(rand.NewSource(7))
 	bad := []any{nil, "abc", "1.5", []any{1}, map[string]any{"a": 1}}
 	reached := 0
-	for trial := 0; trial < 2000; trial++ {
+	grandRaised := 0
+	const trials = 2000
+	for trial := 0; trial < trials; trial++ {
 		n := 1 + rnd.Intn(10)
 		var rows []string
 		for i := 0; i < n; i++ {
@@ -182,29 +184,32 @@ func TestGrandTotalRaiseIsUnreachable(t *testing.T) {
 			all = append(all, objGet(e, "cost_usd", 0.0))
 		}
 		_, grandErr := pyval.Sum(all)
+		if grandErr != nil {
+			grandRaised++
+		}
 		if grandErr != nil && !groupRaises {
 			reached++
 			t.Errorf("found a store where the grand total raises and no group "+
 				"does — M63's error path is live: %v", rows)
 		}
 	}
-	if reached == 0 {
-		// Anti-vacuity: the search must actually have produced raising
-		// stores, or it proved nothing.
-		if !sawARaise(t) {
-			t.Fatal("no fixture in this search ever raised at all")
-		}
+	// Anti-vacuity, measured on THIS search rather than on a hand-built
+	// store. The exemption claims the grand total's error path is dead
+	// because the per-type sums partition the same values and run first — so
+	// the search only proves something if it actually generated stores whose
+	// grand total RAISES. If it never did, every iteration took the boring
+	// path and `reached == 0` means nothing at all.
+	//
+	// The previous version called a helper that summed its own one-row store
+	// and asserted AnalyzeStepCosts errored on it. That is a true statement
+	// about a different store, and it would have kept passing if this
+	// search's generator stopped emitting bad costs entirely — which is
+	// precisely the vacuity this file exists to catch.
+	if grandRaised == 0 {
+		t.Fatal("vacuous: no generated store's grand total ever raised, so " +
+			"the exemption was never exercised")
 	}
-}
-
-func sawARaise(t *testing.T) bool {
-	t.Helper()
-	o, err := pyval.LoadsOrdered(`{"step_type": "a", "total_tokens": 1, "cost_usd": null}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, aerr := AnalyzeStepCosts([]pyval.Obj{o.(pyval.Obj)})
-	return aerr != nil
+	t.Logf("exercised: %d/%d generated stores raised on the grand total", grandRaised, trials)
 }
 
 // TestEmptyByTypeShortCircuitIsRedundant executes the exemption for M66.

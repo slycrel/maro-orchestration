@@ -58,10 +58,10 @@ func fnMatchRunes(name, pat []rune) bool {
 	// stars against a long name is quadratic here and exponential the naive
 	// recursive way, and both inputs are attacker-shaped.
 	var (
-		ni, pi         int
-		starPat        = -1
-		starName       int
-		haveStar       bool
+		ni, pi   int
+		starPat  = -1
+		starName int
+		haveStar bool
 	)
 	for ni < len(name) {
 		if pi < len(pat) {

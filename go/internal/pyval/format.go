@@ -115,17 +115,6 @@ func FloorDiv(a, b int) int {
 	return q
 }
 
-// FloorDivAny is `a // b` where `a` came out of a store and may be a float.
-//
-// Python's `//` KEEPS THE WIDER TYPE while flooring: `5 // 2` is the int 2
-// and `5.0 // 2` is the float 2.0, which are different objects that render
-// as different text. metrics.analyze_step_costs computes `total_tok //
-// count` where total_tok is a `sum()` over a JSON field, so a row carrying
-// `"total_tokens": 2.5` makes avg_tokens a float in CPython — and a port
-// that coerced to int would answer 2 where CPython answers 2.0.
-//
-// A non-numeric `a` is the caller's to reject before getting here; it
-// returns the same TypeError Sum would.
 // RoundAny is `round(x, n)` KEEPING PYTHON'S TYPE.
 //
 // round() of an int is an INT, at every ndigits — `round(2, 6)` is 2, not
@@ -148,6 +137,29 @@ func RoundAny(v any, n int) any {
 	return Round(f, n)
 }
 
+// FloorDivAny is `a // b` where `a` came out of a store and may be a float.
+//
+// Python's `//` KEEPS THE WIDER TYPE while flooring: `5 // 2` is the int 2
+// and `5.0 // 2` is the float 2.0, which are different objects that render
+// as different text. metrics.analyze_step_costs computes `total_tok //
+// count` where total_tok is a `sum()` over a JSON field, so a row carrying
+// `"total_tokens": 2.5` makes avg_tokens a float in CPython — and a port
+// that coerced to int would answer 2 where CPython answers 2.0.
+//
+// The float lane is NOT `math.Floor(a / b)`. CPython's float_floordiv is
+// fmod-based, and the two part company once `a/b` lands past 2^53, where the
+// division rounds across an integer boundary that the remainder does not:
+//
+//	2.543036645110022e16 // 3  is 8476788817033405.0 in CPython
+//	math.Floor(a / 3)          is 8476788817033407
+//
+// Two whole units apart. It needs a token total past 2^53 to reach, which is
+// why a 3M-draw random search under 1e6 finds nothing — but `total_tokens` is
+// a `sum()` over a JSON field with no upper bound, and the answer is written
+// into a report.
+//
+// A non-numeric `a` is the caller's to reject before getting here; it
+// returns the same TypeError Sum would.
 func FloorDivAny(a any, b int) (any, error) {
 	i, f, isFloat, ok := numOf(a)
 	if !ok {
@@ -157,7 +169,38 @@ func FloorDivAny(a any, b int) (any, error) {
 				TypeName(a))}
 	}
 	if isFloat {
-		return math.Floor(f / float64(b)), nil
+		return floatFloorDiv(f, float64(b)), nil
 	}
 	return FloorDiv(i, b), nil
+}
+
+// floatFloorDiv is CPython's float_floordiv (Objects/floatobject.c): take the
+// remainder first, subtract it, and only then divide — so the quotient is
+// exact by construction rather than rounded and floored afterwards. The
+// snap-to-nearest guards the case where the division still lands a hair below
+// the integer it should be.
+func floatFloorDiv(a, b float64) float64 {
+	mod := math.Mod(a, b)
+	div := (a - mod) / b
+	// fmod takes the sign of the DIVIDEND and Python's % takes the sign of
+	// the DIVISOR, so when they disagree the quotient is one too high. This
+	// step is the whole reason `-3001.0 // 3` is -1001.0 and not -1000.0;
+	// leaving it out passes every non-negative fixture and fails the first
+	// negative one.
+	if mod != 0 && (b < 0) != (mod < 0) {
+		div--
+	}
+	// Snap to the nearest integral value. The subtraction above is exact, so
+	// `div` is already integral in all but the boundary case where the
+	// division lands a hair below the integer it should be.
+	if div != 0 {
+		fd := math.Floor(div)
+		if div-fd > 0.5 {
+			fd++
+		}
+		return fd
+	}
+	// A zero quotient keeps the sign of a/b, so -0.0 survives: CPython's
+	// `-0.0 // 5.0` is -0.0, not 0.0.
+	return math.Copysign(0.0, a/b)
 }

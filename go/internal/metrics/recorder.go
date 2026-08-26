@@ -342,13 +342,29 @@ func computeRunCostP90(ws string, limit int) (val float64, ok, cacheable bool) {
 		if rerr != nil {
 			continue
 		}
+		// `card_path.read_text(encoding="utf-8")` is a STRICT decode, and it
+		// runs BEFORE json.loads. One non-UTF-8 byte anywhere in the card —
+		// including inside a field nothing here reads, like `goal` — raises
+		// UnicodeDecodeError, which the `except Exception: continue` catches,
+		// and the card is not a sample.
+		//
+		// Go's JSON decoder instead substitutes U+FFFD for invalid bytes and
+		// returns a perfectly good map, so without this the torn card is
+		// ADMITTED. That fails OPEN in the direction that matters: a junk card
+		// with a large total_cost_usd becomes a sample, which raises the p90,
+		// which raises both the warn line and the 4×p90 auto kill-line.
+		// (SpendForLoops learned this in r1; the fix was never carried here.)
+		text, derr := pyval.DecodeUTF8Strict(raw)
+		if derr != nil {
+			continue
+		}
 		// pyval.LoadsMap, not encoding/json: `json.loads` admits the bare
 		// tokens NaN, Infinity and -Infinity, and Go's decoder rejects them.
 		// A card carrying `"total_cost_usd": NaN` is DROPPED by encoding/json
 		// and ADMITTED by CPython, where it makes the p90 itself nan and every
 		// downstream budget comparison false. The port has one Python-shaped
 		// reader and this is the file that needs it.
-		card, jerr := pyval.LoadsMap(string(raw))
+		card, jerr := pyval.LoadsMap(text)
 		if jerr != nil {
 			continue
 		}
@@ -407,9 +423,26 @@ func computeRunCostP90(ws string, limit int) (val float64, ok, cacheable bool) {
 //
 // pathlib walks the pattern one component at a time: it scandirs `root`,
 // keeps the entries that are directories, and for each one tests whether the
-// literal child `run_card.json` exists. Neither step sorts. A symlinked run
-// directory counts, because `is_dir()` follows symlinks by default — which
-// is what os.Stat does here and os.Lstat would not.
+// literal child `run_card.json` is THERE. Neither step sorts.
+//
+// The two tests are not the same test, and the port had them the same way:
+//
+//   - The DIRECTORY test follows symlinks — `is_dir()` does by default — so a
+//     symlinked run directory counts. os.Stat, not os.Lstat.
+//   - The CARD test does NOT. Measured on 3.14.3: a `run_card.json` that is a
+//     DANGLING symlink is still yielded by glob, because the check is about
+//     the name being present, not the target being readable. os.Lstat.
+//
+// Using os.Stat for the card silently dropped it, which looked like the safe
+// reading and was a divergence with teeth: CPython yields the dead link, then
+// `key=lambda p: p.stat().st_mtime` raises FileNotFoundError, and the WHOLE
+// distribution comes back None — uncached. Skipping it instead answered a
+// confident p90 from the surviving cards and cached that for fifteen minutes.
+// One dangling link is the difference between "no opinion" and a budget
+// breaker computed from a silently truncated sample.
+//
+// os.Lstat also gets the directory-named-run_card.json case right for free:
+// pathlib yields it, the mtime works, and the read fails into `continue`.
 func globRunCards(root string) ([]string, error) {
 	f, err := os.Open(root)
 	if err != nil {
@@ -427,7 +460,7 @@ func globRunCards(root string) ([]string, error) {
 			continue
 		}
 		card := filepath.Join(dir, "run_card.json")
-		if _, serr := os.Stat(card); serr != nil {
+		if _, serr := os.Lstat(card); serr != nil {
 			continue
 		}
 		out = append(out, card)

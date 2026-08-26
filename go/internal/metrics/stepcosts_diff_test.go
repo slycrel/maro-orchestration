@@ -500,6 +500,28 @@ func TestSpendForLoopsMatchesCPython(t *testing.T) {
 		// that split raw bytes answers 1.0 here.
 		{name: "one invalid byte zeroes the whole file", ids: []string{"a"},
 			rows: []string{row("a", 1.0, ""), "{\"loop_id\": \"b\", \"x\": \"\xff\"}"}},
+		// UNIVERSAL NEWLINES. `path.open(encoding="utf-8")` is text mode, and
+		// text mode is TWO behaviours: the strict decode above, and
+		// `newline=None`, which translates a lone \r — and \r\n — to \n before
+		// the `for line in fh` loop ever sees it. A CR-separated ledger is
+		// therefore two rows to CPython and ONE glued row to a byte split on
+		// "\n", and the glued row is invalid JSON, so it is skipped and the
+		// port answered 0.0 where CPython answers 4.0.
+		//
+		// Failing OPEN in the worst direction for a budget gate: real spend
+		// reported as none. Note spend_today must NOT gain this behaviour —
+		// Python opens that one "rb" (metrics.py:189).
+		//
+		// The CR lives INSIDE one element because seedCosts joins with "\n";
+		// this is one file line to a byte splitter and two to CPython.
+		{name: "a carriage return separates rows in text mode",
+			ids:  []string{"a"},
+			rows: []string{row("a", 1.5, "") + "\r" + row("a", 2.5, "")}},
+		// And the Windows pair, which a naive split on "\n" gets RIGHT except
+		// for the stranded \r — json.loads tolerates the trailing whitespace,
+		// so this one agreed before the fix and must keep agreeing after it.
+		{name: "a crlf pair separates rows", ids: []string{"a"},
+			rows: []string{row("a", 1.5, "") + "\r\n" + row("a", 2.5, "")}},
 	}
 
 	type loopsCase struct {
@@ -621,6 +643,28 @@ func TestAnalyzeStepCostsMatchesCPython(t *testing.T) {
 				row("verify", 500, 0.005),
 				row("research", 1200, 0.012),
 				row("build", 80000, 0.8)}},
+		// THE GLOBAL AVERAGE IS A `sum()`, AND `sum()` IS COMPENSATED.
+		// estimate_loop_cost's fallback computes `sum(all_costs) /
+		// len(all_costs)`, which the port folded with `s += c`. On 8-decimal
+		// per-type averages the two disagree at the double level about a
+		// quarter of the time, and roughly one list in 150 still disagrees
+		// after `round(·, 6)`. This is such a list:
+		//
+		//	sum()/3 -> 2.204043      naive fold/3 -> 2.204044
+		//
+		// ORDER IS PART OF THE FIXTURE. all_costs is built in by_type order,
+		// which is newest-first, so the LAST row here is the first cost in
+		// the sum. Written the other way round the same three values agree
+		// and the case proves nothing — which is exactly how a "generous"
+		// fixture set ends up unable to fail (metrics r2, MEDIUM — M1).
+		//
+		// nsteps=1 so the answer IS the average, undiluted by a multiply.
+		{name: "the global average is a compensated sum, not a fold",
+			limit: 100, nsteps: 1,
+			rows: []string{
+				row("ops", 1000, 2.03212616),
+				row("build", 1000, 2.0052634),
+				row("research", 1000, 2.57474094)}},
 		// TWO TYPES: the lower median is the SMALLER average, so the bar is
 		// 2x the cheaper type and the dearer one can clear it. With an upper
 		// or mean median it could not, which is the whole point of the

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
