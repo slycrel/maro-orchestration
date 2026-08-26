@@ -98,6 +98,49 @@ the cost constants living in the same package as the ledger readers.
 
 Do this before any Go-side runtime writes real outcomes.
 
+### Python bug: a negative token count inverts `identify_expensive_patterns` (FOUND 2026-08-26, go-port chunk scoping)
+
+Not a port gap — a bug in `src/metrics.py` that reading the function
+closely enough to port it turned up. Measured against the real
+`estimate_cost`, not reasoned:
+
+    estimate_cost(in=-5000, out=0)        -> -0.015
+    estimate_cost(in=-5000, out=0, cr=100)-> -0.015   (cache_read clamps to 0)
+    estimate_cost(in=1000,  out=-5000)    -> -0.072
+    estimate_cost(in=-5000, out=1000)     ->  0.0     (lands exactly on the gate)
+
+`cache_read = max(0, min(cache_read_tokens, tokens_in))` clamps to zero when
+`tokens_in` is negative, so `fresh_in` keeps the negative value and the cost
+goes negative with it. `identify_expensive_patterns` then computes a negative
+`avg_cost`, and its `type_avg > avg_cost * 1.5` test **inverts** — measured,
+`1.0 > -1.0 * 1.5` is True. The function recommends MODEL_CHEAP for the
+*cheapest* task type and renders a negative multiplier into
+`f"({type_avg/avg_cost:.1f}x the overall average)"`.
+
+The `if avg_cost == 0.0: return []` gate does not catch it; that gate exists
+to make the division safe, and it only excludes exact zero.
+
+Reachable from the store, not just in theory: outcome rows are JSON, and
+nothing validates the sign of `tokens_in` / `tokens_out` on the way in.
+CPython's `json.loads` also accepts bare `Infinity`, `-Infinity` and `NaN`,
+which reach the same arithmetic (`estimate_cost(nan, 0)` -> `nan`;
+`estimate_cost(-inf, inf)` -> `nan`; plain `Infinity` gives `inf`, which is
+at least well-ordered).
+
+The NaN case has a second consequence in `format_metrics_report`, whose
+`sorted(by_model.items(), key=lambda x: -x[1].total_cost_usd)` produces a
+position-dependent garbage order around a NaN (measured: `[a=nan, b=1.0,
+c=5.0]` -> `['c','a','b']`). Go's `sort.SliceStable` runs a different
+comparison sequence and will land somewhere else, so this is also the first
+place the port may need a NAMED divergence it cannot close.
+
+Fix is small and belongs on the Python side first — clamp at the estimator
+(`tokens_in`/`tokens_out` `max(0, ...)`) or reject non-finite values at
+ingest — but it is a behaviour change to a shipped function, so it wants
+Jeremy's call rather than a quiet repair. **The port reproduces the bug
+as-written in the meantime**, with fixtures pinning it; a port that silently
+fixed it would hide the finding and break the differential.
+
 ### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
 
 Surfaced as a byproduct of a documented PASS: the round-3 assessment declined
