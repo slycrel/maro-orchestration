@@ -197,33 +197,57 @@ Five of `config.py`'s seven path helpers behave this way — `memory_dir`,
 `output_dir`, `projects_dir`, `skills_dir`, `personas_dir` — while
 `secrets_dir` and `playbook_path` do not.
 
-`EnsureProjectsRoot` is written and tested but has **no callers yet**.
-The sites that should be reading it, each of which currently resolves
-`projects/` as a pure join where its Python twin creates:
+**PARTLY DONE.** The three ENUMERATORS now create, each measured against
+CPython (`internal/orch/projectsdir_diff_test.go`, three workspace
+shapes):
 
-- `sheriff` — four call sites
-- `missionrun`
-- `internal/orch/projects.go`
-- `internal/orch/mission.go`'s project listing
-
-The rule for choosing per site is the one on `EnsureMemoryDir`: **the
-Python line, not the Go convenience.** A Go site that is only building a
-path to hand to a writer that mkdirs for itself must stay a pure join —
-giving it the side effect is a divergence in the other direction.
-
-Rides with it, an **L4 (a guard that cannot fire)**: `sheriff.py`'s
-
-```python
-if not projects_dir.exists():
-    return []
+```
+fresh workspace   py list_projects() -> []   projects/ EXISTS after
+                  go (before)        -> nil  projects/ did not
+shadowed by file  py list_projects   raises FileExistsError
+                  py list_missions   raises FileExistsError
+                  py resolve_project_slug  SWALLOWS, returns its slug
 ```
 
-is dead, because `projects_root()` on the line above just created the
-directory. The port currently reproduces the guard. Decide whether to
-keep reproducing it (consistent with the dead-branch posture elsewhere
-in this file) or to name it at the site — but do not silently drop it.
+That last row is why the differential measures all three together: a test
+covering only `list_projects` would have licensed "propagate everywhere"
+or "best-effort everywhere", and both are wrong for two of the three.
+`ListProjects` propagates, `ListMissions` answers empty (no error
+channel — the named residual, filed with introspect's two), and
+`SlugResolver` is best-effort.
+
+**STILL OPEN — `ProjectDir` and its path family.** In Python
+`project_dir(slug)` is `projects_root() / slug`, so resolving ANY
+per-project path creates `projects/`. In the port `ProjectDir`,
+`NextPath`, `DecisionsPath`, `RisksPath`, `ProvenancePath` and
+`PriorityPath` are pure joins — **32 non-test call sites plus 6 test
+files**, which is a signature change of its own and was deliberately not
+ridden in on the enumerator slice. Pinned meanwhile by
+`TestProjectDirIsStillAPureJoin`, so it is a recorded fact rather than a
+comment asserting one.
+
+Reachability is narrow and worth stating: the divergence is confined to
+READ-ONLY paths. Any caller that goes on to write creates the
+per-project directory with parents, and `projects/` appears anyway.
+
+Also still open: **three** dead `.exists()` guards, not one — an **L4**
+family. `orch_items.list_projects`, `sheriff.check_all_projects` and
+`mission.list_missions` each call `projects_root()` and then test
+`if not <root>.exists()`, which cannot fire because the line above just
+created the directory. The port reproduces all three, now dead for the
+same reason rather than by accident, and each is named at its site.
+Decide whether reproducing them stays the posture — but do not silently
+drop them.
 
 `output_dir` / `skills_dir` / `personas_dir` are not yet surveyed at all.
+
+**`internal/missionrun` has NO test files.** Surfaced by battery mutant
+PJ-6, which reverts `SlugResolver` to a pure join and survives by
+construction — there is nothing in that package to catch anything. It was
+left in the mutation list and left surviving rather than trimmed, because
+a list pruned to what the suite already covers cannot report a hole like
+this. Any package with `[no test files]` is in the same position; that
+census has not been run.
 
 ### Go port: the directory-MODE census — 34 sites still pass a literal `0o755` (FOUND 2026-08-26, go-port chunk A)
 

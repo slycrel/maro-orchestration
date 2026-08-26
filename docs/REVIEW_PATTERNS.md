@@ -256,7 +256,7 @@ slicer. Six packages carry a private `clipRunes` copy (`scans`,
 introspect port deliberately did not become the seventh.
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 8*
+*instances: 9*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 7*
@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 65*
+*instances: 68*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -856,7 +856,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 10*
+*instances: 11*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1147,7 +1147,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 4*
+*instances: 5*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1190,7 +1190,7 @@ value that renders identically as a Python int and a Go float64. A
 
 ### L53 — A correct assertion can still cover the wrong blast radius
 
-*instances: 1*
+*instances: 3*
 
 The ordinary missing-test finding is "nobody wrote one". This is not
 that. The assertion existed, it was correct, it ran on every suite, and
@@ -1220,10 +1220,31 @@ differential — CPython should be measured once, at the helper. It is a
 cheap structural pin per package that asserts the site still routes
 through the helper, with the measurement left where it is.
 
+**Instance 2** (syshealth r4, 2026-08-26). `Summary.Error` used `""` as
+its sentinel, so an exception raised with no message — CPython emits
+`{"ran": 0, ..., "error": ""}` — lost the key entirely, making an aborted
+cycle indistinguishable from a clean one. It landed inside the ONE
+structure the chunk had pinned deliberately:
+`TestSummaryToDictKeepsCPythonsInsertionOrder` asserts the exact
+insertion-order contract across four shapes, and not one of the four was
+an error with an empty message. The test is right about everything it
+says.
+
+**Instance 3** (projects slice, 2026-08-26). Two mutation survivors were
+defects in a differential written minutes earlier: one ran both
+enumerators against a single workspace and asserted the directory existed
+at the end, so the *first* enumerator's side effect satisfied the
+*second* one's assertion; the other copied the property from a sibling
+differential without copying the mode assertion that makes it
+observable. A side-effect test where something else performs the side
+effect first is measuring nothing.
+
 **Tripwire.** Derive the battery's mutation list from the FILE SET the
 change touched, not from the package the tests live in. That is what
-surfaced this one: the mutants were written per changed file, so three of
-them landed in packages the guard did not reach.
+surfaced instance 1: the mutants were written per changed file, so three
+of them landed in packages the guard did not reach. For a *fixture*
+table, the sibling tripwire is one setup per row — shared setup is how
+one row's effect pays for another row's assertion.
 
 ### P13 — A `try` split across a seam stops being one `try`
 *instances: 1 (`syshealth` r1)*

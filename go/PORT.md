@@ -11747,3 +11747,120 @@ rather than given a test that cannot fail.
 
 Two comments corrected in this chunk, both of the same kind: a rationale
 that sounded like a finding. That is now three in three chunks.
+
+## The projects half, and a lesson that had already been written down
+
+`projects_root()` creates its directory on BOTH branches, so the same
+"mkdir inside a name" shape covers `projects/` as well. Three Python call
+sites read it and then immediately test `if not <root>.exists()` — a
+guard that cannot fire, because the line above just created the thing.
+That is three L4 instances in one family: `orch_items.list_projects`,
+`sheriff.check_all_projects`, `mission.list_missions`.
+
+What made this slice worth doing separately is that the three do not
+agree about what a failure means, and only measuring all of them showed
+it:
+
+```
+list_projects         no try   raises FileExistsError
+list_missions         no try   raises FileExistsError
+resolve_project_slug  own try  swallows, still returns its slug
+```
+
+A differential covering only the first would have licensed "propagate
+everywhere" or "best-effort everywhere". Both are wrong for two of the
+three. `ListProjects` propagates, `ListMissions` answers empty (no error
+channel — the residual, pinned), and `SlugResolver` is best-effort with
+the discarded error named at the site as the difference rather than an
+oversight.
+
+### The comment that was already refuted before I read it
+
+`ListProjects` carried this:
+
+> This port keeps path helpers side-effect-free — the resolved store
+> being an argument rather than an ambient act is the 2026-08-16
+> live-ledger lesson — so a missing root reads as no projects and only
+> the writers create anything.
+
+The cited lesson is real and the citation is wrong. The live-ledger
+incident was about WHICH STORE gets resolved — a second env var routing
+writes somewhere the first did not — and it says nothing about whether
+resolving creates a directory. `EnsureMemoryDir(ws)` takes the workspace
+as an argument AND mkdirs; the two properties are orthogonal. The comment
+borrowed the authority of a correct rule for a claim the rule does not
+make. That is the fifth L52.
+
+### Two mutants that caught my own test, not my own code
+
+The battery over this slice returned 4 of 7, and two of the survivors
+were defects in the differential I had just written:
+
+- **PJ-4** reverted `ListMissions` to a pure join and survived, because
+  the test ran both enumerators against ONE workspace and asserted
+  `projects/` existed at the end. `ListProjects` had already created it
+  two lines earlier. A side-effect test where something else performs
+  the side effect first is measuring nothing. Every row now gets its own
+  workspace.
+- **PJ-5** dropped the group bit from the directory mode and survived,
+  because this differential — unlike the memory-dir one it was modelled
+  on — had no mode assertion at all. The property was copied; the
+  assertion that makes it observable was not.
+
+**PJ-6 survives and is left surviving.** It reverts `SlugResolver`, which
+lives in `internal/missionrun` — a package with no test files at all. A
+mutation list trimmed to what the suite already covers would not have
+said that out loud. The gap is real, it is named here, and it is the
+honest reason the count is 4 and not 5.
+
+## The r4 review of `internal/syshealth` — a lane, and an absence
+
+Not lows-only: two MEDIUM. Both are in the contract rather than the state
+machine, which is itself the finding — the reviewer re-derived
+`run_health_probes` statement by statement against `RunCycle` and could
+not break it.
+
+**F1 — the error table said "four things" and there are five.** `with
+locked_write(_snapshot_path())` sits inside the blanket `try`, and
+`locked_write` raises `FileLockTimeout` when the lock is contended and
+fail-open is off, which is the default. Measured here with the lock held
+by another process:
+
+```
+{"ran": 0, "silent": [], "transitions": 0,
+ "error": "file_lock: could not acquire <ws>/memory/system_health.json.lock
+           within 0.0s (holder alive?). ..."}
+probes called: 0     snapshot written: no
+```
+
+It is neither of its neighbours — `memory/` is fine, so not the mkdir
+lane, and `Ran` is 0 rather than N, so not the write lane. This package
+DELEGATES the lock to its caller, which makes the omission worse rather
+than better: a caller built from that table takes the lock, gets a
+timeout, and has nothing telling it the faithful answer. It is the exact
+case the lock exists for.
+
+**F2 — `Summary.Error` used emptiness as its sentinel.** Python writes
+`summary["error"] = str(exc)[:200]` unconditionally once the except
+fires, and `str(exc)` is `""` for an exception raised with no message.
+Measured: `{"ran": 0, "silent": [], "transitions": 0, "error": ""}`. The
+port dropped the key, making an aborted cycle byte-identical to a clean
+zero-declaration one — and any Go caller testing `sum.Error != ""`
+concludes the cycle succeeded when it never ran a probe. `Error` is now
+`*string`.
+
+What makes F2 sting is where it landed. `TestSummaryToDictKeepsCPythonsInsertionOrder`
+exists precisely to pin this structure, across four shapes, and none of
+the four was an error with an empty message. A correct assertion, wrong
+blast radius — L53, one round after it was minted.
+
+The six LOWs were three overstated enumerations (a present-tense "47
+cycle fixtures" that r3 made 50; "thirty-seven diffs" and "every cycle
+fixture at once", both asserted rather than counted — the real number is
+24, because ten fixtures seed a prior whose entry `Obj.Set` replaces in
+place), a fourth private copy of `EnsureMemoryDir`, an incomplete
+"WHAT IS NOT HERE" list that was silently missing an observable
+emission (the module logger fires on every error lane), and a `prior`
+passed by value — which propagates a probe's write to an EXISTING key
+and silently loses a NEW one. That last is fixed by a pointer, and the
+pin was checked against a reverted copy before being believed.

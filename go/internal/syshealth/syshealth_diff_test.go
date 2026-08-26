@@ -237,7 +237,7 @@ func syProbes(t *testing.T, raw string) []Declaration {
 		s := spec
 		out = append(out, Declaration{
 			Name: name, Description: desc, Expectation: exp,
-			Probe: func(prior pyval.Obj) (string, string, pyval.Obj, error) {
+			Probe: func(prior *pyval.Obj) (string, string, pyval.Obj, error) {
 				if v, ok := s.Get("raise"); ok {
 					return "", "", nil, fmt.Errorf("%s", pyval.Str(v))
 				}
@@ -928,7 +928,16 @@ func syCases() []syCase {
 			// memory'" and "mkdir <ws>/memory: not a directory" — no shared
 			// wording, so the shape asserted is that each names the
 			// directory it failed on.
-			cs[len(cs)-1].elideOSError = "memory"
+			//
+			// r4 F8: it said that while checking for the bare word
+			// "memory", which any message mentioning memory at all
+			// satisfies ("cannot allocate memory" would have passed). The
+			// PATH SEGMENT is the weakest thing both real messages share
+			// that a message about something else does not, so that is
+			// what it checks now. Not the full <ws>/memory path only
+			// because ws is per-run and this value is fixed when the
+			// fixture is built; the comment says what the check does.
+			cs[len(cs)-1].elideOSError = "/memory"
 		}
 	}
 	return cs
@@ -1164,7 +1173,7 @@ func TestRunCycleReadsTheClockOncePerDeclarationPlusOnce(t *testing.T) {
 		decls := make([]Declaration, n)
 		for i := range decls {
 			decls[i] = Declaration{Name: fmt.Sprintf("p%d", i),
-				Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+				Probe: func(*pyval.Obj) (string, string, pyval.Obj, error) {
 					return OK, "e", pyval.Obj{}, nil
 				}}
 		}
@@ -1213,7 +1222,7 @@ func TestLoadSnapshotTreatsUndecodableBytesAsNoSnapshot(t *testing.T) {
 func TestAFailingProbeContributesNothingButItsMessage(t *testing.T) {
 	junk := pyval.Obj{}
 	junk.Set("half", "written")
-	decl := Declaration{Name: "p", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+	decl := Declaration{Name: "p", Probe: func(*pyval.Obj) (string, string, pyval.Obj, error) {
 		return OK, "looked fine", junk, fmt.Errorf("boom")
 	}}
 	next, told, summary := RunCycle(pyval.Obj{}, []Declaration{decl},
@@ -1255,7 +1264,7 @@ func TestRunCycleDoesNotMutateTheProbesObservation(t *testing.T) {
 	obs := pyval.Obj{}
 	obs.Set("at", "1999")
 	obs.Set("n", 1)
-	decl := Declaration{Name: "p", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+	decl := Declaration{Name: "p", Probe: func(*pyval.Obj) (string, string, pyval.Obj, error) {
 		return OK, "e", obs, nil
 	}}
 	RunCycle(pyval.Obj{}, []Declaration{decl}, func() string { return syFrozen })
@@ -1273,15 +1282,21 @@ func TestRunCycleDoesNotMutateTheProbesObservation(t *testing.T) {
 // then outgrow.
 //
 // It is not the only guard — verified by hand-editing a copy into exactly
-// that shape, the differential fails too, on every cycle fixture at once
-// ("processes": {} against CPython's populated map). This test earns its
-// place by naming the cause in one line instead of thirty-seven diffs, and
-// by running in microseconds without an interpreter.
+// that shape, the differential fails too. NOT on every cycle fixture, and
+// not on thirty-seven of them: both numbers in the sentence that used to
+// stand here were asserted rather than counted (r4 F4). Of the 50 cycle
+// fixtures, 34 write a populated snapshot at all; of those, ten seed a
+// prior whose `processes` already holds the probed name (C3-C8, C14, C15,
+// C24, C34), where Obj.Set replaces IN PLACE in the shared backing array,
+// so the pre-loop header still carries the entry and the fixture passes.
+// That leaves 24. This test earns its place by naming the cause in one
+// line instead of 24 diffs, and by running in microseconds without an
+// interpreter.
 func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 	decls := make([]Declaration, 5)
 	for i := range decls {
 		decls[i] = Declaration{Name: fmt.Sprintf("p%d", i),
-			Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+			Probe: func(*pyval.Obj) (string, string, pyval.Obj, error) {
 				return OK, "e", pyval.Obj{}, nil
 			}}
 	}
@@ -1302,8 +1317,12 @@ func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 // TestSummaryToDictKeepsCPythonsInsertionOrder pins the one contract the
 // differential is structurally unable to see. syGo routes every summary
 // through a Go map on its way to encoding/json, and a Go map has no order,
-// so all 47 cycle fixtures would pass with the keys emitted in any order at
-// all. r1 found the cost of that blind spot: ToDict's doc asserted insertion
+// so all 50 cycle fixtures would pass with the keys emitted in any order at
+// all. (Said 47 until r4 counted it: correct when written, stale the moment
+// r3 added C48-C50. The sibling sentence at the mkdir case is PAST tense —
+// "an assumption 47 fixtures shared" — and stays right for that reason. A
+// present-tense count of a growing list is a claim with an expiry date.)
+// r1 found the cost of that blind spot: ToDict's doc asserted insertion
 // order while battery mutant M6 was labelled "the summary key order changes
 // — equivalent, nothing reads it", two opposite claims with nothing
 // adjudicating them. The doc is right; the label was wrong.
@@ -1315,6 +1334,9 @@ func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 //
 // The expected strings are MEASURED against CPython, not asserted from the
 // source: json.dumps(summary) on 3.14 for each of the four shapes.
+// syErr spells an error message as the pointer Summary.Error now is.
+func syErr(s string) *string { return &s }
+
 func TestSummaryToDictKeepsCPythonsInsertionOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1327,10 +1349,17 @@ func TestSummaryToDictKeepsCPythonsInsertionOrder(t *testing.T) {
 		// though both sort before "silent" and "transitions".
 		{"the config gate", Summary{Silent: []string{}, Skipped: "health.probes_enabled is off"},
 			`{"ran": 0, "silent": [], "transitions": 0, "skipped": "health.probes_enabled is off"}`},
-		{"the error lane", Summary{Ran: 1, Silent: []string{"p1"}, Error: "boom"},
+		{"the error lane", Summary{Ran: 1, Silent: []string{"p1"}, Error: syErr("boom")},
 			`{"ran": 1, "silent": ["p1"], "transitions": 0, "error": "boom"}`},
 		{"no probes ran at all", Summary{Silent: []string{}},
 			`{"ran": 0, "silent": [], "transitions": 0}`},
+		// The row r4 found missing. `str(exc)` is "" for an exception
+		// raised with no message, and Python sets the key anyway — so an
+		// aborted cycle and a clean one are DIFFERENT dicts. Every other
+		// fixture here raised with a message, which is the side of the
+		// input space where a "" sentinel and a real absence agree.
+		{"an error whose message is empty", Summary{Silent: []string{}, Error: syErr("")},
+			`{"ran": 0, "silent": [], "transitions": 0, "error": ""}`},
 	} {
 		got, err := pyval.DumpsCompactPy(tc.sum.ToDict())
 		if err != nil {
@@ -1369,7 +1398,7 @@ func TestRunAndPersistDiscardsNarrationsWhenTheWriteFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Chmod(dir, 0o775)
-	decl := Declaration{Name: "p1", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+	decl := Declaration{Name: "p1", Probe: func(*pyval.Obj) (string, string, pyval.Obj, error) {
 		return Silent, "quiet", pyval.Obj{}, nil
 	}}
 	sum, told := RunAndPersist(ws, []Declaration{decl},
@@ -1383,12 +1412,11 @@ func TestRunAndPersistDiscardsNarrationsWhenTheWriteFails(t *testing.T) {
 	if sum.Ran != 1 || len(sum.Silent) != 1 {
 		t.Errorf("the probe results were lost too: %+v", sum)
 	}
-	if sum.Error == "" {
+	if sum.Error == nil {
 		t.Error("the write failure was swallowed")
-	}
-	if n := len([]rune(sum.Error)); n != 200 {
+	} else if n := len([]rune(*sum.Error)); n != 200 {
 		t.Errorf("the write error is %d runes, want the 200-rune clip "+
-			"(message: %q)", n, sum.Error)
+			"(message: %q)", n, *sum.Error)
 	}
 }
 
@@ -1573,7 +1601,7 @@ func TestTheMemoryDirFailureReachesEveryEntryPoint(t *testing.T) {
 		sum, told := RunAndPersist(ws, nil,
 			func() (any, error) { return true, nil },
 			func() string { return syFrozen })
-		if sum.Error == "" {
+		if sum.Error == nil {
 			t.Fatal("RunAndPersist reported no error")
 		}
 		if sum.Ran != 0 || len(sum.Silent) != 0 || sum.Transitions != 0 || told != nil {
@@ -1581,4 +1609,75 @@ func TestTheMemoryDirFailureReachesEveryEntryPoint(t *testing.T) {
 				sum, told)
 		}
 	})
+}
+
+// TestAProbeWritingIntoPriorIsSeenByTheCycle is the other side of
+// TestRunCycleDoesNotMutateTheProbesObservation, and it exists because
+// nothing covered it (r4 F7).
+//
+// Python hands the probe the LIVE entry out of `processes`, so anything it
+// writes is visible to the `prev_status = prior.get("status")` and the
+// `entry = dict(prior)` that follow. The port passed pyval.Obj BY VALUE,
+// which gets half of that right in a way that is hard to see: Set on an
+// existing key writes through the shared backing array and propagates,
+// while Set on a NEW key appends to the local header and vanishes. The two
+// cases below are chosen to separate exactly those halves — a value
+// receiver passes the first and fails the second.
+func TestAProbeWritingIntoPriorIsSeenByTheCycle(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, want string
+	}{
+		{"a key that is already there", "status", Silent},
+		{"a key the entry has never had", "scratch", "written-by-probe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decls := []Declaration{{
+				Name: "p1",
+				Probe: func(prior *pyval.Obj) (string, string, pyval.Obj, error) {
+					prior.Set(tc.key, tc.want)
+					return OK, "e", pyval.Obj{}, nil
+				},
+			}}
+			// A prior carrying `status` so the first case overwrites rather
+			// than appends, which is what makes the two cases different.
+			prior := pyval.Obj{}
+			prior.Set("status", Unknown)
+			procs := pyval.Obj{}
+			procs.Set("p1", prior)
+			snap := pyval.Obj{}
+			snap.Set("processes", procs)
+
+			out, _, _ := RunCycle(snap, decls, func() string { return syFrozen })
+
+			gp, _ := out.Get("processes")
+			gpo, ok := asDict(gp)
+			if !ok {
+				t.Fatalf("processes is not an object: %#v", gp)
+			}
+			ev, _ := gpo.Get("p1")
+			entry, ok := asDict(ev)
+			if !ok {
+				t.Fatalf("the p1 entry is not an object: %#v", ev)
+			}
+			got, present := entry.Get(tc.key)
+			if tc.key == "status" {
+				// The cycle overwrites status with the probe's verdict, so
+				// what this case proves is that the probe's write REACHED
+				// prev_status — visible as the transition decision, not as
+				// a surviving value. Assert the observable half instead.
+				if got != OK {
+					t.Errorf("entry status = %v, want the probe's verdict %q", got, OK)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("the probe's new key %q never reached `entry = "+
+					"dict(prior)` — prior is being passed by value, so the "+
+					"append went to a local slice header", tc.key)
+			}
+			if got != tc.want {
+				t.Errorf("entry[%q] = %v, want %q", tc.key, got, tc.want)
+			}
+		})
+	}
 }

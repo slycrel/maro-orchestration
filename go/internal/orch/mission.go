@@ -569,9 +569,25 @@ type MissionSummary struct {
 }
 
 // ListMissions scans every project for a mission.json.
+//
+// It CREATES projects/, because Python's `projects_root = o.projects_root()`
+// mkdirs — see EnsureProjectsRoot. The `if not projects_root.exists()`
+// guard on the next line of mission.py cannot fire, and is kept dead here
+// for the same reason ListProjects keeps its own.
+//
+// RESIDUAL, named and pinned: `list_missions` has NO try, so CPython
+// raises FileExistsError out of it on a workspace where projects/ cannot
+// be created (measured). This signature has no error channel, so the port
+// answers with an empty list — the caller sees "no missions" where Python
+// sees a crash. Same shape as introspect's two readers; the widening is
+// filed together with them.
 func ListMissions(ws string) []MissionSummary {
 	results := []MissionSummary{}
-	entries, err := os.ReadDir(ProjectsRoot(ws))
+	root, perr := EnsureProjectsRoot(ws)
+	if perr != nil {
+		return results
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return results
 	}

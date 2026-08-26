@@ -80,7 +80,18 @@ func FeatureRunner(a llm.Adapter, rec *record.Recorder, o Opts) orch.RunFeatureF
 // (`project = resolve_project_slug(goal)`) has none either.
 func SlugResolver(ws string) func(goal string) string {
 	return func(goal string) string {
-		slug, _ := loop.ResolveProjectSlug(orch.ProjectsRoot(ws), goal)
+		// resolve_project_slug reaches projects/ through `o.project_dir(base)`
+		// INSIDE its own try, so the mkdir happens and any failure is
+		// swallowed — measured: with a file in the way, list_projects and
+		// list_missions both raise FileExistsError while this one still
+		// returns its slug. Best-effort is the faithful shape here, and
+		// the discarded error is the difference between this site and the
+		// two above it, not an oversight.
+		root, err := orch.EnsureProjectsRoot(ws)
+		if err != nil {
+			root = orch.ProjectsRoot(ws)
+		}
+		slug, _ := loop.ResolveProjectSlug(root, goal)
 		return slug
 	}
 }

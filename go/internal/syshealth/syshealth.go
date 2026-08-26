@@ -47,6 +47,20 @@
 //     this note said "print from the returned snapshot, in the same order",
 //     which is wrong on both counts.
 //   - main, the CLI.
+//   - The module LOGGER, and it is an observable emission rather than an
+//     absence. `logger = logging.getLogger(__name__)` (system_health.py:47)
+//     and `logger.debug("health probe cycle failed (non-fatal): %s", exc)`
+//     (:610) fire on EVERY error lane in the table on Summary, under the
+//     logger name `system_health`, with a message text an operator greps.
+//     This package has no logging seam at all, so a caller reproducing the
+//     error lanes from this file would never learn that line exists. Found
+//     by r4 (F5) — the list's entire value is completeness, and it was
+//     silently missing three of its nine top-level omissions.
+//   - The three shared probe HELPERS `_memory_dir`, `_recent_outcomes` and
+//     `_run_source` (system_health.py:101-131). The first bullet says the
+//     seven declared probes are each their own tranche; these sit BELOW
+//     that line — module-level helpers the probes share — so no per-probe
+//     tranche owns them and nothing above claimed them.
 package syshealth
 
 import (
@@ -97,7 +111,26 @@ type Declaration struct {
 	Name        string
 	Description string
 	Expectation string
-	Probe       func(prior pyval.Obj) (string, string, pyval.Obj, error)
+	// Probe takes a POINTER because Python hands the probe the LIVE entry
+	// out of `processes`, so anything it writes into prior is visible to
+	// the `prev_status = prior.get("status")` and `entry = dict(prior)`
+	// that follow. A pyval.Obj passed by value gets half of that right and
+	// the halves are hard to tell apart: Set on an EXISTING key writes
+	// through the shared backing array (propagates, faithful), while Set
+	// on a NEW key appends to the local slice header and is silently lost.
+	// r4 F7 — latent today because no shipped probe mutates prior, but it
+	// is the seam-invented hazard class that
+	// TestRunCycleDoesNotMutateTheProbesObservation covers on the OTHER
+	// side of this same call, with nothing covering this side.
+	//
+	// The pin is TestAProbeWritingIntoPriorIsSeenByTheCycle, and it was
+	// checked the only way that means anything: a copy of the tree with
+	// BOTH this signature and its fixtures reverted to the value receiver,
+	// where the new-key case fails and the existing-key case still passes.
+	// A battery mutant that flips only this line does not compile — the
+	// fixtures pass a pointer — and P14 says such a mutant is reported as
+	// caught while proving nothing, which is why it was not left to one.
+	Probe func(prior *pyval.Obj) (string, string, pyval.Obj, error)
 }
 
 // Narration is one transition the cycle decided to tell the user about.
@@ -115,17 +148,38 @@ type Narration struct {
 // config gate, decided before any probe runs, so Ran is 0.
 //
 // Error is Python's blanket `except`, and it is WIDER than the cycle. It
-// wraps four things, and `Ran` differs across them — measured, because the
+// wraps FIVE things, and `Ran` differs across them — measured, because the
 // first draft of this comment asserted "by the time it fires the probes
 // have already run and Ran is already non-zero" and that is false for the
-// first row:
+// first row. (It said FOUR through r3; see the third row.)
 //
 //	config.get raises          ran=0, transitions=0, nothing written
 //	_snapshot_path mkdirs      ran=0, transitions=0, NO PROBE CALLED
+//	locked_write times out     ran=0, transitions=0, NO PROBE CALLED
 //	an unparseable cycle       ran=N, transitions=0, nothing written
 //	_write_snapshot raises     ran=N, transitions=0, NOTHING NARRATED
 //
-// A fifth thing is inside the try and cannot contribute a row: the
+// The THIRD row is r4 F1, and this table said "four things" for three
+// rounds without it. `with locked_write(_snapshot_path())` is inside the
+// try, and locked_write raises FileLockTimeout when the lock is contended
+// and fail-open is off — which is the DEFAULT. Measured on 3.14.3 with the
+// lock held by another process and MARO_FILELOCK_TIMEOUT_S=0:
+//
+//	{"ran": 0, "silent": [], "transitions": 0,
+//	 "error": "file_lock: could not acquire <ws>/memory/system_health.json.lock
+//	           within 0.0s (holder alive?). Set MARO_FILELOCK_FAIL_OPEN=1 ..."}
+//	probes called: 0     snapshot written: no
+//
+// It is neither of its neighbours: memory/ is fine, so it is not the mkdir
+// lane, and Ran is 0 rather than N, so it is not the write lane. This
+// package DELEGATES the lock to its caller (see the package doc), which
+// makes the omission worse rather than better — a caller built from this
+// table takes the lock, gets a timeout, and has nothing telling it the
+// faithful answer is ran=0 with a 200-code-point-clipped message and no
+// narration. It is the case the lock exists for: two loop_finalize cycles
+// racing on one box.
+//
+// A sixth thing is inside the try and cannot contribute a row: the
 // narration loop. `_narrate_transition` wraps its ENTIRE body — the import
 // included — in `try: ... except Exception: pass`, so nothing it does can
 // reach this handler. An earlier version of this table listed it as a
@@ -140,7 +194,7 @@ type Narration struct {
 // locked_write. A workspace whose memory/ cannot be created therefore fails
 // before the load and before the loop — fixtures C48/C49.
 //
-// The third row is the one a split port drops on the floor: the probes ran,
+// The FIFTH row is the one a split port drops on the floor: the probes ran,
 // the cycle produced narrations, and the write failed — so `transitions`
 // must be 0 and the pending narrations must be discarded, or the log claims
 // the user was told about a state that never persisted. RunCycle cannot see
@@ -150,7 +204,29 @@ type Summary struct {
 	Silent      []string
 	Transitions int
 	Skipped     string
-	Error       string
+
+	// Error is a POINTER because absence and empty are different answers.
+	// Python writes `summary["error"] = str(exc)[:200]` unconditionally
+	// once the except fires, and `str(exc)` is "" for an exception raised
+	// with no message — `RuntimeError()`. Measured through the real
+	// run_health_probes on CPython 3.14.3:
+	//
+	//	{"ran": 0, "silent": [], "transitions": 0, "error": ""}
+	//
+	// A string field with "" as its sentinel drops that key, making an
+	// aborted cycle indistinguishable from a clean zero-declaration one —
+	// and any Go caller testing `sum.Error != ""` concludes the cycle
+	// succeeded when it never ran a probe. Found in r4; every fixture in
+	// the suite raised WITH a message, which is the side of the input
+	// space where the two spellings agree.
+	Error *string
+}
+
+// setError is `summary["error"] = str(exc)[:200]`: it sets the key even
+// when the clipped message is empty.
+func (s *Summary) setError(msg string) {
+	clipped := pyval.Clip(msg, 200)
+	s.Error = &clipped
 }
 
 // ToDict renders Summary in Python's INSERTION order: `ran`, `silent` and
@@ -176,8 +252,8 @@ func (s Summary) ToDict() pyval.Obj {
 	if s.Skipped != "" {
 		o.Set("skipped", s.Skipped)
 	}
-	if s.Error != "" {
-		o.Set("error", s.Error)
+	if s.Error != nil {
+		o.Set("error", *s.Error)
 	}
 	return o
 }
@@ -221,9 +297,18 @@ func (s Summary) ToDict() pyval.Obj {
 // `mkdir <path>: permission denied` — the same residual `dispatch/
 // envelope.go`'s `oserr` names, and the differential elides it by shape on
 // both sides rather than pretending the two agree.
+// It calls orch.EnsureMemoryDir rather than re-spelling the mkdir, which
+// r4 F6 found it doing: byte-identical logic, a fourth private copy of an
+// idiom in a port whose own comments keep naming three-copies-of-one-helper
+// as the defect shape. EnsureMemoryDir's doc names THIS package's r3
+// finding as its motivating case and states the rule — "if the line it
+// ports says memory_dir(), it wants this one" — and `_snapshot_path()` is
+// exactly `from config import memory_dir; return memory_dir() / "..."`.
+// Sharing it also inherits its named residual (Python's relocation
+// fallback, not ported) instead of quietly not having one.
 func SnapshotPath(ws string) (string, error) {
-	dir := orch.MemoryDir(ws)
-	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+	dir, err := orch.EnsureMemoryDir(ws)
+	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "system_health.json"), nil
@@ -429,7 +514,7 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, now func() string) (pyval
 			prior = pyval.Obj{}
 		}
 
-		status, evidence, obs, perr := decl.Probe(prior)
+		status, evidence, obs, perr := decl.Probe(&prior)
 		if perr != nil {
 			// `except Exception as exc` — a broken probe reports UNKNOWN and
 			// does not take the cycle down. The message is clipped at 120
@@ -519,7 +604,7 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, now func() string) (pyval
 		// before the write: nothing persists, no narration happens, and
 		// `ran` still counts the probes that already ran. The file on disk
 		// is untouched, unparseable counter and all.
-		summary.Error = pyval.Clip(err.Error(), 200)
+		summary.setError(err.Error())
 		return nil, nil, summary
 	}
 	snapshot.Set("cycle", next)
@@ -547,7 +632,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 
 	enabled, err := cfg()
 	if err != nil {
-		summary.Error = pyval.Clip(err.Error(), 200)
+		summary.setError(err.Error())
 		return summary, nil
 	}
 	if !pyval.Truthy(enabled) {
@@ -561,7 +646,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 	// ran=0 and silent=[] and not one probe called — fixtures C48/C49.
 	// Reaching it through LoadSnapshot alone would already have run them.
 	if _, perr := SnapshotPath(ws); perr != nil {
-		summary.Error = pyval.Clip(perr.Error(), 200)
+		summary.setError(perr.Error())
 		return summary, nil
 	}
 	prior, lerr := LoadSnapshot(ws)
@@ -570,7 +655,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 		// and ported anyway: in Python this is the same statement raising
 		// inside the same try, and a port that dropped the lane would be
 		// deciding the mkdir cannot fail twice.
-		summary.Error = pyval.Clip(lerr.Error(), 200)
+		summary.setError(lerr.Error())
 		return summary, nil
 	}
 	snap, pending, summary := RunCycle(prior, decls, now)
@@ -588,7 +673,7 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 		// told about a state that was never recorded, because the state
 		// machine will re-decide the same transition next cycle. Fixtures
 		// C45/C46.
-		summary.Error = pyval.Clip(err.Error(), 200)
+		summary.setError(err.Error())
 		return summary, nil
 	}
 	summary.Transitions = len(pending)

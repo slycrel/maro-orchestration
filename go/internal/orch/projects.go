@@ -14,14 +14,35 @@ import (
 // NEXT.md, sorted. The NEXT.md test is what makes a directory a project;
 // a bare directory is not one.
 //
-// Python's projects_root() creates the directory as a side effect of
-// resolving it. This port keeps path helpers side-effect-free — the
+// Python's projects_root() CREATES the directory as a side effect of
+// resolving it, on both of its branches, and this ports that.
+//
+// The comment that used to stand here said the opposite, on a ground that
+// does not hold: "this port keeps path helpers side-effect-free — the
 // resolved store being an argument rather than an ambient act is the
-// 2026-08-16 live-ledger lesson — so a missing root reads as no projects
-// and only the writers create anything.
+// 2026-08-16 live-ledger lesson". That lesson is about WHICH STORE gets
+// resolved — not reading ambient env vars to pick one — and it is
+// orthogonal to whether resolving creates a directory. EnsureMemoryDir
+// takes the workspace as an argument AND mkdirs. Measured:
+//
+//	fresh workspace   py list_projects() -> []   and projects/ EXISTS after
+//	                  go ListProjects()  -> nil  and projects/ does not
+//
+// A file named `projects` in the way makes CPython raise FileExistsError
+// out of list_projects, which is what the error return here reproduces.
 func ListProjects(ws string) ([]string, error) {
-	entries, err := os.ReadDir(ProjectsRoot(ws))
+	root, err := EnsureProjectsRoot(ws)
 	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		// Python's `if not root.exists(): return []` on the line after
+		// projects_root() cannot fire — the helper just created it. The
+		// port keeps the dead branch for the same reason it keeps the
+		// other dead branches in this tree: a port that silently drops a
+		// status the original can still emit is the worse bug. It is dead
+		// HERE too, and now for the same reason.
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
