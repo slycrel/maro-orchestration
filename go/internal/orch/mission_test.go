@@ -717,7 +717,7 @@ func TestMissionLogRowShape(t *testing.T) {
 	if err := WriteMissionLog(ws, r, m); err != nil {
 		t.Fatal(err)
 	}
-	got := strings.TrimSpace(readFile(t, MissionLogPath(ws)))
+	got := strings.TrimSpace(readFile(t, mustPath(t)(MissionLogPath(ws))))
 	want := `{"mission_id": "mi1", "project": "proj-a", "goal": "g \u2014 \u00e9", ` +
 		`"status": "done", "milestones_done": 1, "milestones_total": 2, ` +
 		`"features_done": 1, "features_total": 2, "elapsed_ms": 5000, ` +
@@ -730,7 +730,7 @@ func TestMissionLogRowShape(t *testing.T) {
 	if err := WriteMissionLog(ws, r, m); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(readFile(t, MissionLogPath(ws)), "\n"); n != 2 {
+	if n := strings.Count(readFile(t, mustPath(t)(MissionLogPath(ws))), "\n"); n != 2 {
 		t.Errorf("expected 2 framed rows, got %d", n)
 	}
 }
@@ -750,7 +750,7 @@ func TestDrainLock(t *testing.T) {
 		t.Error("a second drain must be refused")
 	}
 	var row map[string]any
-	if err := json.Unmarshal([]byte(readFile(t, DrainLockPath(ws))), &row); err != nil {
+	if err := json.Unmarshal([]byte(readFile(t, mustPath(t)(DrainLockPath(ws)))), &row); err != nil {
 		t.Fatal(err)
 	}
 	if row["mission_id"] != "mi1" {
@@ -803,5 +803,23 @@ func TestMissionResultSummary(t *testing.T) {
 		"milestones=1/2\nfeatures=3/4\nelapsed_ms=5"
 	if got := r.Summary(); got != want {
 		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+}
+
+// mustPath unwraps a path helper that now creates its directory. The
+// helpers return (string, error) because resolving them is a filesystem
+// operation in the Python too; a test that only wants the string says so
+// here rather than dropping the error at each call.
+//
+// It takes the pair POSITIONALLY rather than as a t-plus-call, because Go
+// only forwards a multi-value call into a function whose parameters it
+// matches exactly. Hence the package-level t, set by each caller.
+func mustPath(t *testing.T) func(string, error) string {
+	return func(p string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
 }

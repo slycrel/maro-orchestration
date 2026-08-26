@@ -22,14 +22,43 @@ import (
 // second store-routing rule that disagrees with the first is the exact
 // shape of the 2026-08-16 live-ledger incident. One resolution order,
 // passed in as an argument.
-func EventsPath(ws string) string {
-	return filepath.Join(orch.MemoryDir(ws), "events.jsonl")
+// It CREATES memory/: `_events_path()` is `memory_dir() / "events.jsonl"`
+// and memory_dir mkdirs (orch.EnsureMemoryDir). Resolving this path is a
+// filesystem operation in the original, not a join.
+func EventsPath(ws string) (string, error) {
+	dir, err := orch.EnsureMemoryDir(ws)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "events.jsonl"), nil
 }
 
-// DiagnosesPath is introspect._diagnoses_path().
-func DiagnosesPath(ws string) string {
-	return filepath.Join(orch.MemoryDir(ws), "diagnoses.jsonl")
+// DiagnosesPath is introspect._diagnoses_path(), and creates memory/ for
+// the same reason EventsPath does.
+func DiagnosesPath(ws string) (string, error) {
+	dir, err := orch.EnsureMemoryDir(ws)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "diagnoses.jsonl"), nil
 }
+
+// The three readers below do NOT agree with each other about what a
+// failure here means, and the port follows each one rather than picking a
+// house rule:
+//
+//   - LoadLoopEvents  (_load_loop_events)   has NO try. CPython raises.
+//   - LatestLoopID    (_load_latest_loop_id) has NO try. CPython raises.
+//   - LoadDiagnoses   (load_diagnoses)      wraps the whole body,
+//     `_diagnoses_path()` included, in `except Exception: pass` and
+//     returns the results built so far — so empty, which is what this
+//     returns too. FAITHFUL, not a residual.
+//
+// RESIDUAL, named, for the first two only: they return a plain slice and
+// a plain (string, bool), so a memory/ that cannot be created reads as
+// "no events" instead of stopping the caller. Widening those two
+// signatures is a separate change with a caller ripple; BACKLOG'd and
+// pinned in knowngap_test rather than left silent.
 
 // LoadLoopEvents is introspect._load_loop_events.
 //
@@ -59,7 +88,11 @@ func DiagnosesPath(ws string) string {
 // readers that resolve numbers differently, which is the divergence the
 // two readers' own parity test exists to prevent.
 func LoadLoopEvents(ws, loopID string) []pyval.Obj {
-	rows, _ := record.ReadAllCountedOrdered(EventsPath(ws))
+	path, perr := EventsPath(ws)
+	if perr != nil {
+		return nil
+	}
+	rows, _ := record.ReadAllCountedOrdered(path)
 	var out []pyval.Obj
 	for _, e := range rows {
 		if strings.HasPrefix(evStr(evGet(e, "loop_id", "")), loopID) {
@@ -84,7 +117,11 @@ func LoadLoopEvents(ws, loopID string) []pyval.Obj {
 // a missing store reads as zero rows through the same never-raises reader,
 // which is the answer that check exists to produce.
 func LatestLoopID(ws string) (string, bool) {
-	rows, _ := record.ReadAllCountedOrdered(EventsPath(ws))
+	path, perr := EventsPath(ws)
+	if perr != nil {
+		return "", false
+	}
+	rows, _ := record.ReadAllCountedOrdered(path)
 	for i := len(rows) - 1; i >= 0; i-- {
 		if id := evStr(evGet(rows[i], "loop_id", "")); id != "" {
 			return id, true
@@ -106,7 +143,10 @@ func LatestLoopID(ws string) (string, bool) {
 // backfilling supplies its own stamp, and a test must be able to.
 // A non-empty RecordedAt is respected, never overwritten.
 func SaveDiagnosis(ws string, d *LoopDiagnosis, now time.Time) error {
-	path := DiagnosesPath(ws)
+	path, perr := DiagnosesPath(ws)
+	if perr != nil {
+		return perr
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -160,7 +200,11 @@ func SaveDiagnosis(ws string, d *LoopDiagnosis, now time.Time) error {
 // back, so a mistyped row in the shared store cannot be rewritten into a
 // differently-mistyped row by this runtime.
 func LoadDiagnoses(ws string, limit int) []LoopDiagnosis {
-	rows, _ := record.ReadAllCountedOrdered(DiagnosesPath(ws))
+	path, perr := DiagnosesPath(ws)
+	if perr != nil {
+		return nil
+	}
+	rows, _ := record.ReadAllCountedOrdered(path)
 	var out []LoopDiagnosis
 	for i := len(rows) - 1; i >= 0; i-- {
 		d, ok := diagnosisFromRow(rows[i])

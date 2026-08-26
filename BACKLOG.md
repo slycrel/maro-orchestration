@@ -188,6 +188,89 @@ the dead branches deliberately (with the reasoning at the site) rather than
 cannot is the worse bug. Whichever resolution wins has to land in
 `src/sheriff.py` first and be re-ported after.
 
+### Go port: the `projects/` half of the mkdir-inside-a-name family (FOUND 2026-08-26, go-port chunk A scoping — L48)
+
+Chunk A ported the side effect for the **memory** family only:
+`config.memory_dir()` mkdirs, so `EnsureMemoryDir` does too, and the
+callers that stand for a Python `memory_dir() / name` line now carry it.
+Five of `config.py`'s seven path helpers behave this way — `memory_dir`,
+`output_dir`, `projects_dir`, `skills_dir`, `personas_dir` — while
+`secrets_dir` and `playbook_path` do not.
+
+`EnsureProjectsRoot` is written and tested but has **no callers yet**.
+The sites that should be reading it, each of which currently resolves
+`projects/` as a pure join where its Python twin creates:
+
+- `sheriff` — four call sites
+- `missionrun`
+- `internal/orch/projects.go`
+- `internal/orch/mission.go`'s project listing
+
+The rule for choosing per site is the one on `EnsureMemoryDir`: **the
+Python line, not the Go convenience.** A Go site that is only building a
+path to hand to a writer that mkdirs for itself must stay a pure join —
+giving it the side effect is a divergence in the other direction.
+
+Rides with it, an **L4 (a guard that cannot fire)**: `sheriff.py`'s
+
+```python
+if not projects_dir.exists():
+    return []
+```
+
+is dead, because `projects_root()` on the line above just created the
+directory. The port currently reproduces the guard. Decide whether to
+keep reproducing it (consistent with the dead-branch posture elsewhere
+in this file) or to name it at the site — but do not silently drop it.
+
+`output_dir` / `skills_dir` / `personas_dir` are not yet surveyed at all.
+
+### Go port: the directory-MODE census — 34 sites still pass a literal `0o755` (FOUND 2026-08-26, go-port chunk A)
+
+`record.NewDirMode` is `0o777`, which is what `Path.mkdir()` passes, and
+the umask narrows it — 0o775 on this box, 0o755 under a service with
+umask 022, exactly as Python would. A Go site that hard-codes `0o755`
+produces 0o755 **regardless of umask**, so the two runtimes disagree on
+any host whose umask is not 022, and the difference is observable
+(`stat`, and a group-writable workspace shared with the Python runtime).
+
+Chunk A converted two sites as a side effect of the work it was already
+doing (`metrics/recorder.go`'s second MkdirAll, and the drain-lock's own
+mkdir, which was deleted rather than converted). **34 remain**, found by
+`grep -rn "MkdirAll" go/ | grep 0o755`.
+
+Not a mechanical sweep: each one needs the same per-site question the
+memory family got — does the Python line it ports call a helper that
+mkdirs at pathlib's default, or does it pass an explicit mode? Some
+Python sites DO pass `0o755` deliberately. A blanket replace would be a
+guess dressed as a fix, and the mutation battery would not catch it
+because both modes create a working directory.
+
+### Go port: two path readers swallow a failure their Python twins raise (FOUND 2026-08-26, go-port chunk A — named residual)
+
+Widening `MemoryDir` to a `(string, error)` pair pushed an error return
+into every caller, and three of them have nowhere to put it:
+
+- `introspect.LoadLoopEvents` returns `nil` — CPython's
+  `_load_loop_events` has **no** `try` and raises.
+- `introspect.LatestLoopID` returns `"", false` — same, `_load_latest_loop_id`
+  raises.
+- `orch.IsDrainRunning` returns `false` — CPython raises out of
+  `is_drain_running`. A Go bool has no third state, and `false` lets a
+  SECOND drain start on a workspace whose `memory/` cannot be created.
+
+All three are pinned by tests (`memorydir_diff_test.go`'s
+`TestTheDrainLockPredicateForksOnAnUncreatableMemoryDir` and the
+introspect store's per-site comments), so the divergence is a recorded
+fact rather than an omission. `metrics` is deliberately NOT on this list:
+`spend_today`, `spend_for_loops` and `load_step_costs` each wrap their
+whole body — path helper included — in `except Exception`, so the port's
+`return 0` / `return nil` is faithful. That was **checked, not assumed**;
+an earlier note in the same file claimed the opposite.
+
+The fix is to widen the two `introspect` signatures. Cheap, but it
+touches every caller and belongs in its own chunk rather than riding in.
+
 ### Go port: an escaped lone surrogate is a STATE divergence, not a byte one (FOUND 2026-08-26, tasks r1 HIGH)
 
 `pyval`'s existing lone-surrogate residual describes the `ensure_ascii=True`

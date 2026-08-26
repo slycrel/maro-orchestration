@@ -34,8 +34,11 @@ package orch
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // Item states, verbatim from Python. The state is a single character
@@ -70,6 +73,65 @@ func ProjectsRoot(ws string) string { return filepath.Join(ws, "projects") }
 // ProjectsRoot has MARO_ORCH_ROOT, and this port reads none of them —
 // one resolution order, passed in as an argument.
 func MemoryDir(ws string) string { return filepath.Join(ws, "memory") }
+
+// EnsureMemoryDir and EnsureProjectsRoot are the mkdir-ING twins of the
+// two joins above, and they exist because in Python the mkdir lives
+// INSIDE the name.
+//
+//	config.memory_dir():    p = workspace_root() / "memory"
+//	                        p.mkdir(parents=True, exist_ok=True)
+//	                        return p
+//
+// Five of config.py's path helpers do this — memory, output, projects,
+// skills, personas — while secrets_dir and playbook_path do not. So
+// "resolve the memory directory" is not a pure function in the original:
+// it CREATES, and it can FAIL, and both are observable. syshealth r3
+// rated the first instance HIGH, because CPython aborts `run_and_persist`
+// before running a single probe on a workspace whose memory/ cannot be
+// created, while the port ran every probe and reported them all healthy.
+// 47 fixtures shared the unstated assumption that memory/ already existed.
+//
+// The pure joins are KEPT rather than replaced. Not every Go site stands
+// for a Python line that called the creating helper — some are building a
+// path to hand to a writer that mkdirs for itself, and giving those the
+// side effect would be a divergence in the other direction. The rule for
+// choosing is the Python line, not the Go convenience: if the line it
+// ports says `memory_dir()`, it wants this one.
+//
+// NewDirMode is 0o777, which is `Path.mkdir()`'s default — the umask
+// narrows it, and reproducing the umask is the point (0o775 here, and
+// 0o755 under a service with umask 022, exactly as Python would).
+//
+// RESIDUAL, named and deliberate: Python's `orch_items.memory_dir()`
+// wraps the config call in a try and, when the mkdir raises, RELOCATES
+// the whole memory store to orch_root()/memory and then to cwd/memory.
+// This port does not relocate — it returns the error. Porting the
+// fallback means porting MARO_ORCH_ROOT, which this package declines for
+// the reason ProjectsRoot's comment gives: one resolution order, passed
+// in as an argument, after the 2026-08-16 live-ledger incident. The
+// divergence is reachable only on a workspace whose memory/ cannot be
+// created, where Python's answer is to silently write somewhere else —
+// which is the behaviour that incident was about. Pinned as a knowngap
+// rather than left unsaid.
+func EnsureMemoryDir(ws string) (string, error) {
+	dir := MemoryDir(ws)
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// EnsureProjectsRoot is config.projects_dir(), which mkdirs the same way.
+// Note what it does NOT create: `projects_dir() / slug` is a plain join in
+// the Python too, so a per-project directory is created by whatever
+// writes into it, not by resolving its path.
+func EnsureProjectsRoot(ws string) (string, error) {
+	dir := ProjectsRoot(ws)
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
 
 // OutputRoot is Python config.output_dir(): <workspace>/output.
 func OutputRoot(ws string) string { return filepath.Join(ws, "output") }

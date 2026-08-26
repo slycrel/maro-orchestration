@@ -223,7 +223,10 @@ func TestReverseReadlineShortRead(t *testing.T) {
 // r3's fix made this answer 0.0, and CPython answers the partial sum.
 func TestSpendTodayShortReadAnswersPartial(t *testing.T) {
 	ws := t.TempDir()
-	path := StepCostsPath(ws)
+	path, spErr := StepCostsPath(ws)
+	if spErr != nil {
+		t.Fatal(spErr)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +273,10 @@ func TestSpendTodayShortReadAnswersPartial(t *testing.T) {
 
 func TestLoadStepCostsAnnouncesDroppedLines(t *testing.T) {
 	ws := t.TempDir()
-	path := StepCostsPath(ws)
+	path, spErr := StepCostsPath(ws)
+	if spErr != nil {
+		t.Fatal(spErr)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

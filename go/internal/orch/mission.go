@@ -95,8 +95,19 @@ func FeatureManifestPath(ws, project string) string {
 }
 
 // MissionLogPath is <workspace>/memory/mission-log.jsonl.
-func MissionLogPath(ws string) string {
-	return filepath.Join(MemoryDir(ws), "mission-log.jsonl")
+//
+// It CREATES memory/, because the Python it ports is
+// `o.memory_dir() / "mission-log.jsonl"` and memory_dir mkdirs — see
+// EnsureMemoryDir. Resolving this path is not a pure operation in the
+// original, and the difference is observable twice: the directory exists
+// afterwards, and a workspace where it cannot be created stops the caller
+// here rather than letting it read an empty log.
+func MissionLogPath(ws string) (string, error) {
+	dir, err := EnsureMemoryDir(ws)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "mission-log.jsonl"), nil
 }
 
 // SaveMission writes mission.json.
@@ -772,7 +783,10 @@ func WriteMissionLog(ws string, r MissionResult, m *Mission) error {
 	if err != nil {
 		return err
 	}
-	path := MissionLogPath(ws)
+	path, perr := MissionLogPath(ws)
+	if perr != nil {
+		return perr
+	}
 	// The by-hand mkdir that used to sit here moved into record.Locked,
 	// where Python has it (file_lock.py:144) and where every other direct
 	// AppendRawLine caller now gets it too. The note it carried said it
@@ -786,9 +800,15 @@ func WriteMissionLog(ws string, r MissionResult, m *Mission) error {
 
 const drainLockFile = "mission-drain.lock"
 
-// DrainLockPath is <workspace>/memory/mission-drain.lock.
-func DrainLockPath(ws string) string {
-	return filepath.Join(MemoryDir(ws), drainLockFile)
+// DrainLockPath is <workspace>/memory/mission-drain.lock, and like
+// MissionLogPath it CREATES memory/ — `_drain_lock_path()` is
+// `o.memory_dir() / _DRAIN_LOCK_FILE`.
+func DrainLockPath(ws string) (string, error) {
+	dir, err := EnsureMemoryDir(ws)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, drainLockFile), nil
 }
 
 // IsDrainRunning reports whether a mission drain holds the lock.
@@ -799,8 +819,18 @@ func DrainLockPath(ws string) string {
 // process exit; making it an flock here would release it on crash and let
 // two drains run. The staleness is the known cost, and the recorded
 // started_at is what an operator reads to judge it.
+// RESIDUAL, named: when memory/ cannot be created, Python's
+// is_drain_running RAISES (orch_items relocates first, and its last-resort
+// mkdir is unguarded) and this answers false. A bool has no third state,
+// and a lock predicate answering false lets a SECOND drain start — so this
+// is a fork, not a rounding. Reachable only on a workspace whose memory/
+// cannot be created; pinned in knowngap_test rather than left unsaid.
 func IsDrainRunning(ws string) bool {
-	_, err := os.Stat(DrainLockPath(ws))
+	path, perr := DrainLockPath(ws)
+	if perr != nil {
+		return false
+	}
+	_, err := os.Stat(path)
 	return err == nil
 }
 
@@ -812,8 +842,13 @@ func IsDrainRunning(ws string) bool {
 // Named rather than fixed, because an O_EXCL create here would change the
 // crashed-drain recovery story that IsDrainRunning documents.
 func AcquireDrainLock(ws, missionID string) bool {
-	path := DrainLockPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// DrainLockPath creates memory/ on the way, which is where the
+	// by-hand MkdirAll that used to sit here went. It also fixes its MODE:
+	// that call passed 0o755, while `Path.mkdir()` passes 0o777 and lets
+	// the umask narrow it — 0o775 on this box, and the group bit is the
+	// difference between two accounts sharing a workspace and not.
+	path, perr := DrainLockPath(ws)
+	if perr != nil {
 		return false
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -835,5 +870,11 @@ func AcquireDrainLock(ws, missionID string) bool {
 // ReleaseDrainLock removes the lock file. A missing file is not an error —
 // Python's unlink(missing_ok=True).
 func ReleaseDrainLock(ws string) {
-	_ = os.Remove(DrainLockPath(ws))
+	// Python wraps the whole body — path resolution included — in a bare
+	// try/except, so a memory_dir failure is swallowed here and only here.
+	path, err := DrainLockPath(ws)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(path)
 }

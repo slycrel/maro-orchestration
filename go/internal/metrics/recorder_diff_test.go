@@ -193,7 +193,10 @@ func TestRecordStepCostMatchesCPython(t *testing.T) {
 
 			goWS := t.TempDir()
 			row := RecordStepCost(goWS, c)
-			gotPath := StepCostsPath(goWS)
+			gotPath, gpErr := StepCostsPath(goWS)
+			if gpErr != nil {
+				t.Fatal(gpErr)
+			}
 			raw, err := os.ReadFile(gotPath)
 			if err != nil {
 				t.Fatalf("go wrote no ledger: %v", err)

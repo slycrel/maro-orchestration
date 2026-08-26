@@ -322,7 +322,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 25*
+*instances: 26*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -856,7 +856,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 9*
+*instances: 10*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1147,7 +1147,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 1*
+*instances: 4*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1187,6 +1187,43 @@ both-engines comparison reported six byte-identical rows; the seventh
 differed, and chasing it showed the live workspace held `count=2`, a
 value that renders identically as a Python int and a Go float64. A
 `count` of 1000000 would have differed on the same line the same day.
+
+### L53 — A correct assertion can still cover the wrong blast radius
+
+*instances: 1*
+
+The ordinary missing-test finding is "nobody wrote one". This is not
+that. The assertion existed, it was correct, it ran on every suite, and
+it was green while the property it asserts was reverted three packages
+over.
+
+**Instance 1** (memory-dir chunk, 2026-08-26). `config.memory_dir()`
+mkdirs, so every Go site standing for a Python `memory_dir() / name` line
+must too. The differential was written in `internal/orch`, where
+measuring CPython was convenient — four workspace shapes, mode compared
+against CPython's own answer, an anti-vacuity gate. It caught its own
+package's mutants (MD-1 through MD-4, all four). Mutants that reverted
+`introspect.EventsPath` and `metrics.StepCostsPath` to pure joins
+SURVIVED, with that differential green the entire time.
+
+**Why it is a distinct failure from L28.** A stale enumeration is wrong
+about a number. This is a test that is right about everything it says and
+silent about two thirds of where it applies. Reading it tells you
+nothing — it looks exactly like adequate coverage, because for its own
+package it is.
+
+**The check.** When a property is implemented by a shared helper and
+reused across packages, ask *which package would fail if this were
+reverted?* If the answer is only the one where the differential lives,
+the other call sites are unguarded. The fix is not to move the
+differential — CPython should be measured once, at the helper. It is a
+cheap structural pin per package that asserts the site still routes
+through the helper, with the measurement left where it is.
+
+**Tripwire.** Derive the battery's mutation list from the FILE SET the
+change touched, not from the package the tests live in. That is what
+surfaced this one: the mutants were written per changed file, so three of
+them landed in packages the guard did not reach.
 
 ### P13 — A `try` split across a seam stops being one `try`
 *instances: 1 (`syshealth` r1)*
@@ -1231,7 +1268,7 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 5*
+*instances: 6*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
@@ -1272,6 +1309,31 @@ leave a mutation on a file anyone else is editing. Every P4 instance above
 is a symptom of mutating the tree you also work in. Retire the hazard
 rather than documenting it; the sibling `bat_r4.py` had already been doing
 this and the metrics battery had not.
+
+**Sixth instance, and the one that shows why the copy is not optional: a
+killed battery leaves the tree mutated, and the check that says otherwise
+is usually written by hand.** The 2026-08-26 memory-dir battery was
+SIGKILLed by a 2-minute harness timeout partway through MD-3, so its
+`finally: F.write_text(src)` never ran and `MissionLogPath` stayed in its
+mutated form — a pure join — in the live tree. The post-mortem was a
+`git diff --stat` plus a grep, and it reported CLEAN, because it looked at
+`paths.go`: the file the *first two* mutants touch, not the one the
+interrupted mutant did. The mutation survived a relaunch and only surfaced
+as a red baseline eight minutes later, one wasted run downstream.
+
+Two separate failures, and the second is the transferable one:
+
+1. The battery mutated the tree it lives in (P4's standing hazard).
+2. **The restore check was not derived from the battery's own mutation
+   table.** A hand-written verification checks the sites you remember. The
+   battery already holds the exact list — enumerate it, assert each
+   original site still appears exactly once, and compare a pre-run hash of
+   every touched file. That check is four lines and cannot fall out of
+   date with the mutations, because it reads the same table.
+
+A `finally` is not a restore guarantee; it is a restore guarantee against
+*exceptions*. Against SIGKILL there is no in-process answer, which is the
+whole argument for mutating a copy.
 
 ### P7 — A battery that never proves its baseline reads a broken tree as a perfect score
 

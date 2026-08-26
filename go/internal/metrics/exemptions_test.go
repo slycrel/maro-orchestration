@@ -250,7 +250,10 @@ func TestReverseReadlineChunkSizeCannotChangeAnswers(t *testing.T) {
 		rows = append(rows, fmt.Sprintf(
 			`{"i": %d, "pad": "%s"}`, i, "0123456789012345678901234"))
 	}
-	path := StepCostsPath(seedCosts(t, rows, true))
+	path, spErr := StepCostsPath(seedCosts(t, rows, true))
+	if spErr != nil {
+		t.Fatal(spErr)
+	}
 	read := func(buf int) []string {
 		var got []string
 		if err := ReverseReadline(path, buf, func(l string) bool {

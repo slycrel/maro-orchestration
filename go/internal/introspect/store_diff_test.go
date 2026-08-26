@@ -371,7 +371,11 @@ func TestSaveDiagnosisRoundTrips(t *testing.T) {
 		t.Errorf("a caller-supplied recorded_at was overwritten: %q", d2.RecordedAt)
 	}
 
-	raw, err := os.ReadFile(DiagnosesPath(ws))
+	dp, dperr := DiagnosesPath(ws)
+	if dperr != nil {
+		t.Fatal(dperr)
+	}
+	raw, err := os.ReadFile(dp)
 	if err != nil {
 		t.Fatal(err)
 	}

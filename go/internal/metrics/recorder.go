@@ -182,8 +182,23 @@ func RecordStepCost(ws string, in StepCostInput) StepCostRow {
 	if err != nil {
 		return row
 	}
-	path := StepCostsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	path, perr := StepCostsPath(ws)
+	if perr != nil {
+		return row
+	}
+	// Python does this a SECOND time (metrics.py:425,
+	// `path.parent.mkdir(parents=True, exist_ok=True)`) even though
+	// _step_costs_path already created it, so the redundant call is
+	// faithful. The mode is record.NewDirMode for consistency with every
+	// other mkdir in the port, NOT because a literal 0o755 is observable
+	// here — battery mutant MD-7 changed it and survived, correctly.
+	// StepCostsPath returned without error one line up, so memory/ exists,
+	// and MkdirAll does not chmod an existing directory. The only input
+	// that tells the two modes apart is memory/ vanishing between these
+	// two calls, which is the race the redundant Python call exists to
+	// survive and which this suite cannot open on purpose. See
+	// memdir_pin_test.go's closing note.
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return row
 	}
 	_ = record.AppendRawLine(path, []byte(line))

@@ -285,7 +285,11 @@ func TestMissionLogRowIsWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(MissionLogPath(ws))
+	logPath, lperr := MissionLogPath(ws)
+	if lperr != nil {
+		t.Fatal(lperr)
+	}
+	raw, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("no mission-log.jsonl: %v", err)
 	}

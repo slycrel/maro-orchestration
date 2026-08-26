@@ -24,9 +24,28 @@ import (
 // everything that ASKS the ledger a question, because those are what the
 // budget gate and the run cards read, and they are pure given a file.
 
-// StepCostsPath is metrics._step_costs_path().
-func StepCostsPath(ws string) string {
-	return filepath.Join(orch.MemoryDir(ws), "step-costs.jsonl")
+// StepCostsPath is metrics._step_costs_path(), which is
+// `memory_dir() / "step-costs.jsonl"` — and memory_dir MKDIRS. Resolving
+// this path is a filesystem operation in the original, so it is one here
+// (orch.EnsureMemoryDir).
+//
+// NOT a residual, checked rather than assumed: all three readers below
+// return 0 / 0 / nil when this fails, and so does CPython. spend_today,
+// spend_for_loops and load_step_costs each wrap their WHOLE body —
+// `_step_costs_path()` included — in `try: ... except Exception: return
+// 0.0 / []`. So a memory/ that cannot be created produces the same answer
+// as a ledger with no rows in BOTH runtimes.
+//
+// This note used to claim the opposite, in the same commit that added
+// L52 to the catalog: that the Go answering 0 "lets spend through where
+// CPython would have crashed the run". Written from the shape of the
+// call, not from the source. The except clauses were four lines away.
+func StepCostsPath(ws string) (string, error) {
+	dir, err := orch.EnsureMemoryDir(ws)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "step-costs.jsonl"), nil
 }
 
 // reverseReadlineBufSize is `_reverse_readline`'s default buf_size. Exposed
@@ -221,7 +240,10 @@ func objGet(o pyval.Obj, key string, def any) any {
 // CPython without one of the two runtimes lying about the time. SpendTodayNow
 // is the production spelling.
 func SpendToday(ws string, now time.Time) float64 {
-	path := StepCostsPath(ws)
+	path, perr := StepCostsPath(ws)
+	if perr != nil {
+		return 0
+	}
 	if _, err := os.Stat(path); err != nil {
 		return 0.0
 	}
@@ -374,7 +396,10 @@ func SpendForLoops(ws string, loopIDs []string) float64 {
 	if len(wanted) == 0 {
 		return 0.0
 	}
-	path := StepCostsPath(ws)
+	path, perr := StepCostsPath(ws)
+	if perr != nil {
+		return 0
+	}
 	// `path.open(encoding="utf-8")` is a STRICT TEXT read, and TEXT is two
 	// separate behaviours the port needs both halves of. pyval.ReadText is
 	// exactly that pair; this call site had hand-rolled only the first half.
@@ -446,7 +471,10 @@ var warn = func(format string, args ...any) {
 }
 
 func LoadStepCosts(ws string, limit int) []pyval.Obj {
-	path := StepCostsPath(ws)
+	path, perr := StepCostsPath(ws)
+	if perr != nil {
+		return nil
+	}
 	rows, rep := record.ReadAllCountedOrdered(path)
 	// Python's read_jsonl_tail announces its own loss
 	// (jsonl_utils.py:161-164) and this call site discarded the report with

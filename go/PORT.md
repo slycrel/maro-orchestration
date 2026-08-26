@@ -11635,3 +11635,115 @@ the user config tier is read from.
 It was the third private implementation of one Python operation in this
 tree, which is the defect `pypath`'s own package doc names. It is now a
 call into `pypath`.
+
+## The mkdir that lives inside a name
+
+`config.memory_dir()` is not a join:
+
+```python
+def memory_dir() -> Path:
+    p = workspace_root() / "memory"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+```
+
+Five of `config.py`'s seven path helpers do this — `memory_dir`,
+`output_dir`, `projects_dir`, `skills_dir`, `personas_dir` — and two do
+not, `secrets_dir` and `playbook_path`. So "resolve the memory directory"
+is a function that CREATES, at a MODE, and that can FAIL, and all three of
+those are observable from outside.
+
+The syshealth r3 review rated the first instance HIGH: CPython aborts
+`run_and_persist` before running a single probe on a workspace whose
+`memory/` cannot be created, while the port ran every probe and reported
+them all healthy. This chunk does the port-wide half — every Go site that
+stands for a Python line reading `memory_dir()`.
+
+### Why it was invisible in 47 fixtures
+
+Every existing test built its workspace with `t.TempDir()` and then wrote
+into it. `memory/` therefore always existed by the time anything resolved
+it, and a helper that creates it is indistinguishable from one that does
+not. The property is not subtle — it is that a directory appears — but no
+fixture had a workspace in which it was absent *and* something looked.
+That is the same shape as this chunk's previous two findings: a claim
+about behaviour with no input in the corpus that could tell the two
+behaviours apart.
+
+The differential therefore measures three things per call rather than one:
+whether `memory/` exists afterwards, its MODE, and whether the call
+raised. Four workspace shapes: fresh, already-created, shadowed by a
+regular file of the same name, and read-only.
+
+### The mode is compared against CPython, never a literal
+
+`Path.mkdir()` passes `0o777` and lets the umask narrow it. Asserting a
+literal `0o775` in the Go test would pin the umask of whoever ran the
+test, not the behaviour — and it would pass on this box while failing
+under a service with `umask 022`, where CPython would produce `0o755` and
+so should the port. `record.NewDirMode` is `0o777` for exactly this
+reason, and the test compares against the string CPython itself printed.
+
+That distinction is what mutant MD-2 exists to catch: replacing
+`record.NewDirMode` with `0o755` still creates a working directory, so
+every test that only checks existence stays green.
+
+### What the port does NOT do, named
+
+`orch_items.memory_dir()` wraps the `config` call in a `try` and, when the
+mkdir raises, RELOCATES the whole memory store — first to
+`orch_root()/memory`, then to `cwd/memory`. This port returns the error
+instead.
+
+Porting the fallback means porting `MARO_ORCH_ROOT`, which this package
+declines for the reason `ProjectsRoot`'s comment already gives: one
+resolution order, passed in as an argument, after the 2026-08-16
+live-ledger incident. And the divergence is reachable only on a workspace
+whose `memory/` cannot be created — where Python's answer is to silently
+write somewhere else, which is the behaviour that incident *was*. Recorded
+as a knowngap, with a pin, rather than left unsaid.
+
+Three readers gained a swallowed error the same way, because widening the
+path helper pushed an `error` into callers with nowhere to put it:
+`introspect.LoadLoopEvents` and `LatestLoopID` return empty where CPython
+raises, and `orch.IsDrainRunning` returns `false` — a Go bool has no third
+state, and `false` lets a second drain start. All three are pinned; the
+signature widening is in BACKLOG.
+
+`metrics` is deliberately not on that list. `spend_today`,
+`spend_for_loops` and `load_step_costs` each wrap their *whole body* —
+path helper included — in `except Exception`, so returning `0` or `nil` is
+faithful. I had written a blanket comment claiming the opposite before
+checking. The corrected comment says so, in the same file, because a
+rationale recorded as deliberate is still a claim.
+
+### The guard was package-local; the property was not
+
+The battery over this chunk caught 4 of 7 and the three survivors all say
+the same thing. `internal/orch`'s four-shape differential was green
+throughout, and reverting `introspect.EventsPath` (MD-5) or
+`metrics.StepCostsPath` (MD-6) to a pure join changed nothing any test
+could see. The property is port-wide — every site standing for a Python
+`memory_dir() / name` line — and the guard I wrote lived in one package.
+
+That is the same failure as the 47 fixtures one level up, and it is worth
+separating from an ordinary missing test: nothing was *unwritten*. The
+assertion existed, it was correct, and it covered the wrong blast radius.
+A differential written where the CPython measurement is convenient does
+not follow the property into the packages that reuse it. Each of the two
+now carries its own pin, and neither re-measures CPython — that is done
+once, against `config.memory_dir()` itself, in `internal/orch`.
+
+The third survivor, MD-7, is the honest kind. It changes the mode on
+`RecordStepCost`'s SECOND `MkdirAll`, and it survives because by the time
+that line runs `StepCostsPath` has already returned without error, so
+`memory/` exists and `MkdirAll` does not chmod an existing directory. The
+comment I had written at that site read as though the mode change fixed
+something observable. It does not. The only input that separates the two
+modes is `memory/` vanishing between the two calls — which is precisely
+the race Python's redundant call exists to survive, and a window this
+suite cannot open deliberately. Recorded as unpinned, with the reason,
+rather than given a test that cannot fail.
+
+Two comments corrected in this chunk, both of the same kind: a rationale
+that sounded like a finding. That is now three in three chunks.

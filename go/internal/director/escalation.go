@@ -971,8 +971,12 @@ func writeEscalationSummary(ws string, jobIDRaw any, action string, depth any,
 func logCalibration(ws string, jobIDRaw any, depth any, action, decisionClass string,
 	confidence int, o EscalationOptions) {
 
-	dir := orch.MemoryDir(ws)
-	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+	// One spelling for "resolve memory/, creating it" across the port —
+	// the by-hand MkdirAll that stood here was already correct, including
+	// its mode, and is kept only in the sense that EnsureMemoryDir does
+	// exactly what it did.
+	dir, err := orch.EnsureMemoryDir(ws)
+	if err != nil {
 		o.logf("calibration log failed (non-fatal): %v", err)
 		return
 	}
