@@ -161,6 +161,43 @@ Jeremy's call rather than a quiet repair. **The port reproduces the bug
 as-written in the meantime**, with fixtures pinning it; a port that silently
 fixed it would hide the finding and break the differential.
 
+### Go port: decide whether `LoadsMap`'s non-object refusal should abort the call (FOUND 2026-08-26, go-port metrics r2 — L1)
+
+`pyval.LoadsMap` refuses a row that is valid JSON but not an object, and
+every caller treats that refusal as "skip this row". CPython does not
+behave that way, and the divergence is already NAMED at `pyval.go`'s
+`LoadsMap` as a deliberate choice — but it was never adjudicated, and
+three call-site comments described it as `except: continue`, which it is
+not. Those comments are now correct; the behaviour question is open.
+
+What CPython actually does: `json.loads("[1,2]")` SUCCEEDS. The
+`AttributeError` comes from the `.get()` on the NEXT line, which sits
+OUTSIDE the `try` (`metrics.py:234-239`, `:352-357`, `:279-283`), so it
+aborts the whole call. Measured:
+
+```
+one bad row among good ones     PY spend_today     0.0     GO  1.5
+                                PY spend_for_loops 0.0     GO  1.5
+a `null` run card among ten     PY p90             None    GO  9.0
+```
+
+The argument for the current behaviour is that skipping costs one row and
+keeps the rest, where CPython throws the whole answer away. That is a
+value judgement about which is *better*, not about which is faithful —
+and this chunk has now been wrong three times in a row about exactly that
+kind of judgement (the tuple-as-set read, `costUSDOf` swallowing a raise,
+`decodeReplace`'s run-collapsing were each defended by a comment and each
+turned out reachable and failing open).
+
+Reachability is genuinely thin, which is why it is filed and not fixed: a
+crash-torn append does not produce valid non-object JSON. A hand-edited
+or foreign-written row does.
+
+Not a free change — `LoadsMap` has callers across the port and its error
+is currently untyped (`fmt.Errorf`), so matching CPython means adding a
+sentinel and deciding per call site. Worth doing deliberately or not at
+all; do not let it ride in as a side effect of another chunk.
+
 ### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
 
 Surfaced as a byproduct of a documented PASS: the round-3 assessment declined

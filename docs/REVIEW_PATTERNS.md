@@ -31,7 +31,7 @@ fixes.
 findings have been attributed to it in `review/findings.jsonl`. The
 2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
 review record plus 11 recorded live — and live recording has taken it to
-**703**. The counts below are regenerated from the ledger, not recalled.
+**715**. The counts below are regenerated from the ledger, not recalled.
 
 That regeneration is a claim this file has already failed twice: at the
 2026-08-26 refresh L23 read `8` against a ledger holding `10`, and two
@@ -47,7 +47,7 @@ rewrites every `*instances:*` line in this file from the ledger, preserving
 the editorial clause some of them carry. Run it after every import. The
 hand-editing that let the drift in twice is now the wrong way to do it.
 
-**Two things the counts are not.** They are lower bounds: 314 of the 703
+**Two things the counts are not.** They are lower bounds: 314 of the 715
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 58 — the most frequent single defect in the Go port*
+*instances: 59 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -141,7 +141,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 28*
+*instances: 29*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -226,7 +226,7 @@ family: every instance so far was a real behavioural divergence in
 production, not a test problem.
 
 ### L12 — Half a reader
-*instances: 7*
+*instances: 8*
 
 **Canonical instance.** Python's `_rows_as` is TWO readers stacked: an
 announced framing read AND a dataclass construction that EXCLUDES rows and
@@ -256,7 +256,7 @@ slicer. Six packages carry a private `clipRunes` copy (`scans`,
 introspect port deliberately did not become the seventh.
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 6*
+*instances: 7*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 6*
@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 42*
+*instances: 45*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -496,7 +496,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 4 attributed; ~6 in the mined cluster*
+*instances: 5 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -900,7 +900,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 3*
+*instances: 5*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -974,7 +974,7 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 4*
+*instances: 5*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
@@ -1006,6 +1006,15 @@ which no test-side bug can produce.
 before touching the package — and pipe its output to a file rather than
 through `tail`, which buffers everything until the run ends and makes
 "still running" indistinguishable from "produced nothing".
+
+**Better than the tripwire: run the battery against a COPY.** The rebuilt
+metrics battery (2026-08-26) clones the worktree into the scratchpad and
+mutates that, so the exclusivity problem does not exist — ordinary work
+continues in the real tree while the battery runs, and a killed run cannot
+leave a mutation on a file anyone else is editing. Every P4 instance above
+is a symptom of mutating the tree you also work in. Retire the hazard
+rather than documenting it; the sibling `bat_r4.py` had already been doing
+this and the metrics battery had not.
 
 ### P7 — A battery that never proves its baseline reads a broken tree as a perfect score
 
@@ -1040,6 +1049,53 @@ A third habit falls out of the same incident: **a suspiciously perfect
 battery result deserves the same scepticism as a suspiciously perfect test
 suite.** This is L1 wearing a different hat — the battery is a test of the
 tests, and it agreed because nothing could disagree.
+
+### P8 — `open(path, "w")` truncates before the argument is evaluated
+*instances: 1*
+
+Python evaluates `open(BAT, "w")` — which **truncates the file to zero
+bytes** — before it evaluates the expression being written. So this line:
+
+```python
+open(BAT, "w").write("\n".join(src[:start] + body + src[end + 1:]))
+```
+
+destroys the file when `end` is `None`, and the traceback names the
+`TypeError` in the argument, not the deletion that already happened. The
+error message points at the half of the statement that did nothing.
+
+**Canonical instance.** 2026-08-26, the metrics mutation battery. A repair
+script rebuilt the mutant list by locating the `M = [` block with a bracket
+counter. The counter was wrong — mutant strings contain `[]byte` and
+`map[string]any`, so the depth never returned to zero and `end` stayed
+`None`. The write raised; the file was already empty. 139 mutants, gone.
+
+The scratchpad is not under git, so there was no undo. What survived was
+what had been written somewhere else: the run logs, which carry every
+mutant's NAME and verdict. Those recovered the coverage map (129 of 139)
+and none of the mutation strings — which had to be re-derived from the
+files, which is L9's discipline anyway, so the rebuild was not wasted work.
+
+**Three tripwires, in order of how much they would have helped.**
+
+1. **Write to a temp and rename.** `open(tmp, "w")` then `os.replace(tmp,
+   path)` is atomic and cannot destroy the original when the argument
+   raises. Use it for every generated artifact, not just important ones —
+   you find out which ones were important afterwards.
+2. **Never parse a structure out of source text with a bracket counter.**
+   The battery's own list is data; it should live in its own file that a
+   rewrite can replace wholesale, not a region of a larger file that a
+   rewrite has to find. The rebuilt battery splits the harness from
+   `metrics_battery_mutants.py` for exactly this reason — a bad write of
+   the list can no longer take the runner with it.
+3. **An artifact worth an hour is worth a copy.** Anything in the
+   scratchpad that took real work to build has no version control behind
+   it. The logs saved this one by accident; that is not a plan.
+
+The general shape, beyond Python: **a destructive operation that is
+lexically part of a larger expression still happens when the rest of the
+expression fails.** Truncation, `DELETE` before a failing `WHERE`, a
+`shutil.rmtree` in a call whose other argument raises.
 
 ### P5 — Rounds converge to lows by round 3–4
 *standing*

@@ -9863,3 +9863,110 @@ regardless of name, which the lexical-order-reverses-mtime fixture covers.
 `M99` and `M139` are equivalent for a duller reason: both mutants fall
 through to a glob or stat that fails on the same input, so the answer is the
 same by a longer route.
+
+### Round 3: three fixes that were already written, one file over
+
+The whole-chunk adversarial round returned three MEDIUMs and six LOWs, no
+HIGHs. Eight of the nine survived verification against CPython 3.14.3
+unchanged. One did not, and it is the more interesting half.
+
+**M1 was right about the class and wrong about its own example.** The claim:
+`EstimateLoopCost`'s global average folds with `s += c` where CPython spells
+it `sum(all_costs)`, which has been Neumaier-compensated since 3.12. The
+demonstration: three costs whose fold and sum allegedly round to 1.234719
+and 1.234718. Run directly, both give 1.234719 — the fixture does not
+reproduce. The class is nonetheless real and not rare: on 8-decimal per-type
+averages the two disagree at the double level about 26% of the time, and
+roughly one list in 150 still disagrees after `round(·, 6)`. A counterexample
+had to be re-derived, and re-deriving it surfaced something the reviewer's
+version would have hidden — **the ORDER is part of the fixture**. `all_costs`
+is built in `by_type` order, which `load_step_costs` hands over newest-first,
+so the last row in the file is the first cost in the sum. Written the other
+way round, the same three values agree and the case proves nothing.
+
+That is the verify-before-fix discipline earning its keep in a way the usual
+framing misses. The finding was not hallucinated and was not correct; it was
+a true statement about a false example. Fixing it from the report as written
+would have produced a passing test that could not fail.
+
+**The other theme: three separate findings are the same fix, not carried.**
+
+- `SpendForLoops` learned in r1 that `path.open(encoding="utf-8")` is a
+  STRICT decode, and got `pyval.DecodeUTF8Strict`. `computeRunCostP90` reads
+  run cards the same way and never got it, so a card with one bad byte —
+  in `goal`, a field nothing here reads — was admitted where CPython skips
+  it. Fails open, and in the worst direction: a junk card with a large
+  `total_cost_usd` becomes a sample, raising the p90 and with it the 4×p90
+  auto kill-line.
+- `SpendForLoops` had the strict decode and NOT the other half of text mode.
+  `newline=None` translates a lone `\r` to `\n` before iteration, so a
+  CR-separated ledger is many rows to CPython and one glued row to a byte
+  split. The glued row is invalid JSON, so it is skipped, and the port
+  answered 0.0 where CPython answers the real spend. `pyval.ReadText` had
+  been doing exactly the right pair the whole time and this call site was
+  hand-rolling half of it.
+- `globRunCards` used `os.Stat` for BOTH of pathlib's two different tests.
+  The directory test follows symlinks, because `is_dir()` does. The CARD
+  test does not: measured, `glob("*/run_card.json")` yields a DANGLING
+  symlink, because the check is that the name is there, not that the target
+  is readable. CPython then reaches `p.stat().st_mtime`, raises
+  FileNotFoundError, and the whole distribution comes back None and
+  UNCACHED. Go dropped the dead link, answered a confident p90 from the
+  survivors, and cached it for fifteen minutes.
+
+The comment above `globRunCards` had described the mechanism correctly for
+directories and then applied it to cards, in the same sentence. That is the
+sixth time in this chunk that the prose defending a decision WAS the finding.
+
+**And a fix that was wrong on the half its fixtures did not cover.**
+`FloorDivAny`'s float lane was `math.Floor(a/b)`; CPython's `float_floordiv`
+is fmod-based, and past 2^53 the division rounds across an integer boundary
+the remainder does not — `2.543036645110022e16 // 3` is 8476788817033405.0
+against 8476788817033407, two whole units. The first attempt at the fix
+ported the fmod half and omitted the sign correction, which is the entire
+reason `-3001.0 // 3` is -1001.0 and not -1000.0. It passed every positive
+case in the new differential and `TestAnalyzeStepCostsMatchesCPython` caught
+it immediately. The new fixture table now carries both failure modes
+deliberately, because a set that only samples small positive doubles cannot
+tell any of the three implementations apart.
+
+Every fix in this round has a differential that was mutation-checked by
+reverting the fix and confirming the test goes red.
+
+### The battery was destroyed, and what the logs gave back
+
+The repair script that was supposed to re-target the stale mutants ran
+
+    open(BAT, "w").write("\n".join(src[:start] + body + src[end + 1:]))
+
+with `end` set to `None`, because it located the `M = [` block by counting
+brackets and the mutant strings contain `[]byte` and `map[string]any`.
+Python truncates on `open` before it evaluates the argument, so the file was
+already empty when the `TypeError` was raised. The traceback named the half
+of the statement that did nothing. 139 mutants, and the scratchpad is not
+under git.
+
+What survived is what had been written somewhere else. The run logs carry
+every mutant's NAME and verdict, which recovered the coverage map — 129 of
+139 — and none of the mutation strings. Those had to be re-derived from the
+files, which is L9's discipline anyway, so the rebuild is not purely lost
+work: a battery derived from the current files is what the next round needed
+regardless, and the old one had already gone stale twice.
+
+Three things changed in the rebuild, and two of them are improvements the
+battery should have had before:
+
+1. **The mutant list lives in its own file.** A bad write of the list can no
+   longer take the runner with it. Generated artifacts get written to a temp
+   and renamed.
+2. **The battery runs against a COPY of the worktree.** Every P4 instance on
+   record — the exclusivity tripwires, the wasted 28-mutant run, the suite
+   invoked mid-restore comparing against whichever mutation was on disk — is
+   a symptom of mutating the tree you also work in. The sibling introspect
+   battery had already been cloning to the scratchpad and this one had not.
+   The hazard is retired rather than documented.
+3. **`--check` is a first-class mode.** Site uniqueness has to be re-verified
+   AFTER every fix round, not before it. Two mutants had gone stale from r2's
+   own fixes — `decodeReplace` was rewritten in the same commit that repaired
+   nine other stale patterns, and no pre-check ran afterwards. A stale mutant
+   matches zero sites and scores exactly like a detected one.
