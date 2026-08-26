@@ -28,12 +28,13 @@ fixes.
   counts here can be re-derived from data rather than from memory.
 
 **Status legend on each lens:** `instances` is how many independent
-findings have been attributed to it in `review/findings.jsonl`. As of the
-2026-08-26 backfill that is 573 rows — 562 mined out of `go/PORT.md`'s
-review record plus 11 recorded live — and the counts below were
-regenerated from `report --by lens`, not recalled.
+findings have been attributed to it in `review/findings.jsonl`. The
+2026-08-26 backfill seeded 573 rows — 562 mined out of `go/PORT.md`'s
+review record plus 11 recorded live — and live recording has taken it to
+**596**. The counts below were regenerated from `report --by lens`, not
+recalled.
 
-**Two things the counts are not.** They are lower bounds: 309 of the 573
+**Two things the counts are not.** They are lower bounds: 309 of the 596
 rows carry no lens, because `PORT.md` names a review ROLE ("Skeptic",
 "QA") far more often than it names a shape. And the backfill is
 *survivorship-biased by construction* — `PORT.md` records findings that
@@ -51,7 +52,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 45 — the most frequent single defect in the Go port*
+*instances: 50 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -127,7 +128,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 15*
+*instances: 18*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -328,7 +329,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 20*
+*instances: 21*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -474,6 +475,58 @@ the thing it skipped is either counted or lost.
 
 ## G. Process patterns (not about code)
 
+### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
+
+*instances: 4*
+
+Distinct from L1, and the distinction is what makes it findable. L1 is a
+test whose *assertion* cannot fail. Here the assertion is fine and the
+INPUT is the problem: it varies several things at once, several rules
+force the same answer, and a mutant that breaks one of them is carried by
+the others. The test goes on passing for a reason that has nothing to do
+with what it was written to check.
+
+**Canonical instance.** `notes_diff_test.go`'s Unicode-split fixture
+separated goal tokens with `\x1c`, U+00A0 *and* U+3000 at once, to show
+that Python's `.split()` is not `strings.Fields`. But Go's `Fields` splits
+the latter two as well, so the matching token survived under either
+spelling and the mutant that swapped the splitters walked through. `\x1c`
+is the only discriminator between the two, and it now appears alone.
+
+Three more in the same round: the healthy-diagnosis filter's fixture used a
+row with *no evidence*, so keeping the row still produced nothing; `"by"`
+is the twentieth stopword but every case also overlapped on a content word,
+so a set short by one changed no answer; and the ranking sort's fixtures all
+had a single distinct overlap value, which leaves both the comparison's
+direction and its stability unmeasured.
+
+**Tripwire.** For each rule a fixture is meant to exercise, ask what the
+answer would be if *only that rule* were wrong. If it does not change, the
+fixture has a confound — split it until every case has one variable.
+
+### L42 — Two implementations that agree at small n need a fixture past the threshold
+
+*instances: 1*
+
+Library internals routinely fall back to a simpler algorithm on small
+inputs, and the simpler algorithm often has the property the caller was
+relying on the sophisticated one NOT to have. A fixture below the threshold
+cannot tell the correct call from the wrong one, and reports a survivor
+that is really a sizing problem.
+
+**Canonical instance.** `sort.Slice` versus `sort.SliceStable` on
+`find_relevant_failure_notes`' ranking. Under 13 elements Go's pdqsort
+delegates to insertion sort and is therefore *accidentally* stable. Worse,
+with every key TIED its partitioning happens to leave the order alone at
+*any* size — measured on this box up to n=60. Only the combination
+permutes: twelve tied rows plus one scoring higher. The fixture is now 13
+rows with the higher-scoring one oldest.
+
+**Tripwire.** When a mutant swaps one library call for a near-neighbour,
+find the neighbour's small-input fallback before believing a MISS. The
+threshold is a number in someone else's source; measure it rather than
+reasoning about it.
+
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*
 
@@ -488,11 +541,24 @@ the split-control-flow seam class.
 
 Don't grind many rounds at the cheapest tier.
 
-### P4 — A battery that snapshots production files clobbers concurrent edits
-*instances: 2*
+### P4 — A running battery owns the working tree; do not read it OR write it
+*instances: 3*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
+
+**And do not run the suite either.** The 2026-08-26 notes round spent three
+exchanges diagnosing a "misaligned fixture list" that was a live mutant: a
+`go test` issued while the battery was between restores compared against
+whichever mutation happened to be on disk, and the answer CHANGED between
+consecutive runs because the battery moved on. The tell was there and got
+read past — the failure named one case while quoting another's expectation,
+which no test-side bug can produce.
+
+**Tripwire.** A battery run is exclusive. Poll for the process to exit
+before touching the package — and pipe its output to a file rather than
+through `tail`, which buffers everything until the run ends and makes
+"still running" indistinguishable from "produced nothing".
 
 ### P5 — Rounds converge to lows by round 3–4
 *standing*

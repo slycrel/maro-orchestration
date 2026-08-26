@@ -8068,7 +8068,7 @@ filter is gone.
 
 Final state: 44 live mutants, 44 detected.
 
-### introspect's I/O half: two readers, one writer, and a limit that lies
+## introspect's I/O half: two readers, one writer, and a limit that lies
 
 `internal/introspect/store.go` finishes the module's runtime surface —
 `_events_path`, `_diagnoses_path`, `_load_loop_events`,
@@ -8153,3 +8153,127 @@ that does not exist. The fix was to the comment. The real reason is that
 Diagnose takes `pyval.Obj` and the fixtures decode through the same
 decoder; giving one store two readers that resolve numbers differently is
 the divergence those readers' own parity test exists to prevent.
+
+
+## find_relevant_failure_notes: a ranking with two lanes, and a formatter
+## that does arithmetic on prose
+
+`internal/introspect/notes.go` ports
+`introspect._format_decomp_too_broad_note` and
+`introspect.find_relevant_failure_notes` — the surface that turns stored
+diagnoses back into one-line "known patterns to avoid" for injection ahead
+of decomposition. It costs nothing per call: relevance is token overlap
+between the goal and each diagnosis's evidence, not a model.
+
+**Three regexes transcribed character-for-character from Python match a
+different language in Go.** The step pattern is
+`Step (\d+).*?(\d+)\s*(?:ms|tokens).*?(\d+)\s*(?:tokens|ms)`. Go's
+`regexp` reads `\d` as `[0-9]` and `\s` as five ASCII code points; Python's
+`re` on a `str` pattern reads `\d` as every Unicode decimal digit (760 on
+this box) and `\s` as its full 29-point set. Both patterns run over
+evidence text read out of a store the two runtimes share, so the classes
+come from `pytext` — which measures them against CPython — rather than
+being spelled out. This is the fourth chunk in the port to need them and
+the first where a *pattern* rather than a *split* was the consumer.
+
+**`int(s) // 1000` is not `strconv.Atoi`.** Two Python behaviours a
+fixed-width parse loses. `int()` accepts any Unicode decimal digit, so
+`int("١٢٣٤")` is 1234 — `pytext.FoldDecimals` maps those to ASCII first.
+And Python's ints are unbounded, so a forty-digit run in a hostile evidence
+line divides cleanly there and overflows here. `big.Int` costs nothing on
+this path and removes the class rather than bounding it.
+
+**Same-project entries always lead, and are excluded from scoring
+entirely.** A same-project diagnosis with zero goal overlap outranks a
+perfectly-overlapping one from elsewhere. That is deliberate in Python — a
+prior decomposition warning on the same project is far more actionable —
+and it is exactly the part a port is most likely to "improve" into a single
+weighted sort.
+
+**The scored sort is stable and keys on overlap ALONE.** Python's
+`list.sort` is stable, so equal-overlap diagnoses stay in the order
+`load_diagnoses` produced them, which is newest-first. A `sort.Slice` would
+be free to permute them and the top-`limit` slice would pick a different
+diagnosis on different runs.
+
+**A negative `limit` is named, not guessed at.** `ordered[:limit]` with a
+negative limit slices from the END in Python — `ordered[:-1]` drops the
+last entry. The port's `if len(ordered) > limit` lets a negative limit
+through and returns everything. Unreachable from any caller today (`limit`
+is a keyword with a default of 3) and written down rather than silently
+differing, the same way `pyval.Clip` carries a paragraph about the same
+hazard.
+
+**One thing the chunk REMOVED.** The project tag —
+`f" (project={diag.project})"` — was spelled once in each of the two note
+formatters, mirroring Python. A mutation battery could not name a single
+site for it, which is how it got looked at: two private copies of one
+operator-facing rendering is how two surfaces start describing the same
+thing differently. It is now one function.
+
+### The battery
+
+43 mutants over `notes.go`, of which **three were retired as unkillable and
+four were battery spelling faults**. Final state: 40 live, 40 detected —
+after eight real fixture gaps were closed.
+
+The three retired mutants share a shape worth naming: *a mutation that
+cannot change an answer is not a survivor, it is a bad mutant*, and each
+one produced a fact worth writing into the production file.
+
+- **Greediness on the step pattern.** `.*?` versus `.*` decides *which*
+  substring matches, never *whether* one does — and `MatchString` is the
+  pattern's only consumer. Python captures three groups and throws them
+  away too.
+- **Swapping the two substitutions.** The `ms` and `tokens` replacements
+  *commute on every input*. Their match regions can never overlap: one
+  needs a digit run immediately before `ms`, the other a digit run before
+  optional whitespace and `tokens`, and a single run cannot be immediately
+  before both. Neither replacement's output can create a match for the
+  other either — one appends `s`, the other `K tok`. `notes.go` now says
+  so, so nobody "fixes" the order later.
+- **Clipping after the newline flattening instead of before.** `\n` → `" "`
+  maps one character to one character, so it cannot move the 120-rune
+  boundary. Both orders agree on every input.
+
+The eight real gaps split into two families.
+
+**Four fixtures never measured the pattern's actual job.** The step pattern
+does not extract anything — it SELECTS which evidence line becomes the
+detail, with a fallback to `evidence[0]`. Every fixture handed the
+formatter a single candidate line, so the fallback produced *the same
+string* the match would have, and four mutants walked through: Go's `\d`,
+Go's `\s`, an anchored `^Step`, and last-match-wins instead of first. Each
+now pairs a non-matching first line with a second line only Python's
+pattern reaches.
+
+**Four fixtures were single-variable tests with more than one variable
+resolving the same way.**
+
+- The healthy filter's fixture had a healthy row with *no evidence*, so
+  keeping it still produced nothing. It now overlaps the goal.
+- `"by"` is the twentieth stopword and every case overlapped on a content
+  word as well, so a set short by one changed no answer.
+- The Unicode-split fixture separated goal tokens with `\x1c`, ` `
+  and `　` at once. Go's `strings.Fields` splits the latter two as
+  well, so the matching token survived under both spellings. `\x1c` is the
+  only discriminator and is now the only variable.
+- The sort's stability and its DIRECTION were both unmeasured, because
+  every fixture had a single distinct overlap value.
+
+That last one took a measurement rather than an argument. Under 13 elements
+Go's `sort.Slice` delegates to insertion sort and is therefore
+*accidentally* stable, so a small fixture cannot tell it from
+`sort.SliceStable`. And with every key TIED, Go's partitioning happens to
+leave the order alone at any size — measured here up to n=60. It is the
+COMBINATION that permutes: twelve tied rows plus one scoring higher, at
+which point the unstable sort returns a scrambled tail. The fixture is 13
+rows with the higher-scoring one oldest, and it is the only case where the
+comparison's direction is observable too.
+
+The four spelling faults were mine, not the code's: one mutant targeted a
+line the `projectTag` extraction had just removed, two quoted prose
+fragments across a line break the source puts in a different place, and one
+left `pyval` imported and unused, which reports BUILDFAIL rather than a
+verdict. The pattern is now familiar enough to state plainly: **a battery
+run's first output is a report on the battery.**
