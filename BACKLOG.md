@@ -44,6 +44,46 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### DECISION NEEDED — the Go port's first hard ceiling: three modules parse Python with CPython's `ast` (FOUND 2026-08-26, go-port)
+
+Not a divergence, a **boundary**. Three runtime modules parse Python source
+with CPython's own `ast` module, and Go has no expression of it — not a
+harder one, not a slower one, none.
+
+| module | lines | `ast.` uses | what it parses for | reached from |
+|---|---:|---:|---|---|
+| `codebase_graph.py` | 492 | 18 | the call graph injected into planning context | `loop_planning` |
+| `bughunter.py` | 345 | 10 | Maro's static self-scan | `doctor` |
+| `artifact_check.py` | 735 | 5 | `_python_is_inert` — layer 2 of the fabrication check | `loop_execute`, `loop_planning`, `agent_loop`, `run_curation` |
+
+Two of the three are on the **core loop**. `ast.parse` is not a library the
+port can re-implement from a spec — it is CPython's grammar, its
+version-specific node set, and its exact error behaviour, and
+`_python_is_inert` branches on node TYPES (`ast.FunctionDef`, `ast.AnnAssign`,
+`ast.Expr` wrapping an `ast.Constant`), which no regex approximates. A Go
+reimplementation is a Python parser: a project, not a tranche, and every
+version skew against the interpreter actually running the workspace's code
+is a silent wrong answer inside a check whose whole purpose is catching a
+fabricated claim.
+
+**Three options, none free — Jeremy's call:**
+
+1. **Leave these three in Python.** The port becomes a hybrid runtime with a
+   named Python boundary. Cheapest; makes "Go replaces Python" a claim with
+   an asterisk.
+2. **Shell out** (`python3 -c`, results as JSON). Correct by construction,
+   and re-introduces interpreter start-up on the core loop — the cost the
+   port exists to remove.
+3. **Substitute a cruder Go-side rule** (regex / tokeniser). Not a port: a
+   different check that agrees most of the time. L46 in its purest form,
+   with an unbounded divergence count.
+
+**Not blocking now.** `artifact_check`'s layers 1 and 3 (missing-artifact,
+execution-contradiction) are pure string and filesystem work, so the tranche
+is takeable with layer 2 excluded and NAMED in the package doc — the same
+discipline `check_system_health`'s environment probes got. The full write-up
+is in `go/PORT.md`, last section.
+
 ### system_health.render_snapshot dies on a hand-edited snapshot (FOUND 2026-08-26, go-port system_health slice 1)
 
 `memory/system_health.json` is operator-editable by design — it is the seed

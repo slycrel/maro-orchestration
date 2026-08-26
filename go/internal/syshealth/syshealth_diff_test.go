@@ -10,6 +10,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // syPySrc drives the real system_health.py. It is the same probe that
@@ -91,13 +92,25 @@ for c in json.loads(sys.argv[1]):
             sh.datetime = _FakeDT
             import config as _cfg
             real_get = _cfg.get
-            if "enabled" in c:
+            if c.get("cfg_raise"):
+                def _boom(key, default=None, _m=c["cfg_raise"]):
+                    raise RuntimeError(_m)
+                _cfg.get = _boom
+            elif "enabled" in c:
                 _cfg.get = lambda key, default=None: (
                     c["enabled"] if key == "health.probes_enabled"
                     else real_get(key, default))
+            # The blanket except also wraps the WRITE. A read-only memory dir
+            # is the only way to reach that lane, and it is a real lane: the
+            # summary reports the errno and nothing persists.
+            if c.get("readonly"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(str(path.parent), 0o555)
             try:
                 summary = sh.run_health_probes()
             finally:
+                if c.get("readonly"):
+                    os.chmod(str(path.parent), 0o775)
                 sh._narrate_transition, sh.DECLARED_PROCESSES, sh.datetime = (
                     real_narrate, real_decls, real_dt)
                 _cfg.get = real_get
@@ -152,6 +165,10 @@ type syCase struct {
 	name string
 	spec any
 	run  func(t *testing.T, ws string) (any, error)
+	// elideWriteError routes both sides through syElideWriteError before
+	// comparing. Set by exactly the two failed-write fixtures; read the
+	// helper's doc for what it gives up.
+	elideWriteError bool
 }
 
 // syProbes turns the fixture's [[name, spec], ...] into Declarations whose
@@ -272,13 +289,15 @@ func syWriteSnap(t *testing.T, ws, raw string) {
 }
 
 // syCycle is the Go half of `run_health_probes` for one fixture: seed the
-// file, load, run, write. The write is the caller's job in the port (see
-// the package doc), so the differential performs it here — otherwise the
-// `file` half of every cycle fixture would compare against nothing.
-func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any) (any, error) {
+// file, then hand the whole thing to RunAndPersist, which owns the config
+// gate, the load, the cycle and the write — the same four things Python's
+// one try covers. It used to drive RunCycle and perform the write itself,
+// which is exactly the split r1 found: a harness shaped that way cannot
+// express a failing write at all, so the lane went unported and untested.
+func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any, cfgRaise string, readonly bool) (any, error) {
 	t.Helper()
 	path := SnapshotPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		t.Fatal(err)
 	}
 	if priorRaw != "" {
@@ -288,14 +307,23 @@ func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any) (any, error
 	} else {
 		os.Remove(path)
 	}
-	snap := LoadSnapshot(ws)
-	next, told, summary := RunCycle(snap, syProbes(t, probes), enabled,
-		func() string { return syFrozen })
-	if next != nil {
-		if err := WriteSnapshot(ws, next); err != nil {
+	if readonly {
+		// The only way to reach the failed-write lane without mocking the
+		// filesystem. Restored in the defer so the case after this one can
+		// still seed its own file — and so `go test` can clean the temp dir.
+		if err := os.Chmod(filepath.Dir(path), 0o555); err != nil {
 			t.Fatal(err)
 		}
+		defer os.Chmod(filepath.Dir(path), 0o775)
 	}
+	cfg := func() (any, error) {
+		if cfgRaise != "" {
+			return nil, &pyval.PyErr{Class: "RuntimeError", Msg: cfgRaise}
+		}
+		return enabled, nil
+	}
+	summary, told := RunAndPersist(ws, syProbes(t, probes), cfg,
+		func() string { return syFrozen })
 	toldOut := []any{}
 	for _, n := range told {
 		toldOut = append(toldOut, []any{n.Decl.Name, n.Status, n.Evidence})
@@ -311,10 +339,51 @@ func syCycle(t *testing.T, ws, priorRaw, probes string, enabled any) (any, error
 	}, nil
 }
 
+// syElideWriteError is the ONE place this differential looks away, and per
+// L51 it names exactly what it collapses and why the collapse is not hiding
+// the thing under test.
+//
+// It collapses the `error` string of the failed-write lane, and nothing
+// else. Two things live in there that cannot match. The tempfile name is
+// random — atomic_write writes through mkstemp, so the two runtimes could
+// not agree even if they were the same runtime. And the WORDING is a named
+// port residual, the same one dispatch/envelope.go's `oserr` records:
+// str(OSError) is "[Errno 13] Permission denied: '/p/tmpX'" and Go's is
+// "open /p/tmpX: permission denied". This port does not emulate OSError
+// formatting, so a fixture comparing the text would be asserting a
+// divergence we chose.
+//
+// What survives the collapse is everything the lane exists to pin: that an
+// error IS set (empty fails), that it is a permission error and not some
+// other failure that happened to abort the cycle, and — untouched — `ran`,
+// `silent`, `transitions`, `told` and `file`. A port that swallowed the
+// write failure, or narrated anyway, or reported transitions, still fails
+// here.
+func syElideWriteError(t *testing.T, name string, v any) any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: result is not an object: %T", name, v)
+	}
+	sum, ok := m["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: no summary object: %#v", name, m["summary"])
+	}
+	msg, _ := sum["error"].(string)
+	if msg == "" {
+		t.Fatalf("%s: the failed-write lane produced no error message", name)
+	}
+	if !strings.Contains(strings.ToLower(msg), "permission denied") {
+		t.Fatalf("%s: aborted on something other than the lane under test: %q", name, msg)
+	}
+	sum["error"] = "<permission denied; wording and tempfile name elided>"
+	return m
+}
+
 func syCases() []syCase {
 	var cs []syCase
 	add := func(name string, spec any, run func(*testing.T, string) (any, error)) {
-		cs = append(cs, syCase{name, spec, run})
+		cs = append(cs, syCase{name: name, spec: spec, run: run})
 	}
 
 	add("Z1 the constants", map[string]any{"kind": "consts"},
@@ -469,7 +538,15 @@ func syCases() []syCase {
 		probes  string
 		prior   string // JSON object text, or "" for no prior key at all
 		rawFile string // raw bytes to seed the file with, wins over prior
-		enabled any    // nil means the fixture does not patch config
+		// `patch` and `enabled` are two fields rather than one nil-means-no
+		// because they were one, and r1 found what that cost: a fixture for
+		// `probes_enabled: null` — a real config lane, since a YAML key with
+		// no value reads as None — was UNWRITEABLE, because nil enabled meant
+		// "leave config alone". C43 is that fixture and it needs both.
+		patch    bool
+		enabled  any
+		cfgRaise string // config.get itself raises: the ran=0 error lane
+		readonly bool   // chmod the memory dir: the failed-WRITE error lane
 	}
 	// The ring-buffer fixture needs a prior history of exactly HISTORY_KEEP,
 	// so it is built rather than spelled: eight entries n=0..7, plus the new
@@ -536,13 +613,13 @@ func syCases() []syCase {
 			probes: `[["p1", ` + okp + `]]`,
 			prior:  `{"processes": {"gone": {"status": "SILENT", "narrated": "silent"}}}`},
 		{name: "C27 probes_enabled=False skips the whole cycle",
-			probes: `[["p1", ` + okp + `]]`, enabled: false},
+			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: false},
 		{name: "C28 probes_enabled=0 is falsy too",
-			probes: `[["p1", ` + okp + `]]`, enabled: 0},
+			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: 0},
 		{name: "C29 probes_enabled='' is falsy",
-			probes: `[["p1", ` + okp + `]]`, enabled: ""},
+			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: ""},
 		{name: "C30 probes_enabled='no' is a non-empty string, so TRUE",
-			probes: `[["p1", ` + okp + `]]`, enabled: "no"},
+			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: "no"},
 		{name: "C31 a corrupt snapshot file starts from scratch",
 			probes: `[["p1", ` + okp + `]]`, rawFile: "{not json"},
 		{name: "C32 an evidence string with a newline",
@@ -566,6 +643,51 @@ func syCases() []syCase {
 		// before the counter can raise reports 1 here.
 		{name: "C37 a cycle that dies still reports zero transitions",
 			probes: `[["p1", ` + sip + `]]`, prior: `{"cycle": "abc", "processes": {}}`},
+		// The two Clip sites, both pinned on CODE POINTS vs bytes. Before
+		// these, a port slicing bytes passed the whole differential: every
+		// clipped message in the set was ASCII. C38's probe message is 201
+		// runes / 601 bytes and clips to 120 runes; C39's int() message is
+		// 359 bytes and clips to 200 runes. A byte-slicing port also emits
+		// an invalid UTF-8 tail, which then makes WriteSnapshot refuse the
+		// ENTIRE snapshot — so this is not a cosmetic divergence.
+		{name: "C38 a probe message is clipped at 120 CODE POINTS, not bytes",
+			probes: `[["p1", {"raise": "x` + strings.Repeat(`\u2192`, 200) + `"}]]`},
+		{name: "C39 the cycle error is clipped at 200 CODE POINTS, not bytes",
+			probes: `[["p1", ` + okp + `]]`,
+			// The escape stays an ESCAPE in the seed text: the probe seeds its
+			// file with json.dumps, which is ensure_ascii, so a raw-UTF-8 seed
+			// here would make the two runtimes write different BYTES for the
+			// same value and fail on the `file` field for a reason that has
+			// nothing to do with clipping.
+			prior: `{"cycle": "` + strings.Repeat(`\u00e9`, 300) + `", "processes": {}}`},
+		// nextCycle's OTHER raise. C36/C37 only ever reached ValueError, so
+		// the TypeError arm was doc-only until these two.
+		{name: "C40 a LIST cycle counter is a TypeError, not a ValueError",
+			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": [1], "processes": {}}`},
+		{name: "C41 a DICT cycle counter is a TypeError too",
+			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": {"a": 1}, "processes": {}}`},
+		// bool IS an int in Python, so this does not raise: it counts 2.
+		{name: "C42 a TRUE cycle counter is an int",
+			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": true, "processes": {}}`},
+		{name: "C43 probes_enabled=None skips the cycle",
+			probes: `[["p1", ` + okp + `]]`, patch: true, enabled: nil},
+		// The two lanes RunCycle cannot see, which is why RunAndPersist
+		// exists. C44: config.get raises, so ran stays 0 — the ONE error
+		// path where no probe ran. C45/C46: the write fails after the probes
+		// ran and after the narrations were decided, so transitions is 0 and
+		// told is empty. C45 has a narration to lose; C46 has none, which
+		// separates "discarded them" from "there were none".
+		{name: "C44 a config read that RAISES takes the cycle down before any probe runs",
+			probes: `[["p1", ` + okp + `]]`, cfgRaise: "config exploded"},
+		// M96: the config lane's own Clip. C44's message is short, so the
+		// clip there was unpinned — a fixture that reaches a lane is not the
+		// same as a fixture that reaches the DECISIONS on that lane.
+		{name: "C47 a config error is clipped at 200 code points too",
+			probes: `[["p1", ` + okp + `]]`, cfgRaise: strings.Repeat("\u00e9", 300)},
+		{name: "C45 a failed WRITE zeroes transitions and narrates nothing",
+			probes: `[["p1", ` + sip + `]]`, readonly: true},
+		{name: "C46 a failed write on a cycle with nothing to narrate",
+			probes: `[["p1", ` + okp + `]]`, readonly: true},
 		{name: "C33 non-ascii evidence and description",
 			probes: `[["p1", {"status": "SILENT", "evidence": "café", "description": "d é", "expectation": "e é"}]]`},
 	} {
@@ -576,20 +698,28 @@ func syCases() []syCase {
 		} else if tc.prior != "" {
 			spec["prior"] = json.RawMessage(tc.prior)
 		}
-		// The probe reads `"enabled" in c`, so the key must be ABSENT — not
-		// null — on the cases that do not patch config.
+		// The probe reads `"enabled" in c`, so the key must be ABSENT on the
+		// cases that do not patch config — which is not the same as null,
+		// and C43 is the case that proves it.
 		enabled := any(true)
-		if tc.enabled != nil {
+		if tc.patch {
 			spec["enabled"] = tc.enabled
 			enabled = tc.enabled
+		}
+		if tc.cfgRaise != "" {
+			spec["cfg_raise"] = tc.cfgRaise
+		}
+		if tc.readonly {
+			spec["readonly"] = true
 		}
 		add(tc.name, spec, func(t *testing.T, ws string) (any, error) {
 			seed := tc.prior
 			if tc.rawFile != "" {
 				seed = tc.rawFile
 			}
-			return syCycle(t, ws, seed, tc.probes, enabled)
+			return syCycle(t, ws, seed, tc.probes, enabled, tc.cfgRaise, tc.readonly)
 		})
+		cs[len(cs)-1].elideWriteError = tc.readonly
 	}
 	return cs
 }
@@ -654,11 +784,28 @@ func TestSystemHealthMatchesCPython(t *testing.T) {
 					narrated += n
 				}
 			}
-			if _, ok := m["file"].(string); ok {
+			// The file must be one THIS CYCLE wrote, which is what the frozen
+			// stamp proves. Counting `"file" is a string` counted the bytes
+			// the fixture SEEDED: r1 deleted the write from the cycle
+			// entirely and this gate stayed silent at 31 while 31 per-case
+			// diffs failed — a guard that cannot fail is worse than none.
+			if body, ok := m["file"].(string); ok && strings.Contains(body, syFrozen) {
 				wroteFile++
 			}
 		}
 		wantJSON := string(py["ok"])
+		if c.elideWriteError {
+			var pyVal any
+			if err := json.Unmarshal(py["ok"], &pyVal); err != nil {
+				t.Fatal(err)
+			}
+			b, err := json.Marshal(syElideWriteError(t, c.name, pyVal))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON = string(b)
+			goVal = syElideWriteError(t, c.name, goVal)
+		}
 		gotJSON, err := json.Marshal(goVal)
 		if err != nil {
 			t.Fatal(err)
@@ -675,6 +822,8 @@ func TestSystemHealthMatchesCPython(t *testing.T) {
 	// fixture set that never transitions look identical from here.
 	// `wroteFile` covers the write itself — C22 and C27 both answer
 	// `"file": null`, and a port that wrote nothing ever would match them.
+	// It counts snapshots carrying THIS cycle's frozen stamp, not merely
+	// files that exist; see the count site.
 	if raised < 3 {
 		t.Errorf("only %d fixtures raised; render_snapshot has three raising "+
 			"branches and this differential is meant to reach all of them", raised)
@@ -779,7 +928,7 @@ func TestRunCycleReadsTheClockOncePerDeclarationPlusOnce(t *testing.T) {
 				}}
 		}
 		reads := 0
-		_, _, _ = RunCycle(pyval.Obj{}, decls, true, func() string {
+		_, _, _ = RunCycle(pyval.Obj{}, decls, func() string {
 			reads++
 			return syFrozen
 		})
@@ -826,7 +975,7 @@ func TestAFailingProbeContributesNothingButItsMessage(t *testing.T) {
 	decl := Declaration{Name: "p", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
 		return OK, "looked fine", junk, fmt.Errorf("boom")
 	}}
-	next, told, summary := RunCycle(pyval.Obj{}, []Declaration{decl}, true,
+	next, told, summary := RunCycle(pyval.Obj{}, []Declaration{decl},
 		func() string { return syFrozen })
 	if len(told) != 0 {
 		t.Errorf("a failing probe narrated %v", told)
@@ -868,7 +1017,7 @@ func TestRunCycleDoesNotMutateTheProbesObservation(t *testing.T) {
 	decl := Declaration{Name: "p", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
 		return OK, "e", obs, nil
 	}}
-	RunCycle(pyval.Obj{}, []Declaration{decl}, true, func() string { return syFrozen })
+	RunCycle(pyval.Obj{}, []Declaration{decl}, func() string { return syFrozen })
 	if at, _ := obs.Get("at"); at != "1999" {
 		t.Errorf("the cycle stamped the probe's own observation: at = %v", at)
 	}
@@ -895,7 +1044,7 @@ func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 				return OK, "e", pyval.Obj{}, nil
 			}}
 	}
-	next, _, _ := RunCycle(pyval.Obj{}, decls, true, func() string { return syFrozen })
+	next, _, _ := RunCycle(pyval.Obj{}, decls, func() string { return syFrozen })
 	v, ok := next.Get("processes")
 	if !ok {
 		t.Fatal("no processes key")
@@ -906,5 +1055,130 @@ func TestRunCycleKeepsEveryProcessItAppended(t *testing.T) {
 	}
 	if len(procs) != len(decls) {
 		t.Fatalf("the snapshot kept %d of %d processes", len(procs), len(decls))
+	}
+}
+
+
+// TestSummaryToDictKeepsCPythonsInsertionOrder pins the one contract the
+// differential is structurally unable to see. syGo routes every summary
+// through a Go map on its way to encoding/json, and a Go map has no order,
+// so all 46 cycle fixtures would pass with the keys emitted in any order at
+// all. r1 found the cost of that blind spot: ToDict's doc asserted insertion
+// order while battery mutant M6 was labelled "the summary key order changes
+// — equivalent, nothing reads it", two opposite claims with nothing
+// adjudicating them. The doc is right; the label was wrong.
+//
+// It is a real contract because `summary` is returned to loop_finalize,
+// which logs it — anything that json.dumps it without sort_keys writes this
+// order, and `ran, silent, transitions` is not alphabetical, so a port that
+// sorted would look tidy and diverge.
+//
+// The expected strings are MEASURED against CPython, not asserted from the
+// source: json.dumps(summary) on 3.14 for each of the four shapes.
+func TestSummaryToDictKeepsCPythonsInsertionOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sum  Summary
+		want string
+	}{
+		{"a plain cycle", Summary{Ran: 2, Silent: []string{"p1"}, Transitions: 1},
+			`{"ran": 2, "silent": ["p1"], "transitions": 1}`},
+		// skipped and error are appended AFTER the three seeded keys even
+		// though both sort before "silent" and "transitions".
+		{"the config gate", Summary{Silent: []string{}, Skipped: "health.probes_enabled is off"},
+			`{"ran": 0, "silent": [], "transitions": 0, "skipped": "health.probes_enabled is off"}`},
+		{"the error lane", Summary{Ran: 1, Silent: []string{"p1"}, Error: "boom"},
+			`{"ran": 1, "silent": ["p1"], "transitions": 0, "error": "boom"}`},
+		{"no probes ran at all", Summary{Silent: []string{}},
+			`{"ran": 0, "silent": [], "transitions": 0}`},
+	} {
+		got, err := pyval.DumpsCompactPy(tc.sum.ToDict())
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n  want %s\n  got  %s", tc.name, tc.want, got)
+		}
+	}
+}
+
+// TestRunAndPersistDiscardsNarrationsWhenTheWriteFails is the unit-level
+// statement of C45. The differential covers it too, but only on a platform
+// where chmod 0555 actually denies root-less writes; this one holds the
+// contract in the package where a reader looking at RunAndPersist will find
+// it, and it fails on a port that returns `pending` regardless.
+func TestRunAndPersistDiscardsNarrationsWhenTheWriteFails(t *testing.T) {
+	// Deliberately long, so the errno message overruns the 200-rune clip:
+	// battery M101 ("the write error is not clipped") survived a round
+	// because the only fixtures reaching this lane had short temp paths.
+	// A fixture that reaches a lane is not a fixture that reaches the
+	// decisions on it.
+	ws := filepath.Join(t.TempDir(), strings.Repeat("d", 80), strings.Repeat("e", 80))
+	if err := os.MkdirAll(ws, record.NewDirMode); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(SnapshotPath(ws))
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o775)
+	decl := Declaration{Name: "p1", Probe: func(pyval.Obj) (string, string, pyval.Obj, error) {
+		return Silent, "quiet", pyval.Obj{}, nil
+	}}
+	sum, told := RunAndPersist(ws, []Declaration{decl},
+		func() (any, error) { return true, nil }, func() string { return syFrozen })
+	if len(told) != 0 {
+		t.Errorf("a failed write still handed back %d narrations to log", len(told))
+	}
+	if sum.Transitions != 0 {
+		t.Errorf("transitions = %d after a failed write, want 0", sum.Transitions)
+	}
+	if sum.Ran != 1 || len(sum.Silent) != 1 {
+		t.Errorf("the probe results were lost too: %+v", sum)
+	}
+	if sum.Error == "" {
+		t.Error("the write failure was swallowed")
+	}
+	if n := len([]rune(sum.Error)); n != 200 {
+		t.Errorf("the write error is %d runes, want the 200-rune clip "+
+			"(message: %q)", n, sum.Error)
+	}
+}
+
+
+// TestWriteSnapshotCreatesTheMemoryDirTheWayPathMkdirDoes guards r1's F3.
+// Python's Path.mkdir passes 0o777 and lets the process umask narrow it, so
+// on this box (umask 0002) CPython creates memory/ at 0o775; WriteSnapshot
+// was hard-coding 0o755 and producing a store the group could not write.
+//
+// The control dir is the assertion: os.MkdirAll(…, 0o777) IS Path.mkdir's
+// rule, expressed independently of the constant under test, so the umask
+// never has to be read (reading it means setting it, which is process-wide
+// and wrong inside a test binary). Honest limit, stated rather than
+// discovered later: under a 0o022 umask both spellings land on 0o755 and
+// this test cannot fail. It fails here, which is where it matters.
+func TestWriteSnapshotCreatesTheMemoryDirTheWayPathMkdirDoes(t *testing.T) {
+	ws := t.TempDir()
+	if err := WriteSnapshot(ws, pyval.Obj{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Stat(filepath.Dir(SnapshotPath(ws)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := filepath.Join(t.TempDir(), "control")
+	if err := os.MkdirAll(control, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.Stat(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode().Perm() != want.Mode().Perm() {
+		t.Errorf("memory/ created %o, Path.mkdir would create %o",
+			got.Mode().Perm(), want.Mode().Perm())
 	}
 }

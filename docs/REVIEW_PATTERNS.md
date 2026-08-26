@@ -403,7 +403,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 47*
+*instances: 51*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -742,7 +742,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 9*
+*instances: 11*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -1008,7 +1008,7 @@ can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
 
 ### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
-*instances: 2*
+*instances: 5*
 
 A cross-runtime differential almost always has a shim between the two
 answers: something that turns the port's native shapes into whatever the
@@ -1031,11 +1031,32 @@ from the port with every fixture still passing.
 write `"silent": null` where CPython always writes `[]` — survived the whole
 first battery round.
 
-Both are the same shape: **the normaliser rounded off a distinction the
-code under test is responsible for making.**
+**Instances 3–5 (`syshealth` r1) generalise it past normalisers.** The
+anti-vacuity gate `wroteFile < 20` counted fixtures whose `file` field was
+a *string* — which every fixture that SEEDED a file satisfies without any
+write happening; deleting the write from the cycle left the gate silent at
+31 while 31 per-case diffs failed. The same harness spelled "this fixture
+does not patch config" as `enabled == nil`, which is also how you spell
+"config returned None", so a real config lane had no expressible fixture.
+And `syGo`'s route through a Go map left the summary's key order
+unasserted, which let the production doc and the battery's own M6 label
+carry OPPOSITE contracts for a full round with nothing able to adjudicate.
 
-**Tripwire.** For every conversion the harness performs, name what it
-collapses, then ask whether the port is allowed to collapse the same thing.
+None of the three is a normaliser erasing a value. Two are the harness
+collapsing two meanings into one field and then asking that field a
+question it can no longer answer; the third is a collapse that made a
+disagreement invisible rather than a difference.
+
+All five are the same shape: **the harness rounded off a distinction the
+code under test is responsible for making** — sometimes on the way to the
+comparison, sometimes on the way in, and sometimes taking a whole contract
+out of scope with it.
+
+**Tripwire.** For every conversion the harness performs — and every field
+it reuses for two purposes, and every count it derives — name what it
+collapses, then ask whether anything still asserts the collapsed thing.
+For conversions specifically, ask whether the port is allowed to collapse
+the same thing.
 The three that recur: nil vs empty (`null` vs `[]`/`{}`), int vs float
 (`1` vs `1.0`), and key order. A collapse is fine only where BOTH runtimes
 are free — semantic key order in a dict both sides build — and never where
@@ -1049,6 +1070,34 @@ see it"; hand-editing a copy showed all thirty-seven cycle fixtures fail at
 once. Same defect class as the `pySeconds` rationale retracted one tranche
 earlier: **a plausible claim nobody measured is a test that cannot fail,
 written in prose.** Mutate the copy and find out; it costs one minute.
+
+### P13 — A `try` split across a seam stops being one `try`
+*instances: 1 (`syshealth` r1)*
+
+Extracting the middle of a function into another package silently splits
+whatever error handler wrapped it. The extracted half can no longer observe
+the failures of the halves left behind, and — this is the part that bites —
+it will still happily assign the fields that the original only assigns
+AFTER those halves succeed.
+
+`run_health_probes` is one `try` around four things: read config, load the
+snapshot, run the cycle, write the file. The port extracted the cycle,
+left the config gate inside it, and assigned `transitions` there. CPython
+assigns `transitions` after the write returns, so a failed write leaves it
+0 and discards the pending narrations. The port reported them — and a
+caller logging them would claim the user was told about a state that never
+persisted, then re-decide the same transition every cycle forever, which is
+exactly what the Python's own ordering comment says it exists to prevent.
+
+It is invisible to a differential built the obvious way, because the
+harness performs the missing half itself and can therefore never fail it.
+
+**Tripwire.** At every extraction, ask: *what did the original's error
+handler cover that my half does not?* Then, for each thing it covered,
+which fields does the original assign only on the success path? Those
+fields belong outside the extracted half, or the seam is drawn wrong.
+The check is cheap and mechanical: read the `try`'s extent in the source,
+not the function's.
 
 ### P1 — Verify each finding's code claim before fixing
 *standing; measured ~30–50% of adversarial findings are hallucinated*
@@ -1109,7 +1158,7 @@ this and the metrics battery had not.
 
 ### P7 — A battery that never proves its baseline reads a broken tree as a perfect score
 
-*instances: 1*
+*instances: 2*
 
 A mutation battery reports DETECTED when the test suite fails with the
 mutant applied. It does not ask *why* it failed. If the tree was ALREADY
@@ -1181,6 +1230,37 @@ statement ABOUT the tests. The false-green family gains a fourth member
 alongside *a fixture both sides refuse is not a differential*, *a
 compile-kill is not a kill*, and *a test named for a differential must run
 the other side*.
+
+### P14 — A mutant that does not compile is reported as caught and proves nothing
+*instances: 1 — one ledger row, but it covers six mutants across two batteries*
+
+`go test` exits non-zero for a build failure exactly as it does for a failed
+assertion, so a mutation battery that judges on the return code counts every
+mutant it broke the build with as a mutant it detected. No test observed
+those. This is the false-green family's *"a compile-kill is not a kill"*
+(named in P10's discussion) promoted to its own rule, because it now has a
+mechanism and a measurement rather than a caution.
+
+**Measured, `syshealth` r4.** Adding one check for `[build failed]` in the
+runner's output reclassified five mutants that had passed three rounds as
+"caught" and had never once run: two named `Field` where `pyval.Field` was
+meant, and three deleted a term from a condition, leaving a variable
+declared-and-unused. Four were repairable and are now genuinely caught. The
+fifth — deleting `!ok` from `if !ok || !pyval.Truthy(v)` — **survives** once
+it compiles, because `Get` on an absent key returns nil and `Truthy(nil)` is
+already false. Three rounds of green had been asserting the opposite about a
+guard that turns out to be intent, not a decision.
+
+The shape is identical to a mutation site that matches zero times: the
+battery reports on a mutant it never applied. Both are the harness scoring
+its own failures as findings.
+
+**Tripwire.** The runner must classify three outcomes, not two: caught,
+survived, and *never ran* (build failure, setup failure, site match ≠ 1).
+Grep the output for `[build failed]` / `[setup failed]` and report those as
+battery bugs. Then, when repairing one, make the mutant consume what it
+orphans (`_ = ok`, `(recovered && false)`) rather than deleting the term —
+and re-check the verdict, because a compile-killed mutant has no history.
 
 ### P12 — An expected value spelled with the thing under test is not an assertion
 *instances: 3*

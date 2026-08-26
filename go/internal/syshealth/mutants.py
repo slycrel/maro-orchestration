@@ -47,11 +47,13 @@ MUTANTS = [
      'if s.Error != "" {', "if true {"),
     ("M5", "ran and transitions swap", 'o.Set("ran", s.Ran)',
      "o.Set(\"ran\", s.Transitions)"),
-    # EQUIVALENT-BY-CONTRACT: the differential compares the summary
-    # SEMANTICALLY (sameJSON), because CPython hands it back as a dict and
-    # the two runtimes' key order is not something either one promises. The
-    # snapshot FILE is the surface where order is pinned, and sort_keys
-    # decides it there. Kept so this is not re-derived.
+    # NOT equivalent — this label was WRONG for a whole round, and r1 caught
+    # it: it asserted "nothing promises the summary's key order" while
+    # ToDict's own doc asserted the opposite, with nothing adjudicating
+    # because syGo routes the summary through a Go map. Python's summary IS
+    # insertion-ordered and its consumer json.dumps it. The adjudicator is
+    # TestSummaryToDictKeepsCPythonsInsertionOrder, which compares the
+    # rendered string; this mutant is now expected to be CAUGHT.
     ("M6", "the summary key order changes",
      'o.Set("ran", s.Ran)\n\tsil := pyval.List{}',
      'o.Set("transitions", s.Transitions)\n\to.Set("ran", s.Ran)\n\tsil := pyval.List{}'),
@@ -75,10 +77,10 @@ MUTANTS = [
      "if _, err := os.Stat(path); err != nil {", "if false {"),
     ("M10", "unparseable json returns the raw text's type instead of {}",
      "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{}\n\t}",
-     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{Field{Key: \"raw\", Val: text}}\n\t}"),
+     "\tv, jerr := pyval.LoadsOrdered(text)\n\tif jerr != nil {\n\t\treturn pyval.Obj{pyval.Field{Key: \"raw\", Val: text}}\n\t}"),
     ("M11", "a non-object json value is returned as an empty-but-present obj",
      "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o\n\t}\n\treturn pyval.Obj{}",
-     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o\n\t}\n\treturn pyval.Obj{Field{Key: \"v\", Val: v}}"),
+     "\tif o, ok := v.(pyval.Obj); ok {\n\t\treturn o\n\t}\n\treturn pyval.Obj{pyval.Field{Key: \"v\", Val: v}}"),
     # r1 labelled this EQUIVALENT on the grounds that no FIXTURE can hold
     # invalid UTF-8 (the probe's cases travel as JSON). True, and beside the
     # point: encoding/json silently replaces bad bytes with U+FFFD where
@@ -105,24 +107,27 @@ MUTANTS = [
      "\tout := pyval.List{}\n\tv, _ := prior.Get(\"history\")",
      "\tvar out pyval.List\n\tv, _ := prior.Get(\"history\")"),
     ("M18", "non-dict history entries are kept",
-     "if _, isObj := h.(pyval.Obj); isObj {", "if true {"),
+     "\t\tif o, isObj := asDict(h); isObj {\n\t\t\tout = append(out, o)\n\t\t}",
+     "\t\tif o, isObj := asDict(h); isObj {\n\t\t\tout = append(out, o)\n\t\t} else {\n\t\t\tout = append(out, h)\n\t\t}"),
     ("M19", "the history key is misspelled", 'prior.Get("history")',
      'prior.Get("histories")'),
     # EQUIVALENT-BY-CONSTRUCTION: a failed assertion leaves `lst` nil, and
     # ranging over a nil slice appends nothing, so `out` is the same empty
     # List either way.
     ("M20", "a non-list history is not rejected",
-     "\tlst, ok := v.(pyval.List)\n\tif !ok {\n\t\treturn out\n\t}",
-     "\tlst, _ := v.(pyval.List)"),
+     "\tlst, ok := asList(v)\n\tif !ok {\n\t\treturn out\n\t}",
+     "\tlst, _ := asList(v)"),
 
     # --- RunCycle: the config gate -----------------------------------------
     ("M21", "only an explicit false disables the probes",
      "if !pyval.Truthy(enabled) {", "if enabled == false {"),
     ("M22", "the skip message changes",
      '"health.probes_enabled is off"', '"probes disabled"'),
-    ("M23", "the skip still hands back a snapshot to write",
-     "\t\tsummary.Skipped = \"health.probes_enabled is off\"\n\t\treturn nil, nil, summary",
-     "\t\tsummary.Skipped = \"health.probes_enabled is off\"\n\t\treturn snapshot, nil, summary"),
+    # Moved out of RunCycle by the r1 restructure: the config gate now lives
+    # in RunAndPersist, beside the write it shares a try with.
+    ("M23", "the skip records itself but does not stop the cycle",
+     "\t\tsummary.Skipped = \"health.probes_enabled is off\"\n\t\treturn summary, nil",
+     "\t\tsummary.Skipped = \"health.probes_enabled is off\""),
 
     # --- RunCycle: the processes map ---------------------------------------
     # EQUIVALENT-BY-CONSTRUCTION (M24, M27): a failed type assertion yields
@@ -130,8 +135,8 @@ MUTANTS = [
     # lines down already turns that into an empty Obj. The explicit form
     # stays because it is the shape Python has.
     ("M24", "a non-dict processes value is kept rather than replaced",
-     "\t\tif o, isObj := v.(pyval.Obj); isObj {\n\t\t\tprocesses = o\n\t\t}",
-     "\t\tprocesses, _ = v.(pyval.Obj)"),
+     "\t\tif o, isObj := asDict(v); isObj {\n\t\t\tprocesses = o\n\t\t}",
+     "\t\tprocesses, _ = asDict(v)"),
     ("M25", "the processes key is misspelled on read",
      'if v, ok := snapshot.Get("processes"); ok {',
      'if v, ok := snapshot.Get("process"); ok {'),
@@ -156,8 +161,8 @@ MUTANTS = [
      "\tvar pending []Narration\n\tfor _, decl := range decls {",
      "\tsnapshot.Set(\"processes\", processes)\n\tvar pending []Narration\n\tfor _, decl := range decls {"),
     ("M27", "a non-dict prior entry is not treated as empty",
-     "\t\t\tif o, isObj := v.(pyval.Obj); isObj {\n\t\t\t\tprior = o\n\t\t\t}",
-     "\t\t\tprior, _ = v.(pyval.Obj)"),
+     "\t\t\tif o, isObj := asDict(v); isObj {\n\t\t\t\tprior = o\n\t\t\t}",
+     "\t\t\tprior, _ = asDict(v)"),
 
     # --- RunCycle: the probe shield ----------------------------------------
     ("M28", "a raising probe reports OK",
@@ -221,15 +226,19 @@ MUTANTS = [
     ("M48", "the recovery edge fires for anything not told ok",
      'recovered := status == OK && narrated == "silent"',
      'recovered := status == OK && narrated != "ok"'),
+    # `if wentSilent {` alone leaves `recovered` declared and unused, which
+    # does not compile — and a mutant that does not compile is reported as
+    # caught while proving nothing. Consume it instead. (M50 does not need
+    # this: `wentSilent` is read again two lines down.)
     ("M49", "recoveries are never narrated", "if wentSilent || recovered {",
-     "if wentSilent {"),
+     "if wentSilent || (recovered && false) {"),
     ("M50", "silences are never narrated", "if wentSilent || recovered {",
      "if recovered {"),
     ("M51", "the narrated flag is inverted",
      '\t\t\t\tentry.Set("narrated", "silent")\n\t\t\t} else {\n\t\t\t\tentry.Set("narrated", "ok")',
      '\t\t\t\tentry.Set("narrated", "ok")\n\t\t\t} else {\n\t\t\t\tentry.Set("narrated", "silent")'),
     ("M52", "last_transition records the new status as its 'from'",
-     'lt.Set("from", prevStatus)', 'lt.Set("from", status)'),
+     'lt.Set("from", prevStatus)', 'lt.Set("from", status)\n\t\t\t_ = prevStatus'),
     ("M53", "last_transition's 'to' is the old status",
      'lt.Set("to", status)', 'lt.Set("to", prevStatus)'),
     ("M54", "last_transition is stamped with nothing",
@@ -250,10 +259,17 @@ MUTANTS = [
     ("M59", "a dead cycle counter still writes the snapshot",
      "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn nil, nil, summary",
      "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn snapshot, nil, summary"),
+    # Three Clip(..., 200) sites exist since the restructure (the cycle
+    # abort, the config raise, the failed write), so each mutant carries
+    # enough context to match exactly one. A bare "pyval.Clip(err.Error(),
+    # 200)" matched all three and mutated the file in three places at once,
+    # which is a battery bug however green the result looks.
     ("M60", "the cycle error is not clipped",
-     "pyval.Clip(err.Error(), 200)", "err.Error()"),
+     "summary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn nil, nil, summary",
+     "summary.Error = err.Error()\n\t\treturn nil, nil, summary"),
     ("M61", "the cycle error clip is off by one",
-     "pyval.Clip(err.Error(), 200)", "pyval.Clip(err.Error(), 199)"),
+     "summary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn nil, nil, summary",
+     "summary.Error = pyval.Clip(err.Error(), 199)\n\t\treturn nil, nil, summary"),
     # r1 moved this ONE line up, from below the cycle-counter write to above
     # it — both of which are already past the error return, so the mutant
     # could not change an answer (L8). The decision it is meant to probe is
@@ -267,8 +283,14 @@ MUTANTS = [
     # --- nextCycle ---------------------------------------------------------
     ("M64", "a falsy counter is parsed instead of restarting",
      "if !ok || !pyval.Truthy(v) {", "if !ok {"),
+    # EQUIVALENT-BY-CONSTRUCTION, and it took the compile-failure check to
+    # find that out: this mutant was reported as CAUGHT for three rounds
+    # while proving nothing, because dropping `!ok` left `ok` unused and the
+    # package would not build. It compiles now, and it survives — `Get` on an
+    # absent key returns a nil value, and `Truthy(nil)` is already false, so
+    # `!ok` is a statement of intent rather than a decision. Kept, per L8.
     ("M65", "an absent counter raises instead of restarting",
-     "if !ok || !pyval.Truthy(v) {", "if !pyval.Truthy(v) {"),
+     "if !ok || !pyval.Truthy(v) {", "if _ = ok; !pyval.Truthy(v) {"),
     ("M66", "the counter does not advance", "return n + 1, nil", "return n, nil"),
     ("M67", "the counter advances by two", "return n + 1, nil", "return n + 2, nil"),
     ("M68", "a restart begins at zero",
@@ -295,7 +317,8 @@ MUTANTS = [
      "\"'%s' object has no attribute 'get'\", pyval.TypeName(f.Val))",
      "\"'%s' object has no attribute 'get'\", \"str\")"),
     ("M77", "an unhashable status falls to rank 3 instead of raising",
-     "\t\tcase pyval.List, pyval.Obj:", "\t\tcase pyval.List:"),
+     "\t\tcase pyval.List, pyval.Obj, []any, map[string]any:",
+     "\t\tcase pyval.List, []any:"),
     ("M78", "SILENT and OK swap places in the ordering",
      "order := map[string]int{Silent: 0, Unknown: 1, OK: 2}",
      "order := map[string]int{Silent: 2, Unknown: 1, OK: 0}"),
@@ -325,7 +348,8 @@ MUTANTS = [
     ("M89", "the transition arrow is an ascii one",
      '"    last transition: %s → %s at %s"', '"    last transition: %s -> %s at %s"'),
     ("M90", "a non-dict last_transition renders instead of being skipped",
-     "\t\t\tif o, isObj := lt.(pyval.Obj); isObj {", "\t\t\tif o, isObj := lt.(pyval.Obj); !isObj {"),
+     "\t\t\tif o, isObj := asDict(lt); isObj {",
+     "\t\t\tif o, isObj := asDict(lt); !isObj {"),
     ("M91", "the blank line between processes is dropped",
      '\t\tlines = append(lines, "")\n\t}\n\treturn strings.Join(lines, "\\n"), nil',
      "\t}\n\treturn strings.Join(lines, \"\\n\"), nil"),
@@ -335,6 +359,58 @@ MUTANTS = [
     ("M93", "getOr returns its default for a present-but-null value",
      "\tv, ok := o.Get(key)\n\tif !ok {\n\t\treturn def\n\t}\n\treturn pyval.Str(v)",
      "\tv, ok := o.Get(key)\n\tif !ok || v == nil {\n\t\treturn def\n\t}\n\treturn pyval.Str(v)"),
+
+    # --- RunAndPersist: the three lanes the r1 restructure added ------------
+    # Everything below mutates code that did not exist in round 1, because
+    # RunCycle owned only the middle of Python's try. These are the mutants
+    # that would have caught the missing half.
+    ("M95", "the config error is swallowed and reads as 'probes are off'",
+     "\tenabled, err := cfg()\n\tif err != nil {\n\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, nil\n\t}",
+     "\tenabled, err := cfg()\n\tif err != nil {\n\t\tenabled = false\n\t}"),
+    ("M96", "the config error is not clipped at 200",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, nil\n\t}\n\tif !pyval.Truthy(enabled) {",
+     "\t\tsummary.Error = err.Error()\n\t\treturn summary, nil\n\t}\n\tif !pyval.Truthy(enabled) {"),
+    ("M97", "a config read that raises still counts as a cycle that ran",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, nil\n\t}\n\tif !pyval.Truthy(enabled) {",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\tsummary.Ran = 1\n\t\treturn summary, nil\n\t}\n\tif !pyval.Truthy(enabled) {"),
+    ("M98", "a failed write is swallowed: nothing persists but the summary "
+     "reports a clean cycle",
+     "\tif err := WriteSnapshot(ws, snap); err != nil {",
+     "\tif err := WriteSnapshot(ws, snap); false {"),
+    # THE r1 FINDING, as a mutant. This is what the port did before the
+    # restructure, expressed as one line moved above the write.
+    ("M99", "transitions is assigned BEFORE the write, so a failed write "
+     "still reports narrations that never happened",
+     "\tif err := WriteSnapshot(ws, snap); err != nil {",
+     "\tsummary.Transitions = len(pending)\n\tif err := WriteSnapshot(ws, snap); err != nil {"),
+    ("M100", "a failed write still hands the narrations back to be logged",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, nil\n\t}\n\tsummary.Transitions = len(pending)",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, pending\n\t}\n\tsummary.Transitions = len(pending)"),
+    ("M101", "the write error is not clipped at 200",
+     "\t\tsummary.Error = pyval.Clip(err.Error(), 200)\n\t\treturn summary, nil\n\t}\n\tsummary.Transitions = len(pending)",
+     "\t\tsummary.Error = err.Error()\n\t\treturn summary, nil\n\t}\n\tsummary.Transitions = len(pending)"),
+    ("M102", "an aborted cycle is written to disk anyway",
+     "\tif snap == nil {\n\t\t// The cycle aborted", "\tif false {\n\t\t// The cycle aborted"),
+
+    # --- asDict / asList ---------------------------------------------------
+    # EQUIVALENT-BY-CONSTRUCTION, both of them, and labelled rather than
+    # deleted: pyval's decoder never produces a Go map or a []any, so no
+    # fixture can reach these arms without a hand-built caller, and there is
+    # no hand-built caller in the tree yet. They exist because every pyval
+    # helper this package calls in the same breath accepts both spellings
+    # (r1 F9), and the day a caller appears the arms are already right.
+    ("M103", "asDict rejects a plain map",
+     "\tcase map[string]any:\n\t\tkeys := make([]string, 0, len(t))",
+     "\tcase map[string]any:\n\t\treturn nil, len(t) < 0\n\tcase map[string]string:\n\t\tkeys := make([]string, 0, len(t))"),
+    ("M104", "asList rejects a plain slice",
+     "\tcase []any:\n\t\treturn pyval.List(t), true", "\tcase []any:\n\t\treturn nil, len(t) < 0"),
+    ("M106", "the memory dir is created 0o755 instead of Path.mkdir's "
+     "0o777-narrowed-by-umask",
+     "os.MkdirAll(filepath.Dir(path), record.NewDirMode)",
+     "os.MkdirAll(filepath.Dir(path), 0o755)"),
+    ("M105", "asDict does not sort a plain map's keys, so its order is "
+     "whatever the runtime feels like",
+     "\t\tsort.Strings(keys)", "\t\t_ = sort.Strings"),
 ]
 
 # M58 and M83 reference helpers that do not exist in the original — a mutant
@@ -394,9 +470,20 @@ def main():
         body = original.replace(site, repl, 1) + SCAFFOLD.get(mid, "")
         open(target, "w").write(body)
         r = run(["go", "test", "-count=1", PKG], work)
+        out = r.stdout + r.stderr
         if r.returncode == 0:
             survived.append((mid, note))
             print("%-5s SURVIVED     %s" % (mid, note), flush=True)
+        elif "[build failed]" in out or "[setup failed]" in out:
+            # A mutant that does not COMPILE is reported as caught by a
+            # returncode check, and it proves nothing: no test observed it.
+            # Same false-positive class as a site matching zero times, and
+            # it was live for a round (M8 left an import unused). Rewrite
+            # the mutant so it compiles, or the row is a lie.
+            broken.append((mid, note, "does not compile: %s"
+                           % out.strip().splitlines()[-1][:120]))
+            print("%-5s BATTERY-BUG  %s (does not compile)"
+                  % (mid, note), flush=True)
         else:
             caught.append((mid, note))
             print("%-5s caught       %s" % (mid, note), flush=True)

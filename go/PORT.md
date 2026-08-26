@@ -10917,7 +10917,206 @@ What the rounds actually bought, beyond the count:
 The seven r3 survivors are all labelled at their sites. Five are
 equivalent-by-construction because a nil fallback or an identity slice
 follows two lines later (M9, M20, M24, M26b, M27); M41 is `>` vs `>=` at a
-length where the trim is the identity; M6 is the summary's key order, which
-the differential compares semantically because CPython hands the summary
-back as a dict and neither runtime promises an order there. The snapshot
-FILE is where order is pinned, and `sort_keys` decides it.
+length where the trim is the identity. **M6 was labelled equivalent and was
+not** — see the review section below, which is what caught it.
+
+## The r1 review of `internal/syshealth` — the half of a `try` the port did not own
+
+Ten findings survived verification, two were self-retracted as hallucinated
+(P1: check the code claim before fixing — the rate holds). One is
+structural and the rest are the usual sediment, but the structural one is
+worth the whole round.
+
+### The finding: a `try` block split across a seam stops being one try
+
+Python's `run_health_probes` is a single `try` wrapping four things: the
+config read, the load, the cycle, and the write. The port had split the
+middle out as `RunCycle` and left the config gate inside it, with the
+caller — nobody yet — expected to do the write. That reads fine and it is
+wrong in a way no fixture could see, because the fixtures drove `RunCycle`
+and then performed the write themselves.
+
+Measured, all three lanes on CPython 3.14:
+
+| what raises | `ran` | `transitions` | narrated | file |
+|---|---:|---:|---|---|
+| `config.get` | **0** | 0 | nothing | untouched |
+| the cycle counter | N | 0 | nothing | untouched |
+| **`_write_snapshot`** | N | **0** | **nothing** | untouched |
+
+The third row is the one that matters. The probes ran, the cycle decided
+two narrations, and the write failed — so `summary["transitions"] = ...` is
+never reached and the narration loop never runs. A port that assigns
+`Transitions = len(pending)` inside the cycle reports transitions that did
+not happen, and a caller that logs `pending` regardless writes captain's-log
+lines claiming the user was told about a state that was never recorded.
+The state machine will then re-decide the same transition next cycle
+forever, because `narrated` never persisted. That is precisely the failure
+the Python's own comment says the ordering exists to prevent, and the port
+had reintroduced it by drawing the seam one line too high.
+
+The fix is `RunAndPersist`, which owns all four things and is now the entry
+point; `RunCycle` no longer sets `Transitions` at all, and says so. The
+first row is why `cfg` is a `func() (any, error)` rather than a value: it
+is the only lane where `Error` is set and `Ran` is still 0.
+
+**The generalisation is the useful part.** A `try` is a control-flow scope,
+and splitting a function across a package boundary silently splits it. The
+question to ask at every extraction: *what did the original's error handler
+cover that my half does not?* Filed as P13.
+
+### What the round says about the harness
+
+Three of the ten findings were the differential lying by omission, and they
+rhyme:
+
+- **The anti-vacuity gate that could not fail.** `wroteFile < 20` counted
+  fixtures whose `file` key was a string — including every fixture that
+  SEEDED a file and never wrote one. Deleting the write from the cycle
+  entirely left the gate silent at 31 while 31 per-case diffs failed. It
+  now counts only snapshots carrying this cycle's frozen stamp. A guard
+  derived from "is the field present" instead of "did the thing happen" is
+  the same defect as a mutant that cannot change an answer.
+- **`enabled == nil` meant two different things** — "this fixture does not
+  patch config" and "config returned None" — so the second was unwriteable.
+  `probes_enabled:` with no value is a real YAML shape and it skips the
+  cycle. Two fields now, and C43 is the fixture.
+- **Two clip sites, no non-ASCII fixture.** `str(exc)[:120]` and `[:200]`
+  slice CODE POINTS; every clipped message in the fixture set was ASCII, so
+  a byte-slicing port passed. It also emits an invalid UTF-8 tail, which
+  makes `WriteSnapshot` refuse the whole snapshot — not cosmetic. C38 and
+  C39 are 201 and 300 runes of non-ASCII.
+
+And one where the doc and the battery asserted opposite things with nothing
+adjudicating: `ToDict`'s comment said the summary's key order is Python's
+insertion order and a real contract; mutant M6's label said nothing
+promises it. Both were unfalsifiable, because `syGo` routes the summary
+through a Go map on its way to `encoding/json` and a Go map has no order.
+The doc was right — `ran, silent, transitions` is not alphabetical, and the
+consumer `json.dumps` it. `TestSummaryToDictKeepsCPythonsInsertionOrder`
+now compares the rendered string, and M6 is expected to be caught.
+
+**These are L51's instances 3, 4 and 5**, and they are worth counting
+separately from the first two: those were a normaliser erasing a *value*,
+these are a counter, a reused field and a normaliser erasing the
+*question*. The lens generalises to: for every conversion, reused field or
+derived count the harness performs, name what it collapses, then ask
+whether anything else still asserts it.
+
+### One place the differential is allowed to look away
+
+The failed-write fixtures compare everything except the `error` string,
+which is elided with the reason named at the site. Two things live in there
+that cannot match: the tempfile name is random (`atomic_write` goes through
+`mkstemp`), and the WORDING is a named port residual — `str(OSError)` is
+`[Errno 13] Permission denied: '/p/tmpX'` and Go's is
+`open /p/tmpX: permission denied`. This port does not emulate OSError
+formatting, the same call `dispatch/envelope.go`'s `oserr` makes. What
+survives the elision is everything the lane exists to pin: that an error is
+set, that it is a permission error, and — untouched — `ran`, `silent`,
+`transitions`, `told` and `file`.
+
+### The rest
+
+- `WriteSnapshot` created `memory/` at `0o755`; `Path.mkdir` passes `0o777`
+  and lets the umask narrow it, which on this box (umask 0002) is `0o775`.
+  A group-writable store had been quietly becoming group-read-only. The
+  guard builds a control dir with `MkdirAll(…, 0o777)` rather than reading
+  the umask, and states its own limit: under a 0o022 umask it cannot fail.
+- Six inline `v.(pyval.Obj)` assertions rejected `map[string]any` while
+  every `pyval` helper called in the same breath accepts it — so
+  `RenderSnapshot` handed one would build the self-refuting message
+  `'dict' object has no attribute 'items'`. Latent (the decoder never
+  produces a Go map) and now funnelled through `asDict`/`asList`, which
+  sort a plain map's keys because a Go map has no order and this module's
+  output order is observable.
+- `nextCycle`'s TypeError arm was named in its doc and reached by no
+  fixture; C40/C41 reach it, C42 pins that `True` is an int and counts 2.
+- Two doc claims were simply wrong and are now corrected in place: the
+  `verbose` substitute (the snapshot is in prior-insertion order, not
+  declaration order, and carries processes this cycle never probed), and a
+  "measured" claim about the `{**obs, "at": now}` ordinal that `sort_keys`
+  makes unobservable.
+
+### The battery, r4: 96/106, and five mutants that had never run
+
+The battery grew to 106, twelve of them for code the restructure created —
+including M99, which is the r1 finding itself expressed as one line moved
+above the write, and M106, the `0o755` dir mode. It also learned to fail
+honestly, and that is where the round's real find is: **a mutant that does
+not COMPILE was being reported as caught.**
+
+`go test` returns non-zero for a build failure exactly as it does for a
+failing assertion, so a mutant that breaks the build reads as detected while
+no test ever observed it. Adding one check for `[build failed]` reclassified
+**five mutants that had passed three rounds as "caught" and had never once
+run**: M10/M11 (`Field` where `pyval.Field` was meant), M49 and M52
+(dropping a term left a variable declared-and-unused), and M65 (same).
+
+Four were repairable and are now genuinely caught. The fifth is the
+interesting one. M65 deletes the `!ok` from
+`if !ok || !pyval.Truthy(v)` — and once it compiles, it **survives**, because
+`Get` on an absent key returns a nil value and `Truthy(nil)` is already
+false. The guard is a statement of intent, not a decision. Three rounds of
+green had been reporting the opposite.
+
+This is the same false-positive class as a site that matches zero times, and
+it deserves the same standing rule: **a battery's failure signal must
+distinguish "the test caught it" from "the compiler caught it", or the score
+counts builds it broke as bugs it found.**
+
+Final: **96 caught / 106, 0 battery bugs, 10 labelled survivors** — six
+equivalent-by-construction from earlier rounds, M65 as above, and three
+(M103–M105) for the `asDict`/`asList` map arms, which no fixture can reach
+until a hand-built caller exists.
+
+## The first thing in this tree that Go cannot port at all
+
+Every divergence recorded above is a decision one runtime makes differently
+from the other. This is not that. Three runtime modules parse **Python
+source with CPython's own `ast` module**, and there is no Go expression of
+that — not a harder one, not a slower one, none.
+
+| module | lines | `ast.` uses | what it parses for | reached from |
+|---|---:|---:|---|---|
+| `codebase_graph.py` | 492 | 18 | the call graph injected into planning context (imports, calls, top-level defs, a stack-based visitor) | `loop_planning` |
+| `bughunter.py` | 345 | 10 | Maro's static self-scan (bare excepts, mutable defaults, shadowed builtins) | `doctor` |
+| `artifact_check.py` | 735 | 5 | `_python_is_inert` — layer 2 of the fabrication check: does this `.py` print anything when run | `loop_execute`, `loop_planning`, `agent_loop`, `run_curation` |
+
+Two of the three are on the **core loop**, not in a corner.
+
+The reason this is different in kind: `ast.parse` is not a library the port
+can re-implement from a spec. It is CPython's grammar, its version-specific
+node set, and its exact error behaviour, and `_python_is_inert` depends on
+the node TYPES (`ast.FunctionDef`, `ast.AnnAssign`, `ast.Expr` wrapping an
+`ast.Constant`) rather than on anything a regex could approximate. A Go
+reimplementation would be a Python parser — a project, not a tranche — and
+every version skew between it and the interpreter actually running the
+workspace's code would be a silent wrong answer in a check whose entire
+purpose is catching a fabricated claim.
+
+**Three honest options, none of them free:**
+
+1. **Leave these three in Python.** The port becomes a hybrid runtime with
+   a named Python boundary. Cheapest, and it makes "Go replaces Python" a
+   claim with an asterisk.
+2. **Shell out** — `python3 -c` for the AST question, results as JSON. Keeps
+   the logic in one place and correct by construction, and re-introduces the
+   interpreter start-up cost the port exists to remove, on the core loop.
+3. **Substitute a cruder Go-side rule** (regex for `if __name__`, a
+   `go/scanner`-style tokeniser). This is not a port: it is a different
+   check that agrees with the Python most of the time. L46 in its purest
+   form, and the divergence count is unbounded because nobody can enumerate
+   the rules Python's grammar has.
+
+Recorded here rather than decided, because the choice is Jeremy's and it is
+the first place the port's ceiling is a property of the LANGUAGE rather than
+of how much has been ported. Everything else on the ledger is work;
+this is a boundary.
+
+Worth noting what it does NOT block. `artifact_check`'s layers 1 and 3
+(missing-artifact and execution-contradiction) are pure string and
+filesystem work, and the module is portable minus one function. So the
+tranche is still worth taking — with the exclusion named in the package
+doc, which is the same discipline `check_system_health`'s environment
+probes got.

@@ -31,9 +31,14 @@
 //     instead of both reading narrated=None and double-narrating; that is the
 //     CALLER's job here, because RunCycle does not touch the disk at all.
 //   - `verbose`, which prints `[health] name: STATUS — evidence` per
-//     declaration as the cycle runs. It is the --probe flag's progress
-//     output and nothing branches on it; a caller wanting it prints from
-//     the returned snapshot, in the same order.
+//     declaration AS THE CYCLE RUNS. Nothing branches on it — it is the
+//     --probe flag's progress output. A caller wanting it must print from
+//     the DECLARATIONS as it walks them, not from the returned snapshot:
+//     that map is in prior-insertion order rather than declaration order,
+//     and it also holds processes this cycle never probed, still carrying
+//     their stale status and evidence (fixture C26). An earlier draft of
+//     this note said "print from the returned snapshot, in the same order",
+//     which is wrong on both counts.
 //   - main, the CLI.
 package syshealth
 
@@ -99,11 +104,24 @@ type Narration struct {
 //
 // Skipped and Error are separate fields rather than one "why it stopped",
 // because they are different events at different points. Skipped is the
-// config gate, decided before any probe runs, so Ran is 0. Error is the
-// blanket `except` around the whole body, and by the time it fires the
-// probes have already run and Ran is already non-zero — measured: an
-// unparseable `cycle` counter gives {"ran": 1, ..., "error": ...} with
-// NOTHING written to disk.
+// config gate, decided before any probe runs, so Ran is 0.
+//
+// Error is Python's blanket `except`, and it is WIDER than the cycle. It
+// wraps four things, and `Ran` differs across them — measured, because the
+// first draft of this comment asserted "by the time it fires the probes
+// have already run and Ran is already non-zero" and that is false for the
+// first row:
+//
+//	config.get raises          ran=0, transitions=0, nothing written
+//	an unparseable cycle       ran=N, transitions=0, nothing written
+//	_write_snapshot raises     ran=N, transitions=0, NOTHING NARRATED
+//	the narration loop raises  ran=N, transitions already assigned
+//
+// The third row is the one a split port drops on the floor: the probes ran,
+// the cycle produced narrations, and the write failed — so `transitions`
+// must be 0 and the pending narrations must be discarded, or the log claims
+// the user was told about a state that never persisted. RunCycle cannot see
+// that lane; RunAndPersist owns it, and is the reason it exists.
 type Summary struct {
 	Ran         int
 	Silent      []string
@@ -112,12 +130,17 @@ type Summary struct {
 	Error       string
 }
 
-// ToDict renders Summary in Python's INSERTION order, which is the order
-// json.dumps would write it and the order a caller diffing two runtimes
-// sees. `ran`, `silent` and `transitions` are seeded at the top of the
-// function, so all three are present even on the paths that never finish;
-// `skipped` and `error` are added later on their own paths, and they are
-// mutually exclusive because the skip RETURNS before anything can raise.
+// ToDict renders Summary in Python's INSERTION order: `ran`, `silent` and
+// `transitions` are seeded at the top of the function so all three are
+// present even on the paths that never finish, and `skipped` / `error` are
+// added later on their own paths.
+//
+// The order is a real contract — any caller that json.dumps this without
+// sort_keys writes it — and it is NOT checked by the differential, which
+// routes the summary through a Go map and compares semantically. The pin is
+// TestSummaryToDictKeepsCPythonsInsertionOrder, a direct string comparison,
+// added after r1 found this doc and the battery's M6 label asserting
+// opposite contracts with nothing checking either.
 func (s Summary) ToDict() pyval.Obj {
 	o := pyval.Obj{}
 	o.Set("ran", s.Ran)
@@ -183,7 +206,14 @@ func LoadSnapshot(ws string) pyval.Obj {
 // (`... + "\n"`), not by dumps.
 func WriteSnapshot(ws string, snap pyval.Obj) error {
 	path := SnapshotPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// record.NewDirMode, not 0o755: Python's Path.mkdir passes 0o777 and lets
+	// the umask narrow it, so on this box (umask 0002) CPython creates
+	// memory/ as 0o775 and a hard-coded 0o755 creates it 0o755 — a
+	// group-writable store becoming group-read-only, which is exactly the
+	// difference that bites a second user or a container uid. AtomicWrite one
+	// line down already spells the rule; this MkdirAll runs first, so the
+	// narrower constant was winning.
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	body, err := pyval.DumpsIndentNSorted(snap, 1)
@@ -200,16 +230,61 @@ func WriteSnapshot(ws string, snap pyval.Obj) error {
 func HistoryOf(prior pyval.Obj) pyval.List {
 	out := pyval.List{}
 	v, _ := prior.Get("history")
-	lst, ok := v.(pyval.List)
+	lst, ok := asList(v)
 	if !ok {
 		return out
 	}
 	for _, h := range lst {
-		if _, isObj := h.(pyval.Obj); isObj {
-			out = append(out, h)
+		if o, isObj := asDict(h); isObj {
+			out = append(out, o)
 		}
 	}
 	return out
+}
+
+// asDict and asList are `isinstance(v, dict)` / `isinstance(v, list)`.
+//
+// They exist because this package was asserting `v.(pyval.Obj)` inline at six
+// sites while every pyval helper it calls in the same breath — Truthy, Str,
+// TypeName — ALSO accepts a plain `map[string]any` as a dict. r1 found the
+// contradiction in one expression: RenderSnapshot handed a map[string]any
+// would fail its assertion and then build the error message
+// "'dict' object has no attribute 'items'" out of TypeName, which is both
+// self-refuting and a divergence, since CPython renders that snapshot fine.
+//
+// pyval's decoder never produces a Go map, so this is latent rather than
+// live; it is a hand-built caller's lane. The conversion sorts keys, because
+// a Go map HAS no order and this module's output order is observable
+// (render order, ToDict order, the `{**obs, "at": now}` ordinal). Sorted is
+// the only deterministic choice available, and a caller who needs Python's
+// insertion order must hand in a pyval.Obj — which is what the decoder does.
+func asDict(v any) (pyval.Obj, bool) {
+	switch t := v.(type) {
+	case pyval.Obj:
+		return t, true
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		o := make(pyval.Obj, 0, len(keys))
+		for _, k := range keys {
+			o.Set(k, t[k])
+		}
+		return o, true
+	}
+	return nil, false
+}
+
+func asList(v any) (pyval.List, bool) {
+	switch t := v.(type) {
+	case pyval.List:
+		return t, true
+	case []any:
+		return pyval.List(t), true
+	}
+	return nil, false
 }
 
 // RunCycle is the read-modify half of `run_health_probes`: it takes the
@@ -217,10 +292,13 @@ func HistoryOf(prior pyval.Obj) pyval.List {
 // after that write lands, and the summary. A nil snapshot means "write
 // nothing" — see the error lane below.
 //
-// `enabled` is whatever config returned for `health.probes_enabled` (default
-// True), not a bool, because Python spells the gate `bool(cfg_get(...))` and
-// the collapse is observable: 0, "" and False skip the cycle while the
-// STRING "no" is a non-empty string and therefore runs it.
+// It does NOT own the config gate, the write, or `transitions`. Python
+// assigns `summary["transitions"]` AFTER `_write_snapshot` returns, inside
+// the same try, so a failed write leaves it 0 with narrations pending and
+// undelivered. RunCycle cannot observe that, so it does not claim to:
+// Transitions stays 0 here and RunAndPersist sets it. A caller driving
+// RunCycle directly and reading `len(narrations)` is asserting the write
+// succeeded — which is exactly the bug, so drive RunAndPersist instead.
 //
 // `now` is the clock, seamed as a function rather than a value because
 // Python calls `datetime.now(timezone.utc).isoformat()` once per declaration
@@ -241,18 +319,14 @@ func HistoryOf(prior pyval.Obj) pyval.List {
 //     "silent". That covers SILENT→UNKNOWN→OK — a probe that broke in the
 //     middle still owes the user the recovery line.
 //   - A held state never repeats into the log.
-func RunCycle(snapshot pyval.Obj, decls []Declaration, enabled any, now func() string) (pyval.Obj, []Narration, Summary) {
+func RunCycle(snapshot pyval.Obj, decls []Declaration, now func() string) (pyval.Obj, []Narration, Summary) {
 	summary := Summary{Silent: []string{}}
-	if !pyval.Truthy(enabled) {
-		summary.Skipped = "health.probes_enabled is off"
-		return nil, nil, summary
-	}
 
 	// `processes = snapshot.get("processes")`, replaced WHOLESALE when it is
 	// not a dict. A list here is not merged or salvaged, it is dropped.
 	var processes pyval.Obj
 	if v, ok := snapshot.Get("processes"); ok {
-		if o, isObj := v.(pyval.Obj); isObj {
+		if o, isObj := asDict(v); isObj {
 			processes = o
 		}
 	}
@@ -264,7 +338,7 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, enabled any, now func() s
 	for _, decl := range decls {
 		var prior pyval.Obj
 		if v, ok := processes.Get(decl.Name); ok {
-			if o, isObj := v.(pyval.Obj); isObj {
+			if o, isObj := asDict(v); isObj {
 				prior = o
 			}
 		}
@@ -303,10 +377,17 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, enabled any, now func() s
 			// leaves the ring buffer alone.
 			//
 			// `{**obs, "at": now}` appends "at" when it is new and
-			// OVERWRITES a probe-supplied one IN PLACE — measured: a probe
-			// returning {"at": "1999", "n": 1} keeps "at" first and gets the
-			// cycle's clock in it. Obj.Set is exactly that rule, so the
-			// observation is copied and Set rather than rebuilt.
+			// OVERWRITES a probe-supplied one IN PLACE. Obj.Set is exactly
+			// that rule, so the observation is copied and Set rather than
+			// rebuilt.
+			//
+			// What C13 pins is the VALUE — a probe returning
+			// {"at": "1999", "n": 1} gets the cycle's clock in it. The
+			// POSITION is not pinned and cannot be from here: the snapshot is
+			// written sort_keys=True and "at" < "n", so the stamped
+			// observation renders identically whichever ordinal the rule
+			// picked. Obj.Set is used because it is the faithful rule, not
+			// because a fixture proved the ordinal.
 			stamped := make(pyval.Obj, len(obs))
 			copy(stamped, obs)
 			stamped.Set("at", stamp)
@@ -359,8 +440,58 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, enabled any, now func() s
 		return nil, nil, summary
 	}
 	snapshot.Set("cycle", next)
-	summary.Transitions = len(pending)
 	return snapshot, pending, summary
+}
+
+// RunAndPersist is the whole of `run_health_probes` minus the narrating: the
+// config gate, the load, the cycle, the write, and the ONE blanket `except`
+// that covers all four. It returns the narrations to perform rather than
+// performing them (see the package doc), and it is the entry point callers
+// should use — RunCycle alone cannot see two of the four error lanes.
+//
+// `cfg` is `config.get("health.probes_enabled", True)`, returning the raw
+// value rather than a bool because Python spells the gate `bool(cfg_get(...))`
+// and the collapse is observable: 0, "", None and False skip the cycle while
+// the STRING "no" is a non-empty string and therefore RUNS it. It may return
+// an error, because the import-and-call is inside the try and a config layer
+// that raises is measured to give {"ran": 0, "transitions": 0, "error": ...}
+// with nothing written — the one lane where Ran is still 0 when Error is set.
+//
+// The lock is still the caller's (package doc): Python holds the snapshot's
+// lock across load..write, and nothing here takes it.
+func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now func() string) (Summary, []Narration) {
+	summary := Summary{Silent: []string{}}
+
+	enabled, err := cfg()
+	if err != nil {
+		summary.Error = pyval.Clip(err.Error(), 200)
+		return summary, nil
+	}
+	if !pyval.Truthy(enabled) {
+		summary.Skipped = "health.probes_enabled is off"
+		return summary, nil
+	}
+
+	snap, pending, summary := RunCycle(LoadSnapshot(ws), decls, now)
+	if snap == nil {
+		// The cycle aborted (an unparseable `cycle` counter). Its summary
+		// already carries Ran, Silent and Error; there is nothing to write
+		// and nothing to narrate.
+		return summary, nil
+	}
+	if err := WriteSnapshot(ws, snap); err != nil {
+		// The lane a split port drops: probes ran, narrations were decided,
+		// and the file did not land. Python never reaches
+		// `summary["transitions"] = ...`, so it stays 0 AND the pending
+		// narrations are discarded — the log must not claim the user was
+		// told about a state that was never recorded, because the state
+		// machine will re-decide the same transition next cycle. Fixtures
+		// C45/C46.
+		summary.Error = pyval.Clip(err.Error(), 200)
+		return summary, nil
+	}
+	summary.Transitions = len(pending)
+	return summary, pending
 }
 
 // nextCycle is `int(snapshot.get("cycle", 0) or 0) + 1`.
@@ -369,12 +500,17 @@ func RunCycle(snapshot pyval.Obj, decls []Declaration, enabled any, now func() s
 // dormancy threshold has:
 //
 //	absent / 0 / "" / None / False  -> 1   (the counter restarts)
-//	"41" / 41 / 2.9                 -> that value + 1, TRUNCATED toward zero
-//	"abc" / [1]                     -> raises, and the whole cycle aborts
+//	"41" / 41 / 2.9 / True          -> that value + 1, TRUNCATED toward zero
+//	"abc"                           -> ValueError, and the whole cycle aborts
+//	[1] / {"a": 1}                  -> TypeError, likewise
 //
-// The third lane is why this returns an error instead of defaulting: a port
-// that quietly restarted the counter on a corrupt value would write a
-// snapshot CPython refuses to write.
+// The last two lanes are why this returns an error instead of defaulting: a
+// port that quietly restarted the counter on a corrupt value would write a
+// snapshot CPython refuses to write. They are DIFFERENT exception classes
+// with different messages, and the summary carries the message, so both are
+// pinned — fixtures C36/C37 (ValueError), C40/C41 (TypeError), C42 (True is
+// an int, not a rejection). r1 found the TypeError arm named here and reached
+// by nothing, which is a doc claiming coverage the fixtures did not have.
 func nextCycle(snapshot pyval.Obj) (int, error) {
 	v, ok := snapshot.Get("cycle")
 	if !ok || !pyval.Truthy(v) {
@@ -417,7 +553,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 			"(or: python3 -m system_health --probe).")
 		return strings.Join(lines, "\n"), nil
 	}
-	procs, ok := procsVal.(pyval.Obj)
+	procs, ok := asDict(procsVal)
 	if !ok {
 		return "", &pyval.PyErr{Class: "AttributeError", Msg: fmt.Sprintf(
 			"'%s' object has no attribute 'items'", pyval.TypeName(procsVal))}
@@ -436,7 +572,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 	order := map[string]int{Silent: 0, Unknown: 1, OK: 2}
 	rank := make([]int, len(procs))
 	for i, f := range procs {
-		p, isObj := f.Val.(pyval.Obj)
+		p, isObj := asDict(f.Val)
 		if !isObj {
 			// Raised by the SORT KEY, which CPython evaluates before
 			// `sorted` yields anything — and after the header lines were
@@ -453,7 +589,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 			} else {
 				rank[i] = 3
 			}
-		case pyval.List, pyval.Obj:
+		case pyval.List, pyval.Obj, []any, map[string]any:
 			// `order.get(unhashable)` is a TypeError, not a miss. Ported for
 			// the same reason as the AttributeErrors above: the alternative
 			// is inventing a rank CPython never computes.
@@ -485,7 +621,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 	})
 	for _, i := range idx {
 		f := procs[i]
-		p := f.Val.(pyval.Obj)
+		p, _ := asDict(f.Val)
 		lines = append(lines,
 			fmt.Sprintf("[%s] %s — %s", getOr(p, "status", "?"),
 				f.Key, getOr(p, "description", "")),
@@ -495,7 +631,7 @@ func RenderSnapshot(snap pyval.Obj) (string, error) {
 			// `isinstance(lt, dict)` — a string last_transition is SKIPPED,
 			// not rendered and not fatal. The one tolerant branch in a
 			// function that otherwise raises.
-			if o, isObj := lt.(pyval.Obj); isObj {
+			if o, isObj := asDict(lt); isObj {
 				from, _ := o.Get("from")
 				to, _ := o.Get("to")
 				at, _ := o.Get("at")
