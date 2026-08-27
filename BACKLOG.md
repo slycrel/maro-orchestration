@@ -272,31 +272,6 @@ the prescribed spelling. The open item stands unchanged: nothing in the
 tree calls the function, so nothing enforces the decode at a boundary. When
 a caller lands, the decode is part of its review, not an afterthought.
 
-### Go port: 33 sites create directories 0755 where Python creates 0775 (FOUND 2026-08-26, census)
-
-`Path.mkdir()` creates with `0o777 & ~umask`; `os.MkdirAll(p, 0o755)`
-creates with `0o755 & ~umask`. **The umask on this box is 0002**, so the
-Python engine writes 0775 and the Go engine writes 0755 — group write,
-present in one runtime and absent in the other, on every run directory,
-project directory, memory directory and pack import target the port
-creates through a hardcoded literal.
-
-`internal/record/filemode.go` already carries the right answer as
-`NewDirMode` (0o777, with MkdirAll applying the umask), and 28 call sites
-use it. 33 do not, plus 7 more that spell the value `0o777` inline and are
-right by accident. The full site list, the Python-side counts (185 default
-`mkdir`, 3 default `makedirs`, exactly ONE deliberate `mode=0o700` in
-`src/web_fetch.py:494`), and the reason this is not a `sed` are in
-`scratchpad/dirmode_census.md`.
-
-Not a sed because the mode must be justified against the PYTHON call each
-site ports. `web_fetch`'s cache dir is 0700 on purpose; a blanket rewrite
-would widen it when that module lands.
-
-Nothing in the suite can catch this class: the differential fixtures
-compare returned VALUES, and a directory's mode is a property of the
-filesystem afterwards that no probe reads back. The write-path comparison
-harness would close the whole class in one assertion.
 
 ### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
 
@@ -979,26 +954,6 @@ the ordered carrier and `pyjson.Ordered`'s map+modeled-keys signature is a
 different shape, so folding means picking ONE carrier, which is a
 decision, not a move.
 
-### Go port: the directory-MODE census — 34 sites still pass a literal `0o755` (FOUND 2026-08-26, go-port chunk A)
-
-`record.NewDirMode` is `0o777`, which is what `Path.mkdir()` passes, and
-the umask narrows it — 0o775 on this box, 0o755 under a service with
-umask 022, exactly as Python would. A Go site that hard-codes `0o755`
-produces 0o755 **regardless of umask**, so the two runtimes disagree on
-any host whose umask is not 022, and the difference is observable
-(`stat`, and a group-writable workspace shared with the Python runtime).
-
-Chunk A converted two sites as a side effect of the work it was already
-doing (`metrics/recorder.go`'s second MkdirAll, and the drain-lock's own
-mkdir, which was deleted rather than converted). **34 remain**, found by
-`grep -rn "MkdirAll" go/ | grep 0o755`.
-
-Not a mechanical sweep: each one needs the same per-site question the
-memory family got — does the Python line it ports call a helper that
-mkdirs at pathlib's default, or does it pass an explicit mode? Some
-Python sites DO pass `0o755` deliberately. A blanket replace would be a
-guess dressed as a fix, and the mutation battery would not catch it
-because both modes create a working directory.
 
 ### Go port: two path readers swallow a failure their Python twins raise (FOUND 2026-08-26, go-port chunk A — named residual)
 

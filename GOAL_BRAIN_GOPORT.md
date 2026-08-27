@@ -265,6 +265,21 @@ rounds had already edited).
 
 ---
 
+**2026-08-27 — a mode is not observable, so the rule is enforced on the
+SPELLING.** `go/tools/mutate-modes.py` flipped a bit into all 103 mode
+arguments in the tree and, outside `internal/persona`, killed nothing: the
+values are executed by every test and read by none. `internal/record/
+modecensus_test.go` therefore checks how a mode is WRITTEN, not what it
+becomes. *Reversal condition: a write-path harness that reads modes back
+across both runtimes would make the behavioural check possible, and the
+spelling census could then become advisory.*
+
+**2026-08-27 — two build agents finding the same defect on the same day
+is a check, not two findings.** Both found a free directory mode by
+mutating a helper nothing had ever mutated. The response was the tool
+above plus lens L57, recorded CLOSED. This is the standing
+lenses-get-closed rule getting its fourth instance.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 | Thread | State |
@@ -276,7 +291,7 @@ rounds had already edited).
 | `internal/missionrun` has no test file at all | open, unscheduled |
 | Write-path comparison harness | **BUILT and paying.** `go/tools/write-compare.py`; found a silently dropped CLI argument on its first run, then all 7 `task` scenarios byte-identical. Extended to `pack` (the interop format): 6 scenarios, all differ, tranche characterised in Compiled truth and unfixed. r10 found the harness itself blind to directory symlinks; fixed, and the differ's self-test now asserts 5 findings instead of 3. Next targets: the `pack` tranche's own review cycle, then a third write surface (`orch_items` / `record`) |
 | Remaining first-pass tranches, sequenced | **planner returned** → `scratchpad/PORT_PLAN.md`. First pass = 74 modules / 37,777 py lines, ~29 review units, **~120–170 review rounds**. Recommends Option B (comparable core: 62 modules, 25,972 lines, ~90–120 rounds) stopping at a mission dry-run comparison. Unacted |
-| Directory-mode fix: 33 `0o755` + 7 inline `0o777` → `record.NewDirMode` | filed in BACKLOG |
+| Directory-mode fix: 33 `0o755` + 7 inline `0o777` → `record.NewDirMode` | **SHIPPED 2026-08-27** (`6ea47863`) — 58 sites in all, and the class is now closed by a parsed census (`internal/record/modecensus_test.go`). The entry had been gated on "some Python sites pass `0o755` deliberately", which the Python source contradicts: 188 of 189 `mkdir` calls take the default. En route it found the real bug — two shared stores published at 0600 (`1de3e940`) |
 | `check_system_health` | blocked on `llm.DetectBackends` plus a python3 shell-out seam |
 | `artifact_check.py` slice 2 (~250 lines, :483–736) | design captured, unbuilt |
 | inspector/evolver guard slice-1 review | **PAUSED at r14**, r15 gated on Jeremy |

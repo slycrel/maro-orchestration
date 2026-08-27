@@ -142,6 +142,58 @@ Close `tests/mutation/provenance_gate.json` — the contamination
   pin something real. **Do not delete survivors to make the run green** —
   the ledger is the deliverable.
 
+### Go port: the MODE class — SHIPPED 2026-08-27 (`1de3e940`, `6ea47863`)
+
+Two BACKLOG entries covered this (the 2026-08-26 census and its
+duplicate); both are folded in here.
+
+**What shipped.** 58 mode literals swept to the named spelling -- 33
+directories at `0o755`, 17 files at `0o644`, and 8 spelled as a bare
+`0o777` that were right by value and inconsistent by spelling. The rule
+is now enforced by `internal/record/modecensus_test.go`, a parsed census
+with a per-file allowlist carrying a count and a reason. Both arms proved
+to fire (an unsanctioned spelling; a count drift in an allowlisted file),
+and an allowlist entry that matches nothing fails too -- which fired for
+real while writing it.
+
+**The premise that had blocked it was wrong, and that is the lesson.**
+The duplicate entry said this was "not a mechanical sweep" because "some
+Python sites DO pass `0o755` deliberately". Measured across all ~170
+Python modules: 189 `mkdir`/`makedirs` calls, 188 at the pathlib default
+and exactly ONE explicit (`web_fetch`'s `mode=0o700`); four octal
+literals in the entire source tree. None of the 58 sites ports any of
+them. The original entry had the right numbers and drew a caveat from
+`web_fetch` -- a module that is not ported, so it gated 58 sites on a
+risk that could not reach any of them.
+
+**And the census found something bigger than the modes.** Two sites --
+`knowledge.atomicRewrite` and `pack.writeQuarantine` -- had rolled their
+own `os.CreateTemp` + `Rename` with no `Chmod`, publishing SHARED
+workspace stores at 0600 where CPython leaves 0664. Both engines read one
+store by design, so a Go rewrite could leave a ledger the Python runtime
+cannot open; quarantine exists precisely so a human or the other runtime
+can come and look. CPython does not have the bug and its own source says
+why -- `file_lock.atomic_write` carries a comment about having been
+bitten once already (`data-r2-03`). The fix was a deletion:
+`record.AtomicWrite` is that function's port and already had the rule.
+Two CPython differentials landed with it, each proved to fail without the
+fix, each carrying a umask vacuity floor.
+
+**Closes** the third row of the `pack` write-path divergence table (dirs
+775/755, export files 664/644, quarantine 664/600, adopted files
+775/644).
+
+**Named residual.** `loop.recordProjectMission` keeps `os.CreateTemp`'s
+0600 deliberately -- `.mission` is this runtime's stand-in for `NEXT.md`
+and has no Python reader. The reasoning is a comment at the site rather
+than a silence that reads like an oversight, and it is allowlisted in the
+census by name.
+
+**Instrument.** `go/tools/mutate-modes.py` (XOR not assignment, a umask
+floor, and UNTESTABLE reported separately from SURVIVED) with the shared
+scanner in `go/tools/gosrc.py`. Lens L57 in `docs/REVIEW_PATTERNS.md`,
+recorded as CLOSED.
+
 ### Goals cannot carry attachments — a screenshot is not an input (Jeremy, 2026-08-16: "a little concerning that maro can't ingest attachments")
 
 **How it closed.** Probing the four `unverified` enforcement survivors
