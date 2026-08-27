@@ -529,11 +529,38 @@ type Declared struct {
 // ok=false is that arm.
 func CleanDeclared(raw any) []Declared {
 	cleaned := []Declared{}
-	entries, ok := raw.([]any)
-	if !ok {
+	// Python's `isinstance(raw, list)`, spelled narrowly on purpose.
+	//
+	// NOT asList: that helper serves from_list's `steps`, where Python
+	// ITERATES the value, so it answers true for a string (which iterates
+	// to characters) and for a dict. `isinstance` answers false for both,
+	// and the two questions only happen to agree here because an empty
+	// iteration and a refusal both produce no declarations.
+	//
+	// The bare `raw.([]any)` this replaces was a silent total failure:
+	// pyval.List is a NAMED type, so it does not assert to []any, and the
+	// port's own JSON loader returns pyval.List — so every declared world
+	// fact from a model reply was dropped, with clean_declared reporting a
+	// well-formed empty result. Found by differential, not by reading.
+	var entries []any
+	switch t := raw.(type) {
+	case pyval.List:
+		entries = []any(t)
+	case []any:
+		entries = t
+	default:
 		return cleaned
 	}
 	for _, entry := range entries {
+		// EQUIVALENT MUTANT, recorded so it is not re-derived: moving this
+		// check below the asDict guard changes nothing observable. Once the
+		// cap is reached nothing can be appended on any later iteration
+		// either way, so the only difference is how many entries are
+		// inspected before the loop stops. Kept above the guard because
+		// that is where Python writes it, and because the ORDER is what
+		// makes "cap applied AFTER validation" true — a malformed entry
+		// must not consume the budget, which the cap-then-validate reading
+		// would break if the two ever stopped being interchangeable.
 		if len(cleaned) >= MaxFactsPerStep {
 			break
 		}

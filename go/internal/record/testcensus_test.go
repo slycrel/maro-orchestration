@@ -40,8 +40,6 @@ func TestEveryPackageHasADifferential(t *testing.T) {
 			"ResolveLogLevel. Differential owed.",
 		"internal/runtrace": "" +
 			"run_trace.py. Differential owed.",
-		"internal/worldfacts": "" +
-			"world_facts.py. Differential owed.",
 	}
 
 	root, err := filepath.Abs("../..")
