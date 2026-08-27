@@ -294,6 +294,25 @@ func HostOf(text string) string {
 		// empty string is what the caller's `if not host` then tests.
 		return ""
 	}
+	// UNOBSERVABLE, and kept because it is upstream's. Replacing this with
+	// strings.ToLower survives every fixture, and no fixture can change
+	// that:
+	//
+	//   - urlparse's .hostname is ALREADY lowercased, and lower() is
+	//     idempotent, so on an ordinary host the call is a no-op whichever
+	//     lowercaser runs;
+	//   - the one exception is the IPv6 scope zone, which urllib
+	//     deliberately leaves cased ("[fe80::1%tESt]") and this call would
+	//     then fold — and that is where CPython's str.lower() and Go's
+	//     strings.ToLower actually differ, since U+0130 becomes two code
+	//     points in one and one in the other;
+	//   - but a bracketed host cannot get here. `]` is in _URL_RE's
+	//     exclusion class, so the match stops inside the brackets and
+	//     urlparse raises on what is left. Measured, not argued: every
+	//     bracketed row in hostCorpus answers "" in both engines.
+	//
+	// So the divergence is real, the path to it is closed, and the call
+	// stays because upstream has it (L8).
 	return pytext.Lower(host)
 }
 
