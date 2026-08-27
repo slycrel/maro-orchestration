@@ -298,49 +298,6 @@ compare returned VALUES, and a directory's mode is a property of the
 filesystem afterwards that no probe reads back. The write-path comparison
 harness would close the whole class in one assertion.
 
-### Go port: `pypath.FSLess` exists now — `sheriff.py` slice 2 must use it (FOUND 2026-08-26, artifactcheck r3)
-
-Python holds every filename `surrogateescape`-decoded, so an undecodable
-byte is the code point `0xDC00+b` and `sorted()` orders by that; Go's
-`sort.Strings` orders by raw byte. The two agree for all valid UTF-8 AND
-for bad bytes against ASCII or astral characters, so a casual probe finds
-nothing. They part in the two-byte range:
-
-```
-names          b"\x80bad", "école", b"zulu"
-python sorted  'zulu', 'école', '\udc80bad'
-sort.Strings   "zulu", "\x80bad", "école"
-```
-
-`internal/artifactcheck.FilesModifiedSince` is fixed and pinned (W23/W24,
-names carried as byte lists because `json.dumps` cannot encode a lone
-surrogate).
-
-**CORRECTION, same day: this was filed as "a tranche before the code" and
-that was wrong. The code is already written and already carries the
-divergence.** `internal/sheriff/sheriff.go:344`, in
-`ProjectActivityAgeDays`, ports `sorted(artifacts.iterdir())[:50]` as
-`sort.Strings(names)` followed by `names[:50]` — the W24 shape, where the
-truncation means the two runtimes consider DIFFERENT FILES rather than the
-same files in a different order. `newest` is the max mtime over that set,
-which decides the dormancy verdict. The function's own doc comment says
-"which fifty depends on the sort and not on readdir order" and then sorts
-by byte.
-
-There are 28 non-test `sort.Strings` sites in the Go tree. Most sort JSON
-object keys, which arrive from JSON text and are valid UTF-8 by
-construction — those must be left alone rather than churned. Nine sort
-filenames or paths and each needs its Python counterpart read first, with
-two questions per site: does Python sort filenames there at all (or is the
-sort the PORT's own determinism guarantee over something Python iterates
-as a set — `pythonCandidates` is the worked example and carries the
-reasoning at the site), and can the names be non-UTF-8 (anything read from
-a directory can; a key the program builds cannot). The site list is in
-`scratchpad/fsless_census.md`.
-
-L13: fixing sheriff.go:344 alone would be fixing the site that has a
-finding rather than the class that has the bug.
-
 ### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
 
 `datetime.fromisoformat` has a C accelerator in `_datetimemodule.c` and a
