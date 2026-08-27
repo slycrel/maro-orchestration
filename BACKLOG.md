@@ -344,6 +344,49 @@ proc_lock.py:92 — so the naive branch exists for hand-written stamps and old
 data only. If a naive producer ever appears, both of these stop being
 residuals and the `_mktime` probe has to be ported properly.
 
+### Go port: `recall` and `provenance` have tests but no CPython comparison (FOUND 2026-08-26, go-port differential census)
+
+The `missionrun` entry below asks which packages have no TESTS. A second
+census asked the sharper question — which have no **live CPython
+comparison**, meaning the suite starts a real interpreter, runs the Python
+on the same input, and compares, rather than asserting against a
+transcribed expectation.
+
+Result across 46 packages: 25 go through the `pyprobe` harness, 12 more
+shell out to `python3` directly, and **9 have neither**. Seven of those
+nine are structural rather than owed:
+
+| package | prod | why it has none |
+|---|---|---|
+| `llm` | 937 | LLM adapters — the answer is a network call |
+| `workers` | 343 | one persona-framed LLM call; same |
+| `planner` | 128 | LLM decompose; same |
+| `pyprobe` | 275 | **is** the harness |
+| `testenv` | 50 | test scaffolding |
+| `selfimprove` | 111 | composition only; the parts it sequences each have one |
+| `missionrun` | 97 | wiring — and no tests at all (see below) |
+
+The two that are real:
+
+* **`internal/recall`** — 542 production lines, ONE test file, 458 test
+  lines, no interpreter anywhere in it. It is deterministic and read-only
+  by contract, which is exactly the shape a differential handles well. It
+  also carries a `sort.SliceStable` over run directories that the r6 class
+  guard allowlists on the grounds that it sorts by MTIME rather than by
+  name — an allowlist entry with no differential behind it.
+* **`internal/provenance`** — 94 production lines, 49 test lines.
+
+**Why it matters and why it is not urgent.** A package with no
+differential is not untested; it is tested against what the port's author
+believed the Python does. Every substantial finding in this arc's history
+has been a case where that belief was wrong, and roughly a third of
+*reported* findings have been hallucinated — the difference between the
+two is always whether someone ran it. `recall` is the larger of the two
+and the one worth doing first.
+
+**The measurement is in `go/COVERAGE.md`**, along with the script that
+re-derives it, so this entry does not have to be trusted.
+
 ### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
 
 A per-package census of the Go tree — Go lines vs test lines, counted in
