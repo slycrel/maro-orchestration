@@ -42,6 +42,50 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### Go port: the remaining bare `.([]any)` / `.(map[string]any)` assertions are unaudited (FOUND 2026-08-27, worldfacts differential)
+
+`worldfacts.CleanDeclared` opened with `raw.([]any)`. `pyval.List` is a
+NAMED type and does not satisfy that assertion, and the port's own JSON
+loader returns `pyval.List` — so the gate refused every declared world
+fact from a model reply and reported a well-formed empty result. Fixed in
+`9a4912ce`; found by a differential, invisible to reading.
+
+24 bare `.([]any)` assertions exist in production Go. The house
+discipline is `pyval.Plain` at the decoding boundary, after which plain
+assertions are correct, and the sites traced during that fix are all
+covered by it:
+
+    internal/runs/index.go:96,101     meta is pyval.Plain'd at :249
+    internal/closure/closure.go:561   jsonx.Object Plains recursively
+    internal/persona/persona.go:210   normalizeYAML returns []any
+    internal/jsonx/jsonx.go:96        pyval.Plain(v).([]any) explicitly
+
+UNAUDITED, each needing its value's provenance traced to a Plain call or
+a non-pyval decoder:
+
+    internal/inspector/inspector.go:760   stringList(data[...])
+    internal/knowledge/knowledge.go:392   stringList(mustGetOr(row, ...))
+    internal/knowledge/tiered.go:297,320
+    internal/skills/coerce.go:160         strList
+    internal/skills/utility.go:593
+    internal/skills/attribution.go:194,304
+    internal/graduation/graduation.go:218
+    internal/loop/exec.go:343             tc.Arguments["inject_steps"]
+    internal/record/record.go:698         row["verdict_history"]
+    internal/pyval/str.go:354,369         (inside pyval — likely fine)
+
+A silent-total-failure bug leaves no trace: the function returns a valid
+empty result and the caller cannot tell "nothing was declared" from "the
+gate refused the type". The audit is cheap per site and the failure mode
+is expensive, so this should not wait for the next differential to
+stumble on it.
+
+Note what would NOT have caught it: a census over `LoadsOrdered` call
+sites. The value reached CleanDeclared from a caller, not from a decode
+in the same function. What caught it was feeding the differential through
+the PORT's decoder instead of the test's convenient one.
+
+
 Ordered open work that matters. Top of the list is next.
 
 ### DECISION NEEDED — the Go port's first hard ceiling: three modules parse Python with CPython's `ast` (FOUND 2026-08-26, go-port)
