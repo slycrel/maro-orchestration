@@ -26,6 +26,51 @@ fixes.
 - *Recording:* each round's findings go into `review/findings.jsonl` via
   `scripts/review-ledger.py` (see "The ledger" below) so the recurrence
   counts here can be re-derived from data rather than from memory.
+- *Building:* **before you commit a fix, check whether the lens that names
+  it can be CLOSED instead of watched.** See "Closing a lens by
+  construction" below. This is the lane the file was missing, and its
+  absence is why the counts kept going up.
+
+**The failure this file had, stated plainly (2026-08-27, Jeremy).** Every
+bullet above except the last one addresses the *reviewer*. The catalog got
+very good at helping a reviewer find a shape faster, and did nothing at all
+to stop a builder producing it — so the recurrence counts went up round
+after round and were read as the file working. They were the file's subject
+matter recurring. A pattern written down to be *noticed* is a pattern you
+have decided to keep having.
+
+## Closing a lens by construction
+
+This file already said a lens is *"retired only when the shape it names
+becomes structurally impossible"*. That clause sat unused for the file's
+entire life while the instance counts climbed. Using it is the difference
+between a catalog and a ratchet.
+
+A lens closes **for a surface** — not globally — when a mechanical check
+makes the shape unable to reach a commit. Record it here with the surface
+and the check, so the next reader can tell "we watch for this" from "this
+cannot happen there any more":
+
+| Lens | Surface | Closed by | Evidence it closes it |
+|---|---|---|---|
+| **P6** (the round's finding lives inside the previous round's fix) | the `maro task` argv surface | `go/cmd/maro/task_surface_diff_test.go` — extracts argparse's COMPLETE declared spec from the live parser (option strings, defaults, positional `nargs`, `choices`, `type`, `required`) and diffs it against `task_surface.go`'s declaration | Mutation-tested against the two literal historical findings: re-sharing `-error` across the four job-id verbs (r11) and unbounding `fail`'s arity (r10) both fail it, each with a message naming the actual defect. Two properties nobody had ever checked — a wrong flag default and a dropped flag — fail it too |
+
+**How to decide whether a lens can be closed.** Ask what the defect was a
+*property of*. If the answer is a declaration that exists on both sides —
+an argparse spec, a dataclass, a schema, a set of file modes — the two
+declarations can be diffed mechanically and the lens closes for that
+surface. If the answer is a judgement ("this comment is now false", "this
+fixture defends the wrong config"), it cannot, and the lens stays a lens.
+
+**Three rounds is the signal.** P6 fired on the same parser in r1, r10 and
+r11 — three different properties of one construct, one per round, each
+visible in `task_store.py` the whole time. They arrived one at a time
+because each fix was scoped to the finding rather than to the construct.
+The rule that follows: **when a lens fires twice on the same surface, stop
+fixing the property and go close the lens.** The second occurrence is the
+evidence; the third is the one you chose to have.
+
+---
 
 **Status legend on each lens:** `instances` is how many independent
 findings have been attributed to it in `review/findings.jsonl`. The
@@ -1813,7 +1858,7 @@ The fixpoint is real and it arrives. Rounds after that are cheap insurance,
 not discovery.
 
 ### P6 — The round's HIGH lives inside the previous round's own fix
-*instances: 4 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
+*instances: 5 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
 
 The single most common shape in the whole record. A round fixes something;
 the next round's most severe finding is *in that fix*. It recurs at
@@ -1842,6 +1887,29 @@ assumption that lets it through.
 
 **Tripwire.** Before closing a round, list the fixes it made and ask of
 each: what did this fix newly make possible? Then check that.
+
+**CLOSED for the `maro task` argv surface, 2026-08-27.** The tripwire above
+is a good tripwire and it did not work: P6 fired on that one parser three
+times — r1 (flags after a positional were dropped), r10 (extra positionals
+ignored, `--` re-entered parsing), r11 (four verbs sharing one FlagSet, so
+`complete --error` was accepted). Three different properties of one
+construct, one per round, every one of them visible in `task_store.py`'s
+spec the entire time.
+
+They arrived one at a time because each fix was scoped to the finding, and
+no amount of asking "what did this fix newly make possible?" gets you to
+"…and also, go re-derive the entire argparse spec". So the surface stopped
+being code that happens to agree and became a DECLARATION
+(`cmd/maro/task_surface.go`) that is diffed against argparse's own
+declaration (`cmd/maro/task_surface_diff_test.go`), extracted from the live
+parser rather than transcribed by a human — since transcribing it once and
+trusting the transcription is the step that was wrong three rounds running.
+
+There is no fourth property to find one round later, because nothing is
+being checked one property at a time any more. See "Closing a lens by
+construction" at the top of this file, and note the general rule that came
+out of it: **when a lens fires twice on the same surface, stop fixing the
+property and go close the lens.**
 
 ### P15 — A widened guard's own census is the population; a review's findings are a sample
 *instances: 3*

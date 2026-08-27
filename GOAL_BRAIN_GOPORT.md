@@ -129,7 +129,7 @@ scripts so these can be recomputed rather than trusted.
 | Test lines | 81,834 (**1.38 : 1**) | ditto |
 | Packages with a live CPython differential | **37 of 46** — 56,870 lines, **95.7% of production** | ditto; "live" = the test starts a real interpreter and compares, not a transcribed expectation |
 | Python modules with **no Go reference anywhere** | **118 of 183** — 59,962 lines, **45.2%** | ditto. This is a **FLOOR**: "reference" is the loosest test (filename appears anywhere in the Go tree, comments included), so the true unported figure is worse and nothing yet measures how much worse |
-| Review-ledger rows, this arc | **872** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI, +5 r10, +1 r10 census, +1 r11) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
+| Review-ledger rows, this arc | **873** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI, +5 r10, +1 r10 census, +1 r11, +1 P6 closure) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
 | Measured hallucination rate | **15 of 807 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
 | Tranches needing 4+ review rounds | **33 of 66** targets | ditto. Deepest: `guard` 18, `handlequeue` 13, `evolver` 12, `dispatch` 12 |
 | Both engines compared, READ path | **6 renderers, 6 identical, 0 differ, 0 refused** | `go/tools/engine-compare.py` over a copy of the live workspace, 2026-08-26 |
@@ -151,7 +151,7 @@ composition-only wiring.
 divergences that are bugs or latent bugs in behaviour **both** runtimes now
 share, found only because two implementations had to agree. That is the
 "meaningful edges" half of Jeremy's 2026-08-22 question, and it has an
-affirmative answer with 872 rows behind it. `docs/REVIEW_PATTERNS.md`
+affirmative answer with 873 rows behind it. `docs/REVIEW_PATTERNS.md`
 computes the recurrence counts.
 
 **The fair complaint, stated equally plainly:** 45% of the Python has no Go
@@ -223,11 +223,18 @@ purpose is provenance, and the honest value is the one that says which
 engine wrote the artifact.
 
 So it stays, and it moves into `write-compare.py`'s known-divergence
-allowlist with its reason. That allowlist carries a **must-still-be-observed**
-rule: a row that stops matching anything fails the run. So the decision is
-not "ignore this difference", it is "assert this difference continues to
-exist" — if the two engines ever agree on that field, something changed
-that nobody decided.
+allowlist with its reason. The allowlist is how an inconsequential
+difference gets NOTED instead of fixed — that is its whole job, and this
+field is the clearest case of one.
+
+The **must-still-be-observed** rule attached to it is a tripwire on the
+NOTE, not a requirement on the code. An allowlist row that explains a
+difference which no longer happens is a lie about the codebase, and a
+stale one is worse than no note at all, because the next reader trusts it.
+So if the two engines ever agree on this field the run fails — not because
+they must disagree, but because the explanation on file just stopped being
+true and somebody should look at it. The correct response to that failure
+may well be to delete the row.
 
 ---
 

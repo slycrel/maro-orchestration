@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -38,19 +37,10 @@ func runTask(args []string) error {
 
 	switch args[0] {
 	case "enqueue":
-		fs := flag.NewFlagSet("enqueue", flag.ContinueOnError)
-		lane := fs.String("lane", "now", "queue lane")
-		// The CLI's source default is "cli", not the library's
-		// "task_store" — the difference is how a queue row says whether a
-		// human or the runtime put it there.
-		source := fs.String("source", "cli", "who enqueued this")
-		reason := fs.String("reason", "", "why")
-		parent := fs.String("parent-job-id", "", "parent job id")
-		blockedBy := fs.String("blocked-by", "", "comma-separated job ids")
-		// `enqueue` declares no positionals in task_store.py, so argparse
-		// refuses any. Plain fs.Parse would stop at the stray word and
-		// silently discard both it AND every flag written after it.
-		if _, err := parseArgs(fs, args[1:], 0); err != nil {
+		fs, tf, arity := newTaskFlagSet("enqueue")
+		lane, source, reason := tf.lane, tf.source, tf.reason
+		parent, blockedBy := tf.parentJobID, tf.blockedBy
+		if _, err := parseArgs(fs, args[1:], arity); err != nil {
 			return err
 		}
 		var blocked []string
@@ -69,26 +59,9 @@ func runTask(args []string) error {
 		return emit(task)
 
 	case "claim", "complete", "fail", "archive":
-		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
-		// -error is registered ONLY for `fail`. task_store.py builds four
-		// separate subparsers and only `p_fail` calls
-		// `add_argument("--error")`; the other three declare `job_id` alone.
-		// Sharing one FlagSet across the four verbs because they share a
-		// code path shared the ARGUMENT SURFACE too, so
-		// `task complete <id> --error boom` completed the task where
-		// argparse exits 2 (adversarial r11, MEDIUM). The four verbs are one
-		// case arm here and four parsers there; where the two disagree, the
-		// PARSER is the observable half.
-		var errText = new(string)
-		if args[0] == "fail" {
-			errText = fs.String("error", "", "failure reason")
-		}
-		// Each of these four declares exactly one positional (`job_id`) in
-		// task_store.py. The arity is the argument, not a sanity check: a
-		// helper that collected positionals without limit let
-		// `fail <id> -- --error boom` mark the task failed where argparse
-		// exits 2 and leaves it queued (adversarial r10).
-		positional, err := parseArgs(fs, args[1:], 1)
+		fs, tf, arity := newTaskFlagSet(args[0])
+		errText := tf.errText
+		positional, err := parseArgs(fs, args[1:], arity)
 		if err != nil {
 			return err
 		}
@@ -113,9 +86,9 @@ func runTask(args []string) error {
 		return emit(task)
 
 	case "list":
-		fs := flag.NewFlagSet("list", flag.ContinueOnError)
-		status := fs.String("status", "", "filter by status")
-		if _, err := parseArgs(fs, args[1:], 0); err != nil {
+		fs, tf, arity := newTaskFlagSet("list")
+		status := tf.status
+		if _, err := parseArgs(fs, args[1:], arity); err != nil {
 			return err
 		}
 		rows, err := tasks.List(ws, *status)
