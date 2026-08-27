@@ -13328,3 +13328,183 @@ an assertion about a site that may not be there.
 **Standing rule this round adds:** when a guard is widened, run it *before*
 fixing anything and read the whole list. The findings a review reports are
 a sample; the guard's own census is the population.
+
+## The r8 review — two seats, one class, and `os.ReadDir` is a sort
+
+r8 ran **two seats on the same chunk**: an opus seat (same family, high
+effort) and a `gpt-5.6-terra` seat on codex (cross family), neither
+prompted with the other's findings. They converged on one class and each
+found sites the other missed — and they disagreed on exactly one finding,
+which the Python source settled.
+
+The class is the same one r7 closed a day earlier, one spelling over:
+**`os.ReadDir` is a sort.** It byte-orders its entries inside the standard
+library, exactly the way `filepath.Glob` does, so a function that takes its
+order and never sorts at all is invisible to every arm of both guards. It
+is also the *most common* way this tree lists a directory, which makes the
+blind spot wide rather than narrow.
+
+That brings the class to **five spellings**:
+
+1. `sort.Strings` over a listing — the r5 spelling, the one the first
+   guard knew.
+2. A sort inside a directory-listing function — the r6 spelling.
+3. `filepath.Glob`'s own order — r7. Invisible: the sort is in the stdlib.
+4. **`os.ReadDir`'s own order** — r8. Invisible for the same reason.
+5. **A bare `<`/`>` string comparator inside a `sort.Slice` body** — r8.
+   Invisible for a different reason: no arm of either guard reads
+   comparator *bodies*.
+
+### The four production sites
+
+Every one was verified against the Python before it was touched, and every
+one now has a CPython differential that was proved able to fail by
+reverting its own fix.
+
+| Site | Python | Shape |
+|---|---|---|
+| `closure/inventory.go:projectFileInventory` | `closure_verify.py:697,700` — **two** `sorted()` calls | **W24** at the cap |
+| `orch/mission.go:ListMissions` | `mission.py:1116` `sorted(iterdir())` | W23 |
+| `runs/index.go:scanLegacyRunDirs` | `runs.py:199` `sorted(iterdir())` | W24 at the caller |
+| `orch/projects.go:ListBlockedProjects` | `orch_items.py:779` `sorted(..., key=(priority, blocked, slug), reverse=True)` | W23, reversed |
+
+Two of the four are worse than an ordering difference.
+
+`projectFileInventory` **truncates** at its cap, so the two engines do not
+merely order the same files differently — they *name different files*.
+Measured over a tree holding `a\x80z.txt`, `aéz.txt`, `d\x80/k.txt` and
+`dé/k.txt`:
+
+```
+py  cap=1 : ['aéz.txt',   '... (truncated at 1 files)']
+go  cap=1 : "a\x80z.txt\n... (truncated at 1 files)"
+```
+
+That listing is ground truth for the closure plan — it exists so checks
+probe files that exist instead of names the model guessed — so a truncated
+inventory naming a different file is a false-negative closure verdict that
+appears on one runtime only.
+
+`scanLegacyRunDirs`'s **first hit wins**. On a workspace where two run
+directories claim the same `loop_id` — which is what a duplicate-reference
+workspace *is*, and the only reason the legacy scan still exists — the sort
+order decides which run the migration resolves to. A W23 difference in the
+scan is a W24 different-answer difference at `legacyRunDir`.
+
+`ListBlockedProjects` is the fifth spelling, and the one worth staring at:
+`ListProjects` hands it a correctly `FSLess`-ordered slug list, and the
+sort threw that order away one call later with `out[i].Slug > out[j].Slug`.
+An AST arm for comparator bodies was deliberately **not** built — a census
+found 32 bare `<`/`>` comparators tree-wide, and all but these were
+numeric. Thirty allowlist rows about float comparisons is a guard nobody
+reads.
+
+### The one disagreement, and who settled it
+
+The codex seat reported `recall.go:FindPriorAttempts` as a fourth
+divergence: the port stable-sorts equal-mtime directories after `ReadDir`
+has byte-sorted them, where CPython's stable sort preserves readdir order.
+The opus seat re-derived the same site's allowlist row and **cleared it**.
+
+The Python is the tiebreaker, and it says unsorted. `recall.py:407-410`
+sorts a generator over an **unsorted** `root.iterdir()`, so CPython's
+tie-break is raw readdir order — filesystem-dependent, not a Python order
+at all. The port's byte order is a determinism guarantee over something
+CPython leaves undefined, which is the allowlist's category-1 case. Filed
+as an allowlist row with both seats' reasoning in it, not fixed.
+
+Two seats disagreeing is not noise; it is the cheapest possible signal that
+a site needs the source read rather than the diff.
+
+### The census, again, and what it caught this time
+
+The `readDirOrderAllowlist` arm was run **before any fix landed**. Between
+them the two seats named five candidate sites; the census named exactly the
+three that were real and nothing else. That is what makes the arm
+non-inert — a widened guard that merely goes green afterwards has been
+verified against the review's sample, not against the tree.
+
+Then the fixes ran and the guard's own **must-still-be-observed** rule
+fired: the `dirSortAllowlist` row for `closure/inventory.go` was now stale,
+because the site it certified had just been fixed out from under it. That
+rule was written to catch an allowlist entry naming a site that does not
+exist. It caught a second class it was not written for.
+
+This is now a named process pattern (**P15**), on its second instance in
+two days.
+
+### The LOWs — four claims that had decayed, and one rule that was false
+
+- The allowlist header's **second decision rule was false**: *"a key that
+  arrives inside JSON cannot be non-UTF-8, because `json.dumps` could not
+  have written it."* With the default `ensure_ascii=True`,
+  `json.dumps({'\udc80k': 1})` produces `'{"\\udc80k": 1}'` — pure ASCII,
+  writes to a strict-UTF-8 file, and `json.loads` returns the lone
+  surrogate. Seven of fourteen `fsSortAllowlist` rows were admitted by that
+  rule. They are still safe, but for a *different* reason: Go's
+  `encoding/json` substitutes U+FFFD for the escape, a named measured
+  residual at `pyval.go:487-521`. A decision procedure that is right for
+  the wrong reason will be wrong at the next site whose Go side does not
+  happen to launder the surrogate.
+- The NUL corpus comment said **"0-3 NULs through every position of
+  seventeen bases"**. `nulBases` holds **25** entries and the loop runs
+  **1-3** — n=0 would be the bare base, which the loop never emits. L28's
+  other half: an enumeration can be wrong *at birth*, so count every number
+  a comment states.
+- `pyMtime`'s margin was called **"two thousand times smaller than
+  MtimeEps"**. `1e-4 / 2.38e-7` is **420**. The sentence's conclusion
+  survives; the headroom a later reader would infer from it does not.
+- Two comments still named **`pyReadTextNewlines`**, deleted in r7 when the
+  translation moved to `pytext.TranslateNewlines`. One of them carries the
+  load-bearing reason `acUniversalNewlines` must stay a second
+  implementation — an argument still right, hanging on a name that cannot
+  be found, one cleanup away from removal.
+- `acScriptedInert`'s doc block ran unseparated into the next comment, so
+  godoc attached it to `acUniversalNewlines` and the `sort.Strings`
+  determinism argument was stranded on a helper about newline translation.
+
+### The pin that could not fail — the leap-Wednesday disjunct
+
+`isoWeekToGregorian`'s week-53 rule is
+`!(first == 4 || (first == 3 && isLeap(y)))`. Deleting the **second
+disjunct entirely** left the whole package green across the 97,116-input
+ISO corpus:
+
+```
+baseline                     ok
+!(first == 4)                ok     <- SURVIVES
+!(first == 4 || first == 3)  FAIL
+```
+
+`dates` held `2025-W53-1` (Wednesday, not leap → correctly rejected) and
+`2026-W53-1` (Thursday → accepted), but **no leap year starting on a
+Wednesday**. `isLeap` was pinned as a *rejecter* and not as an *accepter*.
+Adding `2020-W53-1`, `2020-W53-7` and `2020-W54-1` makes the mutant fail
+with `CPython gives 1.6091388e+09, the port refused`.
+
+Same shape as r7's D4–D6: a corpus of 97k inputs that could not observe
+one branch. Size is not coverage.
+
+### The fixture bug worth recording
+
+The first cut of the legacy-scan differential interpolated the directory
+name into `metadata.json`'s `handle_id`, which put a lone `0x80` **inside**
+the JSON file. CPython's `read_text(encoding="utf-8")` raised
+`UnicodeDecodeError`, the scan's own `except Exception: continue` swallowed
+it, and the differential silently measured a **one-entry** scan. It was
+caught only because the fixture states its expected order independently of
+both implementations — had it compared CPython against Go alone, both
+sides would have agreed on the wrong tree.
+
+Only the directory name is allowed to carry the bad byte. The metadata is
+ASCII and identical in both directories.
+
+### Round state
+
+Both seats ended `LOWS ONLY: no`, so r9 is owed. 45 packages green,
+`gofmt`/`go vet` clean, ledger +18 rows (including both retracted claims
+and the cross-seat disagreement), two new catalog entries: **P15** (a
+widened guard's own census is the population; a review's findings are a
+sample) and **L55** (a fixture can defend the configuration that does not
+ship) -- the latter named now but measured in r7, filed against r7 in the
+ledger so the count stays honest about when the defect existed.

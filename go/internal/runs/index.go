@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyjson"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -327,10 +329,16 @@ func scanLegacyRunDirs(runsRoot string, yield func(dir string, meta map[string]a
 	if err != nil {
 		return
 	}
-	// os.ReadDir is already sorted by name, which is what Python's
-	// sorted(root.iterdir()) amounts to for a single parent: Path
-	// ordering compares the full path string, the prefix is shared, and
-	// UTF-8 byte order agrees with code-point order.
+	// os.ReadDir sorts by RAW BYTE, and runs.py:199's
+	// `sorted(root.iterdir())` sorts by surrogateescape-decoded code
+	// point. The comment that used to sit here asserted "UTF-8 byte order
+	// agrees with code-point order" -- which is true for every valid UTF-8
+	// name and false for exactly the ones this class is about. This scan's
+	// FIRST HIT WINS, so the order decides WHICH run a duplicate-reference
+	// migration resolves to (adversarial r8, MEDIUM, both reviewer seats).
+	sort.SliceStable(entries, func(i, j int) bool {
+		return pypath.FSLess(entries[i].Name(), entries[j].Name())
+	})
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue

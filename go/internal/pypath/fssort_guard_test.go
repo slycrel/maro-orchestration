@@ -22,9 +22,22 @@ import (
 //     a set? The second kind must NOT be converted;
 //     artifactcheck.pythonCandidates is the worked example and carries the
 //     reasoning at its site.
-//  2. Can the strings be non-UTF-8? Anything read from a directory can. A
-//     key that arrives inside JSON cannot, because json.dumps could not
-//     have written it.
+//  2. Can the strings be non-UTF-8? Anything read from a directory can.
+//     A key that arrives inside JSON can TOO, and this rule used to say
+//     the opposite -- "a key that arrives inside JSON cannot, because
+//     json.dumps could not have written it" (adversarial r8, LOW, both
+//     reviewer seats). json.dumps defaults to ensure_ascii=True, which
+//     escapes a lone surrogate to the pure-ASCII text \udc80; that writes
+//     to a strict-UTF-8 file without complaint and json.loads returns the
+//     surrogate. So the honest question is about the GO side: does the
+//     decoder this port uses hand back a non-UTF-8 string? It does not --
+//     encoding/json substitutes U+FFFD for the escape, which is itself a
+//     named measured residual at pyval.go:487-521 -- so byte order and
+//     code-point order coincide on every Go string that arrives this way.
+//     That is the reason seven rows below are allowed, and it is a
+//     different reason from the one they were admitted under. A decision
+//     procedure that returns the right answer for the wrong reason
+//     returns the wrong answer at the next site.
 //
 // A site that sorts filenames AND reproduces a Python `sorted()` belongs
 // on FSLess and not in this table.
@@ -211,6 +224,43 @@ var globOrderAllowlist = map[string]string{
 		"already named as a residual",
 }
 
+// readDirOrderAllowlist is every function that takes `os.ReadDir`'s order
+// and never replaces it, keyed `<rel path>:<func>`, with the reason that
+// is correct there.
+//
+// `os.ReadDir` IS a sort. It byte-orders its entries inside the standard
+// library, and that call is not in this tree — so a function that reads a
+// directory and simply uses the result is a raw-byte filename order that
+// NO arm above can see: there is no `sort.Strings` to count, and the
+// class guard needs a sorting call inside the function before it will
+// look. This is the identical argument the glob arm was added for one
+// round earlier, and it is the FOURTH spelling of a class that has now
+// been found in nine shipped sites (r8, both reviewer seats independently).
+//
+// Note what is NOT on this list and why: `metrics.globRunCards` uses
+// `f.ReadDir(-1)` on an open *os.File, which returns entries in raw
+// DIRECTORY order and does not sort. That is deliberate and correct there
+// — Python's `Path.glob` is also unsorted — so the arm below matches the
+// `os.ReadDir` package call specifically rather than the method name. The
+// two spellings mean opposite things and a guard that conflated them
+// would have demanded a "fix" that introduced a divergence.
+var readDirOrderAllowlist = map[string]string{
+	"internal/artifactcheck/artifactcheck.go:SnapshotDir": "artifact_check.py:169 " +
+		"walks with os.walk, which sorts NEITHER dirnames nor filenames, and " +
+		"the result is a dict keyed by relative path that is compared, never " +
+		"serialised — so no order is observable on either side",
+	"internal/loop/finalize_helpers.go:pruneStepArtifacts": "the entries are " +
+		"filtered and DELETED; nothing is returned, appended or rendered, so " +
+		"the order cannot reach an observer",
+	"internal/recall/recall.go:FindPriorAttempts": "recall.py:407-410 sorts a " +
+		"generator over an UNSORTED root.iterdir() by mtime, so CPython's " +
+		"tie-break is raw readdir order and there is no Python order to " +
+		"reproduce. The port's byte order is its own determinism guarantee — " +
+		"category 1 in the header above. One r8 seat reported this as a " +
+		"divergence and the other checked it and cleared it; the Python is " +
+		"the tiebreaker and it says unsorted.",
+}
+
 // dirSortAllowlist is every function in the module that both lists a
 // directory and sorts WITHOUT pypath.FSLess, keyed `<rel path>:<func>`,
 // with the reason the raw-byte order is correct there.
@@ -225,8 +275,6 @@ var dirSortAllowlist = map[string]string{
 		"filename: run dirs by mtime, attempts by the raw started_at string",
 	"internal/artifactcheck/artifactcheck.go:SnapshotDir": "os.walk does not " +
 		"sort dirnames, so this order is the port's own, not a Python sorted()",
-	"internal/closure/inventory.go:projectFileInventory": "os.walk does not " +
-		"sort, so this order is the port's own guarantee over a prompt listing",
 	"internal/pack/adopt.go:Adopt": "sorts the NOT-FOUND name list for the " +
 		"error message, built from argv rather than from the directory read",
 }
@@ -267,7 +315,7 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 		call string
 		line int
 	}
-	var found, globbers []site
+	var found, globbers, readers []site
 	listers, scanned := 0, 0
 
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, werr error) error {
@@ -290,7 +338,7 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 			}
 			lists := false
 			var sorts []*ast.CallExpr
-			var globLine int
+			var globLine, readDirLine int
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -305,6 +353,15 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 						pkg.Name == "filepath" && fun.Sel.Name == "Glob" &&
 						globLine == 0 {
 						globLine = fset.Position(call.Pos()).Line
+					}
+					// `os.ReadDir` specifically, not the method name: a
+					// `f.ReadDir(-1)` on an open file returns DIRECTORY
+					// order and does not sort, which is the correct
+					// spelling opposite an unsorted Python glob.
+					if pkg, ok := fun.X.(*ast.Ident); ok &&
+						pkg.Name == "os" && fun.Sel.Name == "ReadDir" &&
+						readDirLine == 0 {
+						readDirLine = fset.Position(call.Pos()).Line
 					}
 					if pkg, ok := fun.X.(*ast.Ident); ok &&
 						sortingCalls[pkg.Name+"."+fun.Sel.Name] {
@@ -325,6 +382,14 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 					key:  rel + ":" + fn.Name.Name,
 					call: "filepath.Glob",
 					line: globLine,
+				})
+			}
+			// Same argument, the other standard-library sort.
+			if readDirLine != 0 && !usesFSLess(fn.Body) {
+				readers = append(readers, site{
+					key:  rel + ":" + fn.Name.Name,
+					call: "os.ReadDir",
+					line: readDirLine,
 				})
 			}
 			if !lists {
@@ -402,14 +467,42 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 				"glob detector stopped seeing it.", key, reason)
 		}
 	}
+	seenRD := map[string]bool{}
+	sort.Slice(readers, func(i, j int) bool { return readers[i].key < readers[j].key })
+	for _, r := range readers {
+		seenRD[r.key] = true
+		if _, listed := readDirOrderAllowlist[r.key]; listed {
+			continue
+		}
+		t.Errorf("%s (line %d) takes os.ReadDir's order and never replaces "+
+			"it. os.ReadDir sorts by raw BYTE, inside the standard library, "+
+			"where no scan of this tree can see it. If the Python here does "+
+			"a sorted() over a directory listing, that order must come from "+
+			"pypath.FSLess instead; if the Python is unsorted, or the order "+
+			"cannot reach an observer, add it to readDirOrderAllowlist "+
+			"saying which.", r.key, r.line)
+	}
+	for key, reason := range readDirOrderAllowlist {
+		if !seenRD[key] {
+			t.Errorf("readDirOrderAllowlist has %q (%s) but the scan no "+
+				"longer finds it — either it was fixed and the row should "+
+				"go, or the os.ReadDir detector stopped seeing it.", key, reason)
+		}
+	}
+	if len(readers) < 3 {
+		t.Fatalf("only %d unreplaced os.ReadDir order(s) found; the ReadDir "+
+			"detector is not measuring anything", len(readers))
+	}
+
 	if len(globbers) < 3 {
 		t.Fatalf("only %d unreplaced filepath.Glob order(s) found; the glob "+
 			"detector is not measuring anything", len(globbers))
 	}
 
 	t.Logf("%d files parsed, %d directory-listing functions, %d raw-byte "+
-		"sorts inside them, %d unreplaced Glob orders",
-		scanned, listers, len(found), len(globbers))
+		"sorts inside them, %d unreplaced Glob orders, %d unreplaced "+
+		"ReadDir orders",
+		scanned, listers, len(found), len(globbers), len(readers))
 }
 
 // usesFSLess reports whether pypath.FSLess appears anywhere inside the

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -591,9 +593,19 @@ func ListMissions(ws string) []MissionSummary {
 	if err != nil {
 		return results
 	}
-	// os.ReadDir returns entries sorted by filename, which is the order
-	// Python's sorted(iterdir()) produces: the paths share a parent, so
-	// comparing the full path strings orders them by name.
+	// os.ReadDir sorts by RAW BYTE. mission.py:1116's
+	// `sorted(projects_root.iterdir())` compares the
+	// surrogateescape-DECODED path string, and the two part on any project
+	// directory whose name is not valid UTF-8. The comment that used to sit
+	// here said ReadDir's order "is the order Python's sorted(iterdir())
+	// produces" -- the same false equivalence, stated as settled, that this
+	// class has now been found asserting in four separate files. Measured
+	// with projects m\x80z and m-e-acute-z, each holding a mission.json:
+	// CPython returns e-acute first, Go returns \x80 first (adversarial r8,
+	// MEDIUM).
+	sort.SliceStable(entries, func(i, j int) bool {
+		return pypath.FSLess(entries[i].Name(), entries[j].Name())
+	})
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue

@@ -236,23 +236,15 @@ func acGeneric(t *testing.T, v any) any {
 	return out
 }
 
-// acScriptedInert is the Go half of the probe's `_fake`: it identifies a
-// candidate by CONTENT, not by path, because the real `_python_is_inert`
-// only ever sees source text.
-//
-// Both sides walk the script in the same order — the probe reads a JSON
-// object whose keys arrive in the order Go's encoder emitted them, which
-// is sorted — so a script naming two files with IDENTICAL content would
-// still answer the same on both sides. It would nonetheless be a fixture
-// whose answer depends on something the fixture does not state, so
-// acAssertDistinctScriptedContent refuses one.
 // acUniversalNewlines is this harness's OWN reading of what text mode does
 // to line endings — deliberately a second implementation rather than a call
-// to pyReadTextNewlines. It is the oracle the production translation is
-// measured against, and an oracle that shares code with its subject moves
-// whenever the subject does. Written character by character from the rule:
-// scan once, a CR swallows a following LF, and either way one "\n" is
-// emitted.
+// to the production translation (`pytext.TranslateNewlines`; before r7 the
+// file-local `pyReadTextNewlines`, which is why this paragraph used to name
+// a function that no longer exists — r8, LOW). It is the oracle that
+// translation is measured against, and an oracle that shares code with its
+// subject moves whenever the subject does. Written character by character
+// from the rule: scan once, a CR swallows a following LF, and either way
+// one "\n" is emitted.
 func acUniversalNewlines(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
@@ -268,6 +260,20 @@ func acUniversalNewlines(s string) string {
 	return b.String()
 }
 
+// acScriptedInert is the Go half of the probe's `_fake`: it identifies a
+// candidate by CONTENT, not by path, because the real `_python_is_inert`
+// only ever sees source text.
+//
+// Both sides walk the script in the same order — the probe reads a JSON
+// object whose keys arrive in the order Go's encoder emitted them, which
+// is sorted — so a script naming two files with IDENTICAL content would
+// still answer the same on both sides. It would nonetheless be a fixture
+// whose answer depends on something the fixture does not state, so
+// acAssertDistinctScriptedContent refuses one.
+//
+// (This paragraph sat above acUniversalNewlines with no separator, so godoc
+// filed the sort.Strings determinism argument under newline translation and
+// left this function undocumented — r8, NIT.)
 func acScriptedInert(t *testing.T, base string, script map[string]any) InertFunc {
 	names := make([]string, 0, len(script))
 	for n := range script {
@@ -287,8 +293,9 @@ func acScriptedInert(t *testing.T, base string, script map[string]any) InertFunc
 			// so the two runtimes would take different fail-open paths for a
 			// reason the fixture never stated (r6 LOW).
 			//
-			// SPELLED OUT rather than calling pyReadTextNewlines, and the
-			// mutation battery is why: with the shared call, mutating the
+			// SPELLED OUT rather than calling the production translation
+			// (pytext.TranslateNewlines), and the mutation battery is why:
+			// with the shared call, mutating the
 			// production translation mutated the ORACLE with it, both sides
 			// of this comparison moved together, and two of three newline
 			// mutants survived. A test that reuses its subject as its own

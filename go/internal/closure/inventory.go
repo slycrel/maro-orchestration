@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 )
 
 // projectFileInventory is a bounded relative-path listing of the
@@ -30,7 +32,26 @@ func projectFileInventory(root string, cap int) string {
 		if err != nil {
 			return true
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Name() < items[j].Name() })
+		// pypath.FSLess, not a bare `<`. closure_verify.py:697 and :700 are
+		// TWO real sorted() calls -- `dirnames[:] = sorted(...)` and
+		// `for fn in sorted(filenames)` -- and CPython compares the
+		// surrogateescape-DECODED name while `<` on a Go string compares
+		// raw bytes. The two part on any entry that is not valid UTF-8.
+		//
+		// This shipped as the byte spelling for months under a
+		// dirSortAllowlist row asserting "os.walk does not sort", which is
+		// true of artifact_check's walk and false of this one. Measured
+		// over a tree holding a\x80z.txt, a-e-acute-z.txt, d\x80/k.txt and
+		// d-e-acute/k.txt: CPython lists e-acute before \x80, Go the
+		// reverse -- and AT THE CAP the two engines name DIFFERENT FILES,
+		// which is the W24 shape this whole class exists to prevent. The
+		// listing is ground truth for the closure plan, so a truncated
+		// inventory naming a different file is a false-negative closure
+		// verdict that appears on one runtime only (adversarial r8,
+		// MEDIUM, found independently by both reviewer seats).
+		sort.SliceStable(items, func(i, j int) bool {
+			return pypath.FSLess(items[i].Name(), items[j].Name())
+		})
 		// Files in this dir first, then subdirs — matching os.walk's
 		// per-directory visit order closely enough for a prompt listing.
 		for _, it := range items {

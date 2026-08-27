@@ -134,6 +134,14 @@ func isoCorpus() []string {
 		"2026W34", "2026-235", "2026235", "2026-02-29", "2024-02-29",
 		"2026-13-01", "2026-00-10", "2026-08-00", "2026-08-32", "2025-W53-1",
 		"2026-W53-1", "2026-W53-7", "2026-W00-1", "2026-W34-8", "2026-8-22",
+		// 2020 is a LEAP year whose Jan 1 is a Wednesday, which is the only
+		// shape that exercises the second disjunct of the week-53 rule
+		// (`first == 3 && isLeap(y)`). Without it that disjunct could be
+		// DELETED and the whole 97k-input corpus stayed green: 2025 starts
+		// Wednesday but is not leap, so isLeap was pinned only as a
+		// REJECTER and never as an accepter (adversarial r8, LOW, found by
+		// mutation). 2032 and 1976 are the neighbours if more are wanted.
+		"2020-W53-1", "2020-W53-7", "2020-W54-1",
 		"2026-08-2", "999-08-22", "0001-01-01", "0001-01-02", "9999-12-31",
 		"8709033", "87090330",
 	}
@@ -200,7 +208,7 @@ func isoCorpus() []string {
 	// where `..._` does not. No alphabet above contains \x00, so the whole
 	// class was invisible to 95,312 inputs (r3 MEDIUM).
 	//
-	// Swept rather than sampled: 0-3 NULs at EVERY position of each base,
+	// Swept rather than sampled: 1-3 NULs at EVERY position of each base,
 	// because the tolerance is position-dependent and count-dependent in
 	// ways no random draw would separate (one trailing NUL parses, two do
 	// not — except after a six-digit fraction, where any number does).

@@ -240,6 +240,26 @@ func ListBlockedProjects(ws string) ([]Status, error) {
 			out = append(out, st)
 		}
 	}
+	// orch_items.py:779 is
+	// `sorted(out, key=lambda s: (s.priority, s.blocked, s.slug), reverse=True)`.
+	// The slug is IN the key, so the tiebreak is a real Python string
+	// comparison over surrogateescape-decoded code points -- and a bare `>`
+	// on a Go string is raw bytes. ListProjects hands this function a
+	// correctly FSLess-ordered slug list and this sort threw that order
+	// away again, one call apart: the "fixed the site that had the fixture"
+	// shape at the smallest possible distance. Measured with projects
+	// a\x80z and a-e-acute-z at equal priority and equal blocked count, so
+	// the slug decides: CPython returns \x80 first, Go returned e-acute
+	// first (adversarial r8, MEDIUM).
+	//
+	// Note for the guard: this site is invisible to every arm of the fssort
+	// guards. The listing happens in ListProjects and the sort here, so the
+	// "lists AND sorts" predicate never fires, and no arm reads comparator
+	// BODIES. A bare `<`/`>` on a name inside a comparator is a fifth
+	// spelling of this class. It is not guarded by an AST arm because a
+	// census found 32 such comparators tree-wide and all but these are
+	// numeric -- 30 allowlist rows about float comparisons would be a
+	// guard nobody reads. Recorded here instead of pretended away.
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Priority != out[j].Priority {
 			return out[i].Priority > out[j].Priority
@@ -247,7 +267,7 @@ func ListBlockedProjects(ws string) ([]Status, error) {
 		if out[i].Blocked != out[j].Blocked {
 			return out[i].Blocked > out[j].Blocked
 		}
-		return out[i].Slug > out[j].Slug
+		return pypath.FSLess(out[j].Slug, out[i].Slug) // reverse=True
 	})
 	return out, nil
 }

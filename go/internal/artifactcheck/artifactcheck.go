@@ -1071,8 +1071,12 @@ func hhMMSSff(t string, hasTZ bool) (h, mi, sec, micro int, ok bool) {
 		// it from an embedded NUL. So `12:34:56\x00` is 12:34:56 while
 		// `12:34:56_` is a ValueError, and `12:34:56\x00\x00` is a
 		// ValueError again — the tolerance is for exactly ONE. Measured,
-		// not modelled; the r3 corpus sweeps 0-3 NULs through every
-		// position of seventeen bases and this is the shape that survives.
+		// not modelled; the r3 corpus sweeps 1-3 NULs through every
+		// position of twenty-five bases and this is the shape that
+		// survives. (Counted r8: the sentence said "0-3" and "seventeen",
+		// and both were wrong at BIRTH -- the loop is `for n := 1; n <= 3`,
+		// so the un-NUL'd base is not a case this sweep contributes, and
+		// eight of the bases are the two-digit offset bodies r6 added.)
 		//
 		// The `hasTZ` half stays as it was: the tz split happens before
 		// this function is called, so `12:34:56\x00Z` arrives here as
@@ -1398,7 +1402,9 @@ func pathExists(p string) bool {
 // form is one rounding of a much larger integer. The two differ by an ulp
 // for a bit over a quarter of ordinary timestamps: measured over 200000
 // random (sec, nsec) pairs at 2017-2030 epochs, 26.97% disagree, max delta
-// 2.38e-7s. That is two thousand times smaller than MtimeEps, and it is
+// 2.38e-7s. That is 420 times smaller than MtimeEps (1e-4 / 2.38e-7; the
+// sentence said "two thousand", overstating the headroom about fivefold --
+// r8, LOW), and it is
 // still enough to move a value across the boundary, because the comparison
 // is `>` on the raw difference.
 //

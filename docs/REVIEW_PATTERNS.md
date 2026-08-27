@@ -131,7 +131,7 @@ shape is real and the tripwire is cheap; treat it as a self-review prompt
 rather than as a measured recurrence.
 
 ### L4 — A guard that cannot fire is not evidence the danger is gone
-*instances: 14*
+*instances: 16*
 
 **Canonical instance.** Deleting the `is_error` check from
 `classify_tool_pathologies`' hallucination scan survived a 37-mutant
@@ -157,7 +157,7 @@ mutant survived.
 *instances: 1*
 
 ### L7 — A detector that cannot see the case you already have is agreeing, not measuring
-*instances: 1*
+*instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
 *instances: 34*
@@ -187,7 +187,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 8 — plus standing (Jeremy, 2026-08-16)*
+*instances: 9 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 86*
+*instances: 89*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -490,7 +490,7 @@ the measurement that produced them.
 *instances: 2*
 
 ### L30 — A fixture travels through a channel, and the channel has opinions about what it carries
-*instances: 3*
+*instances: 4*
 
 **Canonical instance.** `pyprobe.RunJSON` has no `UseNumber`, so a known-gap
 pin comparing re-decoded numbers saw `1.0` come back as `1`. The fix was to
@@ -1086,7 +1086,7 @@ half-way value for a round. "I know what sum does" is the claim being
 tested, and it is the claim that has never once survived contact.
 
 ### L50 — A sort is only as faithful as the order of its input
-*instances: 1*
+*instances: 4*
 
 `sorted(X, key=k)` is two decisions, not one: the key, and the order X
 already had. Reviewers check the key. The port gets X from whichever Go
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 21*
+*instances: 24*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1842,6 +1842,67 @@ assumption that lets it through.
 
 **Tripwire.** Before closing a round, list the fixes it made and ask of
 each: what did this fix newly make possible? Then check that.
+
+### P15 — A widened guard's own census is the population; a review's findings are a sample
+*instances: 1*
+
+When a guard is broadened to cover a new spelling of a known class, the
+temptation is to fix the sites the review named and then run the guard to
+confirm green. That order gets the evidence backwards. The review looked at
+whatever the reviewer's attention reached; the widened guard looks at
+*every* site in the tree. Run it FIRST, with nothing fixed, and read the
+whole list — including the sites the review did not mention.
+
+**Measured twice, one day apart, on the same defect class.**
+
+- *r7, `filepath.Glob`.* The review named one globbing site. The widened
+  arm, run before any fix, named THREE, and the extra one
+  (`tasks.List`) had a stacked double byte-sort under a comment calling the
+  explicit sort redundant. Both allowlists carried a false reason for it,
+  and the r7 reviewer had explicitly re-derived those reasons and called
+  them clean.
+- *r8, `os.ReadDir`.* Two independent reviewer seats between them named
+  five candidate sites. The `readDirOrderAllowlist` arm, run before any
+  fix, named exactly the three that were real — and the run afterwards
+  fired the must-still-be-observed rule on a STALE allowlist row whose site
+  had just been fixed. Neither the fix list nor the stale row came from a
+  review.
+
+**Tripwire.** A widening commit must record the census the guard produced
+*before* the fixes, not just the green afterwards. If the commit message
+can only say "green", the widening was verified against the review's
+sample.
+
+Companion to L13 (a fix at the site that has the fixture is not a fix for
+the class) and to L4 (a guard that cannot fire is not evidence): this is
+how you find out which of the two you are looking at.
+
+### L55 — A fixture can defend the configuration that does not ship
+*instances: 1*
+
+A test seam exists so a fixture can drive a path that is hard to reach
+otherwise. The failure is when EVERY fixture uses the seam and every
+production caller passes the default — the rows then pin the behaviour of a
+configuration that never runs, and the shipped one is uncovered while the
+suite reports a well-tested function.
+
+**Measured, `artifactcheck` r7** (named as a lens in r8, when the same
+shape turned up a second time). Rows D4–D6 all supplied a scripted
+`InertFunc`, so all three measured the port against a hand-written
+inertness verdict. Every production caller passes `nil`, and with `nil` the
+port declines the layer entirely and answers "no fabrication signal" where
+CPython consults a real AST and answers "inert-output". Three green rows,
+and the divergence they were closest to was the one thing they could not
+see. The replacement is a Go-only contract test over the `nil` seam
+specifically, plus a comment saying why a row whose two sides are SUPPOSED
+to differ cannot be a differential.
+
+**Tripwire.** For any test seam, count the fixtures that use it against the
+production callers that do. If no fixture runs the default, the default is
+untested no matter how many rows exist.
+
+Distinct from L1 (a test that agrees may be testing nothing): here the test
+really does measure something — it measures the wrong build.
 
 ---
 

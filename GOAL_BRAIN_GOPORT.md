@@ -129,8 +129,8 @@ scripts so these can be recomputed rather than trusted.
 | Test lines | 81,834 (**1.38 : 1**) | ditto |
 | Packages with a live CPython differential | **37 of 46** — 56,870 lines, **95.7% of production** | ditto; "live" = the test starts a real interpreter and compares, not a transcribed expectation |
 | Python modules with **no Go reference anywhere** | **118 of 183** — 59,962 lines, **45.2%** | ditto. This is a **FLOOR**: "reference" is the loosest test (filename appears anywhere in the Go tree, comments included), so the true unported figure is worse and nothing yet measures how much worse |
-| Review-ledger rows, this arc | **836** (227 high / 365 medium / 225 low / 19 nit) | `review/findings.jsonl`, arc `go-port` |
-| Measured hallucination rate | **11 of 836 rows retracted** as `hallucinated` | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro |
+| Review-ledger rows, this arc | **854** as of 2026-08-27 (836 at the 08-26 audit, +18 from r8) | `review/findings.jsonl`, arc `go-port`; counted, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
+| Measured hallucination rate | **13 of 799 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
 | Tranches needing 4+ review rounds | **33 of 66** targets | ditto. Deepest: `guard` 18, `handlequeue` 13, `evolver` 12, `dispatch` 12 |
 | Both engines compared, READ path | **6 renderers, 6 identical, 0 differ, 0 refused** | `go/tools/engine-compare.py` over a copy of the live workspace, 2026-08-26 |
 | Both engines compared, WRITE path | **never run** | harness designed, unbuilt: `scratchpad/write_path_harness_design.md` |
@@ -213,13 +213,13 @@ either outcome.
 
 | Thread | State |
 |---|---|
-| `internal/artifactcheck` review to fixpoint | **r7 landed** (`3435ac6d`). r8 running on codex (cross-family) with a second opus seat. r7 ended LOWS ONLY: no |
+| `internal/artifactcheck` review to fixpoint | **r8 landed** — two seats (opus + codex `gpt-5.6-terra`), 18 ledger rows, four production sort fixes with CPython differentials. Both seats ended LOWS ONLY: no, so **r9 is the open gate** |
 | `internal/syshealth` review to fixpoint | at r5; **r6 is the open gate**. Brief written |
-| `internal/recall` CPython differential | **dispatched** to the codex build lane, worktree `go-port-lane2` |
+| `internal/recall` CPython differential | **built** by the codex build lane in `go-port-lane2`, full suite green there; **not yet landed** here. Only 3 mutants for 3 tests — a deeper mutation pass is owed. One divergence reported and NOT fixed: `goal_achieved: "false"` (a string) → CPython `None` (unjudged), Go `false` (judged not achieved), fail-closed in Go |
 | `internal/provenance` CPython differential | open, unscheduled |
 | `internal/missionrun` has no test file at all | open, unscheduled |
 | Write-path comparison harness | **designed, unbuilt.** The first moment the arc pays off on writes |
-| Remaining first-pass tranches, sequenced | fable planner running; output → `scratchpad/PORT_PLAN.md` |
+| Remaining first-pass tranches, sequenced | **planner returned** → `scratchpad/PORT_PLAN.md`. First pass = 74 modules / 37,777 py lines, ~29 review units, **~120–170 review rounds**. Recommends Option B (comparable core: 62 modules, 25,972 lines, ~90–120 rounds) stopping at a mission dry-run comparison. Unacted |
 | Directory-mode fix: 33 `0o755` + 7 inline `0o777` → `record.NewDirMode` | filed in BACKLOG |
 | `check_system_health` | blocked on `llm.DetectBackends` plus a python3 shell-out seam |
 | `artifact_check.py` slice 2 (~250 lines, :483–736) | design captured, unbuilt |
@@ -274,3 +274,40 @@ whole census rather than the one site the review named — the standing rule
 that came out of it is **the findings a review reports are a sample; the
 guard's own census is the population**. Jeremy funded parallel capacity;
 lanes opened; this file created.
+
+**2026-08-27** — `internal/artifactcheck` **r8** to a landed round, run as
+a **two-seat panel** (opus same-family + codex `gpt-5.6-terra`
+cross-family, neither prompted with the other's findings). They converged
+on one class and each found sites the other missed. The class: **`os.ReadDir`
+is a sort** — the exact twin of r7's `filepath.Glob` blind spot, one
+spelling over, and the most common way this tree lists a directory. Four
+production fixes (`closure.projectFileInventory`, `orch.ListMissions`,
+`runs.scanLegacyRunDirs`, `orch.ListBlockedProjects`), each with a CPython
+differential proved able to fail by reverting its own fix. Two of the four
+are **W24**, not W23: the inventory truncates at its cap so the engines
+*name different files*, and the legacy scan's first-hit-wins decides which
+run a duplicate-reference migration resolves to.
+
+The seats **disagreed on one finding** (`recall.FindPriorAttempts`) and the
+Python settled it: `recall.py:407-410` sorts a generator over an *unsorted*
+`iterdir()`, so there is no CPython order to reproduce. Filed as an
+allowlist row, not fixed. Two seats disagreeing is the cheapest signal that
+a site needs the source read rather than the diff.
+
+The census discipline paid a second time: the new `readDirOrderAllowlist`
+arm was run **before any fix**, named exactly the three real sites out of
+the five the seats between them proposed, and then the guard's own
+must-still-be-observed rule caught a `dirSortAllowlist` row that the fixes
+had just made stale. Two catalog entries minted: **P15** (a widened guard's
+own census is the population) and **L55** (a fixture can defend the
+configuration that does not ship — named now, filed against r7 where it was
+measured).
+
+Also corrected: an allowlist decision rule that was **false** (`json.dumps`
+with `ensure_ascii=True` escapes a lone surrogate to pure ASCII, so a key
+*can* arrive inside JSON non-UTF-8; seven allowlist rows had been admitted
+by that reason and are safe only because Go's `encoding/json` substitutes
+U+FFFD), two comment counts wrong at birth (25 bases not seventeen; 420×
+not 2000×), and a 97,116-input ISO corpus that could not observe the
+leap-Wednesday disjunct — `isLeap` was pinned as a rejecter and not as an
+accepter until `2020-W53-1` was added.
