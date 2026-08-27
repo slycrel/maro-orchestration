@@ -236,6 +236,33 @@ they must disagree, but because the explanation on file just stopped being
 true and somebody should look at it. The correct response to that failure
 may well be to delete the row.
 
+### 2026-08-27 — a pattern catalog that only a reviewer reads is a catalog, not a ratchet
+
+Jeremy: *"Are we still documenting the patterns we find in the review
+arcs? My hope was that we could note them so we could start avoiding them,
+rather than repeating them... and seems like we are continuing to
+propagate that problem."*
+
+Accurate, and the file said so about itself. `docs/REVIEW_PATTERNS.md`
+carried the clause *"a lens is retired only when the shape it names
+becomes structurally impossible"* for its entire life without ever using
+it, while the instance counts climbed — L14 at 9, L28 at 22 on one
+package, L52 at 24. Every "How to use it" bullet addressed the REVIEWER.
+A reviewer-facing catalog cannot stop a class; it can only find it again.
+
+The standing answer is mechanical, not exhortative: **when a lens fires
+twice on the same surface, stop fixing the property and go close the
+lens.** `scripts/review-ledger.py closable` reports every (lens, target)
+pair that has fired more than once, so the queue is data rather than
+memory. A closure is recorded in the register with the surface, the check,
+and the mutations proving the check can fail.
+
+Not a prompt taxonomy — a test. Two closed so far: P6 on the `maro task`
+argv surface (`task_surface_diff_test.go`), and L14/L28 on every
+production regex literal in the port (`escape_census_test.go`, which found
+a live lane-flipping divergence on its first run, in a pattern two review
+rounds had already edited).
+
 ---
 
 ## Threads (system-maintained — nothing leaves this list silently)

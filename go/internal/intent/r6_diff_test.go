@@ -18,6 +18,13 @@ import (
 //
 // Driven against the real _requires_file_output, so no arm is argued
 // from a reading of the pattern.
+// Built from code points: a fixture whose subject is WHICH separator it
+// carries cannot be reviewed if the answer is "look closely at that space".
+var (
+	nbspIntent = string(rune(0x00A0)) // NO-BREAK SPACE
+	vtabIntent = string(rune(0x000B)) // LINE TABULATION
+)
+
 var fileOutputCorpus = []string{
 	// THE finding: a non-ASCII letter inside the filename stem, which
 	// Python's [\w-]+ matches and Go's did not.
@@ -78,6 +85,29 @@ var fileOutputCorpus = []string{
 	"write " + strings.Repeat("x", 40) + " to out.json",
 	"write " + strings.Repeat("x", 41) + " to out.json",
 	"write " + strings.Repeat("x", 42) + " to out.json",
+
+	// The `\S` half of the same class, found 2026-08-27 by censusing the
+	// regex literals rather than by review. The comment above reasons FROM
+	// `\S*` being "greedy over anything non-space" without ever asking
+	// whether the two engines agree on which characters those are: Go's
+	// `\S` is the complement of five code points, Python's the complement
+	// of 29, so a separator inside the filename stem is eaten by Go's
+	// greedy run and stops Python's. Direction is the REVERSE of r6 — Go
+	// forces lane=agenda where CPython leaves it now.
+	//
+	// Both need the separator INSIDE the stem, after the `to`: the
+	// SpaceClass+ ahead of it already agrees, so a leading one proves
+	// nothing.
+	"write to a" + nbspIntent + "b.md",
+	"write to a" + vtabIntent + "b.md",
+	// U+001C, which is `\s` to Python and not even close for Go, and needs
+	// no Unicode to type.
+	"write to a" + string(rune(0x1C)) + "b.md",
+	// The ASCII control: an ordinary space in the same position, which
+	// both engines treat as a separator and both answer False.
+	"write to a b.md",
+	// ...and the same stem with nothing between, which both answer True.
+	"write to ab.md",
 
 	// The ordinary lanes, ASCII, which already agreed.
 	"write it to a file",

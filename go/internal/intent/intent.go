@@ -105,8 +105,11 @@ Respond ONLY with a JSON object:
 // fileOutputRe ports _FILE_OUTPUT_RE: the goal explicitly asks for
 // output on disk (path, artifacts/, "to a file").
 //
-// Every `\b`, `\s` and `\w` here is rebuilt from pytext: Go's are ASCII
-// and five-code-point where Python's are Unicode and 29. Measured, the
+// Every `\b`, `\s`, `\w` and `\S` here is rebuilt from pytext: Go's are
+// ASCII and five-code-point where Python's are Unicode and 29. The `\S`
+// joined that list on 2026-08-27 — this sentence named three escapes when
+// the pattern had four, and an enumeration that is wrong at birth is not
+// caught by keeping it up to date. Measured, the
 // verbatim transcription missed `save the summary to café.md` — CPython
 // forces lane="agenda" ("Names a file deliverable") and Go left it "now",
 // which is a different execution path, not a different field
@@ -125,7 +128,20 @@ var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|
 	fileOutWindow + `)` + `to` + pytext.SpaceClass +
 	// `(?-i:` because this pattern sets `(?i)` and a raw class spliced
 	// from WordClassBody fold-grows by U+0345 — see pytext.WordClass.
-	`+\S*(?-i:[` + pytext.WordClassBody + `-])+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
+	//
+	// NotClass("") rather than `\S`, and it is the SAME finding as r6 one
+	// escape to the left. Go's `\S` is the complement of five code points
+	// where Python's is the complement of 29, so U+00A0 and U+000B are
+	// NON-space to Go and it runs the greedy stem straight through them.
+	// Measured, both engines: `write to a<U+00A0>b.md` is False in CPython
+	// and was True here — Go forcing lane=agenda where CPython leaves it
+	// now, which is r6's divergence in the opposite direction.
+	//
+	// r6 rebuilt every `\b`, `\s` and `\w` in this pattern and left the
+	// one `\S`. The doc above enumerated the three it fixed, which is why
+	// nothing caught it for two rounds; the census guard in
+	// pytext/foldinvariance_test.go is what catches the next one.
+	`+` + pytext.NotClass("") + `*(?-i:[` + pytext.WordClassBody + `-])+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
 	pytext.WordStart + `to` + pytext.SpaceClass + `+(?:a` + pytext.SpaceClass +
 	`+)?file` + pytext.WordEnd + `|` +
 	pytext.WordStart + `as` + pytext.SpaceClass + `+(?:its` + pytext.SpaceClass +

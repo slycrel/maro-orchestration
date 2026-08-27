@@ -481,6 +481,31 @@ and the one worth doing first.
 **The measurement is in `go/COVERAGE.md`**, along with the script that
 re-derives it, so this entry does not have to be trusted.
 
+### Go port: `intent`'s lane regex kept one `\S` through two review rounds (FOUND+FIXED 2026-08-27, escape census)
+
+`intent.fileOutputRe` picks the EXECUTION LANE. mission-r6 found Go's
+ASCII `\w` missing `save the summary to café.md` and rebuilt the
+pattern's `\b`, `\s` and `\w` from `pytext`; mission-r7 then found a
+HIGH inside r6's own fix. Neither touched the `\S` between them.
+
+Measured, both engines: `write to a<U+00A0>b.md` is False in CPython and
+was **true** here — Go's `\S` is the complement of five code points where
+Python's is the complement of 29, so the greedy stem runs straight through
+a separator that stops CPython's. Direction is the REVERSE of r6: Go
+forces `lane=agenda` where CPython leaves it `now`. Fixed with
+`pytext.NotClass("")`; three fixtures added to the r6 corpus, and
+reverting the fix fails those three and only those.
+
+**The reason it survived two rounds is the finding worth keeping.** r6's
+doc comment ENUMERATED the three escapes it had fixed, so the file read as
+complete — an enumeration that was wrong at birth, which is not a thing
+keeping it up to date can catch. Closed by construction:
+`go/internal/pytext/escape_census_test.go` parses every production `.go`
+file and fails on any `\s \S \w \W \b \B` in a `regexp.MustCompile`
+without a hand-written allowlist entry. Census at close: 140 production
+files, 81 calls, **4 escapes in 2 files**, both with a written reason.
+Recorded in `docs/REVIEW_PATTERNS.md`'s closure register.
+
 ### Go port: `re.IGNORECASE` folds the Turkish i and Go's `(?i)` does not — 16 patterns, 9 files (FOUND 2026-08-27, provenance differential)
 
 CPython's `re.IGNORECASE` case-folds U+0130 (LATIN CAPITAL LETTER I WITH

@@ -3961,11 +3961,20 @@ real divergence:
   keeps `encoding/json` from sorting the key order the test exists to
   check.
 
-**Named residual:** `pack.json`'s key ORDER. The manifest is a
-`map[string]any` across ~15 call sites including a foreign-file decode,
-so `FromPlain` sorts it. Escaping and indent are Python's; order is not.
-Nothing hashes those bytes (the payload hash is separate), and the fix is
-a typed manifest, not a renderer change.
+**Named residual — CLOSED 2026-08-27, see the section at the end of this
+file.** `pack.json`'s key ORDER. The manifest was a `map[string]any`
+across ~15 call sites including a foreign-file decode, so `FromPlain`
+sorted it. Escaping and indent were Python's; order was not. The
+diagnosis here was right and the prescription was right — "the fix is a
+typed manifest, not a renderer change" — and it named the shape of the
+work correctly enough that the fix, when it came, was `pyval.Obj`
+threaded through the whole package rather than one writer patched.
+
+The one thing this note got wrong is the reasoning that made it a
+residual: *nothing hashes those bytes*. True, and irrelevant. `pack` is
+the interop FORMAT — the sole reason it exists is that the other engine
+reads it — so "same values, different bytes" is the failure this package
+is supposed to not have, hash or no hash.
 
 ### Rule — an extraction is a refactor only if ORDER is preserved
 
@@ -14044,3 +14053,121 @@ from the denylist, `TrimSpace` dropped, nil read as absent, a stated
 CPython premise flipped, and one `goDiff` deleted from the ledger. A
 ninth (deleting the string arm outright) did not COMPILE and was replaced
 rather than counted — a mutant that does not build proves nothing.
+
+## The pack's key ORDER, and the escape r6 left behind (2026-08-27)
+
+Two closures in one chunk, unrelated except that both are the same
+mistake: **a fix scoped to the finding rather than to the construct.**
+
+### `pack` writes CPython's dict order now
+
+`maro pack` is how two Maro installs hand each other learning data. The Go
+wrote every `pack.json` key and every audit row ALPHABETICALLY — Go's
+`encoding/json` over a `map[string]any` — where CPython's `json.dumps`
+writes a dict in INSERTION order. Same values, different bytes, in the one
+format whose entire job is to be read by the other engine.
+
+This file named the residual at the time and got the prescription right
+(*"the fix is a typed manifest, not a renderer change"*). What it got
+wrong was the reason it stayed a residual: *nothing hashes those bytes*.
+True, and beside the point. `pack` IS the interop format.
+
+`pyval.Obj` now threads through the whole package rather than one writer
+being patched: `Export` builds the manifest ordered, `decodeManifest`
+reads a foreign `pack.json` through `LoadsOrdered` so an INCOMING order
+survives, and `Seal` uses `Obj.Set`. Three things a partial fix gets
+wrong, each of which cost a fixture:
+
+- `seal_pack` does `manifest["review"] = {...}` (`pack.py:457`). Assigning
+  to an EXISTING key does not move it, so `review` stays sixth. Rebuilding
+  or appending puts it last and rewrites every line after it.
+- Artifact entries have TWO shapes, and the conditional key lands in the
+  MIDDLE (`{class, path, rows, [quarantined_rows_skipped,] sha256}`)
+  because `sha256` is assigned after it — and it is ABSENT for zero rather
+  than written as 0. Collapsing the two builders into one optional field
+  is exactly how the key ends up at the tail.
+- The audit rows are `{**report, "action": ...}` and `{"class": cls,
+  **rest}`; a spread puts new keys LAST and existing ones where they were.
+
+**The digest is deliberately NOT reordered.** `payloadSHA256` is
+`json.dumps(sort_keys=True)`, so `pyCanonJSON`'s new `Obj` arm still
+sorts. Reordering it would have invalidated every pack either runtime has
+already sealed. `TestPayloadSHA256MatchesPython` now feeds it entries in a
+deliberately scrambled order against CPython's golden digest.
+
+**No existing test encoded the old order.** The shapes they happened to
+cover (`{lesson_id,new_id,outcome}`, `{name,outcome}`, `{kind,name}`) are
+alphabetical, so a Go map agreed with CPython BY COINCIDENCE and every
+`imports.jsonl` byte comparison passed while being blind to the bug. The
+new fixtures reach the two lanes that actually diverge (`{rule_id, hyp_id,
+outcome}` and `{class, path, outcome}`) and assert CPython's own rows are
+non-alphabetical FIRST, so they cannot go vacuous.
+
+Measured here, not taken on report: `pack.json` now differs in exactly one
+line, `origin.maro_version`, and the harness output went 631 → 454 lines
+with no key-order hunk left. The six differing scenarios stayed six, which
+is the honest number — the remaining reasons are the ones already named
+out of scope (file/dir MODE, Python's non-inert `--dry-run`, CLI stdout
+prose).
+
+`maro_version` is now ELIDED rather than allowlisted, because the
+allowlist works per ENTRY and this is one FIELD of a file whose every
+other byte is what the harness exists to compare. The two spellings are
+enumerated, not matched by shape, so a port writing anything else there
+fails the elision-counts check instead of being quietly normalised away.
+
+### `\S` — the escape r6 rebuilt around
+
+`intent.fileOutputRe` picks the execution LANE. mission-r6 found that Go's
+ASCII `\w` missed `save the summary to café.md` and rebuilt the pattern's
+`\b`, `\s` and `\w` from `pytext`. mission-r7 then found a HIGH inside
+r6's own fix. Neither round touched the `\S` sitting between them, and
+r6's doc comment ENUMERATED the three escapes it had fixed — so the file
+read as complete.
+
+Measured, both engines:
+
+```
+write to a<U+00A0>b.md    CPython False    Go true
+write to a<VT>b.md        CPython False    Go true
+write to a b.md           CPython False    Go false   (the ASCII control)
+```
+
+Go's `\S` is the complement of five code points, Python's the complement
+of 29, so a separator inside the filename stem is eaten by Go's greedy
+`\S*` and stops Python's. Direction is the REVERSE of r6: Go forces
+`lane=agenda` where CPython leaves it `now`. `pytext.NotClass("")` is the
+drop-in, and the r6 corpus's own comment reasons FROM `\S*` being "greedy
+over anything non-space" without ever asking whether the two engines agree
+on which characters those are — in the one file that exists because they
+do not.
+
+### The census that closes the class
+
+Five findings of this shape now, across three packages, one escape at a
+time. No amount of looking harder finds the next one: the reviewer has to
+already suspect the escape is there.
+
+`internal/pytext/escape_census_test.go` parses every production `.go` file
+in the module, pulls the string literals out of each `regexp.MustCompile`
+call, and fails on any `\s \S \w \W \b \B` that is not in a hand-written
+allowlist naming WHY. The 2026-08-27 census: **140 production files, 81
+calls, 4 carrying an escape**, in two files, both with a written reason
+(`provenance` keeps its literals byte-identical to the Python and
+transforms at the call; `scrub`'s `\b` is a named residual because the
+pattern is used for `ReplaceAllString` and the offsets matter).
+
+Parsed rather than text-scanned, and that is the load-bearing decision: a
+comment INSIDE the call is the common case here, and stripping `//` to
+end-of-line instead would truncate any pattern containing `://` and hide
+whatever follows — a false NEGATIVE in a test whose whole job is to not
+have one. Mutation-proven on that exact case.
+
+Five mutations, five killed: a new escaped pattern in an unlisted file, an
+escape added to an allowlisted file, a stale allowlist entry whose
+divergence no longer exists, an escape after a `://`, and the `\S` fix
+reverted (which fails the three new intent rows and only those).
+
+This does not make the mistake impossible. It makes it impossible to make
+SILENTLY, which is the difference between a lens we watch for and a shape
+that cannot reach a commit.

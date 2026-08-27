@@ -534,8 +534,27 @@ def normalize(text, ws, ids, el):
     el.bump("pid", n)
     text, n = PACK_TAG_RE.subn(r'\1\2@<PACKSHA>"', text)
     el.bump("pack-tag", n)
+    text, n = MARO_VERSION_RE.subn(r'\1<VER>"', text)
+    el.bump("maro-version", n)
     return text
 
+
+# `origin.maro_version` is each engine naming ITSELF, which is the one
+# field in the pack that is SUPPOSED to differ: Python writes "0.8.0" and
+# the port writes "go-port". Censused before deciding — `maro_version`
+# appears exactly twice in src/, both inside pack.py's own build_manifest,
+# so it is written and never read by anything.
+#
+# It is elided rather than allowlisted because the allowlist works per
+# ENTRY and this is one FIELD of pack.json, whose every other byte is
+# exactly what this harness exists to compare. Allowlisting the file to
+# excuse one line is the blindfold the section below warns about.
+#
+# The two spellings are enumerated rather than matched by shape. A port
+# writing "" or "0.8.0" or a stray build tag there does not match, so the
+# substitution does not fire on that side, the elision counts disagree, and
+# the run says so out loud — which is the check that makes eliding safe.
+MARO_VERSION_RE = re.compile(r'("maro_version": ")(?:0\.8\.0|go-port)"')
 
 # ---------------------------------------------------------------------------
 # Known divergences
@@ -543,11 +562,17 @@ def normalize(text, ws, ids, el):
 #
 # A divergence the port made ON PURPOSE and documented at its site. Listing
 # it here keeps it OUT of the difference count so a new divergence in the
-# same run stays visible - and every row carries a must-still-be-observed
-# rule, so an entry that stops matching FAILS the scenario instead of
-# quietly certifying nothing. That is the same discipline the fssort class
-# guard uses, and it is the only thing separating an allowlist from a
-# blindfold.
+# same run stays visible.
+#
+# Every row must still be OBSERVED - an entry that matches nothing FAILS
+# the scenario. Read that as a tripwire on the NOTE, not as a requirement
+# on the code: nothing here wants these differences to survive, and a row
+# is a written claim that the two engines differ HERE and for THIS reason.
+# When the claim stops being true the note has gone stale, and the right
+# answer is frequently to DELETE THE ROW rather than to restore the
+# difference. What the rule prevents is the third option - a row that sits
+# there certifying nothing, which is the only thing separating an allowlist
+# from a blindfold. Same discipline as the fssort class guard.
 #
 # Each row: (scenario-glob, entry-glob, why). fnmatch semantics.
 KNOWN_DIVERGENCES = [
@@ -874,6 +899,17 @@ def normalize_selftest():
         # Not under one of those two keys, and not an 8-hex tail: untouched.
         ('{"note": "cmp-pack@3a04958b"}', {}),
         ('{"pack": "cmp-pack@3a04958"}', {}),
+        # The two spellings each engine writes for itself.
+        ('{"maro_version": "0.8.0"}', {"maro-version": 1}),
+        ('{"maro_version": "go-port"}', {"maro-version": 1}),
+        # Anything else under that key is a finding, not volatility: an
+        # empty string, a version neither engine ships, a build tag.
+        ('{"maro_version": ""}', {}),
+        ('{"maro_version": "0.9.0"}', {}),
+        ('{"maro_version": "go-port-dirty"}', {}),
+        # ...and the two spellings under a DIFFERENT key survive, so the
+        # pattern cannot start eliding version strings generally.
+        ('{"scrubber_version": "0.8.0"}', {}),
     ]
     for text, want in cases:
         el = Elisions()

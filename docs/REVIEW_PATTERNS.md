@@ -53,6 +53,7 @@ cannot happen there any more":
 
 | Lens | Surface | Closed by | Evidence it closes it |
 |---|---|---|---|
+| **L14** (a helper for this already exists in the tree) / **L28** (a stated enumeration is wrong) | every production regex literal in the Go port | `go/internal/pytext/escape_census_test.go` — parses every production `.go` file, pulls the string literals out of each `regexp.MustCompile`, and fails on any `\s \S \w \W \b \B` with no hand-written allowlist entry naming why | Five mutations killed: a new escaped pattern in an unlisted file, an escape added to an allowlisted file, a stale allowlist entry, an escape hidden after a `://` (the false negative a text scan would have), and the `\S` fix reverted. Census at close: 140 files, 81 calls, 4 escapes in 2 files |
 | **P6** (the round's finding lives inside the previous round's fix) | the `maro task` argv surface | `go/cmd/maro/task_surface_diff_test.go` — extracts argparse's COMPLETE declared spec from the live parser (option strings, defaults, positional `nargs`, `choices`, `type`, `required`) and diffs it against `task_surface.go`'s declaration | Mutation-tested against the two literal historical findings: re-sharing `-error` across the four job-id verbs (r11) and unbounding `fail`'s arity (r10) both fail it, each with a message naming the actual defect. Two properties nobody had ever checked — a wrong flag default and a dropped flag — fail it too |
 
 **How to decide whether a lens can be closed.** Ask what the defect was a
@@ -61,6 +62,21 @@ an argparse spec, a dataclass, a schema, a set of file modes — the two
 declarations can be diffed mechanically and the lens closes for that
 surface. If the answer is a judgement ("this comment is now false", "this
 fixture defends the wrong config"), it cannot, and the lens stays a lens.
+
+**Five rounds is not better than three.** The regex-escape class fired in
+mission-r6 twice (`\w` in `intent`, `\S` in `scrub`), mission-r7 once
+(inside r6's own fix), and twice more on 2026-08-27 — `\s` in
+`provenance`, where it was a live laundering hole in the quarantine gate,
+and `\S` in `intent`, in the very pattern r6 and r7 had both edited.
+
+That last one is the argument for the census. r6 rebuilt three escapes and
+left a fourth, then wrote a doc comment ENUMERATING the three it had
+fixed, so the file read as complete to the two rounds that came after. No
+amount of looking harder finds it: the reviewer has to already suspect the
+escape is there, and a comment that lists what was fixed is precisely what
+stops them suspecting. **An enumeration can be wrong at BIRTH** — which is
+why the closing check counts the thing itself rather than trusting the
+sentence about it.
 
 **Three rounds is the signal.** P6 fired on the same parser in r1, r10 and
 r11 — three different properties of one construct, one per round, each
