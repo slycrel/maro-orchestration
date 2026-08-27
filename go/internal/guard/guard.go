@@ -124,7 +124,7 @@ var toolCallPatterns = []*regexp.Regexp{
 		`:` + pytext.SpaceClass + `*` +
 		`"`),
 	boundedStart(`tool_call` + pytext.SpaceClass + `*` + `\(`),
-	regexp.MustCompile(`(?i)<function[_` + pytext.SpaceClassBody + `]call>`),
+	regexp.MustCompile(`(?i)<function(?-i:[_` + pytext.SpaceClassBody + `])call>`),
 }
 
 // Exfiltration / redirect patterns (Python _EXFIL_PATTERNS). The URL

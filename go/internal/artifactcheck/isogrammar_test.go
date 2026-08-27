@@ -143,7 +143,11 @@ func isoCorpus() []string {
 		"24", "24:00:01", "12:60:00", "12:34:60", "99:00:00", "12:34.5",
 		"12:34.", "1234.5", "123456.5", "12:34:561", "12:34:5612",
 	}
-	seps := []string{"T", "t", " ", "_", "X", ":", "9", "."}
+	// The separator is one CODE POINT, so two multi-byte ones are in the
+	// list: the corpus was ASCII-only in both halves and could not reach
+	// the byte-vs-rune advance at all (r2 named this blind spot; the port
+	// was refusing "2026-08-22é12:34", which CPython accepts).
+	seps := []string{"T", "t", " ", "_", "X", ":", "9", ".", "é", "\U0001F600"}
 	offs := []string{
 		"", "Z", "z", "+05", "+0530", "+05:30", "-05:30", "+05:30:15",
 		"-053015", "+05:30:15.123456", "+5:30", "+05:3", "+24:00", "-00:00",
@@ -194,6 +198,32 @@ func isoCorpus() []string {
 			b[j] = pick()
 		}
 		add(string(b))
+	}
+	// A second random half over runes rather than bytes. Everything after
+	// the separator is byte-oriented in CPython too, so a multi-byte
+	// character there must be REFUSED, and refusing for the right reason is
+	// as much a claim as accepting: these rows drive both.
+	runeAlpha := []rune("0123456789-:.,+TZ é\U0001F600\u0345\uFF11\u0661")
+	for i := 0; i < 20000; i++ {
+		r := make([]rune, rng.Intn(20))
+		for j := range r {
+			r[j] = runeAlpha[rng.Intn(len(runeAlpha))]
+		}
+		add(string(r))
+	}
+	// And the shapes the rune-random half is unlikely to hit by accident:
+	// a multi-byte character in each position that a rule looks at.
+	for _, mb := range []string{"é", "\U0001F600", "\uFF11", "\u0661"} {
+		add("2026-08-22" + mb + "12:34:56")
+		add("2026-08-22T12:34:56" + mb)
+		add("2026-08-22T12:34:56." + mb)
+		add("2026-08-22T12:34:56.123456" + mb + "Z")
+		add("2026-08-22T12:34:56" + mb + "Z")
+		add("2026-08-22T12:34:5" + mb)
+		add("2026-08-2" + mb)
+		add(mb + "026-08-22")
+		add("2026-08-22T" + mb + "2:34:56")
+		add("2026-08-22T12:34:56+05:3" + mb)
 	}
 	bases := []string{
 		"2026-08-22T12:34:56.123456+05:30", "20260822T123456Z",

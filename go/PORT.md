@@ -12271,3 +12271,182 @@ comment to keep it true is the wrong spelling of the conclusion — they now
 say "the whole fixture table". That is L28 arriving from a direction it
 had not come from before: not a count that was wrong when written, but a
 count that was CORRECT when written and had no way to stay that way.
+
+## The r2 review of `internal/artifactcheck` — a flag every caller passes
+## and no test did
+
+Nine findings, nine verified, two of them HIGH. Two rounds running at zero
+hallucinated findings is worth noting against the 30–50% the standing
+practice budgets for, and it is not luck: both rounds were told to bring a
+concrete divergent input for every claim, and a claim you have to
+instrument is a claim you mostly do not make.
+
+**The one that matters most is not in this package.** Go expands a
+character class's case-folds BEFORE negating it. Folding `\p{L}` adds
+exactly one code point that is not a letter — U+0345 COMBINING GREEK
+YPOGEGRAMMENI, whose fold orbit contains iota. Python's `re` does no such
+thing: `\w` and `\W` mean the same set with and without `re.IGNORECASE`.
+So under `(?i)`:
+
+```
+                       U+0345      CPython
+(?i)[\p{L}\p{N}_]      matches     \w does NOT match
+(?i)[^\p{L}\p{N}_]     no match    \W DOES match
+```
+
+Every regex in this file sets `(?i)`, because the Python passes
+`re.IGNORECASE`, and so does nearly every other consumer of `pytext` in
+the tree. Both directions were live here.
+`extract_write_claims("xͅwrote to a.txt")` is `['a.txt']` in CPython
+and was `[]` — a fabrication check deciding a real write-claim was never
+made, which is the fail-open this module exists to prevent.
+`_claims_clean_success("all tests passed ͅfailed")` is `False` in
+CPython and was `True` — the same skew flagging a contradiction CPython
+never emits.
+
+**And `pytext` had two tests written to make exactly this impossible.**
+They are the ones added a round earlier, sweeping the whole rune space to
+pin the class against the predicate. They passed throughout. They compile
+
+```go
+regexp.MustCompile(WordClass)
+```
+
+and every caller compiles `regexp.MustCompile("(?i)" + WordClass)`. The
+object under test and the object in production were different objects.
+That is L54, and it is the first genuinely new lesson in several rounds:
+the defect is not in what a test asserts but in how it CONSTRUCTS the
+thing it asserts about, and the flag every caller passes and the test does
+not is precisely where the bug will be. A grep for `(?i)` across the call
+sites and the test file was the whole diagnosis.
+
+The fix has three parts, and only the second and third stop it returning.
+The exported atoms are wrapped in `(?-i:…)`, which turns folding off for
+the class and leaves it on for the literals around it. The invariant sweep
+now runs each atom under BOTH constructions. And because a caller can
+build its own class out of the exported bodies — where no in-package test
+can reach — a source scan walks every `regexp.MustCompile` in the module
+and fails on one that combines `(?i)` with a raw spliced body. It found
+three more sites on its first run, in `closure`, `guard` and this file,
+none of which anyone had looked at.
+
+**A frozenset membership test is not a lookup.** `te.get("name") in
+_EXECUTION_TOOLS` raises `TypeError` when the name is UNHASHABLE — a list
+or a dict, which is exactly what `json.loads` produces — and the blanket
+`except Exception` turns that into the fail-open verdict. The port's
+comment said the opposite in so many words: "a non-string name is not in a
+frozenset of strings, and answers False rather than raising." True for a
+number, true for a tuple, false for the two types an adversary would
+actually send. A transcript whose FIRST event carried a list name came
+back as a confident `execution-contradiction` where CPython says "the
+check broke, do not trust me". This is the hazard X15/X16 were written for
+one comprehension earlier, and the port had ported one and not the other.
+
+**`.timestamp()` on a naive stamp is not `time.Date(…, time.Local)`.**
+They agree for every wall time that exists exactly once, and part by
+exactly 3600 seconds in a DST GAP, where the wall time does not exist at
+all and each runtime invents one. `2026-03-08T02:30:00` in Denver is
+1772962200.0 to CPython — the LATER reading — and was 1772958600 here.
+The file's own named residual had this precisely backwards: it named the
+DST REPEAT hour as the unmodelled case, and the repeat hour is where the
+two AGREE. `pyMktime` now transcribes CPython's `_mktime`, max/min gap
+rule included. The fixture discovers both transitions from the live zone
+by bisection rather than hardcoding a date — a hardcoded transition stops
+being a transition when a zone's rules change, and the fixture would go on
+passing while testing an ordinary Sunday — and renames itself to say so
+out loud on a zone that has none.
+
+**`errors="replace"` substitutes maximal subparts, not bytes.**
+`b"a\xe2\x82b".decode("utf-8", "replace")` is three characters; the port's
+per-byte loop produced four. This is L49 again — a builtin whose
+implementation exceeds its definition — and the reason it survived is
+instructive: the four inputs a reviewer reaches for first (a lone lead
+byte, a surrogate encoding, an overlong NUL, two invalid bytes) all agree
+under either rule. Only the TRUNCATED sequences separate them.
+
+**The `pyJoin` class had two more sites, in a different function.** Third
+time. A10 pinned the first, P8c pinned the second after the r1 battery
+found it, and `SnapshotDir`'s walk — which feeds both snapshots and
+therefore the whole layer-1 gate — still built its child paths with
+`filepath.Join`. A project dir reaching a real directory through
+`link/..` made every stat in the walk miss, so `ChangedSince` returned
+`{}` and layer 1 reported a fabrication on a file plainly on disk. L13
+says a fix at the site that has the fixture is not a fix for the class;
+this is the same class refusing to be closed three times, and what finally
+closed it was asking the question the other way round — not "where did I
+change `filepath.Join`" but "where does this file still call it".
+
+Two lower findings are about claims rather than behaviour, and both are
+L52. A residual said the port's ASCII-only digit reads were a known gap
+because "CPython's `int()` accepts any Unicode decimal" — measured, they
+are not: the C accelerator never calls `int()`, it uses `Py_ISDIGIT`, and
+`fromisoformat` with fullwidth digits raises in every position while
+`int("１２")` is 12. The residual had been read out of `_pydatetime.py`,
+which this file's own "WHICH CPYTHON" paragraph rules out as the
+specification — the trap it warns about, sprung inside the same file. And
+two more comments named fixtures that cannot detect the property they
+defend: E19 fails on a leading boundary whether or not the zero-width
+window exists, and S20's "stdout" is followed by a space, so the trailing
+`\b` it was cited for changes nothing. The reasoning in both was right.
+Only the evidence was.
+
+The last one is about a contract rather than a bug. `asMapping` accepts
+`map[string]any` because `isinstance(te, dict)` does — r1's fix, correct —
+and its doc went on to call `encoding/json` output "a real tool
+transcript". Structurally it is one. By VALUE TYPE it is not: `json.loads`
+types `5` as int and `str(5)` is `"5"`, while `encoding/json` gives
+float64 and `pyval.Str` gives `"5.0"`. Accepting a shape quietly read as
+blessing the types inside it. There is no production caller of
+`CheckExecutionClaim` in the tree yet, so nothing enforces the decode; the
+rendering is pinned for each Python-typed value and the contract is filed
+for whoever writes the caller.
+
+### The r2 battery — 27 mutants, and the two that mattered were fixture gaps
+
+Twenty-seven mutants, derived from the FILES rather than the r2 diff (L9),
+with the r1 fixes re-run because a later fix reverting an earlier one is
+this project's most common severe finding (P6). Twenty-three caught,
+none failed to compile, four survived. Two of the four were predicted
+inert and stayed inert. The other two were real, and both were gaps in
+fixtures rather than in fixes — the fixes themselves were right, and
+nothing in the suite could tell.
+
+**F4d** dropped the `lo, hi = 0x80, 0xBF` reset inside `maximalSubpart`,
+so every continuation byte gets checked against the LEAD byte's own
+narrowed range instead of widening back after the second. That is a real
+behaviour change for exactly two lead bytes — `0xF0`, whose range starts
+at 0x90, and `0xF4`, whose range stops at 0x8F — because only a four-byte
+sequence has a third byte to widen for. `b"\xf0\x90\x80A"` is one U+FFFD
+in CPython and two under the mutant.
+
+It survived because the corpus had precisely one truncated four-byte row
+and it was the emoji, `F0 9F 98`. Every byte of that sequence is ≥ 0x90,
+so the narrowed range accepts it — the row exercises the code path, gets
+the right answer, and cannot distinguish the two spellings. A row that
+runs the line you care about is not the same thing as a row that would
+notice the line being wrong, and the difference here was two hex digits.
+Four rows now carry a continuation byte the lead's own range would reject,
+including the boundary `F0 90 8F`.
+
+**F1e** reverted intent's raw `(?i)` class splice — one of the three sites
+the F1 source-scan guard turned up — and no intent test moved. The guard
+that found the site cannot defend it: the guard is a pytext test, and the
+battery ran only `./internal/intent/`, so from that package's point of
+view the wrapper had no consequence at all. intent's differential corpus
+is thorough about non-ASCII and had no U+0345 in it.
+
+Placing that row took one more observation than expected. U+0345 anywhere
+in the filename does nothing, because `\S*` precedes the class and is
+greedy over anything non-space — it simply eats the offending code point
+and `[\w-]+` still finds its ASCII character, so both engines answer True.
+The stem has to be U+0345 ALONE, and then CPython says False (its `[\w-]`
+does not match it) while the unwrapped Go class says True. Both mutants
+re-run after the fixtures: caught.
+
+The other two survivors are recorded as equivalent mutants at their sites
+rather than deleted (L8). `SpaceClass`'s `(?-i:…)` is inert today because
+the fold closure of that body is the body, measured; it stays, because the
+wrapper is a property of how pytext hands a class to a caller that may set
+`(?i)`, not of today's body. `decodeReplace`'s `utf8.Valid` fast path
+returns what the loop below it returns — the correct result for a
+pure-performance branch is that removing it changes nothing.

@@ -31,6 +31,22 @@ var fileOutputCorpus = []string{
 	"save the summary to cafe.md",
 	"save the summary to notes.md",
 
+	// U+0345 COMBINING GREEK YPOGEGRAMMENI, the artifactcheck-r2 finding
+	// arriving here. This pattern sets (?i) and splices pytext's class
+	// body, and Go expands a class's case-folds BEFORE negating: folding
+	// \p{L} pulls in U+0345, whose fold orbit contains iota. Python's re
+	// never folds a class, so CPython's [\w-] does NOT match it.
+	//
+	// The stem has to be U+0345 ALONE. \S* is greedy over anything
+	// non-space, so a U+0345 anywhere else in the filename is simply eaten
+	// by \S* and [\w-]+ still finds its ASCII character -- both engines
+	// say True and the row proves nothing. Only when the class itself is
+	// the sole candidate for the stem do the two answers part.
+	"save the summary to ͅ.md",  // CPython False; unwrapped Go True
+	"export it to ͅͅ.md",        // two of them, same verdict
+	"save the summary to aͅ.md", // \S* eats it: False in both
+	"save the summary to n.md",  // the ASCII control: True in both
+
 	// A non-ASCII letter adjacent to a keyword, where Go's ASCII \b
 	// fires and Python's does not.
 	"füsave the summary to notes.md",

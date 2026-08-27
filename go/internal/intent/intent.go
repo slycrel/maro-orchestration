@@ -123,7 +123,9 @@ var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|
 	pytext.WordStart + `(?:save|write|output|export)` +
 	`(?:` + fileOutWindow + `|` + fileOutWindow + `[^.;` + "\n" + `]{0,38}` +
 	fileOutWindow + `)` + `to` + pytext.SpaceClass +
-	`+\S*[` + pytext.WordClassBody + `-]+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
+	// `(?-i:` because this pattern sets `(?i)` and a raw class spliced
+	// from WordClassBody fold-grows by U+0345 — see pytext.WordClass.
+	`+\S*(?-i:[` + pytext.WordClassBody + `-])+\.[a-z]{1,6}` + pytext.WordEnd + `|` +
 	pytext.WordStart + `to` + pytext.SpaceClass + `+(?:a` + pytext.SpaceClass +
 	`+)?file` + pytext.WordEnd + `|` +
 	pytext.WordStart + `as` + pytext.SpaceClass + `+(?:its` + pytext.SpaceClass +

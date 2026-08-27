@@ -64,8 +64,8 @@ var modalityPatterns = []struct {
 	// row and read by the behavioral-gap branch, so a command separated by
 	// a non-breaking space classified differently on the two runtimes
 	// (adversarial mission-r6, priced in the sibling sweep).
-	{"process", regexp.MustCompile(`(?i)(^|[` + pytext.SpaceClassBody + `;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[` +
-		pytext.SpaceClassBody + `;&|])(go run|node |python[0-9.]* |timeout [0-9]+` +
+	{"process", regexp.MustCompile(`(?i)(^|(?-i:[` + pytext.SpaceClassBody + `;&|]))\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|(?-i:[` +
+		pytext.SpaceClassBody + `;&|]))(go run|node |python[0-9.]* |timeout [0-9]+` +
 		pytext.SpaceClass + `+` + pytext.NotClass("") + `+` + pytext.SpaceClass + `*&)`)},
 }
 

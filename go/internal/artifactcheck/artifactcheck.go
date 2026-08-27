@@ -159,6 +159,10 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // bad bytes as-is, and they would then reach the InertFunc — which is a
 // Python parser being handed something CPython would never have shown it.
 func decodeReplace(b []byte) string {
+	// A fast path, and nothing else: the loop below returns the same string
+	// for valid input. The r2 battery removed it and every test still
+	// passed, which is the correct result for a pure-performance branch --
+	// an equivalent mutant, not a test gap (L8).
 	if utf8.Valid(b) {
 		return string(b)
 	}
@@ -166,13 +170,69 @@ func decodeReplace(b []byte) string {
 	for i := 0; i < len(b); {
 		r, size := utf8.DecodeRune(b[i:])
 		if r == utf8.RuneError && size == 1 {
+			// ONE U+FFFD per maximal subpart, not per byte. utf8.DecodeRune
+			// reports size 1 for every ill-formed byte including the first
+			// byte of a truncated sequence, so the obvious loop emits one
+			// replacement per byte and CPython emits one per sequence.
+			// MEASURED: b"a\xe2\x82b".decode("utf-8","replace") is 'a\ufffdb'
+			// -- three characters -- and the per-byte spelling produced
+			// four. b"\xf0\x9f\x98" is one character, not three. (r2; the
+			// four cases a casual check would try, b"\xc3", b"\xed\xa0\x80",
+			// b"\xc0\x80", b"\xff\xfe", all agree either way, which is why
+			// this survived.)
 			sb.WriteRune(utf8.RuneError)
-		} else {
-			sb.Write(b[i : i+size])
+			i += maximalSubpart(b[i:])
+			continue
 		}
+		sb.Write(b[i : i+size])
 		i += size
 	}
 	return sb.String()
+}
+
+// maximalSubpart returns the length of the ill-formed prefix of b that
+// CPython replaces with a SINGLE U+FFFD: the longest initial subsequence
+// that could still become a well-formed sequence, or 1 when the first byte
+// cannot start one at all. Unicode 15.0 section 3.9, "U+FFFD Substitution
+// of Maximal Subparts", which is the rule CPython's decoder implements.
+func maximalSubpart(b []byte) int {
+	if len(b) == 0 {
+		return 1
+	}
+	var want int
+	var lo, hi byte
+	switch b0 := b[0]; {
+	case b0 >= 0xC2 && b0 <= 0xDF:
+		want, lo, hi = 2, 0x80, 0xBF
+	case b0 == 0xE0:
+		want, lo, hi = 3, 0xA0, 0xBF
+	case b0 >= 0xE1 && b0 <= 0xEC:
+		want, lo, hi = 3, 0x80, 0xBF
+	case b0 == 0xED:
+		// The surrogate range is not "a valid sequence CPython rejects
+		// later"; it is ill-formed at the second byte, which is why
+		// b"\xed\xa0\x80" is THREE replacements and not one.
+		want, lo, hi = 3, 0x80, 0x9F
+	case b0 >= 0xEE && b0 <= 0xEF:
+		want, lo, hi = 3, 0x80, 0xBF
+	case b0 == 0xF0:
+		want, lo, hi = 4, 0x90, 0xBF
+	case b0 >= 0xF1 && b0 <= 0xF3:
+		want, lo, hi = 4, 0x80, 0xBF
+	case b0 == 0xF4:
+		want, lo, hi = 4, 0x80, 0x8F
+	default:
+		// 0x80-0xC1 and 0xF5-0xFF cannot begin a sequence.
+		return 1
+	}
+	n := 1
+	for ; n < want && n < len(b); n++ {
+		if b[n] < lo || b[n] > hi {
+			break
+		}
+		lo, hi = 0x80, 0xBF
+	}
+	return n
 }
 
 // --- the write-claim regex ------------------------------------------------
@@ -213,8 +273,14 @@ func decodeReplace(b []byte) string {
 // last character and the preposition's first. Every VERB alternative ends
 // in `\w*` or a literal letter, so VERB's last character is always a word
 // character; `t`, `i`, and `a` are word characters. No boundary can exist
-// there, so Python cannot match with an empty window either. E19 is the
-// fixture that would fail if this reasoning were wrong.
+// there, so Python cannot match with an empty window either.
+//
+// The fixture is E30, "wroteto a.txt" — CPython extracts nothing, and a
+// three-branch `(?:|NW|NW…NW)` window would extract a.txt. This comment
+// used to name E19 instead, and E19 ("rewrote to a.txt") cannot see the
+// property at all: it fails on the LEADING boundary, identically with and
+// without a zero-width branch (r2, L52 — a fixture named as a pin that
+// pins nothing, the third instance in this file).
 //
 // A fourth thing does NOT change: `[^.\n]` is a literal class in both, and
 // the non-greedy `*?` means the same thing in both, because Go's regexp
@@ -234,7 +300,7 @@ var outputClaimRE = regexp.MustCompile(
 		`(?:` + notWordDotNL + `|` + notWordDotNL + `[^.\n]*?` + notWordDotNL + `)` +
 		`(?:to|into|at|as)` + pytext.SpaceClass + `+` +
 		"[`'\"(]?" +
-		`(?P<path>[^` + pytext.SpaceClassBody + "`'\"" + `)]+)`)
+		`(?P<path>(?-i:[^` + pytext.SpaceClassBody + "`'\"" + `)])+)`)
 
 var notWordDotNL = pytext.NotWordClassPlus(".\n")
 
@@ -391,7 +457,16 @@ func SnapshotDir(root string) map[string]float64 {
 				}
 				continue
 			}
-			fp := filepath.Join(dir, name)
+			// `Path(dirpath) / fn`, so pyJoin and not filepath.Join: the
+			// walk feeds BOTH snapshots and therefore the whole layer-1
+			// gate, and this is the same defect A10 and P8c pin one
+			// function over. A project dir that reaches a real directory
+			// through `link/..` made every stat here miss, ChangedSince
+			// answered {} where CPython answers {"a.txt"}, and layer 1
+			// fired a false missing-artifact on a file plainly on disk
+			// (r2 -- L13 again, from the fix that had two sites and got
+			// four).
+			fp := pyJoin(dir, name)
 			st, err := os.Stat(fp)
 			if err != nil {
 				// Python's `except OSError: continue` — and the count is
@@ -411,7 +486,10 @@ func SnapshotDir(root string) map[string]float64 {
 		}
 		sort.Strings(subdirs)
 		for _, d := range subdirs {
-			if !walk(filepath.Join(dir, d)) {
+			// os.walk composes the child dirpath with os.path.join, which
+			// also leaves `..` alone; a plain directory NAME makes it and
+			// pathlib agree, so one spelling covers both.
+			if !walk(pyJoin(dir, d)) {
 				return false
 			}
 		}
@@ -559,15 +637,33 @@ func FilesModifiedSince(root, sinceISO string, limit int) []string {
 //     local offset by constructing neighbouring datetimes and one of them
 //     falls into year 0. 0001-01-02 onward is fine, and the aware form of
 //     the same instant is fine. Reproduced narrowly rather than modelled.
+//
 //   - Nothing here consults `fold`, so a naive stamp inside a DST repeat
-//     hour takes CPython's first answer by construction rather than by
+//     hour takes CPython's fold=0 answer by construction rather than by
 //     choice. Every producer this port has is aware
 //     (`datetime.now(timezone.utc).isoformat()` — checkpoint.py:346,
 //     background.py:169, interrupt.py:821, mission.py:1274,
 //     proc_lock.py:92), so the branch is unreachable from them.
-//   - The two-digit reads use ASCII digits only, where CPython's `int()`
-//     accepts any Unicode decimal. That is the same known gap pyval.Int
-//     carries and is answered in the same place, not twice.
+//
+//     CORRECTED (r2). This bullet used to end "takes CPython's first
+//     answer" and to name the repeat hour as the unmodelled case. Both
+//     halves were wrong. The repeat hour is where the two runtimes AGREE
+//     (2026-11-01T01:30:00 is 1793518200 on both); the GAP is where they
+//     parted, by exactly 3600, and the port was taking the earlier reading
+//     where CPython takes the later. That is not a fold question at all —
+//     it is `_mktime`'s max/min rule, and it is ported now in pyMktime.
+//     W20 pins both transitions, discovered from the live zone.
+//
+//   - The two-digit reads use ASCII digits only. This was written down as
+//     a residual — "CPython's int() accepts any Unicode decimal" — and it
+//     is not one: the C accelerator never calls int(), it uses
+//     Py_ISDIGIT, which is ASCII-only. MEASURED: fromisoformat with
+//     fullwidth or Arabic-Indic digits raises ValueError in every
+//     position, while int("１２") is 12. pyInt is exactly right, and the
+//     residual was a false alarm pointing at the pure-Python source this
+//     file's own "WHICH CPYTHON" paragraph rules out (r2). Left here
+//     rather than deleted, because a note saying "we checked and there is
+//     no gap" is worth more than silence to the next reader.
 func parseISO(s string) (float64, bool) {
 	sep, ok := isoDatetimeSeparator(s)
 	if !ok || len(s) < sep {
@@ -584,7 +680,14 @@ func parseISO(s string) (float64, bool) {
 		return isoTimestamp(y, mo, d, 0, 0, 0, 0, 0, false)
 	}
 	// The separator is one character and its identity is never checked.
-	h, mi, sec, micro, offMicro, aware, nextDay, ok := parseISOTime(s[sep+1:])
+	// The separator is one CODE POINT, not one byte: CPython slices the str
+	// and "2026-08-22é12:34" and "20260822\U0001F600123456" both parse
+	// (measured). Everything AFTER it really is byte-oriented -- the one
+	// tolerated stray character and the ">=6 digits then ignore the rest"
+	// rule are both counted in bytes, and the port agrees with CPython on
+	// "…T12:34:56éZ" (ValueError) and "…T12:34:56.123456éZ" (parses).
+	_, sepWidth := utf8.DecodeRuneInString(s[sep:])
+	h, mi, sec, micro, offMicro, aware, nextDay, ok := parseISOTime(s[sep+sepWidth:])
 	if !ok {
 		return 0, false
 	}
@@ -923,9 +1026,8 @@ func isoTimestamp(y, mo, d, h, mi, sec, micro int, offMicro int64, aware bool) (
 			// than modelled: 0001-01-02 onward has a timestamp.
 			return 0, false
 		}
-		t := time.Date(y, time.Month(mo), d, h, mi, sec, micro*1000, time.Local)
 		// `self._mktime() + self.microsecond / 1e6`.
-		return float64(t.Unix()) + float64(micro)/1e6, true
+		return float64(pyMktime(y, mo, d, h, mi, sec)) + float64(micro)/1e6, true
 	}
 	// `(self - _EPOCH).total_seconds()`: ONE integer microsecond count
 	// divided by 1e6, offset folded in before the division.
@@ -948,6 +1050,65 @@ func isoTimestamp(y, mo, d, h, mi, sec, micro int, offMicro int64, aware bool) (
 // isoWeekToGregorian is CPython's `_isoweek_to_gregorian`, including the
 // rule that week 53 exists only when the year starts on a Thursday, or on
 // a Wednesday in a leap year.
+// pyMktime is CPython's `datetime._mktime`, which is NOT what
+// `time.Date(..., time.Local)` computes. Both answer the same thing for
+// every wall time that exists exactly once; they part in a DST GAP, where
+// the wall time does not exist at all and each side is free to invent one.
+// Measured, TZ=America/Denver, "2026-03-08T02:30:00":
+//
+//	CPython  1772962200.0   (03:30 MDT -- the LATER reading)
+//	time.Date 1772958600    (01:30 MST -- the earlier one)
+//
+// Exactly 3600 apart, and the file's own named residual had this backwards:
+// it claimed the unmodelled case was the DST REPEAT hour, where the two in
+// fact agree (2026-11-01T01:30:00 is 1793518200 on both sides). The gap was
+// the case nothing covered, and no generated input could reach it -- the
+// ISO corpus's dates are 2026-08-22, week forms and boundary years, none of
+// them a transition day (artifactcheck r2).
+//
+// The algorithm is CPython's, transcribed rather than reinvented: solve
+// `t == local(u)` for u by trying the offset at t and then the offset at
+// the candidate, and when NEITHER solves it -- which is precisely the gap
+// -- take max(u1, u2) for fold=0. Nothing here consults fold, because no
+// producer in this project emits a naive stamp at all; see the residual
+// note above parseISO.
+func pyMktime(y, mo, d, h, mi, sec int) int64 {
+	// local(u): the wall clock at unix time u, re-read as if it were UTC.
+	local := func(u int64) int64 {
+		lt := time.Unix(u, 0).In(time.Local)
+		return time.Date(lt.Year(), lt.Month(), lt.Day(), lt.Hour(),
+			lt.Minute(), lt.Second(), 0, time.UTC).Unix()
+	}
+	t := time.Date(y, time.Month(mo), d, h, mi, sec, 0, time.UTC).Unix()
+	a := local(t) - t
+	u1 := t - a
+	t1 := local(u1)
+	var b int64
+	if t1 == t {
+		// One solution found; it may still be the wrong side of a fold, so
+		// probe a day away. CPython's max_fold_seconds is 24*3600.
+		u2 := u1 - 24*3600
+		b = local(u2) - u2
+		if a == b {
+			return u1
+		}
+	} else {
+		b = t1 - u1
+	}
+	u2 := t - b
+	if local(u2) == t {
+		return u2
+	}
+	if t1 == t {
+		return u1
+	}
+	// Neither offset solves it: t is in the gap. fold=0 takes the max.
+	if u1 > u2 {
+		return u1
+	}
+	return u2
+}
+
 func isoWeekToGregorian(y, week, day int) (int, int, int, bool) {
 	if y < 1 || y > 9999 || day < 1 || day > 7 || week < 1 || week > 53 {
 		return 0, 0, 0, false
@@ -1217,9 +1378,15 @@ type stdoutBranch struct {
 // there is NO trailing `\b` on the group. Only two alternatives carry one
 // internally — `output(?:s|ted|ting)?\b` and the `the\b` inside
 // `running\s+(?:it|the\b)`. So `prints?` matches inside "printsomething",
-// and `stdout` matches inside "stdoutish". The port reproduces that. S20
-// is the fixture that would notice if a tidier translation added the
-// boundary the Python does not have.
+// and `stdout` matches inside "stdoutish". The port reproduces that.
+//
+// The fixtures are S24 and S25, which are those two words. This comment
+// used to name S20, "stdout was 42" — where `stdout` is followed by a
+// SPACE, so adding the trailing boundary the Python lacks leaves S20's
+// answer unchanged and the property unmeasured. S26 is the control:
+// `output(?:s|ted|ting)?\b` DOES carry one internally, so
+// "outputsomething 42" is False, and a translation that dropped that
+// boundary would be wrong in the other direction (r2, L52).
 var stdoutClaimBranches = buildStdoutBranches()
 
 func buildStdoutBranches() []stdoutBranch {
@@ -1569,6 +1736,20 @@ type ToolEvent map[string]any
 //
 // Anything else is not a dict, and the caller decides what Python does
 // about that — skip it, at the outer level; raise, at `input`.
+//
+// ACCEPTING THE SHAPE IS NOT ACCEPTING THE TYPES, and the paragraph above
+// used to blur the two by calling `json.Unmarshal` output "a real tool
+// transcript". Structurally it is one; by value type it is not. Python's
+// `json.loads` gives `5` the type int and `str(5)` is "5", while
+// `encoding/json` gives it float64 and `str` of that is "5.0". Dict order
+// goes the same way: a Go map has none, which is why pyval.Str refuses one
+// outright instead of inventing an order.
+//
+// So a caller must decode the transcript Python-typed — `jsonx.ObjectOrdered`
+// / pyval.Obj, not `encoding/json` into `map[string]any`. There is no
+// production caller of CheckExecutionClaim in this tree yet, so nothing
+// enforces that today; X25-X28 pin the rendering for each Python-typed
+// value, and BACKLOG carries the contract for whoever writes the caller.
 func asMapping(v any) (map[string]any, bool) {
 	switch m := v.(type) {
 	case ToolEvent:
@@ -1657,8 +1838,24 @@ func CheckExecutionClaim(resultText string, toolEvents []any) (v Verdict) {
 			continue
 		}
 		te := ToolEvent(m)
-		// `te.get("name") in _EXECUTION_TOOLS`: a non-string name is not
-		// in a frozenset of strings, and answers False rather than raising.
+		// `te.get("name") in _EXECUTION_TOOLS`. A non-string name that is
+		// HASHABLE is simply not in a frozenset of strings and answers
+		// False. An UNHASHABLE one -- a list or a dict, which is exactly
+		// what json.loads produces for `"name": ["Bash"]` -- raises
+		// TypeError from the `in` itself, and the blanket `except
+		// Exception` at :481 turns that into the fail-open verdict.
+		//
+		// This is the same hazard X15/X16 were written for at
+		// `te["input"]`, one comprehension earlier, and the first port of
+		// this function missed it: the type assertion below answers "" for
+		// a list, the event is skipped, and a transcript whose FIRST event
+		// is adversary-shaped comes back as a confident
+		// execution-contradiction CPython never emits. The comment that
+		// used to sit here asserted the raise could not happen (r2, L52).
+		if _, hashable := pyval.HashKey(te["name"]); !hashable {
+			panic(&pyval.PyErr{Class: "TypeError",
+				Msg: pyval.UnhashableSetElemMsg(te["name"])})
+		}
 		name, _ := te["name"].(string)
 		if executionTools[name] {
 			execEvents = append(execEvents, te)

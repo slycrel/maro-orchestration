@@ -160,7 +160,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 30*
+*instances: 31*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -187,7 +187,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 2 — plus standing (Jeremy, 2026-08-16)*
+*instances: 4 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -258,7 +258,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 6*
+*instances: 7*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -347,7 +347,7 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 15*
+*instances: 16*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
@@ -361,7 +361,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 26*
+*instances: 27*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -573,7 +573,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 7 attributed; ~6 in the mined cluster*
+*instances: 8 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -819,7 +819,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 11*
+*instances: 12*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -1026,7 +1026,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 8*
+*instances: 9*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 8*
+*instances: 11*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1363,6 +1363,58 @@ unconditionally on a later line, the assertion is about that line. The
 mechanical version is cheaper and catches both: write the mutant that
 reverts the property and run it. An assertion that has never failed is
 not yet an assertion — and neither instance was found by reading.
+
+### L54 — A test that COMPILES the artifact differently from every caller is testing a different artifact
+*instances: 1*
+
+**Canonical instance** (pytext, artifactcheck r2, 2026-08-26). `pytext`
+carried two invariant tests written for exactly one purpose: to make it
+impossible for the `\w` character class and the `IsWordChar` predicate to
+drift apart. They passed. They kept passing while the class the CALLERS ran
+disagreed with the predicate about U+0345 — because the tests compiled
+
+```go
+regexp.MustCompile(WordClass)
+```
+
+and every caller in the tree compiles
+
+```go
+regexp.MustCompile(`(?i)` + WordClass)
+```
+
+since the Python they port passes `re.IGNORECASE`. Go expands a class's
+case-folds *before* negating it, and `\p{L}` under `(?i)` gains one
+non-letter. Python's `re` does not fold classes at all. So the object under
+test and the object in production were different objects, and the test that
+existed to prevent this exact family could not see it.
+
+This is not L1 (a test reporting agreement that tests nothing) — the test
+DID measure something real. It is not L6 (sharing a fixture with the thing
+it measures) — the fixture was the whole rune space. The defect is one step
+earlier, in CONSTRUCTION: the artifact was built with different flags,
+options, or wrappers than the callers build it with, and everything
+downstream of that is measuring a sibling.
+
+The tripwire is a question about the test's first line, not its assertions:
+
+> **How do the callers construct this thing? Enumerate the flags, options
+> and wrappers they pass. If the test does not pass the same ones, it is
+> not testing the same object — and the flag the callers all pass and the
+> test does not is where the bug will be.**
+
+Corollaries seen in the same round:
+
+- A grep is a fine way to answer it. `(?i)` appeared at every call site and
+  nowhere in the two tests; that alone was the finding.
+- Once found, the fix has two halves: correct the artifact, and add the
+  construction the callers use to the invariant sweep. Only the second half
+  stops it coming back.
+- Where callers construct the thing THEMSELVES out of exported parts, no
+  in-package test can cover it. A source scan can: the guard added here
+  walks every `regexp.MustCompile` in the module and fails on one that
+  combines `(?i)` with a raw spliced class body. It found three more sites
+  in its first run, in three packages nobody had looked at.
 
 ### P13 — A `try` split across a seam stops being one `try`
 *instances: 1 (`syshealth` r1)*

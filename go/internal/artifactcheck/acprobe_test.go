@@ -216,6 +216,55 @@ for c in json.loads(sys.argv[1]):
             finally:
                 srv.close()
                 shutil.rmtree(short, ignore_errors=True)
+        elif k == "snapshot_via_symlinked_dir":
+            # os.walk yields dirpath verbatim and pathlib's / keeps the
+            # ".." for the kernel. filepath.Join removes it textually, so
+            # every stat in the walk missed and the snapshot came back empty.
+            base = mktree(ROOT, c["files"])
+            outside = base.parent / (base.name + "-svsd")
+            if outside.exists():
+                shutil.rmtree(outside)
+            (outside / "proj").mkdir(parents=True, exist_ok=True)
+            (outside / "a.txt").write_text("a", encoding="utf-8")
+            (outside / "proj" / "deep.txt").write_text("d", encoding="utf-8")
+            link = base / "slink"
+            if link.is_symlink():
+                link.unlink()
+            os.symlink(str(outside / "proj"), str(link))
+            root = os.path.join(str(link), "..")
+            out.append({"ok": sorted(ac.snapshot_dir(root).keys())})
+        elif k == "decode_replace":
+            # bytes -> str with errors="replace" substitutes ONE U+FFFD per
+            # MAXIMAL SUBPART, not per byte. Byte values ride as ints
+            # because JSON has no byte string.
+            outs = []
+            for vals in c["values"]:
+                d = bytes(vals).decode("utf-8", "replace")
+                outs.append([d, len(d)])
+            out.append({"ok": outs})
+        elif k == "dst_transitions":
+            # The naive .timestamp() branch goes through CPython's _mktime,
+            # which invents a reading for a wall time that does not exist.
+            # The GAP is where it and Go's time.Date part; the repeat hour
+            # is where they agree, and the port's residual had named the
+            # wrong one. Transitions are DISCOVERED from the live zone
+            # rather than hardcoded, so this fixture cannot quietly become
+            # a test of a date that is no longer a transition.
+            import time as _t
+            from datetime import datetime as _dt
+            vals = []
+            for x in c["values"]:
+                try:
+                    vals.append(_dt.fromisoformat(x).timestamp())
+                except Exception:
+                    vals.append(None)
+            # The zone NAME is the last element rather than a sibling key:
+            # the harness compares the probe's "ok" value against the port's
+            # return, so a second key would never be looked at. Two engines
+            # silently running in different zones must fail HERE, not look
+            # like a value bug.
+            vals.append(_t.tzname[_t.localtime().tm_isdst > 0])
+            out.append({"ok": vals})
         elif k == "candidates_via_symlinked_dir":
             # The SECOND loop in _python_candidates joins the project dir to
             # a CHANGED relative path. Walk-derived keys never carry "..",

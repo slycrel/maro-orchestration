@@ -241,6 +241,28 @@ the same species and should be decided in the same pass.
 prefix behaviour, and a mutation that adds `pytext.WordEnd` to the Go arm
 is caught by the fixture table, which is how it was found.
 
+### Go port: `CheckExecutionClaim` has no caller, and its transcript decode is a contract nothing enforces (FOUND 2026-08-26, artifactcheck r2)
+
+`internal/artifactcheck.CheckExecutionClaim` is fully ported and fully
+differentialled, and nothing in the Go tree calls it. When a caller is
+written, HOW it decodes the tool transcript is part of the answer:
+
+```
+                       Python json.loads      Go encoding/json
+{"command": 5}         int    -> str "5"      float64 -> "5.0"
+{"command": {"a": 1}}  dict   -> "{'a': 1}"   map     -> refused by pyval.Str
+```
+
+`asMapping` accepts `map[string]any` because `isinstance(te, dict)` does —
+that part is right and is r1's F1. But accepting the SHAPE is not accepting
+the value TYPES, and the fix for one quietly reads as a blessing for the
+other. The caller must decode Python-typed (`jsonx.ObjectOrdered` /
+`pyval.Obj`), and today nothing says so except a doc comment.
+
+X25-X28 pin the rendering for int / float / list / bool, so the port is
+correct for every input it is GIVEN correctly. The open item is the
+enforcement, which belongs with the caller and not before it.
+
 ### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
 
 `datetime.fromisoformat` has a C accelerator in `_datetimemodule.c` and a
@@ -275,7 +297,11 @@ unreachable from this project's own producers:
   form of the same instant is fine. The port reproduces the single failing
   date rather than modelling `_mktime`'s probe.
 - Nothing in the port consults `fold`, so a naive stamp inside a DST repeat
-  hour takes CPython's first answer by construction rather than by choice.
+  hour takes CPython's fold=0 answer by construction rather than by choice.
+  (CORRECTED 2026-08-26 by artifactcheck r2: this row originally also
+  claimed the repeat hour was unmodelled. It is not — the two runtimes
+  agree there. The DST *gap* was the divergence, by exactly 3600 s, and it
+  is fixed in `pyMktime` with W20 pinning both transitions.)
 
 Every producer feeding this is aware — `datetime.now(timezone.utc)` at
 checkpoint.py:346, background.py:169, interrupt.py:821, mission.py:1274,

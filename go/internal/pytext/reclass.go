@@ -49,10 +49,19 @@ const digitSupplementBody = `\x{10D40}-\x{10D49}\x{116D0}-\x{116E3}` +
 
 // SpaceClass matches one code point that Python's `re` matches with `\s`.
 // Use it in place of `\s`, never alongside it.
-const SpaceClass = `[` + SpaceClassBody + `]`
+//
+// The (?-i:…) here is the only one in this file that is currently INERT:
+// the r2 battery removed it and no test moved, because the fold closure of
+// this body is the body (measured over the whole rune space -- no space
+// character folds to a non-space or vice versa). It stays anyway. The
+// wrapper is a property of how this package hands classes to a caller that
+// may set (?i), not of today's body, and the day someone adds a code point
+// with a fold orbit is not the day to rediscover the rule. Recorded as an
+// equivalent mutant rather than deleted (L8).
+const SpaceClass = `(?-i:[` + SpaceClassBody + `])`
 
 // DigitClass matches one code point that Python's `re` matches with `\d`.
-const DigitClass = `[\p{Nd}` + digitSupplementBody + `]`
+const DigitClass = `(?-i:[\p{Nd}` + digitSupplementBody + `])`
 
 // WordClassBody is the interior of a character class matching what
 // Python's `re` matches with `\w` on a str pattern. Go's `regexp` reads
@@ -186,11 +195,34 @@ func IsWordChar(r rune) bool {
 }
 
 // WordClass matches one code point that Python's `re` matches with `\w`.
-const WordClass = `[` + WordClassBody + `]`
+//
+// The `(?-i:` wrapper is LOAD-BEARING and is the whole reason this is not
+// just `[`+WordClassBody+`]`. Go expands a character class's case-folds
+// BEFORE negating it, and `\p{L}` under `(?i)` gains exactly one code
+// point that is not a letter: U+0345 COMBINING GREEK YPOGEGRAMMENI, whose
+// fold orbit contains iota. Python's `re` does no such thing — `\w` and
+// `\W` mean the same set with and without `re.IGNORECASE` (measured).
+// So under `(?i)` the unwrapped spellings diverge in BOTH directions:
+//
+//	                       U+0345    CPython
+//	(?i)[\p{L}\p{N}_]        match     \w does NOT match
+//	(?i)[^\p{L}\p{N}_]       no match  \W DOES match
+//
+// Nearly every consumer of these constants compiles with `(?i)`, because
+// the Python they port passes re.IGNORECASE. Found by artifactcheck r2:
+// `extract_write_claims("x\u0345wrote to a.txt")` is `['a.txt']` in
+// CPython and was `[]` here, which is a fabrication check silently
+// deciding a real write-claim was never made.
+//
+// U+0345 is the ONLY such code point, for this body and for the digit and
+// space bodies too — swept over the whole rune space in
+// TestEveryExportedClassIsFoldInvariant, which is what keeps this a
+// measurement rather than a belief.
+const WordClass = `(?-i:[` + WordClassBody + `])`
 
 // NotWordClass matches one code point that Python's `re` matches with
-// `\W`.
-const NotWordClass = `[^` + WordClassBody + `]`
+// `\W`. See WordClass for why the `(?-i:` wrapper is not decoration.
+const NotWordClass = `(?-i:[^` + WordClassBody + `])`
 
 // WordStart and WordEnd stand in for Python's Unicode-aware `\b` at the
 // two ends of a literal word. Go's `\b` is ASCII-only, so it fires
@@ -245,8 +277,11 @@ const WordEnd = `(?:$|` + NotWordClass + `)`
 // INSIDE a window it is also consuming.
 //
 // See WordStart/WordEnd's doc for why that case cannot use them.
+// Fold-proofed like WordClass, for the same reason and with the same
+// consequence if it is not: this helper's callers are patterns with
+// `(?i)` on the front.
 func NotWordClassPlus(extra string) string {
-	return `[^` + WordClassBody + escapeInClass(extra) + `]`
+	return `(?-i:[^` + WordClassBody + escapeInClass(extra) + `])`
 }
 
 // NotClass builds a NEGATED character class that excludes Python's `\s`
@@ -257,8 +292,11 @@ func NotWordClassPlus(extra string) string {
 // passing `]` or `-` or `^` in the wrong position writes a different
 // pattern than it means. Callers here pass fixed literals; this is not a
 // user-input path and must not become one.
+// Fold-proofed for uniformity rather than necessity: SpaceClassBody has an
+// empty fold delta today (swept, same test as WordClass), and a caller's
+// `extra` is arbitrary and has no such guarantee.
 func NotClass(extra string) string {
-	return `[^` + SpaceClassBody + escapeInClass(extra) + `]`
+	return `(?-i:[^` + SpaceClassBody + escapeInClass(extra) + `])`
 }
 
 // escapeInClass escapes the three characters that change a character

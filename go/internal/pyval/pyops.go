@@ -619,3 +619,15 @@ func UnhashableKeyMsg(v any) string {
 	return fmt.Sprintf("cannot use '%s' as a dict key (unhashable type: '%s')",
 		TypeName(v), TypeName(v))
 }
+
+// UnhashableSetElemMsg is the same failure asked of a SET rather than a
+// dict -- `x in frozenset(...)` with an unhashable x -- and CPython 3.14
+// words it differently, which is the only reason it is a second function:
+//
+//	cannot use 'list' as a set element (unhashable type: 'list')
+//
+// Same version caveat as UnhashableKeyMsg; measured on 3.14.3.
+func UnhashableSetElemMsg(v any) string {
+	return fmt.Sprintf("cannot use '%s' as a set element (unhashable type: '%s')",
+		TypeName(v), TypeName(v))
+}

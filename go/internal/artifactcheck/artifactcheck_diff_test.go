@@ -350,6 +350,21 @@ func acCases() []acCase {
 		{"E25 a unicode stem", "savé to a.txt"},
 		{"E26 a unicode path", "wrote to café.txt"},
 		{"E27 output* is a verb here", "outputs to a.txt"},
+		// U+0345 COMBINING GREEK YPOGEGRAMMENI is not a word character to
+		// CPython and IS one to Go's `(?i)\p{L}`, because Go expands a
+		// class's case-folds before negating it and U+0345's fold orbit
+		// contains iota. It is the ONLY code point in the whole space where
+		// the two disagree, and it inverted this function's answer: CPython
+		// extracts the claim, the port extracted nothing, and a fabrication
+		// check that finds no claim reports no fabrication. (artifactcheck
+		// r2; the class-level pin is in internal/pytext.)
+		{"E28 a fold-only word char before the verb", "x\u0345wrote to a.txt"},
+		{"E29 the same character after the verb", "wrote\u0345 to a.txt"},
+		// The zero-width-window decision's actual pin: the verb runs
+		// straight into the preposition, so a translation that kept an
+		// empty branch would extract a.txt where CPython extracts nothing.
+		{"E30 the verb runs straight into the preposition", "wroteto a.txt"},
+		{"E31 the same with a different preposition", "wroteat a.txt"},
 		{"E28 dump", "dumped to a.json"},
 		{"E29 export", "exported as a.csv"},
 		{"E30 store", "stored at a.db"},
@@ -407,6 +422,12 @@ func acCases() []acCase {
 		{"S21 empty text", ""},
 		{"S22 a double-quoted literal", `prints "Buzz"`},
 		{"S23 an empty quoted literal is not concrete", "prints ''"},
+		// The missing trailing boundary, actually pinned: S20 has a space
+		// after "stdout" and cannot see it. S26 is the control on the two
+		// alternatives that DO carry a boundary internally.
+		{"S24 stdout matches inside a longer word", "stdoutish was 42"},
+		{"S25 prints matches inside a longer word", "printsomething 42"},
+		{"S26 output* carries its own boundary and does not", "outputsomething 42"},
 	} {
 		add(row[0], map[string]any{"kind": "stdout_claim", "text": row[1]},
 			func(t *testing.T, c acCase, base string) any {
@@ -436,6 +457,12 @@ func acCases() []acCase {
 		{"K18 nothing either way", "I looked at the file"},
 		{"K19 traceback", "passes, though there was a traceback"},
 		{"K20 'unable'", "works, but was unable to finish"},
+		// The other direction of the same skew: CPython's `\b` before
+		// "failed" holds because U+0345 is a NON-word character there, so
+		// the ack fires and the text is not a clean-success claim. Go's
+		// folded `[^\p{L}...]` refused to consume it, the ack was lost, and
+		// CheckExecutionClaim flagged a contradiction CPython never emits.
+		{"K21 a fold-only word char before a failure ack", "all tests passed \u0345failed"},
 	} {
 		add(row[0], map[string]any{"kind": "clean_success", "text": row[1]},
 			func(t *testing.T, c acCase, base string) any {
@@ -568,12 +595,174 @@ func acCases() []acCase {
 				"input": map[string]any{"command": "pytest"}}}},
 		{"X21 a raw-map transcript of a non-execution tool", "all tests passed",
 			[]any{map[string]any{"name": "Read", "is_error": true}}},
+		// `te.get("name") in _EXECUTION_TOOLS` RAISES on an unhashable
+		// name, and json.loads produces exactly those two types. X22's
+		// first event is the adversarial one and its second is a real
+		// failure, so a port that skipped the first would answer a
+		// confident execution-contradiction where CPython fails open.
+		{"X22 an unhashable LIST name ahead of a real failure",
+			"all tests passed",
+			[]any{map[string]any{"name": []any{"Bash"}, "is_error": true},
+				map[string]any{"name": "Bash", "is_error": true,
+					"input": map[string]any{"command": "pytest"}}}},
+		{"X23 an unhashable DICT name on its own", "all tests passed",
+			[]any{map[string]any{"name": map[string]any{"x": 1.0},
+				"is_error": true}}},
+		// The control: a name that is not a string but IS hashable answers
+		// False from the `in` and never raises, which is what the comment
+		// this fix replaced claimed was true of every non-string.
+		{"X24 a hashable non-string name is skipped, not raised on",
+			"all tests passed",
+			[]any{map[string]any{"name": 7.0, "is_error": true}}},
+		// `str(command)` is Python's str, so the VALUE TYPE is part of the
+		// answer: str(5) is "5" and str(5.0) is "5.0". These rows carry the
+		// Python-typed Go spellings (int, float64, []any) and pin that
+		// pyval.Str reproduces each. A caller that decoded the transcript
+		// with encoding/json would hand this function float64(5) for a JSON
+		// `5` and render "5.0" where CPython renders "5" — see asMapping's
+		// doc, and BACKLOG.
+		{"X25 an integer command renders without a decimal point",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": 5}}}},
+		{"X26 a genuine float command keeps its point", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": 5.5}}}},
+		{"X27 a list command renders in Python repr", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": []any{1, "x"}}}}},
+		{"X28 a bool command", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": true}}}},
 	} {
 		add(row.name,
 			map[string]any{"kind": "exec_claim", "text": row.text, "tool_events": row.events},
 			func(t *testing.T, c acCase, base string) any {
 				raw, _ := c.in["tool_events"].([]any)
 				return acObjMap(CheckExecutionClaim(acStr(c, "text"), raw))
+			})
+	}
+
+	// The walk's OWN joins, which A10 and P8c did not reach: the fix for
+	// pathlib's `/` had four sites in one function and the class had more
+	// outside it. This one feeds both snapshots, so getting it wrong empties
+	// the diff and layer 1 reports a fabrication on a file that is there.
+	add("W21 a snapshot rooted at a path that walks '..' through a symlink",
+		map[string]any{"kind": "snapshot_via_symlinked_dir",
+			"files": map[string]any{"keep.txt": "k"}},
+		func(t *testing.T, c acCase, base string) any {
+			outside := base + "-svsd"
+			if err := os.MkdirAll(filepath.Join(outside, "proj"), 0o777); err != nil {
+				t.Fatal(err)
+			}
+			for p, body := range map[string]string{
+				"a.txt": "a", "proj/deep.txt": "d"} {
+				if err := os.WriteFile(filepath.Join(outside, p),
+					[]byte(body), 0o666); err != nil {
+					t.Fatal(err)
+				}
+			}
+			link := filepath.Join(base, "slink")
+			_ = os.Remove(link)
+			if err := os.Symlink(filepath.Join(outside, "proj"), link); err != nil {
+				t.Fatal(err)
+			}
+			return acSortedKeys(SnapshotDir(pyJoin(link, "..")))
+		})
+
+	// --- decode_replace: one U+FFFD per MAXIMAL SUBPART, not per byte -----
+	//
+	// The four cases a casual check reaches for -- a lone lead byte, a
+	// surrogate encoding, an overlong NUL, and two invalid bytes -- agree
+	// under either rule, which is exactly why the per-byte spelling
+	// survived. The rows that separate them are the TRUNCATED ones.
+	//
+	// The second property here is subtler and the first draft of this
+	// corpus could not see it: after the SECOND byte the acceptable
+	// continuation range widens back to 80-BF, and only a FOUR-byte lead
+	// has a third byte to widen for. The battery's F4d mutant (drop the
+	// reset) survived the truncated-emoji row because F0 9F 98 happens to
+	// be all >= 0x90 -- the narrowed F0 range accepts it by luck. The rows
+	// that separate the two spellings need a continuation byte the LEAD's
+	// own range would have rejected: 0x80-0x8F after F0, or 0x90-0xBF
+	// after F4. A near-miss row is not coverage (L9).
+	{
+		seqs := [][]int{
+			{0x61, 0xE2, 0x82, 0x62}, // a + truncated 3-byte + b: ONE FFFD
+			{0xF0, 0x9F, 0x98},       // truncated 4-byte: ONE FFFD
+			{0xE2, 0x82},             // truncated at end of input
+			{0xC3},                   // lone lead byte
+			{0xED, 0xA0, 0x80},       // surrogate: ill-formed at byte 2
+			{0xC0, 0x80},             // overlong
+			{0xFF, 0xFE},             // never valid
+			{0xF4, 0x90, 0x80, 0x80}, // past U+10FFFF
+			{0xE0, 0x80, 0x80},       // overlong 3-byte
+			{0x61, 0xE2, 0x82, 0xAC}, // valid euro, for the control
+			// The continuation-range reset, both lead bytes that narrow:
+			{0xF0, 0x90, 0x80},       // 0x80 is BELOW F0's own 90-BF floor
+			{0xF0, 0x90, 0x80, 0x41}, // ...and again with a trailing ASCII
+			{0xF4, 0x80, 0xA0, 0x41}, // 0xA0 is ABOVE F4's own 80-8F ceiling
+			{0xF0, 0x90, 0x8F, 0x41}, // the boundary byte, just under 0x90
+		}
+		vals := make([]any, 0, len(seqs))
+		for _, sq := range seqs {
+			row := make([]any, 0, len(sq))
+			for _, b := range sq {
+				row = append(row, b)
+			}
+			vals = append(vals, row)
+		}
+		// U1, not D1: there is already a D1 downstream (the layer-ordering
+		// fabrication row), and two fixtures sharing a prefix make every
+		// "caught by D1" line in a battery log ambiguous about which one.
+		add("U1 errors=replace substitutes maximal subparts",
+			map[string]any{"kind": "decode_replace", "values": vals},
+			func(t *testing.T, c acCase, base string) any {
+				var out []any
+				for _, sq := range seqs {
+					b := make([]byte, len(sq))
+					for i, v := range sq {
+						b[i] = byte(v)
+					}
+					d := decodeReplace(b)
+					out = append(out, []any{d, len([]rune(d))})
+				}
+				return out
+			})
+	}
+
+	// --- the naive .timestamp() branch across a DST boundary --------------
+	//
+	// Discovered, not hardcoded: the transitions come from the live zone by
+	// bisection, so this fixture is a test of whatever TZ the box has and
+	// says so out loud when that zone has no transitions at all. A UTC box
+	// would otherwise pass it vacuously, which is the exact shape L1 warns
+	// about.
+	dstStamps, dstReal := acDSTStamps()
+	dstName := "W20 naive local stamps around both DST transitions"
+	if !dstReal {
+		// L44: a fixture's name is a coverage claim. On a zone with no
+		// transitions this row still exercises the naive branch and proves
+		// nothing at all about DST, and the name has to say so.
+		dstName = "W20 naive local stamps (INERT HERE: this zone has no DST transitions)"
+	}
+	{
+		stamps := dstStamps
+		add(dstName,
+			map[string]any{"kind": "dst_transitions", "values": stamps},
+			func(t *testing.T, c acCase, base string) any {
+				var out []any
+				for _, v := range acStrs(c, "values") {
+					f, ok := parseISO(v)
+					if !ok {
+						out = append(out, nil)
+						continue
+					}
+					out = append(out, f)
+				}
+				// Last element, not a sibling key: see the probe.
+				zone, _ := time.Now().In(time.Local).Zone()
+				return append(out, zone)
 			})
 	}
 
@@ -1164,4 +1353,60 @@ func TestTheFreshCandidateOrderIsThePortsOwnGuaranteeNotCPythons(t *testing.T) {
 				i, got, want)
 		}
 	}
+}
+
+// acLocalTransitions finds every UTC instant in `year` at which time.Local
+// changes offset, by hourly scan and then bisection to the second. It is
+// DISCOVERY rather than a table because a hardcoded transition date stops
+// being a transition when a zone's rules change, and the fixture would go
+// on passing while testing an ordinary Sunday.
+func acLocalTransitions(year int) []time.Time {
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC)
+	var out []time.Time
+	_, prevOff := start.In(time.Local).Zone()
+	prev := start
+	for t := start.Add(time.Hour); t.Before(end); t = t.Add(time.Hour) {
+		_, off := t.In(time.Local).Zone()
+		if off != prevOff {
+			lo, hi := prev, t
+			for hi.Sub(lo) > time.Second {
+				mid := lo.Add(hi.Sub(lo) / 2)
+				if _, m := mid.In(time.Local).Zone(); m == prevOff {
+					lo = mid
+				} else {
+					hi = mid
+				}
+			}
+			out = append(out, hi)
+			prevOff = off
+		}
+		prev = t
+	}
+	return out
+}
+
+// acDSTStamps returns naive ISO stamps stepping across every transition in
+// the local zone -- the gap on one and the repeat hour on the other, without
+// needing to know which is which. The bool says whether any transition was
+// actually found; on a zone with none, the stamps are ordinary times and the
+// fixture that uses them must not claim otherwise.
+func acDSTStamps() ([]string, bool) {
+	trs := acLocalTransitions(2026)
+	if len(trs) == 0 {
+		return []string{"2026-03-08T02:30:00", "2026-11-01T01:30:00"}, false
+	}
+	var out []string
+	for _, tr := range trs {
+		base := tr.Add(-time.Second).In(time.Local)
+		// Carried in UTC so Add() steps wall-clock minutes and does not
+		// re-apply the very offset change under test.
+		w := time.Date(base.Year(), base.Month(), base.Day(), base.Hour(),
+			0, 0, 0, time.UTC)
+		for m := -30; m <= 90; m += 15 {
+			out = append(out, w.Add(time.Duration(m)*time.Minute).
+				Format("2006-01-02T15:04:05"))
+		}
+	}
+	return out, true
 }
