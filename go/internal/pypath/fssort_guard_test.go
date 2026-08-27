@@ -69,6 +69,9 @@ var fsSortAllowlist = map[string]struct {
 	"internal/inspector/inspector.go":  {1, "breach names; Python's set() has no order at all"},
 	"internal/skills/coerce.go":        {1, "a generic helper over caller-supplied strings"},
 	"internal/pack/adopt.go":           {1, "the not-found error message's name list, from argv"},
+	"internal/loopfinalize/loopfinalize.go": {1, "pre-flight flag KINDS, " +
+		"reproducing Python's sorted({f.kind for f in flags}); the kinds " +
+		"are Go/Python constants, never a path"},
 
 	// --- filenames, but the ORDER is the port's own guarantee ----------
 	"internal/tasks/tasks.go": {1, "the KEYS of a decoded mapping, in pyKeys' " +

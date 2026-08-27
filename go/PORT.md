@@ -14975,3 +14975,283 @@ in `go/tools/batteries/*.json`, so a later round can re-run what an
 earlier round converged instead of re-deriving it. This chunk's is
 `loopparallel.json`, 46 mutations across the schedulers and pyval's two
 widened alphabets.
+
+---
+
+## Phase G: the terminal shape of a run, and two lanes that disagree about failure (2026-08-27)
+
+`internal/loopfinalize` ports `_build_result_and_finalize` — the 420 lines
+that turn a finished loop into the `LoopResult` its caller returns, write the
+artifacts a human reads, and hand off to the learning tail. Three helpers of
+`loop_finalize.py` were already ported into `internal/loop` by the
+finalize-helpers tranche; this one takes the phase itself.
+
+The tranche also moved `loop_finalize.py` out of the undeclared queue, and
+finding out WHY it was in there is the first entry below.
+
+### A module can be ported, named, and still counted as unported
+
+`PORT_STATUS.md` listed `loop_finalize.py` at 1319 lines in the undeclared
+queue. It was not unported: `internal/loop/finalize_helpers.go` opens with
+"StepEvidence is loop_finalize._step_evidence" and `maintenance.go` names two
+more of its functions. The scanner's rule is a word-boundary match on the
+module's FILENAME, and `loop_finalize._step_evidence` does not contain
+`loop_finalize.py`.
+
+Measured across the whole tree: **nine** of the 106 undeclared modules are
+named in a production comment as `<module>.<attr>` and nowhere as
+`<module>.py` — `loop_finalize`, `ancestry`, `conductor`, `doctor`, `hooks`,
+`memory_bridge`, `run_curation`, `security`, `skill_lifecycle`.
+
+The obvious fix is to widen the regex, and it is wrong. A `<module>.<attr>`
+mention is TWO-VALUED: `internal/loopparallel`'s package doc names
+`security.scan_external_content` precisely to say it is NOT ported. Widening
+would sweep that in as a declaration and make the denominator lie in the
+optimistic direction, which is the worst one available. So the tool now
+reports them as a third category — MENTIONED, neither declared nor absent —
+and the number is in the file rather than the paragraph that used to describe
+the blind spot in prose. The two genuine ones here were fixed at the source,
+which is the convention: name the `.py` file in the package doc.
+
+This is the same shape as the note already in that file's preamble: an
+enumeration can be wrong at BIRTH. It was, twice, and the second time it was
+wrong about a module the port had ported three chunks earlier.
+
+### The exception discipline is not uniform, and that is the design
+
+Almost every call in this phase is `try: … except Exception: log.debug(…)`.
+Four are not: `_write_loop_log`, `o.append_decision`,
+`o.write_operator_status`, and the `LoopResult` construction. An exception
+from those escapes and the loop dies without finalizing.
+
+That asymmetry is worth stating because the friendly port — wrap everything,
+never fail a finalize — silently changes what a run MEANS. A `LoopResult`
+whose `log_path` points at a file that was never written is a run that claims
+a replayable record it does not have. So `BuildResultAndFinalize` returns
+`(*LoopResult, error)`, and a nil `Deps` func on one of those four is an
+error out rather than a log line.
+
+Mutant `loop-log-failure-swallowed` is that port, and it is the one a
+reasonable person writes first.
+
+### Two merge-back lanes, one of which forgets to downgrade
+
+The container-clone lane and the run-worktree lane do the same job forty
+lines apart, and they disagree in two places. Both are Python-side findings,
+BACKLOGged rather than fixed here — this is a port, and a port that
+"improves" its source stops being a differential.
+
+**The worktree lane's `except` does not downgrade.** The clone lane's
+handler is explicit about why it must (2026-07-13 adversarial review, finding
+A6): "a merge-back exception must NOT be reported as a clean 'done' — the
+worker's clone work never reached the fence." It downgrades to `partial`,
+names the retained clone and branch, and stamps `external-interrupt`. The
+worktree lane's handler is one `log.warning` and nothing else. A `merge_back`
+that RAISES leaves a run reporting `done` with its work stranded on a branch
+the result never names.
+
+**And a failed merge can lose its downgrade to a later exception.** The
+worktree block runs `merge_back` → `cleanup` → `prune` → `if not merge.ok:
+downgrade`. The downgrade is LAST. If `cleanup` or `prune` raises when the
+merge already failed, the `except` swallows it and the downgrade never runs —
+a failed merge reports `done`, through the guarded path rather than the
+unguarded one. Scenario `worktree-prune-raises-after-failed-merge` pins that
+behaviour, because the port has to reproduce it, and it is filed because the
+fix (move the downgrade above the cleanup) belongs in Python.
+
+The clone lane has the same shape and survives it: a `cleanup_clone` that
+raises after a failed merge takes the `except` branch, which downgrades
+anyway — with the exception's message instead of the merge's detail. So one
+lane is wrong-but-safe and the other is wrong-and-silent, from the same
+three-line pattern.
+
+### `downgrade` sets the verdict and its evidence together, or neither
+
+Both lanes end in the same shape, and the port factors it into one function
+because the two copies had already drifted:
+
+```go
+if result.Status == "done" { result.Status = "partial" }
+result.StuckReason = append-with-"; "
+if result.StopVerdict == "" {
+    result.StopVerdict = "external-interrupt"
+    result.StopEvidence = budget.Clip(evidence, 800)
+}
+```
+
+The `if` guards BOTH fields. Setting the evidence unconditionally is the
+mutant a reader writes when they read the verdict line as the only thing
+being protected — and it leaves a run whose verdict says `goal-met` next to
+evidence describing a merge conflict. `downgrade-overwrites-verdict` is
+killed by `clone-merge-fails-keeps-existing-verdict`.
+
+The reason string is APPENDED with `"; "`, not assigned: a run that was
+already stuck for its own reason keeps it, and the merge failure is a second
+clause. `downgrade-reason-prepended` and `downgrade-separator` are both
+killed by one scenario that arrives with a stuck reason already set.
+
+### The transcript is a list of strings joined with a newline, and several of them end in one
+
+`_partial_lines` is built as a list and joined with `"\n"`, and four of the
+entries carry their own trailing `"\n"`. The blank lines in a rendered
+`RESULT.md` are the join and the embedded newline together — nobody chose a
+paragraph style. Reproducing the list element-for-element is the only way to
+reproduce the spacing, which is why `RenderTranscript` builds a `[]string`
+that looks redundant rather than a `strings.Builder` that would look tidy.
+
+Three cuts in it, all code points:
+
+- `s.text[:100]` in the step heading,
+- `s.result[:2000]` in the body,
+- and the `"... (truncated, %d chars total)"` figure, which is `len(s.result)`
+  — also code points, so the number and the cut are in the same unit. A
+  byte-counted port tells a reader that 4,000 characters were cut from a
+  2,000-character result. `transcript-truncation-counts-bytes` and
+  `head-counts-bytes` are both killed by one multibyte fixture, and by
+  nothing else in the corpus.
+
+The step heading numbers by POSITION and reports `s.index` separately as
+`ledger #N`. Python's comment says why: `s.index` is the NEXT.md ledger line,
+so rendering it as the step number read as "Step 11 of a 4-step plan".
+
+And the gate is `if _done_steps:` — a DONE step existing, not the run being
+done. A stuck run that finished two of five steps still writes `PARTIAL.md`.
+Two mutants spell the plausible alternatives (`transcript-gate-is-any-step`,
+`transcript-gate-is-status`) and a stuck-with-progress fixture kills both.
+
+### The calibration row's `flag_kinds` is a set comprehension inside a sort
+
+```python
+"flag_kinds": {k: sum(1 for f in flags if f.kind == k)
+               for k in sorted({f.kind for f in flags})}
+```
+
+Three things at once: duplicate kinds collapse in the set, the sort is over
+the DISTINCT kinds, and the JSON object order follows that sort. So the Go
+side builds an ordered `pyval.Obj` rather than a map — a Go map would render
+in Go's own sorted order, which agrees here by accident and would stop
+agreeing the moment Python's key order came from anything but `sorted`.
+
+`flag_count` is `len(flags)`, not `len(flag_kinds)`. Two flags of one kind
+count as two in the aggregate and as one key in the breakdown, which is the
+point of having both.
+
+### What the differential compares, and why it is a file tree
+
+The probe drives the real `_build_result_and_finalize` with every stateful
+surface replaced by a recorder, and both sides emit the same record: the
+returned result, the ORDERED call log with arguments, the log lines at their
+levels, stderr, the four context fields the phase is supposed to clear, and
+**the file tree keyed by relative path**.
+
+The file tree is there because a rendering compared in memory is a rendering
+compared to itself. The probe writes into its own temp root and the Go test
+into another, each through its own runtime's path joining and mkdir
+semantics; the transcript, the scratchpad dump and the calibration JSONL are
+compared as bytes that each runtime actually put on a disk. That is what
+catches `scratchpad-dir-parents` — Python's scratchpad `mkdir` is
+`exist_ok=True` with NO `parents=True`, so the two calls that look
+interchangeable are not.
+
+It does NOT catch `scratchpad-dir-parents`, and that claim was in this
+section before the battery ran. The artifacts dir is guaranteed to exist by
+the time the scratchpad dir is created — the transcript was just written into
+it — so mkdir-one-level and mkdir-p agree on every reachable input. The
+mutant is equivalent and the site now says so. Writing the survivor list
+before running the battery is how a doc acquires a false claim about its own
+tests.
+
+60 scenarios. The one probe bug the run found was in the probe: its recorder
+took the call name as a parameter called `name`, and one recorded call has a
+keyword argument literally named `name`, so `write_event` raised
+`TypeError` into the surrounding `except` and vanished from the Python
+record entirely — as a MISSING CALL, which is exactly what a real port bug
+would have looked like.
+
+
+And the same hazard exists in the rule that was already there. The first
+draft of `internal/loopfinalize`'s package doc listed what the tranche does
+NOT take, naming `loop_report.py` and `pre_flight.py` — and both jumped into
+the DECLARED column, carrying 3,168 lines of "progress" earned by a sentence
+saying they were not ported. It showed up in the regenerated diff and was
+fixed by dropping the suffix in that prose, with a comment at the site saying
+why the suffix is absent. A package doc that names a `.py` file it is
+declining to port declares it. No regex fixes that; only a positive
+convention would, and inventing one now would un-declare 78 rows written
+under the current one. It is recorded in the tool's preamble instead.
+
+### The battery, and what a survivor was worth
+
+69 mutations derived from the file. The first run read 64 killed, 5 survived,
+and the five sorted into three kinds — which is roughly the ratio every
+tranche in this arc has produced, and the reason the survivor list is read
+rather than counted.
+
+**Two were missing fixtures.** `calibration-stuck-is-not-done` rewrites
+`loop_status == "stuck"` as `!= "done"`, and every scenario in the corpus was
+one or the other. `transcript-stuck-gate-is-nil-check` rewrites Python's
+`if stuck_reason:` as a nil check, which needs a stuck reason that is present
+and EMPTY. Both are now fixtures, and both are the shape L9 is about: a
+status field with three values tested at two of them.
+
+**Two were equivalent, and the sites now say so.** Dropping the `!= ""`
+clause from the outcome-stamp guard cannot be observed, because nothing in
+this phase ever CLEARS a verdict — a verdict differing from the pre-merge
+snapshot is already non-empty. Passing `parents=true` to the scratchpad mkdir
+cannot be observed either, because the artifacts dir was just written into.
+Both keep the defensive spelling Python has; the comment is what changes.
+
+**One was a bad mutant.** `report-skipped-when-manifest-fails` inserted an
+`if false` block, which cannot change an answer. Rewritten to actually skip
+the report on a manifest failure, it dies to a fixture that was already
+there.
+
+### A guard from three chunks ago caught the new package on its own
+
+`sort.Strings(kinds)` in the calibration row tripped
+`internal/pypath`'s `TestNoNewByteWiseFilenameSortAppears`, which counts
+`sort.Strings` calls per production file across the whole tree and fails on
+any file not in its allowlist. The sort here is over pre-flight flag KINDS —
+program constants, never a path — so the answer was one allowlist row with
+its reason, which is what the guard is designed to collect.
+
+Worth recording because it is the shape the 2026-08-27 decree asks for:
+**lenses get CLOSED, not re-found.** That guard exists because byte-wise
+filename ordering was found ALREADY SHIPPED in four packages after surviving
+three review rounds. Nobody had to look for it here; a package written today
+was audited by a check written for a bug found in a different subsystem, and
+the cost of the false positive was one line and one sentence.
+
+### Two things the second review pass moved
+
+**`artDir == ""` was standing in for "artifact_dir failed."** Python's
+fallback is the `except` branch and only that: an `artifact_dir` that
+RETURNS an empty string takes the primary path, where Python goes on to use
+`Path("")` — which is `.`, not an error. The port now carries an explicit
+`resolved` flag, and `artdir-return-not-error` is the mutant for it.
+
+**The scratchpad fixture was agreeing with itself.** The scenario spec held
+the scratchpad as a Go `map[string]any`, which marshals SORTED; the Go side
+then rebuilt it by sorting. Both sides would have agreed on `index.json` with
+neither preserving anything, which is L6 exactly. It is an ordered list of
+pairs now, with a four-key fixture in neither alphabetical nor reverse order,
+and `scratchpad-keys-sorted` is the mutant that fixture kills.
+
+One mutant is left in the file rather than the spec.
+`artdir-return-not-error` adds `&& dir != ""` to the resolution above, and
+nothing in the corpus makes `artifact_dir` answer `""`. Building the fixture
+would mean making the PYTHON side write its transcript relative to the
+process CWD — outside the test's temp root, into the checkout. A test that
+can leave files in the repository is a worse trade than an unpinned line, so
+the site carries the reason and the mutant is retired.
+
+### And a P4 check that checked nothing
+
+`pgrep -f mutate-subs`, run to answer "is the battery still running before I
+edit this file?", matches the shell running the pgrep — the pattern is in
+that shell's own command line. It answered STILL-RUNNING for a battery that
+had already printed its summary. A process scan whose pattern is its own
+argument is not a check. The runner now writes a completion marker and the
+marker is what gets polled.
+
+Final: **68/68 killed**, spec in `go/tools/batteries/loopfinalize.json`.

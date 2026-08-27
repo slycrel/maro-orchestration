@@ -21,19 +21,41 @@ needed. Read a row as "the port has an opinion about this module", not as
 "done".
 
 It also cannot see a module ported without being named, and that blind
-spot is REAL AND UNQUANTIFIED. This paragraph previously claimed that
-`killswitch`, `ancestry`, `prefixes` and `security` "also appear by
-filename somewhere, so none of them is missed here". Measured 2026-08-27:
-none of the four appears by filename in any production `.go` file, and
-all four sit in the undeclared queue below. They are EXAMPLES of the
-blind spot, not counterexamples to it — a bare `killswitch` in
+spot is REAL and only PARTLY quantified. This paragraph previously
+claimed that `killswitch`, `ancestry`, `prefixes` and `security` "also
+appear by filename somewhere, so none of them is missed here". Measured
+2026-08-27: none of the four appears by filename in any production `.go`
+file, and all four sit in the undeclared queue below. They are EXAMPLES
+of the blind spot, not counterexamples to it — a bare `killswitch` in
 `internal/provenance` tells this scan nothing.
+
+One SHAPE of the blind spot now carries a number instead of a paragraph.
+`loop_finalize.py` sat in the undeclared queue at 1319 lines while
+`internal/loop/finalize_helpers.go` opened with "StepEvidence is
+loop_finalize._step_evidence" — a declaration in every sense except the
+one this scan matches, which is the `.py` filename. The undeclared queue
+below now marks every row some production comment names as
+`<module>.<attr>`, and the count is printed under it. Those rows are
+still undeclared: the same spelling says "ported" and "deliberately not
+ported", so folding them in would make this number lie in the one
+direction a denominator must never lie in.
+
+The filename rule is two-valued in the SAME way, and it fired the day the
+mention category was added. `internal/loopfinalize`'s package doc listed
+what the tranche does not take, naming `loop_report.py` and
+`pre_flight.py` — and both jumped into the declared column, carrying 3,168
+lines of "progress" earned by a sentence saying they were not ported.
+Caught in the diff and fixed by dropping the suffix in that prose. **A
+package doc that names a `.py` file it is declining to port declares it
+here.** No regex fixes that; only a positive convention would, and
+inventing one now would un-declare 78 rows written under the current one.
 
 So read the undeclared queue as "no declaration either way", never as
 "not started". Closing the gap means naming the source file in the
 package doc, which is the convention already, or judging the row by hand.
 (An enumeration can be wrong at BIRTH — this file exists because one was,
-and its own preamble then was too, one chunk later.)
+its own preamble then was too, one chunk later, and the third time it was
+wrong about a module the port had already ported.)
 
 ## Why this file exists
 
@@ -70,6 +92,7 @@ reading like one.
 | `pack.py` | 1355 | `cmd/maro`, `internal/pack` |
 | `knowledge_lens.py` | 1342 | `internal/record`, `internal/scope` |
 | `captains_log.py` | 1327 | `internal/record` |
+| `loop_finalize.py` | 1319 | `internal/loopfinalize` |
 | `loop_blocked.py` | 1287 | `internal/loop`, `internal/looptypes` |
 | `memory.py` | 1233 | `internal/record` |
 | `navigator_shadow.py` | 1231 | `internal/scope` |
@@ -128,118 +151,121 @@ reading like one.
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**77 modules / 79355 lines** carry a declaration. **106 modules / 53375 lines** do not.
+**78 modules / 80674 lines** carry a declaration. **105 modules / 52056 lines** do not.
 
-### The undeclared queue — 106 modules, 53375 lines, UNJUDGED
+### The undeclared queue — 105 modules, 52056 lines, UNJUDGED
 
-| Python module | lines |
-|---|---:|
-| `loop_report.py` | 2705 |
-| `run_curation.py` | 2135 |
-| `container_exec.py` | 1676 |
-| `orch_bridges.py` | 1522 |
-| `loop_finalize.py` | 1319 |
-| `eval.py` | 1186 |
-| `correspondence.py` | 1174 |
-| `web_fetch.py` | 1172 |
-| `tail_jobs.py` | 1149 |
-| `quality_gate.py` | 1110 |
-| `doctor.py` | 1001 |
-| `skill_lifecycle.py` | 843 |
-| `camera_readout.py` | 817 |
-| `audit_repair.py` | 797 |
-| `harness_optimizer.py` | 768 |
-| `shadow_lane.py` | 759 |
-| `delta_replay.py` | 729 |
-| `discretion_readout.py` | 710 |
-| `memory_backends.py` | 689 |
-| `conductor.py` | 676 |
-| `hooks.py` | 662 |
-| `map_lens.py` | 644 |
-| `backend_benchmark.py` | 616 |
-| `telegram_listener.py` | 613 |
-| `orch.py` | 610 |
-| `mint_grounding.py` | 608 |
-| `memory_quality.py` | 593 |
-| `thinkback.py` | 577 |
-| `cli_args.py` | 574 |
-| `convo_miner.py` | 570 |
-| `mcp_client.py` | 525 |
-| `codebase_graph.py` | 492 |
-| `execution_receipts.py` | 487 |
-| `strategy_evaluator.py` | 485 |
-| `claim_verifier.py` | 477 |
-| `path_rewrite.py` | 477 |
-| `packaging_readout.py` | 476 |
-| `channels.py` | 472 |
-| `navigator_prompt.py` | 470 |
-| `factory_thin.py` | 468 |
-| `scheduler.py` | 464 |
-| `knowledge_bridge.py` | 463 |
-| `pre_flight.py` | 463 |
-| `hosted_free.py` | 459 |
-| `memory_bridge.py` | 458 |
-| `repo_scan.py` | 445 |
-| `sprint_contract.py` | 438 |
-| `gc_memory.py` | 432 |
-| `knowledge.py` | 432 |
-| `read_query.py` | 429 |
-| `slack_listener.py` | 428 |
-| `revisit.py` | 420 |
-| `cross_ref.py` | 417 |
-| `build_loop_runner.py` | 404 |
-| `tool_registry.py` | 399 |
-| `workspace_import.py` | 375 |
-| `lens_ablation.py` | 373 |
-| `claim_probe.py` | 359 |
-| `verdict_flow.py` | 355 |
-| `notify_telegram.py` | 354 |
-| `hybrid_search.py` | 352 |
-| `dev_status.py` | 351 |
-| `memory_sqlite.py` | 351 |
-| `rules.py` | 346 |
-| `bughunter.py` | 345 |
-| `path_tokens.py` | 342 |
-| `conversation.py` | 340 |
-| `compact_ab.py` | 333 |
-| `rerun_identity.py` | 330 |
-| `bootstrap.py` | 315 |
-| `navigator.py` | 311 |
-| `team.py` | 306 |
-| `backchain.py` | 305 |
-| `boot_protocol.py` | 301 |
-| `ancestry.py` | 292 |
-| `validation_shadow.py` | 281 |
-| `llm_errors.py` | 275 |
-| `goal_map.py` | 262 |
-| `gateway.py` | 261 |
-| `persona_dispatch.py` | 254 |
-| `portability.py` | 252 |
-| `tool_cost_report.py` | 252 |
-| `autonomy.py` | 251 |
-| `security.py` | 251 |
-| `verification_agent.py` | 248 |
-| `validator_roi.py` | 246 |
-| `runtime_tools.py` | 244 |
-| `run_lease.py` | 237 |
-| `prereq.py` | 232 |
-| `decision_prior.py` | 230 |
-| `viz_server.py` | 225 |
-| `fetch_tool.py` | 204 |
-| `thread_brain.py` | 199 |
-| `tool_search.py` | 194 |
-| `memory_jsonl.py` | 188 |
-| `prefixes.py` | 188 |
-| `lat_inject.py` | 178 |
-| `slow_update_scheduler.py` | 170 |
-| `killswitch.py` | 162 |
-| `memory_port.py` | 149 |
-| `factory_minimal.py` | 136 |
-| `camera_log.py` | 135 |
-| `benchmark_isolation.py` | 105 |
-| `finding_codes.py` | 102 |
-| `age_stamp.py` | 89 |
-| `listener_core.py` | 55 |
+A `+` marks a module some production COMMENT names as `<module>.<attr>` without ever naming its `.py` file. That is neither a declaration nor an absence: the same spelling is used to say "ported" and to say "deliberately not ported". Each one is one reading by whoever owns that tranche; until then it stays in this queue, because the optimistic direction is the one a denominator must never guess in.
+
+| Python module | lines | mentioned in |
+|---|---:|---|
+| `loop_report.py` | 2705 |  |
+| `run_curation.py` | 2135 | + `internal/recall`, `internal/runtrace` |
+| `container_exec.py` | 1676 |  |
+| `orch_bridges.py` | 1522 |  |
+| `eval.py` | 1186 |  |
+| `correspondence.py` | 1174 |  |
+| `web_fetch.py` | 1172 |  |
+| `tail_jobs.py` | 1149 |  |
+| `quality_gate.py` | 1110 |  |
+| `doctor.py` | 1001 | + `internal/skills` |
+| `skill_lifecycle.py` | 843 | + `internal/skills` |
+| `camera_readout.py` | 817 |  |
+| `audit_repair.py` | 797 |  |
+| `harness_optimizer.py` | 768 |  |
+| `shadow_lane.py` | 759 |  |
+| `delta_replay.py` | 729 |  |
+| `discretion_readout.py` | 710 |  |
+| `memory_backends.py` | 689 |  |
+| `conductor.py` | 676 | + `internal/loop`, `internal/playbook` |
+| `hooks.py` | 662 | + `internal/orch` |
+| `map_lens.py` | 644 |  |
+| `backend_benchmark.py` | 616 |  |
+| `telegram_listener.py` | 613 |  |
+| `orch.py` | 610 |  |
+| `mint_grounding.py` | 608 |  |
+| `memory_quality.py` | 593 |  |
+| `thinkback.py` | 577 |  |
+| `cli_args.py` | 574 |  |
+| `convo_miner.py` | 570 |  |
+| `mcp_client.py` | 525 |  |
+| `codebase_graph.py` | 492 |  |
+| `execution_receipts.py` | 487 |  |
+| `strategy_evaluator.py` | 485 |  |
+| `claim_verifier.py` | 477 |  |
+| `path_rewrite.py` | 477 |  |
+| `packaging_readout.py` | 476 |  |
+| `channels.py` | 472 |  |
+| `navigator_prompt.py` | 470 |  |
+| `factory_thin.py` | 468 |  |
+| `scheduler.py` | 464 |  |
+| `knowledge_bridge.py` | 463 |  |
+| `pre_flight.py` | 463 |  |
+| `hosted_free.py` | 459 |  |
+| `memory_bridge.py` | 458 | + `internal/director` |
+| `repo_scan.py` | 445 |  |
+| `sprint_contract.py` | 438 |  |
+| `gc_memory.py` | 432 |  |
+| `knowledge.py` | 432 |  |
+| `read_query.py` | 429 |  |
+| `slack_listener.py` | 428 |  |
+| `revisit.py` | 420 |  |
+| `cross_ref.py` | 417 |  |
+| `build_loop_runner.py` | 404 |  |
+| `tool_registry.py` | 399 |  |
+| `workspace_import.py` | 375 |  |
+| `lens_ablation.py` | 373 |  |
+| `claim_probe.py` | 359 |  |
+| `verdict_flow.py` | 355 |  |
+| `notify_telegram.py` | 354 |  |
+| `hybrid_search.py` | 352 |  |
+| `dev_status.py` | 351 |  |
+| `memory_sqlite.py` | 351 |  |
+| `rules.py` | 346 |  |
+| `bughunter.py` | 345 |  |
+| `path_tokens.py` | 342 |  |
+| `conversation.py` | 340 |  |
+| `compact_ab.py` | 333 |  |
+| `rerun_identity.py` | 330 |  |
+| `bootstrap.py` | 315 |  |
+| `navigator.py` | 311 |  |
+| `team.py` | 306 |  |
+| `backchain.py` | 305 |  |
+| `boot_protocol.py` | 301 |  |
+| `ancestry.py` | 292 | + `internal/orch`, `internal/recall` |
+| `validation_shadow.py` | 281 |  |
+| `llm_errors.py` | 275 |  |
+| `goal_map.py` | 262 |  |
+| `gateway.py` | 261 |  |
+| `persona_dispatch.py` | 254 |  |
+| `portability.py` | 252 |  |
+| `tool_cost_report.py` | 252 |  |
+| `autonomy.py` | 251 |  |
+| `security.py` | 251 | + `internal/loopparallel` |
+| `verification_agent.py` | 248 |  |
+| `validator_roi.py` | 246 |  |
+| `runtime_tools.py` | 244 |  |
+| `run_lease.py` | 237 |  |
+| `prereq.py` | 232 |  |
+| `decision_prior.py` | 230 |  |
+| `viz_server.py` | 225 |  |
+| `fetch_tool.py` | 204 |  |
+| `thread_brain.py` | 199 |  |
+| `tool_search.py` | 194 |  |
+| `memory_jsonl.py` | 188 |  |
+| `prefixes.py` | 188 |  |
+| `lat_inject.py` | 178 |  |
+| `slow_update_scheduler.py` | 170 |  |
+| `killswitch.py` | 162 |  |
+| `memory_port.py` | 149 |  |
+| `factory_minimal.py` | 136 |  |
+| `camera_log.py` | 135 |  |
+| `benchmark_isolation.py` | 105 |  |
+| `finding_codes.py` | 102 |  |
+| `age_stamp.py` | 89 |  |
+| `listener_core.py` | 55 |  |
+
+**8 of the 105 undeclared modules are mentioned** by attribute somewhere in production comments.
 
 Undeclared is not the same as untouched — this list is UNJUDGED, and
 judging it is the work this file makes possible rather than the work it
@@ -248,9 +274,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **77 of 183 modules (79,355 of 132,730
-> lines, 60%) are named by a Go production package. The other
-> 106 have no declaration either way.**
+> **78 of 183 modules (80,674 of 132,730
+> lines, 61%) are named by a Go production package. The other
+> 105 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.

@@ -42,6 +42,68 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### PYTHON-side: the two merge-back lanes in `loop_finalize.py` disagree about failure (FOUND 2026-08-27, loopfinalize differential)
+
+Both reproduced faithfully in `internal/loopfinalize` and fixtured there
+(`worktree-merge-raises-does-not-downgrade`,
+`worktree-prune-raises-after-failed-merge`,
+`worktree-cleanup-raises-after-failed-merge`). **Filed, not fixed** — the
+Go port reproduces Python.
+
+`_build_result_and_finalize` has two merge-back blocks forty lines apart
+doing the same job. The container-clone one is explicit about why an
+exception must not be reported as a clean run (2026-07-13 adversarial
+review, finding A6): it downgrades `done` -> `partial`, names the retained
+clone and branch in `stuck_reason`, and stamps `external-interrupt`.
+
+**1. The run-worktree lane's `except` does not downgrade.** It is one
+`log.warning("run worktree finalize error: %s", exc)` and nothing else. A
+`worktree.merge_back` that RAISES — rather than returning `ok=False` —
+leaves the run reporting `done` with its work stranded on a branch the
+result never names. The `if not _merge.ok:` path downgrades correctly, so
+the asymmetry is exception-vs-returned-failure inside one block.
+
+**2. A merge that already failed can lose its downgrade to a LATER
+exception.** The block runs `merge_back` -> `cleanup` -> `prune` -> `if
+not _merge.ok: downgrade`, with the downgrade LAST. If `cleanup` or
+`prune` raises while `_merge.ok` is False, the `except` swallows it and
+the downgrade never runs: a failed merge reports `done`, through the
+guarded path. Moving the downgrade above the cleanup fixes both halves.
+
+The clone lane has the same three-line shape and survives it by accident —
+its `except` downgrades anyway, with the exception's message in place of
+the merge's detail.
+
+**3. Smaller, same file.** The transcript block is one `try` covering the
+render, the artifact-dir resolution, the file write AND the scratchpad
+dump, and its handler says `partial result write failed`. A scratchpad
+failure therefore logs that sentence directly after the INFO line saying
+the transcript was written — two log lines that contradict each other. The
+scratchpad `mkdir(exist_ok=True)` also omits `parents=True`, unlike the
+artifact-dir fallback two lines up; unobservable today because the
+artifacts dir always exists by then.
+
+### Go port: `PORT_STATUS.md` counted a module it had already ported (FOUND+FIXED 2026-08-27, loopfinalize tranche)
+
+`loop_finalize.py` sat in the undeclared queue at 1319 lines while
+`internal/loop/finalize_helpers.go` opened with "StepEvidence is
+loop_finalize._step_evidence". The scanner matches the module FILENAME, and
+`loop_finalize._step_evidence` does not contain `loop_finalize.py`.
+
+Measured across the tree: **nine** of the 106 undeclared modules are named
+in a production comment as `<module>.<attr>` and never as `<module>.py` —
+`loop_finalize`, `ancestry`, `conductor`, `doctor`, `hooks`,
+`memory_bridge`, `run_curation`, `security`, `skill_lifecycle`.
+
+Widening the regex would be wrong: a `<module>.<attr>` mention is
+two-valued, and `internal/loopparallel` names
+`security.scan_external_content` precisely to say it is NOT ported.
+Widening makes the denominator lie in the optimistic direction. The tool
+now reports a third category (MENTIONED — neither declared nor absent) so
+the blind spot carries a number instead of a paragraph. **Open remnant:**
+the other eight rows are unjudged; each is one reading of the mention by
+whoever owns that tranche.
+
 ### PYTHON-side: four things `loop_parallel.py` does quietly (FOUND 2026-08-27, loopparallel differential)
 
 All four reproduced faithfully in `internal/loopparallel` and fixtured

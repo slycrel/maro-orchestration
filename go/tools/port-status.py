@@ -68,19 +68,41 @@ needed. Read a row as "the port has an opinion about this module", not as
 "done".
 
 It also cannot see a module ported without being named, and that blind
-spot is REAL AND UNQUANTIFIED. This paragraph previously claimed that
-`killswitch`, `ancestry`, `prefixes` and `security` "also appear by
-filename somewhere, so none of them is missed here". Measured 2026-08-27:
-none of the four appears by filename in any production `.go` file, and
-all four sit in the undeclared queue below. They are EXAMPLES of the
-blind spot, not counterexamples to it — a bare `killswitch` in
+spot is REAL and only PARTLY quantified. This paragraph previously
+claimed that `killswitch`, `ancestry`, `prefixes` and `security` "also
+appear by filename somewhere, so none of them is missed here". Measured
+2026-08-27: none of the four appears by filename in any production `.go`
+file, and all four sit in the undeclared queue below. They are EXAMPLES
+of the blind spot, not counterexamples to it — a bare `killswitch` in
 `internal/provenance` tells this scan nothing.
+
+One SHAPE of the blind spot now carries a number instead of a paragraph.
+`loop_finalize.py` sat in the undeclared queue at 1319 lines while
+`internal/loop/finalize_helpers.go` opened with "StepEvidence is
+loop_finalize._step_evidence" — a declaration in every sense except the
+one this scan matches, which is the `.py` filename. The undeclared queue
+below now marks every row some production comment names as
+`<module>.<attr>`, and the count is printed under it. Those rows are
+still undeclared: the same spelling says "ported" and "deliberately not
+ported", so folding them in would make this number lie in the one
+direction a denominator must never lie in.
+
+The filename rule is two-valued in the SAME way, and it fired the day the
+mention category was added. `internal/loopfinalize`'s package doc listed
+what the tranche does not take, naming `loop_report.py` and
+`pre_flight.py` — and both jumped into the declared column, carrying 3,168
+lines of "progress" earned by a sentence saying they were not ported.
+Caught in the diff and fixed by dropping the suffix in that prose. **A
+package doc that names a `.py` file it is declining to port declares it
+here.** No regex fixes that; only a positive convention would, and
+inventing one now would un-declare 78 rows written under the current one.
 
 So read the undeclared queue as "no declaration either way", never as
 "not started". Closing the gap means naming the source file in the
 package doc, which is the convention already, or judging the row by hand.
 (An enumeration can be wrong at BIRTH — this file exists because one was,
-and its own preamble then was too, one chunk later.)
+its own preamble then was too, one chunk later, and the third time it was
+wrong about a module the port had already ported.)
 
 ## Why this file exists
 
@@ -127,11 +149,46 @@ def line_count(path):
 
 
 def declarations(mods):
-    """module -> {go package dir} for every production .go file naming it."""
+    """Scan production .go files once for two things per module.
+
+    Returns (named, mentioned):
+
+      named     module -> {go package dir}, for a file naming the module
+                by FILENAME. That is the port's declaration convention.
+      mentioned module -> {go package dir}, for a COMMENT naming it as
+                `<module>.<attr>` in a package that does not also declare
+                it by filename.
+
+    The second one exists because a declaration written as
+    `loop_finalize._step_evidence` was counted as no declaration at all
+    for three chunks (2026-08-27). Widening the first pattern to accept
+    `<module>.<attr>` would be the obvious fix and it is WRONG: that
+    spelling is two-valued. `internal/loopparallel`'s package doc names
+    `security.scan_external_content` precisely to say it is NOT ported,
+    and `internal/recall` names `run_curation.<attr>` to describe a
+    consumer it reads from. Folding those in would make the declared
+    number lie in the optimistic direction, which is the one direction a
+    denominator must never lie in.
+
+    So a mention is reported as its own category and judged by hand. The
+    remedy for a genuine one is to name the `.py` file in the package
+    doc, which is the convention already.
+
+    A Go PACKAGE name that happens to match a Python module (`orch`,
+    `knowledge`) would match `<module>.<attr>` on every ordinary selector
+    in a comment, so those are excluded by name.
+    """
     found = {}
+    mentions = {}
+    gopkgs = set()
+    internal = os.path.join(GO_ROOT, "internal")
+    if os.path.isdir(internal):
+        gopkgs = set(os.listdir(internal))
     # Compiled once: 183 patterns against every file is the difference
     # between a second and a minute on this box.
     pats = {m: re.compile(r"\b" + re.escape(m) + r"\b") for m in mods}
+    attr_pats = {m: re.compile(r"\b" + re.escape(m[:-3]) + r"\.[A-Za-z_]")
+                 for m in mods if m[:-3] not in gopkgs}
     for dirpath, dirnames, files in os.walk(GO_ROOT):
         dirnames[:] = [d for d in dirnames if d != ".git"]
         for fn in files:
@@ -144,7 +201,17 @@ def declarations(mods):
             for m, pat in pats.items():
                 if pat.search(text):
                     found.setdefault(m, set()).add(pkg)
-    return found
+            comments = "\n".join(l for l in text.splitlines()
+                                 if l.lstrip().startswith("//"))
+            if not comments:
+                continue
+            for m, pat in attr_pats.items():
+                if pat.search(comments):
+                    mentions.setdefault(m, set()).add(pkg)
+    for m in list(mentions):
+        if m in found:
+            del mentions[m]
+    return found, mentions
 
 
 def render():
@@ -153,7 +220,7 @@ def render():
     if not mods:
         sys.exit("no .py modules in %s; refusing to write an empty ledger" % src)
     lines = {m: line_count(os.path.join(src, m)) for m in mods}
-    named = declarations(mods)
+    named, mentioned = declarations(mods)
 
     have = sorted(((m, lines[m], sorted(named[m])) for m in mods if m in named),
                   key=lambda r: -r[1])
@@ -175,10 +242,25 @@ def render():
                % (len(have), have_lines, len(none), none_lines))
     out.append("\n### The undeclared queue — %d modules, %d lines, UNJUDGED\n\n"
                % (len(none), none_lines))
-    out.append("| Python module | lines |\n")
-    out.append("|---|---:|\n")
+    out.append("A `+` marks a module some production COMMENT names as "
+               "`<module>.<attr>` without ever naming its `.py` file. That "
+               "is neither a declaration nor an absence: the same spelling "
+               "is used to say \"ported\" and to say \"deliberately not "
+               "ported\". Each one is one reading by whoever owns that "
+               "tranche; until then it stays in this queue, because the "
+               "optimistic direction is the one a denominator must never "
+               "guess in.\n\n")
+    out.append("| Python module | lines | mentioned in |\n")
+    out.append("|---|---:|---|\n")
     for m, n in none:
-        out.append("| `%s` | %d |\n" % (m, n))
+        pkgs = sorted(mentioned.get(m, ()))
+        out.append("| `%s` | %d | %s |\n"
+                   % (m, n,
+                      "+ " + ", ".join("`" + p + "`" for p in pkgs)
+                      if pkgs else ""))
+    out.append("\n**%d of the %d undeclared modules are mentioned** by "
+               "attribute somewhere in production comments.\n"
+               % (len(mentioned), len(none)))
     out.append(TAIL.format(
         have_mods=len(have), total_mods=total_mods,
         have_lines=have_lines, total_lines=total_lines,

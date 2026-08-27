@@ -156,7 +156,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 70 — the most frequent single defect in the Go port*
+*instances: 71 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -251,7 +251,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 38*
+*instances: 39*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -619,7 +619,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 97*
+*instances: 100*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -750,7 +750,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 9 attributed; ~6 in the mined cluster*
+*instances: 10 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -1087,7 +1087,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 16*
+*instances: 17*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1664,7 +1664,7 @@ the split-control-flow seam class.
 Don't grind many rounds at the cheapest tier.
 
 ### P4 — A running battery owns the working tree; do not read it OR write it
-*instances: 6*
+*instances: 7*
 
 Its restore set does not include test files, so a test-file edit mid-run
 produces a spurious BUILDFAIL. Do not edit a battery's `FILES` while it runs.
