@@ -51,10 +51,10 @@ reading like one.
 | Python module | lines | named by (Go production package) |
 |---|---:|---|
 | `knowledge_web.py` | 4828 | `internal/knowledge` |
-| `handle.py` | 4309 | `internal/loop`, `internal/now`, `internal/record` |
+| `handle.py` | 4309 | `internal/loop`, `internal/looptypes`, `internal/now`, `internal/record`, `internal/scope` |
 | `llm.py` | 3930 | `cmd/maro`, `internal/llm`, `internal/metrics` |
 | `skills.py` | 3038 | `cmd/maro`, `internal/pyjson`, `internal/record`, `internal/skills` |
-| `closure_verify.py` | 2758 | `internal/closure`, `internal/runs` |
+| `closure_verify.py` | 2758 | `internal/closure`, `internal/runs`, `internal/scope` |
 | `cli.py` | 2705 | `cmd/maro`, `internal/tasks` |
 | `step_exec.py` | 2455 | `internal/loop` |
 | `memory_ledger.py` | 2427 | `internal/knowledge`, `internal/pyjson`, `internal/record` |
@@ -68,10 +68,11 @@ reading like one.
 | `planner.py` | 1434 | `internal/director`, `internal/loop`, `internal/planner`, `internal/recall` |
 | `evolver_store.py` | 1366 | `internal/evolver`, `internal/guard` |
 | `pack.py` | 1355 | `cmd/maro`, `internal/pack` |
-| `knowledge_lens.py` | 1342 | `internal/record` |
+| `knowledge_lens.py` | 1342 | `internal/record`, `internal/scope` |
 | `captains_log.py` | 1327 | `internal/record` |
 | `loop_blocked.py` | 1287 | `internal/loop` |
 | `memory.py` | 1233 | `internal/record` |
+| `navigator_shadow.py` | 1231 | `internal/scope` |
 | `evolver.py` | 1183 | `internal/evolver`, `internal/record` |
 | `provenance.py` | 1156 | `internal/now` |
 | `interrupt.py` | 1128 | `internal/artifactcheck`, `internal/loop` |
@@ -80,22 +81,27 @@ reading like one.
 | `persona.py` | 1060 | `internal/persona` |
 | `recall.py` | 1005 | `internal/recall` |
 | `loop_planning.py` | 883 | `internal/loop`, `internal/metrics` |
+| `agent_loop.py` | 871 | `internal/looptypes` |
 | `orch_items.py` | 845 | `internal/orch` |
 | `metrics.py` | 827 | `internal/metrics`, `internal/pyval`, `internal/record`, `internal/scans` |
 | `playbook.py` | 775 | `internal/playbook`, `internal/pytext` |
+| `scope.py` | 736 | `internal/scope` |
 | `artifact_check.py` | 735 | `internal/artifactcheck` |
 | `constraint.py` | 723 | `internal/evolver` |
 | `worktree.py` | 722 | `internal/procid`, `internal/worktree` |
 | `graduation.py` | 698 | `internal/graduation` |
 | `system_health.py` | 693 | `internal/syshealth` |
 | `checkpoint.py` | 684 | `internal/artifactcheck` |
+| `loop_types.py` | 659 | `internal/looptypes` |
 | `observe.py` | 655 | `internal/evolver`, `internal/loop` |
 | `sheriff.py` | 641 | `internal/sheriff` |
 | `intent.py` | 564 | `internal/intent` |
 | `handle_queue.py` | 562 | `internal/handlequeue` |
 | `router.py` | 521 | `internal/skills` |
 | `jsonl_utils.py` | 519 | `internal/metrics` |
+| `world_facts.py` | 457 | `internal/worldfacts` |
 | `task_store.py` | 455 | `cmd/maro`, `internal/tasks` |
+| `skill_loader.py` | 453 | `internal/scope` |
 | `attribution.py` | 439 | `internal/inspector` |
 | `dispatch_envelope.py` | 413 | `internal/dispatch`, `internal/pypath` |
 | `loop_artifacts.py` | 407 | `internal/loop`, `internal/record` |
@@ -104,11 +110,14 @@ reading like one.
 | `workers.py` | 388 | `internal/workers` |
 | `config.py` | 342 | `internal/config`, `internal/orch`, `internal/pyprobe`, `internal/testenv` |
 | `background.py` | 336 | `internal/artifactcheck` |
+| `run_trace.py` | 307 | `internal/runtrace` |
+| `reanchor.py` | 282 | `internal/scope` |
 | `llm_parse.py` | 253 | `internal/orch` |
 | `notify.py` | 224 | `internal/notify` |
 | `stop_verdicts.py` | 223 | `internal/stopverdicts` |
 | `injection_guard.py` | 196 | `internal/guard` |
 | `context_budget.py` | 192 | `internal/budget` |
+| `terrain.py` | 178 | `internal/pyurl`, `internal/terrain` |
 | `proc_lock.py` | 172 | `internal/artifactcheck` |
 | `audit_policy.py` | 137 | `internal/record` |
 | `escalation_context.py` | 121 | `internal/notify` |
@@ -117,9 +126,9 @@ reading like one.
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**66 modules / 72893 lines** carry a declaration. **117 modules / 59837 lines** do not.
+**75 modules / 78067 lines** carry a declaration. **108 modules / 54663 lines** do not.
 
-### The undeclared queue — 117 modules, 59837 lines, UNJUDGED
+### The undeclared queue — 108 modules, 54663 lines, UNJUDGED
 
 | Python module | lines |
 |---|---:|
@@ -128,27 +137,23 @@ reading like one.
 | `container_exec.py` | 1676 |
 | `orch_bridges.py` | 1522 |
 | `loop_finalize.py` | 1319 |
-| `navigator_shadow.py` | 1231 |
 | `eval.py` | 1186 |
 | `correspondence.py` | 1174 |
 | `web_fetch.py` | 1172 |
 | `tail_jobs.py` | 1149 |
 | `quality_gate.py` | 1110 |
 | `doctor.py` | 1001 |
-| `agent_loop.py` | 871 |
 | `skill_lifecycle.py` | 843 |
 | `camera_readout.py` | 817 |
 | `audit_repair.py` | 797 |
 | `harness_optimizer.py` | 768 |
 | `shadow_lane.py` | 759 |
-| `scope.py` | 736 |
 | `delta_replay.py` | 729 |
 | `discretion_readout.py` | 710 |
 | `memory_backends.py` | 689 |
 | `loop_parallel.py` | 684 |
 | `conductor.py` | 676 |
 | `hooks.py` | 662 |
-| `loop_types.py` | 659 |
 | `map_lens.py` | 644 |
 | `backend_benchmark.py` | 616 |
 | `telegram_listener.py` | 613 |
@@ -174,8 +179,6 @@ reading like one.
 | `pre_flight.py` | 463 |
 | `hosted_free.py` | 459 |
 | `memory_bridge.py` | 458 |
-| `world_facts.py` | 457 |
-| `skill_loader.py` | 453 |
 | `repo_scan.py` | 445 |
 | `sprint_contract.py` | 438 |
 | `gc_memory.py` | 432 |
@@ -202,12 +205,10 @@ reading like one.
 | `rerun_identity.py` | 330 |
 | `bootstrap.py` | 315 |
 | `navigator.py` | 311 |
-| `run_trace.py` | 307 |
 | `team.py` | 306 |
 | `backchain.py` | 305 |
 | `boot_protocol.py` | 301 |
 | `ancestry.py` | 292 |
-| `reanchor.py` | 282 |
 | `validation_shadow.py` | 281 |
 | `llm_errors.py` | 275 |
 | `goal_map.py` | 262 |
@@ -230,7 +231,6 @@ reading like one.
 | `memory_jsonl.py` | 188 |
 | `prefixes.py` | 188 |
 | `lat_inject.py` | 178 |
-| `terrain.py` | 178 |
 | `slow_update_scheduler.py` | 170 |
 | `killswitch.py` | 162 |
 | `memory_port.py` | 149 |
@@ -248,9 +248,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **66 of 183 modules (72,893 of 132,730
-> lines, 55%) are named by a Go production package. The other
-> 117 have no declaration either way.**
+> **75 of 183 modules (78,067 of 132,730
+> lines, 59%) are named by a Go production package. The other
+> 108 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.

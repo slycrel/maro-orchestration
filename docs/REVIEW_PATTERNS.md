@@ -251,7 +251,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 35*
+*instances: 37*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -595,7 +595,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 95*
+*instances: 97*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -779,7 +779,7 @@ the thing it skipped is either counted or lost.
 
 ### L41 — An OVER-DETERMINED fixture measures none of the rules that agree
 
-*instances: 8*
+*instances: 11*
 
 Distinct from L1, and the distinction is what makes it findable. L1 is a
 test whose *assertion* cannot fail. Here the assertion is fine and the
@@ -924,7 +924,7 @@ mutant survives that, the name is a lie even though the suite is green.
 
 ### L45 — A battery measures only what the harness can EXPRESS
 
-*instances: 3*
+*instances: 4*
 
 A mutation score is a statement about the fixtures. But the fixtures reach
 only as far as the harness lets them describe an outcome — and a case
@@ -1371,7 +1371,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 25*
+*instances: 27*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1409,6 +1409,34 @@ which is what a named-but-absent pin looks like from the outside.
 A comment naming a specific fixture is the most credible form this
 failure takes, and the cheapest to check: the fixture is right there.
 Nobody checked, twice, in a file written that hour.
+
+**Instance 3** (looptypes, 2026-08-27) — the same shape, and this time
+the comment and the thing it was wrong about landed in the SAME COMMIT.
+`ResolveLogLevel` upper-cases `$MARO_LOG_LEVEL` with `pytext.Upper`, and a
+comment explained that the choice was faithfulness rather than behaviour:
+*"No input can OBSERVE the difference from strings.ToUpper here: every
+entry in the supplement is a multi-character expansion (fi → FI, ss → SS)
+and none of them spells a prefix of any name in the table."* Reasoning
+about the table, not reading it. The same afternoon's fix had added
+`_STYLES` to that table; U+FB05 and U+FB06 upper-case to `ST`; so
+`MARO_LOG_LEVEL=_ﬅyles` reaches `_STYLES`, hands `setLevel` a dict, and
+aborts the run — where `strings.ToUpper` resolves quietly to WARNING.
+
+The mutation battery did not catch it. Swapping `pytext.Upper` for
+`strings.ToUpper` at the call site SURVIVED the whole suite, because
+every fixture had been written from the same reasoning as the comment.
+A mutant is only as good as the corpus it runs against, and here the
+corpus and the false claim had one author.
+
+**What closed it.** Not another fixture — a SWEEP. Both functions render
+rune by rune, so if two spellings of a string differ, some rune renders
+differently, and for either spelling to equal a table name that rune's
+rendering must be a contiguous substring of that name. Sweeping single
+runes therefore finds every rune that could possibly matter, and the test
+now requires each one to appear in the scenario corpus. A new table entry
+or a new supplement expansion fails on the day it lands. That is the
+2026-08-27 decree applied: the lens had fired on this surface before, so
+the answer was to build the check, not to write the fixture and move on.
 
 **The check.** For any comment asserting that a difference does not
 matter, ask: *what input would tell the two behaviours apart, and does
@@ -1518,7 +1546,7 @@ reverts the property and run it. An assertion that has never failed is
 not yet an assertion — and neither instance was found by reading.
 
 ### L54 — A test that COMPILES the artifact differently from every caller is testing a different artifact
-*instances: 1*
+*instances: 2*
 
 **Canonical instance** (pytext, artifactcheck r2, 2026-08-26). `pytext`
 carried two invariant tests written for exactly one purpose: to make it
@@ -1755,7 +1783,7 @@ compile-kill is not a kill*, and *a test named for a differential must run
 the other side*.
 
 ### P14 — A mutant that does not compile is reported as caught and proves nothing
-*instances: 3 — one ledger row, but it covers six mutants across two batteries*
+*instances: 4 — one ledger row, but it covers six mutants across two batteries*
 
 `go test` exits non-zero for a build failure exactly as it does for a failed
 assertion, so a mutation battery that judges on the return code counts every

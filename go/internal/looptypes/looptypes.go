@@ -135,16 +135,35 @@ type LogEnv struct {
 //     an unparseable config cannot affect a run that named its level.
 //   - the level test is `hasattr(logging, env_level)`, NOT a lookup in the
 //     four names the docstring lists. `MARO_LOG_LEVEL=CRITICAL` resolves to
-//     50 and works. `MARO_LOG_LEVEL=WARN` does NOT (there is no
-//     logging.WARN alias in a modern CPython on this box — measured), and
-//     falls through to the debug/verbose arms. And `MARO_LOG_LEVEL=BASICCONFIG`
-//     passes hasattr and hands setLevel a FUNCTION, which raises
-//     "Level not an integer or a valid string" out of _configure_logging.
-//     badAttr reports that third case: it names the attribute Python found
-//     that is not a level, and level is meaningless when it is non-empty.
+//     50 and works, and so does the deprecated `WARN` alias. And
+//     `MARO_LOG_LEVEL=_styles` passes hasattr and hands setLevel a DICT,
+//     which raises "Level not an integer or a valid string" out of
+//     _configure_logging. badAttr reports that third case: it names the
+//     attribute Python found that is not a level, and level is meaningless
+//     when it is non-empty.
 //
-// The attribute table is the `logging` module's, measured — see the
-// differential, which sweeps every name in dir(logging).
+// The attribute table is the `logging` module's, CENSUSED rather than
+// transcribed — see the differential, which sweeps every name in
+// dir(logging) and fails in BOTH directions. Transcribing it by hand got
+// both hard cases wrong on 2026-08-27: WARN was listed as absent under a
+// comment claiming to have measured it, and _STYLES was in neither table.
+// The census is also the tripwire for the interpreter upgrade that finally
+// removes WARN.
+//
+// str.upper() is Unicode, and here that is LOAD-BEARING rather than
+// merely faithful. It EXPANDS: U+FB05 and U+FB06 (the two ST ligatures)
+// upper-case to the two characters "ST", so `MARO_LOG_LEVEL=_ﬅyles`
+// reaches `_STYLES` and aborts the run, where strings.ToUpper leaves the
+// ligature alone and resolves quietly.
+//
+// The comment that stood here said the opposite — that no input could
+// observe the difference — and argued it from the supplement's shape. It
+// was wrong about the very entry added in the same commit, and it survived
+// a mutation of this call site, because reasoning about a table is not
+// reading it. The differential now SWEEPS all 1.1M code points for
+// expansions that land inside a level name and requires each to have a
+// fixture, so a new table entry or a new supplement expansion fails on the
+// day it lands.
 func ResolveLogLevel(env LogEnv, verbose bool) (level int, badAttr string) {
 	envLevel := pytext.Upper(env.MaroLogLevel)
 	debugOn := env.MaroDebug == "1"
@@ -180,17 +199,31 @@ var loggingLevelAttr = func(name string) (int, bool) {
 var loggingIntAttrs = map[string]int{
 	"CRITICAL": 50, "FATAL": 50, "ERROR": 40, "WARNING": 30,
 	"INFO": 20, "DEBUG": 10, "NOTSET": 0,
-	// The three non-level ints in the module namespace. They are reachable
-	// through this same ladder and setLevel accepts them, so a
-	// MARO_LOG_LEVEL of "BASIC_FORMAT" is not one of them (it is a str) but
-	// these are.
-	"raiseExceptions": 1,
+	// WARN is the deprecated WARNING alias. It is still in the namespace on
+	// this box's 3.14 and hasattr does not care that it is deprecated, so
+	// `MARO_LOG_LEVEL=WARN` resolves to 30. Leaving it out was invisible
+	// unless the run ALSO asked for debug: without it the fall-through
+	// answer is WARNING too, and only --verbose or MARO_DEBUG=1 makes the
+	// two disagree.
+	"WARN": 30,
+	// NOT `raiseExceptions`. A previous version listed it here as one of
+	// "the three non-level ints in the module namespace" — it is a bool,
+	// there were never three, and no input can reach it, because the env
+	// value is upper()ed and "RAISEEXCEPTIONS" is not an attribute. The
+	// census fails on any entry that is not its own upper-case, which is
+	// what found it.
 }
 
 // loggingHasAttr is `hasattr(logging, name)` for the names that are NOT
 // ints. The set is measured from dir(logging) by the differential rather
 // than transcribed from documentation, and the census there fails if the
 // module's namespace moves.
+// The int branch is unreachable FROM ResolveLogLevel, which consults
+// loggingLevelAttr first and returns; it is here because this function
+// answers `hasattr`, and hasattr does not care which table a name is in.
+// The census calls it directly for every name in dir(logging), so the
+// branch is exercised rather than merely defended in prose — removing it
+// fails that test.
 func loggingHasAttr(name string) bool {
 	if _, ok := loggingIntAttrs[name]; ok {
 		return true
@@ -203,7 +236,13 @@ func loggingHasAttr(name string) bool {
 // `.upper()`ed first — so a lower-case attribute like `getLogger` can never
 // be matched and is not listed.
 var loggingOtherAttrs = map[string]bool{
+	// A str: setLevel calls it an "Unknown level".
 	"BASIC_FORMAT": true,
+	// A dict of the three format styles. Its name is already upper-case, so
+	// `MARO_LOG_LEVEL=_styles` reaches it and setLevel raises TypeError —
+	// which _configure_logging does NOT catch, so the process dies at
+	// startup rather than logging quietly. It was in neither table.
+	"_STYLES": true,
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +384,13 @@ func StepFromDecompose(text string, index int, o StepOpts) StepOutcome {
 		confidence = *o.Confidence
 	}
 	injected := o.InjectedSteps
+	// EQUIVALENT MUTANT: `len(injected) == 0` cannot be told apart from
+	// this. It differs only for a NON-NIL EMPTY slice, which it would
+	// replace with a fresh one — and a Go caller cannot observe that,
+	// because appending to a zero-length slice never writes through to the
+	// header the outcome already holds. Python CAN observe it (its list
+	// grows in place), which is why the nil test is the faithful spelling
+	// even though nothing here can fail without it.
 	if injected == nil {
 		injected = []string{}
 	}
@@ -535,6 +581,11 @@ type ContextContribution struct {
 // Note the separator is a BLANK LINE, not a newline, and the label carries
 // no Kind: `kind` is ledger metadata, not prompt text.
 func RenderContributions(records []ContextContribution) string {
+	// EQUIVALENT MUTANT: deleting this guard changes nothing, because
+	// strings.Join over zero parts is already "". It stays because the
+	// empty case is a stated CONTRACT rather than an accident of the
+	// joiner — a later rewrite that added a header or a trailing newline
+	// would have to step over this line to break it.
 	if len(records) == 0 {
 		return ""
 	}
@@ -989,6 +1040,12 @@ func (c *LoopContext) StampStop(verdict, evidence string) {
 // Note the asymmetry with StampStop and that it is upstream's: the pause
 // reason is NOT clipped, because it is a vocabulary member rather than
 // free text, and there is no evidence field beside it.
+//
+// EQUIVALENT MUTANT: adding a Clip here cannot change any answer, since
+// every reason that reaches this line has already passed the vocabulary
+// gate and the longest member is far under any sane cap. The differential
+// asserts that headroom rather than assuming it, so a vocabulary that grew
+// an 800-character member would say so.
 func (c *LoopContext) StampPause(reason string) {
 	if c.PauseReason != "" {
 		return

@@ -30,14 +30,6 @@ func TestEveryPackageHasADifferential(t *testing.T) {
 			"ported, unreferenced, and never given a differential. Predates " +
 			"this census and is the reason it is scoped to `no tests at " +
 			"all` rather than to `new packages`.",
-
-		// The 2026-08-27 delegated tranche. All four are inert — nothing
-		// outside internal/looptypes imports any of them — so they change
-		// no behavior while they sit here, and each leaves this list when
-		// its differential lands rather than when someone remembers it.
-		"internal/looptypes": "" +
-			"loop_types.py: LoopContext, the stamp_* vocabulary gates and " +
-			"ResolveLogLevel. Differential owed.",
 	}
 
 	root, err := filepath.Abs("../..")
