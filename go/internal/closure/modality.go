@@ -20,6 +20,28 @@ import (
 // deliverable end-to-end (Python run d2f4e2f4: {"static": 8} on a run
 // that exercised its deliverable twice).
 
+// wsPattern and testRunnerPattern are the two `(?i)` patterns in this
+// file that are NOT wrapped in pytext.PyFoldI, and they are named rather
+// than inlined so that TestTheTwoUnwrappedPatternsReallyCarryNoI can
+// assert against the SAME string MustCompile receives instead of a
+// retyped copy of it (P12).
+//
+// The reason they are unwrapped is measured, not assumed: `PyFoldI(p) !=
+// p` is false for both. Not one of wscat, websocat, `wss?://`, pytest,
+// go test, cargo test, npm/pnpm/yarn, make test or tox contains an `i`,
+// so there is nothing for CPython's IGNORECASE to fold that Go's (?i)
+// does not, and wrapping them would add a call no input could ever
+// distinguish -- a guard that cannot fail (L4).
+//
+// `timeout`, in the `process` pattern below, DOES contain one. That
+// difference is not visible by scanning the alternations, and was found
+// by asking PyFoldI rather than by reading them.
+var (
+	wsPattern         = `(?i)(?:` + wordBounded(`wscat|websocat`) + `|` + urlBounded(`wss?://`) + `)`
+	testRunnerPattern = `(?i)` + wordBounded(
+		`pytest|go test|cargo test|(?:npm|pnpm|yarn) (?:run )?test|make test|tox`)
+)
+
 // wordBounded is Python's `\b(alt)\b` for an alternation whose every
 // branch STARTS and ENDS with a word character. Both boundaries sit at an
 // end of the pattern and the result is only ever asked MatchString, which
@@ -48,13 +70,12 @@ var modalityPatterns = []struct {
 	label string
 	re    *regexp.Regexp
 }{
-	{"browser", regexp.MustCompile(`(?i)` + wordBounded(
-		`playwright|puppeteer|selenium|chromium|chrome --headless|firefox --headless`))},
-	{"ws", regexp.MustCompile(`(?i)(?:` + wordBounded(`wscat|websocat`) +
-		`|` + urlBounded(`wss?://`) + `)`)},
-	{"http", regexp.MustCompile(`(?i)(?:` +
+	{"browser", regexp.MustCompile(pytext.PyFoldI(`(?i)` + wordBounded(
+		`playwright|puppeteer|selenium|chromium|chrome --headless|firefox --headless`)))},
+	{"ws", regexp.MustCompile(wsPattern)},
+	{"http", regexp.MustCompile(pytext.PyFoldI(`(?i)(?:` +
 		wordBounded(`curl|wget|httpie|http [A-Z]+`) +
-		`|` + urlBounded(`https?://`) + `)`)},
+		`|` + urlBounded(`https?://`) + `)`))},
 	// "process" = runs a built binary or a script that likely exercises
 	// the artifact without network. First char after `./` must be
 	// alphanumeric/underscore/dash — rules out the go wildcard `./...`
@@ -64,9 +85,9 @@ var modalityPatterns = []struct {
 	// row and read by the behavioral-gap branch, so a command separated by
 	// a non-breaking space classified differently on the two runtimes
 	// (adversarial mission-r6, priced in the sibling sweep).
-	{"process", regexp.MustCompile(`(?i)(^|(?-i:[` + pytext.SpaceClassBody + `;&|]))\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|(?-i:[` +
+	{"process", regexp.MustCompile(pytext.PyFoldI(`(?i)(^|(?-i:[` + pytext.SpaceClassBody + `;&|]))\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|(?-i:[` +
 		pytext.SpaceClassBody + `;&|]))(go run|node |python[0-9.]* |timeout [0-9]+` +
-		pytext.SpaceClass + `+` + pytext.NotClass("") + `+` + pytext.SpaceClass + `*&)`)},
+		pytext.SpaceClass + `+` + pytext.NotClass("") + `+` + pytext.SpaceClass + `*&)`))},
 }
 
 // Test runners execute the artifact — classifying them "static" made
@@ -76,18 +97,17 @@ var modalityPatterns = []struct {
 // static — but ONLY for recognized runners: the flags are runner
 // semantics, and a generic `python3 smoke.py --dry-run` still executes
 // the program.
-var testRunnerRe = regexp.MustCompile(`(?i)` + wordBounded(
-	`pytest|go test|cargo test|(?:npm|pnpm|yarn) (?:run )?test|make test|tox`))
-var nonExecRunnerFlagsRe = regexp.MustCompile(`(?i)(?:^|` + pytext.SpaceClass +
-	`)--?(?:no-run|collect-only|co|list-?tests?|dry-run|list)` + pytext.WordEnd)
+var testRunnerRe = regexp.MustCompile(testRunnerPattern)
+var nonExecRunnerFlagsRe = regexp.MustCompile(pytext.PyFoldI(`(?i)(?:^|` + pytext.SpaceClass +
+	`)--?(?:no-run|collect-only|co|list-?tests?|dry-run|list)` + pytext.WordEnd))
 
 // Three branches here end in a SPACE — `ls `, `find `, `jq ` — where the
 // trailing `\b` means "a word character follows", not "a non-word one".
 // They take urlBounded's shape for the same reason its does.
-var staticHintsRe = regexp.MustCompile(`(?i)(?:` + wordBounded(
+var staticHintsRe = regexp.MustCompile(pytext.PyFoldI(`(?i)(?:` + wordBounded(
 	`grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|go build|go vet|`+
 		`tsc --noEmit|ruff|flake8|mypy`) +
-	`|` + urlBounded(`ls |find |jq `) + `)`)
+	`|` + urlBounded(`ls |find |jq `) + `)`))
 
 var modalityRank = map[string]int{"static": 0, "process": 1, "http": 2, "ws": 3, "browser": 4}
 
@@ -243,14 +263,14 @@ func ClassifyProbeModality(cmd string) string {
 // zero-width, so its `group(0)` is the alternation alone. Quoting the
 // whole match here would put the boundary characters inside the stored
 // reason string (see pytext.WordStart's doc).
-var runtimeGapAdmissionRe = regexp.MustCompile(`(?i)` + pytext.WordStart +
+var runtimeGapAdmissionRe = regexp.MustCompile(pytext.PyFoldI(`(?i)` + pytext.WordStart +
 	`(runtime (validation|check|verification|test)|` +
 	`(?:not|never|wasn'?t|weren'?t) (?:run|tested|performed|exercised|executed|verified|started|booted)|` +
 	`no ` + pytext.WordClass + `+(?:` + pytext.SpaceClass + `+` + pytext.WordClass +
 	`+){0,3} (?:was |were )?(?:run|tested|performed|exercised|executed|verified|started|booted)|` +
 	`unexercised runtime|no behavioral|no runtime probe|` +
 	`browser connection (?:was )?not|server (?:startup|boot) (?:was )?not)` +
-	pytext.WordEnd)
+	pytext.WordEnd))
 
 var behavioralModalities = []string{"http", "ws", "browser", "process"}
 

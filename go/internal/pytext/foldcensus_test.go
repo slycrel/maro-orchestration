@@ -62,18 +62,27 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 			"i -- printing, verified, running it -- are not in the literal " +
 			"at the call. Direction UNMEASURED; the branch set decides " +
 			"whether a run is credited with concrete stdout."},
-		"internal/closure/closure.go": {1, "" +
-			"verdictOpenerRe, the `(the )?goal (was|is)` opener whose match " +
-			"is stripped from the verdict summary that reaches disk as " +
-			"goal_verdict_summary. Direction UNMEASURED; a miss leaves the " +
-			"opener in the summary rather than losing the summary."},
-		"internal/closure/modality.go": {8, "" +
-			"The modality detectors -- browser, ws, process, test-runner, " +
-			"runtime-gap admission. Six build their bodies through " +
-			"wordBounded()/urlBounded(), so the literal at the call is " +
-			"`(?i)` plus punctuation. Direction UNMEASURED and it is not " +
-			"one direction: these select which verification a closure " +
-			"claims to have, so a miss and a false hit are different bugs."},
+		"internal/closure/modality.go": {2, "" +
+			"wsPattern and testRunnerPattern, which are NOT exposed and are " +
+			"unwrapped on purpose. They are named vars built from " +
+			"wordBounded/urlBounded, so this scan cannot read the literal and " +
+			"refuses to certify it -- correctly. The claim is made mechanical " +
+			"where the patterns are instead: " +
+			"closure.TestTheTwoUnwrappedPatternsReallyCarryNoI asserts " +
+			"PyFoldI(p) == p against the SAME strings MustCompile receives, so " +
+			"adding an alternative with an i to either fails there and names " +
+			"it. The other seven (?i) patterns in the package ARE wrapped, " +
+			"and the mutation sweep proves each kills a row nothing else " +
+			"kills."},
+		"internal/persona/routing.go": {1, "" +
+			"regexp.QuoteMeta(kw) around a RUNTIME keyword. QuoteMeta emits " +
+			"escaped literal text and can never emit a `(?i)`, so the call " +
+			"is case-SENSITIVE by construction -- but this scan reads no " +
+			"literal here at all, and the honest report for a pattern it " +
+			"cannot see is `I cannot see it`, not silence."},
+		"internal/scrub/scrub.go": {1, "" +
+			"regexp.QuoteMeta(p.needle), same shape and same reason as " +
+			"internal/persona/routing.go above."},
 		"internal/evolver/store.go": {1, "" +
 			"NOT the same shape as the others and must not be `fixed` the " +
 			"same way. `regexp.Compile(\"(?i)\" + pattern)` where pattern " +
@@ -102,6 +111,7 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 		wrapped bool
 		inClass bool     // PyFoldI panicked: a bare i inside a character class
 		opaque  []string // operands the scan cannot read
+		text    string   // the literal halves; empty means nothing readable
 	}
 	var sites []site
 	files, calls, insensitive := 0, 0, 0
@@ -154,6 +164,24 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 				collectOpaque(a, &opaque)
 			}
 			text := sb.String()
+			// A call with NO readable literal at all cannot be judged even
+			// on the flag: `regexp.MustCompile(wsPattern)` carries its
+			// `(?i)` inside the named var, so caseInsensitive("") is false
+			// and the bail below drops the site in silence. That is the
+			// opaque-operand hole below, one level up, and NAMING a pattern
+			// is how you fall into it — hoisting closure/modality.go's two
+			// unwrapped patterns into vars removed them from this census
+			// while the allowlist still claimed two exposed sites there,
+			// and the only symptom was the empty-entry arm firing.
+			if text == "" && len(opaque) > 0 {
+				sites = append(sites, site{
+					rel:     rel,
+					line:    fset.Position(call.Pos()).Line,
+					wrapped: wrapsWithPyFoldI(call),
+					opaque:  opaque,
+				})
+				return true
+			}
 			// Only patterns that actually turn the flag ON. A literal `i`
 			// under no fold flag means itself in both engines.
 			if !caseInsensitive(text) {
@@ -179,6 +207,7 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 				wrapped: wrapsWithPyFoldI(call),
 				inClass: panicked,
 				opaque:  opaque,
+				text:    text,
 			})
 			return true
 		})
@@ -267,16 +296,23 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 			"calls / %d case-insensitive; too few to be measuring anything",
 			files, calls, insensitive)
 	}
-	wrapped := 0
+	wrapped, unreadable := 0, 0
 	for _, s := range sites {
 		if s.wrapped {
 			wrapped++
 		}
+		if s.text == "" {
+			// Reported for being unreadable, not for folding an i, and
+			// counted apart so the line below does not claim a literal it
+			// never saw.
+			unreadable++
+		}
 	}
 	t.Logf("%d production files, %d regexp.MustCompile calls, %d "+
-		"case-insensitive, %d of those carry a literal i/I (%d wrapped, %d "+
-		"not)", files, calls, insensitive, len(sites), wrapped,
-		len(sites)-wrapped)
+		"case-insensitive, %d of those carry a literal i/I; %d more are "+
+		"unreadable (%d of %d reported sites wrapped)",
+		files, calls, insensitive, len(sites)-unreadable, unreadable,
+		wrapped, len(sites))
 }
 
 // caseInsensitive reports whether the pattern turns the `i` flag on at

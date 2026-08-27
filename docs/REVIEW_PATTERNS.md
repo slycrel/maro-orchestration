@@ -2055,7 +2055,7 @@ how you find out which of the two you are looking at.
 
 ### P16 — A tool that computes its own denominator must fail when it cannot compute one
 
-*instances: 1*
+*instances: 2*
 
 A coverage tool enumerates a population, measures each member, and then
 prints a sentence quantified over that population — *"all 2 sites killed
@@ -2089,6 +2089,37 @@ arrived through the channel nobody reads.
    completeness claim. If the summary prints to stdout, the shortfall
    prints to stdout — a warning on stderr next to a success on stdout is
    a green result with a footnote, and it reads as green.
+
+**Second instance (2026-08-27, `go/internal/pytext/foldcensus_test.go`).**
+Same class, a mechanism P16's own tripwire did not cover — the census did
+not *fail* to read the element, it read **nothing** and never noticed.
+
+The scan walks every `regexp.MustCompile` call, concatenates the string
+literals it can see, and bails on `!caseInsensitive(text)` because a
+literal `i` under no fold flag means itself in both engines. That guard is
+about the FLAG. It is not about readability, and it fires identically on
+`text == ""` — a call whose whole pattern is a named var. Hoisting
+`internal/closure/modality.go`'s two deliberately-unwrapped patterns into
+`wsPattern`/`testRunnerPattern` therefore deleted them from the census's
+view entirely. The file already had the right rule written into it three
+lines below the bail — *"a scan that cannot see a pattern must say so
+rather than certify it"* — and the bail ran first.
+
+The only symptom was the allowlist's **empty-entry arm** firing: *"is
+allowlisted for 2 exposed pattern(s) and has none… delete it."* Had that
+arm not existed, or had the entry been deleted as it demanded, two sites
+would have left the rollout queue by disappearing. A census with no
+staleness check on its own allowlist cannot tell "fixed" from "no longer
+looked at".
+
+**Tripwire.** Two rules, plus the one that instance found:
+
+3. In a scanner, **order the guards so unreadability is decided before
+   any predicate that needs to read**. Every early bail on a content
+   predicate is a silent skip of the empty case, and the empty case is
+   exactly what an abstraction boundary produces. And keep the
+   allowlist's empty-entry arm: it is the only thing standing between
+   "this got fixed" and "this got invisible".
 
 Companion to P7 (a battery that never proves its baseline reads a broken
 tree as a perfect score): P7 is the tool lying about the tree, this is the

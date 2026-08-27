@@ -238,11 +238,11 @@ func Fingerprint(v Verdict) string {
 //
 // which is verbatim the regression run d2f4e2f4 produced and this
 // function was written to stop. It reaches disk as goal_verdict_summary.
-var verdictOpenerRe = regexp.MustCompile(`(?i)^` + pytext.SpaceClass +
+var verdictOpenerRe = regexp.MustCompile(pytext.PyFoldI(`(?i)^` + pytext.SpaceClass +
 	`*(?:the` + pytext.SpaceClass + `+)?goal` + pytext.SpaceClass +
 	`+(?:was` + pytext.SpaceClass + `+|is` + pytext.SpaceClass +
 	`+)?(?:not` + pytext.SpaceClass + `+)?(?:fully` + pytext.SpaceClass +
-	`+)?achieved[.!:,]?` + pytext.SpaceClass + `*`)
+	`+)?achieved[.!:,]?` + pytext.SpaceClass + `*`))
 
 // VerdictFirstSummary opens the stored summary with the FLAG's verdict,
 // deterministically. Every surface showing the summary bounds it, and
