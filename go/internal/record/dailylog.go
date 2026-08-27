@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
@@ -146,14 +148,26 @@ func updateMemoryIndex(dir string) error {
 	// Python globs "????-??-??.md" and sorts REVERSE, newest first. Measured
 	// on CPython 3.14.3: pathlib's glob does NOT hide dotfiles and "?" is
 	// not digit-restricted, so ".026-08-23.md" and "abcd-ef-gh.md" both
-	// match — filepath.Glob agrees on both counts, and sorts the same way
-	// (bytewise over the full path, which within one directory is bytewise
-	// over the name).
+	// match — filepath.Glob agrees on both counts.
+	//
+	// It does NOT sort the same way, and this comment used to claim it did.
+	// filepath.Glob orders by raw BYTE; `sorted()` orders the Path objects
+	// by surrogateescape-decoded CODE POINT, and the two part for any name
+	// that is not valid UTF-8. The `[:7]` below is what makes it matter:
+	// the two runtimes would not merely list the same seven days in a
+	// different order, they would pick DIFFERENT SEVEN and render different
+	// days into MEMORY.md. Found by widening the sort class guard past the
+	// single spelling it was derived from (adversarial r6, MEDIUM).
 	matches, err := filepath.Glob(filepath.Join(dir, "????-??-??.md"))
 	if err != nil {
 		return fmt.Errorf("glob daily logs: %w", err)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	// The full path, not the name: every match shares one directory prefix,
+	// so comparing whole strings and comparing tails agree, and the whole
+	// string is what Python compares.
+	sort.SliceStable(matches, func(i, j int) bool {
+		return pypath.FSLess(matches[j], matches[i]) // reverse=True
+	})
 	if len(matches) > 7 {
 		matches = matches[:7]
 	}
@@ -246,8 +260,32 @@ func updateMemoryIndex(dir string) error {
 		return fmt.Errorf("count lessons: %w", rerr)
 	}
 
-	return AtomicWrite(filepath.Join(dir, "MEMORY.md"),
-		[]byte(strings.Join(lines, "\n")+"\n"))
+	content := strings.Join(lines, "\n") + "\n"
+	// Python's atomic_write defaults to errors="strict" and this caller does
+	// not override it. A daily-log filename that is not valid UTF-8 reaches
+	// the rendered index as a LONE SURROGATE, the encoder raises
+	// UnicodeEncodeError, and the bare `except: pass` wrapped around this
+	// whole body swallows it — so CPython writes NOTHING and MEMORY.md is
+	// left exactly as it was. Measured on CPython 3.14.3: eight daily logs,
+	// one of them named "2026-08-0\x80.md", index file never created.
+	//
+	// A Go string holds those bytes happily, so without this gate the port
+	// would rewrite an index CPython would never have produced — the two
+	// runtimes' MEMORY.md diverging over one shared store, which is the
+	// failure this whole file exists to prevent. Found alongside the sort
+	// fix above: the surrogate name only reaches the top seven because
+	// CPython's code-point order keeps it, which is what made it visible.
+	//
+	// It returns rather than passing, per the named divergence in the
+	// doc comment: the write does not happen either way, and the caller
+	// announces it as a warning instead of nobody hearing.
+	if !utf8.ValidString(content) {
+		return fmt.Errorf("refusing to rewrite %s: a daily-log filename is "+
+			"not valid UTF-8, and CPython's strict encoder abandons the whole "+
+			"index rewrite rather than writing it",
+			filepath.Join(dir, "MEMORY.md"))
+	}
+	return AtomicWrite(filepath.Join(dir, "MEMORY.md"), []byte(content))
 }
 
 // outcomeRequiredFields are the Outcome dataclass fields with no default

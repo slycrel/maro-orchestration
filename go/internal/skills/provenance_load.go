@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -102,7 +103,15 @@ func LoadSkillProvenance(ws, skillName string) ProvenanceLoad {
 	// same-directory siblings compares their string parts — the filename.
 	// The stamp is the filename's tail, so reverse-lexicographic is
 	// newest-first, which is what the docstring promises.
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	//
+	// FSLess, not raw bytes: the names came out of a directory, so they can
+	// be non-UTF-8, and Python compares the surrogateescape-DECODED code
+	// points. `sort.StringSlice` compares bytes. This shipped as the byte
+	// spelling and was found by widening the class guard from the one
+	// spelling the last fix happened to touch (adversarial r6, MEDIUM).
+	sort.SliceStable(names, func(i, j int) bool {
+		return pypath.FSLess(names[j], names[i]) // reverse=True
+	})
 
 	records := []any{}
 	unreadable := 0

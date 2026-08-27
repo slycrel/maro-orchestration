@@ -155,6 +155,25 @@ func reprList(ss []string) string { return pyval.ReprStrings(ss) }
 // the tree.
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// pyReadTextNewlines is the other half of `Path.read_text(...)`: it opens
+// in TEXT mode with newline=None, so UNIVERSAL NEWLINES apply and both
+// "\r\n" and a lone "\r" reach the caller as "\n". os.ReadFile does no
+// translation at all, so a CRLF-authored file reached the InertFunc seam
+// with carriage returns CPython would have stripped (r6 LOW).
+//
+// Whether a given parser cares is beside the point. InertFunc is a SEAM,
+// and Python's contract with its callee is that the source contains no
+// "\r" whatsoever. The port owes its callee the same string, not one that
+// happens to be equivalent under CPython's tokenizer.
+//
+// Order matters: "\r\n" before lone "\r", or every CRLF becomes two
+// newlines. "\r" never appears inside a multi-byte UTF-8 sequence, so
+// translating after the decode is the same as Python's decode-then-
+// translate.
+func pyReadTextNewlines(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
+
 // decodeReplace is `bytes.decode("utf-8", errors="replace")`: every
 // ill-formed byte becomes U+FFFD. Go's []byte->string conversion keeps the
 // bad bytes as-is, and they would then reach the InertFunc — which is a
@@ -581,10 +600,15 @@ func FilesModifiedSince(root, sinceISO string, limit int) []string {
 	// ORDER but the CONTENT differs, because `limit` truncates a differently
 	// ordered list (r3 MEDIUM). See pypath.FSLess for the measured pair.
 	//
-	// This axis is structurally invisible to the differential: the probe
-	// round-trips through json.dumps, which cannot encode a lone surrogate,
-	// so no W fixture can carry the input. W23 drives it as a list of BYTE
-	// VALUES instead, which JSON can carry, and compares the ORDER.
+	// This axis is structurally invisible to the differential, and the
+	// reason is the GO end, not the Python end. The comment here used to
+	// say "json.dumps cannot encode a lone surrogate", which is false:
+	// measured, `json.dumps("\udc80b")` returns `"\udc80b"` under the
+	// default ensure_ascii=True and json.loads round-trips it exactly. What
+	// breaks is the receiver — Go's encoding/json decodes `\udc80` to
+	// U+FFFD (ef bf bd) and reports NO error, so the tainted byte would be
+	// laundered before any comparison ran. W23 drives it as a list of BYTE
+	// VALUES instead, which survives both ends, and compares the ORDER.
 	sort.Slice(changed, func(i, j int) bool {
 		return pypath.FSLess(changed[i], changed[j])
 	})
@@ -931,10 +955,22 @@ func parseISOTime(t string) (h, mi, sec, micro int, offMicro int64, aware, nextD
 	// CPYTHON" paragraph rules out as the specification -- the C
 	// accelerator is what runs. The port transcribed it anyway, under a
 	// comment calling all three arms unobservable. Two of them are. The
-	// third is not, and it refuses 48 inputs CPython accepts:
+	// third is not: across the ISO corpus's 97,116 inputs it changes the
+	// answer on exactly FOUR, and it refuses all four where CPython accepts
+	// them. They are the whole set, not a sample -- every one an offset body
+	// of "hh\x00":
 	//
 	//	"2026-08-22T12:34:56+01\x00"   CPython 1787398496.0   port: refused
-	//	"2026-08-22T12:34:56+012"       CPython ValueError     port: refused
+	//	"2026-08-22T12:34:56-23\x00"   CPython accepts        port: refused
+	//	"2026-08-22T12:34:56+00\x00"   CPython accepts        port: refused
+	//	"20260822T123456+01\x00"       CPython accepts        port: refused
+	//
+	// The count used to read "48 inputs", with no denominator and no way to
+	// re-derive it (r6 LOW). Four out of 97,116 is a smaller number and a
+	// far more useful one: it says the arm is reachable, says what reaches
+	// it, and can be re-measured. A three-character body that is NOT
+	// NUL-terminated is refused by both -- "…56+012" is a CPython
+	// ValueError -- so the deleted line was not a pure widening either way.
 	//
 	// A three-character body CAN return true, through the one-stray-
 	// character NUL tolerance in hhMMSSff -- the rule r3 added two hundred
@@ -1160,9 +1196,6 @@ func isoTimestamp(y, mo, d, h, mi, sec, micro int, offMicro int64, aware bool) (
 	return q, true
 }
 
-// isoWeekToGregorian is CPython's `_isoweek_to_gregorian`, including the
-// rule that week 53 exists only when the year starts on a Thursday, or on
-// a Wednesday in a leap year.
 // pyMktime is CPython's `datetime._mktime`, which is NOT what
 // `time.Date(..., time.Local)` computes. Both answer the same thing for
 // every wall time that exists exactly once; they part in a DST GAP, where
@@ -1260,6 +1293,9 @@ func pyMktime(y, mo, d, h, mi, sec int) (int64, bool) {
 	return u2, true
 }
 
+// isoWeekToGregorian is CPython's `_isoweek_to_gregorian`, including the
+// rule that week 53 exists only when the year starts on a Thursday, or on
+// a Wednesday in a leap year.
 func isoWeekToGregorian(y, week, day int) (int, int, int, bool) {
 	if y < 1 || y > 9999 || day < 1 || day > 7 || week < 1 || week > 53 {
 		return 0, 0, 0, false
@@ -1681,11 +1717,63 @@ func pythonCandidates(claims []string, projectDir string, changed map[string]boo
 	var out []string
 	seen := map[string]bool{}
 	add := func(p string) {
-		rp, err := filepath.EvalSymlinks(p)
-		if err != nil {
+		// `_add` guards `p.resolve()` with `except OSError` and NOTHING
+		// ELSE, and an embedded NUL raises ValueError:
+		//
+		//	Path("a\x00b.py").resolve()
+		//	  ValueError: lstat: embedded null character in path
+		//
+		// Uniform across every shape measured — the NUL in the last
+		// component, in the middle, alone, after the extension, in an
+		// absolute path. So a claim carrying a NUL does not get SKIPPED
+		// here: it unwinds out of `_python_candidates` entirely and lands
+		// in check_fabrication's blanket except, which is the fail-open
+		// verdict with judged=FALSE.
+		//
+		// The port swallowed the same condition twice — EvalSymlinks fails
+		// and falls back, then os.Stat fails and returns — and carried on
+		// to a CONFIDENT verdict. Both bad directions at once, measured
+		// end to end on `wrote to a\x00b.py and it prints 1, 2, 3` over a
+		// tree holding two inert .py files:
+		//
+		//	CPython  judged=false, "check error (fail-open)"
+		//	port     judged=true,  fabricated=TRUE, kind=inert-output
+		//
+		// That second line is a fabrication accusation CPython never
+		// makes, on adversary-shaped input, which the te["input"] comment
+		// two hundred lines down calls "the one direction the module
+		// forbids". Reachable through the claim text, which is the inner
+		// agent's own narration: NUL is not in Python's `\s`, so
+		// _OUTPUT_CLAIM_RE's `[^\s...]+` path group takes it, _clean_token's
+		// strip() leaves it, and _EXT_RE still matches — measured,
+		// ExtractWriteClaims returns ["a\x00b.py"] on BOTH sides.
+		//
+		// A9 pins the NUL at `existsAnywhere`, one function over, which is
+		// why this read as closed: `Path.exists()` DOES catch ValueError
+		// and `Path.resolve()` does not. The r3 shape once more — a fix
+		// that stopped one site short of the class (r6 HIGH).
+		if strings.IndexByte(p, 0) >= 0 {
+			panic("pypath: embedded null character in path")
+		}
+		// `p.resolve()`, and pypath.Realpath is that function — a
+		// transcription of the posix `realpath(strict=False)` CPython's
+		// Path.resolve calls. This used to be spelled EvalSymlinks with an
+		// Abs on success and the RAW string on failure, which is a second,
+		// weaker implementation of the same operation (r6 LOW):
+		//
+		//	Path("nope.py").resolve()  -> "/cwd/nope.py"   (never raises)
+		//	EvalSymlinks("nope.py")    -> error            -> key "nope.py"
+		//
+		// so two spellings of one missing file deduped as one key in
+		// CPython and as two here. It was inert only because the os.Stat
+		// below drops a missing candidate before the difference can be
+		// observed — safety by today's call order, not by construction.
+		// The `except OSError` fallback to the unresolved string is kept
+		// because Python keeps it; Realpath reports false only when the
+		// process has no working directory, which is where CPython raises.
+		rp, ok := pypath.Realpath(p)
+		if !ok {
 			rp = p
-		} else {
-			rp, _ = filepath.Abs(rp)
 		}
 		if seen[rp] {
 			return
@@ -1774,7 +1862,20 @@ func inertOutputVerdict(resultText, projectDir string, claims []string,
 		// `read_text(encoding="utf-8", errors="replace")` never raises on
 		// bad bytes; it substitutes U+FFFD. Go's []byte -> string does not
 		// substitute, so the replacement is explicit.
-		inert, known := isInert(decodeReplace(src))
+		//
+		// And read_text opens in TEXT mode with newline=None, which is
+		// UNIVERSAL NEWLINES: "\r\n" and lone "\r" both arrive at
+		// _python_is_inert as "\n". os.ReadFile does no such thing, so a
+		// CRLF-authored .py file reached the seam here with carriage
+		// returns Python would have stripped (r6 LOW).
+		//
+		// Whether any particular parser cares is not the argument. InertFunc
+		// is a SEAM: the caller supplies the parser, and Python's contract
+		// with its callee is that the source it hands over contains no "\r"
+		// at all. The port owes its callee the same string, not one that
+		// happens to be equivalent under CPython's tokenizer.
+		//
+		inert, known := isInert(pyReadTextNewlines(decodeReplace(src)))
 		if !known {
 			return Verdict{}, false
 		}

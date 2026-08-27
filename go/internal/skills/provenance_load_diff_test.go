@@ -44,6 +44,13 @@ for fn, body in _argv["files"].items():
     # the first cut sent one and Go's encoder replaced it with U+FFFD
     # before CPython ever saw it, which is the very laundering under test.
     (d / fn).write_bytes(bytes(body))
+# The same problem one level up: a JSON object KEY cannot carry a byte that
+# is not valid UTF-8 either, so a file whose NAME is byte-tainted arrives as
+# a [name_bytes, body_bytes] pair instead. os.fsdecode is exactly what
+# pathlib holds internally — the surrogateescape decoding whose sort order
+# this fixture exists to pin.
+for _pair in _argv["byte_files"]:
+    (d / os.fsdecode(bytes(_pair[0]))).write_bytes(bytes(_pair[1]))
 
 out = {}
 warns = {}
@@ -118,8 +125,27 @@ func TestLoadSkillProvenanceMatchesCPython(t *testing.T) {
 		"a[b_20260101T000000.json":  body(rec("a[b", "promote")),
 		"a\\b_20260101T000000.json": body(rec("a\\b", "promote")),
 	}
+	// Two sidecars for ONE skill whose names byte order and code-point order
+	// disagree about — the surrogateescape rule in the one place it is
+	// observable, and the only shape that can tell the two sorts apart.
+	//
+	//   sk_\x80.json      → pathlib holds "sk_\udc80.json", U+DC80 = 56448
+	//   sk_\xc3\xa9.json  → pathlib holds "sk_é.json",      U+00E9 =   233
+	//
+	// CPython compares code points, so é sorts FIRST and reverse=True puts
+	// the bad byte first. A raw-byte sort compares 0x80 against 0xC3 and
+	// puts it last. Both orders are self-consistent; only one is CPython's.
+	// This is the fixture for the r6 MEDIUM — the site shipped as
+	// sort.Sort(sort.Reverse(sort.StringSlice(...))) and no test could see it.
+	byteFiles := [][]any{
+		{[]int{'s', 'k', '_', 0x80, '.', 'j', 's', 'o', 'n'}, body(rec("sk", "bad-byte"))},
+		{[]int{'s', 'k', '_', 0xC3, 0xA9, '.', 'j', 's', 'o', 'n'}, body(rec("sk", "e-acute"))},
+	}
+
 	names := []string{
 		"skill_x", "other", "nope", "a", "ab", "torn", "scalar",
+		// The surrogateescape order case; see byteFiles.
+		"sk",
 		// See the fixture note: these two discriminate the matcher.
 		`a\b`, "adir",
 		// The metacharacter names. Each one reads records that are not its
@@ -131,7 +157,8 @@ func TestLoadSkillProvenanceMatchesCPython(t *testing.T) {
 	// IsADirectoryError into the bare except, so it lands in the unreadable
 	// count rather than being invisible. Both sides create it.
 	dirName := "adir_20260101T000000.json"
-	arg := map[string]any{"files": files, "names": names, "dir_entry": dirName}
+	arg := map[string]any{"files": files, "names": names, "dir_entry": dirName,
+		"byte_files": byteFiles}
 
 	pyWS, goWS := t.TempDir(), t.TempDir()
 	var want struct {
@@ -155,6 +182,18 @@ func TestLoadSkillProvenanceMatchesCPython(t *testing.T) {
 		t.Fatalf(`CPython returned %d records for the name "a*b"; the glob `+
 			`leakage this test pins did not occur`, len(got))
 	}
+	// The order fixture is only evidence if BOTH byte-named sidecars were
+	// selected — with one, every sort agrees and the row is inert.
+	if got := want.Records["sk"]; len(got) != 2 {
+		t.Fatalf("CPython returned %d records for sk, want 2 — the byte-named "+
+			"sidecars did not both land and the sort order is unpinned", len(got))
+	}
+	if !strings.Contains(string(want.Records["sk"][0]), "bad-byte") {
+		t.Fatalf("CPython put %s first for sk; this fixture is written from "+
+			"the claim that code-point order puts the LONE SURROGATE first "+
+			"under reverse=True, and that claim is what failed",
+			want.Records["sk"][0])
+	}
 
 	// Seed the Go side with the same bytes.
 	dir := filepath.Join(goWS, "memory", "skill_provenance")
@@ -164,12 +203,24 @@ func TestLoadSkillProvenanceMatchesCPython(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, dirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for fn, bs := range files {
-		raw := make([]byte, 0, len(bs))
-		for _, b := range bs {
+	toBytes := func(vs []int) []byte {
+		raw := make([]byte, 0, len(vs))
+		for _, b := range vs {
 			raw = append(raw, byte(b))
 		}
-		if err := os.WriteFile(filepath.Join(dir, fn), raw, 0o644); err != nil {
+		return raw
+	}
+	for fn, bs := range files {
+		if err := os.WriteFile(filepath.Join(dir, fn), toBytes(bs), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Go strings hold arbitrary bytes, so the byte-tainted NAMES need no
+	// decoding step on this side — which is the whole asymmetry under test.
+	for _, pair := range byteFiles {
+		name := string(toBytes(pair[0].([]int)))
+		if err := os.WriteFile(filepath.Join(dir, name),
+			toBytes(pair[1].([]int)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

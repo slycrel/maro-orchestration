@@ -246,6 +246,28 @@ func acGeneric(t *testing.T, v any) any {
 // still answer the same on both sides. It would nonetheless be a fixture
 // whose answer depends on something the fixture does not state, so
 // acAssertDistinctScriptedContent refuses one.
+// acUniversalNewlines is this harness's OWN reading of what text mode does
+// to line endings — deliberately a second implementation rather than a call
+// to pyReadTextNewlines. It is the oracle the production translation is
+// measured against, and an oracle that shares code with its subject moves
+// whenever the subject does. Written character by character from the rule:
+// scan once, a CR swallows a following LF, and either way one "\n" is
+// emitted.
+func acUniversalNewlines(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\r' {
+			b.WriteByte(s[i])
+			continue
+		}
+		b.WriteByte('\n')
+		if i+1 < len(s) && s[i+1] == '\n' {
+			i++
+		}
+	}
+	return b.String()
+}
+
 func acScriptedInert(t *testing.T, base string, script map[string]any) InertFunc {
 	names := make([]string, 0, len(script))
 	for n := range script {
@@ -258,7 +280,20 @@ func acScriptedInert(t *testing.T, base string, script map[string]any) InertFunc
 			if err != nil {
 				continue
 			}
-			if string(b) != source {
+			// The CPython fake compares against `read_text(...)`, which is
+			// TEXT mode: "\r\n" and lone "\r" both arrive as "\n". Comparing
+			// raw bytes here would make a CRLF fixture match on the Python
+			// side and miss on this one, and a miss returns "cannot tell" —
+			// so the two runtimes would take different fail-open paths for a
+			// reason the fixture never stated (r6 LOW).
+			//
+			// SPELLED OUT rather than calling pyReadTextNewlines, and the
+			// mutation battery is why: with the shared call, mutating the
+			// production translation mutated the ORACLE with it, both sides
+			// of this comparison moved together, and two of three newline
+			// mutants survived. A test that reuses its subject as its own
+			// oracle cannot fail.
+			if acUniversalNewlines(string(b)) != source {
 				continue
 			}
 			v := script[name]
@@ -827,11 +862,15 @@ func acCases() []acCase {
 
 	// --- the sort is over surrogateescape-decoded str, not over bytes ----
 	//
-	// Names travel as lists of BYTE VALUES in both directions. That is not
-	// a convenience: json.dumps cannot encode a lone surrogate, so a
-	// filename with an undecodable byte cannot ride the ordinary string
-	// channel at all, and the entire non-UTF-8 axis was structurally
-	// unreachable by every other fixture in this file (r3 MEDIUM).
+	// Names travel as lists of BYTE VALUES in both directions. That is not a
+	// convenience, and the reason is the GO end rather than the Python end:
+	// this comment used to say json.dumps cannot encode a lone surrogate,
+	// and measured, it can — `json.dumps("\udc80b")` is `"\udc80b"` under
+	// the default ensure_ascii=True and json.loads round-trips it. Go's
+	// encoding/json is what launders it, decoding `\udc80` to U+FFFD with
+	// no error at all, so a filename with an undecodable byte cannot ride
+	// the ordinary string channel and the entire non-UTF-8 axis was
+	// structurally unreachable by every other fixture here (r3 MEDIUM).
 	//
 	// The byte 0x80 against "é" (0xC3 0xA9) is the pair that separates the
 	// two orderings: Python compares U+DC80 (56448) against U+00E9 (233)
@@ -1440,6 +1479,23 @@ func acCases() []acCase {
 			"text":    "prints 1, 2, Fizz",
 			"inert":   map[string]any{"a.py": true, "b.py": nil}}, inertAnswer)
 
+	// read_text opens in TEXT mode, so the source handed to _python_is_inert
+	// has been through universal-newline translation and contains no "\r" at
+	// all. os.ReadFile does none, and the port passed the raw bytes through
+	// (r6 LOW). Both endings are covered because they are separate rules —
+	// CRLF collapses a PAIR, a lone CR is rewritten on its own, and a port
+	// that handled only the first would turn every CRLF into a blank line.
+	add("I10 a CRLF-authored candidate is read with LF endings",
+		map[string]any{"kind": "inert_verdict", "claims": []string{"a.py"},
+			"files": map[string]any{"a.py": "def f():\r\n    pass\r\n"},
+			"text":  "prints 1, 2, Fizz",
+			"inert": map[string]any{"a.py": true}}, inertAnswer)
+	add("I11 a lone-CR candidate too, which is a separate translation rule",
+		map[string]any{"kind": "inert_verdict", "claims": []string{"a.py"},
+			"files": map[string]any{"a.py": "def f():\r    pass\r"},
+			"text":  "prints 1, 2, Fizz",
+			"inert": map[string]any{"a.py": true}}, inertAnswer)
+
 	// --- check_fabrication with layer 2 reachable ------------------------
 	fab2Answer := func(t *testing.T, c acCase, base string) any {
 		acAssertDistinctScriptedContent(t, c)
@@ -1466,6 +1522,47 @@ func acCases() []acCase {
 		map[string]any{"kind": "fabrication2", "text": "wrote to a.py",
 			"files": map[string]any{"a.py": "x = 1"},
 			"inert": map[string]any{"a.py": true}}, fab2Answer)
+
+	// --- an embedded NUL in a claimed .py path (r6 HIGH) -----------------
+	//
+	// `_add` guards `p.resolve()` with `except OSError` alone and a NUL
+	// raises ValueError, so the exception unwinds out of
+	// `_python_candidates` and lands in check_fabrication's blanket except:
+	// the fail-open verdict, judged=FALSE. The port skipped the candidate
+	// and went on to answer CONFIDENTLY — fabricated=true, kind
+	// inert-output, on adversary-shaped narration.
+	//
+	// D7 is the load-bearing half of this set. Without it, D4-D6 pass
+	// against a port that fails open on EVERYTHING: it is the same tree and
+	// the same sentence with the NUL removed, and it must reach the
+	// confident fabricated=true verdict.
+	//
+	// ONE .py file, and that is not incidental. The first cut of this set
+	// had two, which made D7 FLAKY: with two fresh candidates the reason
+	// string lists two names, CPython iterates `changed` as a SET, and the
+	// order is hash-randomised — the exact residual
+	// TestTheFreshCandidateOrderIsThePortsOwnGuaranteeNotCPythons records
+	// and the exact reason the file's own comment says the differential
+	// "drives that case with at most one fresh candidate". A fixture that
+	// re-enters a documented residual is a fixture that fails for a reason
+	// that is not about its subject.
+	nulTree := map[string]any{"a.py": "def f():\n    pass\n", "other.txt": "x"}
+	add("D4 a NUL inside a claimed .py path is a fail-open, not a skip",
+		map[string]any{"kind": "fabrication2",
+			"text":  "wrote to a\x00b.py and it prints 1, 2, 3",
+			"files": nulTree, "inert": map[string]any{"a.py": true}}, fab2Answer)
+	add("D5 a claim that is nothing but a NUL and an extension",
+		map[string]any{"kind": "fabrication2",
+			"text":  "wrote to \x00.py and it prints 1, 2, 3",
+			"files": nulTree, "inert": map[string]any{"a.py": true}}, fab2Answer)
+	add("D6 a NUL AFTER a real name that would otherwise resolve",
+		map[string]any{"kind": "fabrication2",
+			"text":  "wrote to a.py\x00.py and it prints 1, 2, 3",
+			"files": nulTree, "inert": map[string]any{"a.py": true}}, fab2Answer)
+	add("D7 the same sentence WITHOUT the NUL is a confident verdict",
+		map[string]any{"kind": "fabrication2",
+			"text":  "wrote to ab.py and it prints 1, 2, 3",
+			"files": nulTree, "inert": map[string]any{"a.py": true}}, fab2Answer)
 
 	// --- the reason strings embed repr of a LIST OF STR -------------------
 	add("R1 an apostrophe truncates the claim before repr ever sees it",
@@ -1719,9 +1816,18 @@ func acDSTStamps() ([]string, bool) {
 // The assertion is ALLOCATIONS, not elapsed time. A timing test on this box
 // is a flake generator, and the defect has an exact allocation signature:
 // the rune conversion allocates a slice proportional to the remainder,
-// utf8.DecodeRuneInString allocates nothing. Zero allocations is therefore
-// the same statement as "this does not walk the rest of the string", and it
-// cannot pass for an unrelated reason.
+// utf8.DecodeRuneInString allocates nothing.
+//
+// What that does and does not prove, stated honestly (r6 LOW). Zero
+// allocations refutes THE DEFECT — `[]rune(s[i:])[0]` cannot allocate zero
+// times over a 600KB remainder — and the defect is what actually shipped.
+// It is NOT the same statement as "this is O(1)", which is how this comment
+// used to read: a zero-allocation O(n) spelling (scan to the end, then
+// answer about the first rune) would pass every line below. The test's
+// subject is the regression, not the complexity class. Proving O(1) needs a
+// timing or instruction-count measurement, and on this box that trade —
+// a flaky test for a property no plausible rewrite violates — is not worth
+// making.
 //
 // The input is deliberately large: at one byte the two spellings cost the
 // same and the test would hold for the defect it exists to prevent.

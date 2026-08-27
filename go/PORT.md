@@ -13029,10 +13029,17 @@ Seven comments across `sheriff`, `artifactcheck`, `pypath` and
 encode a lone surrogate". Measured, that is false:
 
 ```
-json.dumps("\udc80b")                    -> '"\\udc80b"'   (ensure_ascii=True, the default)
-json.loads('"\\udc80b"')                 -> '\udc80b'      (round-trips)
-json.dumps("\udc80b", ensure_ascii=False) -> UnicodeEncodeError
+json.dumps("\udc80b")                     -> '"\\udc80b"'  (ensure_ascii=True, the default)
+json.loads('"\\udc80b"')                  -> '\udc80b'     (round-trips)
+json.dumps("\udc80b", ensure_ascii=False) -> '"\udc80b"'   (a str; still no error)
+sys.stdout.write(that str)                -> UnicodeEncodeError
 ```
+
+*(That third line said `UnicodeEncodeError` when this section was first
+written, which is the same mistake one level down: `json.dumps` never
+raises here at all. The error belongs to **encoding the str**, which is a
+later and separate step. Corrected during the r6 pass — a correction to a
+paragraph whose whole subject is a wrong justification.)*
 
 The transport is required by the **receiver**: Go's `encoding/json`
 decodes `\udc80` to U+FFFD without an error, so a name that survived the
@@ -13041,3 +13048,139 @@ right and the reason was wrong, which is the shape that survives review —
 nobody re-checks a justification for a decision they agree with. The three
 `internal/artifactcheck` copies are left until its r6 review lands, so the
 report stays anchored to the file it reviewed.
+
+## The r6 review of `internal/artifactcheck` — a class guard that knew one spelling
+
+Seven findings, one HIGH. The HIGH is the r3 shape for the third time: a
+fix that stopped one function short of its class. The MEDIUM is the same
+shape one level up — the *guard* built to prevent a class had been derived
+from the single spelling the last fix happened to touch.
+
+### The HIGH: a NUL in a claimed path is a fail-open, not a skip
+
+`_python_candidates._add` guards `p.resolve()` with `except OSError` and
+nothing else. An embedded NUL raises **`ValueError`**:
+
+```
+Path("a\x00b.py").resolve()
+  ValueError: lstat: embedded null character in path
+```
+
+so a claim carrying a NUL does not get skipped — it unwinds out of
+`_python_candidates` entirely and lands in `check_fabrication`'s blanket
+`except`, which answers `judged=false, "check error (fail-open)"`.
+
+The port swallowed the same condition **twice** — `EvalSymlinks` fails and
+falls back, then `os.Stat` fails and returns — and carried on to a
+confident verdict. Measured end to end on `wrote to a\x00b.py and it
+prints 1, 2, 3` over a tree with two inert `.py` files:
+
+```
+CPython  judged=false, "check error (fail-open)"
+port     judged=true,  fabricated=TRUE, kind=inert-output
+```
+
+That second line is a fabrication accusation CPython never makes, on
+adversary-shaped input, reachable through the inner agent's own narration:
+NUL is not in Python's `\s`, so `_OUTPUT_CLAIM_RE`'s `[^\s...]+` group takes
+it, `_clean_token`'s `strip()` leaves it, and `_EXT_RE` still matches —
+`ExtractWriteClaims` returns `["a\x00b.py"]` on **both** sides.
+
+Why it read as closed: `A9` already pins the NUL one function over, at
+`existsAnywhere`. `Path.exists()` **catches** `ValueError`; `Path.resolve()`
+does not. Fixtures `D4`–`D7`, with exactly one `.py` file in the tree —
+two made `D7` flaky, because CPython draws the fresh-candidate order from a
+`set`.
+
+### The MEDIUM: the guard knew `sort.Strings(`, not the class
+
+The previous round's class guard scanned non-test sources for the literal
+string `sort.Strings(` against a per-file allowlist. The **class** is
+byte-wise ordering of filenames, and it has at least four spellings here.
+Two shipped sites were invisible to it, and both were real:
+
+| site | Python | shape |
+|---|---|---|
+| `skills/provenance_load.go:105` | `sorted(prov_dir.glob(f"{name}_*.json"), reverse=True)` | order only |
+| `record/dailylog.go:156` | `sorted(mem_dir.glob("????-??-??.md"), reverse=True)[:7]` | **W24 — order *and* truncation** |
+
+Both spelled `sort.Sort(sort.Reverse(sort.StringSlice(...)))`.
+`dailylog.go`'s own comment asserted that `filepath.Glob` "sorts the same
+way", which is true for every valid-UTF-8 name and false for the ones that
+matter. And because it truncates to seven, the two runtimes do not list the
+same week in a different order — they render **different days**.
+
+The guard is now written from the class: parse each file with `go/ast`,
+find every function that *both* reads a directory (`ReadDir`,
+`Readdirnames`, `Glob`, `Walk`, `WalkDir`, …) *and* calls a sort whose
+subtree does not mention `FSLess`, and require a listed reason for each.
+Six functions are allowlisted; each entry must still be **observed** by the
+scan, so a detector that quietly stops matching fails instead of passing.
+Run before any fix landed, it named exactly the two sites above and nothing
+else.
+
+Its own named gap, since a guard's honesty is the point: the scan is
+per-function, so a listing done in a helper and sorted by its caller is
+invisible to it. That is why the `sort.Strings` spelling guard is **kept**
+alongside it rather than replaced — the two cover each other's blind spots.
+
+### The find inside the fix: CPython writes no index at all
+
+Fixing `dailylog`'s sort exposed a second divergence that the wrong sort
+had been hiding. Once a non-UTF-8 filename is in the kept seven, it is
+rendered into `MEMORY.md`, and `atomic_write` defaults to
+`errors="strict"`. The `UnicodeEncodeError` lands in
+`_update_memory_index`'s bare `except: pass`, so **CPython writes
+nothing** and the index stays as it was. Measured — eight daily logs, one
+named `2026-08-0\x80.md`, index file never created.
+
+A Go string holds those bytes happily, so the port had been rewriting an
+index CPython refuses. It now declines the write too, and *returns* rather
+than passing, matching the divergence this file already documents.
+
+The two behaviours compose, so they get one case each rather than one case
+that fails for either reason and identifies neither: `order` (eight files,
+the two sorts disagree about which is dropped), `gate` (three files, no
+truncation, so only encodability can fail it), and `control` (eight valid
+files, both runtimes must write the same bytes). Mutating the sort back
+fails `order` alone; removing the gate fails `order` and `gate`; neither
+touches `control`.
+
+### The self-inflicted one, which the battery caught
+
+The newline fixture below needed the scripted-inert harness to compare
+against text-mode content, and the first cut had it call the production
+`pyReadTextNewlines`. That makes the oracle move whenever the subject
+does: **two of three newline mutants survived**. The harness now spells
+universal-newline translation itself, character by character, and all four
+mutants are caught. A test that reuses its subject as its own oracle
+cannot fail (P12) — and it is much easier to write that way than to notice.
+
+### Four LOWs, all of them claims that had decayed
+
+- **`read_text` is not just decode.** It opens in TEXT mode with
+  `newline=None`, so `\r\n` and lone `\r` both reach `_python_is_inert` as
+  `\n`. `os.ReadFile` translates nothing. Whether any particular parser
+  cares is not the argument: `InertFunc` is a **seam**, and Python's
+  contract with its callee is that the source contains no `\r` at all.
+- **A doc paragraph on the wrong function.** `isoWeekToGregorian`'s
+  week-53 rule sat attached to `pyMktime`, a hundred lines above the
+  function it describes.
+- **A number with no denominator.** "It refuses 48 inputs CPython accepts"
+  could not be re-derived. Measured against `isoCorpus()`: exactly **4 of
+  97,116**, every one an offset body of `hh\x00`, and the comment now names
+  all four. Four out of 97,116 is a smaller number and a far more useful
+  one.
+- **An allocation count read as a complexity class.** Zero allocations
+  refutes `[]rune(s[i:])[0]`, which is the defect that shipped. It is
+  *not* the same statement as "this is O(1)" — a zero-allocation O(n)
+  spelling passes every line of that test.
+
+And one duplicate: `pythonCandidates` spelled `p.resolve()` as
+`EvalSymlinks`-then-`Abs` with a fallback to the raw string, where
+`pypath.Realpath` already transcribes `realpath(strict=False)` exactly. It
+is inert *today* only because the `os.Stat` below drops a missing candidate
+before the two dedup keys can differ — safety by call order, not by
+construction, and no fixture can distinguish them. Recorded as such rather
+than pinned, because a pin that cannot fail is the thing this round spent
+its MEDIUM on.

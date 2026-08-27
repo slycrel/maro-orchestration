@@ -448,9 +448,13 @@ func TestRealpathMatchesCPythonOnMissingComponentsAndDotDot(t *testing.T) {
 // that is not valid UTF-8 decoded to the lone surrogate 0xDC00+b by the
 // filesystem encoding's surrogateescape handler.
 //
-// The corpus arrives as lists of BYTE VALUES rather than as strings
-// because json.dumps cannot encode a lone surrogate; a probe that took
-// strings could not carry the inputs this rule is about.
+// The corpus arrives as lists of BYTE VALUES rather than as strings, and
+// the obstacle is the GO end. This note used to blame json.dumps; measured,
+// json.dumps("\udc80b") returns "\udc80b" under the default
+// ensure_ascii=True and json.loads round-trips it exactly. Go's
+// encoding/json is what cannot: it decodes `\udc80` to U+FFFD (ef bf bd)
+// and reports no error, so a probe that took strings would be comparing
+// laundered input against the very rule it is measuring.
 const fsSortSrc = `
 import json, os, sys
 vals = json.loads(sys.argv[1])

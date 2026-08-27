@@ -80,7 +80,7 @@ where the helper wanted `"introspect.py"`, so every probe took the honest
 comparison is derived from (`if len(keys) == 0 { t.Fatal(...) }`).
 
 ### L2 — An enumeration is not a class
-*instances: 3*
+*instances: 4*
 
 Sweeping the cases a fixture happens to name proves nothing about the ones
 it does not.
@@ -258,7 +258,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 8*
+*instances: 10*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -267,7 +267,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 22*
+*instances: 23*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -319,7 +319,7 @@ the same field. The hardening is not done until they agree or the
 disagreement is written down as a divergence.
 
 ### L37 — Two runtimes share a store and nothing tests the crossing
-*instances: 4 attributed; ~5 in the mined cluster*
+*instances: 5 attributed; ~5 in the mined cluster*
 
 The port and CPython write into the same JSONL. Each side's tests are
 self-consistent; the boundary is what nobody exercises.
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 76*
+*instances: 78*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -1026,7 +1026,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 9*
+*instances: 10*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 18*
+*instances: 19*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1654,7 +1654,7 @@ arrives at the runner already broken, and is reported as a build failure
 rather than as the battery bug it is.
 
 ### P12 — An expected value spelled with the thing under test is not an assertion
-*instances: 3*
+*instances: 4*
 
 Two findings, one file, one battery round. The heartbeat log test asserted
 `path != LogPath(ws)` — both sides call `LogPath`, so moving the log out of

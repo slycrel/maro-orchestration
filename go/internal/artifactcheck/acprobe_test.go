@@ -260,9 +260,11 @@ for c in json.loads(sys.argv[1]):
         elif k == "sorted_fsnames":
             # sorted() over surrogateescape-decoded str, which is what
             # Python holds every filename as. Names ride as lists of BYTE
-            # VALUES in both directions because json.dumps cannot encode a
-            # lone surrogate -- that is precisely why no ordinary fixture
-            # could ever carry this input.
+            # VALUES in both directions because of the GO end, not this one:
+            # json.dumps("\udc80b") is "\udc80b" here and loads back exactly,
+            # but Go's encoding/json turns that escape into U+FFFD without
+            # complaining -- which is why no ordinary fixture could ever
+            # carry this input.
             base = pathlib.Path(ROOT) / "fsnames"
             if base.exists():
                 shutil.rmtree(base)
