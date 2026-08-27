@@ -479,7 +479,7 @@ func pyNumStr(t json.Number) string {
 // suggestion someone already reviewed.
 func SaveSuggestions(workspaceDir string, suggestions []Suggestion) error {
 	p := suggestionsPath(workspaceDir)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), record.NewDirMode); err != nil {
 		return err
 	}
 	// The dedup read and the appends happen under ONE lock: a `seen` set
@@ -855,7 +855,7 @@ func changeLogAppend(workspaceDir string, f applyFields, beforeState any) {
 	}
 	raw := []byte(line)
 	path := changeLogPath(workspaceDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return
 	}
 	_ = record.AppendRawLine(path, raw)
@@ -1040,7 +1040,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 		line, _ := pyval.DumpsCompactPy(entry)
 		raw := []byte(line)
 		dcPath := dynamicConstraintsPath(workspaceDir)
-		if err := os.MkdirAll(filepath.Dir(dcPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dcPath), record.NewDirMode); err != nil {
 			fmt.Fprintf(os.Stderr, "[evolver] new_guardrail apply failed: %v\n", err)
 			return actionFailed
 		}

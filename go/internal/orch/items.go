@@ -221,7 +221,7 @@ func AppendNextItems(ws, slug string, items []string) ([]int, error) {
 			// Defensive, matching Python: EnsureProject normally does
 			// this, but a partially-initialized project must not crash a
 			// drain loop.
-			if err := os.MkdirAll(ProjectDir(ws, slug), 0o755); err != nil {
+			if err := os.MkdirAll(ProjectDir(ws, slug), record.NewDirMode); err != nil {
 				return err
 			}
 			body = "# NEXT — " + slug + "\n\n"

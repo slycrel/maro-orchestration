@@ -8,14 +8,14 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 const (
@@ -76,7 +76,7 @@ type tarEntry struct {
 }
 
 func writeArchive(path string, entries []tarEntry) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	f, err := os.Create(path)

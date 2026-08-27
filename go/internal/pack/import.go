@@ -311,7 +311,7 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	// transaction from the importer's perspective; individual stores retain
 	// their own locks for coordination with non-import writers.
 	gate := filepath.Join(ws, "memory", ".pack-import")
-	if err := os.MkdirAll(filepath.Dir(gate), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gate), record.NewDirMode); err != nil {
 		return nil, err
 	}
 	err = record.Locked(gate, func() error {
@@ -1108,7 +1108,7 @@ func (im *importer) writeQuarantine(path, content string) (bool, error) {
 	// The lock file lives beside the target, so the parent must exist
 	// before the lock can be taken (first live cross-runtime import hit
 	// exactly this).
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return false, err
 	}
 	already := false
@@ -1244,7 +1244,7 @@ func (im *importer) appendConflictsNote(kind, name string) error {
 		"Same-name, different-content collisions between this pack's skills/"+
 		"personas and local ones. Local always wins; these stay in quarantine "+
 		"— adopt is editorial, not automatic.\n\n", im.label)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.Locked(path, func() error {
@@ -1267,10 +1267,10 @@ func (im *importer) appendConflictsNote(kind, name string) error {
 			content = header
 		}
 		content += line + "\n"
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 			return err
 		}
-		return os.WriteFile(path, []byte(content), 0o644)
+		return os.WriteFile(path, []byte(content), 0o666)
 	})
 }
 

@@ -949,7 +949,7 @@ func saveReport(workspaceDir string, report InspectionReport) error {
 	}
 	raw := []byte(line)
 	path := inspectionLogPath(workspaceDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.AppendRawLine(path, raw)
@@ -988,11 +988,11 @@ func saveSuggestions(workspaceDir string, suggestions []string) error {
 		lines = append(lines, line)
 	}
 	// The dir must exist before Locked can open the lock file beside p.
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.Locked(p, func() error {
-		f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {
 			return err
 		}

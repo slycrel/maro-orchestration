@@ -174,11 +174,11 @@ func Seed(ws string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil // don't overwrite
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	body := fmt.Sprintf(seedContent, utcNow().Format("2006-01-02"))
-	return os.WriteFile(path, []byte(body), 0o644)
+	return os.WriteFile(path, []byte(body), 0o666)
 }
 
 // Load returns the full playbook text, seeding the file if it is missing.
@@ -644,7 +644,7 @@ func ExpireStaleAlarms(ws string, maxAgeDays int) int {
 // other — and so is the caller's obligation to ABORT when this fails.
 func Archive(ws, text, reason string) (string, error) {
 	dir := filepath.Join(ws, "playbook_history")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return "", err
 	}
 	ts := utcNow().Format("20060102T150405Z")
@@ -660,7 +660,7 @@ func Archive(ws, text, reason string) (string, error) {
 		p = filepath.Join(dir,
 			fmt.Sprintf("playbook-%s-%s-%d.md", ts, reason, n))
 	}
-	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(text), 0o666); err != nil {
 		return "", err
 	}
 	return p, nil

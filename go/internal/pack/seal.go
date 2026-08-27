@@ -145,7 +145,7 @@ func Seal(packPath string, confirmed bool) (pyval.Obj, error) {
 	if err := writeArchive(packPath, entries); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(companion, []byte(reviewText), 0o644); err != nil {
+	if err := os.WriteFile(companion, []byte(reviewText), 0o666); err != nil {
 		return nil, err
 	}
 	return manifest, nil

@@ -302,15 +302,15 @@ func AppendSectionLines(path, heading string, lines []string, dedupeToken string
 				return nil
 			}
 		}
-		if err := os.MkdirAll(dirOf(path), 0o755); err != nil {
+		if err := os.MkdirAll(dirOf(path), record.NewDirMode); err != nil {
 			return err
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			if err := os.WriteFile(path, []byte(heading+"\n\n"), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(heading+"\n\n"), 0o666); err != nil {
 				return err
 			}
 		}
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {
 			return err
 		}
@@ -373,7 +373,7 @@ func nextTemplate(slug, mission string) string {
 // it is what lets a caller re-prioritize an existing project.
 func EnsureProject(ws, slug, mission string, priority int) (string, error) {
 	pdir := ProjectDir(ws, slug)
-	if err := os.MkdirAll(pdir, 0o755); err != nil {
+	if err := os.MkdirAll(pdir, record.NewDirMode); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(NextPath(ws, slug)); os.IsNotExist(err) {

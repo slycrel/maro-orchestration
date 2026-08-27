@@ -320,7 +320,7 @@ func Run(ctx context.Context, a llm.Adapter, rec *record.Recorder, opts Opts) (*
 		if _, statErr := os.Stat(res.ProjectDir); statErr == nil {
 			dirExisted = true
 		}
-		err := os.MkdirAll(res.ProjectDir, 0o755)
+		err := os.MkdirAll(res.ProjectDir, record.NewDirMode)
 		holdingSlot := false
 		if err == nil {
 			// Admission gate BEFORE the first project write: two runs

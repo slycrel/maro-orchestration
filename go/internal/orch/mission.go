@@ -118,7 +118,7 @@ func MissionLogPath(ws string) (string, error) {
 // json.dumps emits — a rewrite by either runtime has to read the same way.
 func SaveMission(ws string, m *Mission, project string) error {
 	path := MissionPath(ws, project)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	milestones := pyList{}
@@ -438,13 +438,13 @@ func GenerateFeatureManifest(ws string, m *Mission, project string) (pyObj, erro
 	if err != nil {
 		return manifest, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return manifest, nil // Python swallows the write failure
 	}
 	// write_text, NOT atomic_write: this is Python's shape here, and the
 	// difference is observable — a crash mid-write leaves a truncated
 	// manifest that the read above then rebuilds from the mission.
-	_ = os.WriteFile(path, []byte(text), 0o644)
+	_ = os.WriteFile(path, []byte(text), 0o666)
 	return manifest, nil
 }
 
@@ -892,7 +892,7 @@ func AcquireDrainLock(ws, missionID string) bool {
 	if err != nil {
 		return false
 	}
-	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(line), 0o666); err != nil {
 		return false
 	}
 	return true

@@ -19,15 +19,15 @@ package sheriff
 
 import (
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/orch"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/slycrel/maro-orchestration/go/internal/orch"
-	"github.com/slycrel/maro-orchestration/go/internal/pypath"
-	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // CheckAllProjects is sheriff.check_all_projects.
@@ -174,7 +174,7 @@ func ArchiveDormantProjects(ws string, days float64, apply bool, now time.Time) 
 		if apply {
 			// exist_ok=True, no parents. os.Mkdir returns EEXIST, which is
 			// exactly what exist_ok swallows — and ONLY that one.
-			if merr := os.Mkdir(archiveRoot, 0o777); merr != nil && !os.IsExist(merr) {
+			if merr := os.Mkdir(archiveRoot, record.NewDirMode); merr != nil && !os.IsExist(merr) {
 				return nil, merr
 			}
 			target := filepath.Join(archiveRoot, name)
@@ -326,7 +326,7 @@ func WriteHeartbeatState(ws string, h Health, projectReports []Report) string {
 	if _, derr := orch.EnsureMemoryDir(ws); derr != nil {
 		return ""
 	}
-	if werr := os.WriteFile(path, []byte(text), 0o644); werr != nil {
+	if werr := os.WriteFile(path, []byte(text), 0o666); werr != nil {
 		return ""
 	}
 	return path

@@ -224,7 +224,7 @@ func (s *Store) AppendHypothesis(h Hypothesis) error {
 		return err
 	}
 	raw := []byte(line)
-	if err := os.MkdirAll(s.memory(), 0o755); err != nil {
+	if err := os.MkdirAll(s.memory(), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.AppendRawLine(s.HypothesesPath(), raw)
@@ -247,7 +247,7 @@ func (s *Store) AppendMediumLesson(tl TieredLesson) error {
 	}
 	raw := []byte(line)
 	path := s.TieredLessonsPath("medium")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.AppendRawLine(path, raw)

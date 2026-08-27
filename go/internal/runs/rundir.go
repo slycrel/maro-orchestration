@@ -2,10 +2,10 @@ package runs
 
 import (
 	"context"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"os"
 	"strings"
-
-	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 )
 
 // The active run-dir, ported from runs._current_run_dir.
@@ -144,7 +144,7 @@ func CurrentHandleID(ctx context.Context) (string, bool) {
 func ArtifactDir(ctx context.Context, project string, projectRoot func() string) (string, error) {
 	if rd := CurrentRunDir(ctx); rd != "" {
 		out := pypath.Join(rd, "build")
-		if err := os.MkdirAll(out, 0o755); err != nil {
+		if err := os.MkdirAll(out, record.NewDirMode); err != nil {
 			return out, err
 		}
 		return out, nil
@@ -181,7 +181,7 @@ func ArtifactDir(ctx context.Context, project string, projectRoot func() string)
 	// so a port that clamps it disagrees about which directory the artifacts
 	// of that run live in.
 	out := pypath.Join(pypath.Join(root, project), "artifacts")
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := os.MkdirAll(out, record.NewDirMode); err != nil {
 		return out, err
 	}
 	return out, nil

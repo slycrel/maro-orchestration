@@ -496,7 +496,7 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		return nil, err
 	}
 	companion := reviewCompanionPath(packPath)
-	if err := os.WriteFile(companion, []byte(reviewMD), 0o644); err != nil {
+	if err := os.WriteFile(companion, []byte(reviewMD), 0o666); err != nil {
 		return nil, err
 	}
 	return &ExportResult{PackPath: packPath, ReviewPath: companion, Manifest: manifest}, nil

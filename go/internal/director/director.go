@@ -833,7 +833,7 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 		return "", nil
 	}
 	dir := filepath.Join(rec.WorkspaceDir, "output", "artifacts", "director")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return "", err
 	}
 	tickets := make([]map[string]any, 0, len(res.Tickets))
@@ -910,7 +910,7 @@ func writeLog(rec *record.Recorder, res Result) (string, error) {
 	data := []byte(text)
 	path := filepath.Join(dir, fmt.Sprintf("director-%s-log.json", res.DirectorID))
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o666); err != nil {
 		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {

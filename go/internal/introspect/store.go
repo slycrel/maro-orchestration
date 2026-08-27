@@ -147,7 +147,7 @@ func SaveDiagnosis(ws string, d *LoopDiagnosis, now time.Time) error {
 	if perr != nil {
 		return perr
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	if d.RecordedAt == "" {
@@ -157,7 +157,7 @@ func SaveDiagnosis(ws string, d *LoopDiagnosis, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}

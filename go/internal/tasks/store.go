@@ -3,11 +3,11 @@ package tasks
 import (
 	"errors"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // locked runs fn holding an advisory lock on the task file's `.lock`
@@ -32,7 +32,7 @@ import (
 // hand two holders the same lock. Archive() unlinks a lock it is holding,
 // which is exactly that race made routine.
 func locked(path string, shared bool, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		return err
 	}
 	lp := lockPath(path)
@@ -90,7 +90,7 @@ func locked(path string, shared bool, fn func() error) error {
 // would not be.
 func writeTask(path string, task Task) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return err
 	}
 	text, err := pyval.DumpsIndent2Raw(task)

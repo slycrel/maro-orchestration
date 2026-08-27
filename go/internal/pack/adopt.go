@@ -150,12 +150,12 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 			report.Adopted = append(report.Adopted, adoptedRow(c.kind, c.name))
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dest), record.NewDirMode); err != nil {
 			return nil, err
 		}
 		// O_EXCL: the exists() check above is advisory; the create is the
 		// real never-overwrite guarantee.
-		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 		if err != nil {
 			if os.IsExist(err) {
 				report.Skipped = append(report.Skipped, skippedRow(c.kind, c.name))
@@ -188,7 +188,7 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 		}
 		raw := []byte(line)
 		audit := filepath.Join(ws, "memory", "imports.jsonl")
-		if err := os.MkdirAll(filepath.Dir(audit), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(audit), record.NewDirMode); err != nil {
 			return nil, err
 		}
 		if err := record.AppendRawLine(audit, raw); err != nil {

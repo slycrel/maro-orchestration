@@ -58,7 +58,7 @@ func Dir(workspaceDir, handleID string) string {
 func Create(workspaceDir, handleID, prompt string) (string, error) {
 	rd := Dir(workspaceDir, handleID)
 	for _, sub := range []string{"source", "build", "artifact"} {
-		if err := os.MkdirAll(filepath.Join(rd, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(rd, sub), record.NewDirMode); err != nil {
 			return "", err
 		}
 	}
@@ -267,7 +267,7 @@ func AppendVerdictRow(runDir, loopID string, row pyval.Obj) error {
 		return err
 	}
 	f, err := os.OpenFile(filepath.Join(runDir, "build", "closure_verdicts.jsonl"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 	if err != nil {
 		return err
 	}
@@ -280,7 +280,7 @@ func AppendVerdictRow(runDir, loopID string, row pyval.Obj) error {
 
 func atomicWrite(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o666); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -371,7 +371,7 @@ func AppendSkillsManifest(runDir string, entries []SkillManifestEntry,
 		return err
 	}
 	out := filepath.Join(runDir, "source", "skills_manifest.jsonl")
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(out), record.NewDirMode); err != nil {
 		return err
 	}
 	return record.AppendRawLine(out, []byte(raw))

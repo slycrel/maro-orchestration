@@ -393,7 +393,7 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 	}
 
 	path := suggestionsPath(ws)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), record.NewDirMode); err != nil {
 		fmt.Fprintf(os.Stderr, "[graduation] cannot create memory dir: %v\n", err)
 		return 0
 	}

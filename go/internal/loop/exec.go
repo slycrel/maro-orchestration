@@ -14,15 +14,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/budget"
+	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/slycrel/maro-orchestration/go/internal/budget"
-	"github.com/slycrel/maro-orchestration/go/internal/llm"
 )
 
 // execSystem is the executor system prompt — the sections of Python
@@ -269,7 +269,7 @@ func executeExecStep(ctx context.Context, a llm.Adapter, goal, step, hint string
 	// as a warning, never swallowed.
 	var mkdirWarn string
 	artifactDir := filepath.Join(projectDir, "artifacts")
-	if err := os.MkdirAll(artifactDir, 0o755); err == nil {
+	if err := os.MkdirAll(artifactDir, record.NewDirMode); err == nil {
 		opts.TranscriptPath = filepath.Join(artifactDir,
 			fmt.Sprintf("step-%d-transcript.jsonl", stepNum))
 	} else {

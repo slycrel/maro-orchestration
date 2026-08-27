@@ -465,7 +465,7 @@ func ScanQualityDrift(ws string, outcomes []map[string]any,
 	if raw, err := pyval.DumpsCompactPy(snapshot); err == nil {
 		// Locked append (file_lock.locked_append parity); a failed save
 		// never blocks the scan (Python swallows it too).
-		_ = os.MkdirAll(memoryDir(ws), 0o755)
+		_ = os.MkdirAll(memoryDir(ws), record.NewDirMode)
 		_ = record.AppendRawLine(baselinesPath(ws), []byte(raw))
 	}
 
@@ -788,7 +788,7 @@ func RecordSuggestionOutcomes(ws string, suggestionIDs []string, passed bool, ru
 		if err != nil {
 			continue
 		}
-		_ = os.MkdirAll(memoryDir(ws), 0o755)
+		_ = os.MkdirAll(memoryDir(ws), record.NewDirMode)
 		_ = record.AppendRawLine(suggestionOutcomesPath(ws), []byte(raw))
 	}
 }

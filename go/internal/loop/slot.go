@@ -26,6 +26,7 @@ package loop
 import (
 	"fmt"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -38,11 +39,11 @@ import (
 //   - nil, warn, nil      — gate unavailable (fs error); proceed UNGATED.
 func acquireProjectSlot(memoryDir, slug, loopID, goal string) (release func(), warn string, err error) {
 	lockPath := filepath.Join(memoryDir, "loop-"+slug+".lock")
-	if mkErr := os.MkdirAll(memoryDir, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(memoryDir, record.NewDirMode); mkErr != nil {
 		return nil, fmt.Sprintf("admission gate unavailable for %s (%v) — proceeding UNGATED",
 			slug, mkErr), nil
 	}
-	f, openErr := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o644)
+	f, openErr := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o666)
 	if openErr != nil {
 		return nil, fmt.Sprintf("admission gate unavailable for %s (%v) — proceeding UNGATED",
 			slug, openErr), nil

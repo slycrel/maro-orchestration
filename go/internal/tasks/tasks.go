@@ -41,6 +41,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"math"
 	"os"
 	"path/filepath"
@@ -49,9 +52,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/slycrel/maro-orchestration/go/internal/pypath"
-	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // Task is one queue row, key order preserved.
@@ -646,7 +646,7 @@ func Fail(ws, jobID, errText string) (Task, error) {
 // claimable.
 func resolveDependents(ws string, completedJobID any) error {
 	dir := TasksDir(ws)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return err
 	}
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
@@ -740,7 +740,7 @@ func resolveDependents(ws string, completedJobID any) error {
 // MERGING behaviour and deliberately does not pin the order.
 func List(ws, statusFilter string) ([]any, error) {
 	dir := TasksDir(ws)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return nil, err
 	}
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
@@ -795,7 +795,7 @@ func List(ws, statusFilter string) ([]any, error) {
 // failure the read path was written to prevent (adversarial r11 round 6).
 func StatusSummary(ws string) (pyval.Obj, error) {
 	dir := TasksDir(ws)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return nil, err
 	}
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
@@ -901,7 +901,7 @@ func Archive(ws, jobID string) (Task, error) {
 				jobID, pyval.Str(raw))
 		}
 		t.Set("status", "archived")
-		if err := os.MkdirAll(ArchiveDir(ws), 0o777); err != nil {
+		if err := os.MkdirAll(ArchiveDir(ws), record.NewDirMode); err != nil {
 			return err
 		}
 		// `_archive_dir() / f"{job_id}.json"` — the same pathlib join, so
@@ -938,7 +938,7 @@ func Archive(ws, jobID string) (Task, error) {
 // narrow-type shape as Complete's needle, one field over.
 func RecoverStaleClaims(ws string) ([]any, error) {
 	dir := TasksDir(ws)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, record.NewDirMode); err != nil {
 		return nil, err
 	}
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
