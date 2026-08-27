@@ -68,15 +68,15 @@ func runTask(args []string) error {
 	case "claim", "complete", "fail", "archive":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		errText := fs.String("error", "", "failure reason (fail only)")
-		if err := fs.Parse(args[1:]); err != nil {
+		positional, err := parseInterleaved(fs, args[1:])
+		if err != nil {
 			return err
 		}
-		if fs.NArg() < 1 {
+		if len(positional) < 1 {
 			return fmt.Errorf("usage: maro task %s <job_id>", args[0])
 		}
-		jobID := fs.Arg(0)
+		jobID := positional[0]
 		var task tasks.Task
-		var err error
 		switch args[0] {
 		case "claim":
 			task, err = tasks.Claim(ws, jobID, 0)

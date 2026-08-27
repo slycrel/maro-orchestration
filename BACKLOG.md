@@ -400,6 +400,15 @@ mid-tranche.
 
 ### Go port: `recall` and `provenance` have tests but no CPython comparison (FOUND 2026-08-26, go-port differential census)
 
+**`recall` half CLOSED 2026-08-26.** Three live differentials landed
+(`73cf930b`, built in the `go-port-lane2` worktree), then a 51-mutant
+census derived from `recall.go` itself took the package from 29/51 to
+**49/51**; the two survivors are equivalent mutants named in
+`census_test.go`'s doc block before the re-run. `provenance` is still
+open. One divergence stands reported and deliberately unfixed: a
+`goal_achieved` of the STRING `"false"` reads as unjudged in CPython and
+as judged-not-achieved in Go (fail-closed in Go, documented at the site).
+
 The `missionrun` entry below asks which packages have no TESTS. A second
 census asked the sharper question — which have no **live CPython
 comparison**, meaning the suite starts a real interpreter, runs the Python
@@ -440,6 +449,33 @@ and the one worth doing first.
 
 **The measurement is in `go/COVERAGE.md`**, along with the script that
 re-derives it, so this entry does not have to be trusted.
+
+### Go port: `pack adopt` takes its label as a FLAG where `pack.py` takes it positionally (FOUND 2026-08-26, write-path harness census)
+
+The write-path harness found Go's `flag` silently dropping a flag written
+after a positional, where argparse interleaves. That is fixed
+(`cmd/maro/flagorder.go`). Censusing the class turned up a second,
+different difference at the same site, which is filed rather than papered
+over:
+
+```
+python3 -m pack adopt <label> [items...] [--all] [--target] [--dry-run]
+maro pack adopt -label <label> [items...] [-all] [-target] [-dry-run]
+```
+
+`pack.py` takes the label as a **positional**; the Go takes `-label`. A
+script written for one CLI does not run against the other.
+
+**Why it is filed and not fixed.** It is a surface difference of the same
+kind as `maro task` vs `python3 -m task_store` — the invocation differs and
+nothing silently misreads. It is only worth changing if the port ever needs
+argv-compatible drop-in CLIs, which is a decision about the port's boundary
+(open question 1 in `GOAL_BRAIN_GOPORT.md`), not a bug. The site carries a
+comment saying so, so the next reader does not "fix" it by accident.
+
+Related and NOT to be changed: `run` and `director` deliberately REFUSE a
+flag written after their positional rather than interleaving. That refusal
+is documented at both sites and is louder than either alternative.
 
 ### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
 

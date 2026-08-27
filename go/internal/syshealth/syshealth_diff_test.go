@@ -25,9 +25,17 @@ import (
 // answers a seam the port had to reproduce:
 //
 //   - DECLARED_PROCESSES is REPLACED with scripted probes. The seven real
-//     ones each read a different live store; with them in place there is no
-//     way to ask "what does a SILENT do to the snapshot" at all. The Go side
-//     takes them as a parameter for the same reason.
+//     ones read the live workspace — four of them (run_ref_index,
+//     skill_attribution, lesson_receipts, closure_verdicts) through
+//     `_recent_outcomes` over memory/outcomes.jsonl, and two
+//     (contradiction_lifecycle, variant_ab) through captains_log.query_log
+//     — so with them in place there is no way to ask "what does a SILENT do
+//     to the snapshot" at all. The Go side takes them as a parameter for
+//     the same reason. This sentence used to say the seven "each read a
+//     different live store", which is the same factual error r5 corrected
+//     in the package documentation and left standing here (adversarial r6,
+//     LOW — a fix at the site that has the reader is not a fix for the
+//     claim, L13).
 //   - sh.datetime is frozen. `datetime.now(timezone.utc).isoformat()` is
 //     called once per declaration and once more for updated_at, so a fixture
 //     that let the real clock through would compare four moving strings.

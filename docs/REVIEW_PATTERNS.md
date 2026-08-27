@@ -160,7 +160,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 34*
+*instances: 35*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -187,7 +187,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 9 — plus standing (Jeremy, 2026-08-16)*
+*instances: 10 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -319,7 +319,7 @@ the same field. The hardening is not done until they agree or the
 disagreement is written down as a divergence.
 
 ### L37 — Two runtimes share a store and nothing tests the crossing
-*instances: 5 attributed; ~5 in the mined cluster*
+*instances: 6 attributed; ~5 in the mined cluster*
 
 The port and CPython write into the same JSONL. Each side's tests are
 self-consistent; the boundary is what nobody exercises.
@@ -354,7 +354,7 @@ Fixtures for a reader must be LINES, not literals.
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 24*
+*instances: 25*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 89*
+*instances: 90*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -771,7 +771,7 @@ mutant survives that, the name is a lie even though the suite is green.
 
 ### L45 — A battery measures only what the harness can EXPRESS
 
-*instances: 2*
+*instances: 3*
 
 A mutation score is a statement about the fixtures. But the fixtures reach
 only as far as the harness lets them describe an outcome — and a case
@@ -819,7 +819,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 16*
+*instances: 18*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -1844,7 +1844,7 @@ assumption that lets it through.
 each: what did this fix newly make possible? Then check that.
 
 ### P15 — A widened guard's own census is the population; a review's findings are a sample
-*instances: 1*
+*instances: 2*
 
 When a guard is broadened to cover a new spelling of a known class, the
 temptation is to fix the sites the review named and then run the guard to

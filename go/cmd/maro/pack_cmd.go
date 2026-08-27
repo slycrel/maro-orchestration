@@ -160,7 +160,18 @@ func packAdopt(args []string) error {
 	target := fs.String("target", "", "target workspace (default: resolved)")
 	all := fs.Bool("all", false, "adopt everything quarantined under the label")
 	dryRun := fs.Bool("dry-run", false, "report without writing")
-	if err := fs.Parse(args); err != nil {
+	// parseInterleaved, not fs.Parse: the item list is positional and
+	// pack.py's `adopt` takes `--all` / `--target` / `--dry-run` AFTER it
+	// (argparse interleaves). With stdlib parsing, `pack adopt -label x
+	// foo.md --all` swallows "--all" into Items and adopts one file where
+	// the Python adopts the whole label. See flagorder.go.
+	//
+	// The argv SHAPE still differs and is not changed here: pack.py takes
+	// the label as a positional and the Go takes it as -label. That is a
+	// surface difference like `maro task` vs `python3 -m task_store`, not a
+	// silently dropped argument, and it is filed rather than papered over.
+	items, err := parseInterleaved(fs, args)
+	if err != nil {
 		return err
 	}
 	if *label == "" {
@@ -171,7 +182,7 @@ func packAdopt(args []string) error {
 		return err
 	}
 	report, err := pack.Adopt(pack.AdoptOpts{
-		Label: *label, Target: ws, Items: fs.Args(), All: *all, DryRun: *dryRun,
+		Label: *label, Target: ws, Items: items, All: *all, DryRun: *dryRun,
 	})
 	if err != nil {
 		return err

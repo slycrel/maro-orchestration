@@ -2,6 +2,7 @@ package artifactcheck
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -1642,8 +1643,72 @@ func acCases() []acCase {
 
 // --- the differential -----------------------------------------------------
 
+// acUnixSocketsWork reports whether this environment can bind an
+// AF_UNIX socket at all.
+//
+// P8b's whole subject is a socket, and both sides of that row have to make
+// one. Some restricted environments (a hardened container, a sandboxed
+// agent runner) refuse the bind outright with EPERM, and the row then fails
+// before either implementation has been asked anything — a package failure
+// that says nothing about the port (adversarial r9, LOW, codex seat, whose
+// own sandbox hit exactly this).
+//
+// The gate is deliberately narrow, and narrow in three ways, because a skip
+// is a claim nobody re-examines (L25):
+//
+//   - It probes the CAPABILITY, not a platform name. A guard spelled
+//     `runtime.GOOS != "linux"` would go on being true after the reason for
+//     it stopped being true.
+//   - Only a PERMISSION error counts. Any other failure (a full disk, a
+//     path length, a bug in the fixture) stays fatal, because those are not
+//     environment capabilities and hiding them behind a skip is how a real
+//     defect becomes a green run.
+//   - The drop is announced with the errno on every run, and the row is
+//     removed from the case list rather than passed, so the positional
+//     alignment between fixtures and probe answers still holds.
+func acUnixSocketsWork(t *testing.T) (bool, error) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	l, err := net.Listen("unix", filepath.Join(dir, "probe"))
+	if err == nil {
+		l.Close()
+		return true, nil
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return false, err
+	}
+	t.Fatalf("could not bind a unix socket, and NOT for a permission "+
+		"reason — this is a real failure, not an environment capability: %v",
+		err)
+	return false, nil
+}
+
 func TestTheArtifactCheckAgreesWithCPythonOnEveryFixture(t *testing.T) {
 	cases := acCases()
+	if ok, why := acUnixSocketsWork(t); !ok {
+		var kept []acCase
+		var dropped []string
+		for _, c := range cases {
+			if strings.Contains(c.name, "SOCKET") {
+				dropped = append(dropped, c.name)
+				continue
+			}
+			kept = append(kept, c)
+		}
+		if len(dropped) == 0 {
+			t.Fatal("the socket capability is unavailable but no fixture " +
+				"matched the drop rule — the rule and the fixture names " +
+				"have drifted apart, and the row would fail unexplained")
+		}
+		t.Logf("DROPPED %d socket fixture(s) — this environment refuses "+
+			"AF_UNIX binds (%v). Those rows compared NOTHING; every other "+
+			"row still ran. %v", len(dropped), why, dropped)
+		cases = kept
+	}
 
 	ws := t.TempDir()
 	probe := pyprobe.Probe{Marker: "artifact_check.py", Workspace: ws}

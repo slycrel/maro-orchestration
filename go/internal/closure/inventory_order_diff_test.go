@@ -71,6 +71,76 @@ func bytesToString(bs []int) string {
 	return string(b)
 }
 
+// TestProjectFileInventoryClassifiesLinksLikeOsWalk covers the OTHER half
+// of the same walk: not the order of the names, but which names are names
+// at all.
+//
+// os.ReadDir reports each entry's OWN type bits, so a symlink pointing at a
+// directory is not a directory to it. os.walk splits on `entry.is_dir()`,
+// which follows the link. The port took the byte-typed answer and emitted
+// the link as a FILE — and at the cap that means the two runtimes name
+// different things again, this time a directory link where CPython names a
+// real file (adversarial r9, MEDIUM, codex seat).
+//
+// The dangling link is the control that keeps the fix honest in the other
+// direction: scandir's is_dir() is False when the stat fails, so a dangling
+// link IS a file to CPython, and a fix that simply followed every link
+// would have dropped it.
+func TestProjectFileInventoryClassifiesLinksLikeOsWalk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "inner.txt"),
+		[]byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "z.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A link to a directory: emitted by neither runtime, descended by
+	// neither. Named "aa" so a byte order would put it FIRST and the cap
+	// case below can see the difference.
+	if err := os.Symlink(filepath.Join(root, "real"),
+		filepath.Join(root, "aalink")); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling link: a file to both.
+	if err := os.Symlink(filepath.Join(root, "nowhere"),
+		filepath.Join(root, "abdangling")); err != nil {
+		t.Fatal(err)
+	}
+
+	var py struct {
+		Full   []int `json:"full"`
+		Capped []int `json:"capped"`
+	}
+	pyprobe.Probe{Marker: "closure_verify.py"}.
+		RunJSON(t, pyInventoryOrderSrc, &py, root)
+
+	wantFull := "abdangling\nz.txt\nreal/inner.txt"
+	wantCapped := "abdangling\n... (truncated at 1 files)"
+	if got := bytesToString(py.Full); got != wantFull {
+		t.Fatalf("CPython listed %q, want %q — either os.walk's link "+
+			"handling changed or this fixture's premise is wrong",
+			got, wantFull)
+	}
+	if got := bytesToString(py.Capped); got != wantCapped {
+		t.Fatalf("CPython at cap=1 listed %q, want %q", got, wantCapped)
+	}
+
+	if got := projectFileInventory(root, 10); got != wantFull {
+		t.Errorf("projectFileInventory listed\n  %q\nCPython listed\n  %q\n"+
+			"os.ReadDir reports the entry's own type bits; os.walk follows "+
+			"the link to decide dirnames vs filenames.", got, wantFull)
+	}
+	if got := projectFileInventory(root, 1); got != wantCapped {
+		t.Errorf("projectFileInventory at cap=1 listed %q, CPython %q — a "+
+			"directory link consumed the inventory slot a real file should "+
+			"have had.", got, wantCapped)
+	}
+}
+
 func TestProjectFileInventoryOrderMatchesCPython(t *testing.T) {
 	root := t.TempDir()
 	seedInventoryTree(t, root)

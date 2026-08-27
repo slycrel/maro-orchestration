@@ -13550,3 +13550,160 @@ an `internal/artifactcheck` fixture that creates a Unix socket and hit
 `PermissionError` in its sandbox. Re-run outside the sandbox: exit 0, all
 packages green. The fixture correctly failed rather than skipping, which is
 the pyprobe rule working as designed.
+
+## The r9 review — `os.walk` has an opinion about symlinks, and a fixture that defended the wrong environment
+
+Two codex seats ran in parallel against the same tree (read-only, separate
+`GOCACHE`s): round 9 on `internal/artifactcheck` and round 6 on
+`internal/syshealth`. Both reviewed the WHOLE chunk plus its fixes (P2),
+not the latest diff.
+
+**The MEDIUM: `entry.IsDir()` is not `scandir`'s `is_dir()`.**
+
+`closure_verify._project_file_inventory` is an `os.walk(root,
+followlinks=False)`. The port used `os.ReadDir` and asked each entry
+`it.IsDir()`. Those two questions differ on exactly one input — a symlink
+that points at a directory:
+
+| | a dir symlink | a DANGLING symlink |
+|---|---|---|
+| CPython `scandir` `is_dir()` | **True** — follows the link | False — `stat` fails |
+| Go `DirEntry.IsDir()` | **False** — the entry's own type bits | False |
+
+CPython therefore puts a symlinked directory in `dirnames`, and because
+`followlinks=False` it is never descended into either. The link is named
+*nowhere*: not as a file, not as a directory it walked. The port emitted it
+as a file. At the inventory cap that is not cosmetic — the invented entry
+consumes a slot and can displace a real path the closure plan should have
+verified. Fail-open.
+
+Verified against CPython before touching anything (P1), with a root holding
+`linkdir -> real/`, `real/inner.txt`, and `z.txt`:
+
+```
+cap=10  ->  'z.txt\nreal/inner.txt'
+cap=1   ->  'z.txt\n... (truncated at 1 files)'
+```
+
+Neither the link nor a path under it. The fix is an `isDir(dir, entry)`
+helper that stats *through* a symlink, applied to the FILE arm only. The
+descend arm deliberately keeps `!it.IsDir()`, so a symlinked directory is
+still never followed — and the asymmetry is commented at both sites,
+because a later reader looking at two adjacent loops asking the same
+question two different ways will otherwise "fix" one of them.
+
+The fixture was proved able to fail: reverting `isDir` to `it.IsDir()`
+turns `"abdangling\nz.txt\nreal/inner.txt"` into
+`"aalink\nabdangling\nz.txt\nreal/inner.txt"`.
+
+**The LOW, and a rationale from four sections ago that turned out to be
+wrong.** The P8b differential binds an `AF_UNIX` socket to build its
+fixture. On a host that forbids that, the *whole* `artifactcheck` package
+failed — before comparing either implementation. The section immediately
+above this one records the earlier verdict on exactly this behaviour:
+*"The fixture correctly failed rather than skipping, which is the pyprobe
+rule working as designed."* That was half right. The pyprobe rule exists so
+a missing INTERPRETER is never silently skipped; it says nothing about a
+missing *kernel capability*, which is not a port fact at all. L52 — a
+rationale recorded as deliberate is still a claim.
+
+The gate is a probe bind, and the shape matters more than the gate:
+
+- on `EPERM`, the socket fixtures are DROPPED, the errno is logged, and
+  every other fixture still runs;
+- on **any other** bind error the test still fatals, spelling out that this
+  is a real failure and not an environment capability — a gate that
+  swallowed every error would have replaced one silent hole with a wider
+  one;
+- the drop rule fatals if it matches no fixture, so it cannot rot into a
+  no-op the day the fixture is renamed (L4).
+
+**syshealth r6: the same factual error, in the other copy.** r5 corrected
+the package doc's claim that the seven real `DECLARED_PROCESSES` probes
+each read a different live store. They do not: four (`run_ref_index`,
+`skill_attribution`, `lesson_receipts`, `closure_verdicts`) share
+`_recent_outcomes` over `memory/outcomes.jsonl`, and two
+(`contradiction_lifecycle`, `variant_ab`) share `captains_log.query_log`.
+r6 found the sentence still standing in the *harness* comment. L13, again:
+a fix at the site that has the fixture is not a fix for the class. With
+that corrected, r6 returned **LOWS ONLY: yes** — `internal/syshealth` is at
+fixpoint.
+
+Both seats also retracted a candidate of their own after instrumenting it
+(`pypath.Name` on unreachable `a/.` spellings; a non-finite `cycle` value
+that reaches the same outer handler with the same clipped message in both
+runtimes). Round hallucination: 2 of 5.
+
+## The write path gets a harness, and it finds a dropped argument on its first run
+
+`engine-compare.py` compares STDOUT of read-only renderers. It cannot see a
+divergence that only appears while WRITING — which is where this port's
+recorded bug families actually live: content-key prose divergence, key
+order inside a written object, absent vs zero, a created directory's mode.
+`go/tools/write-compare.py` is the other half. It runs both engines through
+the same command sequence and byte-diffs the resulting trees, directories
+and their MODES included.
+
+Two workspaces, not one: both engines are mutating, so the read harness's
+trick of handing both the same path is unavailable, and every value that
+embeds the workspace root becomes volatile. Volatility is handled by
+**positive-shape elision** — a job id must match `task-\d{8}T\d{6}Z-[0-9a-f]{8}`,
+a `run_id` must match a **version-4** UUID (the `4` and the variant nibble
+are part of the assertion), a `claimed_by_pid` is elided only under its own
+key and only when it starts `[1-9]`. A pid of `0` and a `null` both survive
+to the diff, because "None vs 0" is a divergence class this port keeps
+hitting. Substitution counts are tracked per side and required to AGREE: a
+side that emitted five timestamps where the other emitted four has a real
+difference the normaliser would otherwise erase (L51).
+
+The harness proves itself twice before it is believed (P10). `selftest()`
+builds two trees differing in one byte, one mode, and one missing file and
+requires exactly 3 findings and 0 false positives. `normalize_selftest()`
+checks each elision in **both** directions over nine shapes — a v1 UUID, an
+all-zero UUID, `"claimed_by_pid": 0`, `null`, and the same number under a
+different key must all come through UNTOUCHED. The negative half is the
+half that matters; a too-greedy elision still prints "identical".
+
+**What it found on its first run.**
+
+```
+python  task fail <id> --error "boom"  ->  "error": "boom"
+go      task fail <id> --error "boom"  ->  (no error key at all)
+go      task fail --error "boom" <id>  ->  "error": "boom"
+```
+
+Go's `flag` stops parsing at the first non-flag argument; `argparse`
+interleaves. The two runtimes write DIFFERENT rows to a store they share,
+and nothing says so — the failure is invisible until something reads the
+row back. This is L46 in its purest form: the stdlib substituted for the
+ported library costs one divergence per rule nobody enumerated, and
+"argparse interleaves" is a rule nobody enumerated.
+
+`parseInterleaved` is the standard loop — parse, take one positional,
+re-parse the rest — and it still ERRORS on an unknown flag wherever it
+appears, because a version that swallowed the error to keep going would
+turn every typo into a silently ignored argument, which is a worse bug than
+the one being fixed.
+
+**Then the census, not the site (P15).** The review's finding is a sample;
+the guard's own population is every `fs.Arg(0)` after a bare `fs.Parse`:
+
+| site | shape | disposition |
+|---|---|---|
+| `task claim/complete/fail/archive` | silent swallow | fixed |
+| `pack adopt` | silent swallow — `-label x foo.md --all` adopted ONE file where `pack.py` adopts the whole label | fixed |
+| `run` | refuses a post-positional flag loudly | left alone, deliberate |
+| `director` | refuses a post-positional flag loudly | left alone, deliberate |
+
+One surface difference is filed at the site rather than papered over:
+`pack.py` takes the label as a POSITIONAL and the Go takes `-label`. That
+is a spelling difference like `maro task` vs `python3 -m task_store`, not a
+dropped argument.
+
+**And then the harness's actual verdict.** With the fix in and the volatile
+fields taught, all seven `task` scenarios — enqueue, claim, complete, fail,
+archive, blocked-by, and a no-op recover — come out **byte-identical across
+both engines**, directory modes included, with the elision counts agreeing
+on both sides. That is the first end-to-end WRITE-path agreement this port
+has measured, and it covers the whole state machine of the one ported
+surface where a state machine writes.

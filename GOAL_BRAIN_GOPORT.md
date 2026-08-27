@@ -129,19 +129,23 @@ scripts so these can be recomputed rather than trusted.
 | Test lines | 81,834 (**1.38 : 1**) | ditto |
 | Packages with a live CPython differential | **37 of 46** — 56,870 lines, **95.7% of production** | ditto; "live" = the test starts a real interpreter and compares, not a transcribed expectation |
 | Python modules with **no Go reference anywhere** | **118 of 183** — 59,962 lines, **45.2%** | ditto. This is a **FLOOR**: "reference" is the loosest test (filename appears anywhere in the Go tree, comments included), so the true unported figure is worse and nothing yet measures how much worse |
-| Review-ledger rows, this arc | **854** as of 2026-08-27 (836 at the 08-26 audit, +18 from r8) | `review/findings.jsonl`, arc `go-port`; counted, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
-| Measured hallucination rate | **13 of 799 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
+| Review-ledger rows, this arc | **865** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
+| Measured hallucination rate | **15 of 807 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
 | Tranches needing 4+ review rounds | **33 of 66** targets | ditto. Deepest: `guard` 18, `handlequeue` 13, `evolver` 12, `dispatch` 12 |
 | Both engines compared, READ path | **6 renderers, 6 identical, 0 differ, 0 refused** | `go/tools/engine-compare.py` over a copy of the live workspace, 2026-08-26 |
-| Both engines compared, WRITE path | **never run** | harness designed, unbuilt: `scratchpad/write_path_harness_design.md` |
+| Both engines compared, WRITE path | **7 `task` scenarios, 7 byte-identical, 0 differ, 0 refused** — after fixing the divergence its first run found | `go/tools/write-compare.py`, 2026-08-26. Trees byte-diffed including directory MODES; volatile fields elided by positive shape with per-side counts required to agree, and the harness self-tests its differ AND its normaliser (both directions) before comparing anything |
 | Can the port run a mission end to end? | **No** | `go/COVERAGE.md` |
 | Interpreter every differential runs against | CPython **3.14.3** (bare `python3` is linuxbrew's; `/usr/bin/python3` is 3.12.3) | measured 2026-08-26 |
 
-**Named genuine gaps** (as opposed to structural absences): `internal/recall`
-(542 lines, no interpreter comparison), `internal/provenance` (94 lines),
-`internal/missionrun` (no test file at all). The other six packages without
-a differential have nothing to compare against — LLM adapters, the probe
-harness itself, test scaffolding, composition-only wiring.
+**Named genuine gaps** (as opposed to structural absences): ~~`internal/recall`
+(542 lines, no interpreter comparison)~~ **CLOSED 2026-08-26** — three live
+differentials landed from the lane2 build (`73cf930b`), then a 51-mutant
+census derived from `recall.go` itself took it from 29/51 to **49/51**, the
+two survivors being equivalent mutants named before the re-run;
+`internal/provenance` (94 lines), `internal/missionrun` (no test file at
+all). The other six packages without a differential have nothing to compare
+against — LLM adapters, the probe harness itself, test scaffolding,
+composition-only wiring.
 
 **The strongest argument the port has, stated plainly:** the ledger records
 divergences that are bugs or latent bugs in behaviour **both** runtimes now
@@ -213,12 +217,12 @@ either outcome.
 
 | Thread | State |
 |---|---|
-| `internal/artifactcheck` review to fixpoint | **r8 landed** — two seats (opus + codex `gpt-5.6-terra`), 18 ledger rows, four production sort fixes with CPython differentials. Both seats ended LOWS ONLY: no, so **r9 is the open gate** |
-| `internal/syshealth` review to fixpoint | at r5; **r6 is the open gate**. Brief written |
-| `internal/recall` CPython differential | **built** by the codex build lane in `go-port-lane2`, full suite green there; **not yet landed** here. Only 3 mutants for 3 tests — a deeper mutation pass is owed. One divergence reported and NOT fixed: `goal_achieved: "false"` (a string) → CPython `None` (unjudged), Go `false` (judged not achieved), fail-closed in Go |
+| `internal/artifactcheck` review to fixpoint | **r9 landed** — 1 MEDIUM (a dir symlink counted as a file in `closure`, fail-open at the inventory cap), 1 LOW (the P8b fixture required an `AF_UNIX` bind and failed the whole package where the kernel forbids one), 1 self-retraction. `LOWS ONLY: no`, so **r10 is the open gate** |
+| `internal/syshealth` review to fixpoint | **AT FIXPOINT.** r6 returned `LOWS ONLY: yes` with one doc LOW (r5's factual correction had not reached the harness copy — L13) and one self-retraction. Fix landed |
+| `internal/recall` CPython differential | **CLOSED.** Landed `73cf930b`; the owed deeper mutation pass then ran — 51 mutants derived from `recall.go` itself, 29/51 → **49/51** after `census_test.go`, the 2 survivors equivalent mutants named before the re-run. One divergence stands reported and NOT fixed: `goal_achieved: "false"` (a string) → CPython `None` (unjudged), Go `false` (judged not achieved), fail-closed in Go |
 | `internal/provenance` CPython differential | open, unscheduled |
 | `internal/missionrun` has no test file at all | open, unscheduled |
-| Write-path comparison harness | **designed, unbuilt.** The first moment the arc pays off on writes |
+| Write-path comparison harness | **BUILT and paying.** `go/tools/write-compare.py`; found a silently dropped CLI argument on its first run, then all 7 `task` scenarios byte-identical. Next targets: a second write surface (`orch_items` / `record`) and the directory-mode thread, which this harness can now measure |
 | Remaining first-pass tranches, sequenced | **planner returned** → `scratchpad/PORT_PLAN.md`. First pass = 74 modules / 37,777 py lines, ~29 review units, **~120–170 review rounds**. Recommends Option B (comparable core: 62 modules, 25,972 lines, ~90–120 rounds) stopping at a mission dry-run comparison. Unacted |
 | Directory-mode fix: 33 `0o755` + 7 inline `0o777` → `record.NewDirMode` | filed in BACKLOG |
 | `check_system_health` | blocked on `llm.DetectBackends` plus a python3 shell-out seam |
@@ -245,9 +249,15 @@ include things with nothing to port against (LLM adapters) and things that
 are dev tooling. Until that set is classified, "completely" has no
 denominator. *Assigned to the planner.*
 
-**3. Does the write path agree?** Unknown and unmeasured. This is the
-question the read-path comparison could not touch, and the one where two
-runtimes sharing one store can corrupt rather than merely disagree.
+**3. Does the write path agree?** **Answered for `task`, 2026-08-26: yes,
+now.** Seven scenarios covering the whole state machine come out
+byte-identical across both engines, directory modes included — but only
+after the harness's first run found Go's `flag` silently dropping
+`--error "boom"` when it followed the job id. So the honest form of the
+answer is: the write path agrees where it has been MEASURED, it did not
+before it was measured, and six of the eight-plus other writing surfaces
+(`orch_items`, `record`, the memory ledger, the captain's log…) remain
+unmeasured.
 
 ---
 
@@ -311,3 +321,50 @@ U+FFFD), two comment counts wrong at birth (25 bases not seventeen; 420×
 not 2000×), and a 97,116-input ISO corpus that could not observe the
 leap-Wednesday disjunct — `isLeap` was pinned as a rejecter and not as an
 accepter until `2020-W53-1` was added.
+
+**2026-08-26 (later)** — Two codex seats in parallel, then the write path
+gets an instrument.
+
+`internal/syshealth` reached **fixpoint** (r6, `LOWS ONLY: yes`). Its one
+LOW is the same factual error r5 had already corrected in the package doc,
+still standing in the harness comment — L13 measured again, in the plainest
+possible form: a fix at the site that has the fixture is not a fix for the
+class.
+
+`internal/artifactcheck` r9 returned a real MEDIUM in `closure`:
+`os.DirEntry.IsDir()` reads the entry's own type bits, while CPython's
+`os.walk` asks `scandir`'s `is_dir()`, which **follows** the link. A
+symlinked directory therefore lands in `dirnames` and, with
+`followlinks=False`, is named nowhere at all — while the port emitted it as
+a file, where at the inventory cap it could displace a real path. Fail-open.
+Verified against a live CPython probe before touching anything, and the
+descend arm was deliberately left asking the *other* question, with the
+asymmetry commented at both sites. r9's LOW also **overturned a rationale
+this file's own prose had recorded as deliberate** three sections earlier:
+"the fixture correctly failed rather than skipping" was half right — the
+pyprobe rule exists so a missing INTERPRETER is never skipped, and says
+nothing about a missing kernel capability, which is not a port fact. L52.
+
+The owed deeper mutation pass on `internal/recall` ran: 51 mutants derived
+from `recall.go` itself (L9, not from the diff), **29/51 → 49/51**, and the
+two survivors are the two equivalent mutants `census_test.go` names in its
+doc block *before* the re-run.
+
+**The instrument, and what it cost to believe it.** `write-compare.py` runs
+both engines through the same command sequence and byte-diffs the trees,
+directory MODES included. It self-tests twice — the differ must find
+exactly 3 planted differences and 0 false positives, and the *normaliser*
+is checked in both directions over nine shapes, because a too-greedy
+elision still prints "identical" (L51). On its first run it found Go's
+`flag` silently dropping `--error "boom"` when written after the job id,
+where argparse interleaves: two runtimes writing different rows to a store
+they share, invisible until something reads the row back. Fixed, then
+**censused** rather than patched at the site (P15) — `pack adopt` had the
+same shape, `run` and `director` already refuse loudly and were left alone.
+
+With that in, all seven `task` scenarios come out byte-identical. That
+answers open question 3 for one surface and makes the honest form of the
+answer visible: the write path agrees where it has been measured, it did
+not before it was measured, and most writing surfaces are still unmeasured.
+The directory-mode thread — 33 `0o755` sites against Python's
+`0o777 & ~umask` — now has something that can actually observe it.
