@@ -1,6 +1,7 @@
 package artifactcheck
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"strings"
@@ -331,6 +332,21 @@ func TestTheNaiveTimestampAgreesAtBothENDSOfTheYearRangeInEveryZone(t *testing.T
 	}
 	inputs = append(inputs, "0001-01-01T23:59:59.999999",
 		"9999-12-31T23:59:59.999999", "0001-01-01", "9999-12-31")
+	// Half-hourly across both boundary DAYS. The calls that decide the
+	// answer here are the probes _mktime makes a DAY away from the
+	// instant, so the interesting inputs are the ones that are themselves
+	// inside the year range while a probe is not. The r4 battery's two
+	// surviving mutants live at exactly those calls, and a sparse table
+	// cannot tell "masked by a later refusal" from "unreachable".
+	for _, day := range []string{
+		"0001-01-01", "0001-01-02", "0001-01-03",
+		"9999-12-29", "9999-12-30", "9999-12-31",
+	} {
+		for h := 0; h < 24; h++ {
+			inputs = append(inputs, fmt.Sprintf("%sT%02d:00:00", day, h),
+				fmt.Sprintf("%sT%02d:30:00", day, h))
+		}
+	}
 
 	origLocal := time.Local
 	t.Cleanup(func() { time.Local = origLocal })

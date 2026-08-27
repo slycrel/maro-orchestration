@@ -1190,6 +1190,17 @@ func pyMktime(y, mo, d, h, mi, sec int) (int64, bool) {
 	if t1 == t {
 		// One solution found; it may still be the wrong side of a fold, so
 		// probe a day away. CPython's max_fold_seconds is 24*3600.
+		//
+		// EQUIVALENT MUTANT, twice (r4 battery, H2e and H2f): ignoring the
+		// refusal at THIS call, or at the final one below, survives even a
+		// half-hourly sweep of both boundary days in six zones. It is not a
+		// fixture gap. This probe looks a day EARLIER, so it can only leave
+		// the year range at the LOW end -- and every naive instant close
+		// enough to year 1 for that to happen is one where the later probes
+		// are out of range too, so the mutant refuses anyway, one call
+		// further on. The check stays because it is where CPython raises,
+		// and a transcription that is right for the wrong reason stops
+		// being right the moment the surrounding code moves.
 		u2 := u1 - 24*3600
 		lu2, ok := local(u2)
 		if !ok {

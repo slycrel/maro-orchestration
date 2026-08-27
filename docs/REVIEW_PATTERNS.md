@@ -160,7 +160,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 32*
+*instances: 34*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -187,7 +187,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 7 — plus standing (Jeremy, 2026-08-16)*
+*instances: 8 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -267,7 +267,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 20*
+*instances: 21*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,

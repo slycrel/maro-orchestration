@@ -459,6 +459,19 @@ func acCases() []acCase {
 		{"S24 stdout matches inside a longer word", "stdoutish was 42"},
 		{"S25 prints matches inside a longer word", "printsomething 42"},
 		{"S26 output* carries its own boundary and does not", "outputsomething 42"},
+		// The \b after a wordEnd branch is a CODE POINT test, not a byte
+		// test, and the difference is invisible for every following ASCII
+		// character and for every following multi-byte LETTER: 0xC3 alone
+		// decodes as U+00C3, which is a letter, so an accented e answers
+		// the same either way. It shows up only when the following
+		// character is multi-byte and NOT a word character, because its
+		// lead byte still is one -- 0xE2 alone is U+00E2. Both wordEnd
+		// branches are driven; a fix at one is not a fix for the class.
+		{"S27 running-the ends before a multi-byte NON-word char", "running the\u2014 42"},
+		{"S28 the control: a multi-byte WORD char, same lead-byte class", "running the\u00e9 42"},
+		{"S29 output ends before a multi-byte NON-word char", "output\u2014 42"},
+		{"S30 the control for output", "output\u00e9 42"},
+		{"S31 an ideographic SPACE after the branch", "running the\u3000 42"},
 	} {
 		add(row[0], map[string]any{"kind": "stdout_claim", "text": row[1]},
 			func(t *testing.T, c acCase, base string) any {

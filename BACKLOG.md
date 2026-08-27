@@ -314,12 +314,32 @@ sort.Strings   "zulu", "\x80bad", "école"
 
 `internal/artifactcheck.FilesModifiedSince` is fixed and pinned (W23/W24,
 names carried as byte lists because `json.dumps` cannot encode a lone
-surrogate). **`sheriff.check_all_projects` has the same `sorted()` over
-the same kind of name, and `archive_dormant_projects` sorts
-`projects_dir.iterdir()`** — both are unwritten in Go today, and both must
-go through `pypath.FSLess` rather than growing a second copy of the rule.
-Filed here because the finding arrived a tranche before the code does; the
-word supplement is what happens when that note is not written down (L14).
+surrogate).
+
+**CORRECTION, same day: this was filed as "a tranche before the code" and
+that was wrong. The code is already written and already carries the
+divergence.** `internal/sheriff/sheriff.go:344`, in
+`ProjectActivityAgeDays`, ports `sorted(artifacts.iterdir())[:50]` as
+`sort.Strings(names)` followed by `names[:50]` — the W24 shape, where the
+truncation means the two runtimes consider DIFFERENT FILES rather than the
+same files in a different order. `newest` is the max mtime over that set,
+which decides the dormancy verdict. The function's own doc comment says
+"which fifty depends on the sort and not on readdir order" and then sorts
+by byte.
+
+There are 28 non-test `sort.Strings` sites in the Go tree. Most sort JSON
+object keys, which arrive from JSON text and are valid UTF-8 by
+construction — those must be left alone rather than churned. Nine sort
+filenames or paths and each needs its Python counterpart read first, with
+two questions per site: does Python sort filenames there at all (or is the
+sort the PORT's own determinism guarantee over something Python iterates
+as a set — `pythonCandidates` is the worked example and carries the
+reasoning at the site), and can the names be non-UTF-8 (anything read from
+a directory can; a key the program builds cannot). The site list is in
+`scratchpad/fsless_census.md`.
+
+L13: fixing sheriff.go:344 alone would be fixing the site that has a
+finding rather than the class that has the bug.
 
 ### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
 
@@ -417,6 +437,28 @@ detector — a separate mechanism with its own regex family:
 The bash-command regexes are the risk: they are the third place in the port
 where a Python pattern has to survive translation to RE2, and the first two
 each produced a finding. Budget a probe-first pass (L49) before any Go.
+
+**The lookbehind blocker is SOLVED on paper (2026-08-26), design in
+`scratchpad/artifactcheck_slice2_design.md`.** All three lookbehinds
+(`_ABS_PATH_RE`, `_BASH_REL_WRITE_RE`, `_GOAL_PATH_RE`) are fixed-width
+single-character negative classes, and the two obvious translations are
+both wrong. Consuming the preceding character advances the scan one
+position too far. Scanning the core pattern and FILTERING in Go is worse:
+Python's engine RETRIES one character later rather than dropping the
+position, and a later start inside the same region can succeed — measured,
+not reasoned:
+
+```
+'x/a@/b'     python ['/b']       core scan ['/a@/b']
+'e/f@/g@/h'  python ['/g@/h']    core scan ['/f@/g@/h']
+```
+
+The class is non-empty because `@`, `+` and `-` may appear IN a path
+component and may not appear BEFORE one. So the filter translation loses a
+real fence escape. The answer is a retry loop that reproduces the engine
+(`p = start + 1` on a lookbehind failure, `p = end` on a match), with the
+lookbehind and the Unicode `\b` in `\btee` both spelled in Go via
+`pytext.IsWordChar` rather than in the RE2 pattern.
 
 ### Go port: the `projects/` half of the mkdir-inside-a-name family (FOUND 2026-08-26, go-port chunk A scoping — L48)
 

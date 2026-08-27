@@ -12739,3 +12739,76 @@ wrong the moment it was written — the fourth stale count in this file and
 the second one wrong at birth rather than by drift. The number is gone
 rather than corrected a third time; the comment now argues for its own
 deletion, which is what it had been arguing for all along.
+
+### The r4 battery — 19 mutants, and the gap was a lead byte that is also a letter
+
+15 of 19 caught, one real gap, three equivalents. Both r4 fixes were
+confirmed by the fixtures written for them — the allocation pin killed the
+quadratic spelling, and all four year-range mutants (removed, west-only,
+east-only, off-by-one) died in the zones the corpus now varies.
+
+**H1b is the gap, and it is a nice one.** `boundaryAt` reading one BYTE
+where Python reads one CODE POINT survived the entire suite. The reason it
+survived is the reason it is worth writing down: the two spellings agree
+for every following ASCII character, and they agree for every following
+multi-byte **letter**, because a lead byte read on its own is usually
+still a letter — 0xC3 alone is U+00C3, `Ã`. They part only when the
+following character is multi-byte and NOT a word character, because its
+lead byte still is one: 0xE2 alone is U+00E2, `â`. Measured against the
+module before anything was written:
+
+```
+_claims_concrete_stdout('running the— 42')  -> True    em dash: the boundary holds
+_claims_concrete_stdout('running theé 42')  -> False   the control: no boundary
+_claims_concrete_stdout('output— 42')       -> True
+_claims_concrete_stdout('outputé 42')       -> False
+```
+
+S27–S31 drive both `wordEnd` branches with the rows a byte read gets
+wrong, plus the accented-`e` controls that keep a fix from over-accepting
+— a fix at one branch is not a fix for the class. Re-run: caught by S27,
+S29 and S31, with the controls correctly silent.
+
+**H2e and H2f are equivalent, and the corpus was densified before saying
+so.** Ignoring `local()`'s refusal at `_mktime`'s third and fourth calls
+survives. Rather than argue it, the zone sweep went to half-hourly across
+both boundary days in six zones — 288 inputs per zone — and they still
+survive. That makes the structural argument credible: the fold probe looks
+a day EARLIER, so it can only leave the year range at the low end, and
+every instant close enough to year 1 for that is one where the later
+probes are out of range too, so the mutant refuses anyway one call further
+on. The checks stay, because they are where CPython raises and a
+transcription that is right for the wrong reason stops being right the
+moment the surrounding code moves.
+
+**H3b is unreachable.** `pyJoin` losing the absolute-right-operand rule
+survives because `existsAnywhere` and `pythonCandidates` both take an
+`IsAbs` branch first — which is what the Python does (`cp.is_absolute()`).
+The rule is pinned in `pypath`, where it is reachable. No fixture added:
+one here would pin a path no caller can take.
+
+### A finding the battery did not produce, found while checking a backlog claim
+
+`internal/sheriff/sheriff.go:344` ports `sorted(artifacts.iterdir())[:50]`
+as `sort.Strings(names)` followed by `names[:50]`. That is the **W24
+shape** — the truncation means the two runtimes consider different FILES,
+not the same files in a different order — and `newest` over that set
+decides the dormancy verdict. Python sorts `Path` objects; measured, that
+ordering is the surrogateescape decoding compared by code point:
+
+```
+Path-sorted   zz.tx  zz.txt  éa.txt  ကb.txt  \x80z.txt  \xffq.txt
+str-sorted    zz.tx  zz.txt  éa.txt  ကb.txt  \x80z.txt  \xffq.txt
+byte-sorted   zz.tx  zz.txt  \x80z.txt  éa.txt  ကb.txt  \xffq.txt
+```
+
+The correction that matters is to my own record: this had been filed as
+arriving "a tranche before the code", and the code is already written and
+already carries the divergence. Nine of the tree's 28 non-test
+`sort.Strings` sites sort filenames; the rest sort JSON object keys, which
+are valid UTF-8 by construction and must be left alone rather than
+churned. Each of the nine needs its Python counterpart read first, because
+some of them are the port's OWN determinism guarantee over something
+Python iterates as a set — `pythonCandidates` is the worked example and
+carries that reasoning at the site. Census in `scratchpad/fsless_census.md`,
+filed in BACKLOG.
