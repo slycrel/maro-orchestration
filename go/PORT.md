@@ -14458,3 +14458,169 @@ whole battery is:
 | a pattern built from a local identifier | census, as opaque |
 | an allowlisted file gains an exposure | census, count 4 vs 3 |
 | an allowlist entry whose divergence is gone | census, as a lie |
+
+## The provenance rollout, and a tripwire that fired on its own author (2026-08-27)
+
+`internal/provenance` was the entry this arc had **pinned rather than
+fixed**, with the note that no remedy existed in the tree. It was also the
+only one on the census list already measured unsafe:
+
+```
+Classify("the prompt \u0131nstructs x", "", "")
+  CPython  "prompt"    quarantined
+  Go       "outcome"   injectable
+```
+
+One homoglyph walks an instruction-derived lesson past the port's
+quarantine gate and not past CPython's. All three patterns now go through
+`pytext.PyFoldI`, spelled at each call rather than hidden inside
+`pySpace()` — a helper that hides the wrap reads as UNWRAPPED to the
+census, and that is the correct answer for a census that only knows what
+it can parse.
+
+### The blocker was real, and it had an answer
+
+`TestRegexSourceMatchesCPython` pins the port's pattern text byte-for-byte
+against CPython's by un-substituting `SpaceClass` back out of the compiled
+pattern. `IClass` has to come out the same way — except it stands in for
+BOTH `i` and `I`, so the round-trip is unambiguous only while CPython's
+patterns carry no uppercase `I`.
+
+They carry none. Measured: 11 / 5 / 1 lowercase across the three, zero
+uppercase. So this is licensed edit 3 **with the property asserted rather
+than assumed** — a pattern that gains an `I` fails there, loudly, instead
+of silently comparing the wrong string. That assertion is the difference
+between a round-trip and a coincidence.
+
+### The rollout tripped its own tripwire
+
+Un-pinning went: three rows lose their `goDiff`, the `whyFold` cause
+leaves the ledger (`whyBoundary: 5`, total 5), delete the census allowlist
+entry. Except the census got there first —
+
+```
+internal/provenance/provenance.go is allowlisted for 3 exposed (?i)
+pattern(s) and has none. The entry describes a divergence that no longer
+exists, which is a lie about this codebase — delete it.
+```
+
+— which is the check working, on the person who wrote it, the same day.
+Both directions of the allowlist are live: an entry that stops matching
+fails as loudly as a file that stops being listed.
+
+### A structural assertion is not a behavioural one
+
+The mutation battery is where this got interesting. Dropping `PyFoldI`
+from `obedienceRe` or `scaffoldingRe` killed **only** the structural
+`IClass` assertion — no behavioural row moved.
+
+That assertion proves the wrapper is PRESENT. It does not prove it
+MATTERS, and those are different claims: the first survives a pattern
+whose `i` no input ever reaches, the second does not. Four rows added —
+`_OBEDIENCE_RE`'s `i` is in `follow (it|them) exactly`, and
+`_SCAFFOLDING_RE` carries exactly one, in `give\s+up`, which also needs
+the goal as well as the lesson to reach the scaffolding signal.
+
+### Three in one day is a habit, not three bugs
+
+| fix | sites changed | sites fixtured |
+|---|---|---|
+| `artifactcheck` | 4 | 3 — the ones r12 named |
+| `guard` exfiltration class | the class body | the STEM, not the class |
+| `provenance` | 3 | 1 |
+
+Every one was correct code with an unprovable guard, and in each the
+missed site was the one no review had named — because the fixtures were
+written from the FINDING while the fix was written from the FILE. That is
+L9 exactly, one level up, and it has now fired often enough to stop being
+a discipline: `tools/mutate-wraps.py` enumerates a wrapper's call sites,
+removes each in turn, and reports the ones whose removal leaves the suite
+green. It cannot invent the missing fixture. It can no longer be unaware
+of the site.
+
+## Judging the 120: the loop's own spine is in the undeclared queue (2026-08-27)
+
+`PORT_STATUS.md` made the denominator real — 63 of 183 modules declared,
+120 not — and then said the 120 were UNJUDGED, which was honest and not
+useful. This is the first pass at judging them.
+
+**What this is.** Every undeclared module's first docstring line, read and
+sorted into tiers. That is a JUDGEMENT from a one-line summary, not a
+measurement of the code, and it is written down that way on purpose: this
+arc has now twice shipped a number that read like a measurement and was
+not. Treat every tier below as revisable by anyone who opens the file.
+
+**The finding that changes the plan.** The core loop's spine is in the
+undeclared queue. `internal/loop` declares `handle.py`, `step_exec.py`,
+`loop_execute.py`, `loop_blocked.py`, `loop_post_step.py`,
+`loop_planning.py`, `loop_artifacts.py`, `observe.py`, `planner.py` and
+`interrupt.py` — the PHASES — while the runner that sequences them is
+not named anywhere:
+
+| module | lines | what it is |
+|---|---:|---|
+| `loop_finalize.py` | 1319 | loop finalization (Tier 3 split of agent_loop) |
+| `agent_loop.py` | 871 | the autonomous loop runner itself |
+| `scope.py` | 736 | scope + resolved intent — injected into planning, live on this box |
+| `loop_parallel.py` | 684 | parallel and DAG-aware step execution |
+| `conductor.py` | 676 | the top-level role and session entry point |
+| `loop_types.py` | 659 | core types and the state machine |
+| `orch.py` | 610 | orchestration core utilities |
+| `loop_init.py` | 604 | budget gate, context setup, dry-run adapter |
+| `cli_args.py` | 574 | CLI argument parser (`cmd/maro` may cover part) |
+| `pre_flight.py` | 463 | cheap plan review before execution starts |
+| `run_lease.py` | 237 | the per-loop flock, held from init to process death |
+| `killswitch.py` | 162 | the global kill switch |
+
+**~7,600 lines, and it is not an optional tranche** — it is the thing the
+ported phases are phases OF. Whatever "the first pass of the go port
+completely implemented" means, it cannot mean a port with no loop runner.
+That reframes the remaining work: the tranches previously queued
+(`handle_queue`'s portable half, `mission.py` slice 2, the rest of
+`skills.py`, `playbook.md`, then heartbeat / projects / escalation /
+notifications / viz) are real, and this sits in front of them.
+
+The rest, by tier, at the same confidence:
+
+- **Platform the loop calls into** — `container_exec` 1676, `web_fetch`
+  1172, `hooks` 662, `mcp_client` 525, `path_rewrite` 477, `channels`
+  472, `scheduler` 464, `world_facts` 457, `tool_registry` 399,
+  `path_tokens` 342, `boot_protocol` 301, `ancestry` 292, `llm_errors`
+  275, `autonomy` 251, `security` 251, `prefixes` 188, and the smaller
+  `terrain` / `process_identity` / `tool_search` / `runtime_tools`.
+- **Memory and knowledge backends** — `memory_backends` 689,
+  `memory_quality` 593, `codebase_graph` 492, `knowledge_bridge` 463,
+  `memory_bridge` 458, `knowledge` 432, `gc_memory` 432, `hybrid_search`
+  352, `memory_sqlite` 351, `memory_jsonl` 188, `memory_port` 149,
+  `lat_inject` 178, `age_stamp` 89.
+- **Self-improvement instrumentation** — the machinery this arc's own
+  lessons run through: `navigator_shadow` 1231, `shadow_lane` 759,
+  `skill_lifecycle` 843, `harness_optimizer` 768, `delta_replay` 729,
+  `mint_grounding` 608, `thinkback` 577, `convo_miner` 570,
+  `strategy_evaluator` 485, `claim_verifier` 477, `revisit` 420,
+  `cross_ref` 417, `backchain` 305, `reanchor` 282, `portability` 252,
+  and the navigator trio.
+- **Dev tooling and readouts, likely NOT first-pass runtime** —
+  `loop_report` 2705, `eval` 1186, `correspondence` 1174 (dev-only by
+  decree), `doctor` 1001, `camera_readout` 817, `discretion_readout` 710,
+  `map_lens` 644, `backend_benchmark` 616, plus the readout family and
+  `viz_server`.
+- **External interfaces** — `orch_bridges` 1522, `tail_jobs` 1149,
+  `audit_repair` 797, `telegram_listener` 613, `slack_listener` 428,
+  `notify_telegram` 354, `conversation` 340, `persona_dispatch` 254,
+  `listener_core` 55. (`persona.py` and `worktree.py` are being ported
+  now.)
+
+### The preamble was wrong one chunk after it was written
+
+`PORT_STATUS.md` shipped saying `killswitch`, `ancestry`, `prefixes` and
+`security` "also appear by filename somewhere, so none of them is missed
+here". Measured while writing this section: **none of the four appears by
+filename in any production `.go` file**, and all four are in the
+undeclared queue. They are examples OF the generator's blind spot, not
+counterexamples to it.
+
+The file exists because a hand-maintained enumeration was wrong at birth.
+Its own preamble then was too, in the very next chunk, in the paragraph
+about the thing it cannot see. Corrected in the generator, not the
+output, or it would come back on the next run.

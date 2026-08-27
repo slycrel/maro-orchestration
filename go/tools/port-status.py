@@ -67,10 +67,20 @@ so out loud). Others are named only because one function of theirs was
 needed. Read a row as "the port has an opinion about this module", not as
 "done".
 
-It also cannot see a module ported without being named. That direction
-was measured and is small but real — `killswitch`, `ancestry`, `prefixes`
-and `security` are reached by bare module name in places, though all four
-also appear by filename somewhere, so none of them is missed here.
+It also cannot see a module ported without being named, and that blind
+spot is REAL AND UNQUANTIFIED. This paragraph previously claimed that
+`killswitch`, `ancestry`, `prefixes` and `security` "also appear by
+filename somewhere, so none of them is missed here". Measured 2026-08-27:
+none of the four appears by filename in any production `.go` file, and
+all four sit in the undeclared queue below. They are EXAMPLES of the
+blind spot, not counterexamples to it — a bare `killswitch` in
+`internal/provenance` tells this scan nothing.
+
+So read the undeclared queue as "no declaration either way", never as
+"not started". Closing the gap means naming the source file in the
+package doc, which is the convention already, or judging the row by hand.
+(An enumeration can be wrong at BIRTH — this file exists because one was,
+and its own preamble then was too, one chunk later.)
 
 ## Why this file exists
 

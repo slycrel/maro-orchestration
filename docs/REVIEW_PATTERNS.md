@@ -278,7 +278,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 10 — plus standing (Jeremy, 2026-08-16)*
+*instances: 13 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -295,6 +295,37 @@ mutating each decision — not by reading what the last round found. If a
 site is deliberately unmutated because no input can observe it, say so in
 the battery, in a comment, next to the sites it covers (L8); an unexplained
 absence and a considered exemption look identical six weeks later.
+
+**The 2026-08-27 sub-shape: a fix broader than the finding, fixtured to
+the finding.** Three times in one day, and the count is the point — this
+is not three bugs, it is one habit:
+
+| fix | sites changed | sites fixtured | found by |
+|---|---|---|---|
+| `artifactcheck` Turkish i | 4 | 3 (the ones r12 named) | mutation |
+| `guard` exfiltration class | class body, 4 code points | the STEM, not the class | mutation |
+| `provenance` Turkish i | 3 patterns | 1 (`promptAuthorityRe`) | mutation |
+
+Every one was correct code with an unprovable guard, and in each the
+missed site was the one the review had *not* named — because the fixtures
+were written from the finding while the fix was written from the file.
+The `guard` case is the sharpest: two rows were added *for the class
+case*, both passed, and emptying the class killed nothing, because both
+rows spelled the homoglyph in the stem where the already-folded literal
+handled it. A fixture aimed at a fix is not a fixture aimed at the CODE.
+
+Sharpened tripwire: **derive the mutation list from the set of SITES
+CHANGED, not from the finding that prompted the change.** If the fix
+touched four call sites, four mutations, and each must kill a row nothing
+else kills. A site whose removal kills only a structural assertion
+("the wrapper is present") is not covered — that proves the wrapper is
+there, not that it MATTERS, and the two are different claims
+(`provenance`'s `obedienceRe`/`scaffoldingRe`, same day).
+
+**Closed by construction (partially).** `go/tools/mutate-wraps.py`
+enumerates a wrapper's call sites, removes each in turn, and reports any
+whose removal leaves the suite green. That is the mechanical half; it
+cannot invent a fixture, but it can no longer be *unaware* of a site.
 
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
 *instances: 2*
