@@ -38,8 +38,6 @@ func TestEveryPackageHasADifferential(t *testing.T) {
 		"internal/looptypes": "" +
 			"loop_types.py: LoopContext, the stamp_* vocabulary gates and " +
 			"ResolveLogLevel. Differential owed.",
-		"internal/runtrace": "" +
-			"run_trace.py. Differential owed.",
 	}
 
 	root, err := filepath.Abs("../..")

@@ -259,6 +259,13 @@ func clipAttr(v any) any {
 	if !ok {
 		return v
 	}
+	// EQUIVALENT MUTANT, recorded so it is not re-derived: this guard is a
+	// fast path and nothing else. budget.Clip opens with the same rune-length
+	// check and returns s unchanged when it passes, so spelling this one in
+	// BYTES — or deleting it — cannot change an answer. Python has the same
+	// shape (`len(v) <= EVIDENCE_CAP` in front of context_budget.clip) and
+	// the line is kept for the same reason: it is the statement upstream
+	// writes, and it saves a []rune allocation on the common short value.
 	if len([]rune(s)) <= EvidenceCap {
 		return s
 	}
@@ -525,7 +532,15 @@ func RecordPath(ctx context.Context, cfg map[string]any, ws string, nodes []stri
 //
 // The three-value return replaces Python's `counted` flag: a caller that
 // wants Python's uncounted shape ignores the second value.
-func ReadTrace(runDir string) (rows []map[string]any, skipped int, warnings []string) {
+// A row is whatever loads_clean returns, which is NOT necessarily an
+// object. record.LoadsClean adds a non-object refusal on top of Python's
+// loads_clean because ITS caller needs jsonl_utils._classify's separate
+// "non-dict" bucket; read_trace has no such caller and appends whatever
+// parses. Using LoadsClean here made a trace holding `42` or `[1,2,3]`
+// report three unreadable rows and one edge where CPython reports four
+// rows and a healthy trace — a false "the trace is incomplete" warning,
+// and a different row list for anything reading them.
+func ReadTrace(runDir string) (rows []any, skipped int, warnings []string) {
 	p := filepath.Join(runDir, "build", TraceFilename)
 	// jsonl_utils.store_text is `path.read_bytes().decode("utf-8",
 	// errors="surrogateescape")`. Go strings hold arbitrary bytes, so the
@@ -549,7 +564,7 @@ func ReadTrace(runDir string) (rows []map[string]any, skipped int, warnings []st
 		if line == "" {
 			continue
 		}
-		row, lerr := record.LoadsClean(line)
+		row, lerr := record.LoadsCleanValue(line)
 		if lerr != nil {
 			skipped++
 			warnings = append(warnings,
