@@ -129,7 +129,7 @@ scripts so these can be recomputed rather than trusted.
 | Test lines | 81,834 (**1.38 : 1**) | ditto |
 | Packages with a live CPython differential | **37 of 46** — 56,870 lines, **95.7% of production** | ditto; "live" = the test starts a real interpreter and compares, not a transcribed expectation |
 | Python modules with **no Go reference anywhere** | **118 of 183** — 59,962 lines, **45.2%** | ditto. This is a **FLOOR**: "reference" is the loosest test (filename appears anywhere in the Go tree, comments included), so the true unported figure is worse and nothing yet measures how much worse |
-| Review-ledger rows, this arc | **871** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI, +5 r10, +1 r10 census) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
+| Review-ledger rows, this arc | **872** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI, +5 r10, +1 r10 census, +1 r11) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
 | Measured hallucination rate | **15 of 807 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
 | Tranches needing 4+ review rounds | **33 of 66** targets | ditto. Deepest: `guard` 18, `handlequeue` 13, `evolver` 12, `dispatch` 12 |
 | Both engines compared, READ path | **6 renderers, 6 identical, 0 differ, 0 refused** | `go/tools/engine-compare.py` over a copy of the live workspace, 2026-08-26 |
@@ -151,7 +151,7 @@ composition-only wiring.
 divergences that are bugs or latent bugs in behaviour **both** runtimes now
 share, found only because two implementations had to agree. That is the
 "meaningful edges" half of Jeremy's 2026-08-22 question, and it has an
-affirmative answer with 871 rows behind it. `docs/REVIEW_PATTERNS.md`
+affirmative answer with 872 rows behind it. `docs/REVIEW_PATTERNS.md`
 computes the recurrence counts.
 
 **The fair complaint, stated equally plainly:** 45% of the Python has no Go
@@ -211,16 +211,34 @@ that) with the port overall."* The parenthetical is load-bearing and is
 recorded as-is: merging is conditional, and the file is written to survive
 either outcome.
 
+**2026-08-27 — `origin.maro_version` stays `"go-port"`, as an ASSERTED
+divergence rather than an unexplained one.** The write-path harness reported
+CPython writing `"0.8.0"` and the port writing `"go-port"` into every pack
+manifest. Censused before deciding: `maro_version` is **written and never
+read** — `grep -rn maro_version src/` returns exactly two hits, both inside
+`pack.py`'s own `build_manifest`. Nothing gates on it, so matching the
+string buys no compatibility. What it buys is a lie: a pack produced by the
+Go would claim to have been produced by Python 0.8.0. The field's only
+purpose is provenance, and the honest value is the one that says which
+engine wrote the artifact.
+
+So it stays, and it moves into `write-compare.py`'s known-divergence
+allowlist with its reason. That allowlist carries a **must-still-be-observed**
+rule: a row that stops matching anything fails the run. So the decision is
+not "ignore this difference", it is "assert this difference continues to
+exist" — if the two engines ever agree on that field, something changed
+that nobody decided.
+
 ---
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
 | Thread | State |
 |---|---|
-| `internal/artifactcheck` review to fixpoint | **r10 landed** — 5 findings, all 5 confirmed by measurement, 4 of them one class (`Path.is_dir()` follows a symlink, `DirEntry.IsDir()` does not — the same spelling r9 fixed pointing the OTHER way). LOWS-ONLY by content, so **r11 is the open gate** |
+| `internal/artifactcheck` review to fixpoint | **r11 landed** — ONE finding, MEDIUM, and it lived inside r10's own fix (P6 twice running: the four task verbs shared one FlagSet where argparse gives them four subparsers, so `complete --error` was accepted). `LOWS ONLY: no`, so **r12 is the open gate** — but the round returned a single finding over the whole chunk, which is what convergence looks like |
 | `internal/syshealth` review to fixpoint | **AT FIXPOINT.** r6 returned `LOWS ONLY: yes` with one doc LOW (r5's factual correction had not reached the harness copy — L13) and one self-retraction. Fix landed |
 | `internal/recall` CPython differential | **CLOSED.** Landed `73cf930b`; the owed deeper mutation pass then ran — 51 mutants derived from `recall.go` itself, 29/51 → **49/51** after `census_test.go`, the 2 survivors equivalent mutants named before the re-run. One divergence stands reported and NOT fixed: `goal_achieved: "false"` (a string) → CPython `None` (unjudged), Go `false` (judged not achieved), fail-closed in Go |
-| `internal/provenance` CPython differential | open, unscheduled |
+| `internal/provenance` CPython differential | **IN FLIGHT** — dispatched to a worktree-isolated subagent 2026-08-27 |
 | `internal/missionrun` has no test file at all | open, unscheduled |
 | Write-path comparison harness | **BUILT and paying.** `go/tools/write-compare.py`; found a silently dropped CLI argument on its first run, then all 7 `task` scenarios byte-identical. Extended to `pack` (the interop format): 6 scenarios, all differ, tranche characterised in Compiled truth and unfixed. r10 found the harness itself blind to directory symlinks; fixed, and the differ's self-test now asserts 5 findings instead of 3. Next targets: the `pack` tranche's own review cycle, then a third write surface (`orch_items` / `record`) |
 | Remaining first-pass tranches, sequenced | **planner returned** → `scratchpad/PORT_PLAN.md`. First pass = 74 modules / 37,777 py lines, ~29 review units, **~120–170 review rounds**. Recommends Option B (comparable core: 62 modules, 25,972 lines, ~90–120 rounds) stopping at a mission dry-run comparison. Unacted |
@@ -229,7 +247,7 @@ either outcome.
 | `artifact_check.py` slice 2 (~250 lines, :483–736) | design captured, unbuilt |
 | inspector/evolver guard slice-1 review | **PAUSED at r14**, r15 gated on Jeremy |
 | Stale comment `internal/pack/export.go:385` | trivial, open |
-| `pack` write-path divergence tranche | **OPEN, characterised, unfixed.** 5 named differences (key order, `maro_version`, modes, dry-run mkdir, stdout prose). Needs BACKLOG entries and its own review cycle; the key-order one is a `pyval.Obj`-vs-`map[string]any` fix, which is the port's oldest recurring family |
+| `pack` write-path divergence tranche | **key-order half IN FLIGHT** (worktree-isolated subagent, 2026-08-27); the other four named differences still open. **Characterised.** 5 named differences (key order, `maro_version`, modes, dry-run mkdir, stdout prose). Needs BACKLOG entries and its own review cycle; the key-order one is a `pyval.Obj`-vs-`map[string]any` fix, which is the port's oldest recurring family |
 | argv surface: abbreviation, single-dash long options, exit code 2 vs 1 | **FILED, not fixed** (BACKLOG, with the measured table). None changes what is WRITTEN for an argv both engines accept |
 
 ---

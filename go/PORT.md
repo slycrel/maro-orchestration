@@ -13895,3 +13895,43 @@ exports 119 ms apart produced inner-tar digests `28b724195933` and
 0 and the gzip header mtime matched. What is compared instead: member
 ORDER as a synthetic entry, and every member's name, type, mode and
 content.
+
+## The r11 review — one finding, and P6 fires twice in a row
+
+The cross-family seat returned a single MEDIUM over the whole chunk, which
+is what convergence looks like. It lived inside r10's own fix.
+
+`task_store.py` builds **four** subparsers for `claim`, `complete`, `fail`
+and `archive`, and only `p_fail` calls `add_argument("--error")`; the other
+three declare `job_id` alone. The Go handles all four in one `case` arm —
+which is fine, they share a code path — but it built **one `FlagSet`** for
+the arm, so the four verbs shared an argument surface the Python never gave
+them:
+
+```
+task complete <id> --error boom     python  rc=2, unrecognized arguments
+                                    go      rc=0, "status": "done"
+```
+
+r10 fixed the *arity* of this exact parser and left the flag *set*
+over-wide. Two rounds running, the round's only finding has been inside the
+previous round's fix — which is P6 doing exactly what it says: the place to
+look hardest is the code you just touched, because a fix is written with
+the bug in mind and the surrounding invariants out of it.
+
+The general shape is worth naming, because it will recur wherever the port
+consolidates: **four parsers on one side and one parser on the other is a
+divergence even when the four are identical in every respect the fix was
+thinking about.** The Go's consolidation is a legitimate implementation
+choice about *code*; it silently became a choice about the *argument
+surface*, which is observable. Where a structural choice and an observable
+surface disagree, the surface wins.
+
+The pin is derived from `task_store.py`'s four subparser specs rather than
+from the diff (L9), so a fifth verb added to the `case` arm without a
+matching Python subparser fails the test rather than inheriting the arm's
+flags by accident.
+
+Measured after the fix: `complete`, `claim` and `archive` refuse `-error`
+on both engines and `fail` still accepts it. The remaining difference on
+the refusal path is exit code 2 vs 1, which is CLI-wide and already filed.
