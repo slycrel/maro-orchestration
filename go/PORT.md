@@ -12934,3 +12934,110 @@ time that check found the pin inert. The rule earns its keep every time:
 untested claim into a tested-looking one. The mutation is also a reminder
 of P14 — reverting the `FSLess` call alone does not compile, since it
 strands the import; a mutation is a LIST of edits.
+
+## `sheriff.py` slice 2 — four functions, and a boundary that is not arbitrary
+
+Slice 2 ports `check_all_projects` (:334), `archive_dormant_projects`
+(:357), `write_heartbeat_state` (:534) and `read_heartbeat_state` (:556)
+into `internal/sheriff/slice2.go`.
+
+`check_system_health` (:439) is deliberately left out, and the reason is
+worth stating because "we did four of five" is otherwise indistinguishable
+from running out of steam. Three of its five checks are a stat, a division
+and a socket connect, and they port directly. Check 2 is
+`__import__("requests")` — a question about the PYTHON environment, which
+only a Python subprocess can answer honestly, since the telegram and
+notify paths it guards ARE Python. Check 4 needs `llm.detect_backends()`,
+which this tree does not have; porting it drags in the credentials-env
+reader, `_get_key`, the backend-order config walk and two binary probes,
+which is an `internal/llm` tranche.
+
+Emitting four checks of five is the one option that is not available.
+`RollupStatus` is `startswith("warn")` over the map, so a MISSING check
+turns a degraded box healthy — the fail-open direction, in the function
+whose whole job is to say when the box is unhealthy.
+
+### What the four functions actually carry
+
+- **`sorted(slugs)` is a filename sort, and so is
+  `sorted(projects_dir.iterdir())`.** Two more members of the class the
+  `fssort` guard now covers; both are on `pypath.FSLess`. In
+  `check_all_projects` the sorted list IS the return value.
+- **`age is None or age <= days`** — the threshold is `<=`, so a project
+  exactly at it is not archived.
+- **`round(age, 1)`** is half-to-EVEN on the binary double, so 30.25 days
+  rounds to 30.2 and 30.35 to 30.3. `pyval.Round` is that.
+- **`archive_root.mkdir(exist_ok=True)`** takes Python's default `0o777`,
+  which lands as `0o775` under this box's umask. A hard-coded `0o755`
+  would create a group-read-only directory where Python creates a
+  group-writable one — the 33-site census class, and this fixture is the
+  first thing in the suite that can SEE it (the probe returns the archive
+  root's mode on both sides).
+- **`archive_dormant_projects` has no `try`/`except`.** Every other
+  function in the module swallows; this one lets an OSError out, so the Go
+  returns an error. Wrapping it in the module's house style would turn a
+  failed move into a silent success.
+- **`shutil.move` is not `os.Rename`.** Its is-dir-destination branch is
+  REACHABLE — the caller's `target.exists()` check and the move are not
+  atomic, so a concurrent mkdir lands the project one level deeper with no
+  error. Reproduced. Its rename fallback catches `OSError` broadly (not
+  just EXDEV) and copytrees; NAMED GAP, because `projects/` and
+  `projects/_archive/` share a device in every install and an untested
+  copytree is worse than a named gap.
+- **The heartbeat file's BYTES.** `json.dumps(payload, indent=2)` is three
+  decisions in one call, and the differential compares the file rather
+  than the value.
+
+### One named divergence, and it is the annotation that lies
+
+`read_heartbeat_state` returns `Optional[Dict[str, Any]]` and returns
+whatever `json.loads` produced. A `heartbeat-state.json` holding `[]`
+comes back as a LIST; the caller does `state.get(...)` on it one line
+later and raises. Go cannot return a list through an object-shaped
+signature, so the port answers absent — a miss where Python crashes. It is
+pinned by a Go-side test rather than a differential row, because a row
+asserts the two sides are equal and here they are not.
+
+### The battery, and the four pins that could not fail
+
+19 mutations derived from the file, 19 caught, one documented equivalent
+(a nil `pyval.List` renders `[]` exactly as an empty one does, because the
+renderer switches on the type).
+
+The first run caught only 14, and **four of the five survivors were
+fixtures that could not fail** — each one passing for a reason unrelated
+to what its name claimed:
+
+| survivor | why the fixture was inert |
+|---|---|
+| a missing projects dir returns the star report | the fixture built an EMPTY dir, which takes the other branch |
+| the dot/underscore skip is dropped | the only skipped dir present was `_archive`, created by the sweep, so always too young to archive anyway |
+| the collision suffix rounds instead of truncating | the fixture's clock was a whole number, where truncating and rounding agree |
+| an absent age is treated as zero | invisible at any positive threshold — it takes a NEGATIVE `days` to separate them |
+
+That is four in one battery, on top of the two earlier in the day (the
+`A50` directory-mtime case and the `G4a` missing-`src` case). The pattern
+is sharp enough to name: **a pin written from the code reads as covering
+the branch, and a pin written from the FIXTURE'S OWN INPUTS is what
+actually covers it.** Every one of these four was a case where the input
+did not reach the branch the name described.
+
+### A comment wrong in five files at once
+
+Seven comments across `sheriff`, `artifactcheck`, `pypath` and
+`acprobe_test` say byte-value lists are needed "because json.dumps cannot
+encode a lone surrogate". Measured, that is false:
+
+```
+json.dumps("\udc80b")                    -> '"\\udc80b"'   (ensure_ascii=True, the default)
+json.loads('"\\udc80b"')                 -> '\udc80b'      (round-trips)
+json.dumps("\udc80b", ensure_ascii=False) -> UnicodeEncodeError
+```
+
+The transport is required by the **receiver**: Go's `encoding/json`
+decodes `\udc80` to U+FFFD without an error, so a name that survived the
+Python side arrives on the Go side as a different name. The conclusion was
+right and the reason was wrong, which is the shape that survives review —
+nobody re-checks a justification for a decision they agree with. The three
+`internal/artifactcheck` copies are left until its r6 review lands, so the
+report stays anchored to the file it reviewed.

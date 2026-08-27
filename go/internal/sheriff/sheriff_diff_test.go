@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/slycrel/maro-orchestration/go/internal/orch"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -158,9 +160,17 @@ for c in json.loads(sys.argv[1]):
                 _cfg.get = _real
         elif k == "activity_fsnames":
             # project_activity_age_days over an artifacts/ directory whose
-            # names are NOT all valid UTF-8. Names ride as lists of BYTE
-            # VALUES in both directions because json.dumps cannot encode a
-            # lone surrogate -- the same reason artifactcheck's W23/W24 do.
+            # names are NOT all valid UTF-8.
+            # Names ride as lists of BYTE VALUES in both directions, and
+            # the reason is the RECEIVER, not the writer. MEASURED: with
+            # ensure_ascii=True -- the default -- json.dumps happily writes
+            # a surrogateescaped name as "\udc80b", and json.loads reads it
+            # back unchanged. Go's encoding/json does NOT: it decodes
+            # \udc80 to U+FFFD (ef bf bd) without an error, so a name that
+            # survived the Python side arrives on the Go side as a
+            # different name and the comparison passes or fails for the
+            # wrong reason. (ensure_ascii=False is the case that raises,
+            # and nothing here passes it.)
             #
             # sorted(artifacts.iterdir())[:50] TRUNCATES, so an ordering
             # difference is not cosmetic: the two runtimes stat a different
@@ -188,6 +198,168 @@ for c in json.loads(sys.argv[1]):
             finally:
                 sh.time.time = _real_time
             out.append({"ok": None if age is None else int(age)})
+        elif k == "all_projects":
+            # check_all_projects over a projects/ dir seeded with entries
+            # that are NOT all projects: dotted and underscored names, a
+            # regular file, a dangling symlink, a symlink TO a directory,
+            # and names that are not valid UTF-8. A surrogateescaped slug
+            # is exactly what sorted() is being tested on.
+            # Names ride as lists of BYTE VALUES in both directions, and
+            # the reason is the RECEIVER, not the writer. MEASURED: with
+            # ensure_ascii=True -- the default -- json.dumps happily writes
+            # a surrogateescaped name as "\udc80b", and json.loads reads it
+            # back unchanged. Go's encoding/json does NOT: it decodes
+            # \udc80 to U+FFFD (ef bf bd) without an error, so a name that
+            # survived the Python side arrives on the Go side as a
+            # different name and the comparison passes or fails for the
+            # wrong reason. (ensure_ascii=False is the case that raises,
+            # and nothing here passes it.)
+            import orch as _orch, shutil as _sh_util
+            root = _orch.projects_root()
+            # Every case shares one probe process and one workspace, so an
+            # enumeration fixture must start from a KNOWN projects/ rather
+            # than from whatever the check_project cases left. The guard is
+            # not decoration: MARO_WORKSPACE is the store override and a
+            # probe that resolved to the live one would rmtree the real
+            # ledgers (2026-08-16). Assert the resolved path, then delete.
+            assert "/.maro/" not in str(root), "refusing to clear " + str(root)
+            _sh_util.rmtree(root, ignore_errors=True)
+            # nocreate leaves projects/ ABSENT. Without it the "missing
+            # directory" fixture tested an EMPTY one, which takes the other
+            # branch entirely -- the first cut of A62 did exactly that and
+            # a mutant returning the star report for a missing dir walked
+            # straight through it.
+            if not c.get("nocreate"):
+                root.mkdir(parents=True, exist_ok=True)
+            rb = os.fsencode(str(root))
+            for vals in c.get("dirs", []):
+                p = os.path.join(rb, bytes(vals))
+                os.makedirs(p, exist_ok=True)
+                with open(os.path.join(p, b"NEXT.md"), "wb") as fh:
+                    fh.write(b"# NEXT\n\n- [ ] todo one\n")
+                os.makedirs(os.path.join(p, b"artifacts"), exist_ok=True)
+                with open(os.path.join(p, b"artifacts", b"a.txt"), "wb") as fh:
+                    fh.write(b"x")
+            for vals in c.get("plainfiles", []):
+                with open(os.path.join(rb, bytes(vals)), "wb") as fh:
+                    fh.write(b"not a project")
+            for vals, target in c.get("links", []):
+                os.symlink(target, os.path.join(rb, bytes(vals)))
+            if c.get("unreadable"):
+                os.chmod(root, 0o000)
+            _real_time = sh.time.time
+            if "now" in c:
+                sh.time.time = lambda: c["now"]
+            try:
+                reps = sh.check_all_projects(window_minutes=c.get("window", 30))
+            finally:
+                sh.time.time = _real_time
+                if c.get("unreadable"):
+                    os.chmod(root, 0o755)
+            # The diagnosis is elided to its PREFIX on both sides: the "*"
+            # report interpolates str(exc), and Python spells an OSError
+            # "[Errno 13] Permission denied: '<p>'" where Go spells it
+            # "open <p>: permission denied". Named residual, not a bug --
+            # so the fixture pins the shape and the prefix, which is what
+            # a reader keys on, and elides the half the two disagree about.
+            out.append({"ok": [[list(os.fsencode(r.project)), r.status,
+                                r.diagnosis[:30]] for r in reps]})
+        elif k == "archive":
+            # archive_dormant_projects. The answer is the json.dumps TEXT of
+            # the entry list, not the parsed value, because the entry's KEY
+            # ORDER (project, age_days, moved, target-only-when-moved) is
+            # half of what is being compared and a reparse would lose it.
+            import orch as _orch, shutil as _sh_util
+            root = _orch.projects_root()
+            assert "/.maro/" not in str(root), "refusing to clear " + str(root)
+            _sh_util.rmtree(root, ignore_errors=True)
+            root.mkdir(parents=True, exist_ok=True)
+            rb = os.fsencode(str(root))
+            for slug, mt in c["projects"]:
+                # A slug rides as a STRING when it is valid UTF-8 and as a
+                # list of byte values when it is not. See the note in the
+                # all_projects arm for why the byte list is the receiver's
+                # requirement rather than json.dumps'.
+                nb = slug.encode() if isinstance(slug, str) else bytes(slug)
+                db = os.path.join(rb, nb)
+                os.makedirs(os.path.join(db, b"artifacts"), exist_ok=True)
+                with open(os.path.join(db, b"NEXT.md"), "wb") as fh:
+                    fh.write(b"# NEXT\n")
+                for q in (os.path.join(db, b"NEXT.md"),
+                          os.path.join(db, b"artifacts"), db):
+                    os.utime(q, (mt, mt))
+            for extra in c.get("premade", []):
+                (root / "_archive" / extra).mkdir(parents=True, exist_ok=True)
+            _real_time = sh.time.time
+            sh.time.time = lambda: c["now"]
+            try:
+                entries = sh.archive_dormant_projects(days=c["days"],
+                                                      apply=c["apply"])
+            finally:
+                sh.time.time = _real_time
+            # The absolute target path differs between the two workspaces,
+            # so it is reduced to the part under projects/ on both sides.
+            for e in entries:
+                if "target" in e:
+                    e["target"] = str(pathlib.Path(e["target"]).relative_to(root))
+            # The entry ORDER rides separately, as byte lists, so the sort
+            # can be pinned on names json.dumps could never carry.
+            order = [list(os.fsencode(e["project"])) for e in entries]
+            text = None if c.get("notext") else json.dumps(entries)
+            listing = [list(os.fsencode(x)) for x in sorted(os.listdir(root))]
+            adir = root / "_archive"
+            arch = [list(os.fsencode(x)) for x in sorted(os.listdir(adir))] if adir.exists() else None
+            # The archive root's MODE. mkdir(exist_ok=True) takes Python's
+            # default 0o777, so what lands is 0o777 & ~umask -- 0o775 here.
+            # A port hard-coding 0o755 creates a group-read-only directory
+            # where Python creates a group-writable one, and nothing else
+            # in this suite can see that.
+            mode = ("%o" % (adir.stat().st_mode & 0o7777)) if adir.exists() else None
+            out.append({"ok": {"entries": text, "order": order,
+                               "root": listing, "archive": arch, "mode": mode}})
+        elif k == "heartbeat_write":
+            # write_heartbeat_state, compared as the FILE'S BYTES. Three
+            # json.dumps decisions ride in one call -- indent-2 drops the
+            # item separator's trailing space, ensure_ascii escapes every
+            # non-ASCII rune, and < and & stay raw -- and only the bytes
+            # can tell whether all three landed.
+            import orch as _orch
+            _orch.memory_dir().mkdir(parents=True, exist_ok=True)
+            h = sh.SystemHealth(status=c["status"],
+                                checks={a: b for a, b in c["checks"]},
+                                checked_at=c["checked_at"])
+            reps = [sh.SheriffReport(project=p, status=s, diagnosis="",
+                                     evidence=[]) for p, s in c["reports"]]
+            path = sh.write_heartbeat_state(
+                h, project_reports=(reps if c["with_reports"] else None))
+            body = pathlib.Path(path).read_text(encoding="utf-8") if path else None
+            out.append({"ok": {"wrote": path is not None, "body": body,
+                               "name": os.path.basename(path) if path else None}})
+        elif k == "heartbeat_read":
+            import orch as _orch
+            md = _orch.memory_dir()
+            md.mkdir(parents=True, exist_ok=True)
+            # One probe process, one workspace: the heartbeat_write cases
+            # already wrote this file, so "absent" has to be MADE absent.
+            # The first cut of this arm did not and the missing-file case
+            # read back the previous case's payload -- a fixture that
+            # tested the wrong thing while passing on the Go side because
+            # the Go side gets a fresh workspace per case.
+            assert "/.maro/" not in str(md), "refusing to unlink under " + str(md)
+            state = md / "heartbeat-state.json"
+            if state.exists():
+                state.unlink()
+            if c["body"] is not None:
+                (md / "heartbeat-state.json").write_text(c["body"], encoding="utf-8")
+            got = sh.read_heartbeat_state()
+            # A non-object top level is the one shape the two runtimes
+            # answer differently, so the comparison records the TYPE rather
+            # than the value: Python hands back whatever json.loads made
+            # (its annotation notwithstanding) and Go answers absent.
+            kind = ("absent" if got is None else
+                    ("object" if isinstance(got, dict) else "other"))
+            out.append({"ok": {"kind": kind,
+                               "text": json.dumps(got) if isinstance(got, dict) else None}})
         elif k == "md5":
             out.append({"ok": hashlib.md5(c["s"].encode()).hexdigest()})
         elif k == "slice2000":
@@ -823,7 +995,443 @@ func shCases() []shCase {
 			})
 	}
 
+	// --- slice 2: check_all_projects -------------------------------------
+	//
+	// Each of these gets its OWN workspace. The rest of the file shares one
+	// (each case builds its own project and reads it back), but an
+	// ENUMERATION fixture is a function of everything in projects/, so a
+	// shared workspace would make the answer depend on which cases ran
+	// first. The probe clears its projects root for the same reason, behind
+	// an assert that the resolved path is not the live one.
+	AP := func(name string, spec map[string]any, window int) {
+		var myWS string
+		var root string
+		unreadable, _ := spec["unreadable"].(bool)
+		cs = append(cs, shCase{name: name, spec: spec,
+			build: func(t *testing.T, _ string) {
+				myWS = t.TempDir()
+				root = orch.ProjectsRoot(myWS)
+				if nocreate, _ := spec["nocreate"].(bool); nocreate {
+					return
+				}
+				if err := os.MkdirAll(root, 0o777); err != nil {
+					t.Fatal(err)
+				}
+				for _, d := range asVals(spec["dirs"]) {
+					p := filepath.Join(root, byteName(d))
+					mustMkdir(t, filepath.Join(p, "artifacts"))
+					mustWrite(t, filepath.Join(p, "NEXT.md"), "# NEXT\n\n- [ ] todo one\n")
+					mustWrite(t, filepath.Join(p, "artifacts", "a.txt"), "x")
+				}
+				for _, f := range asVals(spec["plainfiles"]) {
+					mustWrite(t, filepath.Join(root, byteName(f)), "not a project")
+				}
+				for _, l := range asVals(spec["links"]) {
+					pair := l.([]any)
+					if err := os.Symlink(pair[1].(string),
+						filepath.Join(root, byteName(pair[0]))); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			run: func(_ string) any {
+				if unreadable {
+					if err := os.Chmod(root, 0o000); err != nil {
+						panic(err)
+					}
+					defer os.Chmod(root, 0o755)
+				}
+				reps := CheckAllProjects(myWS, window, time.Now(), DormantDaysDefault)
+				out := []any{}
+				for _, r := range reps {
+					out = append(out, []any{byteVals(r.Project), r.Status,
+						clipTail3(r.Diagnosis, 30)})
+				}
+				return out
+			},
+		})
+	}
+	{
+		// The ordering case, and the only one that can tell a byte sort from
+		// a code-point sort. Byte order puts \x80 first; CPython's sorted()
+		// puts it LAST, because surrogateescape lifts it to U+DC80 (56448)
+		// while "é" is U+00E9 (233). Same class as A50 and the five shipped
+		// sites the fssort guard now covers.
+		dirs := []any{
+			[]any{0x7A, 0x7A},             // "zz"
+			[]any{0xC3, 0xA9, 0x61},       // "éa"
+			[]any{0x80, 0x62},             // an undecodable lead byte
+			[]any{0x61, 0x61},             // "aa"
+			[]any{0xE3, 0x81, 0x82, 0x63}, // "あc" — three bytes, agrees either way
+		}
+		AP("A60 project slugs sort by CODE POINT, not by byte",
+			map[string]any{"kind": "all_projects", "dirs": dirs}, 30)
+	}
+	{
+		// What is NOT a project. A symlink TO a directory is one, because
+		// is_dir() follows; a dangling one is not, because it answers False
+		// rather than raising.
+		AP("A61 dotted, underscored, plain files and links",
+			map[string]any{"kind": "all_projects",
+				"dirs": []any{
+					[]any{0x6F, 0x6B}, // "ok"
+					[]any{0x5F, 0x61}, // "_a" — the archive-shaped skip
+					[]any{0x2E, 0x62}, // ".b" — hidden
+				},
+				"plainfiles": []any{[]any{0x66, 0x2E, 0x6D, 0x64}}, // "f.md"
+				"links": []any{
+					[]any{[]any{0x6C, 0x64}, "ok"},      // "ld" -> a real project
+					[]any{[]any{0x6C, 0x78}, "nowhere"}, // "lx" -> dangling
+				}}, 30)
+	}
+	AP("A62 a MISSING projects dir is an empty list, not the star report",
+		map[string]any{"kind": "all_projects", "nocreate": true,
+			"dirs": []any{}}, 30)
+	AP("A62b an EMPTY projects dir is also an empty list",
+		map[string]any{"kind": "all_projects", "dirs": []any{}}, 30)
+	AP("A63 an unreadable projects dir is the star report",
+		map[string]any{"kind": "all_projects", "unreadable": true,
+			"dirs": []any{[]any{0x6F, 0x6B}}}, 30)
+
+	// --- slice 2: archive_dormant_projects --------------------------------
+	AR := func(name string, spec map[string]any) {
+		var myWS string
+		days := spec["days"].(float64)
+		apply := spec["apply"].(bool)
+		cs = append(cs, shCase{name: name, spec: spec,
+			build: func(t *testing.T, _ string) {
+				myWS = t.TempDir()
+				root := orch.ProjectsRoot(myWS)
+				mustMkdir(t, root)
+				for _, p := range asVals(spec["projects"]) {
+					pair := p.([]any)
+					slug, mt := specName(pair[0]), pair[1].(float64)
+					d := filepath.Join(root, slug)
+					mustMkdir(t, filepath.Join(d, "artifacts"))
+					mustWrite(t, filepath.Join(d, "NEXT.md"), "# NEXT\n")
+					ts := time.Unix(int64(mt), int64((mt-float64(int64(mt)))*1e9))
+					// Same order the probe uses: the file, then artifacts/,
+					// then the project dir. Any other order re-stamps a
+					// parent and un-ages the fixture.
+					for _, q := range []string{filepath.Join(d, "NEXT.md"),
+						filepath.Join(d, "artifacts"), d} {
+						if err := os.Chtimes(q, ts, ts); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				for _, e := range asVals(spec["premade"]) {
+					mustMkdir(t, filepath.Join(root, "_archive", e.(string)))
+				}
+			},
+			run: func(_ string) any {
+				now := shNow(spec)
+				entries, err := ArchiveDormantProjects(myWS, days, apply, now)
+				if err != nil {
+					return map[string]any{"err": err.Error()}
+				}
+				root := orch.ProjectsRoot(myWS)
+				items := pyval.List{}
+				for _, e := range entries {
+					cp := pyval.Obj{}
+					for _, f := range e {
+						if f.Key == "target" {
+							rel, _ := filepath.Rel(root, f.Val.(string))
+							cp.Set("target", rel)
+							continue
+						}
+						cp.Set(f.Key, f.Val)
+					}
+					items = append(items, cp)
+				}
+				order := []any{}
+				for _, e := range entries {
+					for _, f := range e {
+						if f.Key == "project" {
+							order = append(order, byteVals(f.Val.(string)))
+						}
+					}
+				}
+				var text any
+				if notext, _ := spec["notext"].(bool); !notext {
+					t, derr := pyval.DumpsCompactPy(items)
+					if derr != nil {
+						panic(derr)
+					}
+					text = t
+				}
+				res := map[string]any{"entries": text, "order": order,
+					"root": listDir(root), "archive": nil, "mode": nil}
+				adir := filepath.Join(root, "_archive")
+				if st, serr := os.Stat(adir); serr == nil {
+					res["archive"] = listDir(adir)
+					res["mode"] = fmt.Sprintf("%o", st.Mode().Perm())
+				}
+				return res
+			},
+		})
+	}
+	{
+		const now = 1787000000.0
+		const day = 86400.0
+		AR("A70 dry run: over, exactly at, and under the threshold",
+			map[string]any{"kind": "archive", "now": now, "days": 30.0,
+				"apply": false, "projects": []any{
+					[]any{"old", now - 40*day},
+					// EXACTLY at the threshold. `age <= days` skips it, and
+					// the fixture exists because `<` is the natural mistake.
+					[]any{"edge", now - 30*day},
+					[]any{"fresh", now - day},
+				}})
+		// The skip in the archive sweep needs a dir that WOULD be archived
+		// without it. `_archive` itself does not qualify: it is created by
+		// the sweep, so its mtime is always now and it fails the age test
+		// anyway -- which is why dropping the skip survived the first cut
+		// of this battery.
+		AR("A70b dotted and underscored dirs are skipped even when ancient",
+			map[string]any{"kind": "archive", "now": now, "days": 30.0,
+				"apply": false, "projects": []any{
+					[]any{"real", now - 40*day},
+					[]any{"_old", now - 40*day},
+					[]any{".old", now - 40*day},
+				}})
+		AR("A71 apply moves it and leaves the rest alone",
+			map[string]any{"kind": "archive", "now": now, "days": 30.0,
+				"apply": true, "projects": []any{
+					[]any{"old", now - 40*day},
+					[]any{"fresh", now - day},
+				}})
+		// `int(time.time())` TRUNCATES toward zero. With a whole-second
+		// clock a rounding port gives the same suffix, so this fixture's
+		// clock carries a fraction -- without it the mutation survives.
+		AR("A72 apply onto an existing target takes the timestamp suffix",
+			map[string]any{"kind": "archive", "now": now + 0.7, "days": 30.0,
+				"apply": true, "premade": []any{"old"},
+				"projects": []any{[]any{"old", now - 40*day}}})
+		// `age is None or age <= days`. The None arm is INVISIBLE at any
+		// positive threshold -- a port that read absence as zero skips the
+		// project either way -- so it takes a NEGATIVE days to separate
+		// them, which the CLI can pass. The epoch-0 project reports an
+		// unknown age (project_activity_age_days returns None when the
+		// newest mtime is <= 0), and must still be skipped where the
+		// ordinary one is archived.
+		AR("A75 an UNKNOWN age is skipped even below a negative threshold",
+			map[string]any{"kind": "archive", "now": now, "days": -1.0,
+				"apply": false, "projects": []any{
+					[]any{"epoch", 0.0},
+					[]any{"normal", now - day},
+				}})
+		// round(age, 1) is half-to-EVEN on the BINARY double. 30.25 days
+		// rounds to 30.2, not 30.3, and a port using math.Round answers
+		// 30.3 — the entry is the function's whole output.
+		// The archive sweep's own `sorted(projects_dir.iterdir())`. It is a
+		// SECOND filename sort in the same file and the entry list's order
+		// is its whole observable; the ASCII fixtures above cannot tell a
+		// byte sort from a code-point one, which is how this class hid in
+		// five shipped sites.
+		//
+		// `notext` elides the serialised entry list, and the reason is a
+		// KNOWN residual rather than a transport limit. I expected
+		// json.dumps to REFUSE a surrogateescaped slug; it does not. With
+		// ensure_ascii=True — the default — it happily writes
+		// `"\udc80b"`, a pure-ASCII file holding an escape no valid
+		// string can decode to, while pyval refuses byte-tainted text
+		// outright. That is the lone-surrogate item already in BACKLOG
+		// ("an escaped lone surrogate is a STATE divergence, not a byte
+		// one"), reached from a new direction: closing it needs a
+		// surrogate-preserving decoder AND an encodeString that re-emits
+		// `\udXXX`, which is not this slice's job. Eliding it here is the
+		// honest move; comparing it would fail for a reason that has
+		// nothing to do with archive_dormant_projects.
+		AR("A74 the archive sweep sorts by code point too",
+			map[string]any{"kind": "archive", "now": now, "days": 30.0,
+				"apply": false, "notext": true, "projects": []any{
+					[]any{[]any{0x7A, 0x7A}, now - 40*day},       // "zz"
+					[]any{[]any{0xC3, 0xA9, 0x61}, now - 41*day}, // "éa"
+					[]any{[]any{0x80, 0x62}, now - 42*day},       // undecodable
+				}})
+		AR("A73 age_days is Python's round, not half-away-from-zero",
+			map[string]any{"kind": "archive", "now": now, "days": 30.0,
+				"apply": false, "projects": []any{
+					[]any{"quarter", now - 30.25*day},
+					[]any{"threeeighths", now - 30.35*day},
+				}})
+	}
+
+	// --- slice 2: the heartbeat state file --------------------------------
+	HB := func(name string, spec map[string]any) {
+		var myWS string
+		cs = append(cs, shCase{name: name, spec: spec,
+			build: func(t *testing.T, _ string) { myWS = t.TempDir() },
+			run: func(_ string) any {
+				checks := pyval.Obj{}
+				for _, kv := range asVals(spec["checks"]) {
+					pair := kv.([]any)
+					checks.Set(pair[0].(string), pair[1])
+				}
+				h := Health{Status: spec["status"].(string), Checks: checks,
+					CheckedAt: spec["checked_at"].(string)}
+				var reps []Report
+				if spec["with_reports"].(bool) {
+					reps = []Report{}
+					for _, r := range asVals(spec["reports"]) {
+						pair := r.([]any)
+						reps = append(reps, Report{Project: pair[0].(string),
+							Status: pair[1].(string), Evidence: []string{}})
+					}
+				}
+				path := WriteHeartbeatState(myWS, h, reps)
+				res := map[string]any{"wrote": path != "", "body": nil, "name": nil}
+				if path != "" {
+					res["name"] = filepath.Base(path)
+					b, err := os.ReadFile(path)
+					if err != nil {
+						panic(err)
+					}
+					res["body"] = string(b)
+				}
+				return res
+			},
+		})
+	}
+	HB("A80 the state file's BYTES: indent 2, ensure_ascii, raw html",
+		map[string]any{"kind": "heartbeat_write", "status": "degraded",
+			"checked_at": "2026-08-26T00:00:00+00:00",
+			"checks": []any{
+				[]any{"workspace_writable", "ok"},
+				[]any{"pkg_requests", "warn: requests not installed"},
+				// The three characters encoding/json escapes and json.dumps
+				// does not, plus a rune ensure_ascii escapes and it does not.
+				[]any{"disk_space", "ok: 12MB free — a > b & c < d, café"},
+			},
+			"with_reports": true,
+			"reports": []any{
+				[]any{"a", "stuck"}, []any{"b", "healthy"},
+				[]any{"c", "warning"}, []any{"d", "dormant"},
+			}})
+	HB("A81 no reports at all still writes an empty list, never null",
+		map[string]any{"kind": "heartbeat_write", "status": "healthy",
+			"checked_at": "2026-08-26T00:00:00+00:00",
+			"checks":     []any{}, "with_reports": false, "reports": []any{}})
+
+	HR := func(name string, body any) {
+		var myWS string
+		spec := map[string]any{"kind": "heartbeat_read", "body": body}
+		cs = append(cs, shCase{name: name, spec: spec,
+			build: func(t *testing.T, _ string) {
+				myWS = t.TempDir()
+				if body == nil {
+					return
+				}
+				md := orch.MemoryDir(myWS)
+				mustMkdir(t, md)
+				mustWrite(t, filepath.Join(md, HeartbeatStateName), body.(string))
+			},
+			run: func(_ string) any {
+				o, ok := ReadHeartbeatState(myWS)
+				res := map[string]any{"kind": "absent", "text": nil}
+				if ok {
+					res["kind"] = "object"
+					text, err := pyval.DumpsCompactPy(o)
+					if err != nil {
+						panic(err)
+					}
+					res["text"] = text
+				}
+				return res
+			},
+		})
+	}
+	HR("A82 a missing state file is absent", nil)
+	HR("A83 a state file round-trips with its key ORDER intact",
+		`{"checked_at": "t", "system_status": "healthy", "checks": {"b": 1, "a": 2}, "stuck_projects": []}`)
+	HR("A84 invalid JSON is absent", "{not json")
+
 	return cs
+}
+
+// asVals reads a spec entry that may be absent as a list.
+func asVals(v any) []any {
+	if v == nil {
+		return nil
+	}
+	return v.([]any)
+}
+
+// byteName turns a list of byte VALUES into the Go string holding those
+// raw bytes — the spelling a filename takes on Linux, and the one a Go
+// string literal cannot express when the bytes are not valid UTF-8.
+func byteName(v any) string {
+	vals := v.([]any)
+	b := make([]byte, 0, len(vals))
+	for _, x := range vals {
+		b = append(b, byte(x.(int)))
+	}
+	return string(b)
+}
+
+// byteVals is byteName's inverse, for handing a name back to the probe.
+func byteVals(s string) []any {
+	out := make([]any, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		out = append(out, int(s[i]))
+	}
+	return out
+}
+
+// clipTail3 is Python's `s[:n]` — n CODE POINTS, not n bytes.
+func clipTail3(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// listDir is `sorted(os.listdir(d))` handed back as byte lists, because a
+// directory entry is bytes and sorted() orders the surrogateescape
+// decoding by code point.
+func listDir(dir string) []any {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Slice(names, func(i, j int) bool { return pypath.FSLess(names[i], names[j]) })
+	out := make([]any, 0, len(names))
+	for _, n := range names {
+		out = append(out, byteVals(n))
+	}
+	return out
+}
+
+// specName reads a slug that rides as a string when it is valid UTF-8 and
+// as a list of byte values when it is not.
+func specName(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return byteName(v)
+}
+
+func mustMkdir(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(p, 0o777); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWrite(t *testing.T, p, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(text), 0o666); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // digitVals spells a two-digit index as byte values, so a name can be built
@@ -977,5 +1585,49 @@ func TestResolveDormantDaysFallsBackWhenTheConfigReadItselfFails(t *testing.T) {
 	if DormantDaysDefault != 14.0 {
 		t.Errorf("DormantDaysDefault is %v; sheriff.py's DORMANT_DAYS_DEFAULT "+
 			"is 14.0 and the dormant diagnosis quotes it", DormantDaysDefault)
+	}
+}
+
+// TestReadHeartbeatStateRefusesANonObjectDocument pins the one shape the
+// differential CANNOT compare, because it is the one shape where the two
+// runtimes deliberately answer differently.
+//
+// `json.loads("[]")` gives a LIST. read_heartbeat_state's annotation says
+// Optional[Dict[str, Any]] and it returns the list anyway — the annotation
+// is a lie, not a contract. Go cannot return a list through an
+// object-shaped signature, so this port answers absent, and the caller
+// that would have received the list does `state.get(...)` on it one line
+// later, which raises. The Python "answer" is a crash; the port's is a
+// miss.
+//
+// MEASURED on this box rather than reasoned:
+//
+//	json.loads("[]")                     -> []          (a list)
+//	sh.read_heartbeat_state()            -> []          (returned as-is)
+//
+// A Go test rather than a differential row, because a row asserts the two
+// sides are EQUAL and here they are not. What it can still do is fail: a
+// port that dropped the type assertion answers found-with-nothing-in-it,
+// which is the fail-open direction — a caller would read an empty checks
+// map and roll it up as healthy.
+func TestReadHeartbeatStateRefusesANonObjectDocument(t *testing.T) {
+	for _, body := range []string{"[]", `[{"a": 1}]`, `"a string"`, "7", "null"} {
+		ws := t.TempDir()
+		md := orch.MemoryDir(ws)
+		mustMkdir(t, md)
+		mustWrite(t, filepath.Join(md, HeartbeatStateName), body)
+		if got, ok := ReadHeartbeatState(ws); ok {
+			t.Errorf("a top-level %s read back as an object: %v", body, got)
+		}
+	}
+	// Anti-vacuity: the same helper on a real object must still find it,
+	// or the loop above would pass against a reader that never finds
+	// anything at all.
+	ws := t.TempDir()
+	md := orch.MemoryDir(ws)
+	mustMkdir(t, md)
+	mustWrite(t, filepath.Join(md, HeartbeatStateName), `{"a": 1}`)
+	if _, ok := ReadHeartbeatState(ws); !ok {
+		t.Fatal("the reader finds nothing at all, so the refusals above prove nothing")
 	}
 }
