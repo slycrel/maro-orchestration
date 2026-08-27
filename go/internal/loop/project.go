@@ -222,6 +222,16 @@ func resolveProjectSlug(projectsRoot, goal string) (slug, warn string) {
 // EEXIST, preserving first-writer-wins atomically WITH its content.
 func recordProjectMission(projectDir, goal string) error {
 	path := filepath.Join(projectDir, missionFileName)
+	// os.CreateTemp publishes 0600 and Link keeps it, so `.mission` is
+	// owner-only. Left that way DELIBERATELY, and the reason is that this
+	// file has no Python twin: `.mission` is this runtime's stand-in for
+	// NEXT.md (see missionFileName), so there is no cross-runtime reader
+	// whose access a narrow mode could break. The same spelling in
+	// knowledge.atomicRewrite and pack.writeQuarantine WAS a bug, because
+	// those files are read by both engines -- see record.AtomicWrite,
+	// which carries file_lock.atomic_write's mode rule for exactly that
+	// case. If `.mission` ever grows a Python reader, this becomes the
+	// third instance and should move to record.AtomicWrite too.
 	tmp, err := os.CreateTemp(projectDir, missionFileName+".tmp-*")
 	if err != nil {
 		return err

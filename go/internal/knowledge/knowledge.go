@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
@@ -403,22 +404,26 @@ func stringList(v any) []string {
 
 // atomicRewrite replaces path via temp-file + rename (crash-safe; the
 // caller holds the flock, so no other locked writer interleaves).
+//
+// record.AtomicWrite, not a second temp-file dance of its own. The
+// hand-rolled version this replaces created the temp with os.CreateTemp
+// and renamed it into place WITHOUT a Chmod, and os.CreateTemp creates
+// 0600 -- so every rewrite of a shared lessons store narrowed it to
+// 0600, both for an existing 0664 ledger and for a file created fresh.
+// That is the same defect CPython's file_lock.atomic_write carries a
+// comment about having already fixed once ("data-r2-03: rewrites
+// silently narrow existing ledgers"), and it matters more here than
+// there: the two runtimes share one workspace store by design, so a Go
+// rewrite can leave a ledger the Python runtime cannot read.
+// record.AtomicWrite is that function's port and already has the rule.
+// It also fsyncs, which this did not and CPython does.
 func atomicRewrite(path string, lines []string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".rewrite-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
+	var b strings.Builder
 	for _, ln := range lines {
-		if _, err := tmp.WriteString(ln + "\n"); err != nil {
-			tmp.Close()
-			return err
-		}
+		b.WriteString(ln)
+		b.WriteString("\n")
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return record.AtomicWrite(path, []byte(b.String()))
 }
 
 // mustGetOr is pyval.Obj's `.get(key)`: the value, or nil when absent —

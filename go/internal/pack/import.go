@@ -1130,19 +1130,14 @@ func (im *importer) writeQuarantine(path, content string) (bool, error) {
 		case rerr != nil && !os.IsNotExist(rerr):
 			return rerr
 		}
-		tmp, err := os.CreateTemp(filepath.Dir(path), ".quarantine-*")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(tmp.Name())
-		if _, err := tmp.WriteString(content); err != nil {
-			tmp.Close()
-			return err
-		}
-		if err := tmp.Close(); err != nil {
-			return err
-		}
-		return os.Rename(tmp.Name(), path)
+		// record.AtomicWrite, not a second temp-file dance. CPython's
+		// _write_quarantine calls file_lock.atomic_write, which fchmods
+		// the temp before publishing it; the hand-rolled version here
+		// renamed an os.CreateTemp file into place, and os.CreateTemp
+		// creates 0600. Every quarantined artifact landed 0600 where
+		// CPython leaves 0664 -- and quarantine exists precisely so a
+		// human, or the other runtime, can come and look at it.
+		return record.AtomicWrite(path, []byte(content))
 	})
 	return already, err
 }

@@ -972,7 +972,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 19*
+*instances: 21*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -2093,6 +2093,65 @@ arrived through the channel nobody reads.
 Companion to P7 (a battery that never proves its baseline reads a broken
 tree as a perfect score): P7 is the tool lying about the tree, this is the
 tool lying about itself.
+
+### L57 — An argument whose only effect is on the FILESYSTEM is invisible to every assertion about the return value
+
+*instances: 4 — and it is CLOSED, see the tripwire*
+
+A mode passed to `os.MkdirAll` does not come back. The call returns
+`error`, the directory appears, the tests assert on the directory's
+CONTENTS, and the mode sits in the argument list doing whatever it likes.
+Line coverage reports the argument as executed, because it was. Nothing
+in the package can tell "this value was chosen and checked" from "this
+value has never once been looked at".
+
+The same is true of any argument the callee consumes without reflecting:
+file permission bits, `O_EXCL` vs `O_TRUNC`, an fsync flag, an ownership
+uid. The tell is that you cannot name the assertion that would change if
+the argument changed — and the reason you cannot is that the observation
+lives on disk, in another process's view, or at a later run, not in the
+value the test is holding.
+
+**Measured four times in one day (2026-08-27), in two lanes that had no
+contact with each other.**
+
+- *`internal/worktree`.* `makeDirs`' `record.NewDirMode` rewritten to
+  `0o700`: the package reported `ok`. The worktrees root and every loop
+  directory are created there and read by workers that may run under a
+  different uid, so the wrong value surfaces as a git error three layers
+  away, in a different subsystem, long after the code that chose it.
+- *`internal/persona`.* All THREE `os.MkdirAll` sites — `EnsureWorkspaceDir`,
+  `SaveManifest`, `RecordDispatch` — rewritten to `0o700`: the package
+  reported `ok`. Directory modes were named explicitly in that agent's
+  brief and every one of them was still free.
+
+Both were found by the same move, and it is the move worth keeping:
+**mutate the helpers you have never mutated.** A battery grown from
+previous findings tests the previous findings. For a function nothing has
+ever mutated, "guarded" and "never checked" produce identical evidence,
+so the score cannot distinguish them and neither can the reader.
+
+**Tripwire — and this one is mechanical, not a discipline.**
+`go/tools/mutate-modes.py` flips `0o044` into every mode argument in the
+tree (last argument of `os.Mkdir`/`os.MkdirAll`/`os.WriteFile`/
+`os.OpenFile`/`os.Chmod`) and runs the owning package. Three details in
+it are the lesson, not the plumbing:
+
+1. **XOR, not assignment.** A mutant that sets a mode to `0o700` when it
+   is already `0o700` changes nothing and reports a gap that is not
+   there. The persona sweep manufactured three such findings in one
+   session with no-op mutants. A tool that measures guards must have its
+   own mutants checked first.
+2. **A umask floor.** The kernel masks these bits on `Mkdir`/`OpenFile`,
+   so under a umask that clears both flipped bits every site would report
+   SURVIVED for a reason with nothing to do with the tests. The run
+   refuses instead of printing that.
+3. **UNTESTABLE is not SURVIVED.** A package with no test files is
+   reported as its own outcome. Collapsing the two would rebuild, inside
+   the instrument, the exact wall the instrument exists to find (L45).
+
+Companion to L4 (a guard that cannot fire is not evidence): L4 is about a
+branch no fixture reaches, this is about a value no assertion reads.
 
 ### L56 — An empty path argument is not "no path", it is the CURRENT one
 *instances: 1 — with a demonstrated consequence*
