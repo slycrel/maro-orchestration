@@ -95,6 +95,7 @@ reading like one.
 | `loop_types.py` | 659 | `internal/looptypes` |
 | `observe.py` | 655 | `internal/evolver`, `internal/loop` |
 | `sheriff.py` | 641 | `internal/sheriff` |
+| `loop_init.py` | 604 | `internal/loopinit` |
 | `intent.py` | 564 | `internal/intent` |
 | `handle_queue.py` | 562 | `internal/handlequeue` |
 | `router.py` | 521 | `internal/skills` |
@@ -126,9 +127,9 @@ reading like one.
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**75 modules / 78067 lines** carry a declaration. **108 modules / 54663 lines** do not.
+**76 modules / 78671 lines** carry a declaration. **107 modules / 54059 lines** do not.
 
-### The undeclared queue — 108 modules, 54663 lines, UNJUDGED
+### The undeclared queue — 107 modules, 54059 lines, UNJUDGED
 
 | Python module | lines |
 |---|---:|
@@ -159,7 +160,6 @@ reading like one.
 | `telegram_listener.py` | 613 |
 | `orch.py` | 610 |
 | `mint_grounding.py` | 608 |
-| `loop_init.py` | 604 |
 | `memory_quality.py` | 593 |
 | `thinkback.py` | 577 |
 | `cli_args.py` | 574 |
@@ -248,9 +248,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **75 of 183 modules (78,067 of 132,730
+> **76 of 183 modules (78,671 of 132,730
 > lines, 59%) are named by a Go production package. The other
-> 108 have no declaration either way.**
+> 107 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.

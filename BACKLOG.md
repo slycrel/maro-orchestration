@@ -42,6 +42,26 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### Go port: `loop_init.py`'s three stateful halves are unported by design (FILED 2026-08-27, loopinit tranche)
+
+`internal/loopinit` ports `_budget_gate` and `_coerce_cap` — the pure
+decision half of the spend circuit breaker. Three pieces of the same
+module are deliberately left in Python and named in the package doc, so
+the boundary is a declaration and not an omission:
+
+| Python | why it is not here |
+|---|---|
+| `_initialize_loop` | builds a live `LoopContext` and touches the run dir |
+| `_DryRunAdapter` | an LLM adapter stub; belongs with the adapter tranche |
+| `_stamp_refusal_verdict` (write half) | writes the verdict file; `BudgetGate` returns `ReopenPayload()` instead and the caller stamps |
+
+The notify call at `loop_init.py:186` is still untwinned for the same
+reason, and PORT.md's notification table now says so precisely rather than
+claiming the refusal itself is unported.
+
+Unblocks with the run-dir tranche. Nothing depends on it today: the Go
+side has no caller for `BudgetGate` yet either.
+
 ### Go port: the remaining bare `.([]any)` / `.(map[string]any)` assertions are unaudited (FOUND 2026-08-27, worldfacts differential)
 
 `worldfacts.CleanDeclared` opened with `raw.([]any)`. `pyval.List` is a

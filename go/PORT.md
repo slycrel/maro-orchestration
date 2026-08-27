@@ -4346,7 +4346,7 @@ complete. Every `notify.emit` call site in the Python tree, audited:
 | `cli.py:2411` | `run_verdict` | CLI tranche |
 | `container_exec.py:929,1020` | `backend_actionable` | unported subsystem |
 | `audit_repair.py:662` | `escalation` | unported subsystem |
-| `loop_init.py:186` | `escalation` (daily budget gate) | the pre-start daily-cap refusal is unported (no `metrics.spend_today` twin) |
+| `loop_init.py:186` | `escalation` (daily budget gate) | the REFUSAL is now decided in `loopinit.BudgetGate`, which returns the payload; the notify call itself still has no twin, because `_stamp_refusal_verdict` writes to the run dir |
 | `loop_blocked.py:841` | `escalation` (blocked step) | inside `_act_blocked_step`, already on `blocked.go`'s named not-ported list (navigator shadow) |
 
 No ported Go path drops a notification. Every gap above is a gap in the
@@ -14702,3 +14702,88 @@ instances since the `runIntrospect` finding.
 A second builder re-deriving a catalogued lens from scratch is the
 argument for the 2026-08-27 decree, restated: a pattern catalog only a
 reviewer reads is a catalog, not a ratchet. L10 is now at twelve.
+
+
+## The gate that decides what a run may cost, before it costs anything (2026-08-27)
+
+`internal/loopinit` ports the deterministic half of `loop_init.py`:
+`_budget_gate` and its `_coerce_cap` helper. That is the circuit breaker
+that runs before a single token is spent and answers two questions — what
+may this run cost, and may it start at all.
+
+What is deliberately NOT here is named in the package doc: `_initialize_loop`
+(it builds a live context and touches the run dir), `_DryRunAdapter`, and
+the WRITE half of `_stamp_refusal_verdict`. `BudgetGate` returns a
+`BudgetDecision` carrying the refusal reason and a `ReopenPayload()`; who
+stamps it and who notifies is the caller's problem, and stays in Python
+until the run-dir tranche lands.
+
+### The ladder has three states where a port wants two
+
+`config.get` answers ABSENT, an explicit null, or a number, and
+`loop_init` means something different by each:
+
+- **absent** — auto. `max($10, 4 x p90)`, scaling the breaker with what
+  this box's successful runs actually cost.
+- **null or 0** — uncapped, and the operator meant it. `if _per_run > 0`
+  leaves `cost_budget` as `None`.
+- **malformed** — fails CLOSED to the default, with a warning. Not the
+  same as the opt-out, and a port that collapsed them would turn a typo
+  into an unlimited run.
+
+`ConfigValue{Absent bool; Value any}` carries all three, mirroring
+Python's `_CONFIG_ABSENT` sentinel. Its ZERO VALUE is the dangerous one:
+`ConfigValue{}` reads as present-and-null, which is the uncapped opt-out.
+A test in this package was written by leaving the fields off and passed
+for exactly that reason — both arms nil, agreeing about something that
+had nothing to do with the p90 they were comparing. **L19**, and the type
+now says so at its own declaration.
+
+### What the differential found on its first run
+
+CPython logs a line when the daily-cap check itself fails:
+
+    budget gate: daily cap check failed (non-blocking): <err>
+
+...and then PROCEEDS, which is the right posture for a breaker whose
+own instrument is broken. The port had the proceeding half and not the
+line: `spend_today` was modelled as a bool, so the error text had nowhere
+to go. **L26**, and the sort of thing that is invisible to review because
+the CONTROL FLOW is correct — only the emitted string is missing.
+`BudgetEnv` grew a `SpendTodayError string` and the warning came back.
+
+### One survivor, and it is the mutant's fault
+
+Thirty mutants, twenty-nine killed. The survivor is
+`if p90 != nil && *p90 != 0` -> `if p90 != nil`, the Go spelling of
+Python's `if _p90:` truthiness. It cannot change an answer: at a p90 of
+0.0 the branch it would newly take computes `max($10, 4*0) = $10`, which
+is what the else arm returns. A negative p90 is truthy on both sides; a
+NaN is too (`NaN != 0` in Go, and CPython finds a NaN truthy).
+
+That is **L8** — a bad mutant, not a test gap — but the ABSORPTION is a
+claim, and this port has now shipped one comment that was false the day it
+was written (`ResolveLogLevel`, L52 instance 3, three days of a surviving
+mutation ago). So the claim is a test:
+`TestTheP90TruthinessTestIsAbsorbedByTheFloor` asserts
+`maxF(DefaultPerRunUSD, KillP90Multiplier*0) == DefaultPerRunUSD` and then
+re-asserts it through the real gate. A tuning pass that drops the floor to
+zero fails at the claim rather than quietly making the comment beside it
+untrue.
+
+### A divergence noted instead of fixed
+
+`pyval.Repr` of a Go map is the `<unordered map: decode with LoadsOrdered>`
+placeholder where CPython prints `{'a': 1}`, so the malformed-cap warning
+reads differently on the two sides when the malformed value is a mapping.
+Config values arrive as unordered `map[string]any` from yaml.v3 and there
+is no order to render, so this is not reconcilable and not worth
+pretending otherwise. Both sides' text is pinned by a per-scenario flag —
+NOT routed through a normaliser, which would move the assertion into the
+normaliser (**L51**).
+
+The negative-cap rows in the corpus are the other half of that honesty:
+`cost_budget = -5.0` is nonsense, `if ctx.cost_budget` finds it truthy,
+and it is the ONLY input that separates `if _warn and _warn >= cap` from a
+bare `_warn >= cap`. Contrived and reachable — `cost_budget` is a plain
+caller argument with no validation anywhere between here and it.

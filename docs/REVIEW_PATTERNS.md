@@ -251,7 +251,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 37*
+*instances: 38*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -411,7 +411,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 14*
+*instances: 16*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -507,7 +507,7 @@ Fixtures for a reader must be LINES, not literals.
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 25*
+*instances: 26*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
@@ -580,7 +580,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 27*
+*instances: 28*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -1287,7 +1287,7 @@ can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
 
 ### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
-*instances: 6*
+*instances: 7*
 
 **Instance 6 is the one no fixture can reach** (syshealth r3, 2026-08-26).
 The first five erased a value or a question on ONE side. This one erased a
