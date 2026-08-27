@@ -1498,7 +1498,7 @@ value that renders identically as a Python int and a Go float64. A
 
 ### L53 — A correct assertion can still cover the wrong blast radius
 
-*instances: 8*
+*instances: 9*
 
 The ordinary missing-test finding is "nobody wrote one". This is not
 that. The assertion existed, it was correct, it ran on every suite, and

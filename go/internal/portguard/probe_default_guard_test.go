@@ -113,6 +113,40 @@ func omitemptyFields(t *testing.T, path string) map[string]int {
 	return out
 }
 
+// probeSourceFor returns the probe text a given _test.go file is checked
+// against: the probes it NAMES, or every probe in the directory when it
+// names none.
+//
+// The pairing is not cosmetic. internal/loopfinalize holds three probes
+// and three differentials; concatenating them made every omitempty field
+// in one spec struct answerable by a subscript in an unrelated probe, and
+// the guard reported two fields that no probe reading them could ever
+// see. A check whose blast radius is the DIRECTORY reports findings the
+// code does not have, which is the fastest way to teach a reader to
+// allowlist it (L53).
+//
+// The fallback is deliberate: a differential that builds its probe path
+// some other way still gets checked, conservatively, against everything.
+func probeSourceFor(testFile string, probes map[string]string) (string, error) {
+	b, err := os.ReadFile(testFile)
+	if err != nil {
+		return "", err
+	}
+	test := string(b)
+	var named []string
+	for name, body := range probes {
+		if strings.Contains(test, name) {
+			named = append(named, body)
+		}
+	}
+	if len(named) == 0 {
+		for _, body := range probes {
+			named = append(named, body)
+		}
+	}
+	return strings.Join(named, "\n"), nil
+}
+
 func TestProbeReadsCannotMaskAnOmittedField(t *testing.T) {
 	root := modRoot(t)
 	var failures []string
@@ -126,7 +160,7 @@ func TestProbeReadsCannotMaskAnOmittedField(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			var probe strings.Builder
+			probes := map[string]string{}
 			var tests []string
 			for _, e := range ents {
 				switch {
@@ -135,18 +169,20 @@ func TestProbeReadsCannotMaskAnOmittedField(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					probe.Write(b)
-					probe.WriteString("\n")
+					probes[e.Name()] = string(b)
 				case strings.HasSuffix(e.Name(), "_test.go"):
 					tests = append(tests, filepath.Join(path, e.Name()))
 				}
 			}
-			if probe.Len() == 0 {
+			if len(probes) == 0 {
 				return nil
 			}
-			src := probe.String()
 			for _, tf := range tests {
 				rel, _ := filepath.Rel(root, tf)
+				src, err := probeSourceFor(tf, probes)
+				if err != nil {
+					return err
+				}
 				for key, line := range omitemptyFields(t, tf) {
 					q := regexp.QuoteMeta(key)
 					if probeDefaultAllowlist[rel+":"+key] != "" {

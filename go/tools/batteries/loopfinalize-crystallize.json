@@ -1,0 +1,255 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "extraction-warning-text",
+   "old": "\"skill extraction failed — loop \" + in.LoopID +\n\t\t\t\" may not contribute to skill library: \" + err.Error()",
+   "new": "\"skill extraction failed — loop \" + in.LoopID + \": \" + err.Error()"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "extraction-failure-not-warned",
+   "old": "\tif err := crystallize(in, d); err != nil && d.Warn != nil {",
+   "new": "\tif err := crystallize(in, d); err != nil && d.Warn == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "extraction-warned-on-success",
+   "old": "\tif err := crystallize(in, d); err != nil && d.Warn != nil {\n\t\td.Warn(\"skill extraction failed — loop \" + in.LoopID +",
+   "new": "\tif err := crystallize(in, d); d.Warn != nil {\n\t\td.Warn(\"skill extraction failed — loop \" + in.LoopID +"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synthesis-always-runs",
+   "old": "\tif in.HadNoMatching {\n\t\tif err := synthesize(in, d);",
+   "new": "\tif true {\n\t\tif err := synthesize(in, d);"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synthesis-never-runs",
+   "old": "\tif in.HadNoMatching {\n\t\tif err := synthesize(in, d);",
+   "new": "\tif false {\n\t\tif err := synthesize(in, d);"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synthesis-warning-text",
+   "old": "\t\t\td.Warn(\"skill synthesis failed — loop \" + in.LoopID + \": \" +\n\t\t\t\terr.Error())",
+   "new": "\t\t\td.Warn(\"skill synthesis failed — loop \" + in.LoopID + \" \" +\n\t\t\t\terr.Error())"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "adapter-coercion-dropped",
+   "old": "func adapterOrNone(a any) any {\n\tif !pyval.Truthy(a) {\n\t\treturn nil\n\t}\n\treturn a\n}",
+   "new": "func adapterOrNone(a any) any {\n\treturn a\n}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "adapter-always-none",
+   "old": "func adapterOrNone(a any) any {\n\tif !pyval.Truthy(a) {\n\t\treturn nil\n\t}\n\treturn a\n}",
+   "new": "func adapterOrNone(a any) any {\n\t_ = a\n\treturn nil\n}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "missing-skills-module-is-silent",
+   "old": "\tif d.LoadSkills == nil || d.ExtractSkills == nil || d.SaveSkill == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.LoadSkills == nil || d.ExtractSkills == nil || d.SaveSkill == nil {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "missing-evolver-module-is-silent",
+   "old": "\tif d.SynthesizeSkill == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.SynthesizeSkill == nil {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-includes-empty-results",
+   "old": "\t\tif s.Status == \"done\" && s.Result != \"\" {\n\t\t\tdoneSummaries = append(doneSummaries,",
+   "new": "\t\tif s.Status == \"done\" {\n\t\t\tdoneSummaries = append(doneSummaries,"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-takes-the-not-done",
+   "old": "\t\tif s.Status == \"done\" && s.Result != \"\" {\n\t\t\tdoneSummaries = append(doneSummaries,",
+   "new": "\t\tif s.Status != \"done\" && s.Result != \"\" {\n\t\t\tdoneSummaries = append(doneSummaries,"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-result-not-clipped",
+   "old": "\t\t\tdoneSummaries = append(doneSummaries,\n\t\t\t\tpytext.Head(s.Result, ExtractResultClip))",
+   "new": "\t\t\tdoneSummaries = append(doneSummaries, s.Result)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "extract-clip-off-by-one",
+   "old": "\tExtractResultClip = 200",
+   "new": "\tExtractResultClip = 201"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "steps-list-holds-only-done",
+   "old": "\tfor _, s := range in.StepOutcomes {\n\t\tsteps = append(steps, pyval.Obj{",
+   "new": "\tfor _, s := range in.StepOutcomes {\n\t\tif s.Status != \"done\" {\n\t\t\tcontinue\n\t\t}\n\t\tsteps = append(steps, pyval.Obj{"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "steps-result-not-clipped",
+   "old": "\t\t\t{Key: \"result\", Val: pytext.Head(s.Result, ExtractResultClip)},",
+   "new": "\t\t\t{Key: \"result\", Val: s.Result},"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "outcome-key-order-swapped",
+   "old": "\t\t{Key: \"goal\", Val: in.Goal},\n\t\t{Key: \"status\", Val: in.LoopStatus},",
+   "new": "\t\t{Key: \"status\", Val: in.LoopStatus},\n\t\t{Key: \"goal\", Val: in.Goal},"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "task-type-is-not-agenda",
+   "old": "\t\t{Key: \"task_type\", Val: \"agenda\"},",
+   "new": "\t\t{Key: \"task_type\", Val: \"now\"},"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-join-loses-the-space",
+   "old": "\t\t\t\tExtractSummarySteps)], \". \")},",
+   "new": "\t\t\t\tExtractSummarySteps)], \".\")},"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-not-capped",
+   "old": "\t\t{Key: \"summary\", Val: strings.Join(\n\t\t\tdoneSummaries[:pyval.SliceStop(len(doneSummaries),\n\t\t\t\tExtractSummarySteps)], \". \")},",
+   "new": "\t\t{Key: \"summary\", Val: strings.Join(doneSummaries, \". \")},"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "summary-cap-off-by-one",
+   "old": "\tExtractSummarySteps = 4",
+   "new": "\tExtractSummarySteps = 3"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "existing-skills-not-consulted",
+   "old": "\t\tif existing[sk.Name] {\n\t\t\tcontinue\n\t\t}",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "existing-skills-inverted",
+   "old": "\t\tif existing[sk.Name] {\n\t\t\tcontinue\n\t\t}",
+   "new": "\t\tif !existing[sk.Name] {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "existing-set-updated-as-we-save",
+   "old": "\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\treturn err\n\t\t}",
+   "new": "\t\texisting[sk.Name] = true\n\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\treturn err\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "load-skills-after-extract",
+   "old": "\texisting := map[string]bool{}\n\tskills, err := d.LoadSkills()\n\tif err != nil {\n\t\treturn err\n\t}\n\tfor _, s := range skills {\n\t\texisting[s.Name] = true\n\t}\n\n\textracted, err := d.ExtractSkills([]pyval.Obj{outcome},\n\t\tadapterOrNone(in.Adapter))\n\tif err != nil {\n\t\treturn err\n\t}",
+   "new": "\textracted, err := d.ExtractSkills([]pyval.Obj{outcome},\n\t\tadapterOrNone(in.Adapter))\n\tif err != nil {\n\t\treturn err\n\t}\n\texisting := map[string]bool{}\n\tskills, lerr := d.LoadSkills()\n\tif lerr != nil {\n\t\treturn lerr\n\t}\n\tfor _, s := range skills {\n\t\texisting[s.Name] = true\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "save-failure-does-not-abort",
+   "old": "\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\treturn err\n\t\t}",
+   "new": "\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "crystallised-line-text",
+   "old": "\t\t\td.Stderr(\"[maro] skill crystallised: \" + sk.Name)",
+   "new": "\t\t\td.Stderr(\"[maro] skill crystallized: \" + sk.Name)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "crystallised-line-not-gated-on-verbose",
+   "old": "\t\tif in.Verbose && d.Stderr != nil {",
+   "new": "\t\tif d.Stderr != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "crystallised-line-printed-before-the-save",
+   "old": "\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif in.Verbose && d.Stderr != nil {\n\t\t\td.Stderr(\"[maro] skill crystallised: \" + sk.Name)\n\t\t}",
+   "new": "\t\tif in.Verbose && d.Stderr != nil {\n\t\t\td.Stderr(\"[maro] skill crystallised: \" + sk.Name)\n\t\t}\n\t\tif err := d.SaveSkill(sk); err != nil {\n\t\t\treturn err\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-includes-empty-results",
+   "old": "\t\tif s.Status == \"done\" && s.Result != \"\" {\n\t\t\tdoneSteps = append(doneSteps, s)\n\t\t}",
+   "new": "\t\tif s.Status == \"done\" {\n\t\t\tdoneSteps = append(doneSteps, s)\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-not-capped",
+   "old": "\tfor _, s := range doneSteps[:pyval.SliceStop(len(doneSteps), SynthSteps)] {",
+   "new": "\tfor _, s := range doneSteps {"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-cap-off-by-one",
+   "old": "\tSynthSteps      = 3",
+   "new": "\tSynthSteps      = 4"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-clip-off-by-one",
+   "old": "\tSynthResultClip = 120",
+   "new": "\tSynthResultClip = 121"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-result-not-clipped",
+   "old": "\t\tparts = append(parts, pytext.Head(s.Result, SynthResultClip))",
+   "new": "\t\tparts = append(parts, s.Result)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-clips-the-join-not-the-parts",
+   "old": "\t\tparts = append(parts, pytext.Head(s.Result, SynthResultClip))\n\t}\n\tsummary := strings.Join(parts, \". \")",
+   "new": "\t\tparts = append(parts, s.Result)\n\t}\n\tsummary := pytext.Head(strings.Join(parts, \". \"), SynthResultClip)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-join-loses-the-space",
+   "old": "\tsummary := strings.Join(parts, \". \")",
+   "new": "\tsummary := strings.Join(parts, \" \")"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-fallback-dropped",
+   "old": "\tif summary == \"\" {\n\t\tsummary = SynthFallbackSummary\n\t}",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-fallback-text",
+   "old": "\tSynthFallbackSummary = \"completed successfully\"",
+   "new": "\tSynthFallbackSummary = \"completed\""
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-adapter-coerced",
+   "old": "\treturn d.SynthesizeSkill(in.Goal, summary, in.LoopID, in.Adapter,\n\t\tin.Verbose)",
+   "new": "\treturn d.SynthesizeSkill(in.Goal, summary, in.LoopID,\n\t\tadapterOrNone(in.Adapter), in.Verbose)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-goal-and-loop-id-swapped",
+   "old": "\treturn d.SynthesizeSkill(in.Goal, summary, in.LoopID, in.Adapter,\n\t\tin.Verbose)",
+   "new": "\treturn d.SynthesizeSkill(in.LoopID, summary, in.Goal, in.Adapter,\n\t\tin.Verbose)"
+  },
+  {
+   "file": "internal/loopfinalize/crystallize.go",
+   "name": "synth-verbose-inverted",
+   "old": "\treturn d.SynthesizeSkill(in.Goal, summary, in.LoopID, in.Adapter,\n\t\tin.Verbose)",
+   "new": "\treturn d.SynthesizeSkill(in.Goal, summary, in.LoopID, in.Adapter,\n\t\t!in.Verbose)"
+  }
+ ]
+}

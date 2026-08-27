@@ -15867,3 +15867,83 @@ invisible.
 uses — so `head_test.go` asks CPython for 28 `(s, n)` pairs and compares,
 including every negative arm. An unexercised branch in a helper seven
 packages share is a liability, not generality.
+
+## Phase K: crystallisation, and an adapter that is falsy on one call only (2026-08-27)
+
+`_crystallize_and_synthesize` — skill crystallisation plus the Phase-32
+no-matching-skill synthesis. `internal/loopfinalize/crystallize.go`.
+
+It returns nothing and raises nothing, so a test that checked its return
+value would pass against a body that had been deleted. Everything it does
+is a CALL, so the differential records the calls in order with their
+arguments, plus the warnings and the stderr lines, and compares those. 43
+scenarios; battery 41/41 first run, no survivors.
+
+### The asymmetry worth the whole tranche
+
+```python
+extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
+...
+synthesize_skill(goal=goal, ..., adapter=adapter, verbose=verbose)
+```
+
+The extraction call coerces a falsy adapter to `None`. The synthesis call,
+twenty lines down, passes it raw. With a plain object both spellings agree
+and the difference is invisible; with an adapter whose `__bool__` says no
+— an empty client, a disabled backend — it reaches the synthesiser and
+does not reach the extractor, and only one of the two gets to decide what
+to do about that.
+
+`adapter-falsy-splits-the-two-calls` is the fixture, and it is the only
+one of the three adapter fixtures that can tell `adapterOrNone` from
+identity. On the Go side the falsy stand-in has to be an empty
+`pyval.List` rather than a named type with `[]any` underneath: pyval's
+truthiness switches on EXACT types, so a named type reads as truthy and
+the fixture would have quietly tested the truthy path.
+
+### Two rules a reader would call bugs, reproduced
+
+- `existing_skills` is computed ONCE, before extraction, and is not
+  updated as skills are saved. Two extracted skills with the same name are
+  both saved. The dedupe is against the library on disk, and a second save
+  of the same name is a question for `save_skill`, not for this loop.
+- A `save_skill` that raises aborts the REST of the extracted skills: the
+  `try` wraps the whole loop, not each iteration. So one bad skill costs
+  every skill after it in the list, and the warning says only that
+  extraction failed.
+
+Both are pinned (`duplicate-extracted-name-saves-twice`,
+`save-raises-aborts-the-rest`) rather than fixed. A port that improves its
+source stops being a differential.
+
+### Two try blocks, and the second is not inside the first
+
+An extraction that blew up does NOT skip synthesis, and the two warnings
+have different texts. `extraction-failure-does-not-skip-synthesis` is the
+fixture; without it, nesting the two would pass every other scenario.
+
+### The import failure is fixture-chosen text, and that is stated
+
+`from skills import ...` failing is an environment condition, and CPython's
+message for it names the module and the path it searched. The probe
+installs a module whose every attribute access raises
+`ImportError("no module")` and the Go side's nil-dep guard reports the
+same string, so the differential tests the HANDLING and not the message.
+Pinning CPython's real text here would be pinning the probe's own
+mechanism.
+
+### The L6 guard was scoped to the wrong thing
+
+Adding a third probe to `internal/loopfinalize` made `portguard` fail on
+two fields that no probe reading them could ever see: it concatenated
+every `.py.tpl` in a directory, so an `omitempty` field in one spec struct
+was answerable by a subscript in an unrelated probe.
+
+The fix is not an allowlist row. A `_test.go` is now checked against the
+probes it NAMES, with the whole directory as a fallback for a test that
+builds its probe path some other way — and the narrowing was verified the
+way L9 demands: an `omitempty` was put back on a field the crystallize
+probe really does subscript, the guard fired on it, and it was removed
+again. A check whose blast radius is the directory reports findings the
+code does not have, which is the fastest way to teach a reader to
+allowlist it (**L53**).
