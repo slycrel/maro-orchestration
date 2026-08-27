@@ -1,0 +1,315 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopparallel/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "iteration-bumped-per-step",
+   "old": "iteration := in.Iteration + len(batchSteps)",
+   "new": "iteration := in.Iteration + 1"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "iteration-not-bumped",
+   "old": "iteration := in.Iteration + len(batchSteps)",
+   "new": "iteration := in.Iteration"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "max-workers-not-capped",
+   "old": "\tif len(batchSteps) < maxWorkers {",
+   "new": "\tif false {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "max-workers-is-max",
+   "old": "\tif len(batchSteps) < maxWorkers {",
+   "new": "\tif len(batchSteps) > maxWorkers {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "elapsed-measured-from-zero",
+   "old": "elapsed := int((d.Monotonic() - batchStart) * 1000)",
+   "new": "elapsed := int(d.Monotonic() * 1000)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "elapsed-in-seconds",
+   "old": "elapsed := int((d.Monotonic() - batchStart) * 1000)",
+   "new": "elapsed := int(d.Monotonic() - batchStart)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "batch-status-defaults-done",
+   "old": "\t\tstatus := strField(oc, \"status\", \"blocked\")",
+   "new": "\t\tstatus := strField(oc, \"status\", \"done\")"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "cost-failure-propagates",
+   "old": "\t\t}); err != nil {\n\t\t\td.Debug(fmt.Sprintf(\n\t\t\t\t\"batch record_step_cost failed (non-critical): %s\", err))\n\t\t}",
+   "new": "\t\t}); err != nil {\n\t\t\treturn BatchOut{}, err\n\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "mark-failure-propagates",
+   "old": "\t\t\t\tif err := d.MarkItemDone(ctx.Project, itemIdx); err != nil {\n\t\t\t\t\td.Debug(fmt.Sprintf(\n\t\t\t\t\t\t\"parallel batch mark_item failed: %s\", err))\n\t\t\t\t}",
+   "new": "\t\t\t\tif err := d.MarkItemDone(ctx.Project, itemIdx); err != nil {\n\t\t\t\t\treturn BatchOut{}, err\n\t\t\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "decisions-failure-swallowed",
+   "old": "\t\t\tif err := d.RecordStepDecisions(fmt.Sprint(stepIdx), oc); err != nil {\n\t\t\t\treturn BatchOut{}, err\n\t\t\t}",
+   "new": "\t\t\tif err := d.RecordStepDecisions(fmt.Sprint(stepIdx), oc); err != nil {\n\t\t\t\t_ = err\n\t\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "facts-failure-swallowed",
+   "old": "\t\t\tif err := d.RecordStepWorldFacts(fmt.Sprint(stepIdx), oc); err != nil {\n\t\t\t\treturn BatchOut{}, err\n\t\t\t}",
+   "new": "\t\t\tif err := d.RecordStepWorldFacts(fmt.Sprint(stepIdx), oc); err != nil {\n\t\t\t\t_ = err\n\t\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "item-index-unbounded",
+   "old": "\t\tif bi < len(in.BatchItemIndices) {",
+   "new": "\t\tif true {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "mark-gate-strictly-positive",
+   "old": "\t\t\tif itemIdx >= 0 {",
+   "new": "\t\t\tif itemIdx > 0 {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "excerpt-cap-700",
+   "old": "BatchExcerptCap = 800",
+   "new": "BatchExcerptCap = 700"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "label-cap-60",
+   "old": "StepLabelCap = 80",
+   "new": "StepLabelCap = 60"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "excerpt-not-clipped",
+   "old": "excerpt = pyval.Clip(result, BatchExcerptCap)",
+   "new": "excerpt = result"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "completed-context-one-line",
+   "old": "fmt.Sprintf(\"Step %d (%s):\\n%s\", stepIdx,",
+   "new": "fmt.Sprintf(\"Step %d (%s): %s\", stepIdx,"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "completed-context-uses-batch-index",
+   "old": "fmt.Sprintf(\"Step %d (%s):\\n%s\", stepIdx,",
+   "new": "fmt.Sprintf(\"Step %d (%s):\\n%s\", bi,"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-cap-seven",
+   "old": "InjectCap = 6",
+   "new": "InjectCap = 7"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-sentinel-zero",
+   "old": "InjectLedgerSentinel = -1",
+   "new": "InjectLedgerSentinel = 0"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-appended-not-prepended",
+   "old": "\t\t*in.RemainingSteps = append(append([]string{}, capped...), *in.RemainingSteps...)",
+   "new": "\t\t*in.RemainingSteps = append(*in.RemainingSteps, capped...)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-indices-appended",
+   "old": "\t\t*in.RemainingIndices = append(append([]int{}, idxs...), *in.RemainingIndices...)",
+   "new": "\t\t*in.RemainingIndices = append(*in.RemainingIndices, idxs...)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-mirrors-without-project",
+   "old": "\t\tif ctx.Project != \"\" {",
+   "new": "\t\tif true {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-mirror-failure-keeps-partial",
+   "old": "\t\t\t\td.Warning(fmt.Sprintf(\n\t\t\t\t\t\"parallel inject ledger mirror failed for %s: %s\",\n\t\t\t\t\tctx.Project, err))\n\t\t\t} else {\n\t\t\t\t",
+   "new": "\t\t\t\td.Warning(fmt.Sprintf(\n\t\t\t\t\t\"parallel inject ledger mirror failed for %s: %s\",\n\t\t\t\t\tctx.Project, err))\n\t\t\t\tidxs = got\n\t\t\t} else {\n\t\t\t\t"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "inject-mirror-length-reconciled",
+   "old": "\t\t\t\tidxs = got",
+   "new": "\t\t\t\tfor i := range idxs {\n\t\t\t\t\tif i < len(got) {\n\t\t\t\t\t\tidxs[i] = got[i]\n\t\t\t\t\t}\n\t\t\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "blocked-verbose-shows-result",
+   "old": "stepIdx, pyval.Clip(strField(oc, \"stuck_reason\", \"\"), StepLabelCap)))",
+   "new": "stepIdx, pyval.Clip(strField(oc, \"result\", \"\"), StepLabelCap)))"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "done-verbose-shows-result",
+   "old": "stepIdx, pyval.Clip(strField(oc, \"summary\", \"\"), StepLabelCap)))",
+   "new": "stepIdx, pyval.Clip(strField(oc, \"result\", \"\"), StepLabelCap)))"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "tokens-assigned-not-summed",
+   "old": "\t\tout.TokensIn += intField(oc, \"tokens_in\")",
+   "new": "\t\tout.TokensIn = intField(oc, \"tokens_in\")"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "cache-read-not-summed",
+   "old": "\t\tout.CacheRead += intField(oc, \"cache_read_tokens\")",
+   "new": "\t\tout.CacheRead = intField(oc, \"cache_read_tokens\")"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "cost-line-counts-folded-only",
+   "old": "\tfor _, oc := range outcomes {\n\t\tbatchTokens +=",
+   "new": "\tfor _, oc := range outcomes[:n] {\n\t\tbatchTokens +="
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "batch-zip-not-truncated",
+   "old": "\tn := len(batchSteps)\n\tif len(outcomes) < n {\n\t\tn = len(outcomes)\n\t}",
+   "new": "\tn := len(batchSteps)\n\tif false {\n\t\tn = len(outcomes)\n\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "cost-or-zero-dropped",
+   "old": "\tif !pyval.Truthy(v) {\n\t\treturn 0.0, nil\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "float-forgives-garbage",
+   "old": "\t\treturn 0, fmt.Errorf(\"could not convert string to float: %s\", pyval.Repr(t))",
+   "new": "\t\treturn 0, nil"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "confidence-default-weak",
+   "old": "\t\t\t\tConfidence:    ptrString(strField(oc, \"confidence\", \"unverified\")),\n\t\t\t\tInjectedSteps: rawInjectedSteps(oc),\n\t\t\t\tCallRecord:    strField(oc, \"call_record\", \"\"),\n\t\t\t\tEndedTS:       ptrString(\"\"),\n\t\t\t}))\n\n\t\tswitch status {",
+   "new": "\t\t\t\tConfidence:    ptrString(strField(oc, \"confidence\", \"weak\")),\n\t\t\t\tInjectedSteps: rawInjectedSteps(oc),\n\t\t\t\tCallRecord:    strField(oc, \"call_record\", \"\"),\n\t\t\t\tEndedTS:       ptrString(\"\"),\n\t\t\t}))\n\n\t\tswitch status {"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "resolve-tools-not-called",
+   "old": "in.ProjArtifactDir, ancestry, incremental, d.ResolveTools())",
+   "new": "in.ProjArtifactDir, ancestry, incremental, nil)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "drain-values-swapped",
+   "old": "\tincremental, ancestry := DrainPendingContext(ctx.Ledger, ctx.Ancestry)\n\n\tmaxWorkers",
+   "new": "\tancestry, incremental := DrainPendingContext(ctx.Ledger, ctx.Ancestry)\n\n\tmaxWorkers"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-status-defaults-done",
+   "old": "\t\tst := strField(oc, \"status\", \"blocked\")",
+   "new": "\t\tst := strField(oc, \"status\", \"done\")"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-first-blocked-wins",
+   "old": "\t\tif st == \"blocked\" {\n\t\t\tloopStatus = \"stuck\"",
+   "new": "\t\tif st == \"blocked\" && stuckReason == nil {\n\t\t\tloopStatus = \"stuck\""
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-blocked-default-wording",
+   "old": "s := fmt.Sprintf(\"step %d blocked\", i)",
+   "new": "s := fmt.Sprintf(\"step %d is blocked\", i)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-null-reason-becomes-default",
+   "old": "\t\t\t\t} else if v == nil {\n\t\t\t\t\tstuckReason = nil\n\t\t\t\t}",
+   "new": "\t\t\t\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-item-index-zero-based",
+   "old": "looptypes.StepFromDecompose(stepText, i, looptypes.StepOpts{",
+   "new": "looptypes.StepFromDecompose(stepText, i-1, looptypes.StepOpts{"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-iteration-zero",
+   "old": "\t\t\t\tIteration:     i,",
+   "new": "\t\t\t\tIteration:     0,"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-elapsed-from-zero",
+   "old": "res.ElapsedMS = int((d.Monotonic() - ctx.StartedAt) * 1000)",
+   "new": "res.ElapsedMS = int(d.Monotonic() * 1000)"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-callback-cap-100",
+   "old": "CallbackResultCap = 120",
+   "new": "CallbackResultCap = 100"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-callback-failure-propagates",
+   "old": "\t\t\t\tst); err != nil {\n\t\t\t\td.Debug(fmt.Sprintf(\n\t\t\t\t\t\"step_callback raised on parallel step %d: %s\", i, err))",
+   "new": "\t\t\t\tst); err != nil {\n\t\t\t\treturn nil, err"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-dag-folds-raw-steps",
+   "old": "\t\tstepTexts = in.CleanSteps",
+   "new": "\t\tstepTexts = in.Steps"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-dag-banner-numbers-swapped",
+   "old": "\t\t\t\tlen(*in.Levels), len(in.ParallelLevels)))",
+   "new": "\t\t\t\tlen(in.ParallelLevels), len(*in.Levels)))"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-loop-status-defaults-stuck",
+   "old": "\tloopStatus := \"done\"",
+   "new": "\tloopStatus := \"stuck\""
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-zip-not-truncated",
+   "old": "\tn := len(stepTexts)\n\tif len(outcomes) < n {\n\t\tn = len(outcomes)\n\t}",
+   "new": "\tn := len(stepTexts)\n\tif false {\n\t\tn = len(outcomes)\n\t}"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "path-tokens-not-summed",
+   "old": "\t\ttokensIn += intField(oc, \"tokens_in\")",
+   "new": "\t\ttokensIn = intField(oc, \"tokens_in\")"
+  },
+  {
+   "file": "internal/loopparallel/folds.go",
+   "name": "ended-ts-uses-the-clock",
+   "old": "\t\t\t\tCallRecord:    strField(oc, \"call_record\", \"\"),\n\t\t\t\tEndedTS:       ptrString(\"\"),\n\t\t\t}))\n\t\tif st == \"done\" {",
+   "new": "\t\t\t\tCallRecord:    strField(oc, \"call_record\", \"\"),\n\t\t\t\tEndedTS:       nil,\n\t\t\t}))\n\t\tif st == \"done\" {"
+  }
+ ]
+}

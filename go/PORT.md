@@ -15548,3 +15548,141 @@ Four survived the first pass, and they were four different things:
 Final: **34/34** on `agentloop`, **36/36** on `pyargparse` (39 written,
 three retired above), and `loopfinalize`'s 68 re-run green after its
 fixtures changed.
+
+## Phase I: the two folds, and a path that invents ledger indices (2026-08-27)
+
+`internal/loopparallel` had the SCHEDULERS since its first slice —
+`_run_steps_parallel` and `_run_steps_dag`, the two functions that decide
+what runs and in what grouping. This tranche takes the FOLDS:
+`_run_parallel_batch` and `_run_parallel_path`, which decide what the run
+MEANT. They turn a scheduler's outcome dicts into StepOutcomes, a
+LoopResult, ledger writes and the lines an operator reads.
+
+They were slice 2 because they reach loop_post_step, orch and metrics, and
+none of those had a Go twin a fold could call. They still don't; each
+arrives as a Deps func, and the boundary is a declaration rather than an
+omission.
+
+### The exception discipline is not uniform, and that is the fix from a
+### previous review
+
+Python wraps four calls in `try/except Exception` and leaves two bare. The
+bare pair is the DECISION fan-out — `record_step_decisions` and
+`record_step_world_facts` — added by a chunk-3 review finding, because the
+parallel paths bypassed `_process_done_step` and silently dropped every
+decision a parallel step made. Wrapping them again would undo that fix
+quietly, which is exactly the failure it was written to stop.
+
+So the port's Deps signatures encode it: a func whose error is swallowed to
+a log line and a func whose error is RETURNED are different contracts, and
+the differential drives both (`batch-decisions-failure-propagates` against
+`batch-cost-failure-is-non-critical`). Four fixtures, four different
+answers, from six calls that look alike in the source.
+
+### Arithmetic a reader will assume is per-step, and is not
+
+- `iteration += len(_batch_steps)` runs BEFORE the fold, so every outcome
+  in a batch carries the same, final iteration number. Nothing counts up
+  through the batch.
+- `_b_elapsed` is measured from the BATCH's start for every member, so a
+  four-step batch records four near-identical durations that are really the
+  batch's own elapsed time. That is why each outcome passes `ended_ts=""`:
+  it opts out of `step_from_decompose`'s "now" default so the report's
+  timeline stays in its approximate mode instead of rendering fabricated
+  precision (2026-07-08 review).
+- On the fan-out path there is no per-worker timing AT ALL, so every
+  outcome records `elapsed_ms=0`, and the same `ended_ts=""` sentinel keeps
+  those from reading as real zero-duration steps.
+- `stuck_reason` is ASSIGNED, not accumulated, so the LAST blocked step is
+  the one the run reports. Earlier blocks survive only in the per-step
+  outcomes.
+
+### zip() truncates, and nothing says so
+
+Both folds iterate `zip(step_texts, outcomes)`. A scheduler that returned
+fewer outcomes than it was given steps leaves the tail unprocessed and
+unreported — no error, no blocked outcome, the steps simply do not appear
+in `step_outcomes`. Extra outcomes are dropped from the fold but still
+counted in the batch's cost log line, because that sum iterates the raw
+list. Both directions are fixtured.
+
+### `float(x or 0.0)` is two operations and the order matters
+
+```python
+_provider_cost_delta += float(_batch_oc.get("provider_cost_usd", 0.0) or 0.0)
+```
+
+The `or` runs FIRST, so a falsy value — `None`, `0`, `""`, an empty list —
+becomes `0.0` and never reaches the conversion. Only a TRUTHY non-number
+raises, and it raises out of the whole fold: this line is not inside a try.
+A numeric string converts fine. The port carries a local `pyFloat` rather
+than the module's forgiving `FloatOf`, because a forgiving conversion here
+turns a crash into a silently free step.
+
+### The one that is worth a Python-side fix
+
+`_run_parallel_batch` is careful about NEXT.md item indices: it threads
+`batch_item_indices` from the caller, bounds-checks it, falls back to `-1`
+for "not a project item", and gates `mark_item` on `>= 0`.
+
+`_run_parallel_path`, twenty lines later, passes the ENUMERATION COUNTER as
+the item index — 1, 2, 3 — whatever the project's ledger holds, and whether
+or not the run has a project. It never calls `mark_item`, so nothing is
+mis-marked; it is the outcome RECORD that carries the wrong reference, and
+anything reading `StepOutcome.index` as a ledger id on this path is reading
+step ordinals. Reproduced, pinned by `path-item-index-is-the-counter`, and
+filed in BACKLOG.md rather than fixed here.
+
+### `len(None)` is reachable, and only when you are watching
+
+`levels` is typed `Optional[List[Any]]` and is read exactly once, inside the
+DAG path's verbose banner. So a quiet run with `levels=None` finishes
+normally and a verbose one dies with `TypeError: object of type 'NoneType'
+has no len()`. The port keeps `Levels` a pointer so None stays
+distinguishable from an empty list, and raises in the same place — both
+arms fixtured (`path-dag-quiet-survives-none-levels`,
+`path-dag-verbose-none-levels-raises`). Inventing a tolerance CPython does
+not have would hide the crash until someone turned verbose on.
+
+### A difference the type system will not let the differential carry
+
+Both folds pass `oc.get("inject_steps", [])` RAW into `step_from_decompose`.
+Python's field annotation is `List[str]` and annotations enforce nothing, so
+a step body that answered a string or a list with a number in it puts that
+object verbatim into the outcome. Go's field is `[]string` and cannot.
+
+The INJECTION half — `isinstance(..., list)` and the `str(s).strip()`
+filter, which is the half that changes the plan — is pinned by a Go test
+that drives both malformed shapes. The outcome-row divergence is filed in
+BACKLOG.md with the two ways out, rather than papered over by a normaliser
+in the differential: a comparison that smooths a difference has moved the
+assertion into the smoother (**L51**).
+
+### One helper, not two
+
+Comparing StepOutcomes against `dataclasses.asdict` needs the 24-field
+mapping, and `internal/looptypes`' own differential already had it as a
+private test helper. Copying it here is how two differentials start
+disagreeing about which fields exist (**L14**), so it moved onto the type as
+`StepOutcome.AsDict()` and both callers use it. A field added to the struct
+and forgotten there now shows up as a length mismatch in every differential
+that compares against asdict.
+
+### The three survivors
+
+- **`mark-gate-strictly-positive`** (`itemIdx >= 0` → `> 0`) and
+  **`path-status-defaults-done`** were both real fixture gaps: no scenario
+  used item index exactly 0 — the FIRST row of NEXT.md — and every fan-out
+  outcome set its status explicitly, so the `"blocked"` default on that
+  path was never taken. Two fixtures, both killed.
+- **`empty-item-indices-are-indices`** was the interesting one. The port
+  spelled Python's guard out as
+  `len(in.BatchItemIndices) > 0 && bi < len(in.BatchItemIndices)`, and the
+  mutation that deletes the first term cannot change an answer: in Go the
+  bounds check SUBSUMES the truthiness test, because a nil or empty slice
+  has length 0 and no index is below it. The redundant term was removed
+  rather than allowlisted — a clause a reader has to re-derive as dead is
+  worse than the Python idiom it was transcribing.
+
+Final: **51/51 killed**, spec in
+`go/tools/batteries/loopparallel-folds.json`.

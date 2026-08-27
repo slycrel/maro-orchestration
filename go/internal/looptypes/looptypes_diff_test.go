@@ -626,21 +626,10 @@ func TestStepFromDecomposeMatchesCPython(t *testing.T) {
 // an int and a float that happen to be equal are not reported as different.
 func asPyDict(t *testing.T, o StepOutcome) map[string]any {
 	t.Helper()
-	m := map[string]any{
-		"index": o.Index, "text": o.Text, "status": o.Status,
-		"result": o.Result, "iteration": o.Iteration,
-		"tokens_in": o.TokensIn, "tokens_out": o.TokensOut,
-		"cache_read_tokens": o.CacheReadTokens,
-		"provider_cost_usd": o.ProviderCostUSD, "elapsed_ms": o.ElapsedMS,
-		"confidence": o.Confidence, "injected_steps": o.InjectedSteps,
-		"call_record": o.CallRecord, "ended_ts": o.EndedTS,
-		"executor_session_id":      o.ExecutorSessionID,
-		"executor_session_resumed": o.ExecutorSessionResumed,
-		"started_ts":               o.StartedTS, "model": o.Model,
-		"model_tier": o.ModelTier, "tier_escalated_from": o.TierEscalatedFrom,
-		"venue": o.Venue, "artifact_check": o.ArtifactCheck,
-	}
-	b, err := json.Marshal(m)
+	// The mapping itself lives on the type (StepOutcome.AsDict) because a
+	// second differential needs it too, and two copies of a 24-field
+	// mapping is how they start disagreeing about which fields exist.
+	b, err := json.Marshal(o.AsDict())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -42,6 +42,60 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### PYTHON-side: the fan-out path claims NEXT.md item indices 1..n (FOUND 2026-08-27, loopparallel folds differential)
+
+`_run_parallel_batch` is careful about ledger indices. It threads
+`batch_item_indices` through from the caller, bounds-checks it, and falls
+back to `-1` — "not a project item" — whenever it does not have a real
+one. `mark_item` is then gated on `_b_item_idx >= 0`, so a step with no
+ledger row never marks one.
+
+`_run_parallel_path`, twenty lines further down, does this instead:
+
+```python
+for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
+    _fanout_step_outcomes.append(step_from_decompose(
+        _step_text, _i,
+        ...
+```
+
+The second positional of `step_from_decompose` is the ITEM INDEX. So every
+step on the fan-out and DAG paths is stamped with the enumeration counter —
+1, 2, 3… — whatever the project's NEXT.md actually holds, and whether or
+not the run has a project at all.
+
+Reproduced faithfully in `internal/loopparallel` (`RunParallelPath`) and
+pinned by the `path-item-index-is-the-counter` scenario, rather than fixed,
+because a port that improves its source stops being a differential.
+
+What it costs is not obvious from the fold itself, because this path never
+calls `mark_item` — it is the outcome RECORD that carries the wrong index.
+Anything reading `StepOutcome.index` as a ledger reference (the run report's
+`ledger #N`, the plan-header progress count) is reading step ordinals as
+item ids on this path. Worth deciding whether the honest value is `-1`
+here, the way the batch path spells "I do not have one".
+
+### Go port: `StepOutcome.injected_steps` is typed and Python's is not (FOUND 2026-08-27, loopparallel folds tranche)
+
+Both folds pass `_batch_oc.get("inject_steps", [])` — the RAW dict value —
+straight into `step_from_decompose`. Python's dataclass field is annotated
+`List[str]` and annotations do not enforce anything, so a step body that
+answered a bare string, a dict, or a list with a number in it puts that
+object verbatim into the outcome record, and from there into the run's
+serialized steps.
+
+Go's field is `[]string`. `rawInjectedSteps` therefore stores an empty list
+for anything that is not a list of strings, which is a real divergence on
+the outcome ROW (not on the injection, which both languages guard with
+`isinstance(..., list)` and a `str(s).strip()` filter — that half is pinned
+by `TestMalformedInjectStepsAffectsOnlyTheOutcomeRow`).
+
+Two ways out, neither urgent: widen the Go field to `[]any` (blast radius
+is every package that reads a StepOutcome), or establish that `step_exec`
+already normalises `inject_steps` to a list of strings before it can reach
+here, in which case the divergence is unreachable and the note is the whole
+fix. Nobody has checked which.
+
 ### PYTHON-side: `maro-run --verbose` cannot do anything (FOUND 2026-08-27, agentloop differential)
 
 `agent_loop.main` ends with:

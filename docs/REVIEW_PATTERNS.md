@@ -251,7 +251,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 41*
+*instances: 42*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -444,7 +444,7 @@ and the tell is the same — a correct fix, at the one site that had the
 evidence.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 31*
+*instances: 32*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -531,7 +531,7 @@ Fixtures for a reader must be LINES, not literals.
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 26*
+*instances: 27*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
@@ -1087,7 +1087,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 18*
+*instances: 19*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1311,7 +1311,7 @@ can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
 
 ### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
-*instances: 7*
+*instances: 8*
 
 **Instance 6 is the one no fixture can reach** (syshealth r3, 2026-08-26).
 The first five erased a value or a question on ONE side. This one erased a

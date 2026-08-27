@@ -313,6 +313,31 @@ type StepOutcome struct {
 	ArtifactCheck string
 }
 
+// AsDict renders a StepOutcome under the DATACLASS's own field names —
+// `dataclasses.asdict(outcome)`, key for key.
+//
+// It is exported because more than one package's CPython differential
+// needs it, and the second copy of a 24-field mapping is how two
+// differentials start disagreeing about which fields exist (L14). A field
+// added to the struct and forgotten here shows up as a length mismatch in
+// every differential that compares against asdict, which is the point.
+func (o StepOutcome) AsDict() map[string]any {
+	return map[string]any{
+		"index": o.Index, "text": o.Text, "status": o.Status,
+		"result": o.Result, "iteration": o.Iteration,
+		"tokens_in": o.TokensIn, "tokens_out": o.TokensOut,
+		"cache_read_tokens": o.CacheReadTokens,
+		"provider_cost_usd": o.ProviderCostUSD, "elapsed_ms": o.ElapsedMS,
+		"confidence": o.Confidence, "injected_steps": o.InjectedSteps,
+		"call_record": o.CallRecord, "ended_ts": o.EndedTS,
+		"executor_session_id":      o.ExecutorSessionID,
+		"executor_session_resumed": o.ExecutorSessionResumed,
+		"started_ts":               o.StartedTS, "model": o.Model,
+		"model_tier": o.ModelTier, "tier_escalated_from": o.TierEscalatedFrom,
+		"venue": o.Venue, "artifact_check": o.ArtifactCheck,
+	}
+}
+
 // StepOpts is `step_from_decompose`'s keyword-only tail.
 //
 // Three fields are POINTERS and the rest are plain, and that split is the
