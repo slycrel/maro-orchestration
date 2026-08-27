@@ -51,20 +51,51 @@ type ImportOpts struct {
 
 // ImportReport carries the same keys as Python's report dict so the audit
 // rows are cross-runtime comparable.
+//
+// The rows are pyval.Obj, not map[string]any: every one of them is a
+// Python dict LITERAL, and this whole report is json.dumps'd into
+// memory/imports.jsonl — a shared audit ledger both runtimes append to
+// and a human greps. A sorted row is a different stored value from an
+// insertion-order one even when every key and value agrees.
 type ImportReport struct {
-	Pack                     string           `json:"pack"`
-	PackTag                  string           `json:"pack_tag"`
-	Label                    string           `json:"label"`
-	ImportedAt               string           `json:"imported_at"`
-	DryRun                   bool             `json:"dry_run"`
-	RulesDemotedToHypotheses []map[string]any `json:"rules_demoted_to_hypotheses"`
-	HypothesesImported       []map[string]any `json:"hypotheses_imported"`
-	LessonsImported          []map[string]any `json:"lessons_imported"`
-	SkillRecordsImported     []map[string]any `json:"skill_records_imported"`
-	SkillsMD                 []map[string]any `json:"skills_md"`
-	PersonasMD               []map[string]any `json:"personas_md"`
-	Quarantined              []map[string]any `json:"quarantined"`
-	QuarantinedUnknown       []map[string]any `json:"quarantined_unknown"`
+	Pack                     string      `json:"pack"`
+	PackTag                  string      `json:"pack_tag"`
+	Label                    string      `json:"label"`
+	ImportedAt               string      `json:"imported_at"`
+	DryRun                   bool        `json:"dry_run"`
+	RulesDemotedToHypotheses []pyval.Obj `json:"rules_demoted_to_hypotheses"`
+	HypothesesImported       []pyval.Obj `json:"hypotheses_imported"`
+	LessonsImported          []pyval.Obj `json:"lessons_imported"`
+	SkillRecordsImported     []pyval.Obj `json:"skill_records_imported"`
+	SkillsMD                 []pyval.Obj `json:"skills_md"`
+	PersonasMD               []pyval.Obj `json:"personas_md"`
+	Quarantined              []pyval.Obj `json:"quarantined"`
+	QuarantinedUnknown       []pyval.Obj `json:"quarantined_unknown"`
+}
+
+// malformedRow is the per-row fault row every trust lane writes, in
+// CPython's order: the id field, then outcome, then error (pack.py:578,
+// 635, 852). It is one helper rather than eight literals because the
+// order is the same at every site and a hand-copied literal is how one
+// of them drifts.
+func malformedRow(idField, idValue string, err error) pyval.Obj {
+	return pyval.Obj{
+		{Key: idField, Val: idValue},
+		{Key: "outcome", Val: "malformed_skipped"},
+		{Key: "error", Val: err.Error()},
+	}
+}
+
+// withClassFirst is Python's `{"class": cls, **rest}` — `class` takes the
+// FIRST ordinal and the spread follows, so a quarantine row reads
+// {class, path, outcome}. Set, not append, so a `class` already inside
+// rest is overwritten in place exactly as the spread would.
+func withClassFirst(cls string, rest pyval.Obj) pyval.Obj {
+	out := pyval.Obj{{Key: "class", Val: cls}}
+	for _, f := range rest {
+		out.Set(f.Key, f.Val)
+	}
+	return out
 }
 
 // safeLabel ports _safe_label.
@@ -98,9 +129,8 @@ func safeRelpath(relpath, what string) error {
 	return nil
 }
 
-func artifactRelpath(a map[string]any) (string, error) {
-	p, _ := a["path"].(string)
-	rel := strings.TrimPrefix(p, "artifacts/")
+func artifactRelpath(a pyval.Obj) (string, error) {
+	rel := strings.TrimPrefix(a.GetString("path"), "artifacts/")
 	if err := safeRelpath(rel, "artifact"); err != nil {
 		return "", err
 	}
@@ -141,7 +171,7 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	// alone let type-confused values bypass the version gate entirely.
 	// Python's `fmt > PACK_FORMAT` TypeErrors on the same input — an ugly
 	// crash, but closed).
-	if raw, present := manifest["pack_format"]; present {
+	if raw, present := manifest.Get("pack_format"); present {
 		num, ok := raw.(json.Number)
 		if !ok {
 			return nil, fmt.Errorf("import refused: pack_format is not a number: %v", raw)
@@ -155,8 +185,10 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 		}
 	}
 
-	review, _ := manifest["review"].(map[string]any)
-	humanReviewed, _ := review["human_reviewed"].(bool)
+	reviewRaw, _ := manifest.Get("review")
+	review, _ := reviewRaw.(pyval.Obj)
+	reviewHuman, _ := review.Get("human_reviewed")
+	humanReviewed, _ := reviewHuman.(bool)
 	if !humanReviewed && !opts.AllowUnreviewed {
 		return nil, fmt.Errorf(
 			"import refused: pack is not sealed (review.human_reviewed=false) — " +
@@ -168,7 +200,7 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	artifacts := manifestArtifacts(manifest)
 	artifactBytes := map[string][]byte{}
 	for _, a := range artifacts {
-		p, _ := a["path"].(string)
+		p := a.GetString("path")
 		if p == "pack.json" || p == "REVIEW.md" {
 			// Seal excludes the reserved members before its bijection loop,
 			// so it refuses these; Import read them from the raw member map
@@ -207,13 +239,13 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	}
 
 	if humanReviewed {
-		expected, _ := review["review_manifest_sha256"].(string)
+		expected := review.GetString("review_manifest_sha256")
 		if expected == "" || sha256Text(archivedReview) != expected {
 			return nil, fmt.Errorf(
 				"import refused: REVIEW.md in the archive does not match the sealed " +
 					"hash — possible post-seal tampering")
 		}
-		expectedPayload, _ := review["review_payload_sha256"].(string)
+		expectedPayload := review.GetString("review_payload_sha256")
 		marker := fmt.Sprintf("Reviewed payload SHA-256: `%s`", expectedPayload)
 		actualPayload, err := payloadSHA256(artifacts, artifactBytes)
 		if err != nil {
@@ -230,8 +262,8 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	// Independently verify every artifact's declared sha256. Fail closed on
 	// missing or mismatched hashes even for --allow-unreviewed imports.
 	for _, a := range artifacts {
-		p, _ := a["path"].(string)
-		declared, _ := a["sha256"].(string)
+		p := a.GetString("path")
+		declared := a.GetString("sha256")
 		if declared == "" || sha256Text(string(artifactBytes[p])) != declared {
 			return nil, fmt.Errorf(
 				"import refused: artifact %q does not match its manifest sha256 — "+
@@ -239,7 +271,7 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 		}
 	}
 
-	packName, _ := manifest["name"].(string)
+	packName := manifest.GetString("name")
 	if packName == "" {
 		packName = strings.TrimSuffix(filepath.Base(opts.PackPath), ArchiveSuffix)
 	}
@@ -253,14 +285,14 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	report := &ImportReport{
 		Pack: packName, PackTag: packTag, Label: opts.Label,
 		ImportedAt: now, DryRun: opts.DryRun,
-		RulesDemotedToHypotheses: []map[string]any{},
-		HypothesesImported:       []map[string]any{},
-		LessonsImported:          []map[string]any{},
-		SkillRecordsImported:     []map[string]any{},
-		SkillsMD:                 []map[string]any{},
-		PersonasMD:               []map[string]any{},
-		Quarantined:              []map[string]any{},
-		QuarantinedUnknown:       []map[string]any{},
+		RulesDemotedToHypotheses: []pyval.Obj{},
+		HypothesesImported:       []pyval.Obj{},
+		LessonsImported:          []pyval.Obj{},
+		SkillRecordsImported:     []pyval.Obj{},
+		SkillsMD:                 []pyval.Obj{},
+		PersonasMD:               []pyval.Obj{},
+		Quarantined:              []pyval.Obj{},
+		QuarantinedUnknown:       []pyval.Obj{},
 	}
 
 	store := knowledge.NewStore(ws)
@@ -284,13 +316,12 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 	}
 	err = record.Locked(gate, func() error {
 		for _, artifact := range artifacts {
-			cls, _ := artifact["class"].(string)
+			cls := artifact.GetString("class")
 			rel, err := artifactRelpath(artifact)
 			if err != nil {
 				return err
 			}
-			p, _ := artifact["path"].(string)
-			content := string(artifactBytes[p])
+			content := string(artifactBytes[artifact.GetString("path")])
 			switch {
 			case cls == "rules":
 				rows, err := imp.importRulesAsHypotheses(content)
@@ -318,9 +349,16 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 				if err != nil {
 					return err
 				}
-				res["outcome"] = "quarantined_no_native_skill_store_v1"
-				res["class"] = cls
-				report.SkillRecordsImported = append(report.SkillRecordsImported, res)
+				// The outcome is REPLACED in place — position two, where
+				// _quarantine_single put it — and `class` takes the lead,
+				// so this row reads like the quarantine rows it is a
+				// sibling of. There is no CPython counterpart to copy an
+				// order from (CPython imports these natively), so the
+				// order is borrowed from the lane this row belongs to
+				// rather than invented.
+				res.Set("outcome", "quarantined_no_native_skill_store_v1")
+				report.SkillRecordsImported = append(
+					report.SkillRecordsImported, withClassFirst(cls, res))
 			case cls == "skill_md":
 				res, err := imp.importAuthoredMD("skills", rel, content)
 				if err != nil {
@@ -338,15 +376,16 @@ func Import(opts ImportOpts) (*ImportReport, error) {
 				if err != nil {
 					return err
 				}
-				res["class"] = cls
-				report.Quarantined = append(report.Quarantined, res)
+				// pack.py:1144-1145 — `{"class": cls, **_quarantine_single(...)}`.
+				report.Quarantined = append(report.Quarantined, withClassFirst(cls, res))
 			default:
 				res, err := imp.quarantineSingle("unknown/"+rel, content)
 				if err != nil {
 					return err
 				}
-				res["class"] = cls
-				report.QuarantinedUnknown = append(report.QuarantinedUnknown, res)
+				// pack.py:1147-1148 — the same spread, unknown/ prefixed.
+				report.QuarantinedUnknown = append(
+					report.QuarantinedUnknown, withClassFirst(cls, res))
 			}
 		}
 		if !opts.DryRun {
@@ -506,33 +545,35 @@ func (im *importer) provenanceStamp(originalID, originalClass string, row map[st
 }
 
 // importRulesAsHypotheses: standing rules demote to Hypothesis on arrival.
-func (im *importer) importRulesAsHypotheses(content string) ([]map[string]any, error) {
+func (im *importer) importRulesAsHypotheses(content string) ([]pyval.Obj, error) {
 	snap, err := im.store.HypothesisSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	var results []map[string]any
+	var results []pyval.Obj
 	for _, sr := range scanRows(content) {
 		if sr.err != nil {
-			results = append(results, map[string]any{
-				"rule_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			results = append(results, malformedRow("rule_id", "", sr.err))
 			continue
 		}
 		row := sr.row
 		originalID, rawID, err := rowID(row, "rule_id")
 		if err != nil {
-			results = append(results, map[string]any{
-				"rule_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
+			results = append(results, malformedRow("rule_id", rawID, err))
 			continue
 		}
 		ruleText, _ := row["rule"].(string)
 		hypID := fmt.Sprintf("imported-%s-%s", im.packName, originalID)
 		if snap.IDs[hypID] {
-			results = append(results, map[string]any{"rule_id": originalID, "outcome": "already_imported"})
+			results = append(results, pyval.Obj{
+				{Key: "rule_id", Val: originalID},
+				{Key: "outcome", Val: "already_imported"}})
 			continue
 		}
 		if ruleText != "" && snap.Texts[ruleText] {
-			results = append(results, map[string]any{"rule_id": originalID, "outcome": "skipped_identical"})
+			results = append(results, pyval.Obj{
+				{Key: "rule_id", Val: originalID},
+				{Key: "outcome", Val: "skipped_identical"}})
 			continue
 		}
 		domain, _ := row["domain"].(string)
@@ -545,46 +586,50 @@ func (im *importer) importRulesAsHypotheses(content string) ([]map[string]any, e
 		}
 		if !im.dryRun {
 			if err := im.store.AppendHypothesis(hyp); err != nil {
-				results = append(results, map[string]any{
-					"rule_id": originalID, "outcome": "malformed_skipped", "error": err.Error()})
+				results = append(results, malformedRow("rule_id", originalID, err))
 				continue
 			}
 		}
 		snap.IDs[hypID] = true
-		results = append(results, map[string]any{
-			"rule_id": originalID, "hyp_id": hypID, "outcome": "demoted_to_hypothesis"})
+		// pack.py:571 — rule_id, hyp_id, outcome.
+		results = append(results, pyval.Obj{
+			{Key: "rule_id", Val: originalID},
+			{Key: "hyp_id", Val: hypID},
+			{Key: "outcome", Val: "demoted_to_hypothesis"}})
 	}
 	return results, nil
 }
 
 // importHypotheses: already-hypothesis rows still reset trust on arrival.
-func (im *importer) importHypotheses(content string) ([]map[string]any, error) {
+func (im *importer) importHypotheses(content string) ([]pyval.Obj, error) {
 	snap, err := im.store.HypothesisSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	var results []map[string]any
+	var results []pyval.Obj
 	for _, sr := range scanRows(content) {
 		if sr.err != nil {
-			results = append(results, map[string]any{
-				"hyp_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			results = append(results, malformedRow("hyp_id", "", sr.err))
 			continue
 		}
 		row := sr.row
 		originalID, rawID, err := rowID(row, "hyp_id")
 		if err != nil {
-			results = append(results, map[string]any{
-				"hyp_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
+			results = append(results, malformedRow("hyp_id", rawID, err))
 			continue
 		}
 		lessonText, _ := row["lesson"].(string)
 		hypID := fmt.Sprintf("imported-%s-%s", im.packName, originalID)
 		if snap.IDs[hypID] {
-			results = append(results, map[string]any{"hyp_id": originalID, "outcome": "already_imported"})
+			results = append(results, pyval.Obj{
+				{Key: "hyp_id", Val: originalID},
+				{Key: "outcome", Val: "already_imported"}})
 			continue
 		}
 		if lessonText != "" && snap.Texts[lessonText] {
-			results = append(results, map[string]any{"hyp_id": originalID, "outcome": "skipped_identical"})
+			results = append(results, pyval.Obj{
+				{Key: "hyp_id", Val: originalID},
+				{Key: "outcome", Val: "skipped_identical"}})
 			continue
 		}
 		domain, _ := row["domain"].(string)
@@ -597,14 +642,16 @@ func (im *importer) importHypotheses(content string) ([]map[string]any, error) {
 		}
 		if !im.dryRun {
 			if err := im.store.AppendHypothesis(hyp); err != nil {
-				results = append(results, map[string]any{
-					"hyp_id": originalID, "outcome": "malformed_skipped", "error": err.Error()})
+				results = append(results, malformedRow("hyp_id", originalID, err))
 				continue
 			}
 		}
 		snap.IDs[hypID] = true
-		results = append(results, map[string]any{
-			"hyp_id": originalID, "new_hyp_id": hypID, "outcome": "imported"})
+		// pack.py:633 — hyp_id, new_hyp_id, outcome.
+		results = append(results, pyval.Obj{
+			{Key: "hyp_id", Val: originalID},
+			{Key: "new_hyp_id", Val: hypID},
+			{Key: "outcome", Val: "imported"}})
 	}
 	return results, nil
 }
@@ -826,23 +873,21 @@ func asString(v any) string {
 // importLessons: MEDIUM tier regardless of origin tier, score capped 0.5,
 // counters reset, provenance gate re-applied (conservative union — either
 // side saying "prompt" quarantines).
-func (im *importer) importLessons(content string) ([]map[string]any, error) {
+func (im *importer) importLessons(content string) ([]pyval.Obj, error) {
 	snap, err := im.store.LessonSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	var results []map[string]any
+	var results []pyval.Obj
 	for _, sr := range scanRows(content) {
 		if sr.err != nil {
-			results = append(results, map[string]any{
-				"lesson_id": "", "outcome": "malformed_skipped", "error": sr.err.Error()})
+			results = append(results, malformedRow("lesson_id", "", sr.err))
 			continue
 		}
 		row := sr.row
 		originalID, rawID, err := rowID(row, "lesson_id")
 		if err != nil {
-			results = append(results, map[string]any{
-				"lesson_id": rawID, "outcome": "malformed_skipped", "error": err.Error()})
+			results = append(results, malformedRow("lesson_id", rawID, err))
 			continue
 		}
 		res := im.importOneLesson(row, originalID, snap)
@@ -852,11 +897,13 @@ func (im *importer) importLessons(content string) ([]map[string]any, error) {
 }
 
 func (im *importer) importOneLesson(row map[string]any, originalID string,
-	snap *knowledge.DedupSnapshot) map[string]any {
+	snap *knowledge.DedupSnapshot) pyval.Obj {
 	lessonText, _ := row["lesson"].(string)
 	newID := fmt.Sprintf("imported-%s-%s", im.packName, originalID)
 	if snap.IDs[newID] {
-		return map[string]any{"lesson_id": originalID, "outcome": "already_imported"}
+		return pyval.Obj{
+			{Key: "lesson_id", Val: originalID},
+			{Key: "outcome", Val: "already_imported"}}
 	}
 	if lessonText != "" && snap.Texts[lessonText] {
 		// Identity collision skips the ROW, not its rationale — incoming
@@ -865,12 +912,14 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 		inVars := importVariants(row["merged_variants"])
 		if len(inVars) > 0 && !im.dryRun {
 			if err := im.store.UnionVariantsIntoLesson(lessonText, inVars); err != nil {
-				return map[string]any{"lesson_id": originalID,
-					"outcome": "malformed_skipped", "error": err.Error()}
+				return malformedRow("lesson_id", originalID, err)
 			}
 		}
-		return map[string]any{"lesson_id": originalID,
-			"outcome": "skipped_identical", "variants_merged": len(inVars)}
+		// pack.py:727-728 — lesson_id, outcome, variants_merged.
+		return pyval.Obj{
+			{Key: "lesson_id", Val: originalID},
+			{Key: "outcome", Val: "skipped_identical"},
+			{Key: "variants_merged", Val: len(inVars)}}
 	}
 
 	// The error text is `str(exc)` from Python's per-row except and it rides
@@ -881,16 +930,14 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	// string an operator cannot grep across both.
 	originalScore, err := pyFloatGet(row, "score", 1.0)
 	if err != nil {
-		return map[string]any{"lesson_id": originalID,
-			"outcome": "malformed_skipped", "error": err.Error()}
+		return malformedRow("lesson_id", originalID, err)
 	}
 	confidence, err := pyFloatGet(row, "confidence", 0.5)
 	if err != nil {
 		// Coerce at the border: a junk value costs the import (reported),
 		// not the store (a non-numeric confidence is load-fatal in Python's
 		// knowledge_web).
-		return map[string]any{"lesson_id": originalID,
-			"outcome": "malformed_skipped", "error": err.Error()}
+		return malformedRow("lesson_id", originalID, err)
 	}
 
 	scopeClean, scopeBad := knowledge.CoerceScope(row["scope"])
@@ -1033,8 +1080,7 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	}
 	if !im.dryRun {
 		if err := im.store.AppendMediumLesson(tl); err != nil {
-			return map[string]any{"lesson_id": originalID,
-				"outcome": "malformed_skipped", "error": err.Error()}
+			return malformedRow("lesson_id", originalID, err)
 		}
 	}
 	snap.IDs[newID] = true
@@ -1045,7 +1091,11 @@ func (im *importer) importOneLesson(row map[string]any, originalID string,
 	if mintedFrom == "prompt" {
 		outcome = "imported_medium_quarantined"
 	}
-	return map[string]any{"lesson_id": originalID, "new_id": newID, "outcome": outcome}
+	// pack.py:850 — lesson_id, new_id, outcome.
+	return pyval.Obj{
+		{Key: "lesson_id", Val: originalID},
+		{Key: "new_id", Val: newID},
+		{Key: "outcome", Val: outcome}}
 }
 
 func (im *importer) quarantineDir() string {
@@ -1097,21 +1147,30 @@ func (im *importer) writeQuarantine(path, content string) (bool, error) {
 	return already, err
 }
 
-func (im *importer) quarantineSingle(relpath, content string) (map[string]any, error) {
+// quarantineSingle ports _quarantine_single (pack.py:1010-1019), whose
+// return is {path, outcome} — the two keys its callers then spread a
+// `class` in FRONT of.
+func (im *importer) quarantineSingle(relpath, content string) (pyval.Obj, error) {
 	path := filepath.Join(im.quarantineDir(), filepath.FromSlash(relpath))
 	if im.dryRun {
 		text, rerr := pyval.ReadText(path)
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return nil, rerr // `path.exists() and path.read_text(...)`
 		}
-		return map[string]any{"path": relpath,
-			"outcome": quarantineOutcome(rerr == nil && text == content)}, nil
+		return quarantineRow(relpath, rerr == nil && text == content), nil
 	}
 	already, err := im.writeQuarantine(path, content)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"path": relpath, "outcome": quarantineOutcome(already)}, nil
+	return quarantineRow(relpath, already), nil
+}
+
+func quarantineRow(relpath string, already bool) pyval.Obj {
+	return pyval.Obj{
+		{Key: "path", Val: relpath},
+		{Key: "outcome", Val: quarantineOutcome(already)},
+	}
 }
 
 func quarantineOutcome(already bool) string {
@@ -1124,7 +1183,7 @@ func quarantineOutcome(already bool) string {
 // importAuthoredMD: Class A (.md) never lands live — always quarantine.
 // Same-name/different-content vs a local file: local wins, noted in
 // CONFLICTS.md.
-func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]any, error) {
+func (im *importer) importAuthoredMD(kind, relpath, content string) (pyval.Obj, error) {
 	name := filepath.Base(filepath.FromSlash(relpath))
 	livePath := filepath.Join(im.ws, kind, name)
 	quarantinePath := filepath.Join(im.quarantineDir(), kind, name)
@@ -1139,7 +1198,7 @@ func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]
 			return nil, err
 		}
 		if text == content {
-			return map[string]any{"name": name, "outcome": "skipped_identical"}, nil
+			return authoredRow(name, "skipped_identical"), nil
 		}
 		if !im.dryRun {
 			if _, err := im.writeQuarantine(quarantinePath, content); err != nil {
@@ -1149,7 +1208,7 @@ func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]
 				return nil, err
 			}
 		}
-		return map[string]any{"name": name, "outcome": "conflict_quarantined"}, nil
+		return authoredRow(name, "conflict_quarantined"), nil
 	}
 
 	if im.dryRun {
@@ -1157,14 +1216,22 @@ func (im *importer) importAuthoredMD(kind, relpath, content string) (map[string]
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return nil, rerr
 		}
-		return map[string]any{"name": name,
-			"outcome": quarantinedMDOutcome(rerr == nil && text == content)}, nil
+		return authoredRow(name, quarantinedMDOutcome(rerr == nil && text == content)), nil
 	}
 	already, err := im.writeQuarantine(quarantinePath, content)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"name": name, "outcome": quarantinedMDOutcome(already)}, nil
+	return authoredRow(name, quarantinedMDOutcome(already)), nil
+}
+
+// authoredRow ports _quarantine_authored's return (pack.py:1004-1007) and
+// the two early exits above it: {name, outcome}, in that order.
+func authoredRow(name, outcome string) pyval.Obj {
+	return pyval.Obj{
+		{Key: "name", Val: name},
+		{Key: "outcome", Val: outcome},
+	}
 }
 
 func quarantinedMDOutcome(already bool) string {

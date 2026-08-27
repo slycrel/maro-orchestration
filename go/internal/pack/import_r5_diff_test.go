@@ -47,8 +47,8 @@ func TestImportAcceptsCPythonNonFiniteRows(t *testing.T) {
 		t.Fatalf("the fixture is not exercising the case: CPython imported "+
 			"%d lessons and %d hypotheses", len(want.Lessons), len(want.Hypotheses))
 	}
-	cmpResultRows(t, "lessons", dropNewID(got.LessonsImported), want.Lessons)
-	cmpResultRows(t, "hypotheses", dropNewID(got.HypothesesImported), want.Hypotheses)
+	cmpResultRows(t, "lessons", got.LessonsImported, want.Lessons)
+	cmpResultRows(t, "hypotheses", got.HypothesesImported, want.Hypotheses)
 	cmpStoreBytes(t, goTarget, want, "memory/medium/lessons.jsonl")
 	cmpStoreBytes(t, goTarget, want, "memory/hypotheses.jsonl")
 }
@@ -102,7 +102,7 @@ func TestImportStampsAbsentAndNullFieldsLikePython(t *testing.T) {
 				"measuring what it claims:\n%s", marker, stored)
 		}
 	}
-	cmpResultRows(t, "lessons", dropNewID(got.LessonsImported), want.Lessons)
+	cmpResultRows(t, "lessons", got.LessonsImported, want.Lessons)
 	cmpStoreBytes(t, goTarget, want, "memory/medium/lessons.jsonl")
 }
 
@@ -141,7 +141,7 @@ func TestImportReportsPythonsFloatErrors(t *testing.T) {
 		t.Fatalf("CPython reported %d of 5 rows malformed_skipped — the "+
 			"fixture is not exercising the error path: %+v", skipped, want.Lessons)
 	}
-	cmpResultRows(t, "lessons", dropNewID(got.LessonsImported), want.Lessons)
+	cmpResultRows(t, "lessons", got.LessonsImported, want.Lessons)
 }
 
 // TestImportRefusesToWriteANonFiniteCPythonWrites — L3, and the layer under
@@ -200,11 +200,11 @@ func TestImportRefusesToWriteANonFiniteCPythonWrites(t *testing.T) {
 			"— the divergence this test pins no longer exists")
 	}
 
-	goByID := map[string]map[string]any{}
+	goByID := map[string]pyval.Obj{}
 	for _, r := range got.LessonsImported {
-		goByID[asString(r["lesson_id"])] = r
+		goByID[r.GetString("lesson_id")] = r
 	}
-	if goByID["big"]["outcome"] != "malformed_skipped" {
+	if goByID["big"].GetString("outcome") != "malformed_skipped" {
 		t.Errorf("the port imported a row it refuses to write: %+v", goByID["big"])
 	}
 	// WHICH refusal matters. asFloat used to reject the literal itself
@@ -213,20 +213,20 @@ func TestImportRefusesToWriteANonFiniteCPythonWrites(t *testing.T) {
 	// reason the writer actually has. Asserting only the outcome would let
 	// the coercion fault come back invisibly — the two spellings agree on
 	// the verdict and disagree about the program.
-	if e := asString(goByID["big"]["error"]); e != "non-finite number refused" {
+	if e := goByID["big"].GetString("error"); e != "non-finite number refused" {
 		t.Errorf("refused for the wrong reason: %q — asFloat should coerce "+
 			"1e400 to +Inf like CPython's float(), leaving the writer to "+
 			"decline it", e)
 	}
 	// The refusal must be scoped to the offending row. A writer that gave
 	// up on the batch would satisfy the assertion above and lose the rest.
-	if goByID["fine"]["outcome"] != "imported_medium" {
+	if goByID["fine"].GetString("outcome") != "imported_medium" {
 		t.Errorf("the finite control row did not import: %+v", goByID["fine"])
 	}
-	if byID["fine"]["outcome"] != goByID["fine"]["outcome"] {
+	if byID["fine"]["outcome"] != goByID["fine"].GetString("outcome") {
 		t.Errorf("the finite control diverges too (%v vs CPython %v) — the "+
 			"divergence is wider than the non-finite row",
-			goByID["fine"]["outcome"], byID["fine"]["outcome"])
+			goByID["fine"].GetString("outcome"), byID["fine"]["outcome"])
 	}
 }
 

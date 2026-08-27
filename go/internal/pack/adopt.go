@@ -30,12 +30,31 @@ type AdoptOpts struct {
 // rows are cross-runtime comparable (adversarial round 2026-08-22:
 // label/adopted_at/dry_run were dropped and no audit row was written —
 // a Go-side adopt was invisible to every imports.jsonl reader).
+// The rows are pyval.Obj for the same reason the import report's are:
+// they are Python dict literals that land in memory/imports.jsonl, a
+// ledger the other runtime also appends to. {kind, name} and {kind,
+// name, reason} happen to be alphabetical, so a Go map agreed with
+// CPython here BY COINCIDENCE — rename one key and the agreement is
+// gone with nothing to notice. Ordered by construction instead.
 type AdoptReport struct {
-	Label     string              `json:"label"`
-	Adopted   []map[string]string `json:"adopted"`
-	Skipped   []map[string]string `json:"skipped"`
-	AdoptedAt string              `json:"adopted_at"`
-	DryRun    bool                `json:"dry_run"`
+	Label     string      `json:"label"`
+	Adopted   []pyval.Obj `json:"adopted"`
+	Skipped   []pyval.Obj `json:"skipped"`
+	AdoptedAt string      `json:"adopted_at"`
+	DryRun    bool        `json:"dry_run"`
+}
+
+// adoptedRow / skippedRow are pack.py:1226-1238's two literals.
+func adoptedRow(kind, name string) pyval.Obj {
+	return pyval.Obj{{Key: "kind", Val: kind}, {Key: "name", Val: name}}
+}
+
+func skippedRow(kind, name string) pyval.Obj {
+	return pyval.Obj{
+		{Key: "kind", Val: kind},
+		{Key: "name", Val: name},
+		{Key: "reason", Val: "already exists locally"},
+	}
 }
 
 func stampProvenanceFrontmatter(content, label, now string) string {
@@ -114,7 +133,7 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 	now := nowISO()
 	report := &AdoptReport{
 		Label: opts.Label, AdoptedAt: now, DryRun: opts.DryRun,
-		Adopted: []map[string]string{}, Skipped: []map[string]string{},
+		Adopted: []pyval.Obj{}, Skipped: []pyval.Obj{},
 	}
 	for _, c := range selected {
 		dest := filepath.Join(ws, c.kind, c.name)
@@ -124,13 +143,11 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 		}
 		stamped := stampProvenanceFrontmatter(string(raw), opts.Label, now)
 		if _, err := os.Stat(dest); err == nil {
-			report.Skipped = append(report.Skipped, map[string]string{
-				"kind": c.kind, "name": c.name, "reason": "already exists locally"})
+			report.Skipped = append(report.Skipped, skippedRow(c.kind, c.name))
 			continue
 		}
 		if opts.DryRun {
-			report.Adopted = append(report.Adopted, map[string]string{
-				"kind": c.kind, "name": c.name})
+			report.Adopted = append(report.Adopted, adoptedRow(c.kind, c.name))
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -141,8 +158,7 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
 			if os.IsExist(err) {
-				report.Skipped = append(report.Skipped, map[string]string{
-					"kind": c.kind, "name": c.name, "reason": "already exists locally"})
+				report.Skipped = append(report.Skipped, skippedRow(c.kind, c.name))
 				continue
 			}
 			return nil, err
@@ -154,8 +170,7 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 		if err := f.Close(); err != nil {
 			return nil, err
 		}
-		report.Adopted = append(report.Adopted, map[string]string{
-			"kind": c.kind, "name": c.name})
+		report.Adopted = append(report.Adopted, adoptedRow(c.kind, c.name))
 	}
 	// Audit trail: same row Python appends — a promotion from quarantine
 	// to live must be visible to whoever reads memory/imports.jsonl.

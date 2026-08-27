@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // pyCanonJSON renders a decoded-JSON value exactly as Python's canonical
@@ -62,6 +64,49 @@ func pyCanonJSON(v any, sb *strings.Builder) error {
 			}
 		}
 		sb.WriteByte(']')
+	case pyval.List:
+		sb.WriteByte('[')
+		for i, e := range t {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			if err := pyCanonJSON(e, sb); err != nil {
+				return err
+			}
+		}
+		sb.WriteByte(']')
+	// An ORDERED object still hashes SORTED. sort_keys=True is what the
+	// two runtimes agreed on for the digest, and it is the opposite
+	// decision from pack.json's insertion-order render — the same value
+	// is written two ways on purpose, one for the human-readable
+	// manifest and one for the hash. Making the manifest ordered must
+	// not quietly turn the digest into an insertion-order digest, which
+	// would break every pack either runtime has already sealed.
+	case pyval.Obj:
+		keys := make([]string, 0, len(t))
+		byKey := make(map[string]any, len(t))
+		for _, f := range t {
+			if _, dup := byKey[f.Key]; !dup {
+				keys = append(keys, f.Key)
+			}
+			// Last-wins, like the dict CPython hashes: decodeOrdered
+			// already collapses duplicates, so this is a floor rather
+			// than a live case.
+			byKey[f.Key] = f.Val
+		}
+		sort.Strings(keys)
+		sb.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			writePyString(k, sb)
+			sb.WriteByte(':')
+			if err := pyCanonJSON(byKey[k], sb); err != nil {
+				return err
+			}
+		}
+		sb.WriteByte('}')
 	case map[string]any:
 		keys := make([]string, 0, len(t))
 		for k := range t {
@@ -155,10 +200,10 @@ func sha256File(path string) (string, error) {
 // payload — Python fails the same way by KeyError, and a Go map's nil
 // zero-value would otherwise let Seal stamp a "clean" digest over a
 // truncated archive (adversarial round 2026-08-22, Skeptic HIGH).
-func payloadSHA256(artifacts []map[string]any, files map[string][]byte) (string, error) {
-	byPath := map[string]map[string]any{}
+func payloadSHA256(artifacts []pyval.Obj, files map[string][]byte) (string, error) {
+	byPath := map[string]pyval.Obj{}
 	for _, a := range artifacts {
-		p, _ := a["path"].(string)
+		p := a.GetString("path")
 		byPath[p] = a
 	}
 	paths := make([]string, 0, len(byPath))

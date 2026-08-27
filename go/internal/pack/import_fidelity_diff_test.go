@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // pyImportFidelitySrc builds a pack with CPython, then imports it with
@@ -25,10 +27,15 @@ from pathlib import Path
 import pack
 
 _argv = json.loads(sys.argv[1])
+# include_knowledge, so a seed can reach the QUARANTINE-ONLY lane, whose
+# report rows are {"class": cls, **_quarantine_single(...)} — a different
+# dict literal from the lesson/hypothesis rows and therefore a different
+# key order to get wrong. No seed that omits knowledge_nodes.jsonl is
+# affected: the exporter skips artifacts it finds nothing for.
 res = pack.export_pack(name="t", label="src",
                        workspace=Path(_argv["src"]), out_dir=Path(_argv["out"]),
                        denylist=[], home="/nonexistent-home",
-                       hostname="nonexistent-host")
+                       hostname="nonexistent-host", include_knowledge=True)
 pack_path = res["pack_path"]
 # Sealed, because an unsealed pack is refused at the door by both importers
 # and the refusal would be the only thing this differential measured.
@@ -57,16 +64,30 @@ print(json.dumps({
     "lessons": _clean(report["lessons_imported"]),
     "hypotheses": _clean(report["hypotheses_imported"]),
     "skills_md": report["skills_md"],
+    "rules": _clean(report["rules_demoted_to_hypotheses"]),
+    "quarantined": report["quarantined"],
+    # KEY ORDER as lists of strings — the envelope's sort_keys=True sorts
+    # dicts at every level, so the orders cannot ride the rows above.
+    "key_order": {
+        "lessons": [list(r) for r in report["lessons_imported"]],
+        "hypotheses": [list(r) for r in report["hypotheses_imported"]],
+        "skills_md": [list(r) for r in report["skills_md"]],
+        "rules": [list(r) for r in report["rules_demoted_to_hypotheses"]],
+        "quarantined": [list(r) for r in report["quarantined"]],
+    },
     "stores": stores,
 }, sort_keys=True))
 `
 
 type importProbe struct {
-	Pack       string            `json:"pack"`
-	Lessons    []map[string]any  `json:"lessons"`
-	Hypotheses []map[string]any  `json:"hypotheses"`
-	SkillsMD   []map[string]any  `json:"skills_md"`
-	Stores     map[string]string `json:"stores"`
+	Pack        string                `json:"pack"`
+	Lessons     []map[string]any      `json:"lessons"`
+	Hypotheses  []map[string]any      `json:"hypotheses"`
+	SkillsMD    []map[string]any      `json:"skills_md"`
+	Rules       []map[string]any      `json:"rules"`
+	Quarantined []map[string]any      `json:"quarantined"`
+	KeyOrder    map[string][][]string `json:"key_order"`
+	Stores      map[string]string     `json:"stores"`
 }
 
 // runImportBoth seeds an identical SOURCE workspace and an identical TARGET
@@ -94,13 +115,19 @@ func runImportBoth(t *testing.T, seedSrc, seedTarget func(ws string)) (
 }
 
 // dropNewID strips the one key that cannot agree — see the probe's _clean.
-func dropNewID(rows []map[string]any) []map[string]any {
+//
+// It also FLATTENS the ordered row to a map, which is the point of the
+// separate cmpResultKeyOrder below: this comparison is about the values
+// the importer decided, and json.Marshal over a map sorts both sides
+// under one serializer. Key order is a different question and it gets
+// its own assertion rather than riding silently on this one.
+func dropNewID(rows []pyval.Obj) []map[string]any {
 	out := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
 		c := make(map[string]any, len(r))
-		for k, v := range r {
-			if k != "new_id" {
-				c[k] = v
+		for _, f := range r {
+			if f.Key != "new_id" {
+				c[f.Key] = f.Val
 			}
 		}
 		out = append(out, c)
@@ -111,12 +138,48 @@ func dropNewID(rows []map[string]any) []map[string]any {
 // cmpResultRows compares two result lists as JSON, which normalizes number
 // types (the Go report holds float64 where CPython holds int) without
 // normalizing anything the importer decided.
-func cmpResultRows(t *testing.T, what string, got, want []map[string]any) {
+func cmpResultRows(t *testing.T, what string, got []pyval.Obj, want []map[string]any) {
 	t.Helper()
 	g, _ := json.Marshal(dropNewID(got))
 	w, _ := json.Marshal(canonRows(t, want))
 	if string(g) != string(w) {
 		t.Errorf("%s result rows differ.\n go: %s\n py: %s", what, g, w)
+	}
+}
+
+// cmpResultKeyOrder compares the KEY SEQUENCE of each result row against
+// the sequence CPython's dict literal produced.
+//
+// It is separate from cmpResultRows because the probe's envelope is
+// dumped with sort_keys=True, which sorts at every level and therefore
+// destroys the row order in transport — the value comparison cannot see
+// it. The probe sends the orders as explicit lists of strings instead,
+// which sort_keys cannot touch.
+func cmpResultKeyOrder(t *testing.T, what string, got []pyval.Obj, want [][]string) {
+	t.Helper()
+	if want == nil {
+		t.Fatalf("%s: the probe sent no key orders — this assertion would "+
+			"pass over an empty list and prove nothing", what)
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: %d rows, CPython %d", what, len(got), len(want))
+		return
+	}
+	for i, w := range want {
+		var g []string
+		for _, f := range got[i] {
+			g = append(g, f.Key)
+		}
+		if len(g) != len(w) {
+			t.Errorf("%s row %d keys %v, CPython %v", what, i, g, w)
+			continue
+		}
+		for j := range w {
+			if g[j] != w[j] {
+				t.Errorf("%s row %d key order %v, CPython %v", what, i, g, w)
+				break
+			}
+		}
 	}
 }
 
@@ -333,4 +396,52 @@ var (
 func maskVolatile(s string) string {
 	s = volatileTag.ReplaceAllString(s, "<tag>")
 	return volatileTS.ReplaceAllString(s, "<ts>")
+}
+
+// TestImportRowKeyOrderMatchesCPythonsDictLiterals reaches the two report
+// shapes whose key order actually DIVERGES from alphabetical, which is
+// what makes it a fixture rather than a restatement.
+//
+// The rest of this file's cases happen to be alphabetical —
+// {lesson_id, new_id, outcome}, {hyp_id, new_hyp_id, outcome},
+// {name, outcome} — so a Go map agreed with CPython there by
+// coincidence and every existing imports.jsonl comparison passed while
+// being structurally blind to the bug. The two that do not:
+//
+//	rules       {rule_id, hyp_id, outcome}   — hyp_id sorts BEFORE rule_id
+//	quarantined {class, path, outcome}       — outcome sorts BEFORE path
+//
+// Both land in memory/imports.jsonl, which cmpStoreBytes compares byte
+// for byte, so the store assertion below is the load-bearing one and the
+// key-order assertions say WHICH row moved when it fails.
+func TestImportRowKeyOrderMatchesCPythonsDictLiterals(t *testing.T) {
+	seed := func(ws string) {
+		w := seedWriter(t, ws)
+		w("memory/standing_rules.jsonl",
+			`{"rule_id":"r1","rule":"verify before fix","domain":"review",`+
+				`"confirmations":7,"contradictions":0}`+"\n")
+		// A quarantine-only class, for the {class, **rest} spread.
+		w("memory/knowledge_nodes.jsonl",
+			`{"node_id":"n1","title":"a node","body":"text"}`+"\n")
+	}
+	want, got, goTarget := runImportBoth(t, seed, nil)
+	if len(want.Rules) != 1 || len(want.Quarantined) != 1 {
+		t.Fatalf("the fixture proves nothing unless CPython reports one row "+
+			"in EACH lane; it reported %d rules and %d quarantined",
+			len(want.Rules), len(want.Quarantined))
+	}
+	// The premise, asserted rather than assumed: if CPython ever stopped
+	// writing these in a non-alphabetical order, this whole test would
+	// pass against a sorted port and prove nothing.
+	if k := want.KeyOrder["rules"][0]; strings.Join(k, ",") == "hyp_id,outcome,rule_id" {
+		t.Fatalf("CPython's rules row is alphabetical (%v) — this fixture no "+
+			"longer separates insertion order from sorted order", k)
+	}
+	if k := want.KeyOrder["quarantined"][0]; strings.Join(k, ",") == "class,outcome,path" {
+		t.Fatalf("CPython's quarantine row is alphabetical (%v) — same", k)
+	}
+	cmpResultRows(t, "rules", got.RulesDemotedToHypotheses, want.Rules)
+	cmpResultKeyOrder(t, "rules", got.RulesDemotedToHypotheses, want.KeyOrder["rules"])
+	cmpResultKeyOrder(t, "quarantined", got.Quarantined, want.KeyOrder["quarantined"])
+	cmpStoreBytes(t, goTarget, want, "memory/imports.jsonl")
 }

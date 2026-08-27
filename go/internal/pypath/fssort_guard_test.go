@@ -51,8 +51,14 @@ var fsSortAllowlist = map[string]struct {
 	"internal/knowledge/tiered.go":    {1, "decoded record keys"},
 	"internal/skills/testgate.go":     {1, "decoded record keys"},
 	"internal/syshealth/syshealth.go": {1, "decoded record keys"},
-	"internal/pack/canonical.go":      {2, "archive paths carried inside the manifest JSON"},
-	"internal/pack/export.go":         {1, "artifact class names pulled out of JSON"},
+	// Three since the pack key-order chunk: the manifest became an
+	// ordered pyval.Obj, so pyCanonJSON grew an Obj arm that must still
+	// hash SORTED (json.dumps(..., sort_keys=True)) — CPython sorts dict
+	// keys there by code point, and these are JSON keys the exporter
+	// writes, never filenames read off a directory, so FSLess would be
+	// the wrong answer.
+	"internal/pack/canonical.go": {3, "archive paths and JSON keys carried inside the manifest"},
+	"internal/pack/export.go":    {1, "artifact class names pulled out of JSON"},
 
 	// --- program-built strings, never read from a directory -------------
 	"internal/introspect/lens.go":      {2, "lens names, registered as Go constants"},

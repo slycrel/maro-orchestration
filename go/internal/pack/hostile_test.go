@@ -284,12 +284,12 @@ func TestImportSkipsIdlessRowsAsMalformed(t *testing.T) {
 	var malformed, demoted, eaten int
 	var numericImported bool
 	for _, r := range rep.RulesDemotedToHypotheses {
-		switch r["outcome"] {
+		switch r.GetString("outcome") {
 		case "malformed_skipped":
 			malformed++
 		case "demoted_to_hypothesis":
 			demoted++
-			if r["hyp_id"] == "imported-hostile-42" {
+			if r.GetString("hyp_id") == "imported-hostile-42" {
 				numericImported = true
 			}
 		case "already_imported":
@@ -318,10 +318,10 @@ func TestImportRefusesLoneSurrogateRowContent(t *testing.T) {
 	}
 	var malformed, demoted int
 	for _, r := range rep.RulesDemotedToHypotheses {
-		switch r["outcome"] {
+		switch r.GetString("outcome") {
 		case "malformed_skipped":
 			malformed++
-			if !strings.Contains(r["error"].(string), "surrogate") {
+			if !strings.Contains(r.GetString("error"), "surrogate") {
 				t.Fatalf("wrong refusal reason: %v", r)
 			}
 		case "demoted_to_hypothesis":
@@ -499,10 +499,10 @@ func TestImportKeepsLargeIntegerIDExact(t *testing.T) {
 	}
 	got := map[string]bool{}
 	for _, r := range rep.RulesDemotedToHypotheses {
-		if r["outcome"] != "demoted_to_hypothesis" {
+		if r.GetString("outcome") != "demoted_to_hypothesis" {
 			t.Fatalf("large-int id row mishandled: %v", r)
 		}
-		got[r["hyp_id"].(string)] = true
+		got[r.GetString("hyp_id")] = true
 	}
 	if !got["imported-hostile-9007199254740993"] || !got["imported-hostile-9007199254740995"] {
 		t.Fatalf("large integer ids not exact/distinct: %v", got)
@@ -528,7 +528,7 @@ func TestImportReportPreservesFileOrder(t *testing.T) {
 	}
 	wantOutcomes := []string{"demoted_to_hypothesis", "malformed_skipped", "demoted_to_hypothesis"}
 	for i, want := range wantOutcomes {
-		if rep.RulesDemotedToHypotheses[i]["outcome"] != want {
+		if rep.RulesDemotedToHypotheses[i].GetString("outcome") != want {
 			t.Fatalf("report order broken at %d: %v", i, rep.RulesDemotedToHypotheses)
 		}
 	}
@@ -551,7 +551,7 @@ func TestImportRefusesTrailingDataRows(t *testing.T) {
 	// The trailing-data line skips wholesale (Python parity: JSONDecodeError
 	// → continue, no report row) — neither "b" nor "c" may land.
 	if len(rep.RulesDemotedToHypotheses) != 1 ||
-		rep.RulesDemotedToHypotheses[0]["rule_id"] != "a" {
+		rep.RulesDemotedToHypotheses[0].GetString("rule_id") != "a" {
 		t.Fatalf("trailing-data row not refused wholesale: %v", rep.RulesDemotedToHypotheses)
 	}
 
@@ -612,7 +612,7 @@ func TestProvenanceKillswitchRespected(t *testing.T) {
 	}
 	outcomes := map[string]string{}
 	for _, r := range rep.LessonsImported {
-		outcomes[r["lesson_id"].(string)] = r["outcome"].(string)
+		outcomes[r.GetString("lesson_id")] = r.GetString("outcome")
 	}
 	if outcomes["p1"] != "imported_medium" {
 		t.Fatalf("gate off, unstamped prompt-shaped lesson should import clean: %v", outcomes)
@@ -631,7 +631,8 @@ func TestProvenanceKillswitchRespected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range rep2.LessonsImported {
-		if r["lesson_id"] == "p1" && r["outcome"] != "imported_medium_quarantined" {
+		if r.GetString("lesson_id") == "p1" &&
+			r.GetString("outcome") != "imported_medium_quarantined" {
 			t.Fatalf("gate on, prompt-shaped lesson not quarantined: %v", r)
 		}
 	}

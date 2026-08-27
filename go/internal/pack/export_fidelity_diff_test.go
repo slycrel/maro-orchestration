@@ -2,12 +2,14 @@ package pack
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // pyExportFidelitySrc exports the seeded workspace with CPython and reports
@@ -55,16 +57,33 @@ print(json.dumps({
                    "sha256": a["sha256"]} for a in manifest["artifacts"]],
     "quarantined": sum(a.get("quarantined_rows_skipped", 0)
                        for a in manifest["artifacts"]),
+    # KEY ORDER, as lists of strings. It cannot ride the dicts above:
+    # this envelope is dumped with sort_keys=True, which sorts at every
+    # level, and json.loads on the Go side would flatten it into a map
+    # anyway. A list survives both.
+    #
+    # json.load(f, object_pairs_hook=...) is not needed to read it back
+    # in order: pack.json was written by json.dumps in insertion order
+    # and CPython dicts preserve insertion order on parse, so list(d)
+    # IS the order the bytes carried.
+    "manifest_keys": list(manifest),
+    "origin_keys": list(manifest["origin"]),
+    "review_keys": list(manifest["review"]),
+    "artifact_keys": [list(a) for a in manifest["artifacts"]],
 }, sort_keys=True))
 `
 
 // exportProbe runs both exporters over identical seeds and hands back the
 // CPython side plus the Go archive.
 type exportProbe struct {
-	Members     map[string]string `json:"members"`
-	Raised      string            `json:"raised"`
-	Quarantined int               `json:"quarantined"`
-	Artifacts   []struct {
+	Members      map[string]string `json:"members"`
+	Raised       string            `json:"raised"`
+	Quarantined  int               `json:"quarantined"`
+	ManifestKeys []string          `json:"manifest_keys"`
+	OriginKeys   []string          `json:"origin_keys"`
+	ReviewKeys   []string          `json:"review_keys"`
+	ArtifactKeys [][]string        `json:"artifact_keys"`
+	Artifacts    []struct {
 		Path   string `json:"path"`
 		Rows   *int   `json:"rows"`
 		SHA256 string `json:"sha256"`
@@ -312,6 +331,33 @@ func assertMembersMatch(t *testing.T, got map[string][]byte, want exportProbe) {
 			t.Errorf("member %s differs.\n--- go ---\n%q\n--- py ---\n%q", n, gs, ws)
 		}
 	}
+	// pack.json is excluded from the byte comparison above (it carries
+	// the export instant), so its KEY ORDER has to be asserted here or
+	// nowhere. json.dumps writes a dict in insertion order and pack.json
+	// is what the other runtime's importer parses and what a human reads
+	// before sealing, so the order is part of the artifact.
+	ordered, err := decodeManifest(got["pack.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmpKeyOrder(t, "manifest", ordered, want.ManifestKeys)
+	if o, _ := ordered.Get("origin"); o != nil {
+		cmpKeyOrder(t, "origin", o.(pyval.Obj), want.OriginKeys)
+	}
+	if r, _ := ordered.Get("review"); r != nil {
+		cmpKeyOrder(t, "review", r.(pyval.Obj), want.ReviewKeys)
+	}
+	gotArtObjs := manifestArtifacts(ordered)
+	if len(gotArtObjs) != len(want.ArtifactKeys) {
+		t.Errorf("artifact-key rows %d, CPython %d",
+			len(gotArtObjs), len(want.ArtifactKeys))
+	} else {
+		for i, a := range gotArtObjs {
+			cmpKeyOrder(t, fmt.Sprintf("artifact %d (%s)", i,
+				a.GetString("path")), a, want.ArtifactKeys[i])
+		}
+	}
+
 	var manifest map[string]any
 	if err := json.Unmarshal(got["pack.json"], &manifest); err != nil {
 		t.Fatal(err)
@@ -338,5 +384,26 @@ func assertMembersMatch(t *testing.T, got map[string][]byte, want exportProbe) {
 		} else if w.Rows != nil && int(gotRows) != *w.Rows {
 			t.Errorf("%s: rows = %d, CPython %d", w.Path, int(gotRows), *w.Rows)
 		}
+	}
+}
+
+// cmpKeyOrder asserts one object's key SEQUENCE against CPython's.
+//
+// An empty `want` is a FAILURE, not a pass: the probe sends these lists
+// unconditionally, so an empty one means the probe stopped reporting
+// rather than that the orders agree — the shape that lets a fixture
+// report agreement while comparing nothing.
+func cmpKeyOrder(t *testing.T, what string, got pyval.Obj, want []string) {
+	t.Helper()
+	if len(want) == 0 {
+		t.Errorf("%s: the probe sent no key order", what)
+		return
+	}
+	var g []string
+	for _, f := range got {
+		g = append(g, f.Key)
+	}
+	if strings.Join(g, ",") != strings.Join(want, ",") {
+		t.Errorf("%s key order\n go: %v\n py: %v", what, g, want)
 	}
 }

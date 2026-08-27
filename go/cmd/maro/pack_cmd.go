@@ -125,9 +125,12 @@ func packSeal(args []string) error {
 	if err != nil {
 		return err
 	}
-	review := manifest["review"].(map[string]any)
+	reviewRaw, _ := manifest.Get("review")
+	review, _ := reviewRaw.(pyval.Obj)
+	reviewedAt, _ := review.Get("reviewed_at")
+	payloadSHA, _ := review.Get("review_payload_sha256")
 	fmt.Printf("sealed: %s\nreviewed_at: %v\npayload_sha256: %v\n",
-		*packPath, review["reviewed_at"], review["review_payload_sha256"])
+		*packPath, reviewedAt, payloadSHA)
 	return nil
 }
 

@@ -193,15 +193,41 @@ func readArchive(path string) (map[string][]byte, error) {
 // the lone surrogate in its str and then crashes encoding the digest, or
 // refuses — either way Python never accepts what Go would have quietly
 // rewritten (adversarial round 2026-08-22).
-func decodeManifest(raw []byte) (map[string]any, error) {
+//
+// ORDERED, as of the key-order chunk: Python's json.load hands
+// seal_pack a dict whose key order is the order the bytes carried, and
+// seal REWRITES those bytes. A map[string]any here threw that order away
+// before Seal could preserve it, so a Go re-seal of a CPython pack
+// alphabetized someone else's manifest.
+func decodeManifest(raw []byte) (pyval.Obj, error) {
 	if err := refuseLoneSurrogates(raw); err != nil {
 		return nil, fmt.Errorf("pack.json: %w", err)
 	}
-	m, err := decodeStrictJSONObject(string(raw))
+	m, err := decodeStrictJSONObjectOrdered(string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("pack.json: %w", err)
 	}
 	return m, nil
+}
+
+// decodeStrictJSONObjectOrdered is decodeStrictJSONObject without the
+// flattening: one JSON object, key order kept, numbers as their source
+// literal, NaN/Infinity accepted, trailing data refused. pyval.LoadsMap
+// is literally this plus a map conversion, so this is the same reader
+// with one step removed rather than a second implementation.
+func decodeStrictJSONObjectOrdered(text string) (pyval.Obj, error) {
+	v, err := pyval.LoadsOrdered(text)
+	if err != nil {
+		return nil, err
+	}
+	o, ok := v.(pyval.Obj)
+	if !ok {
+		// Same narrowing LoadsMap documents: CPython succeeds here and
+		// raises AttributeError on the caller's next .get(). Refusing at
+		// the decode is the port's deliberate, named divergence.
+		return nil, fmt.Errorf("expected a JSON object, got %T", v)
+	}
+	return o, nil
 }
 
 // decodeStrictJSONObject decodes exactly ONE JSON object the way a bare
@@ -295,33 +321,37 @@ func refuseLoneSurrogates(raw []byte) error {
 // re-written by both runtimes, and the manifest carries pack NAMES and
 // origin LABELS that are free text (adversarial mission-r7 HIGH).
 //
-// KEY ORDER IS A NAMED RESIDUAL and this is the one place it stays lost:
-// the manifest is a map[string]any everywhere in this package — decoded
-// from a foreign pack.json by decodeManifest, indexed by fifteen call
-// sites, mutated in place by Seal — so the order Python wrote is already
-// gone before it reaches here. FromPlain sorts, which is what
-// MarshalIndent did, so this changes nothing about order and everything
-// about the other two. Closing it means an ordered manifest type through
-// the whole package; it is written down rather than half-done.
+// KEY ORDER used to be a named residual here and this is where it is
+// closed: the manifest is a pyval.Obj everywhere in this package now —
+// built ordered by Export, decoded ordered from a foreign pack.json by
+// decodeManifest, replaced-in-place by Seal — so the order CPython wrote
+// survives every hop. There is deliberately no FromPlain on the way in:
+// a Go map reaching the renderer is REFUSED by pyval rather than
+// silently sorted, which is the whole point of the type change.
 //
 // Nothing hashes these bytes: review_manifest_sha256 is over the REVIEW
-// text and review_payload_sha256 is over the artifact payloads, so a
-// re-ordered manifest cannot break a seal.
-func manifestBytes(manifest map[string]any) ([]byte, error) {
-	text, err := pyval.DumpsIndent2(pyval.FromPlain(manifest))
+// text and review_payload_sha256 is over the artifact payloads, so key
+// order cannot break a seal. It can, however, make every `maro pack`
+// artifact byte-different from the CPython one for the same workspace —
+// and pack is the interop format two installs use to hand each other
+// learning data, so "different bytes, same meaning" is the divergence
+// that makes a write-path comparison useless.
+func manifestBytes(manifest pyval.Obj) ([]byte, error) {
+	text, err := pyval.DumpsIndent2(manifest)
 	if err != nil {
 		return nil, err
 	}
 	return []byte(text), nil
 }
 
-// manifestArtifacts pulls the artifacts list as []map[string]any,
-// tolerating absence (empty pack).
-func manifestArtifacts(manifest map[string]any) []map[string]any {
-	arr, _ := manifest["artifacts"].([]any)
-	var out []map[string]any
+// manifestArtifacts pulls the artifacts list as []pyval.Obj, tolerating
+// absence (empty pack).
+func manifestArtifacts(manifest pyval.Obj) []pyval.Obj {
+	raw, _ := manifest.Get("artifacts")
+	arr, _ := raw.(pyval.List)
+	var out []pyval.Obj
 	for _, e := range arr {
-		if m, ok := e.(map[string]any); ok {
+		if m, ok := e.(pyval.Obj); ok {
 			out = append(out, m)
 		}
 	}

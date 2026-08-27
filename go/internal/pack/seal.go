@@ -15,7 +15,7 @@ import (
 // Seal refuses without explicit confirmation (the CLI's --yes). The
 // sha256 stamped is of the REVIEW.md a human actually read — the loose
 // companion if present (pre-seal edits count), else the archived copy.
-func Seal(packPath string, confirmed bool) (map[string]any, error) {
+func Seal(packPath string, confirmed bool) (pyval.Obj, error) {
 	if _, err := os.Stat(packPath); err != nil {
 		return nil, fmt.Errorf("no such pack: %s", packPath)
 	}
@@ -56,7 +56,8 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 	var artifactOrder []string
 	listed := map[string]bool{}
 	for _, a := range manifestArtifacts(manifest) {
-		p, ok := a["path"].(string)
+		raw, _ := a.Get("path")
+		p, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("seal refused: manifest artifact without a path")
 		}
@@ -115,12 +116,20 @@ func Seal(packPath string, confirmed bool) (map[string]any, error) {
 	reviewText = pytext.TrimRight(reviewText) +
 		fmt.Sprintf("\n\n---\n\n%s\n", marker)
 
-	manifest["review"] = map[string]any{
-		"human_reviewed":         true,
-		"reviewed_at":            nowISO(),
-		"review_manifest_sha256": sha256Text(reviewText),
-		"review_payload_sha256":  payloadSHA,
-	}
+	// `manifest["review"] = {...}` (pack.py:457). Assigning to an
+	// EXISTING key does not move it in a Python dict, so `review` keeps
+	// its ordinal — sixth, between `artifacts` and `trust_policy` — and
+	// the sealed pack.json differs from the unsealed one in exactly the
+	// four values below. Obj.Set is that assignment: in place for a key
+	// that is there, appended only for one that is not. A port that
+	// rebuilt the manifest here, or that appended the replacement, would
+	// move `review` to the tail and rewrite every line after it.
+	manifest.Set("review", pyval.Obj{
+		{Key: "human_reviewed", Val: true},
+		{Key: "reviewed_at", Val: nowISO()},
+		{Key: "review_manifest_sha256", Val: sha256Text(reviewText)},
+		{Key: "review_payload_sha256", Val: payloadSHA},
+	})
 
 	manifestJSON, err := manifestBytes(manifest)
 	if err != nil {

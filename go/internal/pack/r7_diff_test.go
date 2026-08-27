@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // TestPackJSONIsPythonIndentTwo: pack.json is decoded by the Python
@@ -16,9 +18,11 @@ import (
 // including the byte-for-byte canonical-JSON ones, stayed green (those
 // cover the PAYLOAD hash, which pack.json is deliberately not part of).
 //
-// Key ORDER stays lost here and is named rather than claimed: the
-// manifest is a map[string]any across ~15 call sites including a foreign
-// -file decode, so FromPlain sorts it. See archive.go's manifestBytes.
+// Key ORDER used to be a named loss here — the manifest was a
+// map[string]any across ~15 call sites including a foreign-file decode,
+// so FromPlain sorted it. It is a pyval.Obj end to end now; the CPython
+// comparison lives in export_fidelity_diff_test.go's cmpKeyOrder, and
+// the seal half in TestSealReplacesReviewInPlace.
 func TestPackJSONIsPythonIndentTwo(t *testing.T) {
 	ws := fixtureWorkspace(t)
 	out := t.TempDir()
@@ -67,5 +71,86 @@ func TestPackJSONIsPythonIndentTwo(t *testing.T) {
 	// The companion on disk is the same bytes the reader gets.
 	if _, err := os.Stat(res.PackPath); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSealReplacesReviewInPlace: `manifest["review"] = {...}`
+// (pack.py:457) is an assignment to an EXISTING key, and a Python dict
+// does not move a key it already has. So `review` keeps its ordinal —
+// sixth, between `artifacts` and `trust_policy` — and a sealed pack.json
+// differs from its unsealed self in exactly four values.
+//
+// A port that rebuilt the manifest on seal, or that appended the
+// replacement, would put `review` last and rewrite every line after it.
+// Nothing hashes pack.json, so that rewrite breaks no digest and shows
+// up only as "the two runtimes produce different bytes for the same
+// pack" — which is the whole reason a byte-comparison harness exists.
+//
+// The diff is computed rather than spelled out: an assertion that only
+// checked the key sequence would pass a seal that also rewrote `origin`.
+func TestSealReplacesReviewInPlace(t *testing.T) {
+	ws := fixtureWorkspace(t)
+	res, err := Export(ExportOpts{Name: "t", Label: "src", Workspace: ws,
+		OutDir: t.TempDir(), Denylist: []string{}, Home: "/x", Hostname: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := readArchive(res.PackPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsealed, err := decodeManifest(before["pack.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := Seal(res.PackPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(o pyval.Obj) []string {
+		var out []string
+		for _, f := range o {
+			out = append(out, f.Key)
+		}
+		return out
+	}
+	if a, b := strings.Join(keys(unsealed), ","), strings.Join(keys(sealed), ","); a != b {
+		t.Fatalf("seal moved a top-level key.\n unsealed: %s\n sealed:   %s", a, b)
+	}
+	if got := keys(sealed); len(got) < 7 || got[5] != "review" || got[6] != "trust_policy" {
+		t.Fatalf("review is not in build_manifest's sixth position: %v", got)
+	}
+	// Every field outside `review` must be byte-identical, and `review`
+	// itself must keep its own four keys in build_manifest's order.
+	for _, f := range sealed {
+		u, present := unsealed.Get(f.Key)
+		if !present {
+			t.Fatalf("seal invented a key: %s", f.Key)
+		}
+		if f.Key == "review" {
+			continue
+		}
+		gj, _ := pyval.DumpsIndent2(f.Val)
+		uj, _ := pyval.DumpsIndent2(u)
+		if gj != uj {
+			t.Errorf("seal rewrote %s.\n unsealed: %s\n sealed:   %s", f.Key, uj, gj)
+		}
+	}
+	rv, _ := sealed.Get("review")
+	rev, ok := rv.(pyval.Obj)
+	if !ok {
+		t.Fatalf("sealed review is not an ordered object: %T", rv)
+	}
+	if got := strings.Join(keys(rev), ","); got !=
+		"human_reviewed,reviewed_at,review_manifest_sha256,review_payload_sha256" {
+		t.Fatalf("sealed review key order: %s", got)
+	}
+	// And it really did seal — otherwise "nothing changed" would pass
+	// every assertion above.
+	if hr, _ := rev.Get("human_reviewed"); hr != true {
+		t.Fatalf("seal did not stamp human_reviewed: %v", hr)
+	}
+	if rev.GetString("review_payload_sha256") == "" {
+		t.Fatal("seal did not stamp a payload digest")
 	}
 }

@@ -41,11 +41,13 @@ type ExportOpts struct {
 	Hostname         string   // "" = this machine's
 }
 
-// ExportResult reports what shipped.
+// ExportResult reports what shipped. Manifest is ORDERED — it is the
+// same value that was rendered into pack.json, not a re-derivation, so a
+// caller reading it sees the key order the archive carries.
 type ExportResult struct {
 	PackPath   string
 	ReviewPath string
-	Manifest   map[string]any
+	Manifest   pyval.Obj
 }
 
 // DefaultDenylist ports pack.default_denylist: email-shaped identity from
@@ -131,8 +133,12 @@ func reviewSection(cls, relPath, content string) string {
 	return section
 }
 
-func buildReviewMD(manifest map[string]any, sections []string) string {
-	origin, _ := manifest["origin"].(map[string]any)
+func buildReviewMD(manifest pyval.Obj, sections []string) string {
+	originRaw, _ := manifest.Get("origin")
+	origin, _ := originRaw.(pyval.Obj)
+	name, _ := manifest.Get("name")
+	createdAt, _ := manifest.Get("created_at")
+	label, _ := origin.Get("label")
 	header := fmt.Sprintf(
 		"# Review — %s\n\nCreated: %s\nLabel: %s\n\n"+
 			"This is a mechanical scrub of secret-shaped strings and known local "+
@@ -141,7 +147,7 @@ func buildReviewMD(manifest map[string]any, sections []string) string {
 			"Everything below is the artifact's real content exactly as it will "+
 			"ship; lines flagged \"Redacted lines\" were changed by the "+
 			"scrubber.\n\n---\n\n",
-		manifest["name"], manifest["created_at"], origin["label"])
+		name, createdAt, label)
 	if len(sections) == 0 {
 		return header + "*(no artifacts in this pack)*\n"
 	}
@@ -234,14 +240,23 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		return out
 	}
 
-	var artifacts []map[string]any
+	var artifacts []pyval.Obj
 	var files []tarEntry
 	var sections []string
 
+	// TEXT artifacts and JSONL artifacts are two different objects, not
+	// one object with an optional field — `_add_text_artifact`
+	// (pack.py:319) writes {class, path, sha256} and `_add_jsonl_artifact`
+	// (pack.py:350-357) writes {class, path, rows, [quarantined_rows_
+	// skipped,] sha256}. Collapsing them into one builder is how the
+	// conditional key ends up at the tail instead of in the MIDDLE, which
+	// is where CPython leaves it because `sha256` is assigned after it.
 	addText := func(cls, rel, rawText string) {
 		scrubbed := scrubText(rawText)
-		artifacts = append(artifacts, map[string]any{
-			"class": cls, "path": "artifacts/" + rel, "sha256": sha256Text(scrubbed),
+		artifacts = append(artifacts, pyval.Obj{
+			{Key: "class", Val: cls},
+			{Key: "path", Val: "artifacts/" + rel},
+			{Key: "sha256", Val: sha256Text(scrubbed)},
 		})
 		files = append(files, tarEntry{"artifacts/" + rel, []byte(scrubbed)})
 		sections = append(sections, reviewSection(cls, rel, scrubbed))
@@ -343,17 +358,24 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		// When filtering emptied the artifact, still emit a zero-row entry:
 		// a reviewer must be able to tell "no lessons existed" from "all
 		// lessons were withheld".
-		entry := map[string]any{
-			"class": cls, "path": "artifacts/" + rel, "rows": len(scrubbed),
+		entry := pyval.Obj{
+			{Key: "class", Val: cls},
+			{Key: "path", Val: "artifacts/" + rel},
+			{Key: "rows", Val: len(scrubbed)},
 		}
+		// `if quarantined_skipped:` — a TRUTHINESS test, so the key is
+		// ABSENT for zero rather than present as 0, and it lands here,
+		// between `rows` and `sha256`, because that is where the
+		// assignment is. Absence-vs-zero and position are both
+		// observable in pack.json.
 		if quarantinedSkipped > 0 {
-			entry["quarantined_rows_skipped"] = quarantinedSkipped
+			entry.Set("quarantined_rows_skipped", quarantinedSkipped)
 		}
 		content := ""
 		for _, ln := range scrubbed {
 			content += ln + "\n"
 		}
-		entry["sha256"] = sha256Text(content)
+		entry.Set("sha256", sha256Text(content))
 		artifacts = append(artifacts, entry)
 		files = append(files, tarEntry{"artifacts/" + rel, []byte(content)})
 		sections = append(sections, reviewSection(cls, rel, content))
@@ -433,21 +455,31 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 		}
 	}
 
-	manifest := map[string]any{
-		"pack_format": PackFormat,
-		"name":        opts.Name,
-		"created_at":  nowISO(),
-		"origin": map[string]any{
-			"label":            opts.Label,
-			"maro_version":     "go-port",
-			"scrubber_version": ScrubberVersion,
-		},
-		"artifacts": anySlice(artifacts),
-		"review": map[string]any{
-			"human_reviewed": false, "reviewed_at": nil,
-			"review_manifest_sha256": nil, "review_payload_sha256": nil,
-		},
-		"trust_policy": "demote-to-hypothesis",
+	// build_manifest, pack.py:186-203, in CPython's INSERTION order.
+	// json.dumps writes a dict in that order and pack.json is read by the
+	// other runtime's importer and by the human who seals it, so the
+	// order is part of the artifact, not presentation.
+	manifest := pyval.Obj{
+		{Key: "pack_format", Val: PackFormat},
+		{Key: "name", Val: opts.Name},
+		{Key: "created_at", Val: nowISO()},
+		{Key: "origin", Val: pyval.Obj{
+			{Key: "label", Val: opts.Label},
+			{Key: "maro_version", Val: "go-port"},
+			{Key: "scrubber_version", Val: ScrubberVersion},
+		}},
+		{Key: "artifacts", Val: anySlice(artifacts)},
+		// Position SIX, before trust_policy. Seal replaces this value in
+		// place (`manifest["review"] = {...}` does not move an existing
+		// key), so a sealed manifest differs from its unsealed self only
+		// in the four values below.
+		{Key: "review", Val: pyval.Obj{
+			{Key: "human_reviewed", Val: false},
+			{Key: "reviewed_at", Val: nil},
+			{Key: "review_manifest_sha256", Val: nil},
+			{Key: "review_payload_sha256", Val: nil},
+		}},
+		{Key: "trust_policy", Val: "demote-to-hypothesis"},
 	}
 	reviewMD := buildReviewMD(manifest, sections)
 
@@ -470,8 +502,11 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 	return &ExportResult{PackPath: packPath, ReviewPath: companion, Manifest: manifest}, nil
 }
 
-func anySlice(in []map[string]any) []any {
-	out := make([]any, len(in))
+// anySlice widens the gathered artifact entries into the pyval.List the
+// ordered renderer wants. A plain []any would be refused by renderUnit,
+// which is the guard working as intended.
+func anySlice(in []pyval.Obj) pyval.List {
+	out := make(pyval.List, len(in))
 	for i, m := range in {
 		out[i] = m
 	}
