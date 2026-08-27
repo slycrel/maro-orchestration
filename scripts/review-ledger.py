@@ -152,6 +152,68 @@ def load_rows(arc: str | None = None) -> list[dict]:
     return out
 
 
+def cmd_closable(args) -> int:
+    """(lens, target) pairs that have fired more than once — the ones worth
+    CLOSING rather than watching.
+
+    The catalog is a reviewer's tool: it helps someone find a known shape
+    faster. That is worth having and it is not the same as making the shape
+    stop happening, and for the file's whole life the instance counts went
+    up round after round while everyone read that as the file working.
+
+    The rule this view exists to serve (2026-08-27): **when a lens fires
+    twice on the same surface, stop fixing the property and go close the
+    lens.** The second occurrence is the evidence; the third is the one you
+    chose to have. P6 got three on `cmd/maro` before anybody asked whether
+    it could be made structurally impossible there — it could, in an
+    afternoon.
+
+    A pair is CLOSABLE when the defect is a property of a DECLARATION that
+    exists on both sides — an argparse spec, a dataclass, a schema, a set
+    of file modes — because two declarations can be diffed mechanically. It
+    is NOT closable when the defect is a judgement ("this comment is now
+    false", "this fixture defends the wrong config"). This view cannot tell
+    those apart; it names the candidates and a human decides.
+    """
+    rows = load_rows(args.arc)
+    if not rows:
+        print("no findings recorded yet")
+        return 0
+    lenses = known_lenses()
+
+    pairs = defaultdict(list)
+    for r in rows:
+        lens = r.get("lens")
+        target = r.get("target")
+        if not lens or not target:
+            continue
+        pairs[(lens, target)].append(r)
+
+    hot = sorted(((k, v) for k, v in pairs.items() if len(v) >= args.min),
+                 key=lambda kv: (-len(kv[1]), kv[0][0], kv[0][1]))
+    if not hot:
+        print(f"no (lens, target) pair has fired {args.min}+ times")
+        return 0
+
+    print(f"{len(hot)} (lens, target) pair(s) at {args.min}+ occurrences — "
+          "candidates for closing by construction")
+    print()
+    for (lens, target), rs in hot:
+        rounds = sorted({r.get("round") for r in rs if r.get("round")})
+        sev = Counter(r.get("severity") for r in rs)
+        sev_s = " ".join(f"{n}{s[0].upper()}" for s, n in sev.most_common())
+        print(f"  {lens:<5} {target:<26} {len(rs):>2}x  "
+              f"rounds {','.join('r%s' % x for x in rounds)}  {sev_s}")
+        print(f"        {lenses.get(lens, '')}")
+    print()
+    print("A pair here is a QUESTION, not a defect: can this shape be made")
+    print("structurally impossible on this surface? If the defect is a")
+    print("property of a declaration both sides carry, yes — diff the two")
+    print("declarations. If it is a judgement, no, and the lens stays a lens.")
+    print("Record what you close in docs/REVIEW_PATTERNS.md.")
+    return 0
+
+
 def cmd_report(args) -> int:
     rows = load_rows(args.arc)
     if not rows:
@@ -398,6 +460,14 @@ def main(argv=None) -> int:
     sy.add_argument("--dry-run", action="store_true",
                     help="report what would change and write nothing")
     sy.set_defaults(func=cmd_sync)
+
+    cl = sub.add_parser("closable",
+                        help="(lens, target) pairs that fired 2+ times — "
+                             "candidates for closing by construction")
+    cl.add_argument("--arc")
+    cl.add_argument("--min", type=int, default=2,
+                    help="occurrences before a pair is a candidate (default 2)")
+    cl.set_defaults(func=cmd_closable)
 
     pr = sub.add_parser("prompt",
                         help="the block to paste into a review subagent: "

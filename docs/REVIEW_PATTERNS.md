@@ -70,6 +70,36 @@ The rule that follows: **when a lens fires twice on the same surface, stop
 fixing the property and go close the lens.** The second occurrence is the
 evidence; the third is the one you chose to have.
 
+**The rule has a report, so it is data and not a slogan:**
+
+```bash
+python3 scripts/review-ledger.py closable --arc go-port          # 2+
+python3 scripts/review-ledger.py closable --arc go-port --min 3  # 3+
+```
+
+It lists every `(lens, target)` pair that has fired more than once, with
+the rounds it fired in. As of 2026-08-27 that is **101 pairs at 2+ and 42
+at 3+** — which is the size of the thing this file had been recording
+rather than reducing. A pair in that list is a QUESTION, not a defect; the
+report cannot tell a declaration from a judgement and does not try.
+
+The head of it, unedited, because it is the most useful thing in this file:
+
+```
+L28   internal/syshealth         22x  rounds r1..r6      15L 7N
+L28   internal/artifactcheck     11x  rounds r1..r8      10L 1N
+L1    go                          8x  rounds r8,r12      5H 3M
+L1    internal/skills             7x  rounds r9,r10,r11  5M 2H
+L49   internal/artifactcheck      7x  rounds r1..r6      5M 1L 1H
+```
+
+L28 has fired **22 times on one package across six rounds** — a comment
+asserting coverage that decayed, found again and again, fixed as prose each
+time. Nobody asked whether it could be closed. Its closable half is
+concrete: a comment that states a COUNT of something the code enumerates is
+a claim a test can check, and "count every number a comment states" is
+already a recorded lesson. That is a real candidate, not a hypothetical.
+
 ---
 
 **Status legend on each lens:** `instances` is how many independent
