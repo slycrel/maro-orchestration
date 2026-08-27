@@ -400,14 +400,45 @@ mid-tranche.
 
 ### Go port: `recall` and `provenance` have tests but no CPython comparison (FOUND 2026-08-26, go-port differential census)
 
-**`recall` half CLOSED 2026-08-26.** Three live differentials landed
-(`73cf930b`, built in the `go-port-lane2` worktree), then a 51-mutant
-census derived from `recall.go` itself took the package from 29/51 to
-**49/51**; the two survivors are equivalent mutants named in
-`census_test.go`'s doc block before the re-run. `provenance` is still
-open. One divergence stands reported and deliberately unfixed: a
-`goal_achieved` of the STRING `"false"` reads as unjudged in CPython and
-as judged-not-achieved in Go (fail-closed in Go, documented at the site).
+**BOTH HALVES CLOSED — `recall` 2026-08-26, `provenance` 2026-08-27.**
+
+`recall`: three live differentials landed (`73cf930b`, built in the
+`go-port-lane2` worktree), then a 51-mutant census derived from
+`recall.go` itself took the package from 29/51 to **49/51**; the two
+survivors are equivalent mutants named in `census_test.go`'s doc block
+before the re-run. One divergence stands reported and deliberately
+unfixed: a `goal_achieved` of the STRING `"false"` reads as unjudged in
+CPython and as judged-not-achieved in Go (fail-closed in Go, documented
+at the site).
+
+`provenance`: a 977-line differential landed (`c13de5b2`) and found five
+divergence classes, of which **one ran UNSAFE and is now fixed**
+(`\s`, below). The three residual classes are filed as their own entries
+after this one. The differential is the reason they are known at all —
+this package's whole prior evidence that the port agreed with
+`src/lesson_provenance.py` was that the two regex strings *look alike*,
+which is a claim about ASCII, and both engines had only ever been fed
+ASCII.
+
+**The one that was unsafe, and is fixed** (`provenance.go`, 2026-08-27):
+Python's `\s` is 29 code points, Go's is 5. This is the quarantine gate,
+so the gap ran the wrong way — CPython quarantined, the port did not, and
+an unquarantined lesson is injectable into every later run. Measured on
+both engines:
+
+```
+Classify("do not escalate", "do\u00a0not stop", "")
+  CPython  "prompt"    (quarantined)
+  Go       "outcome"   (injectable)
+```
+
+One NO-BREAK SPACE in the untrusted dispatch prompt. `must\vbe obeyed`
+does it with a VERTICAL TAB and no Unicode at all. The fix is
+`pySpace()`, one `strings.ReplaceAll` that rewrites `\s` to
+`pytext.SpaceClass` — **which had been in this tree the whole time**
+(`reclass.go:61`, already used by guard, jsonx, scrub, intent, closure
+and playbook). This package transcribed `\s` instead of looking for it
+(L14), and a helper only fixes the callers that reach it (L15).
 
 The `missionrun` entry below asks which packages have no TESTS. A second
 census asked the sharper question — which have no **live CPython
@@ -449,6 +480,68 @@ and the one worth doing first.
 
 **The measurement is in `go/COVERAGE.md`**, along with the script that
 re-derives it, so this entry does not have to be trusted.
+
+### Go port: `re.IGNORECASE` folds the Turkish i and Go's `(?i)` does not — 16 patterns, 9 files (FOUND 2026-08-27, provenance differential)
+
+CPython's `re.IGNORECASE` case-folds U+0130 (LATIN CAPITAL LETTER I WITH
+DOT ABOVE) and U+0131 (LATIN SMALL LETTER DOTLESS I) onto ASCII `i`. Go's
+`regexp` folds through `unicode.SimpleFold`, which does not. Measured,
+both engines, same input:
+
+```
+Classify("the prompt \u0131nstructs x", "", "")   CPython "prompt"   Go "outcome"
+Classify("the \u0130NSTRUCTIONS say x", "", "")   CPython "prompt"   Go "outcome"
+```
+
+Direction is **UNSAFE in `provenance`** — same shape as the `\s` hole:
+CPython quarantines, the port does not. It is filed rather than fixed
+because **there is no remedy in the tree**. `pytext` has a
+`SpaceClass`/`WordStart`/`WordEnd` answer for `\s` and `\b`; it has
+nothing for folding, and the honest fix is either a generated fold table
+or pre-normalizing the subject, both of which are their own chunk.
+
+It is also not a `provenance` problem. Census across the port:
+**16 of 40 `(?i)` patterns, in 9 files**, carry an `i` or `I` in the
+pattern tail and are therefore exposed —
+`pytext/reclass.go` 3, `provenance/provenance.go` 3, `artifactcheck` 3,
+`intent` 2, and `jsonx` / `scrub` / `guard` / `evolver` 1 each. Pinned
+with a stated reason in `provenance_diff_test.go` (three rows, cause
+`whyFold`), so closing it fails that test deliberately.
+
+Practical exposure is low — the strings are English operational prose —
+but "low" is the argument for filing it, not for not knowing it.
+
+### Go port: three more provenance divergences, all fail-closed (FOUND 2026-08-27, provenance differential)
+
+Filed together because they share a verdict: the port quarantines MORE
+than CPython, so each is a false positive rather than a laundering hole.
+None is fixed; all three are pinned in `provenance_diff_test.go` with a
+stated cause so a silent change fails.
+
+1. **`\b` / `\w` are Unicode in Python and ASCII in Go** — 142,940 word
+   runes to Go's 63. A non-ASCII letter touching a keyword is a word
+   character to Python (so no boundary, no match, `"outcome"`) and a
+   non-word character to Go (boundary holds, `"prompt"`). Pinned, five
+   rows, cause `whyBoundary`. **Not fixed even though `pytext` has
+   `WordStart`/`WordEnd`**: two of `scaffoldingRe`'s three `\b` are
+   INTERIOR to a `[^.]{0,60}` window, and substituting there means
+   redoing the window arithmetic (`reclass.go:227-271`) — a different
+   change from the one-line `\s` transformation, with a fail-closed
+   direction that does not earn it.
+
+2. **Killswitch parse: `str.strip()` vs `strings.TrimSpace`** — same
+   root as the `\s` gap. `"\x1cfalse"` strips to `"false"` in CPython
+   (gate OFF) and stays `"\x1cfalse"` in Go (unrecognized → gate ON).
+
+3. **Empty containers as a killswitch value** — `[]` / `{}` are falsey
+   in CPython (gate OFF) and are not the Go zero value the port checks
+   (gate ON).
+
+Two non-findings were also reported and are recorded so they are not
+re-found: PyYAML 1.1 decodes `off`/`no`/`yes`/`on` as booleans where
+`yaml.v3` (1.2) leaves them strings — the two gates agree here only by
+construction, not by design — and `pack/hostile_test.go:568` pins a
+`Get[any]` composition production does not use.
 
 ### Go port: `pack adopt` takes its label as a FLAG where `pack.py` takes it positionally (FOUND 2026-08-26, write-path harness census)
 

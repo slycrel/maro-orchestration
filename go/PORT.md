@@ -13982,8 +13982,12 @@ already sitting in this tree that this package never used:
    CPython's. No remedy exists in the tree. This is NOT
    provenance-specific — `pytext`'s fold-invariance sweep covers the
    exported CLASSES, and this is about LITERALS: any `(?i)` pattern in
-   the port with an `i` in a literal has the same hole (40 such patterns
-   across 11 files). U+017F/`s` and U+212A/`k`, the other two special
+   the port with an `i` in a literal has the same hole. The reported
+   figure was "40 patterns across 11 files", which is the count of `(?i)`
+   patterns, not of exposed ones; re-censused, **16 of those 40, across 9
+   files**, carry an `i` or `I` in the pattern tail — `pytext/reclass.go`
+   3, `provenance/provenance.go` 3, `artifactcheck` 3, `intent` 2, and
+   `jsonx` / `scrub` / `guard` / `evolver` 1 each. U+017F/`s` and U+212A/`k`, the other two special
    folds an ASCII pattern can reach, DO agree — measured, which is why
    the rows name the Turkish i rather than "unicode folding".
 
@@ -14014,6 +14018,17 @@ Every pinned row asserts the disagreement PERSISTS, so closing one fails
 the test and forces the ledger to be updated rather than quietly
 shrinking — proven by widening the port's `\s` toward Python's and
 watching eleven rows and the swept class fail together.
+
+**What that assertion is for, since the phrasing invites the wrong
+reading** (Jeremy, 2026-08-27: *"'assert this difference continues to
+exist' seems a little... wrong"*): it is a tripwire on the NOTE, not a
+requirement on the code. Nothing here wants the divergence to survive.
+A row is a written claim that the two engines differ HERE and for THIS
+reason; when the row stops being true, the note has gone stale, and a
+stale note about a security gate is worse than no note. So the failure
+is deliberate and the correct response to it is frequently to **delete
+the row** — which is exactly what happened to the `\s` class within the
+day, ten rows removed rather than re-pinned.
 
 The CPython premise is checked before either side is compared, and it
 earned its keep immediately: two rows of the first draft claimed to

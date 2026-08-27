@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 // The provenance gate is a QUARANTINE decision made once, at mint and at
@@ -83,12 +84,10 @@ type provCase struct {
 	why      string
 }
 
-// The four `why` strings the pinned rows share. Named, so the ledger is
+// The `why` strings the pinned rows share. Named, so the ledger is
 // countable and a row cannot invent a private wording for a cause that
 // already exists.
 const (
-	whySpace = "Python's \\s is 29 code points, Go's is 5: the separator " +
-		"inside the phrase is one of the 24 Go does not honour"
 	whyBoundary = "Python's \\w is Unicode, Go's is [0-9A-Za-z_]: a non-ASCII " +
 		"letter touching the keyword suppresses \\b in Python and not in Go"
 	whyFold = "Python's IGNORECASE folds U+0130/U+0131 to i, Go's " +
@@ -259,27 +258,28 @@ func classifyCases() []provCase {
 		{name: "several spaces between the words", py: "prompt",
 			lesson: "the   prompt   says x"},
 
-		// --- DIVERGENCE 1: Python's \s is Unicode, Go's is 5 ASCII bytes --
-		// Direction is UNSAFE: CPython quarantines, the port does not, and
+		// --- CLOSED: Python's \s is Unicode, and now so is the port's ---
+		// These ten rows were pinned divergences until 2026-08-27, and the
+		// direction was UNSAFE: CPython quarantined, the port did not, and
 		// an unquarantined lesson is injectable into every later run. A
 		// model that emits a non-breaking space, or a lesson extracted from
-		// text pasted out of a rendered page, reaches this without anyone
+		// text pasted out of a rendered page, reached it without anyone
 		// trying; U+000B needs no Unicode at all.
+		//
+		// provenance.go now runs its patterns through pySpace(), so they
+		// AGREE. The rows stay, unpinned: they are the only thing that
+		// notices if the transformation is dropped from one of the three
+		// patterns, which is exactly how it would be dropped.
 		{name: "a vertical tab between the words", py: "prompt",
-			lesson: "the prompt" + vtab + "says x",
-			goDiff: "outcome", why: whySpace},
+			lesson: "the prompt" + vtab + "says x"},
 		{name: "a non-breaking space between the words", py: "prompt",
-			lesson: "the prompt" + nbsp + "says x",
-			goDiff: "outcome", why: whySpace},
+			lesson: "the prompt" + nbsp + "says x"},
 		{name: "an em space between the words", py: "prompt",
-			lesson: "the prompt" + emsp + "says x",
-			goDiff: "outcome", why: whySpace},
+			lesson: "the prompt" + emsp + "says x"},
 		{name: "an ideographic space between the words", py: "prompt",
-			lesson: "the prompt" + ideosp + "says x",
-			goDiff: "outcome", why: whySpace},
+			lesson: "the prompt" + ideosp + "says x"},
 		{name: "a NEL between the words", py: "prompt",
-			lesson: "the prompt" + nel + "says x",
-			goDiff: "outcome", why: whySpace},
+			lesson: "the prompt" + nel + "says x"},
 		// The same hole in the other two regexes, and — the one that
 		// matters most — in the SOURCE leg, where the text is the
 		// untrusted dispatch prompt itself.
@@ -294,20 +294,15 @@ func classifyCases() []provCase {
 		{name: "a non-breaking space after the determiner", py: "prompt",
 			lesson: "the" + nbsp + "prompt says x"},
 		{name: "a non-breaking space in the obedience phrase", py: "prompt",
-			lesson: "treat that as a hard" + nbsp + "constraint",
-			goDiff: "outcome", why: whySpace},
+			lesson: "treat that as a hard" + nbsp + "constraint"},
 		{name: "a vertical tab in must-be-obeyed", py: "prompt",
-			lesson: "operator rules must" + vtab + "be obeyed",
-			goDiff: "outcome", why: whySpace},
+			lesson: "operator rules must" + vtab + "be obeyed"},
 		{name: "a non-breaking space in the lesson's scaffolding", py: "prompt",
-			lesson: "do" + nbsp + "not escalate", goal: "do not stop",
-			goDiff: "outcome", why: whySpace},
+			lesson: "do" + nbsp + "not escalate", goal: "do not stop"},
 		{name: "a non-breaking space in the goal's scaffolding", py: "prompt",
-			lesson: "do not escalate", goal: "do" + nbsp + "not stop",
-			goDiff: "outcome", why: whySpace},
+			lesson: "do not escalate", goal: "do" + nbsp + "not stop"},
 		{name: "a vertical tab in the goal's scaffolding", py: "prompt",
-			lesson: "do not escalate", goal: "do" + vtab + "not stop",
-			goDiff: "outcome", why: whySpace},
+			lesson: "do not escalate", goal: "do" + vtab + "not stop"},
 
 		// --- DIVERGENCE 2: Python's \w is Unicode, Go's is [0-9A-Za-z_] ---
 		// Direction is SAFE: a non-ASCII letter touching the keyword is a
@@ -481,8 +476,13 @@ func TestWhitespaceClassMatchesCPython(t *testing.T) {
 	} {
 		pySpace[r] = true
 	}
-	// ...and these are the five Go's regexp does.
-	goSpace := map[rune]bool{0x09: true, 0x0a: true, 0x0c: true, 0x0d: true, 0x20: true}
+	// ...and these are the five Go's OWN \s does. The port does not use
+	// it — provenance.go rewrites every \s into pytext.SpaceClass — so
+	// this map is not an expectation any more. It names the 24 code points
+	// that only agree BECAUSE of that rewrite, and the closing assertion
+	// walks it to make sure they were actually exercised. Without that, a
+	// revert of pySpace() could be absorbed by a shrinking candidate list.
+	goNativeSpace := map[rune]bool{0x09: true, 0x0a: true, 0x0c: true, 0x0d: true, 0x20: true}
 
 	args := make([]map[string]string, 0, len(candidates))
 	names := map[rune]string{}
@@ -516,13 +516,11 @@ func TestWhitespaceClassMatchesCPython(t *testing.T) {
 			pyDisagrees = append(pyDisagrees, fmt.Sprintf("%s: %s", n, cp))
 			continue
 		}
-		wantGo := MintedFromOutcome
-		if goSpace[r] {
-			wantGo = MintedFromPrompt
-		}
-		if g := Classify("the prompt"+string(r)+"says x", "", ""); g != wantGo {
+		// The port is held to CPython's answer, not to a second stated
+		// class of its own: there is no licensed gap here to describe.
+		if g := Classify("the prompt"+string(r)+"says x", "", ""); g != cp {
 			portDisagrees = append(portDisagrees,
-				fmt.Sprintf("%s: %s (expected %s)", n, g, wantGo))
+				fmt.Sprintf("%s: port %s, cpython %s", n, g, cp))
 		}
 	}
 	if len(pyDisagrees) > 0 {
@@ -536,23 +534,30 @@ func TestWhitespaceClassMatchesCPython(t *testing.T) {
 		t.Fatalf("the port's whitespace class moved at %d code points: %v",
 			len(portDisagrees), portDisagrees)
 	}
-	// The gap is the finding, so it is counted out loud rather than left
-	// implied by two maps: 24 separators CPython honours inside the
-	// pattern and the port does not.
-	gap := 0
+	// Agreement above is only worth reading if the hard cases were IN the
+	// candidate list. These 24 are the ones Go's native \s does not honour
+	// — every one of them was a failing row before pySpace() — so they are
+	// counted out loud rather than left implied by the loop.
+	var earned []rune
 	for r := range pySpace {
-		if !goSpace[r] {
-			gap++
+		if !goNativeSpace[r] {
+			if _, present := names[r]; !present {
+				t.Fatalf("U+%04X is a CPython separator Go's own \\s misses and "+
+					"the candidate list no longer carries it — the agreement "+
+					"above stopped covering the case it exists for", r)
+			}
+			earned = append(earned, r)
 		}
 	}
-	if gap != 24 {
-		t.Fatalf("the \\s gap between the two engines is %d code points, "+
-			"not the 24 on record", gap)
+	if len(earned) != 24 {
+		t.Fatalf("pySpace() is carrying %d code points past Go's native \\s, "+
+			"not the 24 on record", len(earned))
 	}
-	for r := range goSpace {
+	for r := range goNativeSpace {
 		if !pySpace[r] {
-			t.Fatalf("U+%04X is a separator to the port and not to CPython — "+
-				"the gap is supposed to be one-directional", r)
+			t.Fatalf("U+%04X is a separator to Go's native \\s and not to "+
+				"CPython — the transformation cannot narrow the class, only "+
+				"widen it", r)
 		}
 	}
 }
@@ -622,15 +627,33 @@ print(json.dumps({
 			t.Errorf("%s carries flags the port does not spell: %d",
 				c.name, c.want.OtherFlags)
 		}
-		// The port's one licensed edit to the pattern text is hoisting
-		// IGNORECASE into an inline (?i), which is how Go spells a flag
-		// there being no flags argument to MustCompile.
+		// The port gets exactly TWO licensed edits to the pattern text,
+		// and both are undone here rather than described, so anything
+		// else — a widened window, one more verb, a hand-expanded class
+		// in only one of the three patterns — still fails byte-for-byte.
+		//
+		//  1. IGNORECASE hoisted into an inline (?i), which is how Go
+		//     spells a flag there being no flags argument to MustCompile.
+		//  2. every `\s` rewritten to pytext.SpaceClass by pySpace(),
+		//     because Go's own `\s` is 5 code points to CPython's 29.
+		//
+		// Un-substituting with the same constant pySpace() uses is not
+		// circular: the constant is not what is being checked here, the
+		// PATTERN is, and a pattern that expanded the class by hand would
+		// not round-trip back to `\s`.
 		stripped := strings.TrimPrefix(c.got, "(?i)")
 		if stripped == c.got {
 			t.Errorf("%s: the port's pattern carries no inline (?i) to stand "+
 				"in for re.IGNORECASE: %q", c.name, c.got)
 			continue
 		}
+		if !strings.Contains(stripped, pytext.SpaceClass) {
+			t.Errorf("%s: the port's pattern carries no pytext.SpaceClass — "+
+				"either pySpace() was dropped from it or CPython stopped "+
+				"using \\s here: %q", c.name, stripped)
+			continue
+		}
+		stripped = strings.ReplaceAll(stripped, pytext.SpaceClass, `\s`)
 		if stripped != c.want.Pattern {
 			t.Errorf("%s pattern text differs\ncpython: %q\n     go: %q",
 				c.name, c.want.Pattern, stripped)
@@ -654,9 +677,9 @@ func TestClassifyDivergenceLedger(t *testing.T) {
 	for _, n := range byWhy {
 		total += n
 	}
-	want := map[string]int{whySpace: 10, whyBoundary: 5, whyFold: 3}
-	if total != 18 {
-		t.Errorf("the table pins %d divergent rows, not the 18 on record", total)
+	want := map[string]int{whyBoundary: 5, whyFold: 3}
+	if total != 8 {
+		t.Errorf("the table pins %d divergent rows, not the 8 on record", total)
 	}
 	for why, n := range want {
 		if byWhy[why] != n {
