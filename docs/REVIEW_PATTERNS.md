@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 65 — the most frequent single defect in the Go port*
+*instances: 66 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -347,21 +347,21 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 16*
+*instances: 17*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
 surface rendered "Total tokens: 0".
 
 ### L19 — A zero value that must mean two things means neither
-*instances: 23*
+*instances: 24*
 
 **Canonical instance.** `load_outcomes(limit=0)` in Python returns NOTHING
 (`[:0]`). The port reads `limit <= 0` as "everything" — a deliberate
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 27*
+*instances: 28*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 78*
+*instances: 80*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -573,7 +573,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 8 attributed; ~6 in the mined cluster*
+*instances: 9 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -1274,7 +1274,7 @@ value that renders identically as a Python int and a Go float64. A
 
 ### L53 — A correct assertion can still cover the wrong blast radius
 
-*instances: 5*
+*instances: 6*
 
 The ordinary missing-test finding is "nobody wrote one". This is not
 that. The assertion existed, it was correct, it ran on every suite, and
