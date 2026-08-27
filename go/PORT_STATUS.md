@@ -104,7 +104,7 @@ reading like one.
 | `persona.py` | 1060 | `internal/persona` |
 | `recall.py` | 1005 | `internal/recall` |
 | `loop_planning.py` | 883 | `internal/loop`, `internal/metrics` |
-| `agent_loop.py` | 871 | `internal/looptypes` |
+| `agent_loop.py` | 871 | `internal/agentloop`, `internal/looptypes` |
 | `orch_items.py` | 845 | `internal/orch` |
 | `metrics.py` | 827 | `internal/metrics`, `internal/pyval`, `internal/record`, `internal/scans` |
 | `playbook.py` | 775 | `internal/playbook`, `internal/pytext` |

@@ -113,9 +113,9 @@ type mergeSpec struct {
 }
 
 type behSpec struct {
-	Monotonic         float64    `json:"monotonic,omitempty"`
-	Now               string     `json:"now,omitempty"`
-	LogPath           string     `json:"log_path,omitempty"`
+	Monotonic         float64    `json:"monotonic"`
+	Now               string     `json:"now"`
+	LogPath           string     `json:"log_path"`
 	ManifestRaise     string     `json:"manifest_raise,omitempty"`
 	ReportRaise       string     `json:"report_raise,omitempty"`
 	LogLogRaise       string     `json:"loglog_raise,omitempty"`
@@ -126,7 +126,7 @@ type behSpec struct {
 	LockedAppendRaise string     `json:"lockedappend_raise,omitempty"`
 	WriteEventRaise   string     `json:"writeevent_raise,omitempty"`
 	ArtifactDirRaise  string     `json:"artifactdir_raise,omitempty"`
-	LandFacts         []int      `json:"landfacts,omitempty"`
+	LandFacts         []int      `json:"landfacts"`
 	LandFactsRaise    string     `json:"landfacts_raise,omitempty"`
 	FinalizeRaise     string     `json:"finalize_raise,omitempty"`
 	CloneMerge        *mergeSpec `json:"clone_merge,omitempty"`
@@ -176,7 +176,13 @@ func scenarios() []scenario {
 	sc := []scenario{}
 
 	add := func(name string, mut func(*scenario)) {
-		s := scenario{Name: name, Ctx: baseCtx(), In: baseIn(), Beh: &behSpec{}}
+		s := scenario{Name: name, Ctx: baseCtx(), In: baseIn(), Beh: &behSpec{
+			// The ambient values every scenario runs against, in ONE place.
+			Monotonic: 12.5,
+			Now:       "2026-08-27T00:00:00+00:00",
+			LogPath:   "/logs/loop.json",
+			LandFacts: []int{0, 0},
+		}}
 		mut(&s)
 		sc = append(sc, s)
 	}
@@ -488,18 +494,12 @@ func goRecord(t *testing.T, root string, s scenario) map[string]any {
 		}
 	}
 
-	mono := beh.Monotonic
-	if mono == 0 {
-		mono = 12.5
-	}
-	now := beh.Now
-	if now == "" {
-		now = "2026-08-27T00:00:00+00:00"
-	}
-	logPath := beh.LogPath
-	if logPath == "" {
-		logPath = "/logs/loop.json"
-	}
+	// No defaulting here, and none in the probe either: the base scenario
+	// carries all three, so both languages read the value a fixture chose.
+	// They used to be defaulted on BOTH sides to the same constants, which
+	// agreed perfectly and made "monotonic returns zero" unexpressible
+	// (L6; internal/portguard now checks for the shape).
+	mono, now, logPath := beh.Monotonic, beh.Now, beh.LogPath
 
 	ctx := looptypes.NewLoopContext()
 	c := s.Ctx
@@ -654,10 +654,7 @@ func goRecord(t *testing.T, root string, s scenario) map[string]any {
 			if err := boom(beh.LandFactsRaise); err != nil {
 				return 0, 0, err
 			}
-			if len(beh.LandFacts) == 2 {
-				return beh.LandFacts[0], beh.LandFacts[1], nil
-			}
-			return 0, 0, nil
+			return beh.LandFacts[0], beh.LandFacts[1], nil
 		},
 		FinalizeLoop: func(f FinalizeIn) error {
 			rec("finalize_loop", map[string]any{

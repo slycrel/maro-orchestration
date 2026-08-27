@@ -1,0 +1,227 @@
+{
+ "packages": {
+  "default": [
+   "./internal/pyargparse/",
+   "./internal/introspect/",
+   "./internal/agentloop/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "negnum-anchored-both-ends",
+   "old": "regexp.MustCompile(`^-\\.?[\\p{Nd}]`)",
+   "new": "regexp.MustCompile(`^-\\d+$`)"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "negnum-ascii-digits-only",
+   "old": "`^-\\.?[\\p{Nd}]`",
+   "new": "`^-\\.?[0-9]`"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "negnum-no-leading-dot",
+   "old": "`^-\\.?[\\p{Nd}]`",
+   "new": "`^-[\\p{Nd}]`"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "negnum-not-consulted",
+   "old": "\tif negativeNumber.MatchString(arg) {\n\t\treturn nil\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "exact-option-before-equals-dropped",
+   "old": "\tif before, after, found := strings.Cut(arg, \"=\"); found {\n\t\tfor i, o := range p.Opts {\n\t\t\tif o.Str == before {\n\t\t\t\treturn []optTuple{{opt: i, str: before, sep: sepEquals, explicit: after}}\n\t\t\t}\n\t\t}\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "lone-dash-is-an-option",
+   "old": "\tif len(arg) == 1 {\n\t\treturn nil\n\t}",
+   "new": "\tif false {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "space-token-is-an-option",
+   "old": "\tif strings.Contains(arg, \" \") {\n\t\treturn nil\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "long-abbreviation-requires-equality",
+   "old": "\t\t\tif strings.HasPrefix(o.Str, prefix) {\n\t\t\t\tout = append(out, optTuple{opt: i, str: o.Str, sep: sep, explicit: explicit})",
+   "new": "\t\t\tif o.Str == prefix {\n\t\t\t\tout = append(out, optTuple{opt: i, str: o.Str, sep: sep, explicit: explicit})"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "ambiguity-needs-three",
+   "old": "\tif len(tuples) > 1 {",
+   "new": "\tif len(tuples) > 2 {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "ambiguous-names-the-prefix",
+   "old": "\t\t\tnames[j] = t.str",
+   "new": "\t\t\tnames[j] = s.argv[startIndex]"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "ambiguous-wording",
+   "old": "\"ambiguous option: %s could match %s\"",
+   "new": "\"ambiguous option %s could match %s\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "glued-tail-dash-test-inverted",
+   "old": "runeAt(optionString, 1) != \"-\"",
+   "new": "runeAt(optionString, 1) == \"-\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "equals-tail-not-refused",
+   "old": "\t\t\tif sep == sepEquals || head == \"-\" {",
+   "new": "\t\t\tif head == \"-\" {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "dash-tail-not-refused",
+   "old": "\t\t\tif sep == sepEquals || head == \"-\" {",
+   "new": "\t\t\tif sep == sepEquals {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "glued-tail-extras-lose-the-dash",
+   "old": "\t\t\t\ts.extras = append(s.extras, dash+explicit)",
+   "new": "\t\t\t\ts.extras = append(s.extras, explicit)"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "glued-value-stop-overshoots",
+   "old": "\t\t\tstop = startIndex + 1\n\t\t\tactions = append(actions, actionTuple{opt: opt, args: []string{explicit}})",
+   "new": "\t\t\tstop = startIndex + 2\n\t\t\tactions = append(actions, actionTuple{opt: opt, args: []string{explicit}})"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "expected-argument-wording",
+   "old": "\"argument %s: expected one argument\"",
+   "new": "\"argument %s: expected 1 argument\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "option-token-taken-as-value",
+   "old": "\tif len(pattern) == 0 || pattern[0] != 'A' {",
+   "new": "\tif len(pattern) == 0 {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "terminator-classified-as-value",
+   "old": "\t\t\ts.pattern[i] = '-'\n\t\t\tterminated = true",
+   "new": "\t\t\ts.pattern[i] = 'A'\n\t\t\tterminated = true"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "terminator-never-removed",
+   "old": "\t\t\tif a == \"--\" {",
+   "new": "\t\t\tif false {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "terminator-removed-everywhere",
+   "old": "\t\t\t\targs = append(args[:j:j], args[j+1:]...)\n\t\t\t\tbreak",
+   "new": "\t\t\t\targs = append(args[:j:j], args[j+1:]...)"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "required-reported-after-extras",
+   "old": "\tif len(missing) > 0 {\n\t\treturn s.p.errorf(\"the following arguments are required: %s\",\n\t\t\tstrings.Join(missing, \", \"))\n\t}\n\n\tif len(s.extras) > 0 {\n\t\treturn s.p.errorf(\"unrecognized arguments: %s\", strings.Join(s.extras, \" \"))\n\t}",
+   "new": "\tif len(s.extras) > 0 {\n\t\treturn s.p.errorf(\"unrecognized arguments: %s\", strings.Join(s.extras, \" \"))\n\t}\n\n\tif len(missing) > 0 {\n\t\treturn s.p.errorf(\"the following arguments are required: %s\",\n\t\t\tstrings.Join(missing, \", \"))\n\t}"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "required-wording",
+   "old": "\"the following arguments are required: %s\"",
+   "new": "\"the following argument is required: %s\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "unrecognized-wording",
+   "old": "\"unrecognized arguments: %s\"",
+   "new": "\"unrecognized argument: %s\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "extras-joined-with-comma",
+   "old": "strings.Join(s.extras, \" \")",
+   "new": "strings.Join(s.extras, \", \")"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "flag-stores-false",
+   "old": "\t\tv := o.Value\n\t\tif v == nil {\n\t\t\tv = true\n\t\t}",
+   "new": "\t\tv := o.Value\n\t\tif v == nil {\n\t\t\tv = false\n\t\t}"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "help-does-not-unwind",
+   "old": "\t\tst.res.Help = true\n\t\treturn st.res, nil",
+   "new": "\t\tst.res.Help = true\n\t\treturn st.res, err"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "choices-quoted",
+   "old": "\t\t\tlabel, pyval.Repr(raw), strings.Join(allowed, \", \"))}",
+   "new": "\t\t\tlabel, pyval.Repr(raw), \"'\"+strings.Join(allowed, \"', '\")+\"'\")}"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "choices-wording",
+   "old": "\"argument %s: invalid choice: %s (choose from %s)\"",
+   "new": "\"argument %s: invalid choice: %s (choose from: %s)\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "int-overflow-refused",
+   "old": "\tif !errors.Is(err, pyval.ErrIntTooLarge) {",
+   "new": "\tif true {"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "int-negative-saturates-up",
+   "old": "\tif strings.HasPrefix(pytext.Strip(raw), \"-\") {\n\t\treturn math.MinInt, nil\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "int-value-wording",
+   "old": "\"argument %s: invalid int value: %s\"",
+   "new": "\"argument %s: invalid int: %s\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "int-value-not-repr",
+   "old": "\t\t\t\"argument %s: invalid int value: %s\", label, pyval.Repr(raw))}",
+   "new": "\t\t\t\"argument %s: invalid int value: %s\", label, raw)}"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "usage-block-omitted",
+   "old": "\treturn e.usage + e.prog + \": error: \" + e.msg + \"\\n\"",
+   "new": "\treturn e.prog + \": error: \" + e.msg + \"\\n\""
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "exit-status-code-one",
+   "old": "\t\treturn ue.Stderr(), 2, true",
+   "new": "\t\treturn ue.Stderr(), 1, true"
+  },
+  {
+   "file": "internal/pyargparse/pyargparse.go",
+   "name": "convert-error-loses-usage",
+   "old": "\t\treturn &UsageError{msg: ue.msg, prog: s.p.Prog, usage: s.p.Usage}",
+   "new": "\t\treturn errors.New(ue.msg)"
+  }
+ ]
+}

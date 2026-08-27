@@ -52,7 +52,7 @@ def run_one(sc):
             injections=list(kw["injections"]))
         if beh.get("loglog_raise"):
             raise Boom(beh["loglog_raise"])
-        return beh.get("log_path", "/logs/loop.json")
+        return beh["log_path"]
 
     def w_index(force=False):
         rec("runs_index", force=force)
@@ -90,13 +90,13 @@ def run_one(sc):
     lf.cleanup_step_artifacts = cleanup
     lf._project_dir_root = lambda: root / "projroot"
 
-    lf.time = types.SimpleNamespace(monotonic=lambda: float(beh.get("monotonic", 12.5)))
+    lf.time = types.SimpleNamespace(monotonic=lambda: float(beh["monotonic"]))
 
     class FakeDT:
         @staticmethod
         def now(tz=None):
             return types.SimpleNamespace(
-                isoformat=lambda: beh.get("now", "2026-08-27T00:00:00+00:00"))
+                isoformat=lambda: beh["now"])
     lf.datetime = FakeDT
 
     buf = io.StringIO()
@@ -124,7 +124,7 @@ def run_one(sc):
         rec("land_facts", loop_id=loop_id, project=project, dry_run=dry_run)
         if beh.get("landfacts_raise"):
             raise Boom(beh["landfacts_raise"])
-        lfc = beh.get("landfacts", [0, 0])
+        lfc = beh["landfacts"]
         return {"anecdotal": lfc[0], "hypotheses": lfc[1]}
 
     def write_event(name, **kw):

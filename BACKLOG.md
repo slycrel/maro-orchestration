@@ -42,6 +42,44 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### PYTHON-side: `maro-run --verbose` cannot do anything (FOUND 2026-08-27, agentloop differential)
+
+`agent_loop.main` ends with:
+
+```python
+result = run_agent_loop(
+    goal,
+    ...
+    verbose=args.verbose or True,
+)
+```
+
+`args.verbose or True` is `True` for every input the parser can produce.
+The flag is `action="store_true"`, so absent is `False` and `False or True`
+is `True`; present is `True` and `True or True` is `True`. The CLI runs
+verbose unconditionally, and `-v` / `--verbose` are decoration.
+
+Confirmed by the differential (`internal/agentloop`), which compares the
+kwargs `main` passes: every scenario, flag or no flag, carries
+`verbose=True`. The port reproduces it — with the flag still PARSED, so
+that `--verbose=x` is still the exit-2 argparse refuses — and the finding
+is filed here rather than fixed there, because a port that improves its
+source stops being a differential.
+
+The fix is one of two, and it is a product question, not a mechanical one:
+
+- **`verbose=args.verbose`** — the flag starts working, and every existing
+  `maro-run` invocation that did not pass `-v` goes quiet. That is a
+  behaviour change for anything reading the output today, including
+  whatever put the `or True` there.
+- **drop the flag and the `or True`** — the CLI stays verbose always, and
+  stops advertising a switch that does nothing. The help text loses a line
+  and no output changes.
+
+The second is the honest small move; the first is the one the flag's
+existence implies. Someone who knows why the `or True` was added should
+pick.
+
 ### PYTHON-side: the two merge-back lanes in `loop_finalize.py` disagree about failure (FOUND 2026-08-27, loopfinalize differential)
 
 Both reproduced faithfully in `internal/loopfinalize` and fixtured there

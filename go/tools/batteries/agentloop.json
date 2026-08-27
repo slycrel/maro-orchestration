@@ -1,0 +1,213 @@
+{
+ "packages": {
+  "default": [
+   "./internal/agentloop/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "default-max-steps",
+   "old": "DefaultMaxSteps      = 6",
+   "new": "DefaultMaxSteps      = 5"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "default-max-iterations",
+   "old": "DefaultMaxIterations = 20",
+   "new": "DefaultMaxIterations = 21"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "backend-choice-order",
+   "old": "var Backends = []string{\"auto\", \"anthropic\", \"openrouter\", \"openai\",",
+   "new": "var Backends = []string{\"anthropic\", \"auto\", \"openrouter\", \"openai\","
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "backend-choice-dropped",
+   "old": "\t\"subprocess\", \"codex\", \"xai\"}",
+   "new": "\t\"subprocess\", \"codex\"}"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "usage-wrap-column",
+   "old": "\"                [--dry-run] [--verbose]\\n\" +",
+   "new": "\"                [--dry-run] [--verbose] [--backend BACKEND]\\n\" +"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "usage-positional-line",
+   "old": "\"                goal [goal ...]\\n\"",
+   "new": "\"                goal\\n\""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "help-body-positional",
+   "old": "  goal                  Goal description",
+   "new": "  goal                  The goal"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "help-body-default-six",
+   "old": "Max decomposition steps (default: 6)",
+   "new": "Max decomposition steps (default: 5)"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "help-prints-usage-only",
+   "old": "\t\tio.WriteString(out, HelpText)",
+   "new": "\t\tio.WriteString(out, UsageText)"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "help-exits-two",
+   "old": "\t\tio.WriteString(out, HelpText)\n\t\treturn 0, nil",
+   "new": "\t\tio.WriteString(out, HelpText)\n\t\treturn 2, nil"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parse-error-exits-one",
+   "old": "\t\treturn 2, err",
+   "new": "\t\treturn 1, err"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "run-error-exits-two",
+   "old": "\tres, err := run(a)\n\tif err != nil {\n\t\treturn 1, err",
+   "new": "\tres, err := run(a)\n\tif err != nil {\n\t\treturn 2, err"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "goal-joined-without-space",
+   "old": "strings.Join(r.Strings(\"goal\"), \" \")",
+   "new": "strings.Join(r.Strings(\"goal\"), \"\")"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "empty-project-becomes-none",
+   "old": "if v, ok := r.Values[\"project\"]; ok {",
+   "new": "if v, ok := r.Values[\"project\"]; ok && v.(string) != \"\" {"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "model-not-passed",
+   "old": "\tif v, ok := r.Values[\"model\"]; ok {\n\t\ts := v.(string)\n\t\ta.Model = &s\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "backend-not-passed",
+   "old": "\tif v, ok := r.Values[\"backend\"]; ok {\n\t\ts := v.(string)\n\t\ta.Backend = &s\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "max-steps-default-zero",
+   "old": "\t\tMaxSteps:      DefaultMaxSteps,",
+   "new": "\t\tMaxSteps:      0,"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "max-iterations-default-zero",
+   "old": "\t\tMaxIterations: DefaultMaxIterations,",
+   "new": "\t\tMaxIterations: 0,"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "max-steps-value-ignored",
+   "old": "\tif n := r.IntPtr(\"max_steps\"); n != nil {\n\t\ta.MaxSteps = *n\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "max-iterations-value-ignored",
+   "old": "\tif n := r.IntPtr(\"max_iterations\"); n != nil {\n\t\ta.MaxIterations = *n\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "dry-run-not-passed",
+   "old": "\t\tDryRun:        r.Bool(\"dry_run\"),",
+   "new": "\t\tDryRun:        false,"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "verbose-not-forced",
+   "old": "\ta.Verbose = true\n\tres, err := run(a)",
+   "new": "\tres, err := run(a)"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "verbose-forced-in-parser",
+   "old": "\ta.Verbose = r.Bool(\"verbose\")",
+   "new": "\ta.Verbose = true"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "stuck-exits-zero",
+   "old": "\tif res.Status == \"done\" {\n\t\treturn 0, nil\n\t}\n\treturn 1, nil",
+   "new": "\tif res.Status == \"done\" {\n\t\treturn 0, nil\n\t}\n\treturn 0, nil"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "summary-without-newline",
+   "old": "fmt.Fprintln(out, res.Summary)",
+   "new": "fmt.Fprint(out, res.Summary)"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "summary-not-printed",
+   "old": "\tfmt.Fprintln(out, res.Summary)\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-empty-returns-null",
+   "old": "\t\treturn []T{}, nil",
+   "new": "\t\treturn nil, nil"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-empty-guard-dropped",
+   "old": "\tif len(goals) == 0 {",
+   "new": "\tif false {"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-zero-workers-allowed",
+   "old": "\t\treturn nil, ErrMaxWorkers{}",
+   "new": "\t\treturn []T{}, nil"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-error-wording",
+   "old": "func (ErrMaxWorkers) Error() string { return \"max_workers must be greater than 0\" }",
+   "new": "func (ErrMaxWorkers) Error() string { return \"max_workers must be > 0\" }"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-results-reversed",
+   "old": "\tfor i := range out {",
+   "new": "\tfor i := len(out) - 1; i >= 0; i-- {"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-no-join",
+   "old": "\twg.Wait()\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-semaphore-not-queue",
+   "old": "\tqueue := make(chan int)\n\tvar wg sync.WaitGroup\n\tfor w := 0; w < effective; w++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tfor i := range queue {\n\t\t\t\tout[i].val, out[i].err = run(goals[i])\n\t\t\t}\n\t\t}()\n\t}\n\tfor i := range goals {\n\t\tqueue <- i\n\t}\n\tclose(queue)\n",
+   "new": "\tsem := make(chan struct{}, effective)\n\tvar wg sync.WaitGroup\n\tfor i := range goals {\n\t\twg.Add(1)\n\t\tgo func(i int) {\n\t\t\tdefer wg.Done()\n\t\t\tsem <- struct{}{}\n\t\t\tdefer func() { <-sem }()\n\t\t\tout[i].val, out[i].err = run(goals[i])\n\t\t}(i)\n\t}\n"
+  },
+  {
+   "file": "internal/agentloop/agentloop.go",
+   "name": "parallel-unbounded",
+   "old": "\tfor w := 0; w < effective; w++ {",
+   "new": "\tfor w := 0; w < len(goals); w++ {"
+  }
+ ]
+}

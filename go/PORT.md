@@ -15255,3 +15255,296 @@ argument is not a check. The runner now writes a completion marker and the
 marker is what gets polled.
 
 Final: **68/68 killed**, spec in `go/tools/batteries/loopfinalize.json`.
+
+## Phase H: the CLI that would have been argparse's second copy (2026-08-27)
+
+`agent_loop.py` is 900 lines, and 670 of them are `run_agent_loop` — the
+loop's whole orchestration, reaching loop_execute, loop_post_step,
+loop_blocked and the director. This tranche takes the two ends that are not
+that: `main`, the `maro-run` command line, and `run_parallel_loops`, the
+fan-out entry point. The loop itself is reached through a `RunFn`, so
+everything around it can be measured now.
+
+### The extraction, and why it happened before the port
+
+`maro-introspect` was ported weeks ago, and its CLI carried ~650 lines of
+argparse emulation: the two-pass parse, abbreviation on both dash forms, the
+negative-number heuristic, `--` handling, the nargs patterns, conversion at
+the point of consumption, and the error wording. Every one of those lines
+had survived a review round.
+
+`maro-run` is the second CLI. The choice was to copy those lines or to
+extract them, and this port has a standing lesson about exactly that
+(**L14**: a helper you did not look for is a helper you will write again —
+the byte-wise filename sort was found ALREADY SHIPPED in four packages).
+Copying argparse would have been the largest instance of L14 available:
+a second copy starts every one of those review rounds over, and the two
+copies then drift apart one bug fix at a time.
+
+So `internal/pyargparse` came out of `internal/introspect/cli.go` first, as
+a pure extraction — no behaviour change, ~600 lines deleted from the
+consumer — and the proof that it was pure is that introspect's own CPython
+differential (~84 argv cases against the real `argparse`) stayed green
+across the move without a single fixture edit.
+
+That is the part worth naming. An extraction is normally justified by
+inspection: the code looks the same, so it is the same. Here it was
+justified by the same measurement the original was built against. The
+generalization is real rather than a rename because a second consumer with a
+DIFFERENT parser spec — thirteen option rows instead of six, `nargs="+"` on
+a required positional instead of `nargs="?"` on an optional one, two
+`type=int` conversions and a `choices=` list — now runs through it and is
+compared against CPython independently.
+
+### What the second consumer found that the first could not
+
+introspect's parser has one optional positional. `maro-run`'s has a required
+one with `nargs="+"`, and that exposed an ordering the first consumer never
+reached:
+
+```
+$ maro-run --bogus
+maro-run: error: the following arguments are required: goal
+```
+
+Not `unrecognized arguments: --bogus`. argparse raises the required-actions
+error from INSIDE `_parse_known_args`, while extras are reported by
+`parse_args` afterwards — so the missing positional wins, and a user who
+mistyped an option is told about a different problem entirely. The port now
+runs the required check at the end of `parse()` and the extras check after
+it, in that order, and the differential pins it.
+
+Two more measurements, both version-dependent, both recorded at their sites
+because a future red differential will look like a port bug and not be one:
+
+- **`choices=` is printed UNQUOTED** on CPython 3.14.3:
+  `invalid choice: 'bogus' (choose from auto, anthropic, openrouter, openai,
+  subprocess, codex, xai)`. Through 3.11 the choices carried quotes.
+- **`--project, -p PROJECT`** is the 3.13+ help rendering. Older argparse
+  wrote `--project PROJECT, -p PROJECT`.
+
+### The usage block is a measured constant, and it is 80 columns
+
+Neither consumer generates its usage or help text. argparse's HelpFormatter
+wraps both to `shutil.get_terminal_size().columns - 2`, which means the
+output is a function of the terminal it ran in. Porting the wrapping
+algorithm is a tranche of its own and buys nothing: the 80-column rendering
+is what CPython produces whenever stdout is not a terminal — a pipe, a
+redirect, a CI log, every scripted invocation — and what it falls back to
+when the width cannot be determined.
+
+So the constants are the 80-column text, the probe exports `COLUMNS=80`, and
+the differential compares them byte for byte. Measured, not assumed: without
+the export the comparison would silently become a property of whoever ran
+the test.
+
+### `--verbose` cannot do anything, and the port reproduces that
+
+```python
+verbose=args.verbose or True,
+```
+
+`args.verbose or True` is `True` for every input the parser can produce.
+`store_true` gives `False` when absent, and `False or True` is `True`. The
+`maro-run` CLI runs verbose unconditionally and the flag is decoration.
+
+The port keeps it — `a.Verbose = true` immediately before the call — with
+the flag still PARSED, because parsing is where a wrong `-v` is refused:
+`--verbose=x` is still argparse's exit 2. A port that folded the `or True`
+into the parser would have made `--verbose=x` legal, so the two halves are
+tested separately (`TestVerboseIsAlwaysTrue`, `TestParseArgsKeepsVerboseAsGiven`)
+rather than left to one field of one differential record.
+
+The finding is filed in `BACKLOG.md` against the Python source. Fixing it
+here would have been the port improving its source, which is how a
+differential stops being one — and the fix is a product question anyway
+(make the flag work and every existing quiet invocation starts talking, or
+delete the flag and change nothing).
+
+### `run_parallel_loops`: three behaviours, and only one of them is the result
+
+```python
+if not goals:
+    return []
+effective_workers = min(max_workers, len(goals))
+with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+    futures = [executor.submit(run_agent_loop, goal, **kwargs) for goal in goals]
+    results = [f.result() for f in futures]
+```
+
+1. **The empty-list guard runs BEFORE the pool is built.** So
+   `max_workers=0` with no goals is fine, and `max_workers=0` with one goal
+   is `ValueError: max_workers must be greater than 0` — raised by
+   ThreadPoolExecutor's constructor, not by any check in this function. A
+   port that validated `max_workers` up front would refuse a call CPython
+   accepts.
+2. **Results are read in SUBMISSION order**, so the first goal's exception
+   propagates even when a later goal failed first — and `with` still joins
+   every thread on the way out. A failure cancels nothing.
+3. **`min(max_workers, len(goals))`** caps the pool at the work available.
+
+The port is a FIFO channel with `effective` worker goroutines, not
+`len(goals)` goroutines racing for a semaphore. Both agree on everything the
+function RETURNS. They disagree on the order tasks START in: a semaphore
+hands its slot to whichever goroutine the scheduler picks, where
+ThreadPoolExecutor's work queue is first-in-first-out. Nothing this function
+returns observes that — but `run` is a caller's function, and a caller whose
+steps log their own start is entitled to the order Python gives them.
+
+Which is why the differential instruments `run` on both sides and records
+the start order and the peak in-flight count, not just the results. The
+mutation battery carries both wrong shapes (`parallel-semaphore-not-queue`,
+`parallel-unbounded`) and both die.
+
+### Comparing a start order without comparing a race
+
+Raw start order is not comparable. With `effective` workers, FIFO submission
+fixes which goals are in flight TOGETHER, but not the order in which those
+threads reach the recording lock — that is a race in CPython and in Go
+alike, and a test that compared the raw list would be flaky in a way that
+looks like a port bug.
+
+So both sides' observed order is collapsed into waves of `effective` and
+sorted within each wave, by the same function, before comparison. The
+property survives — a semaphore over one goroutine per goal puts goal 5 in
+wave 0 — and the race does not.
+
+### `min(max_workers, len(goals))` is an equivalent mutant, and that is the
+### interesting part
+
+The cap has no observable effect through this function. Peak concurrency is
+bounded by `len(goals)` whether or not the pool is capped, so `9` workers
+for `2` goals still peaks at 2, and a negative `max_workers` is negative
+either way. It is a resource decision, not a behavioural one, and the site
+says so rather than carrying a mutation that would report SURVIVED forever.
+
+### The two fixtures that were agreeing with themselves
+
+Both were `omitempty` (**L6**, again):
+
+- `mainRun{Summary: ""}` marshalled to nothing, the probe's
+  `b.get("summary", "SUMMARY")` filled the default back in, and the
+  "empty summary" scenario tested the non-empty one. The probe now reads
+  `b["summary"]` with no default at all — a scenario always carries both
+  fields, and a default is how an omitted fixture field silently agrees
+  with the port's own default instead of testing it.
+- `Goals: []string{}` and `MaxWorkers: 0` marshalled to nothing, and the
+  probe raised `KeyError` — which at least failed loudly. The empty-goals
+  scenarios, the only ones that reach the early return, were the ones that
+  vanished.
+
+### An inconsequential difference, noted rather than pinned
+
+`--max-steps 9999999999999999999999999999999999999999` works in Python:
+its ints are arbitrary precision. The port saturates at `math.MaxInt`.
+
+That divergence is real and it does not matter — both are step counts no run
+reaches — so it is written down here and NOT asserted by a test. What IS
+asserted, in `internal/pyargparse`, is that the port does not invent a
+refusal CPython never makes: a 40-digit `--max-steps` must parse, because a
+port that answered `invalid int value` would have changed the CLI's
+contract, not merely its precision. The differential's own fixture uses
+`2**63-1` exactly, which both languages spell identically.
+
+### One branch the differential cannot reach
+
+`Main` returns exit 1 when the loop itself errors. Python does not catch
+anything from `run_agent_loop`: the exception escapes to the interpreter,
+which prints a traceback and exits 1. Reproducing that traceback is not this
+code's job, so the differential stubs a loop that always returns, and the
+status is pinned by a named Go test instead. Measured, not assumed:
+`python3 -c "raise ValueError('x')"` exits 1. Getting this wrong would make
+a crash indistinguishable from a typo — 2 is argparse's usage status.
+
+### Closing L6 instead of finding it again
+
+L6 — "a fixture that agrees with itself" — fired here twice in one file,
+which by the standing rule (2026-08-27: *lenses get CLOSED, not re-found*)
+makes it a check rather than another ledger row.
+
+The mechanism is specific enough to check. A differential's scenario struct
+is the WIRE FORMAT to a CPython probe: Go marshals it, Python reads it back.
+`omitempty` deletes a field whose value is the Go zero, and the probe then
+supplies its own default for the missing key. When that default is not the
+Go zero, the fixture cannot express the zero AT ALL —
+
+```go
+Summary string `json:"summary,omitempty"`   // Go: ""
+```
+```python
+b.get("summary", "SUMMARY")                 # Python: "SUMMARY"
+```
+
+— and a scenario named "empty summary" passes while testing the non-empty
+one. The other half shipped in the same file: a field dropped by
+`omitempty` and read as `sc["goals"]`, which raises `KeyError` for exactly
+the empty-list scenarios that were the point. That one at least failed
+loudly.
+
+`internal/portguard` now walks every directory holding a `.py.tpl`, parses
+the `_test.go` files for `omitempty` tags, and joins each key against how
+the probe reads it. A subscript is a failure unless it is guarded by a
+truthiness test on the same key (the standard
+`if beh.get("x"): raise Boom(beh["x"])` shape, where the absent case is the
+tested one); a `.get(key, D)` is a failure when `D` is not a literal that
+round-trips to the Go zero.
+
+The remedy is deliberately not an allowlist row. It is to fill the default
+in the SCENARIO BUILDER — one place, on the Go side, where both languages
+then read the same value — and delete it from the probe. A default that
+exists in two languages is a divergence waiting for someone to edit one of
+them.
+
+Writing the check found three more instances immediately, all in
+`loopfinalize`'s differential and all of the second kind: `monotonic`
+defaulted to `12.5` in the probe AND to `12.5` in the Go mirror, `now` to
+the same ISO string in both, `log_path` to `/logs/loop.json` in both. No
+divergence was being masked — the two sides genuinely agreed — but no
+scenario could ever say "monotonic returns zero", and nothing said so. The
+defaults moved into the base scenario and both copies went away.
+
+That is the argument for closing a lens rather than logging it: the check
+found in one run what four review rounds had not looked for.
+
+### The three survivors, and what each one turned out to be
+
+`internal/pyargparse` got its own battery of 39 mutations, run against all
+three packages that can see the change — the package itself, `introspect`,
+and `agentloop`. Narrowing that list to the package under edit is how a
+shared helper's mutation reports SURVIVED with its killers never run.
+
+Four survived the first pass, and they were four different things:
+
+- **`glued-tail-extras-lose-the-dash`** was a real gap. When a single-dash
+  flag carries a tail that names no option, the tail joins the extras WITH
+  the dash it was glued to: `maro-run ship -vx` is
+  `unrecognized arguments: -x`, not `x`. Measured against CPython, fixtured,
+  killed. `introspect`'s corpus could not reach it because its own glued
+  tail is `-hx`, and the help action unwinds the parser before extras are
+  ever reported.
+- **`short-glued-cut-by-bytes`** is equivalent, and the reason is worth the
+  comment it now carries: cutting `arg[:2]` by bytes differs from cutting
+  by code points only when the token's second character is multi-byte, and
+  the resulting prefix is then invalid UTF-8 — which can never equal an
+  option string, because every option in this port's parsers is ASCII. The
+  rune cut stays anyway: it is what argparse does, and the next parser to
+  declare a non-ASCII option would silently get the wrong answer from the
+  byte version.
+- **`second-terminator-also-terminates`** was a bad mutant (**L8**): it adds
+  `&& !terminated` to the `--` arm of a switch whose PRECEDING arm already
+  matches on `terminated`. It cannot change an answer. Retired, with the
+  reason at the site.
+- **`empty-positional-counts-as-seen`** found a real wrong rule that no
+  input can observe. The port marked a positional as seen only when its
+  matched span was non-empty; argparse's `take_action` does
+  `seen_actions.add(action)` before it looks at the values. No fixture
+  distinguishes them — a required positional is `nargs not in ["?", "*"]`,
+  and every other nargs needs at least one `A` to match at all — so a
+  required positional can never be taken with an empty span. The port was
+  changed to argparse's rule regardless. An unobservable difference is
+  still a wrong rule for the next parser spec to trip over, and the
+  mutation was retired because its target no longer exists.
+
+Final: **34/34** on `agentloop`, **36/36** on `pyargparse` (39 written,
+three retired above), and `loopfinalize`'s 68 re-run green after its
+fixtures changed.

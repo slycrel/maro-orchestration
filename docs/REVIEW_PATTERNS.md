@@ -245,13 +245,13 @@ normalization was the only reason a "return nil for a clean transcript"
 mutant survived.
 
 ### L6 — A test that shares a fixture with the thing it measures against is measuring the fixture
-*instances: 1*
+*instances: 2*
 
 ### L7 — A detector that cannot see the case you already have is agreeing, not measuring
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 39*
+*instances: 41*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -444,7 +444,7 @@ and the tell is the same — a correct fix, at the one site that had the
 evidence.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 30*
+*instances: 31*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -472,7 +472,7 @@ that covers part of a class silently splits the class.
 > it, read that refusal as a claim (L52) rather than as a decision.**
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 10*
+*instances: 11*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 8*
@@ -619,7 +619,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 100*
+*instances: 101*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -750,7 +750,7 @@ say out loud what a second writer does in between. "Nothing writes this
 concurrently" is a claim; find the writer list before believing it.
 
 ### L38 — A failure that fails OPEN
-*instances: 10 attributed; ~6 in the mined cluster*
+*instances: 11 attributed; ~6 in the mined cluster*
 
 The error path returns the permissive answer: the input unchanged, the
 default allow, the empty filter. It is invisible in tests because the error
@@ -1087,7 +1087,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 17*
+*instances: 18*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
