@@ -2441,3 +2441,102 @@ line endings, BOMs, surrogates, trailing newlines, file modes.
 name the exact bytes it puts on disk, and check that both seeders write
 those bytes. `base64` in the spec is the cheap answer and reads as a
 deliberate signal: a b64 field says "these bytes, not this text".
+
+---
+
+### L59 — Names imported together fail together, and a whole-module stub cannot see it
+
+*instances: 1 (2026-08-27, `_finalize_loop`)*
+
+Python bundles names per import statement:
+
+```python
+from memory import reflect_and_record, record_step_trace
+```
+
+is ONE statement. Dropping `record_step_trace` fails the whole Reflexion
+phase with the handler at the top of *that try* — a WARNING, no outcome
+row written at all — and NOT the debug line that `record_step_trace`'s own
+call site would have produced. Seven introspect names on four consecutive
+lines behave the same way: losing the seventh means `diagnose_loop` is
+never called.
+
+A port models each importable name as a nilable dependency, and the guard
+that stands in for the ImportError has a PLACE: at the top of the phase,
+or at the call site. Both compile. Both pass every fixture whose module is
+present. They differ only when one name is missing and the others are not
+— and a probe that can only install-or-delete whole modules cannot build
+that fixture. **The guard's placement is then unfalsifiable, and the
+levels the port emits under partial failure are whatever the author
+guessed.**
+
+The fix is a module stub that is missing SOME of its names:
+
+```python
+class PartialModule(types.ModuleType):
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)      # see below
+        raise ImportError("no module")
+```
+
+with a `drop_names` field in the fixture spec, and one fixture per
+importable name. Twenty-one names, twenty-one fixtures, and three of them
+found real divergences the whole-module fixtures agreed on.
+
+**The dunder arm is load-bearing and cost a debugging round.** `from X
+import y` runs `_handle_fromlist` first, which probes `__path__` through
+`hasattr` — and `hasattr` only swallows `AttributeError`. A stub that
+raises ImportError for dunders fails EVERY import from that module, so the
+whole suite reports phantom divergences and the one name you dropped is
+invisible among them.
+
+> **A guard standing in for an import must be placed where the IMPORT is,
+> not where the call is — and the fixture that proves it is one dropped
+> name, not one deleted module.**
+
+**Tripwire.** Count the importable names the ported function reaches. If
+the differential has fewer failure fixtures than that, the missing ones
+are guard placements nothing measures.
+
+---
+
+### P17 — The probe's own machinery fails the way the code under test would
+
+*instances: 2 (2026-08-27, both in one probe)*
+
+A differential probe is code. When it breaks, it breaks *inside* the
+handler it is observing, and the report you get is a divergence in the
+subject.
+
+Two in one afternoon:
+
+- **A recorder parameter collided with a recorded kwarg.** `def rec(name,
+  **kw)` plus `rec("save_skill", name=skill.name)` is a TypeError raised
+  inside the recorder, caught by the crystallisation handler, and reported
+  as `skill extraction failed — ... got multiple values for argument
+  'name'`. Two scenarios "diverged". The fix is one character of syntax:
+  `def rec(_call, /, **kw)`.
+- **A wrapper chained onto the previous scenario's wrapper.** `real_defer
+  = lf.defer_maintenance_post_notify` read INSIDE the per-scenario setup
+  captures the patch the LAST scenario installed. Scenario 40's registration
+  therefore also ran scenario 1's recorder — and scenario 1's call list had
+  not been serialised yet, so its record grew rows from a fixture it never
+  ran. The first scenario in the file failed with calls belonging to the
+  fortieth.
+
+The tell in both cases is the same and it is worth naming, because "the
+port is wrong" is the cheaper hypothesis and it is the one you will reach
+for: **the failure appeared in a scenario whose fixture has nothing to do
+with the phase that reported it.** A crystallisation warning in a fixture
+about token counts. A maintenance call in a fixture with no handle id.
+
+> **Before believing a divergence, ask whether the fixture that produced
+> it could plausibly reach that code path at all. If it could not, suspect
+> the harness.**
+
+**Tripwire.** Capture every function you monkey-patch ONCE, at import,
+before any scenario runs; give every recorder positional-only parameters;
+and clear every module-level registry the subject writes to at the top of
+each scenario, because the Go side gets a fresh one per record and the
+Python side does not.

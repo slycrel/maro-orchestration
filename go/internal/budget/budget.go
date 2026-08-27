@@ -320,3 +320,19 @@ func Clip(s string, limit int) string {
 	return fmt.Sprintf("%s … [truncated: first %d of %d characters]",
 		string(r[:limit]), limit, len(r))
 }
+
+// StoreEntryCap and StoreTotalBudget are context_budget's STORE-grade pair,
+// and they are plain ints in Python rather than Budget objects — so they
+// are plain consts here, not Registry rows. Adding them to the Registry
+// would claim a rationale row the Python side does not have.
+//
+// The trade they encode was priced, not guessed (2026-08-06): breadth over
+// depth. The consumer is a later extractor asking "what did this run DO",
+// and knowing all six steps at 500 chars each beats knowing two of them at
+// 800. Depth is already covered at finalize time by the wide prompt-grade
+// view; the stored copy exists for the deferred post-verdict re-extraction,
+// which has nothing else to read.
+const (
+	StoreEntryCap    = 500
+	StoreTotalBudget = 4000
+)

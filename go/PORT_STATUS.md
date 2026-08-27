@@ -73,7 +73,7 @@ reading like one.
 | Python module | lines | named by (Go production package) |
 |---|---:|---|
 | `knowledge_web.py` | 4828 | `internal/knowledge` |
-| `handle.py` | 4309 | `internal/loop`, `internal/looptypes`, `internal/now`, `internal/record`, `internal/scope` |
+| `handle.py` | 4309 | `internal/loop`, `internal/loopfinalize`, `internal/looptypes`, `internal/now`, `internal/record`, `internal/scope` |
 | `llm.py` | 3930 | `cmd/maro`, `internal/llm`, `internal/metrics` |
 | `skills.py` | 3038 | `cmd/maro`, `internal/pyjson`, `internal/record`, `internal/skills` |
 | `closure_verify.py` | 2758 | `internal/closure`, `internal/runs`, `internal/scope` |
@@ -183,7 +183,7 @@ A `+` marks a module some production COMMENT names as `<module>.<attr>` without 
 | `backend_benchmark.py` | 616 |  |
 | `telegram_listener.py` | 613 |  |
 | `orch.py` | 610 |  |
-| `mint_grounding.py` | 608 |  |
+| `mint_grounding.py` | 608 | + `internal/loopfinalize` |
 | `memory_quality.py` | 593 |  |
 | `thinkback.py` | 577 |  |
 | `cli_args.py` | 574 |  |
@@ -265,7 +265,7 @@ A `+` marks a module some production COMMENT names as `<module>.<attr>` without 
 | `age_stamp.py` | 89 |  |
 | `listener_core.py` | 55 |  |
 
-**8 of the 105 undeclared modules are mentioned** by attribute somewhere in production comments.
+**9 of the 105 undeclared modules are mentioned** by attribute somewhere in production comments.
 
 Undeclared is not the same as untouched — this list is UNJUDGED, and
 judging it is the work this file makes possible rather than the work it

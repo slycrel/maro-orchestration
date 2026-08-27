@@ -1,0 +1,921 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "header-done-and-blocked-swapped",
+   "old": "\t\tcase \"done\":\n\t\t\tdone++\n\t\tcase \"blocked\":\n\t\t\tblocked++",
+   "new": "\t\tcase \"done\":\n\t\t\tblocked++\n\t\tcase \"blocked\":\n\t\t\tdone++"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "header-counts-skipped-as-done",
+   "old": "\t\tcase \"done\":\n\t\t\tdone++",
+   "new": "\t\tcase \"done\", \"skipped\":\n\t\t\tdone++"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "header-tokens-input-only",
+   "old": "a.TotalTokensIn+a.TotalTokensOut, a.ElapsedMS)",
+   "new": "a.TotalTokensIn, a.ElapsedMS)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "header-args-out-of-order",
+   "old": "a.LoopID, a.LoopStatus, done, blocked,",
+   "new": "a.LoopID, a.LoopStatus, blocked, done,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "header-label-drift",
+   "old": "steps=%d/%d(done/blocked) \"+",
+   "new": "steps=%d/%d(done/skipped) \"+"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "introspect-after-verified-recovery",
+   "old": "\tintrospectPhase(a, d)\n\tverifiedRecoveryPhase(a, d)",
+   "new": "\tverifiedRecoveryPhase(a, d)\n\tintrospectPhase(a, d)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "portability-before-reflexion",
+   "old": "\treflexionPhase(a, d)\n\tportabilityPhase(a, d)",
+   "new": "\tportabilityPhase(a, d)\n\treflexionPhase(a, d)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-before-portability",
+   "old": "\tportabilityPhase(a, d)\n\tstepLessonPhase(a, d)",
+   "new": "\tstepLessonPhase(a, d)\n\tportabilityPhase(a, d)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-before-maintenance",
+   "old": "\tmaintenancePhase(a, d)\n\trestartPingPhase(a, d)",
+   "new": "\trestartPingPhase(a, d)\n\tmaintenancePhase(a, d)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-after-maintenance",
+   "old": "\tstepLessonPhase(a, d)\n\n\t// Deferred with the lessons",
+   "new": "\tstepLessonPhase(a, d)\n\tmaintenancePhase(a, d)\n\n\t// Deferred with the lessons"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-any-status",
+   "old": "\tif a.LoopStatus == \"done\" && !a.DryRun",
+   "new": "\tif a.LoopStatus != \"\" && !a.DryRun"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-in-dry-run",
+   "old": "if a.LoopStatus == \"done\" && !a.DryRun && len(a.StepOutcomes) > 0 &&",
+   "new": "if a.LoopStatus == \"done\" && (!a.DryRun || true) && len(a.StepOutcomes) > 0 &&"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-with-no-steps",
+   "old": "&& len(a.StepOutcomes) > 0 &&\n\t\t!a.DeferLearning {",
+   "new": "&& len(a.StepOutcomes) >= 0 &&\n\t\t!a.DeferLearning {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-ignores-defer-learning",
+   "old": "\t\t!a.DeferLearning {",
+   "new": "\t\t(!a.DeferLearning || true) {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-passes-loop-status-as-goal",
+   "old": "\t\t\tLoopID: a.LoopID, Goal: a.Goal, Project: a.Project,",
+   "new": "\t\t\tLoopID: a.LoopID, Goal: a.LoopStatus, Project: a.Project,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "crystallize-drops-had-no-matching",
+   "old": "\t\t\tHadNoMatching: a.HadNoMatching}, d.Crystallize)",
+   "new": "\t\t\tHadNoMatching: !a.HadNoMatching}, d.Crystallize)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "introspect-failure-is-a-warning",
+   "old": "\t\td.debugf(\"introspect failed: %s\", err)",
+   "new": "\t\td.warnf(\"introspect failed: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-save-diagnosis",
+   "old": "d.SaveDiagnosis == nil ||",
+   "new": "false ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-run-lenses",
+   "old": "d.RunLenses == nil ||",
+   "new": "false ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-aggregate-lenses",
+   "old": "d.AggregateLenses == nil ||",
+   "new": "false ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-plan-recovery",
+   "old": "d.PlanRecovery == nil ||",
+   "new": "false ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-build-step-profiles",
+   "old": "d.BuildStepProfiles == nil ||",
+   "new": "false ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-load-loop-events",
+   "old": "\t\td.LoadLoopEvents == nil {",
+   "new": "\t\tfalse {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "import-guard-drops-diagnose-loop",
+   "old": "\tif d.DiagnoseLoop == nil || d.SaveDiagnosis == nil ||",
+   "new": "\tif d.SaveDiagnosis == nil ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnose-gets-the-goal-not-the-project",
+   "old": "d.DiagnoseLoop(a.LoopID, a.Project)",
+   "new": "d.DiagnoseLoop(a.LoopID, a.Goal)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "save-diagnosis-error-swallowed",
+   "old": "\tif err := d.SaveDiagnosis(diag); err != nil {",
+   "new": "\tif err := d.SaveDiagnosis(diag); err != nil && false {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "unhealthy-branch-inverted",
+   "old": "\tif diag.FailureClass != \"healthy\" {\n\t\td.warnf(\"introspect: %s\", diag.Summary)",
+   "new": "\tif diag.FailureClass == \"healthy\" {\n\t\td.warnf(\"introspect: %s\", diag.Summary)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-summary-at-info",
+   "old": "\t\td.warnf(\"introspect: %s\", diag.Summary)",
+   "new": "\t\td.info(\"introspect: %s\", diag.Summary)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "lens-action-guard-inverted",
+   "old": "\t\t\tif lr.Action != \"\" {",
+   "new": "\t\t\tif lr.Action == \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "lens-name-and-action-swapped",
+   "old": "d.warnf(\"lens[%s]: %s\", lr.LensName, lr.Action)",
+   "new": "d.warnf(\"lens[%s]: %s\", lr.Action, lr.LensName)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "aggregate-runs-on-an-empty-lens-set",
+   "old": "\t\tif len(lensResults) > 0 {",
+   "new": "\t\tif len(lensResults) >= 0 {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "confidence-not-scaled-to-percent",
+   "old": "\t\t\t\tagg.Confidence*100, agg.LensAgreement, agg.PrimaryAction)",
+   "new": "\t\t\t\tagg.Confidence, agg.LensAgreement, agg.PrimaryAction)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "confidence-precision",
+   "old": "d.info(\"synthesis: confidence=%.0f%% agreement=%d action=%s\",",
+   "new": "d.info(\"synthesis: confidence=%.1f%% agreement=%d action=%s\","
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "synthesis-line-at-warning",
+   "old": "\t\t\td.info(\"synthesis: confidence",
+   "new": "\t\t\td.warnf(\"synthesis: confidence"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "plan-recovery-advisor-off",
+   "old": "d.PlanRecovery(diag, true)",
+   "new": "d.PlanRecovery(diag, false)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-tag-inverted",
+   "old": "\t\t\ttag := \"NEEDS-REVIEW\"\n\t\t\tif recovery.AutoApply {\n\t\t\t\ttag = \"AUTO-RECOVERABLE\"",
+   "new": "\t\t\ttag := \"AUTO-RECOVERABLE\"\n\t\t\tif recovery.AutoApply {\n\t\t\t\ttag = \"NEEDS-REVIEW\""
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-log-drops-the-risk",
+   "old": "d.warnf(\"recovery[%s] risk=%s: %s\", tag, recovery.Risk,\n\t\t\t\trecovery.Action)",
+   "new": "d.warnf(\"recovery[%s] risk=%s: %s\", tag, recovery.Action,\n\t\t\t\trecovery.Risk)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-lesson-runs-in-dry-run",
+   "old": "\t\t\tif !a.DryRun {\n\t\t\t\tif err := recoveryPlanLesson(",
+   "new": "\t\t\tif !a.DryRun || true {\n\t\t\t\tif err := recoveryPlanLesson("
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-lesson-failure-is-a-warning",
+   "old": "d.debugf(\"recovery-plan lesson record failed: %s\", err)",
+   "new": "d.warnf(\"recovery-plan lesson record failed: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-lesson-failure-aborts-the-phase",
+   "old": "\t\t\t\t\td.debugf(\"recovery-plan lesson record failed: %s\", err)\n\t\t\t\t}",
+   "new": "\t\t\t\t\td.debugf(\"recovery-plan lesson record failed: %s\", err)\n\t\t\t\t\treturn err\n\t\t\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-hoisted-into-the-unhealthy-block",
+   "old": "\tif diag.FailureClass != \"healthy\" {\n\t\tif err := storeLesson(d, StoredLesson{",
+   "new": "\tif true {\n\t\tif err := storeLesson(d, StoredLesson{"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-outcome-is-the-loop-status",
+   "old": "\t\t\tOutcome:    diag.FailureClass,",
+   "new": "\t\t\tOutcome:    a.LoopStatus,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-recommendation-dropped",
+   "old": "AutoDiagnosisLessonText(diag.FailureClass, diag.Recommendation),",
+   "new": "AutoDiagnosisLessonText(diag.FailureClass, diag.FailureClass),"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-goal-unclipped",
+   "old": "\t\t\tSourceGoal: pytext.Head(a.Goal, SourceGoalClip),",
+   "new": "\t\t\tSourceGoal: a.Goal,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-confidence",
+   "old": "\t\t\tConfidence: DiagnosisLessonConfidence,",
+   "new": "\t\t\tConfidence: RecoveryPlanConfidence,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-failure-is-a-debug-line",
+   "old": "\t\t\td.warnf(\"failed to persist diagnosis lesson (learning data \"+",
+   "new": "\t\t\td.debugf(\"failed to persist diagnosis lesson (learning data \"+"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "diagnosis-lesson-success-line-always-logged",
+   "old": "\t\t} else {\n\t\t\td.info(\"injected diagnosis lesson: %s\", diag.FailureClass)\n\t\t}",
+   "new": "\t\t}\n\t\td.info(\"injected diagnosis lesson: %s\", diag.FailureClass)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-grounds-before-the-import-guard",
+   "old": "\tif d.RecordTieredLesson == nil {\n\t\treturn errImport\n\t}\n\ttext := RecoveryPlanLessonText",
+   "new": "\tif d.RecordTieredLesson == nil {\n\t\t_ = groundingFor(\"\", a.LoopID, d)\n\t\treturn errImport\n\t}\n\ttext := RecoveryPlanLessonText"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-lesson-text-args-swapped",
+   "old": "RecoveryPlanLessonText(diag.FailureClass, recovery.Action)",
+   "new": "RecoveryPlanLessonText(recovery.Action, diag.FailureClass)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-outcome-hardcoded-done",
+   "old": "\t\tOutcome:         a.LoopStatus,",
+   "new": "\t\tOutcome:         \"done\","
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-goal-unclipped",
+   "old": "\t\tSourceGoal:      pytext.Head(a.Goal, SourceGoalClip),\n\t\tConfidence:      RecoveryPlanConfidence,",
+   "new": "\t\tSourceGoal:      a.Goal,\n\t\tConfidence:      RecoveryPlanConfidence,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-confidence-is-the-verified-one",
+   "old": "\t\tConfidence:      RecoveryPlanConfidence,",
+   "new": "\t\tConfidence:      VerifiedRecoveryConfidence,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-lesson-type",
+   "old": "\t\tConfidence:      RecoveryPlanConfidence,\n\t\tLessonType:      \"recovery\",",
+   "new": "\t\tConfidence:      RecoveryPlanConfidence,\n\t\tLessonType:      \"diagnosis\","
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "recovery-plan-grounds-the-wrong-text",
+   "old": "\t\tGrounding:       groundingFor(text, a.LoopID, d),\n\t})\n}\n\nfunc storeLesson",
+   "new": "\t\tGrounding:       groundingFor(a.Goal, a.LoopID, d),\n\t})\n}\n\nfunc storeLesson"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "store-lesson-guard-dropped",
+   "old": "\tif d.StoreLesson == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.StoreLesson == nil {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-ignores-an-empty-loop-id",
+   "old": "\tif loopID == \"\" || d.GroundLessons == nil {",
+   "new": "\tif d.GroundLessons == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-empty-is-nil-not-a-list",
+   "old": "\tempty := []any{}",
+   "new": "\tvar empty []any"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-error-propagates",
+   "old": "\tout, err := d.GroundLessons([]string{lessonText}, loopID)\n\tif err != nil {\n\t\treturn empty\n\t}",
+   "new": "\tout, err := d.GroundLessons([]string{lessonText}, loopID)\n\tif err != nil {\n\t\treturn []any{err.Error()}\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-index-error-unguarded",
+   "old": "\tif len(out) == 0 {\n\t\treturn empty\n\t}",
+   "new": "\tif len(out) < 0 {\n\t\treturn empty\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-takes-the-last-entry",
+   "old": "\treturn out[0]\n}",
+   "new": "\treturn out[len(out)-1]\n}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "grounding-sends-the-loop-id-as-the-text",
+   "old": "d.GroundLessons([]string{lessonText}, loopID)",
+   "new": "d.GroundLessons([]string{loopID}, lessonText)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "evidence-sources-empty-is-nil",
+   "old": "\tif loopID == \"\" {\n\t\treturn []string{}\n\t}",
+   "new": "\tif loopID == \"\" {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "evidence-sources-guard-inverted",
+   "old": "\tif loopID == \"\" {\n\t\treturn []string{}",
+   "new": "\tif loopID != \"\" {\n\t\treturn []string{}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "evidence-source-prefix",
+   "old": "\treturn []string{\"loop:\" + loopID}",
+   "new": "\treturn []string{\"run:\" + loopID}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-runs-in-dry-run",
+   "old": "\tif a.DryRun || a.LoopStatus != \"done\" || a.RecoverySteps <= 0 ||",
+   "new": "\tif a.LoopStatus != \"done\" || a.RecoverySteps <= 0 ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-any-status",
+   "old": "\tif a.DryRun || a.LoopStatus != \"done\" ||",
+   "new": "\tif a.DryRun || a.LoopStatus == \"\" ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-zero-steps-qualify",
+   "old": "a.RecoverySteps <= 0 ||",
+   "new": "a.RecoverySteps < 0 ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-empty-chain-qualifies",
+   "old": "\t\tlen(a.FailureChain) == 0 {",
+   "new": "\t\tlen(a.FailureChain) < 0 {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-guard-is-a-warning",
+   "old": "\t\td.debugf(\"verified-recovery lesson record failed: %s\", errImport)",
+   "new": "\t\td.warnf(\"verified-recovery lesson record failed: %s\", errImport)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "marker-phrase-re-decomposing",
+   "old": "\t\t{\"re-decomposing\", \"re-decompose\"},",
+   "new": "\t\t{\"re-decompose\", \"re-decompose\"},"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "marker-kind-step-split",
+   "old": "\t\t{\"split\", \"step-split\"},",
+   "new": "\t\t{\"split\", \"split\"},"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "marker-kind-retry",
+   "old": "\t\t{\"retry\", \"retry-with-hint\"},",
+   "new": "\t\t{\"retry\", \"retry\"},"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "kinds-not-deduped",
+   "old": "\t\t\tif strings.Contains(e, m.phrase) && !seen[m.kind] {",
+   "new": "\t\t\tif strings.Contains(e, m.phrase) && (!seen[m.kind] || true) {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "kinds-matched-by-prefix-not-substring",
+   "old": "strings.Contains(e, m.phrase)",
+   "new": "strings.HasPrefix(e, m.phrase)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "kinds-not-sorted",
+   "old": "\tsort.Strings(kinds)",
+   "new": "\tsort.Sort(sort.Reverse(sort.StringSlice(kinds)))"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "kinds-join-separator",
+   "old": "\tlabel := strings.Join(kinds, \", \")",
+   "new": "\tlabel := strings.Join(kinds, \",\")"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "kinds-fallback-inverted",
+   "old": "\tif label == \"\" {\n\t\tlabel = \"recovery\"\n\t}",
+   "new": "\tif label != \"\" {\n\t\tlabel = \"recovery\"\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-text-wording",
+   "old": "\"[recovery-verified] %s unblocked a run: %s\"",
+   "new": "\"[recovery-verified] %s unblocked: %s\""
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "failure-chain-head-unclipped",
+   "old": "\t\tpytext.Head(a.FailureChain[0], FailureChainHeadClip))",
+   "new": "\t\ta.FailureChain[0])"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "failure-chain-uses-the-last-entry",
+   "old": "pytext.Head(a.FailureChain[0], FailureChainHeadClip))",
+   "new": "pytext.Head(a.FailureChain[len(a.FailureChain)-1], FailureChainHeadClip))"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "failure-chain-clip-uses-the-goal-cap",
+   "old": "pytext.Head(a.FailureChain[0], FailureChainHeadClip))",
+   "new": "pytext.Head(a.FailureChain[0], SourceGoalClip))"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-confidence",
+   "old": "\t\tConfidence:      VerifiedRecoveryConfidence,",
+   "new": "\t\tConfidence:      RecoveryPlanConfidence,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-goal-unclipped",
+   "old": "\t\tSourceGoal:      pytext.Head(a.Goal, SourceGoalClip),\n\t\tConfidence:      VerifiedRecoveryConfidence,",
+   "new": "\t\tSourceGoal:      a.Goal,\n\t\tConfidence:      VerifiedRecoveryConfidence,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-record-failure-is-a-warning",
+   "old": "\t\td.debugf(\"verified-recovery lesson record failed: %s\", err)",
+   "new": "\t\td.warnf(\"verified-recovery lesson record failed: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-logs-success-after-a-failure",
+   "old": "\t\td.debugf(\"verified-recovery lesson record failed: %s\", err)\n\t\treturn\n\t}",
+   "new": "\t\td.debugf(\"verified-recovery lesson record failed: %s\", err)\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-count-is-the-chain-length",
+   "old": "\td.info(\"recorded verified-recovery lesson (%d recovery steps)\",\n\t\ta.RecoverySteps)",
+   "new": "\td.info(\"recorded verified-recovery lesson (%d recovery steps)\",\n\t\tlen(a.FailureChain))"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-failure-is-a-debug-line",
+   "old": "\t\td.warnf(\"reflect_and_record failed — run %s produced no learning \"+",
+   "new": "\t\td.debugf(\"reflect_and_record failed — run %s produced no learning \"+"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-warning-names-the-goal",
+   "old": "\t\t\t\"data: %s\", a.LoopID, err)",
+   "new": "\t\t\t\"data: %s\", a.Goal, err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflexion-guard-drops-record-step-trace",
+   "old": "\tif d.ReflectAndRecord == nil || d.RecordStepTrace == nil ||",
+   "new": "\tif d.ReflectAndRecord == nil ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflexion-guard-drops-reflect-and-record",
+   "old": "d.ReflectAndRecord == nil || d.RecordStepTrace == nil ||",
+   "new": "d.RecordStepTrace == nil ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "done-count-includes-blocked",
+   "old": "\t\tif s.Status == \"done\" {\n\t\t\tdoneSteps++",
+   "new": "\t\tif s.Status != \"\" {\n\t\t\tdoneSteps++"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "head-counts-done-over-done",
+   "old": "fmt.Sprintf(\"Completed %d/%d steps.\", doneSteps,\n\t\tlen(a.StepOutcomes))",
+   "new": "fmt.Sprintf(\"Completed %d/%d steps.\", doneSteps,\n\t\tdoneSteps)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "head-wording",
+   "old": "\"Completed %d/%d steps.\"",
+   "new": "\"Completed %d of %d steps.\""
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "summary-joined-without-the-space",
+   "old": "\tsummary := head + \" \" + d.StepEvidenceBounded(a.StepOutcomes,",
+   "new": "\tsummary := head + d.StepEvidenceBounded(a.StepOutcomes,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "evidence-budgets-swapped-between-the-two-strings",
+   "old": "\tsummary := head + \" \" + d.StepEvidenceBounded(a.StepOutcomes,\n\t\tbudget.StoreTotalBudget, budget.StoreEntryCap)\n\tlessonEvidence := head + \"\\n\\n\" + d.StepEvidence(a.StepOutcomes)",
+   "new": "\tsummary := head + \" \" + d.StepEvidence(a.StepOutcomes)\n\tlessonEvidence := head + \"\\n\\n\" + d.StepEvidenceBounded(a.StepOutcomes,\n\t\tbudget.StoreTotalBudget, budget.StoreEntryCap)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "summary-budgets-swapped",
+   "old": "\t\tbudget.StoreTotalBudget, budget.StoreEntryCap)",
+   "new": "\t\tbudget.StoreEntryCap, budget.StoreTotalBudget)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "lesson-evidence-joined-with-one-newline",
+   "old": "\tlessonEvidence := head + \"\\n\\n\" + d.StepEvidence(a.StepOutcomes)",
+   "new": "\tlessonEvidence := head + \"\\n\" + d.StepEvidence(a.StepOutcomes)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "lesson-evidence-uses-the-store-budget",
+   "old": "\tlessonEvidence := head + \"\\n\\n\" + d.StepEvidence(a.StepOutcomes)",
+   "new": "\tlessonEvidence := head + \"\\n\\n\" + d.StepEvidenceBounded(a.StepOutcomes,\n\t\tbudget.StoreTotalBudget, budget.StoreEntryCap)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "dry-run-still-hands-over-the-adapter",
+   "old": "\tvar adapter any\n\tif !a.DryRun {\n\t\tadapter = a.Adapter\n\t}",
+   "new": "\tvar adapter any\n\tif !a.DryRun || true {\n\t\tadapter = a.Adapter\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "model-key-read-from-the-nilled-adapter",
+   "old": "\t\tmodelKey = d.ModelKey(a.Adapter)",
+   "new": "\t\tmodelKey = d.ModelKey(adapter)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "nil-failure-chain-stays-nil",
+   "old": "\tchain := a.FailureChain\n\tif chain == nil {\n\t\tchain = []string{}\n\t}",
+   "new": "\tchain := a.FailureChain"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-task-type",
+   "old": "\t\tTaskType:       \"agenda\",\n\t\tProject:        a.Project,",
+   "new": "\t\tTaskType:       \"loop\",\n\t\tProject:        a.Project,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-token-fields-swapped",
+   "old": "\t\tTokensIn:       a.TotalTokensIn,\n\t\tTokensOut:      a.TotalTokensOut,",
+   "new": "\t\tTokensIn:       a.TotalTokensOut,\n\t\tTokensOut:      a.TotalTokensIn,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-defer-lessons-gated-on-done",
+   "old": "\t\tDeferLessons:     a.DeferLearning,",
+   "new": "\t\tDeferLessons:     a.DeferLearning && a.LoopStatus == \"done\","
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "reflect-stop-fields-swapped",
+   "old": "\t\tStopVerdict:      a.StopVerdict,\n\t\tStopEvidence:     a.StopEvidence,",
+   "new": "\t\tStopVerdict:      a.StopEvidence,\n\t\tStopEvidence:     a.StopVerdict,"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-in-dry-run",
+   "old": "\tif !a.DryRun && len(a.StepOutcomes) > 0 && rec != nil {",
+   "new": "\tif (!a.DryRun || true) && len(a.StepOutcomes) > 0 && rec != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-with-no-steps",
+   "old": "\tif !a.DryRun && len(a.StepOutcomes) > 0 && rec != nil {",
+   "new": "\tif !a.DryRun && len(a.StepOutcomes) >= 0 && rec != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-on-a-nil-record",
+   "old": "&& rec != nil {\n\t\tif err := d.RecordStepTrace(rec.OutcomeID",
+   "new": "&& rec == nil {\n\t\tif err := d.RecordStepTrace(rec.OutcomeID"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-failure-is-a-warning",
+   "old": "d.debugf(\"record_step_trace failed (non-critical): %s\", err)",
+   "new": "d.warnf(\"record_step_trace failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-failure-aborts-the-phase",
+   "old": "\t\t\td.debugf(\"record_step_trace failed (non-critical): %s\", err)\n\t\t}",
+   "new": "\t\t\td.debugf(\"record_step_trace failed (non-critical): %s\", err)\n\t\t\treturn err\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-trace-task-type",
+   "old": "\t\t\t\"agenda\"); err != nil {",
+   "new": "\t\t\t\"loop\"); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "portability-runs-in-dry-run",
+   "old": "func portabilityPhase(a FinalizeArgs, d FinalizeDeps) {\n\tif a.DryRun {\n\t\treturn\n\t}",
+   "new": "func portabilityPhase(a FinalizeArgs, d FinalizeDeps) {\n\tif a.DryRun && false {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "portability-failure-is-a-warning",
+   "old": "d.debugf(\"portability cache refresh skipped: %s\", err)",
+   "new": "d.warnf(\"portability cache refresh skipped: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "portability-guard-drops-refresh-cache",
+   "old": "\tif d.WeightingEnabled == nil || d.RefreshCache == nil {",
+   "new": "\tif d.WeightingEnabled == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "portability-refreshes-when-weighting-is-off",
+   "old": "\tif !on {\n\t\treturn nil\n\t}",
+   "new": "\tif on {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-in-dry-run",
+   "old": "\tif a.DryRun || len(a.StepOutcomes) == 0 || a.LoopStatus == \"done\" {",
+   "new": "\tif len(a.StepOutcomes) == 0 || a.LoopStatus == \"done\" {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-with-no-steps",
+   "old": "\tif a.DryRun || len(a.StepOutcomes) == 0 ||",
+   "new": "\tif a.DryRun || len(a.StepOutcomes) < 0 ||"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-for-a-done-run",
+   "old": "\tif a.DryRun || len(a.StepOutcomes) == 0 || a.LoopStatus == \"done\" {\n\t\treturn\n\t}",
+   "new": "\tif a.DryRun || len(a.StepOutcomes) == 0 || a.LoopStatus != \"done\" {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-import-guard-is-silent",
+   "old": "\tif d.ExtractStepLessons == nil {\n\t\td.debugf(\"step-lesson extraction failed (non-critical): %s\", errImport)\n\t\treturn\n\t}",
+   "new": "\tif d.ExtractStepLessons == nil {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-get-the-nilled-adapter",
+   "old": "\tif err := d.ExtractStepLessons(a.Goal, a.StepOutcomes, \"agenda\",\n\t\ta.Adapter, a.LoopID); err != nil {",
+   "new": "\tif err := d.ExtractStepLessons(a.Goal, a.StepOutcomes, \"agenda\",\n\t\tnil, a.LoopID); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-task-type",
+   "old": "\tif err := d.ExtractStepLessons(a.Goal, a.StepOutcomes, \"agenda\",",
+   "new": "\tif err := d.ExtractStepLessons(a.Goal, a.StepOutcomes, \"loop\","
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "step-lessons-failure-is-a-warning",
+   "old": "\t\td.debugf(\"step-lesson extraction failed (non-critical): %s\", err)",
+   "new": "\t\td.warnf(\"step-lesson extraction failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "maintenance-runs-in-dry-run",
+   "old": "func maintenancePhase(a FinalizeArgs, d FinalizeDeps) {\n\tif a.DryRun {\n\t\treturn\n\t}",
+   "new": "func maintenancePhase(a FinalizeArgs, d FinalizeDeps) {\n\tif a.DryRun && false {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "durable-tier-needs-no-handle-id",
+   "old": "\tif a.DeferMaintenance && a.HandleID != \"\" {\n\t\t// Durable first",
+   "new": "\tif a.DeferMaintenance {\n\t\t// Durable first"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "durable-tier-ignores-the-defer-flag",
+   "old": "\tif a.DeferMaintenance && a.HandleID != \"\" {\n\t\t// Durable first (async-tail phase 3, 2026-08-20)",
+   "new": "\tif a.HandleID != \"\" {\n\t\t// Durable first (async-tail phase 3, 2026-08-20)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "durable-record-failure-is-a-warning",
+   "old": "d.debugf(\"maintenance record failed — trying in-process \"+",
+   "new": "d.warnf(\"maintenance record failed — trying in-process \"+"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "durable-record-false-counts-as-deferred",
+   "old": "\t\t} else {\n\t\t\tdeferred = ok\n\t\t}",
+   "new": "\t\t} else {\n\t\t\tdeferred = true\n\t\t\t_ = ok\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "durable-record-error-counts-as-deferred",
+   "old": "\t\t\td.debugf(\"maintenance record failed — trying in-process \"+\n\t\t\t\t\"deferral: %s\", err)",
+   "new": "\t\t\td.debugf(\"maintenance record failed — trying in-process \"+\n\t\t\t\t\"deferral: %s\", err)\n\t\t\tdeferred = true"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "in-process-tier-retried-after-a-durable-win",
+   "old": "\tif a.DeferMaintenance && a.HandleID != \"\" && !deferred {",
+   "new": "\tif a.DeferMaintenance && a.HandleID != \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "in-process-tier-needs-no-handle-id",
+   "old": "\tif a.DeferMaintenance && a.HandleID != \"\" && !deferred {",
+   "new": "\tif a.DeferMaintenance && !deferred {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "defer-failure-is-a-warning",
+   "old": "d.debugf(\"maintenance defer failed — running inline: %s\", err)",
+   "new": "d.warnf(\"maintenance defer failed — running inline: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "defer-failure-still-counts-as-deferred",
+   "old": "\t\t\td.debugf(\"maintenance defer failed — running inline: %s\", err)\n\t\t} else {\n\t\t\tdeferred = true\n\t\t}",
+   "new": "\t\t\td.debugf(\"maintenance defer failed — running inline: %s\", err)\n\t\t}\n\t\tdeferred = true"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "inline-tier-runs-even-when-deferred",
+   "old": "\tif !deferred && d.RunPostRunMaintenance != nil {",
+   "new": "\tif d.RunPostRunMaintenance != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "inline-tier-never-runs",
+   "old": "\tif !deferred && d.RunPostRunMaintenance != nil {\n\t\td.RunPostRunMaintenance(a.Adapter, a.Verbose)",
+   "new": "\tif deferred && d.RunPostRunMaintenance != nil {\n\t\td.RunPostRunMaintenance(a.Adapter, a.Verbose)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "inline-tier-drops-verbose",
+   "old": "\t\td.RunPostRunMaintenance(a.Adapter, a.Verbose)\n\t}\n}\n\nfunc recordMaintenance",
+   "new": "\t\td.RunPostRunMaintenance(a.Adapter, false)\n\t}\n}\n\nfunc recordMaintenance"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "record-maintenance-guard-is-a-false-not-an-error",
+   "old": "\tif d.RecordMaintenance == nil {\n\t\treturn false, errImport\n\t}",
+   "new": "\tif d.RecordMaintenance == nil {\n\t\treturn false, nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "record-maintenance-args-swapped",
+   "old": "\treturn d.RecordMaintenance(a.HandleID, a.LoopID, a.Adapter, a.Verbose)",
+   "new": "\treturn d.RecordMaintenance(a.LoopID, a.HandleID, a.Adapter, a.Verbose)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "defer-in-process-guard-dropped",
+   "old": "\tif d.DeferMaintenance == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.DeferMaintenance == nil {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "deferred-closure-skips-a-missing-scope",
+   "old": "\t\tif d.LoopIDScope == nil {\n\t\t\treturn errImport\n\t\t}",
+   "new": "\t\tif d.LoopIDScope == nil {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "deferred-closure-scope-error-ignored",
+   "old": "\t\texit, err := d.LoopIDScope(loopID)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tdefer exit()",
+   "new": "\t\texit, err := d.LoopIDScope(loopID)\n\t\tif err == nil {\n\t\t\tdefer exit()\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "deferred-closure-scopes-the-handle-not-the-loop",
+   "old": "\tadapter, verbose, loopID := a.Adapter, a.Verbose, a.LoopID",
+   "new": "\tadapter, verbose, loopID := a.Adapter, a.Verbose, a.HandleID"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "deferred-closure-drops-verbose",
+   "old": "\tadapter, verbose, loopID := a.Adapter, a.Verbose, a.LoopID",
+   "new": "\tadapter, verbose, loopID := a.Adapter, false, a.LoopID"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-in-dry-run",
+   "old": "\tif a.DryRun || a.LoopStatus != \"restart\" {",
+   "new": "\tif a.LoopStatus != \"restart\" {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-on-any-status",
+   "old": "\tif a.DryRun || a.LoopStatus != \"restart\" {\n\t\treturn\n\t}",
+   "new": "\tif a.DryRun || a.LoopStatus == \"restart\" {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-import-guard-is-silent",
+   "old": "\tif d.TelegramNotify == nil {\n\t\td.debugf(\"loop-boundary Telegram ping failed (non-critical): %s\",\n\t\t\terrImport)\n\t\treturn\n\t}",
+   "new": "\tif d.TelegramNotify == nil {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-counts-every-step-as-done",
+   "old": "\t\tif s.Status == \"done\" {\n\t\t\tdone++\n\t\t}\n\t}\n\tlabel := a.Project",
+   "new": "\t\tif s.Status != \"\" {\n\t\t\tdone++\n\t\t}\n\t}\n\tlabel := a.Project"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-label-prefers-the-goal",
+   "old": "\tlabel := a.Project\n\tif label == \"\" {\n\t\tlabel = pytext.Head(a.Goal, TelegramGoalClip)\n\t}",
+   "new": "\tlabel := pytext.Head(a.Goal, TelegramGoalClip)\n\tif label == \"\" {\n\t\tlabel = a.Project\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-goal-unclipped",
+   "old": "\t\tlabel = pytext.Head(a.Goal, TelegramGoalClip)",
+   "new": "\t\tlabel = a.Goal"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-goal-clip-uses-the-source-cap",
+   "old": "pytext.Head(a.Goal, TelegramGoalClip)",
+   "new": "pytext.Head(a.Goal, SourceGoalClip)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-wording",
+   "old": "\"🔄 Replanning — `%s`\\nLoop ended after %d/%d steps; \"+",
+   "new": "\"🔄 Replanning — `%s`\\nLoop ended after %d/%d steps. \"+"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-step-counts-swapped",
+   "old": "\t\tlen(a.StepOutcomes))\n\tif err := d.TelegramNotify(msg); err != nil {",
+   "new": "\t\tdone)\n\tif err := d.TelegramNotify(msg); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "ping-failure-is-a-warning",
+   "old": "\t\td.debugf(\"loop-boundary Telegram ping failed (non-critical): %s\", err)",
+   "new": "\t\td.warnf(\"loop-boundary Telegram ping failed (non-critical): %s\", err)"
+  }
+ ]
+}

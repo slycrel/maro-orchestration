@@ -15947,3 +15947,149 @@ probe really does subscript, the guard fired on it, and it was removed
 again. A check whose blast radius is the directory reports findings the
 code does not have, which is the fastest way to teach a reader to
 allowlist it (**L53**).
+
+---
+
+## Phase K: eight try blocks, five log levels (2026-08-27)
+
+`_finalize_loop` (`src/loop_finalize.py:595-933`) — every post-loop side
+effect in the order Python runs them. Ported to
+`go/internal/loopfinalize/finalize.go`, with `budget.StoreEntryCap` /
+`budget.StoreTotalBudget` added for the two store-grade budgets.
+
+The function returns nothing and raises nothing. Everything it does is a
+CALL or a LOG LINE, so the differential records both, in order, with
+arguments — and the **log level is part of the record**, because the
+levels are the spec.
+
+That is not a stylistic claim. One line of this function is a monument:
+`_diagnose(loop_id, project=project or "")` reads the local param, and it
+used to read `ctx.project` — a NameError that the outer `except` swallowed
+on **every run for six weeks** (2026-04-26 → session 40). The whole
+introspection block was dead and nothing said so, because that handler is
+`log.debug`. A port that got the levels right-but-different would hide the
+same class of bug in the same way, so the differential drives all eight
+phases into failure and asserts what comes out.
+
+### What stays real
+
+`_step_evidence` and `_crystallize_and_synthesize` are NOT stubbed. The Go
+side wires `StepEvidence`/`StepEvidenceBounded` to the already-ported
+`internal/loop` helpers (converting `looptypes.StepOutcome` →
+`loop.StepOutcome` across the package seam) and hands
+`CrystallizeAndSynthesize` the real deps. Three ported pieces, and the
+seams between them are covered rather than stubbed away.
+
+### Dropping ONE name, not one module
+
+The interesting failures here are import failures, and Python bundles
+names per statement: `from memory import reflect_and_record,
+record_step_trace` is one import, so losing `record_step_trace` fails the
+whole Reflexion phase with the WARNING — no row written at all — and not
+the debug line its own call site would have produced.
+
+A probe that can only delete whole modules cannot show that, which makes
+the port's guard composition unfalsifiable. So the probe grew a
+`PartialModule` and the spec grew `drop_names`, and there is a fixture per
+importable name (21 of them). Dropping the seventh introspect name means
+`diagnose_loop` is never reached at all.
+
+`PartialModule.__getattr__` has to raise **AttributeError for dunders**
+and ImportError for everything else: `from X import y` runs
+`_handle_fromlist` first, which probes `__path__` through `hasattr`, and
+`hasattr` only swallows AttributeError. Raising ImportError there failed
+every import from the module instead of the dropped name — the first
+version of this probe reported 40 scenarios' worth of phantom
+divergences.
+
+### Three real divergences, all found by fixtures nothing else would have written
+
+1. **A grounding query for a lesson that was never going to be written.**
+   Python imports `record_tiered_lesson` at the TOP of the recovery-plan
+   try; `_grounding_for` runs below it, as an argument. Go built the
+   `TieredLesson` literal — grounding call and all — and checked the nil
+   dep afterwards. With `memory` missing, Go queried `mint_grounding` and
+   Python did not. Fixed by hoisting the guard into
+   `recoveryPlanLesson`, and pinned by
+   `recovery-plan-grounds-before-the-import-guard`.
+2. **`grounding=None` normalised to `[]`.** `ground_lessons_for_run(...)[0]`
+   is the LAST thing Python does; whatever sits at index 0 goes into the
+   row unexamined. The port had an `if out[0] == nil { return empty }`
+   that no Python line corresponds to. Removed — reproducing beats
+   improving, and `grounding=None` vs `grounding=[]` is a difference the
+   recorded call can see.
+3. **A missing `captains_log` ran maintenance that Python skips.**
+   `from captains_log import loop_id_scope` is inside the deferred
+   closure, so it fails at DRAIN time and fails the drain — the
+   maintenance does not run and the drain's own warning is the only
+   report. Go treated a nil scope as "carry on unscoped".
+
+### The probe bug wearing a divergence costume
+
+Two crystallize scenarios failed with a warning nobody wrote:
+`rec() got multiple values for argument 'name'`. `save_skill` records a
+kwarg literally called `name`, and the recorder's first parameter was
+also `name` — a TypeError raised inside the recorder, caught by the
+crystallize handler, reported as a skill-extraction failure. The
+recorder is positional-only now (`def rec(_call, /, **kw)`).
+
+The same shape bit the maintenance registry: `real_defer =
+lf.defer_maintenance_post_notify` read INSIDE the scenario loop chained
+each scenario's wrapper onto the previous one's, and the previous one's
+recorder writes into a call list this process has not printed yet.
+Scenario 1's record grew rows from scenario 40. The original is captured
+once at import now, and `_POST_NOTIFY_MAINTENANCE` is cleared per
+scenario to match Go's fresh-registry-per-record.
+
+**Both are the same lesson: a probe's own machinery can fail in a way the
+code under test would fail, and the differential cannot tell them apart.**
+The tell in each case was that the failure appeared in scenarios whose
+fixtures had nothing to do with the phase that reported it.
+
+### The battery: 152 mutations, and nine of them were fixture gaps
+
+Derived from the FILE (L9): every guard, every log level, every argument,
+every clip constant, and the ORDER of the eight phases. First run:
+141 killed, **9 survived, 3 did not compile**.
+
+Every one of the nine was a hole the fixture set had, not a hole in the
+port — and seven of them existed because the scenario builder's own
+DEFAULTS had closed the input space:
+
+- `add()` fills a blank `LoopID` with a real id, so no fixture could reach
+  `if not loop_id` in either `_grounding_for` or the evidence-sources
+  expression. Two survivors. (The fixture named
+  `grounding-skipped-without-loop-id` used `" "` to dodge the default —
+  a name that claimed coverage it did not have, **L44**.)
+- `add()` fills a nil `FailureChain` with `[]string{}`, so
+  `failure_chain or []` was never exercised.
+- Every recovery-plan fixture was a `"done"` run, where `Outcome:
+  a.LoopStatus` and `Outcome: "done"` are the same string.
+- The dry-run fixture was a `"restart"`, so the verified-recovery block's
+  `dry_run` test was masked by the status test after it.
+- `DeferLearning` was only ever set on a `"done"` run.
+- Every drain fixture had `verbose` false, where "captured by value" and
+  "hardcoded false" are the same call.
+
+Two spec flags (`no_loop_id`, `nil_failure_chain`) and six fixtures later,
+all nine are killed. **A default that fills a field is a default that
+deletes a test**, and the battery is the only thing that says so.
+
+Two of the nine were not fixture gaps:
+
+- `verified-recovery-outcome-is-the-loop-status` is an **equivalent
+  mutant** — the guard four lines up returns unless the status is
+  `"done"`. The row was deleted and the reasoning is a comment at the
+  site.
+- `defer-in-process-guard-dropped` has no CPython counterpart at all:
+  `defer_maintenance_post_notify` is a module-level function, not an
+  import, so "this name is missing" is not a state Python can be in. The
+  Go Deps struct permits nil regardless, and the ladder must fall through
+  rather than count it as deferred — so it is a native Go test
+  (`TestNilDeferMaintenanceFallsBackInline`), not a fixture.
+
+The three build failures were the usual shape (**P14**): a deletion
+orphaning the identifier that made the file compile. `budget` became an
+unused import the moment the store-grade call was replaced, so that row is
+now a SWAP of the two budgets between the two evidence strings — which is
+the more interesting mutation anyway.
