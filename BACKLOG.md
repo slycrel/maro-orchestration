@@ -344,6 +344,60 @@ proc_lock.py:92 — so the naive branch exists for hand-written stamps and old
 data only. If a naive producer ever appears, both of these stop being
 residuals and the `_mktime` probe has to be ported properly.
 
+### The review ledger under-counts, and `target` is 67 spellings for 46 packages (FOUND 2026-08-26, ledger audit)
+
+`docs/REVIEW_PATTERNS.md` states an `*instances: N*` line per lens, and
+those numbers are COMPUTED from `review/findings.jsonl` by
+`scripts/review-ledger.py sync-catalog`. They are what a reviewer reads to
+decide which failure modes this project actually keeps making. Two defects
+make them wrong.
+
+**1. Whole rounds never get recorded.** An audit comparing `git log` round
+markers against ledger rows found `internal/syshealth` r4 and r5 both
+landed with their fixes and neither reached the ledger, and
+`internal/artifactcheck` **rounds 1 through 4 — 30 findings — entirely
+absent** while r5 and r6 were present. Both backfilled (`273ec25c`,
+`72c59e46`) from the commit messages and the round-by-round summaries each
+review brief carries forward. The correction was not marginal:
+
+```
+L49  10 -> 16     a builtin's implementation exceeds its definition
+L20  28 -> 34     Python's operators are not Go's
+L28  80 -> 84     a comment that asserts coverage is a claim
+L13  10 -> 12     a fix at the site with the fixture is not a fix for the class
+L46  12 -> 14     substituting a local library costs a divergence per rule
+```
+
+L49 was understated by 60%. It is also the lens whose tripwire ("write the
+differential BEFORE the implementation, with an ill-conditioned input")
+would have caught several of the findings it was undercounting.
+
+The cause is structural rather than carelessness: **recording is a
+separate step from fixing, and a round whose fixes land cleanly is exactly
+the round where the recording is easiest to skip.** Nothing fails when it
+is skipped — the ledger just quietly reads as though that round found
+nothing.
+
+**2. `target` is free text, and it shows.** 67 distinct target strings for
+a tree of 46 packages: `internal/metrics`, `go/internal/metrics/recorder.go`,
+`go/internal/metrics/stepcosts.go`, `src/metrics.py` and
+`scratchpad/metrics_battery.py` are all one subsystem. Twelve targets
+appear exactly once. Per-target round history — "which rounds has this
+package had?" — is therefore unreliable, which is what made defect 1 hard
+to see in the first place.
+
+**The fix, when it comes up:** `review-ledger.py add` should normalise
+`target` against a known package list and refuse an unknown one without
+`--allow-new-target` (the same shape as the existing `--allow-new-lens`),
+and `report` should grow a coverage view — rounds per target — so a
+missing round is visible rather than inferred. Neither is large. Filed
+rather than built because it is dev tooling and the port arc is
+mid-tranche.
+
+**Note on `72c59e46`'s message:** it reads "and  is free text" — the word
+`target` was eaten by backtick command substitution in a double-quoted
+`git commit -m`. Left rather than force-pushed onto a shared branch.
+
 ### Go port: `recall` and `provenance` have tests but no CPython comparison (FOUND 2026-08-26, go-port differential census)
 
 The `missionrun` entry below asks which packages have no TESTS. A second
