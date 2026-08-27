@@ -327,6 +327,25 @@ enumerates a wrapper's call sites, removes each in turn, and reports any
 whose removal leaves the suite green. That is the mechanical half; it
 cannot invent a fixture, but it can no longer be *unaware* of a site.
 
+It paid for itself on its first real run, which is the fourth instance
+of the day: `internal/guard` has TWO bounded builders, and every fixture
+written that morning went through `boundedBoth`. Dropping `PyFoldI` from
+`boundedStart` killed nothing. Its patterns are `new instructions:` and
+`tool_call(`, and only the first carries an `i` — so the missed site was
+again the one no one had named, and again it was found by machine rather
+than by looking harder. All eleven sites are now proven.
+
+**Two traps in the tool itself, both worth naming because both are
+general.** Narrowing what you TEST is not narrowing what you MUTATE: a
+first version let `--pkg` scope the test run while still mutating every
+site in the module, which reports a site in another package as SURVIVED
+because its killers were never run — a false clean bill from a tool whose
+whole job is to not give one. And a mutation harness must restore on a
+SIGNAL, not just on an exception: Python does not run `finally` blocks
+for a default-disposition SIGTERM, so killing the first version left
+`internal/provenance/provenance.go` mutated in the working tree. A tool
+that measures the tree must not be able to damage it when interrupted.
+
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
 *instances: 2*
 

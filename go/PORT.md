@@ -14580,6 +14580,24 @@ That reframes the remaining work: the tranches previously queued
 `skills.py`, `playbook.md`, then heartbeat / projects / escalation /
 notifications / viz) are real, and this sits in front of them.
 
+**And it has an order**, which is the actionable half. `agent_loop.py` is
+one 597-line function, `run_agent_loop`, and its import list is very
+nearly the table above — `loop_types`, `loop_init`, `loop_finalize`,
+`loop_parallel`, `loop_report`, `run_trace`, `tool_registry`,
+`container_exec`, `worktree`. So the tranche is a chain, not a pile:
+
+1. `loop_types` — 65-field `LoopContext`, 22-field `StepOutcome`,
+   20-field `LoopResult`, `ContributionLedger`, `LoopPhase` and
+   `LoopStateMachine`. Everything else here depends on it, and its
+   Python-specific parts (default factories, `_new_terrain`,
+   `_new_world_facts`) are the divergence-prone half of a types module.
+2. `loop_init` / `loop_finalize` / `loop_parallel` — the three Tier-3
+   splits `run_agent_loop` calls directly.
+3. `agent_loop` itself — one function, and by L48 its SHAPE is observable,
+   so it is not a candidate for tidying on the way across.
+4. `conductor`, `orch`, `scope`, `pre_flight`, `cli_args`, `run_lease`,
+   `killswitch` — reachable in parallel with the above.
+
 The rest, by tier, at the same confidence:
 
 - **Platform the loop calls into** — `container_exec` 1676, `web_fetch`

@@ -32,12 +32,37 @@ Usage:
 """
 
 import argparse
+import atexit
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+
+# Every file this run has rewritten, mapped to its pristine copy. A
+# per-site try/finally covers an exception; it does NOT cover SIGTERM,
+# because Python does not run finally blocks for a default-disposition
+# signal. Killing an early version of this script left
+# internal/provenance/provenance.go mutated in the working tree -- a tool
+# that measures the tree must not be able to damage it when interrupted.
+_PENDING = {}
+
+
+def _restore_all(*_):
+    for path, backup in list(_PENDING.items()):
+        try:
+            shutil.copyfile(backup, path)
+            os.unlink(backup)
+        except OSError:
+            pass
+        _PENDING.pop(path, None)
+
+
+atexit.register(_restore_all)
+for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(_sig, lambda s, f: (_restore_all(), sys.exit(128 + s)))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GO_ROOT = os.path.dirname(HERE)
@@ -127,18 +152,28 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("wrapper", help="e.g. pytext.PyFoldI")
     ap.add_argument("--pkg", default="./...",
-                    help="package pattern to test (default ./...)")
+                    help="package pattern to TEST (default ./...)")
+    ap.add_argument("--path", default="",
+                    help="only mutate sites under this module-relative "
+                         "prefix. Narrowing --pkg alone is a TRAP: it "
+                         "changes what is tested, not what is mutated, so "
+                         "a site in another package reports SURVIVED "
+                         "because its killers were never run.")
     ap.add_argument("--quick", action="store_true", help="pass -short")
     args = ap.parse_args()
 
     targets = []
     for path in go_files():
+        if args.path and not os.path.relpath(path, GO_ROOT).startswith(
+                args.path.lstrip("./")):
+            continue
         src, found = sites(path, args.wrapper)
         for s in found:
             targets.append((path, src, s))
     if not targets:
-        sys.exit("no %s( call sites found under %s — nothing to mutate, "
-                 "which is itself the answer" % (args.wrapper, GO_ROOT))
+        sys.exit("no %s( call sites found under %s%s — nothing to mutate, "
+                 "which is itself the answer"
+                 % (args.wrapper, GO_ROOT, "/" + args.path if args.path else ""))
 
     print("baseline: %s across %d site(s)" % (args.pkg, len(targets)))
     ok, _, _ = run_tests(args.pkg, args.quick)
@@ -155,13 +190,13 @@ def main():
         mutant = src[:start] + "(" + src[open_idx + 1:close_idx] + ")" + src[close_idx + 1:]
         backup = tempfile.mktemp(suffix=".go")
         shutil.copyfile(path, backup)
+        _PENDING[path] = backup
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(mutant)
             ok, killers, panicked = run_tests(args.pkg, args.quick)
         finally:
-            shutil.copyfile(backup, path)
-            os.unlink(backup)
+            _restore_all()
 
         if ok:
             survivors.append((rel, line))
