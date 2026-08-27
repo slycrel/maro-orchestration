@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -896,6 +897,88 @@ func TestUnlinkMissingOKMatchesCPython(t *testing.T) {
 			t.Errorf("%s: CPython left it there=%v, Go left it there=%v — "+
 				"the two runtimes deleted different things",
 				name, want.StillThere, stillThere)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// Path.mkdir(parents=True, exist_ok=True) — the MODE
+// ---------------------------------------------------------------------
+
+const pyMkdirSrc = `
+import json, os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+(root / "a" / "b").mkdir(parents=True, exist_ok=True)
+# exist_ok: a second call must not raise and must not re-chmod.
+os.chmod(root / "a", 0o755)
+(root / "a" / "b").mkdir(parents=True, exist_ok=True)
+out = {"umask": oct(os.umask(0o022))}
+os.umask(int(out["umask"], 8))
+for rel in ["a", "a/b"]:
+    out[rel] = oct((root / rel).stat().st_mode & 0o7777)
+print(json.dumps(out))
+`
+
+// TestMakeDirsModeMatchesCPython pins the mode makeDirs creates
+// directories with.
+//
+// pathlib's mkdir passes 0o777 and lets the umask subtract; the port
+// spells that as record.NewDirMode. Nothing else in this package looks at
+// a mode, so the constant was free to be anything — measured: changing it
+// to 0o700 failed no test in the package. It is not cosmetic. The
+// worktrees root and every loop directory under it are created here, and
+// a worker process running under a different uid in the same group reads
+// and writes inside them; 0o700 would lock it out, and the failure would
+// surface as a git error three layers away.
+//
+// The umask is asked for rather than assumed, and both runtimes inherit
+// the same one from this process, so the comparison is of what mkdir
+// REQUESTED — not of the session's umask, which is the environment's
+// business and not this port's.
+func TestMakeDirsModeMatchesCPython(t *testing.T) {
+	pyRoot, goRoot := t.TempDir(), t.TempDir()
+
+	var out map[string]string
+	pyprobeWorktree(t.TempDir()).RunJSON(t, pyMkdirSrc, &out, pyRoot)
+
+	// --- the CLAIM about CPython ---
+	// 0o777 &^ umask. With the usual 022 that is 0o755; the test states
+	// the derivation rather than the number so a box with a different
+	// umask is measured, not failed.
+	var umask int
+	if _, err := fmt.Sscanf(out["umask"], "0o%o", &umask); err != nil {
+		t.Fatalf("could not read the probe's umask %q: %v", out["umask"], err)
+	}
+	wantMode := fmt.Sprintf("0o%o", 0o777&^umask)
+	if out["a/b"] != wantMode {
+		t.Fatalf("the claim that mkdir requests 0o777 is stale: umask %s, "+
+			"expected %s, CPython created %s", out["umask"], wantMode, out["a/b"])
+	}
+	// The parent chmod'd between the two calls must have survived: exist_ok
+	// means "leave it alone", not "make it right".
+	if out["a"] != "0o755" {
+		t.Fatalf("the claim that exist_ok does not re-chmod is stale: %s", out["a"])
+	}
+
+	// --- the comparison ---
+	if err := makeDirs(filepath.Join(goRoot, "a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(goRoot, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDirs(filepath.Join(goRoot, "a", "b")); err != nil {
+		t.Fatalf("the second call raised where exist_ok=True does not: %v", err)
+	}
+	for _, rel := range []string{"a", "a/b"} {
+		st, err := os.Stat(filepath.Join(goRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := fmt.Sprintf("0o%o", st.Mode().Perm())
+		if got != out[rel] {
+			t.Errorf("%s: mode differs — CPython %s, Go %s", rel, out[rel], got)
 		}
 	}
 }

@@ -98,6 +98,11 @@ type sidecar struct {
 	raw     string // verbatim sidecar bytes; "" means write no sidecar
 	makeDir bool
 	ageS    int // how far in the past to set the clone dir's mtime
+	// asFile puts a regular FILE where the clone directory would be.
+	// is_dir() is False for it — but only a real is_dir() call knows
+	// that, which is what makes this row different from "nothing there":
+	// a stat that merely SUCCEEDS answers yes.
+	asFile bool
 }
 
 func ownerJSON(pid string, token string, repo, base, branch string) string {
@@ -117,39 +122,46 @@ func sweepFixtures() []sidecar {
 	const repo = "/srv/repo"
 	return []sidecar{
 		// owner alive -> skipped_live, never touched
-		{"a-clone", "L1", ownerJSON("4242", "TOK-ALIVE", repo, "main", "maro/L1/a"), true, 7200},
+		{"a-clone", "L1", ownerJSON("4242", "TOK-ALIVE", repo, "main", "maro/L1/a"), true, 7200, false},
 		// owner dead but the clone is younger than the grace -> skipped_young
-		{"b-clone", "L1", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L1/b"), true, 0},
+		{"b-clone", "L1", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L1/b"), true, 0, false},
 		// owner dead, old, nothing to merge -> removed_empty (and REMOVED)
-		{"c-clone", "L1", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L1/c"), true, 7200},
+		{"c-clone", "L1", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L1/c"), true, 7200, false},
 		// owner dead, old, a conflict -> preserved (and KEPT)
-		{"d-clone", "L1", ownerJSON("9998", "TOK-DEAD", repo, "main", "maro/L1/d"), true, 7200},
+		{"d-clone", "L1", ownerJSON("9998", "TOK-DEAD", repo, "main", "maro/L1/d"), true, 7200, false},
 		// a sidecar whose clone directory is gone -> debug only, no row
-		{"e-clone", "L1", ownerJSON("9999", "", repo, "main", "maro/L1/e"), false, 0},
+		{"e-clone", "L1", ownerJSON("9999", "", repo, "main", "maro/L1/e"), false, 0, false},
 		// a sidecar that is not JSON -> surfaced, KEPT
-		{"f-clone", "L1", "{not json", true, 7200},
+		{"f-clone", "L1", "{not json", true, 7200, false},
 		// no sidecar at all -> surfaced by the SECOND glob, KEPT
-		{"g-clone", "L1", "", true, 7200},
+		{"g-clone", "L1", "", true, 7200, false},
 		// owner_pid is a FLOAT, so isinstance(x, int) is False and the
 		// liveness test never runs: it falls to the age branch carrying
 		// the float verbatim into the result
-		{"h-clone", "L2", ownerJSON("1.5", "TOK-DEAD", repo, "main", "maro/L2/h"), true, 0},
+		{"h-clone", "L2", ownerJSON("1.5", "TOK-DEAD", repo, "main", "maro/L2/h"), true, 0, false},
 		// owner_pid is `true`, which IS an int in Python
-		{"i-clone", "L2", ownerJSON("true", "TOK-ALIVE", repo, "main", "maro/L2/i"), true, 7200},
+		{"i-clone", "L2", ownerJSON("true", "TOK-ALIVE", repo, "main", "maro/L2/i"), true, 7200, false},
 		// a sidecar with no base_ref -> surfaced, KEPT
-		{"j-clone", "L2", `{"owner_pid": 9999, "repo_dir": "` + repo + `"}`, true, 7200},
+		{"j-clone", "L2", `{"owner_pid": 9999, "repo_dir": "` + repo + `"}`, true, 7200, false},
 		// a non-ASCII name, to keep the sort comparison honest about
 		// code points rather than bytes
-		{"Zé-clone", "L2", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L2/z"), true, 7200},
+		{"Zé-clone", "L2", ownerJSON("9999", "TOK-DEAD", repo, "main", "maro/L2/z"), true, 7200, false},
 		// a sidecar that IS a JSON object but carries no owner_pid ->
 		// _read_clone_owner answers None (the `"owner_pid" not in data`
 		// arm, which no malformed-JSON fixture reaches) -> surfaced, KEPT
-		{"k-clone", "L2", `{"repo_dir": "` + repo + `", "base_ref": "main"}`, true, 7200},
+		{"k-clone", "L2", `{"repo_dir": "` + repo + `", "base_ref": "main"}`, true, 7200, false},
 		// a sidecar with no BRANCH -> the `or f"maro/stale/{name}"`
 		// fallback names the branch after the clone directory, and that
 		// name is what CleanupClone would delete, so it is in as_dict
 		{"l-clone", "L2", `{"owner_pid": 9999, "owner_start": "TOK-DEAD", "repo_dir": "` +
-			repo + `", "base_ref": "main"}`, true, 7200},
+			repo + `", "base_ref": "main"}`, true, 7200, false},
+		// a sidecar whose "clone" is a regular FILE. is_dir() is False,
+		// so this takes the orphan-sidecar branch and lands in NO list —
+		// which is why only the log channel and the surviving tree can
+		// see it. A stat-succeeded test would take it for a clone dir
+		// and hand a regular file to merge_back_clone.
+		{"m-clone", "L2", ownerJSON("9999", "TOK-DEAD", repo, "main",
+			"maro/L2/m"), false, 7200, true},
 	}
 }
 
@@ -163,6 +175,11 @@ func buildSweepTree(t *testing.T, ws string) {
 			t.Fatal(err)
 		}
 		clone := filepath.Join(dir, f.name)
+		if f.asFile {
+			if err := os.WriteFile(clone, []byte("not a clone\n"), 0o666); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if f.makeDir {
 			// A .git/hooks the sanitiser will delete, so that path runs.
 			if err := os.MkdirAll(filepath.Join(clone, ".git", "hooks"), 0o777); err != nil {
