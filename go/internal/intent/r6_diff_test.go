@@ -109,6 +109,30 @@ var fileOutputCorpus = []string{
 	// ...and the same stem with nothing between, which both answer True.
 	"write to ab.md",
 
+	// The Turkish i, in `artifacts`. re.IGNORECASE also matches
+	// U+0130/U+0131 for an `i` and Go's (?i) does not, so before
+	// pytext.PyFoldI the port answered False where CPython answered True
+	// -- an artifact-producing goal routed to a different LANE.
+	"put it in art\u0131facts/report.md",
+	"PUT IT IN ART\u0130FACTS/REPORT.MD",
+	// The ASCII control for the pair above, and its uppercase form, so a
+	// pattern that stopped matching `artifacts` at all fails here too.
+	"PUT IT IN ARTIFACTS/REPORT.MD",
+
+	// `artifacts` is one of FOUR alternatives in this pattern carrying an
+	// `i`, and fixturing only the one the finding named is the L9 shape
+	// this port keeps repeating. Each row below is spelled so that the
+	// named alternative is the ONLY one that can match -- the first
+	// draft of these used `wrıte the notes to a file`, which CPython
+	// answers True through the `to a file` branch no matter what the
+	// verb does, and so proved nothing about the verb.
+	"wrıte the notes to notes.md",      // (?:save|write|output|export)
+	"write the notes to notes.md",      // ...its ASCII control
+	"save the notes to a fıle",         // to (a )?file
+	"save the notes to a file",         // ...its ASCII control
+	"save it as ıts own markdown file", // as (its own )?markdown
+	"save it as its own markdown file", // ...its ASCII control
+
 	// The ordinary lanes, ASCII, which already agreed.
 	"write it to a file",
 	"export results as csv files",

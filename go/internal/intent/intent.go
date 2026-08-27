@@ -122,7 +122,12 @@ Respond ONLY with a JSON object:
 // input). See pytext.WordStart's doc for the translation.
 var fileOutWindow = pytext.NotWordClassPlus(".;\n")
 
-var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|` +
+// PyFoldI: `artifacts` carries an `i`, and re.IGNORECASE also matches
+// U+0130/U+0131 there while Go's (?i) does not. Measured both engines --
+// CPython matches "save to art\u0131facts/x.md" and "SAVE TO
+// ART\u0130FACTS/X.MD"; the port did not, which routes an
+// artifact-producing goal to a different LANE.
+var fileOutputRe = regexp.MustCompile(pytext.PyFoldI(`(?i)(` + pytext.WordStart + `artifacts?/|` +
 	pytext.WordStart + `(?:save|write|output|export)` +
 	`(?:` + fileOutWindow + `|` + fileOutWindow + `[^.;` + "\n" + `]{0,38}` +
 	fileOutWindow + `)` + `to` + pytext.SpaceClass +
@@ -146,7 +151,7 @@ var fileOutputRe = regexp.MustCompile(`(?i)(` + pytext.WordStart + `artifacts?/|
 	`+)?file` + pytext.WordEnd + `|` +
 	pytext.WordStart + `as` + pytext.SpaceClass + `+(?:its` + pytext.SpaceClass +
 	`+own` + pytext.SpaceClass + `+)?(?:markdown|csv|json|yaml|text)` +
-	pytext.SpaceClass + `+files?` + pytext.WordEnd + `)`)
+	pytext.SpaceClass + `+files?` + pytext.WordEnd + `)`))
 
 // RequiresFileOutput is exported for the NOW lane's own honesty checks.
 func RequiresFileOutput(message string) bool {
@@ -319,8 +324,13 @@ var agendaPatterns = []*regexp.Regexp{
 // an ACCEPTED residual of the fallback, confirmed by three independent
 // reviewers 2026-07-12, not a gap to chase (the real signal is the LLM
 // path's needs_live_data).
-var liveDataRe = regexp.MustCompile(`(?i)` + pytext.WordStart +
-	`(what('s| is) (the |a |an )?(current|latest|today'?s?))` + pytext.WordEnd)
+// PyFoldI, for the ONE `i` in this pattern: the ` is` alternative.
+// `current`, `latest` and `today` carry none, so "what \u0131s the
+// current price" is the whole exposure and the apostrophe form is
+// unaffected -- which is why the fixtures below drive ` is` and not
+// `latest`.
+var liveDataRe = regexp.MustCompile(pytext.PyFoldI(`(?i)` + pytext.WordStart +
+	`(what('s| is) (the |a |an )?(current|latest|today'?s?))` + pytext.WordEnd))
 
 const shortThreshold = 8 // words — very short messages tend to be NOW
 

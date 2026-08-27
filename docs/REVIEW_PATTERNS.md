@@ -2053,6 +2053,47 @@ Companion to L13 (a fix at the site that has the fixture is not a fix for
 the class) and to L4 (a guard that cannot fire is not evidence): this is
 how you find out which of the two you are looking at.
 
+### P16 — A tool that computes its own denominator must fail when it cannot compute one
+
+*instances: 1*
+
+A coverage tool enumerates a population, measures each member, and then
+prints a sentence quantified over that population — *"all 2 sites killed
+at least one test"*. The sentence is true of what the tool found. It says
+nothing about what the tool could not parse, and the reader has no way to
+tell the difference, because a complete run and a partial run print the
+same shape of summary.
+
+**Canonical instance (2026-08-27, `go/tools/mutate-wraps.py`).**
+`match_close` walked Go source counting parens, skipping string literals
+— and had no case for comments. `internal/intent/intent.go`'s
+`fileOutputRe` is a multi-line argument interleaved with prose, and the
+apostrophe in *"Go's `\S`"* opened what the walker read as a rune literal
+that ran to the next apostrophe nine lines down, swallowing the closing
+paren. The site was reported unbalanced, skipped with a warning on
+**stderr**, and the run finished `all 1 site(s) killed at least one test`
+on **stdout**. One of the two wrapped patterns in that file was never
+mutated, and the summary line said the file was fully covered.
+
+The instrument was the one written *because* three same-day fixes had
+landed unprovable (L9's inversion). A tool built to stop a guard from
+silently not-guarding was itself silently not-measuring, and the failure
+arrived through the channel nobody reads.
+
+**Tripwire.** Two rules, and the second is the one that bites:
+
+1. An element the tool cannot measure is an **error**, not a warning.
+   `sys.exit` before printing any coverage number, because the number is
+   quantified over a set that is now wrong.
+2. Never route a completeness failure to a different stream than the
+   completeness claim. If the summary prints to stdout, the shortfall
+   prints to stdout — a warning on stderr next to a success on stdout is
+   a green result with a footnote, and it reads as green.
+
+Companion to P7 (a battery that never proves its baseline reads a broken
+tree as a perfect score): P7 is the tool lying about the tree, this is the
+tool lying about itself.
+
 ### L56 — An empty path argument is not "no path", it is the CURRENT one
 *instances: 1 — with a demonstrated consequence*
 

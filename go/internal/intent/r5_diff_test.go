@@ -66,6 +66,25 @@ var heuristicCorpus = []struct{ name, msg string }{
 	{"a newline inside the window", "what is\nthe time?"},
 	{"a non-ASCII letter right after the keyword", "what研究 is the time?"},
 
+	// The live-data lane, whose ONLY `i` is the ` is` alternative.
+	// re.IGNORECASE folds U+0131 onto `i` and Go's (?i) does not, so
+	// before pytext.PyFoldI this row scored no agenda point and fell to
+	// the short-message NOW bonus: CPython agenda 0.65, Go now 0.65.
+	{"the dotless i in the live-data pattern", "what ıs the current price"},
+	{"the same with a keyword carrying no i", "what ıs the latest news"},
+	{"the ASCII control", "what is the current price"},
+
+	// U+0130 in the same slot is NOT a divergence here, and the reason is
+	// worth pinning: heuristicClassify lowercases FIRST, and both
+	// str.lower() and pytext.Lower expand U+0130 to "i" + U+0307. The
+	// combining dot then sits between the `i` and the `s`, so the ` is`
+	// alternative misses on BOTH engines and the message routes NOW.
+	// Fold coverage and the lowercase pass interact; a fixture written
+	// from the pattern alone would have asserted agenda here and been
+	// wrong for a reason no reading of liveDataRe could show.
+	{"a dotted capital I, eaten by the lowercase pass",
+		"WHAT İS THE CURRENT PRICE"},
+
 	// The ordinary ASCII lanes, so the corpus is not all edge cases.
 	{"a plain now question", "what is the time"},
 	{"a plain agenda task", "build a dashboard and deploy it to production"},

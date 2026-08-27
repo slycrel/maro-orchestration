@@ -82,13 +82,6 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 			"to fold at the call, on the incoming pattern, which changes " +
 			"what a suggestion means and wants its own decision. Filed, not " +
 			"deferred by oversight."},
-		"internal/intent/intent.go": {2, "" +
-			"fileOutputRe (:125) and liveDataRe (:322). fileOutputRe is the " +
-			"pattern mission-r6 and r7 both edited and the 2026-08-27 " +
-			"escape census then found a fourth escape in -- a third pass " +
-			"over the same lines wants its own differential rather than a " +
-			"drive-by. Direction UNMEASURED; intent routing picks the " +
-			"execution LANE."},
 		"internal/jsonx/jsonx.go": {2, "" +
 			"thinkRe and thinkOpenRe, which strip `<think>` spans out of " +
 			"model output. The i is in the tag name, so reaching this " +

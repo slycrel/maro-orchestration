@@ -83,28 +83,52 @@ def match_close(src, open_idx):
     interpreted strings honour backslash escapes. A paren inside either
     is not a paren, and getting that wrong is how a rewriter corrupts a
     file it was only supposed to measure.
+
+    COMMENTS ARE PART OF THAT. A multi-line argument in this port is
+    routinely interleaved with prose, and prose contains apostrophes:
+    the first version of this function read the `'` in "Go's" as a rune
+    literal, swallowed everything to the next apostrophe several lines
+    down, and reported the whole site as unbalanced. It then SKIPPED
+    that site while the summary still said "all 1 site(s) killed" --
+    the tool written to stop a guard from silently not-guarding was
+    itself silently not-measuring. Line and block comments are now
+    consumed as comments, and a rune scan may not cross a newline.
     """
     depth = 0
     i = open_idx
     n = len(src)
     while i < n:
         c = src[i]
-        if c == "`":
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            nl = src.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            end = src.find("*/", i + 2)
+            if end < 0:
+                return -1
+            i = end + 1
+        elif c == "`":
             i = src.find("`", i + 1)
             if i < 0:
                 return -1
         elif c == '"':
             i += 1
-            while i < n and src[i] != '"':
+            while i < n and src[i] != '"' and src[i] != "\n":
                 if src[i] == "\\":
                     i += 1
                 i += 1
         elif c == "'":
-            i += 1
-            while i < n and src[i] != "'":
-                if src[i] == "\\":
-                    i += 1
-                i += 1
+            # A Go rune literal is one character or one escape and never
+            # spans a line. Anything else is prose that survived the
+            # comment scan, and must not eat the file.
+            j = i + 1
+            while j < n and src[j] != "'" and src[j] != "\n":
+                if src[j] == "\\":
+                    j += 1
+                j += 1
+            if j < n and src[j] == "'":
+                i = j
         elif c == "(":
             depth += 1
         elif c == ")":
@@ -119,16 +143,15 @@ def sites(path, wrapper):
     """(start, open_idx, close_idx) for each `wrapper(...)` in path."""
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
-    out = []
+    out, skipped = [], []
     pat = re.compile(r"\b" + re.escape(wrapper) + r"\(")
     for m in pat.finditer(src):
         close = match_close(src, m.end() - 1)
         if close < 0:
-            print("  ! unbalanced parens at %s:%d — skipped"
-                  % (path, src.count("\n", 0, m.start()) + 1), file=sys.stderr)
+            skipped.append(src.count("\n", 0, m.start()) + 1)
             continue
         out.append((m.start(), m.end() - 1, close))
-    return src, out
+    return src, out, skipped
 
 
 def line_of(src, idx):
@@ -162,14 +185,26 @@ def main():
     ap.add_argument("--quick", action="store_true", help="pass -short")
     args = ap.parse_args()
 
-    targets = []
+    targets, unparsed = [], []
     for path in go_files():
         if args.path and not os.path.relpath(path, GO_ROOT).startswith(
                 args.path.lstrip("./")):
             continue
-        src, found = sites(path, args.wrapper)
+        src, found, skipped = sites(path, args.wrapper)
         for s in found:
             targets.append((path, src, s))
+        for line in skipped:
+            unparsed.append((os.path.relpath(path, GO_ROOT), line))
+    if unparsed:
+        # Not a warning. A site this tool cannot parse is a site it does
+        # not mutate, and the run would still print "all N killed" over a
+        # denominator quietly short of the truth.
+        for rel, line in unparsed:
+            print("  ! could not find the matching ')' at %s:%d" % (rel, line),
+                  file=sys.stderr)
+        sys.exit("%d site(s) could not be parsed. Fix match_close before "
+                 "trusting any coverage number this run would print."
+                 % len(unparsed))
     if not targets:
         sys.exit("no %s( call sites found under %s%s — nothing to mutate, "
                  "which is itself the answer"
