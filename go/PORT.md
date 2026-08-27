@@ -13508,3 +13508,45 @@ widened guard's own census is the population; a review's findings are a
 sample) and **L55** (a fixture can defend the configuration that does not
 ship) -- the latter named now but measured in r7, filed against r7 in the
 ledger so the count stays honest about when the defect existed.
+
+
+## `internal/recall` gets an interpreter — built in a parallel lane
+
+`internal/recall` was one of the three genuine gaps `go/COVERAGE.md` names:
+542 lines with **no interpreter comparison at all**. A codex build lane,
+working in its own git worktree (`go-port-lane2`, P4 — a battery or a build
+owns the whole tree it runs in, because a Go module builds through its
+import graph), closed it with three live CPython differentials:
+
+- `TestFindPriorAttemptsMatchesCPython` — exact / near / project match
+  lanes, exclusion, the 24-hour window, the tri-state `goal_achieved`
+  verdict, the status-derived interrupt verdict, and newest-first ordering.
+- `TestRecallLessonsMatchCPython` — agenda-first ranked retrieval, untyped
+  top-up, lesson-ID dedup, done/stuck icons, receipt spelling, rendered
+  citation IDs. The probe forces Python's optional hybrid and its
+  unported/inherently-writing substrates inert, leaving the ported
+  read-only slice.
+- `TestContextBlockMatchesCPython` — the prior-attempt paragraph: sorted
+  status breakdown, SF-2 verdict counts, both interrupt channels, and the
+  newest-attempt wording.
+
+All three state their expected rows **before** either answer is compared,
+so CPython is checked rather than silently made the oracle.
+
+**One divergence, reported and not fixed.** A metadata `goal_achieved` set
+to the *string* `"false"` makes CPython return `None` (unjudged) where the
+port returns `false` (judged not achieved). Fail-closed in Go, and the
+production code documents the conservative choice. The lane's brief says
+report divergences, do not fix them — the fix decision is the host's — and
+it held to that.
+
+**What the lane did not deliver.** Three mutants for three tests is thinner
+than the brief asked for, and mutations derived per-test rather than from
+the file are the shape L9 warns about. A deeper pass derived from
+`recall.go` itself is owed before this package can be called pinned.
+
+**Sandbox artifact, checked.** The lane reported `go test ./...` blocked by
+an `internal/artifactcheck` fixture that creates a Unix socket and hit
+`PermissionError` in its sandbox. Re-run outside the sandbox: exit 0, all
+packages green. The fixture correctly failed rather than skipping, which is
+the pyprobe rule working as designed.
