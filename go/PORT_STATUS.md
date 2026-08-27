@@ -77,6 +77,7 @@ reading like one.
 | `interrupt.py` | 1128 | `internal/artifactcheck`, `internal/loop` |
 | `loop_post_step.py` | 1127 | `internal/loop` |
 | `inspector.py` | 1066 | `internal/inspector` |
+| `persona.py` | 1060 | `internal/persona` |
 | `recall.py` | 1005 | `internal/recall` |
 | `loop_planning.py` | 883 | `internal/loop`, `internal/metrics` |
 | `orch_items.py` | 845 | `internal/orch` |
@@ -84,6 +85,7 @@ reading like one.
 | `playbook.py` | 775 | `internal/playbook`, `internal/pytext` |
 | `artifact_check.py` | 735 | `internal/artifactcheck` |
 | `constraint.py` | 723 | `internal/evolver` |
+| `worktree.py` | 722 | `internal/procid`, `internal/worktree` |
 | `graduation.py` | 698 | `internal/graduation` |
 | `system_health.py` | 693 | `internal/syshealth` |
 | `checkpoint.py` | 684 | `internal/artifactcheck` |
@@ -110,13 +112,14 @@ reading like one.
 | `proc_lock.py` | 172 | `internal/artifactcheck` |
 | `audit_policy.py` | 137 | `internal/record` |
 | `escalation_context.py` | 121 | `internal/notify` |
+| `process_identity.py` | 115 | `internal/procid` |
 | `lesson_provenance.py` | 109 | `internal/provenance` |
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**63 modules / 70996 lines** carry a declaration. **120 modules / 61734 lines** do not.
+**66 modules / 72893 lines** carry a declaration. **117 modules / 59837 lines** do not.
 
-### The undeclared queue — 120 modules, 61734 lines, UNJUDGED
+### The undeclared queue — 117 modules, 59837 lines, UNJUDGED
 
 | Python module | lines |
 |---|---:|
@@ -131,7 +134,6 @@ reading like one.
 | `web_fetch.py` | 1172 |
 | `tail_jobs.py` | 1149 |
 | `quality_gate.py` | 1110 |
-| `persona.py` | 1060 |
 | `doctor.py` | 1001 |
 | `agent_loop.py` | 871 |
 | `skill_lifecycle.py` | 843 |
@@ -141,7 +143,6 @@ reading like one.
 | `shadow_lane.py` | 759 |
 | `scope.py` | 736 |
 | `delta_replay.py` | 729 |
-| `worktree.py` | 722 |
 | `discretion_readout.py` | 710 |
 | `memory_backends.py` | 689 |
 | `loop_parallel.py` | 684 |
@@ -235,7 +236,6 @@ reading like one.
 | `memory_port.py` | 149 |
 | `factory_minimal.py` | 136 |
 | `camera_log.py` | 135 |
-| `process_identity.py` | 115 |
 | `benchmark_isolation.py` | 105 |
 | `finding_codes.py` | 102 |
 | `age_stamp.py` | 89 |
@@ -248,9 +248,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **63 of 183 modules (70,996 of 132,730
-> lines, 53%) are named by a Go production package. The other
-> 120 have no declaration either way.**
+> **66 of 183 modules (72,893 of 132,730
+> lines, 55%) are named by a Go production package. The other
+> 117 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.
