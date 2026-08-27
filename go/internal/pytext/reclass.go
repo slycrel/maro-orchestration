@@ -312,3 +312,137 @@ func escapeInClass(s string) string {
 	}
 	return b.String()
 }
+
+// IClass matches exactly what Python's `re.IGNORECASE` matches for the
+// letter `i`, which is the ONE place Go's `(?i)` folds a smaller set than
+// CPython's for an ASCII pattern.
+//
+// Measured exhaustively over all 0x110000 code points, both engines, for
+// every ASCII letter and digit — not reasoned about:
+//
+//	letter  CPython IGNORECASE            Go (?i)
+//	i       I i U+0130 U+0131             I i          <-- the gap
+//	k       K k U+212A                    K k U+212A
+//	s       S s U+017F                    S s U+017F
+//	(all others)                          identical
+//
+// U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE and U+0131 LATIN SMALL
+// LETTER DOTLESS I are in CPython's fold table and are singletons under
+// `unicode.SimpleFold`, which is what Go's regexp uses. `k` and `s` agree
+// because U+212A and U+017F DO have fold orbits reaching ASCII.
+//
+// Spelled `(?-i:...)` and listing both cases explicitly, so it means the
+// same thing whether or not the enclosing pattern sets `(?i)` and cannot
+// fold-grow the way a spliced WordClassBody does (see WordClass).
+const IClass = `(?-i:[iI\x{130}\x{131}])`
+
+// FoldI rewrites a LITERAL word into the pattern CPython's IGNORECASE
+// would match for it, by replacing each `i`/`I` with IClass.
+//
+// Literal only. It escapes nothing and interprets nothing, so passing a
+// pattern with a character class or a range through it silently changes
+// what that pattern means (`[a-i]` would become `[a-` + IClass + `]`).
+// Callers here pass fixed words; this is not a user-input path and must
+// not become one.
+//
+// This exists because the alternative — normalising the SUBJECT before
+// matching — moves the offsets, and several callers return captured
+// substrings or use FindStringIndex. Rewriting the pattern preserves
+// them.
+func FoldI(literal string) string {
+	var b strings.Builder
+	for _, r := range literal {
+		if r == 'i' || r == 'I' {
+			b.WriteString(IClass)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// PyFoldI rewrites a PATTERN so its `(?i)` means what CPython's
+// re.IGNORECASE means, by replacing each literal `i`/`I` with IClass.
+//
+// This is the same shape as provenance's pySpace(): the transformation
+// lives at the call so the pattern in the source stays readable and stays
+// comparable to the Python it was ported from. Hand-splicing IClass at
+// fifteen sites across four patterns is how one of them gets missed —
+// which is exactly the finding this exists to fix (r12, artifactcheck:
+// `wrote İnto absent.txt` extracted no write claim at all, so the
+// fabrication detector checked nothing and passed. A detector that fails
+// OPEN).
+//
+// It skips what it must not touch, and each skip is a real construct that
+// appears in this port's patterns:
+//
+//   - inline flag groups — `(?i)`, `(?-i:`, `(?is)` — where the `i` IS the
+//     flag. Rewriting it produces a pattern that does not compile, which
+//     at least fails loudly, but only after it has stopped meaning
+//     anything.
+//   - escapes — `\i` is not a thing, but `\1` and `\.` are, and consuming
+//     a backslash's partner is how a rewriter corrupts a pattern quietly.
+//   - character classes. `[...]` cannot hold a group, so IClass cannot be
+//     spliced in. A bare `i` there under `(?i)` IS a real divergence and
+//     this cannot fix it, so it PANICS rather than returning a pattern
+//     that is wrong in a way nothing reports. Use an explicit
+//     `iI\x{130}\x{131}` in the class instead.
+//
+// Panicking is right here because every caller is a package-level
+// MustCompile: the failure lands at init, in the test run that introduced
+// it, not at match time on a user's input.
+func PyFoldI(pattern string) string {
+	var b strings.Builder
+	rs := []rune(pattern)
+	for i := 0; i < len(rs); i++ {
+		switch {
+		case rs[i] == '\\' && i+1 < len(rs):
+			b.WriteRune(rs[i])
+			b.WriteRune(rs[i+1])
+			i++
+		case rs[i] == '(' && i+1 < len(rs) && rs[i+1] == '?':
+			// Copy through the end of the flag/name construct: `)` closes
+			// a bare flag group, `:` opens a non-capturing one, `>` closes
+			// a named-capture prefix `(?P<x>`.
+			j := i
+			for j < len(rs) && rs[j] != ')' && rs[j] != ':' && rs[j] != '>' {
+				j++
+			}
+			if j < len(rs) {
+				j++
+			}
+			b.WriteString(string(rs[i:j]))
+			i = j - 1
+		case rs[i] == '[':
+			j := i + 1
+			if j < len(rs) && rs[j] == '^' {
+				j++
+			}
+			if j < len(rs) && rs[j] == ']' { // a literal ] in first position
+				j++
+			}
+			for j < len(rs) && rs[j] != ']' {
+				if rs[j] == '\\' && j+1 < len(rs) {
+					j++
+				}
+				if rs[j] == 'i' || rs[j] == 'I' {
+					panic("pytext.PyFoldI: a bare i/I inside a character " +
+						"class cannot be rewritten (a class cannot hold a " +
+						"group). Spell it iI\\x{130}\\x{131} in the class: " +
+						pattern)
+				}
+				j++
+			}
+			if j < len(rs) {
+				j++
+			}
+			b.WriteString(string(rs[i:j]))
+			i = j - 1
+		case rs[i] == 'i' || rs[i] == 'I':
+			b.WriteString(IClass)
+		default:
+			b.WriteRune(rs[i])
+		}
+	}
+	return b.String()
+}

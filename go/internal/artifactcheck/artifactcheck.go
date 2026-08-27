@@ -294,7 +294,7 @@ func maximalSubpart(b []byte) int {
 // the non-greedy `*?` means the same thing in both, because Go's regexp
 // resolves alternation and repetition leftmost-FIRST (Perl semantics), not
 // leftmost-longest. `regexp.MustCompilePOSIX` would not, and is not used.
-var outputClaimRE = regexp.MustCompile(
+var outputClaimRE = regexp.MustCompile(pytext.PyFoldI(
 	`(?i)` + pytext.WordStart +
 		`(?:sav` + pytext.WordClass + `*` +
 		`|writ` + pytext.WordClass + `*` +
@@ -308,7 +308,7 @@ var outputClaimRE = regexp.MustCompile(
 		`(?:` + notWordDotNL + `|` + notWordDotNL + `[^.\n]*?` + notWordDotNL + `)` +
 		`(?:to|into|at|as)` + pytext.SpaceClass + `+` +
 		"[`'\"(]?" +
-		`(?P<path>(?-i:[^` + pytext.SpaceClassBody + "`'\"" + `)])+)`)
+		`(?P<path>(?-i:[^` + pytext.SpaceClassBody + "`'\"" + `)])+)`))
 
 var notWordDotNL = pytext.NotWordClassPlus(".\n")
 
@@ -1540,7 +1540,7 @@ func buildStdoutBranches() []stdoutBranch {
 	// pins that: "output to" is excluded and "output quickly" is not, and
 	// the honest question here was whether "output tolerances" is excluded
 	// too. It is.
-	excl := regexp.MustCompile(`(?i)^` + sp + `+(?:file|to|into|path|dir)`)
+	excl := regexp.MustCompile(pytext.PyFoldI(`(?i)^` + sp + `+(?:file|to|into|path|dir)`))
 	return []stdoutBranch{
 		lit("prints", `prints?`),
 		lit("printed", `printed`),
@@ -2052,7 +2052,7 @@ func toolFailed(te ToolEvent) bool {
 // successClaimRE is Python's `_SUCCESS_CLAIM_RE` (:408). `\s` and `\b`
 // carry the same Unicode treatment as everywhere else in this file; the
 // two emoji are literal.
-var successClaimRE = regexp.MustCompile(`(?i)` +
+var successClaimRE = regexp.MustCompile(pytext.PyFoldI(`(?i)` +
 	pytext.WordStart + `(?:all` + pytext.SpaceClass + `+)?(?:tests?` + pytext.SpaceClass + `+)?pass(?:ed|es|ing)?` + pytext.WordEnd +
 	`|succe(?:ss|ssful(?:ly)?|eded)` + pytext.WordEnd +
 	`|` + pytext.WordStart + `works?` + pytext.WordEnd +
@@ -2062,15 +2062,15 @@ var successClaimRE = regexp.MustCompile(`(?i)` +
 	`|exit(?:` + pytext.SpaceClass + `+code)?` + pytext.SpaceClass + `+0` + pytext.WordEnd +
 	`|completed` + pytext.SpaceClass + `+successfully` + pytext.WordEnd +
 	`|built?` + pytext.SpaceClass + `+(?:cleanly|successfully)` + pytext.WordEnd +
-	`|✓|✅`)
+	`|✓|✅`))
 
 // failureAckRE is Python's `_FAILURE_ACK_RE` (:420) — the guard that keeps
 // the execution check positive-evidence-only. A result that ADMITS a
 // problem is not claiming clean success, and must not be flagged.
-var failureAckRE = regexp.MustCompile(`(?i)` + pytext.WordStart +
+var failureAckRE = regexp.MustCompile(pytext.PyFoldI(`(?i)` + pytext.WordStart +
 	`(?:fail(?:ed|s|ing|ure)?|error(?:ed|s)?|traceback|exception` +
 	`|did` + pytext.SpaceClass + `+not|didn'?t|could` + pytext.SpaceClass + `*n'?t|unable|broke(?:n)?|crash` + pytext.WordClass + `*` +
-	`|non[- ]zero|exit` + pytext.SpaceClass + `+(?:code` + pytext.SpaceClass + `+)?[1-9])` + pytext.WordEnd)
+	`|non[- ]zero|exit` + pytext.SpaceClass + `+(?:code` + pytext.SpaceClass + `+)?[1-9])` + pytext.WordEnd))
 
 // claimsCleanSuccess is Python's `_claims_clean_success` (:436).
 func claimsCleanSuccess(text string) bool {

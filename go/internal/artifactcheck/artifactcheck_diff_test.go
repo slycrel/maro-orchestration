@@ -438,6 +438,29 @@ func acCases() []acCase {
 		// straight into the preposition, so a translation that kept an
 		// empty branch would extract a.txt where CPython extracts nothing.
 		{"E46 the verb runs straight into the preposition", "wroteto a.txt"},
+		// r12 (gpt-5.6-terra, 2026-08-27). `re.IGNORECASE` folds U+0130 and
+		// U+0131 onto `i`; Go's `(?i)` does not, because both are singletons
+		// under unicode.SimpleFold. Measured exhaustively over every ASCII
+		// letter and digit, both engines: `i` is the ONLY character where
+		// they differ — `k` and `s` already agree, because U+212A and U+017F
+		// have fold orbits reaching ASCII (the class-level sweep is in
+		// internal/pytext).
+		//
+		// Direction is the same one E44 names and worse: CPython extracts
+		// the claim, the port extracted NOTHING, and a fabrication check
+		// with no claim reports no fabrication. A one-character homoglyph
+		// edit walks a fabricated write past the detector. Fixed with
+		// pytext.PyFoldI; these rows are what notices if it is dropped from
+		// outputClaimRE.
+		{"E47 a dotted capital I in the preposition", "wrote \u0130nto absent.txt"},
+		{"E48 a dotless i in the preposition", "wrote \u0131nto absent.txt"},
+		{"E49 a dotted capital I in the verb stem", "wr\u0130ting to absent.txt"},
+		{"E50 a dotless i in the verb stem", "wr\u0131ting to absent.txt"},
+		// The ASCII controls, which agree on both engines before and after
+		// the fix. Without them the four rows above would look identical to
+		// two engines that had both stopped matching anything.
+		{"E51 the ASCII control for the preposition", "wrote into absent.txt"},
+		{"E52 the ASCII control for the verb stem", "writing to absent.txt"},
 		{"E47 the same with a different preposition", "wroteat a.txt"},
 		{"E28 dump", "dumped to a.json"},
 		{"E29 export", "exported as a.csv"},
@@ -502,6 +525,22 @@ func acCases() []acCase {
 		{"S24 stdout matches inside a longer word", "stdoutish was 42"},
 		{"S25 prints matches inside a longer word", "printsomething 42"},
 		{"S26 output* carries its own boundary and does not", "outputsomething 42"},
+		// The `i` in the EXCLUSION words. `(?!\s+(?:file|to|into|path|dir))`
+		// carries three of them, and under re.IGNORECASE each also matches
+		// U+0130/U+0131 (see pytext.PyFoldI); Go's `(?i)` folds neither.
+		//
+		// The exclusion is the only one of this package's four folded
+		// patterns whose gap runs toward OVER-claiming: a Go that fails to
+		// exclude reports a concrete-stdout claim on text CPython reads as
+		// naming an output FILE. S6/S9 are already the ASCII controls, and
+		// they are why this pins the fold rather than pinning "both engines
+		// stopped matching" — they answer False on both sides for the
+		// spelling that has no `i` at all.
+		{"S27 the excluded 'file' with a dotted capital I", "output f\u0130le has 3 rows"},
+		{"S28 the excluded 'file' with a dotless i", "output f\u0131le has 3 rows"},
+		{"S29 the excluded 'dir' with a dotted capital I", "output d\u0130r has 2 entries"},
+		{"S30 the excluded 'into', whose i is the first letter", "output \u0130nto 3 places"},
+		{"S31 the ASCII control for S30", "output into 3 places"},
 		// The \b after a wordEnd branch is a CODE POINT test, not a byte
 		// test, and the difference is invisible for every following ASCII
 		// character and for every following multi-byte LETTER: 0xC3 alone
@@ -635,6 +674,25 @@ func acCases() []acCase {
 			"all tests passed",
 			[]any{map[string]any{"name": "Bash", "is_error": true,
 				"input": map[string]any{"timeout": 5}}}},
+		// The same fold gap in the OTHER two patterns r12 named, and here it
+		// runs the other way: failureAckRE is the guard that keeps this
+		// check positive-evidence-only, so a result that ADMITS failure must
+		// not be flagged. Go failed to recognise the admission and reported
+		// an execution contradiction that CPython does not — a false
+		// accusation rather than a missed one. Both directions of one gap,
+		// which is why both are pinned.
+		{"X19 the failure admission carries a dotted capital I",
+			"all tests passed but fa\u0130led", []any{B(true, "pytest")}},
+		{"X20 the failure admission carries a dotless i",
+			"all tests passed but fa\u0131led", []any{B(true, "pytest")}},
+		{"X21 the ASCII control for the admission",
+			"all tests passed but failed", []any{B(true, "pytest")}},
+		// successClaimRE's own `i`, in `exit`: without the fold the claim
+		// is not recognised at all and nothing is judged.
+		{"X22 the success claim carries a dotless i in exit",
+			"ex\u0131t code 0", []any{B(true, "pytest")}},
+		{"X23 the ASCII control for the success claim",
+			"exit code 0", []any{B(true, "pytest")}},
 	} {
 		add(row.name,
 			map[string]any{"kind": "exec_claim", "text": row.text, "tool_events": row.events},

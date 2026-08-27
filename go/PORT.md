@@ -6103,6 +6103,52 @@ been started.
 `correspondence.py` is dev tooling by decree and does not belong in a
 runtime port at all; the other 23 do.
 
+### 2026-08-27 — the burndown was reporting the wrong denominator
+
+Re-measured, and the headline above is not the remaining surface. It is
+the remaining surface **among the modules this table happens to list**,
+and the table has a size cut-off at ~690 lines that was a DISPLAY decision
+before it was a scoping one.
+
+The whole Python surface: **183 modules, 132,730 lines.** The table tracks
+the **59 modules over 690 lines**. The other **124 modules — 45,060 lines,
+34% of the source — are not in the burndown at all**, ported or otherwise.
+Nothing above says so; the sentence right before this one says "the other
+23 do", which reads as 23 modules left in the port.
+
+The table already carried the sentence *"the table understates progress
+for anything under its cut, which is worth knowing before reading it as a
+burndown"* — written about the numerator. The same cut applies to the
+denominator, and that half was never said.
+
+**What the remaining surface actually is, honestly:** the grep this
+section uses (`grep -rl "<module>.py" internal/ cmd/`) is weak in BOTH
+directions, which was known for the overstating half and not for the other.
+It overstates coverage — naming a module is not porting it — and it also
+UNDERSTATES coverage, because the port names some sources by bare module
+name rather than filename (`killswitch`, `ancestry`, `prefixes` and
+`security` are all reached that way and all read as unported to the `.py`
+grep). Three spellings of the same census disagree:
+
+| measure | modules unreferenced | lines |
+|---|---:|---:|
+| `"<module>.py"` anywhere in `internal/ cmd/ tools/` | 117 | 59,091 |
+| bare `\bmodule\b` anywhere | 81 | 38,164 |
+| `"<module>.py"` in a PRODUCTION `.go` file only | 47 | 57,221 |
+
+The third disagrees with the first two on WHICH modules, not just how
+many — it calls `handle.py`, `llm.py` and `skills.py` unported, which is
+plainly false, because production Go names those sources in package docs
+that the filter happens to miss. So none of the three is the answer.
+
+The answer this arc needs is a per-module PORT STATUS, declared rather than
+grepped — the same shape as the divergence rows: written down, and failing
+when it stops being true. That is its own slice and it is now the honest
+next one, because the standing goal ("the first pass completely
+implemented") is measured against this number and the number has been off
+by more than the work done so far. Until it exists, read every figure in
+this section as a lower bound with an unknown gap above it.
+
 ### What the list changes about the sweep's tiering
 
 Chasing the strip/lower sweep into `planner` turned up the reason this
@@ -14171,3 +14217,136 @@ reverted (which fails the three new intent rows and only those).
 This does not make the mistake impossible. It makes it impossible to make
 SILENTLY, which is the difference between a lens we watch for and a shape
 that cannot reach a commit.
+
+## r12 of `internal/artifactcheck` — one finding, and it was the residual I had just filed as unfixable (2026-08-27)
+
+Round 12, gpt-5.6-terra at high effort, whole chunk plus eleven rounds of
+fixes. **One finding, MEDIUM.** That is what convergence looks like after
+eleven rounds, and the finding is worth more than the count.
+
+It is the Turkish-i class — the one this arc had filed hours earlier, in
+`provenance`, with the words *"no remedy exists in the tree"*. The reviewer
+found it independently in a different package, with a falsifier that makes
+the consequence unarguable. Verified here before touching anything:
+
+```
+extract_write_claims("wrote İnto absent.txt")
+  CPython  ['absent.txt']
+  Go       []
+```
+
+`artifactcheck` is the FABRICATION detector — the thing that catches an
+agent claiming it wrote a file it did not write. Go extracts no write
+claim, so nothing is checked and the result passes. **A detector that
+fails open**, reachable with a one-character homoglyph edit, in the
+package whose entire job is to not be fooled. The ASCII control agrees on
+both engines, which is what separates this from a broken fixture.
+
+### "No remedy exists in the tree" was a reading, not a measurement
+
+That claim was made the same morning, in the entry that files L14. It
+assumed the fix had to be a generated fold table or subject
+normalisation — the first because `pytext` had no folding helper, the
+second because that is the obvious way to make two engines agree about
+case. Both assumptions were wrong, and one measurement dissolves them.
+
+Exhaustive, both engines, every ASCII letter and digit against all
+0x110000 code points:
+
+| letter | CPython `IGNORECASE` | Go `(?i)` |
+|---|---|---|
+| `i` | `I i U+0130 U+0131` | `I i` |
+| `k` | `K k U+212A` | `K k U+212A` |
+| `s` | `S s U+017F` | `S s U+017F` |
+| every other letter and digit | identical | identical |
+
+**One letter.** U+0130 and U+0131 are singletons under
+`unicode.SimpleFold`; U+212A and U+017F have fold orbits that reach ASCII,
+which is why `k` and `s` already agreed. No table. And normalising the
+subject was never the only option — it would have moved the offsets
+several callers depend on, where rewriting the PATTERN preserves them.
+
+`pytext.IClass` is `(?-i:[iI\x{130}\x{131}])`, spelled with the flag off
+and both cases listed so it means the same thing inside a `(?i)` pattern
+and outside one — the fold-growth hazard `WordClass` documents.
+
+### The transform, and why it is a transform
+
+`pytext.PyFoldI(pattern)` rewrites each literal `i`/`I` into `IClass`, at
+the call, the same shape as `provenance`'s `pySpace()`. Hand-splicing was
+the alternative and it is how one of the fifteen sites gets missed —
+which is the exact defect being fixed here, one level up.
+
+What it must NOT touch is the interesting half, and each skip is a
+construct these patterns actually contain:
+
+- inline flag groups — `(?i)`, `(?-i:`, `(?is)`, `(?P<path>` — where the
+  `i` IS the flag.
+- escapes, because consuming a backslash's partner corrupts a pattern
+  quietly.
+- character classes, which cannot hold a group. A bare `i` there under
+  `(?i)` is a real divergence `PyFoldI` cannot fix, so it **panics**
+  rather than returning a pattern that is wrong in a way nothing reports.
+  Every caller is a package-level `MustCompile`, so that lands at init in
+  the run that introduced it.
+
+A consequence worth stating because it looks like a bug: `PyFoldI` is
+deliberately NOT idempotent. `IClass`'s own class body holds a literal
+`i`, so applying the transform twice panics. Composition order matters and
+failing loudly is how a caller learns that.
+
+### Evidence
+
+- The fold sweep is exhaustive on both sides for all 36 characters, in
+  both directions — a code point Go folds and CPython does not would make
+  the port fire where CPython stays quiet, and that half is checked too.
+- `TestPyFoldISkipsWhatItMustNotTouch` — thirteen constructs, each also
+  required to still COMPILE.
+- `TestPyFoldIRefusesABareIInsideAClass` — five cases including `IClass`
+  itself.
+- `TestPyFoldIPatternsAgreeWithCPython` — 57 subjects x 7 real patterns
+  from this port, driven through both engines. It counts the cases the
+  UNFOLDED pattern gets wrong and fails if that count drops below five;
+  it is currently 18, so a corpus that stopped reaching the Turkish i
+  fails instead of certifying the fix vacuously.
+
+Two fixtures in the first draft used `\i` and a backreference, neither of
+which RE2 has. They were fixture bugs, not findings, and the compile
+assertion is what caught them.
+
+### The mutation battery found the site the review did not
+
+r12 named three patterns. `PyFoldI` went onto **four** — the fourth being
+the `excl` lookahead inside `buildStdoutBranches`, the
+`(?!\s+(?:file|to|into|path|dir))` after `output`, whose `file`, `into`
+and `dir` each carry an `i`. That fourth wrap was mine, added because the
+census habit says look at all of them, and it was correct.
+
+It was also, for about an hour, **unfixtured**. Dropping `PyFoldI` from
+each of the four sites in turn:
+
+| site | rows that fail |
+|---|---|
+| `outputClaimRE` | E47 E48 E49 E50 |
+| `excl` (the stdout lookahead) | *nothing* |
+| `successClaimRE` | X22 |
+| `failureAckRE` | X19 X20 |
+
+A guard that cannot fail is worse than no guard
+(`feedback_mutation_from_file.md`), and this is the shape it takes in
+practice: not an absent test, but a fix broader than the finding that
+prompted it, with fixtures written to the finding's list. The rows came
+from the FILE — four wrapped patterns — and the battery is what made the
+gap between those two numbers visible.
+
+S27–S30 close it, and this exclusion is the one site of the four whose
+gap runs toward **over**-claiming: a Go that fails to exclude reports a
+concrete-stdout claim on text CPython reads as naming an output file.
+Both directions of the same gap now appear in this package — E-rows and
+X19/X20 under-report, S-rows over-report — which is the argument for
+pinning all of them rather than the one the reviewer happened to land on.
+
+```
+"output fİle has 3 rows"   CPython false   Go (unfolded) true
+"output into 3 places"     CPython false   Go            false   <- the control
+```

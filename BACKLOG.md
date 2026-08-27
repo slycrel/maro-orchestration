@@ -506,7 +506,7 @@ without a hand-written allowlist entry. Census at close: 140 production
 files, 81 calls, **4 escapes in 2 files**, both with a written reason.
 Recorded in `docs/REVIEW_PATTERNS.md`'s closure register.
 
-### Go port: `re.IGNORECASE` folds the Turkish i and Go's `(?i)` does not — 16 patterns, 9 files (FOUND 2026-08-27, provenance differential)
+### Go port: `re.IGNORECASE` folds the Turkish i and Go's `(?i)` does not (FOUND 2026-08-27 provenance differential; REMEDY BUILT same day, rollout open)
 
 CPython's `re.IGNORECASE` case-folds U+0130 (LATIN CAPITAL LETTER I WITH
 DOT ABOVE) and U+0131 (LATIN SMALL LETTER DOTLESS I) onto ASCII `i`. Go's
@@ -519,11 +519,33 @@ Classify("the \u0130NSTRUCTIONS say x", "", "")   CPython "prompt"   Go "outcome
 ```
 
 Direction is **UNSAFE in `provenance`** — same shape as the `\s` hole:
-CPython quarantines, the port does not. It is filed rather than fixed
-because **there is no remedy in the tree**. `pytext` has a
-`SpaceClass`/`WordStart`/`WordEnd` answer for `\s` and `\b`; it has
-nothing for folding, and the honest fix is either a generated fold table
-or pre-normalizing the subject, both of which are their own chunk.
+CPython quarantines, the port does not.
+
+**"There is no remedy in the tree" is what this entry said this morning,
+and it was wrong.** That claim came from a reading, not a measurement:
+`pytext` had no folding helper, so the fix was assumed to be a generated
+fold table or subject normalisation, each its own chunk. Both assumptions
+were false. This is L14 firing on the entry that files L14 — the same
+morning, in the same file.
+
+What the measurement says (exhaustive, both engines, every ASCII letter
+and digit against all 0x110000 code points):
+
+| letter | CPython IGNORECASE | Go `(?i)` |
+|---|---|---|
+| `i` | `I i U+0130 U+0131` | `I i` |
+| `k` | `K k U+212A` | `K k U+212A` |
+| `s` | `S s U+017F` | `S s U+017F` |
+| everything else | identical | identical |
+
+**One letter.** U+0130 and U+0131 are singletons under
+`unicode.SimpleFold`; U+212A and U+017F have fold orbits reaching ASCII,
+so `k` and `s` already agree. No table is needed, and normalising the
+subject — which would have moved the offsets several callers depend on —
+was never the only option: rewriting the PATTERN preserves them.
+
+`pytext.IClass` and `pytext.PyFoldI` are the remedy, shipped 2026-08-27
+with the exhaustive sweep above as their test.
 
 It is also not a `provenance` problem. Census across the port:
 **16 of 40 `(?i)` patterns, in 9 files**, carry an `i` or `I` in the
@@ -533,8 +555,42 @@ pattern tail and are therefore exposed —
 with a stated reason in `provenance_diff_test.go` (three rows, cause
 `whyFold`), so closing it fails that test deliberately.
 
-Practical exposure is low — the strings are English operational prose —
-but "low" is the argument for filing it, not for not knowing it.
+**Exposure was NOT low, and that guess was wrong too.** r12 of
+`internal/artifactcheck` (gpt-5.6-terra, 2026-08-27) found it live in the
+fabrication detector, and the direction is worse than `provenance`'s.
+Verified independently, both engines:
+
+```
+extract_write_claims("wrote İnto absent.txt")
+  CPython  ['absent.txt']
+  Go       []                 <- no claim extracted, so NOTHING is checked
+```
+
+A detector that fails OPEN. The ASCII control agrees on both sides, so it
+is a real hole rather than a broken fixture. FIXED in `artifactcheck`'s
+four `(?i)` patterns via `pytext.PyFoldI`.
+
+**Still open: the rollout — and the denominator for it is not known.**
+This entry said "16 of 40 `(?i)` patterns across 9 files". Re-measuring
+the same question a second way answered 35 of 47 across 10. Both are
+hand-written greps over a shape that needs parsing, they disagree on the
+count AND on the file list, so the honest statement is that **neither is
+the number** — the same failure as `PORT.md`'s scope ledger, one week
+apart (L28: an enumeration can be wrong at BIRTH).
+
+The measured floor, which is not a grep: `artifactcheck` needed **four**
+wraps, not the three r12 named and not the three the census above
+attributed to it, and the mutation battery proves each of the four kills
+rows nothing else kills. So the census undercounted the one file where
+the truth is independently known.
+
+The answer is the one `escape_census_test.go` already demonstrates for
+the sibling class: a parsed census with a hand-written allowlist, so an
+unwrapped exposed pattern cannot reach a commit silently. That is the
+next slice; until it lands, treat the rollout list as unenumerated rather
+than as 16 or 35. `provenance`'s patterns remain next by consequence, and
+the three `provenance_diff_test.go` rows pinned with cause `whyFold` come
+out when they are done.
 
 ### Go port: three more provenance divergences, all fail-closed (FOUND 2026-08-27, provenance differential)
 
