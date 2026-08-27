@@ -14642,3 +14642,63 @@ The file exists because a hand-maintained enumeration was wrong at birth.
 Its own preamble then was too, in the very next chunk, in the paragraph
 about the thing it cannot see. Corrected in the generator, not the
 output, or it would come back on the next run.
+
+## Two packages arrive, and one of them wrote to the repository (2026-08-27)
+
+`internal/persona` (persona.py, 1060 lines) and `internal/worktree` +
+`internal/procid` (worktree.py, 722) came back from two build agents.
+Both verified here rather than accepted: scope checked against the commit
+(`persona` touched 15 files, all under its own directory, nothing else),
+gates re-run in this tree (48 packages green, `gofmt`/`vet` clean), and
+the module-wide guards — the `(?i)` census and the regex-escape census —
+run against the new code, which the agents' branches predate.
+
+### The incident
+
+A run of `internal/worktree`'s own tests **created a linked worktree of
+the maro repository** and left an autocommit on the checked-out branch:
+author `Port Test <port@example.invalid>`, the fixture's pinned dates,
+the fixture's own commit message, on a branch named `maro/L1/wé-rk`.
+
+Verified independently, not taken from the report:
+
+- the commit exists (`effb7730`), and is an ancestor of **neither**
+  `origin/main` nor `origin/go-port`;
+- no stray branch and no stale worktree registration survived;
+- nothing under `~/.maro` was touched.
+
+Contained — and contained by luck rather than by design. The mechanism is
+now L56: `git -C ''` is a documented no-op that runs in the caller's
+working directory, and `str(Path(""))` is `"."`. Neither half looks wrong
+alone; together they turn an absent repo argument into "whatever checkout
+this process is standing in". `worktree.py` already carried a dead
+`if not repo_dir` guard that had been FILED as a divergence. This is that
+guard's consequence, demonstrated.
+
+`internal/worktree/guard_test.go` fingerprints HEAD, the ref list and
+`git worktree list` around the package run and turns a green run red if
+they moved. I re-ran the package here with my own before/after
+fingerprint taken outside the test binary — the refs and worktree list
+were byte-identical afterwards. The fingerprint is the net; the
+prevention is rejecting the empty path.
+
+### `effb7730` was not garbage, which matters for how it was taken
+
+The stray autocommit captured fourteen real files — the agent's own
+in-progress package. So its work spanned two commits, and cherry-picking
+only the tip would have landed half a package. Taken instead as the tip
+CONTENT of the two directories (`git checkout ba3e0373 -- …`), which
+brings the finished code with no fabricated authorship attached.
+
+### What the agents found that the catalog already knew
+
+`internal/persona`'s builder reported, as a candidate lens, that a
+differential which rebuilds the value instead of calling the function
+measures nothing — three instances in its own package, two of them found
+by mutation, one surviving **four** separate mutations of the function it
+claimed to guard. That is **L10**, already in the catalog at nine
+instances since the `runIntrospect` finding.
+
+A second builder re-deriving a catalogued lens from scratch is the
+argument for the 2026-08-27 decree, restated: a pattern catalog only a
+reviewer reads is a catalog, not a ratchet. L10 is now at twelve.

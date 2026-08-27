@@ -156,7 +156,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 68 — the most frequent single defect in the Go port*
+*instances: 69 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -278,7 +278,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 13 — plus standing (Jeremy, 2026-08-16)*
+*instances: 15 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -347,7 +347,7 @@ for a default-disposition SIGTERM, so killing the first version left
 that measures the tree must not be able to damage it when interrupted.
 
 ### L10 — A test helper is code, and a guard it repeats is a guard nothing pins
-*instances: 2*
+*instances: 3*
 
 The sharpest form: the test does not merely repeat a guard, it
 **re-implements the production mapping and then asserts its own copy**
@@ -361,6 +361,18 @@ code 2. It had no test. Next door, `cli_diff_test.go` wrote its own
 which passes whatever the wrapper does. Round 4 proved it: `os.Exit(2)` →
 `os.Exit(1)` and `ue.Stderr()` → a bare `"error\n"` both left
 `go test ./cmd/maro/ ./internal/introspect/` green.
+
+**Independently re-found, three times in one package (2026-08-27).** The
+`internal/persona` port build reported it as a candidate lens without
+having seen this entry: `TestRecordDispatchRowMatchesCPython` rebuilt the
+ledger row instead of calling `RecordDispatch`, and *survived four
+separate mutations of the real function*; the LLM-fallback test rebuilt
+`available_names` the same way, and dropping `+ [_DEFAULT_PERSONA]`
+survived it; and a PyYAML-fold assertion checked that the dump *contained*
+a run of `x`, which is true whether or not it folded. Two of those were
+found by mutation, not by reading. That a second builder re-derived this
+lens from scratch is the argument for the catalog being a RATCHET rather
+than a reading list — it was already here, at nine instances.
 
 **Tripwire.** When a test needs a piece of production logic to interpret
 the result, CALL the production function — do not restate it. If it is
@@ -408,7 +420,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 25*
+*instances: 29*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -436,7 +448,7 @@ that covers part of a class silently splits the class.
 > it, read that refusal as a claim (L52) rather than as a decision.**
 
 ### L15 — A helper that fixes a class does not fix the class — it fixes the callers that reach it
-*instances: 9*
+*instances: 10*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
 *instances: 7*
@@ -583,7 +595,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 90*
+*instances: 95*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -960,7 +972,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 18*
+*instances: 19*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -1007,7 +1019,7 @@ the substitution is one way to lose the original's shape, and rewriting it
 by hand is another.
 
 ### L47 — The source you ported is not always the source you test against
-*instances: 5*
+*instances: 6*
 
 A constant lifted from a standard library is pinned to the VERSION it was
 lifted from. The differential runs against whatever interpreter is on the
@@ -1359,7 +1371,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 24*
+*instances: 25*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -2040,6 +2052,41 @@ sample.
 Companion to L13 (a fix at the site that has the fixture is not a fix for
 the class) and to L4 (a guard that cannot fire is not evidence): this is
 how you find out which of the two you are looking at.
+
+### L56 — An empty path argument is not "no path", it is the CURRENT one
+*instances: 1 — with a demonstrated consequence*
+
+`git -C ''` is a documented **no-op**: git runs in the caller's working
+directory and returns 0. `str(Path(""))` is `"."`, which does the same
+thing. Neither half looks wrong on its own, and together they turn an
+absent repository argument into "whatever checkout this process happens
+to be standing in".
+
+**Canonical instance.** A run of `internal/worktree`'s own tests created
+a linked worktree **of the maro repository**, on a branch named from a
+fixture (`maro/L1/wé-rk`), and `_commit_dirty`'s autocommit landed on the
+checked-out branch — author `Port Test <port@example.invalid>`, the
+fixture's pinned dates, and the fixture's commit message. Verified after
+the fact: the commit exists, it is an ancestor of neither `origin/main`
+nor `origin/go-port`, no stray branch or stale worktree registration
+survived, and nothing under `~/.maro` was touched. It was contained, and
+it was luck that it was contained.
+
+This is the port doctrine's **absence-vs-zero** class arriving at a
+subprocess argument, which is where it stops being a value question and
+becomes a filesystem one. `worktree.py` already carried a dead
+`if not repo_dir` guard in `sweep_stranded_clones` that had been filed as
+a divergence; this is that guard's consequence, demonstrated.
+
+**Tripwire.** Anywhere a workspace/root/repo argument can arrive empty
+and reach a subprocess path flag, reject the empty value explicitly —
+`-C ''` must be an error, never a default. And a test package that builds
+a `git` argv gets a `TestMain` that fingerprints HEAD, the ref list and
+`git worktree list` before and after, and fails a green run whose refs
+moved (`internal/worktree/guard_test.go`; proved to fire). Deliberately
+ignore the dirty working tree there — a guard that fires on every edit
+gets disabled. The prevention is the empty check; the fingerprint is only
+the net.
 
 ### L55 — A fixture can defend the configuration that does not ship
 *instances: 1*
