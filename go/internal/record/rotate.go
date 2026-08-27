@@ -5,12 +5,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
@@ -349,8 +351,19 @@ func ArchivePaths(memoryDir string) []string {
 	if err != nil {
 		return nil
 	}
-	// filepath.Glob already returns sorted names, and Python's sorted() over
-	// Path objects sorts on the same bytes.
+	// filepath.Glob's order is a RAW BYTE sort — it byte-sorts its matches
+	// through a sort.Strings inside the standard library. Python's
+	// `sorted()` over Path objects compares the surrogateescape-DECODED
+	// string, so the two part on any archive name that is not valid UTF-8.
+	// Measured, with captains_log.{z,\xc3\xa9,\x80,\xff}.jsonl in one
+	// directory: CPython returns z, e-acute, \x80, \xff; Glob returns
+	// z, \x80, e-acute, \xff. This list is "oldest first" and feeds the
+	// archaeology readers, so the two engines would replay one corpus in
+	// two orders. The comment that used to sit here asserted the opposite
+	// as settled fact (adversarial r7, LOW).
+	sort.SliceStable(matches, func(i, j int) bool {
+		return pypath.FSLess(matches[i], matches[j])
+	})
 	//
 	// Directories matching the pattern are dropped, which Python's glob does
 	// not do. Every consumer of this list reads the path as a file, so a

@@ -13184,3 +13184,147 @@ before the two dedup keys can differ — safety by call order, not by
 construction, and no fixture can distinguish them. Recorded as such rather
 than pinned, because a pin that cannot fail is the thing this round spent
 its MEDIUM on.
+
+## The r7 review of `internal/artifactcheck` — a fixture that defended the configuration that does not ship
+
+One MEDIUM, four LOW, and a large "what I could not break" section that
+re-derived r6's panic boundary against CPython 3.14.3, confirmed the
+inertness rule over a 14-case differential, and ran 900 random trees end
+to end through the production nil seam. Then a sixth finding, found not by
+fixing the site the review named but by censusing the class it belonged to
+— and that one landed on the guard I had written the round before.
+
+### The MEDIUM: D4–D6 pinned a seam no caller uses
+
+r6's HIGH was the NUL fail-open. Its fixtures, D4–D6, drive
+`CheckFabrication` with a *scripted* `InertFunc`. There is no `InertFunc`
+implementation anywhere in this tree; every production caller passes
+`nil`. So the fixtures defended the configuration that does not ship, and
+the one that does was defended by nothing.
+
+The mutation is a plausible tidy-up. In `inertOutputVerdict`, hoist
+
+```go
+if isInert == nil { return Verdict{}, false }
+```
+
+above the `pythonCandidates` call — why build candidates for a seam that
+cannot judge them? The whole suite stays green, because with `nil` there is
+no longer any call that can raise the NUL. Layer 2 then declines quietly
+and `check_fabrication` returns its "nothing found" verdict with
+**`judged=TRUE`**, where CPython's `ValueError` unwinds into the blanket
+`except` and answers `judged=FALSE`. `judged` is the field that tells a
+reader *the check found nothing* from *the check broke*; inverting it on
+adversary-shaped narration is the entire point of the r6 fix.
+
+Closed with `C9`–`C11`: the same three sentences through the nil seam, as
+CPython differentials. The mutant fails six assertions.
+
+**D7's control could not be a differential, and that is the finding's
+second half.** With the seam `nil` the port declines layer 2 where CPython
+consults a real AST, so the NUL-free control sentence is a row the two
+runtimes are *supposed* to disagree on. Written as a differential it fails
+honestly and for the wrong reason. It lives instead in
+`TestTheNilSeamStillFailsOpenOnANulAndOnlyOnANul`, asserting the port's own
+contract: with a NUL the check must break, without one it must not. Without
+that pair `C9`–`C11` would pass against a port that fails open on
+everything — the exact hole D7 exists to close one layer down.
+
+### The LOW that made the MEDIUM possible
+
+`CheckFabrication`'s doc paragraph said the honest port of a blanket `try`
+
+> is not a `recover()` wrapper pretending to be one — it is to make every
+> operation inside it total, which the helpers above are … The one thing
+> that could still panic is a caller's `InertFunc`.
+
+r6's own fix had made that false **in the same round it was written**, by
+putting an unconditional `panic("pypath: embedded null character in path")`
+inside `pythonCandidates` precisely so the ValueError would reach that
+`recover`. Two things panic in there now, one of them ours. The sentence
+was the licence a later refactor would have cited for the hoist above, and
+it is another instance of L28: a comment asserting a property is a claim,
+and this one decayed within a day of being written.
+
+### Two local copies of library functions
+
+- `pyBasename` duplicated `pypath.Name` and was **wrong on six of nineteen
+  pathlib shapes**: `a/.`, `a/./`, `a/.//`, `x.py/.` and `a/b/.` all came
+  back `"."` where CPython gives the parent's name, and `".."` came back
+  `""` where CPython keeps `".."`. Its own comment argued
+  equivalence-under-reachable-input and was scrupulously honest that this
+  was a property of *today's callers* rather than of the function. That is
+  the argument against keeping a second implementation, not for it.
+  Deleted; the five divergent shapes went into `pypath`'s CPython
+  differential, where they are now pinned against the interpreter rather
+  than against a table.
+- `pyReadTextNewlines` duplicated `pytext.TranslateNewlines` — same rule,
+  written one round earlier, with a no-allocate fast path this copy lacked.
+  Deleted.
+
+The test-side twin stays. `acUniversalNewlines` is written out
+character-by-character in the test file *on purpose*: a test that reuses
+its subject as its own oracle cannot fail, which is how two of three
+newline mutants survived r6. Deduplicating production and deduplicating an
+oracle are opposite moves.
+
+### `filepath.Glob` is a sort, and it is invisible
+
+The last LOW was `record.ArchivePaths`, which takes `filepath.Glob`'s order
+for `captains_log._archive_paths`' `sorted()` and says so:
+
+> `filepath.Glob` already returns sorted names, and Python's `sorted()`
+> over `Path` objects sorts on the same bytes.
+
+The second half is the exact false equivalence this whole class exists to
+deny, stated as settled fact one file over from where r6 spent its MEDIUM.
+Measured with `captains_log.{z,\xc3\xa9,\x80,\xff}.jsonl` in one directory:
+
+```
+CPython   z, é, \x80, \xff        (surrogateescape code points)
+Glob      z, \x80, é, \xff        (raw bytes)
+```
+
+The list is "oldest first" and feeds the archaeology readers, so two
+engines would replay one corpus in two orders.
+
+What makes it worth its own heading is *why the r6 class guard missed it*.
+That guard looks for a function that lists a directory **and then sorts**.
+`ArchivePaths` contains no sort. `filepath.Glob` **is** the sort — it
+byte-orders its matches through a `sort.Strings` inside the standard
+library, a call that is not in this tree and that no scan of this tree can
+see. The spelling guard has no `sort.Strings` to count; the class guard has
+no sort to find. A third arm now treats `filepath.Glob` as a listing call
+whose order must be replaced, with a `globOrderAllowlist` for the sites
+where the Python globs unsorted.
+
+### And the sixth finding, which the review did not report
+
+Run before any fix landed, the widened guard named **three** sites, not the
+one r7 reported. The extra one is `tasks.List`:
+
+```go
+paths, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+sort.Strings(paths)     // task_store.py:314 `sorted(_tasks_dir().glob("*.json"))`
+```
+
+Two raw-byte orders stacked, under a comment calling the explicit sort
+"redundant". It was neither redundant nor right. Worse, **both** allowlists
+carried a false reason for it — `fsSortAllowlist` and `dirSortAllowlist`
+each said "a glob the Python does not sort at all" — and r7 states in its
+own words that it re-derived all six `dirSortAllowlist` reasons and found
+them clean. A recorded rationale is a claim (L52) even when the reviewer
+checking it is thorough, and even when the person who recorded it is the
+guard's own author.
+
+The first cut of `globOrderAllowlist` then made the same mistake in
+miniature: written from memory, it named `tasks.go:Sweep`, which does not
+glob (`resolveDependents` does), and `pack/export.go:exportSkillMarkdown`,
+whose glob *is* re-sorted through `FSLess` inside `Export`. Both were
+caught by the allowlist's own must-still-be-observed rule within one test
+run. That rule is not tidiness — an allowlist entry the scan cannot find is
+an assertion about a site that may not be there.
+
+**Standing rule this round adds:** when a guard is widened, run it *before*
+fixing anything and read the whole list. The findings a review reports are
+a sample; the guard's own census is the population.

@@ -50,6 +50,10 @@ func TestThePathlibHelpersMatchCPython(t *testing.T) {
 	inputs := []string{
 		// The `name` rule: trailing "." components are dropped and ".." is not.
 		"a/.", "a/..", "a/./.", "a//", "a/b/", ".", "..", "", "/", "//", "///",
+		// The five shapes an artifactcheck-local copy of this rule got wrong
+		// for months: it trimmed trailing slashes and then took the text
+		// after the last one, so every one of these came back "." (r7).
+		"a/./", "a/.//", "x.py/.", "a/b/.", "a/b/./",
 		// The `str` rule, including the POSIX double-slash root.
 		"/a//b", "//a/b", "///a/b", "./a/./b", "a/./b//c",
 		// The suffix/stem rule. `f.` and `..f` are the two shapes where

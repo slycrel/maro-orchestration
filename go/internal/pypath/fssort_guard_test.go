@@ -52,8 +52,8 @@ var fsSortAllowlist = map[string]struct {
 	"internal/pack/adopt.go":           {1, "the not-found error message's name list, from argv"},
 
 	// --- filenames, but the ORDER is the port's own guarantee ----------
-	"internal/tasks/tasks.go": {2, "a glob the Python does not sort; the port sorts " +
-		"for determinism and the differential deliberately does not pin order"},
+	"internal/tasks/tasks.go": {1, "the KEYS of a decoded mapping, in pyKeys' " +
+		"map branch; not a directory read at all"},
 	"internal/artifactcheck/artifactcheck.go": {2, "the walk's subdir order (os.walk does " +
 		"not sort dirnames) and pythonCandidates' fresh files (CPython iterates a set)"},
 }
@@ -173,6 +173,44 @@ var sortingCalls = map[string]bool{
 	"slices.SortStableFunc": true, "slices.SortedFunc": true,
 }
 
+// globOrderAllowlist is every function that calls filepath.Glob and does
+// NOT re-sort the result through FSLess, keyed `<rel path>:<func>`.
+//
+// `filepath.Glob` IS a sort — it returns its matches in byte order, via a
+// `sort.Strings` inside the standard library. That call is not in this
+// tree, so neither of the two guards above can see it: the function has no
+// `sort.Strings` to count and, if it globs rather than reading the
+// directory itself, nothing for the dir-listing predicate to match either.
+//
+// That blind spot was real and it had two live instances, both found the
+// round after the class guard was written (r7):
+//
+//	record/rotate.go:ArchivePaths  <- captains_log._archive_paths, sorted()
+//	tasks/tasks.go:List            <- task_store.list_tasks,       sorted()
+//
+// Both are fixed; the rows below are the sites where taking Glob's order
+// IS correct. Writing this list from memory got one of the three wrong
+// (`Sweep` does not glob — `resolveDependents` does), which is why the
+// scan fails on an allowlist row it can no longer observe rather than
+// skipping it.
+//
+// and `ArchivePaths`' own comment asserted the equivalence this whole file
+// exists to deny ("Python's sorted() over Path objects sorts on the same
+// bytes"). Taking Glob's order is only correct where the Python does NOT
+// sort — where the order is the port's own determinism guarantee over
+// something CPython leaves to readdir.
+var globOrderAllowlist = map[string]string{
+	"internal/tasks/tasks.go:resolveDependents": "task_store.py:294 " +
+		"_resolve_dependents globs UNSORTED; the port takes Glob's order for " +
+		"determinism and the differential deliberately does not pin it",
+	"internal/tasks/tasks.go:StatusSummary": "task_store.py:324 " +
+		"status_summary globs UNSORTED; see List's doc — the printed key " +
+		"order is a named residual",
+	"internal/tasks/tasks.go:RecoverStaleClaims": "task_store.py:356 " +
+		"recover_stale_claims globs UNSORTED; returns ids whose order is " +
+		"already named as a residual",
+}
+
 // dirSortAllowlist is every function in the module that both lists a
 // directory and sorts WITHOUT pypath.FSLess, keyed `<rel path>:<func>`,
 // with the reason the raw-byte order is correct there.
@@ -185,8 +223,6 @@ var dirSortAllowlist = map[string]string{
 		"not by name; the names are only carried along",
 	"internal/recall/recall.go:FindPriorAttempts": "two sorts, neither on a " +
 		"filename: run dirs by mtime, attempts by the raw started_at string",
-	"internal/tasks/tasks.go:List": "a glob the Python does not sort at all; " +
-		"the port sorts for determinism and the differential does not pin order",
 	"internal/artifactcheck/artifactcheck.go:SnapshotDir": "os.walk does not " +
 		"sort dirnames, so this order is the port's own, not a Python sorted()",
 	"internal/closure/inventory.go:projectFileInventory": "os.walk does not " +
@@ -231,7 +267,7 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 		call string
 		line int
 	}
-	var found []site
+	var found, globbers []site
 	listers, scanned := 0, 0
 
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, werr error) error {
@@ -254,6 +290,7 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 			}
 			lists := false
 			var sorts []*ast.CallExpr
+			var globLine int
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -263,6 +300,11 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 				case *ast.SelectorExpr:
 					if dirListingCalls[fun.Sel.Name] {
 						lists = true
+					}
+					if pkg, ok := fun.X.(*ast.Ident); ok &&
+						pkg.Name == "filepath" && fun.Sel.Name == "Glob" &&
+						globLine == 0 {
+						globLine = fset.Position(call.Pos()).Line
 					}
 					if pkg, ok := fun.X.(*ast.Ident); ok &&
 						sortingCalls[pkg.Name+"."+fun.Sel.Name] {
@@ -275,6 +317,16 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 				}
 				return true
 			})
+			// A filepath.Glob whose order is never replaced is a byte sort
+			// the two guards above cannot see, because the sort.Strings that
+			// produces it lives in the standard library.
+			if globLine != 0 && !usesFSLess(fn.Body) {
+				globbers = append(globbers, site{
+					key:  rel + ":" + fn.Name.Name,
+					call: "filepath.Glob",
+					line: globLine,
+				})
+			}
 			if !lists {
 				continue
 			}
@@ -326,16 +378,46 @@ func TestNoDirectoryListingIsSortedByRawByte(t *testing.T) {
 				"test pass without measuring anything.", key, reason)
 		}
 	}
+	// The glob half: same allowlist discipline, same must-still-be-observed
+	// rule, reported separately so a failure names which blind spot it came
+	// through.
+	seenGlob := map[string]bool{}
+	sort.Slice(globbers, func(i, j int) bool { return globbers[i].key < globbers[j].key })
+	for _, g := range globbers {
+		seenGlob[g.key] = true
+		if _, listed := globOrderAllowlist[g.key]; listed {
+			continue
+		}
+		t.Errorf("%s (line %d) takes filepath.Glob's order and never replaces "+
+			"it. Glob sorts by raw BYTE, in a sort.Strings inside the standard "+
+			"library that no scan of this tree can see. If the Python here "+
+			"sorts, that order must come from pypath.FSLess instead; if the "+
+			"Python globs UNSORTED, add it to globOrderAllowlist saying so.",
+			g.key, g.line)
+	}
+	for key, reason := range globOrderAllowlist {
+		if !seenGlob[key] {
+			t.Errorf("globOrderAllowlist has %q (%s) but the scan no longer "+
+				"finds it — either it was fixed and the row should go, or the "+
+				"glob detector stopped seeing it.", key, reason)
+		}
+	}
+	if len(globbers) < 3 {
+		t.Fatalf("only %d unreplaced filepath.Glob order(s) found; the glob "+
+			"detector is not measuring anything", len(globbers))
+	}
+
 	t.Logf("%d files parsed, %d directory-listing functions, %d raw-byte "+
-		"sorts inside them", scanned, listers, len(found))
+		"sorts inside them, %d unreplaced Glob orders",
+		scanned, listers, len(found), len(globbers))
 }
 
 // usesFSLess reports whether pypath.FSLess appears anywhere inside the
 // call — as the comparator of a sort.Slice, inside the Less method a
 // sort.Sort is handed, or wrapped in a reverse closure.
-func usesFSLess(call *ast.CallExpr) bool {
+func usesFSLess(node ast.Node) bool {
 	hit := false
-	ast.Inspect(call, func(n ast.Node) bool {
+	ast.Inspect(node, func(n ast.Node) bool {
 		switch id := n.(type) {
 		case *ast.SelectorExpr:
 			if id.Sel.Name == "FSLess" {

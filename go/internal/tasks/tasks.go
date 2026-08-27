@@ -711,11 +711,14 @@ func resolveDependents(ws string, completedJobID any) error {
 // List returns every task, optionally filtered by status.
 //
 // Python sorts the glob HERE and nowhere else, so list_tasks is the one
-// sweep with a defined order. Go's filepath.Glob sorts on its own
-// (verified, not assumed: it reads through a sorted readdirnames), which
-// makes the explicit sort below redundant — it stays because the ORDER is
-// a requirement of this function and not an accident of its helper, and
-// no mutation can kill it, which is recorded rather than hidden.
+// sweep with a defined order. That order must come from pypath.FSLess:
+// `sorted()` over Path objects compares the surrogateescape-DECODED
+// string, while both filepath.Glob's own ordering and sort.Strings compare
+// RAW BYTES, and the two part on any task filename that is not valid
+// UTF-8. This shipped as sort.Strings on top of Glob, with a comment
+// calling the sort redundant; it was neither redundant nor right
+// (adversarial r7, MEDIUM — found by censusing the class rather than
+// fixing the one site the review named).
 //
 // The same fact runs the other way in the three unsorted sweeps:
 // resolveDependents, StatusSummary and RecoverStaleClaims iterate in
@@ -744,7 +747,9 @@ func List(ws, statusFilter string) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(paths)
+	sort.SliceStable(paths, func(i, j int) bool {
+		return pypath.FSLess(paths[i], paths[j])
+	})
 	out := []any{}
 	for _, p := range paths {
 		v, err := readRaw(p)

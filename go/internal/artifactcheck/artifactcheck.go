@@ -155,25 +155,6 @@ func reprList(ss []string) string { return pyval.ReprStrings(ss) }
 // the tree.
 func itoa(n int) string { return strconv.Itoa(n) }
 
-// pyReadTextNewlines is the other half of `Path.read_text(...)`: it opens
-// in TEXT mode with newline=None, so UNIVERSAL NEWLINES apply and both
-// "\r\n" and a lone "\r" reach the caller as "\n". os.ReadFile does no
-// translation at all, so a CRLF-authored file reached the InertFunc seam
-// with carriage returns CPython would have stripped (r6 LOW).
-//
-// Whether a given parser cares is beside the point. InertFunc is a SEAM,
-// and Python's contract with its callee is that the source contains no
-// "\r" whatsoever. The port owes its callee the same string, not one that
-// happens to be equivalent under CPython's tokenizer.
-//
-// Order matters: "\r\n" before lone "\r", or every CRLF becomes two
-// newlines. "\r" never appears inside a multi-byte UTF-8 sequence, so
-// translating after the decode is the same as Python's decode-then-
-// translate.
-func pyReadTextNewlines(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
-}
-
 // decodeReplace is `bytes.decode("utf-8", errors="replace")`: every
 // ill-formed byte becomes U+FFFD. Go's []byte->string conversion keeps the
 // bad bytes as-is, and they would then reach the InertFunc — which is a
@@ -1395,7 +1376,7 @@ func existsAnywhere(claim, projectDir string) bool {
 		if pathExists(pyJoin(projectDir, claim)) {
 			return true
 		}
-		if pathExists(pyJoin(projectDir, pyBasename(claim))) {
+		if pathExists(pyJoin(projectDir, pypath.Name(claim))) {
 			return true
 		}
 	}
@@ -1480,35 +1461,16 @@ func pyMtime(st os.FileInfo) float64 {
 // at the sites it is about.
 func pyJoin(base, rel string) string { return pypath.Join(base, rel) }
 
-// pyBasename is `PurePath.name`, which is not filepath.Base.
-//
-// They disagree in general — `Path("/").name` is "" while
-// `filepath.Base("/")` is "/", and `Path(".").name` is "" while
-// `filepath.Base(".")` is "." — but NOT on anything this package can
-// reach, which the mutation battery established by swapping one for the
-// other and watching the whole fixture table stay green.
-//
-// The reachable inputs are narrow on both call sites. existsAnywhere sees
-// only tokens ExtractWriteClaims produced, which are non-empty, do not end
-// in "/", and take the absolute branch when they start with one; the
-// inert-output reason sees only paths built by pyJoin. On every one
-// of those the two functions agree, and where they do not
-// (`filepath.Base("")` is "." and this returns "") pyJoin drops the
-// difference away before anything observes it.
-//
-// It stays because the Python line is `PurePath.name`, and because the
-// narrowness is a property of today's callers rather than of the function.
-// Recorded as equivalent-under-reachable-input, not as pinned.
-func pyBasename(p string) string {
-	p = strings.TrimRight(p, "/")
-	if p == "" || p == "." || p == ".." {
-		return ""
-	}
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		return p[i+1:]
-	}
-	return p
-}
+// `PurePath.name` is pypath.Name for the same reason, and it took one round
+// longer to notice (r7, LOW). This file carried its own pyBasename with a
+// comment arguing it was equivalent-under-reachable-input; the comment was
+// honest about being a property of today's callers rather than of the
+// function, and the function was in fact WRONG on six of nineteen shapes
+// that pathlib defines -- `a/.`, `a/./`, `a/.//`, `x.py/.` and `a/b/.` all
+// came back "." where CPython says the parent's name, and ".." came back ""
+// where CPython keeps "..". None of those are reachable from either call
+// site today. That is exactly the argument the local copy made for
+// existing, and it is not an argument for a second implementation.
 
 // --- the stdout claim -----------------------------------------------------
 
@@ -1875,7 +1837,7 @@ func inertOutputVerdict(resultText, projectDir string, claims []string,
 		// at all. The port owes its callee the same string, not one that
 		// happens to be equivalent under CPython's tokenizer.
 		//
-		inert, known := isInert(pyReadTextNewlines(decodeReplace(src)))
+		inert, known := isInert(pytext.TranslateNewlines(decodeReplace(src)))
 		if !known {
 			return Verdict{}, false
 		}
@@ -1889,7 +1851,7 @@ func inertOutputVerdict(resultText, projectDir string, claims []string,
 	}
 	names := make([]string, 0, len(cands))
 	for _, p := range cands {
-		names = append(names, pyBasename(p))
+		names = append(names, pypath.Name(p))
 	}
 	v := newVerdict()
 	v.Fabricated = true
@@ -1927,13 +1889,21 @@ func inertOutputVerdict(resultText, projectDir string, claims []string,
 //
 // The blanket `except Exception` is the fail-open contract: any internal
 // error yields fabricated=False with judged=FALSE, which is how a reader
-// tells "the check found nothing" from "the check broke". Go has no
-// exceptions to catch, so the honest port of a blanket try is not a
-// recover() wrapper pretending to be one — it is to make every operation
-// inside it total, which the helpers above are, and to say so here. The
-// one thing that could still panic is a caller's InertFunc, and that is
-// the caller's own code running inside this frame; it is recovered,
-// because Python would have caught it.
+// tells "the check found nothing" from "the check broke".
+//
+// The recover() below is a real part of that contract and not decoration,
+// and this paragraph used to say the opposite (r7 LOW). It said the honest
+// port of a blanket try "is not a recover() wrapper pretending to be one —
+// it is to make every operation inside it total, which the helpers above
+// are", and named a caller's InertFunc as the one remaining panic. That
+// stopped being true in the same round it was written: the r6 fix put an
+// unconditional `panic("pypath: embedded null character in path")` inside
+// pythonCandidates, precisely so that a ValueError CPython raises reaches
+// this recover and comes back out as the fail-open verdict. Two things
+// panic in here now, one of them ours, and the "make everything total"
+// sentence was the licence a later refactor would have used to hoist the
+// nil-seam check above the call that raises. C9-C11 in the differential
+// pin that; this paragraph is why they exist.
 func CheckFabrication(resultText, projectDir string, before map[string]float64,
 	isInert InertFunc) (v Verdict) {
 

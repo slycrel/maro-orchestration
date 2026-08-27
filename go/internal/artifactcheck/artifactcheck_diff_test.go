@@ -1564,6 +1564,51 @@ func acCases() []acCase {
 			"text":  "wrote to ab.py and it prints 1, 2, 3",
 			"files": nulTree, "inert": map[string]any{"a.py": true}}, fab2Answer)
 
+	// The SAME three sentences through the nil seam (r7 MEDIUM).
+	//
+	// D4-D6 drive the NUL boundary with a scripted InertFunc, and that is
+	// the only configuration they pin. There is no InertFunc implementation
+	// anywhere in this tree — every production caller passes nil — so the
+	// configuration D4-D6 defend is the one that does not ship, and the one
+	// that ships was defended by nothing.
+	//
+	// The mutation this closes: hoist `if isInert == nil { return
+	// Verdict{}, false }` ABOVE the pythonCandidates call in
+	// inertOutputVerdict. It is a plausible tidy-up — why build candidates
+	// for a seam that cannot judge them — and it leaves the whole suite
+	// green, because with nil there is no longer any call that can raise
+	// the NUL. Layer 2 then declines quietly and check_fabrication returns
+	// its "nothing found" verdict with judged=TRUE, where CPython's
+	// ValueError unwinds into the blanket except and answers judged=FALSE.
+	// Judged is the field that tells a reader "the check found nothing"
+	// from "the check broke"; inverting it on adversary-shaped narration is
+	// the whole point of the r6 fix.
+	//
+	// The .py file in the tree matters: without a candidate to build there
+	// is nothing to resolve and nothing to raise. So does the non-empty
+	// diff — with an empty one layer 1 fires first and layer 2 is never
+	// reached, which is the shape D4-D6 already rely on.
+	add("C9 a NUL inside a claimed .py path fails open through the nil seam",
+		map[string]any{"kind": "fabrication",
+			"text":  "wrote to a\x00b.py and it prints 1, 2, 3",
+			"files": nulTree}, fabAnswer)
+	add("C10 a claim that is nothing but a NUL and an extension, nil seam",
+		map[string]any{"kind": "fabrication",
+			"text":  "wrote to \x00.py and it prints 1, 2, 3",
+			"files": nulTree}, fabAnswer)
+	add("C11 a NUL after a real name, nil seam",
+		map[string]any{"kind": "fabrication",
+			"text":  "wrote to a.py\x00.py and it prints 1, 2, 3",
+			"files": nulTree}, fabAnswer)
+	// D7's control has NO differential twin here, and that is not an
+	// omission. With the seam nil the port declines layer 2 where CPython
+	// consults a real AST, so the NUL-free sentence is a row on which the
+	// two runtimes are SUPPOSED to differ: CPython answers
+	// fabricated=true/inert-output, the port answers "no fabrication
+	// signal". The control lives in
+	// TestTheNilSeamStillFailsOpenOnANulAndOnlyOnANul below, where it can
+	// assert the port's own contract instead of a disagreement.
+
 	// --- the reason strings embed repr of a LIST OF STR -------------------
 	add("R1 an apostrophe truncates the claim before repr ever sees it",
 		map[string]any{"kind": "fabrication", "text": "wrote to it's.txt",
@@ -1848,5 +1893,50 @@ func TestBoundaryAtReadsOneCodePointNotTheWholeRemainder(t *testing.T) {
 		t.Errorf("boundaryAt allocated %v times per call over a %d-byte "+
 			"string; it is converting the remainder to runes again, which "+
 			"is what made searchStdoutClaim quadratic", n, len(big))
+	}
+}
+
+// TestTheNilSeamStillFailsOpenOnANulAndOnlyOnANul is D7's control for the
+// C9-C11 rows, and it cannot be a differential.
+//
+// Every production caller in this tree passes a nil InertFunc — there is no
+// InertFunc implementation anywhere — so nil is the configuration that
+// ships, and on it the port deliberately declines layer 2 where CPython
+// consults a real AST. That divergence is named at the nil check itself.
+// It also means the NUL-free control sentence is a row the two runtimes
+// disagree on BY DESIGN, so the control has to assert the port's own
+// contract: with a NUL the check must break (judged=false), and without one
+// it must not (judged=true). Without this pair, C9-C11 would pass against a
+// port that fails open on every input.
+func TestTheNilSeamStillFailsOpenOnANulAndOnlyOnANul(t *testing.T) {
+	base := t.TempDir()
+	for name, body := range map[string]string{
+		"a.py": "def f():\n    pass\n", "other.txt": "x",
+	} {
+		if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name       string
+		text       string
+		wantJudged bool
+	}{
+		{"a NUL inside the claimed path", "wrote to a\x00b.py and it prints 1, 2, 3", false},
+		{"a claim that is only a NUL and an extension", "wrote to \x00.py and it prints 1, 2, 3", false},
+		{"a NUL after a name that would resolve", "wrote to a.py\x00.py and it prints 1, 2, 3", false},
+		{"the same sentence with no NUL at all", "wrote to ab.py and it prints 1, 2, 3", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := CheckFabrication(c.text, base, map[string]float64{}, nil)
+			if v.Judged != c.wantJudged {
+				t.Errorf("judged=%v, want %v (verdict %+v).\nCPython's "+
+					"_python_candidates guards p.resolve() with `except "+
+					"OSError` alone, and an embedded NUL raises ValueError; "+
+					"it unwinds into check_fabrication's blanket except and "+
+					"answers judged=FALSE. judged is what tells a reader "+
+					"\"found nothing\" from \"broke\".", v.Judged, c.wantJudged, v)
+			}
+		})
 	}
 }
