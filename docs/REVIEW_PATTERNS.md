@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 66 — the most frequent single defect in the Go port*
+*instances: 68 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -80,7 +80,7 @@ where the helper wanted `"introspect.py"`, so every probe took the honest
 comparison is derived from (`if len(keys) == 0 { t.Fatal(...) }`).
 
 ### L2 — An enumeration is not a class
-*instances: 4*
+*instances: 5*
 
 Sweeping the cases a fixture happens to name proves nothing about the ones
 it does not.
@@ -258,7 +258,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 10*
+*instances: 12*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -267,7 +267,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 23*
+*instances: 25*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -347,7 +347,7 @@ its own reader cannot see it.
 Fixtures for a reader must be LINES, not literals.
 
 ### L18 — A value arrives with a type, and something reads the type away
-*instances: 17*
+*instances: 19*
 
 **Canonical instance.** Switching to an announced ordered read made numbers
 `json.Number`, so `intOf`'s `float64` arm stopped matching and a human
@@ -361,7 +361,7 @@ surface rendered "Total tokens: 0".
 divergence, now pinned by a named-divergence test rather than left implicit.
 
 ### L20 — Python's operators are not Go's
-*instances: 28*
+*instances: 34*
 
 Truthiness vs `== true`; identity deciding a dict lookup; `str()` vs
 `repr()` agreeing on `None` and disagreeing on everything else; `%` on
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 80*
+*instances: 84*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -731,7 +731,7 @@ comment, because it is a property of the source, not of the test.
 
 ### L44 — A fixture's name is a coverage claim, and nothing checks it
 
-*instances: 4*
+*instances: 5*
 
 The fixture feeds the code through a field the code does not read. Its
 inputs are shaped like the real thing but keyed the way the *writer* names
@@ -819,7 +819,7 @@ that answers "did it refuse" is itself a wall. And read every `t.Fatal` in
 the comparison path as a scope declaration, because that is what it is.
 
 ### L46 — Substituting a local library for the ported one costs a divergence per rule nobody enumerated
-*instances: 12*
+*instances: 14*
 
 A port that reaches for the host language's equivalent library — `flag`
 for `argparse`, `regexp` for `re`, `filepath.Match` for `fnmatch` — is not
@@ -866,7 +866,7 @@ the substitution is one way to lose the original's shape, and rewriting it
 by hand is another.
 
 ### L47 — The source you ported is not always the source you test against
-*instances: 4*
+*instances: 5*
 
 A constant lifted from a standard library is pinned to the VERSION it was
 lifted from. The differential runs against whatever interpreter is on the
@@ -1026,7 +1026,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 10*
+*instances: 16*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 19*
+*instances: 20*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
