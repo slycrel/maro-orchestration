@@ -272,6 +272,32 @@ the prescribed spelling. The open item stands unchanged: nothing in the
 tree calls the function, so nothing enforces the decode at a boundary. When
 a caller lands, the decode is part of its review, not an afterthought.
 
+### Go port: 33 sites create directories 0755 where Python creates 0775 (FOUND 2026-08-26, census)
+
+`Path.mkdir()` creates with `0o777 & ~umask`; `os.MkdirAll(p, 0o755)`
+creates with `0o755 & ~umask`. **The umask on this box is 0002**, so the
+Python engine writes 0775 and the Go engine writes 0755 — group write,
+present in one runtime and absent in the other, on every run directory,
+project directory, memory directory and pack import target the port
+creates through a hardcoded literal.
+
+`internal/record/filemode.go` already carries the right answer as
+`NewDirMode` (0o777, with MkdirAll applying the umask), and 28 call sites
+use it. 33 do not, plus 7 more that spell the value `0o777` inline and are
+right by accident. The full site list, the Python-side counts (185 default
+`mkdir`, 3 default `makedirs`, exactly ONE deliberate `mode=0o700` in
+`src/web_fetch.py:494`), and the reason this is not a `sed` are in
+`scratchpad/dirmode_census.md`.
+
+Not a sed because the mode must be justified against the PYTHON call each
+site ports. `web_fetch`'s cache dir is 0700 on purpose; a blanket rewrite
+would widen it when that module lands.
+
+Nothing in the suite can catch this class: the differential fixtures
+compare returned VALUES, and a directory's mode is a property of the
+filesystem afterwards that no probe reads back. The write-path comparison
+harness would close the whole class in one assertion.
+
 ### Go port: `pypath.FSLess` exists now — `sheriff.py` slice 2 must use it (FOUND 2026-08-26, artifactcheck r3)
 
 Python holds every filename `surrogateescape`-decoded, so an undecodable
