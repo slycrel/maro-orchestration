@@ -1090,14 +1090,28 @@ func hhMMSSff(t string, hasTZ bool) (h, mi, sec, micro int, ok bool) {
 // isoTimestamp is the two `.timestamp()` formulas, kept apart on purpose.
 func isoTimestamp(y, mo, d, h, mi, sec, micro int, offMicro int64, aware bool) (float64, bool) {
 	if !aware {
-		if y == 1 && mo == 1 && d == 1 {
-			// CPython's _mktime probes the local offset around this instant
-			// and lands in year 0. Narrow, measured, and reproduced rather
-			// than modelled: 0001-01-02 onward has a timestamp.
+		// `self._mktime() + self.microsecond / 1e6`, where _mktime can
+		// raise. It probes the local offset by rebuilding a datetime from
+		// localtime(), and that constructor rejects a year outside 1..9999
+		// -- so an instant near either END of the range fails, in whichever
+		// direction the zone's offset points.
+		//
+		// This used to be a hardcoded `y == 1 && mo == 1 && d == 1`, which
+		// is the west-of-UTC end and only the west-of-UTC end. The rule has
+		// two ends and the guard modelled one (r4). The box being west of
+		// UTC is the only reason a 96,582-input corpus could not see it:
+		//
+		//	TZ=Asia/Kolkata  9999-12-31T18:29:59  ->  253402261199.0
+		//	TZ=Asia/Kolkata  9999-12-31T18:30:00  ->  ValueError
+		//
+		// Both ends now fall out of local() itself rather than being
+		// enumerated, which is the difference between porting the rule and
+		// porting two of its answers.
+		ts, ok := pyMktime(y, mo, d, h, mi, sec)
+		if !ok {
 			return 0, false
 		}
-		// `self._mktime() + self.microsecond / 1e6`.
-		return float64(pyMktime(y, mo, d, h, mi, sec)) + float64(micro)/1e6, true
+		return float64(ts) + float64(micro)/1e6, true
 	}
 	// `(self - _EPOCH).total_seconds()`: ONE integer microsecond count
 	// divided by 1e6, offset folded in before the division.
@@ -1142,41 +1156,68 @@ func isoTimestamp(y, mo, d, h, mi, sec, micro int, offMicro int64, aware bool) (
 // -- take max(u1, u2) for fold=0. Nothing here consults fold, because no
 // producer in this project emits a naive stamp at all; see the residual
 // note above parseISO.
-func pyMktime(y, mo, d, h, mi, sec int) int64 {
+// pyMktime returns false where CPython's _mktime raises.
+//
+// It raises through local(), which does `datetime(*localtime(u)[:6])` --
+// a constructor that rejects a year outside 1..9999. Whether that happens
+// depends on the zone's offset and on which END of the range the instant
+// sits at, and the calls happen in a fixed ORDER, so the refusal is
+// reproduced by checking each call where CPython makes it rather than by
+// testing the input up front.
+func pyMktime(y, mo, d, h, mi, sec int) (int64, bool) {
 	// local(u): the wall clock at unix time u, re-read as if it were UTC.
-	local := func(u int64) int64 {
+	// The bool is `datetime(y, m, d, hh, mm, ss)` refusing to exist.
+	local := func(u int64) (int64, bool) {
 		lt := time.Unix(u, 0).In(time.Local)
+		if lt.Year() < 1 || lt.Year() > 9999 {
+			return 0, false
+		}
 		return time.Date(lt.Year(), lt.Month(), lt.Day(), lt.Hour(),
-			lt.Minute(), lt.Second(), 0, time.UTC).Unix()
+			lt.Minute(), lt.Second(), 0, time.UTC).Unix(), true
 	}
 	t := time.Date(y, time.Month(mo), d, h, mi, sec, 0, time.UTC).Unix()
-	a := local(t) - t
+	lt, ok := local(t)
+	if !ok {
+		return 0, false
+	}
+	a := lt - t
 	u1 := t - a
-	t1 := local(u1)
+	t1, ok := local(u1)
+	if !ok {
+		return 0, false
+	}
 	var b int64
 	if t1 == t {
 		// One solution found; it may still be the wrong side of a fold, so
 		// probe a day away. CPython's max_fold_seconds is 24*3600.
 		u2 := u1 - 24*3600
-		b = local(u2) - u2
+		lu2, ok := local(u2)
+		if !ok {
+			return 0, false
+		}
+		b = lu2 - u2
 		if a == b {
-			return u1
+			return u1, true
 		}
 	} else {
 		b = t1 - u1
 	}
 	u2 := t - b
-	if local(u2) == t {
-		return u2
+	lu2, ok := local(u2)
+	if !ok {
+		return 0, false
+	}
+	if lu2 == t {
+		return u2, true
 	}
 	if t1 == t {
-		return u1
+		return u1, true
 	}
 	// Neither offset solves it: t is in the gap. fold=0 takes the max.
 	if u1 > u2 {
-		return u1
+		return u1, true
 	}
-	return u2
+	return u2, true
 }
 
 func isoWeekToGregorian(y, week, day int) (int, int, int, bool) {
@@ -1344,42 +1385,24 @@ func pyMtime(st os.FileInfo) float64 {
 // so every project dir beneath them has this shape.
 //
 // `rel` starting with "/" returns rel, matching pathlib's "an absolute
-// right operand wins". The POSIX double-slash root (`//x`) is left alone
-// by pathlib and by this function; it cannot reach here anyway, because
-// every caller takes an absolute branch first.
-func pyJoin(base, rel string) string {
-	if strings.HasPrefix(rel, "/") {
-		return pyNorm(rel)
-	}
-	b, r := pyNorm(base), pyNorm(rel)
-	switch {
-	case r == "":
-		return b
-	case b == "":
-		return r
-	case b == "/":
-		return "/" + r
-	}
-	return b + "/" + r
-}
-
-// pyNorm is the normalisation pathlib does at construction: empty and "."
-// components are dropped, ".." is kept, a leading "/" is kept.
-func pyNorm(s string) string {
-	abs := strings.HasPrefix(s, "/")
-	var out []string
-	for _, c := range strings.Split(s, "/") {
-		if c == "" || c == "." {
-			continue
-		}
-		out = append(out, c)
-	}
-	j := strings.Join(out, "/")
-	if abs {
-		return "/" + j
-	}
-	return j
-}
+// right operand wins".
+//
+// THIS IS A WRAPPER, and it used to be a second implementation. The
+// comment it replaces claimed "the POSIX double-slash root (`//x`) is left
+// alone by pathlib and by this function; it cannot reach here anyway,
+// because every caller takes an absolute branch first". Both halves were
+// wrong (r4): the local normaliser split on "/" and dropped empty
+// components, so it collapsed `//x` to `/x`, and SnapshotDir's walk passes
+// its base straight through with no absolute branch anywhere. It was also
+// wrong about `PurePosixPath("") / ""`, which is "." and was "".
+//
+// pypath.Join is the same operation with the rule already right and a
+// differential test behind it, and two implementations of one Python
+// operation disagreeing is a defect before they disagree -- which is the
+// sentence pypath's own header opens with. The name stays because the call
+// sites read better with it and because the history below is worth keeping
+// at the sites it is about.
+func pyJoin(base, rel string) string { return pypath.Join(base, rel) }
 
 // pyBasename is `PurePath.name`, which is not filepath.Base.
 //
@@ -1547,7 +1570,21 @@ func boundaryAt(s string, i int) bool {
 	if i >= len(s) {
 		return true
 	}
-	return !isWordChar([]rune(s[i:])[0])
+	// DecodeRuneInString, not `[]rune(s[i:])[0]`. The conversion builds a
+	// rune slice for the WHOLE remainder to read one code point, which
+	// turns Python's O(1) `\b` test into O(n) and searchStdoutClaim into a
+	// quadratic scan: every match of a wordEnd branch pays it, and a
+	// REJECTED match pays it without ending the loop. Measured on an
+	// ordinary 169 KB build log with 5,000 "writing output to build/objN.o"
+	// lines -- CPython 0.016s, this function 2.28s before the change, 146x.
+	// At 240 KB it was 900x. The two spellings answer identically, invalid
+	// bytes included: both yield U+FFFD, which is not a word character.
+	//
+	// The module's own Python docstring states "runs in <10ms" as part of
+	// its contract (artifact_check.py:17), and it sits on the per-step
+	// critical path. A liveness divergence is a divergence.
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return !isWordChar(r)
 }
 
 // isWordChar is pytext.IsWordChar, kept as a local name because boundaryAt
@@ -1643,6 +1680,15 @@ func pythonCandidates(claims []string, projectDir string, changed map[string]boo
 				fresh = append(fresh, rel)
 			}
 		}
+		// sort.Strings, and deliberately NOT pypath.FSLess — the two order
+		// undecodable names differently and this is the one place in the
+		// file where that is fine. CPython iterates a SET here, so there is
+		// no Python order to reproduce; the sort exists only so the port's
+		// own answer is deterministic across runs, which is a guarantee
+		// this port makes and the original does not. FSLess is for the
+		// sites that must match a Python `sorted()`, and using it here
+		// would suggest this is one of them (r4 raised the inconsistency;
+		// this comment is the answer, not a change).
 		sort.Strings(fresh)
 		for _, rel := range fresh {
 			add(pyJoin(projectDir, rel))

@@ -1597,11 +1597,15 @@ func TestTheVerdictRendersItsFieldsInTheDataclassOrder(t *testing.T) {
 // fresh candidate.
 //
 // The mutation battery is what found that hole: commenting out the sort
-// left the ENTIRE fixture table green. (It said "all 192 fixtures" until
-// r3 counted 223 — the third time in this file a stated fixture count has
-// gone stale, and ExtractWriteClaims' own doc already says why: a
-// conclusion that has to be re-counted to stay true is the wrong spelling
-// of the conclusion. The number is load-bearing for nothing here.)
+// left the ENTIRE fixture table green. (This sentence said "all 192
+// fixtures" for months; r3 replaced 192 with 223 and added nine fixtures
+// in the same commit, so the correction was wrong the moment it was
+// written — 232, not 223. That is the fourth stale count in this file and
+// the second one wrong at BIRTH rather than by drift. The number is
+// load-bearing for nothing here, so it is gone rather than corrected a
+// third time: a conclusion that has to be re-counted to stay true is the
+// wrong spelling of the conclusion, which is what ExtractWriteClaims' own
+// doc already says.)
 func TestTheFreshCandidateOrderIsThePortsOwnGuaranteeNotCPythons(t *testing.T) {
 	base := t.TempDir()
 	// Names chosen so sorted order and creation order disagree, or the
@@ -1684,4 +1688,38 @@ func acDSTStamps() ([]string, bool) {
 		}
 	}
 	return out, true
+}
+
+// TestBoundaryAtReadsOneCodePointNotTheWholeRemainder is the pin for the
+// r4 MEDIUM: `\b` is O(1) in Python and boundaryAt spelled it
+// `[]rune(s[i:])[0]`, which is O(n) and made searchStdoutClaim quadratic
+// over ordinary build output.
+//
+// The assertion is ALLOCATIONS, not elapsed time. A timing test on this box
+// is a flake generator, and the defect has an exact allocation signature:
+// the rune conversion allocates a slice proportional to the remainder,
+// utf8.DecodeRuneInString allocates nothing. Zero allocations is therefore
+// the same statement as "this does not walk the rest of the string", and it
+// cannot pass for an unrelated reason.
+//
+// The input is deliberately large: at one byte the two spellings cost the
+// same and the test would hold for the defect it exists to prevent.
+func TestBoundaryAtReadsOneCodePointNotTheWholeRemainder(t *testing.T) {
+	big := strings.Repeat("writing output to build/obj.o\n", 20000)
+	if len(big) < 500_000 {
+		t.Fatalf("the corpus is %d bytes; too small to separate O(1) from O(n)", len(big))
+	}
+	// Both answers are asserted so the test still fails if the function
+	// stops answering correctly in the course of becoming cheap.
+	if boundaryAt(big, 0) {
+		t.Error("boundaryAt before a letter should be false")
+	}
+	if !boundaryAt(big, len("writing")) {
+		t.Error("boundaryAt before a space should be true")
+	}
+	if n := testing.AllocsPerRun(50, func() { boundaryAt(big, 0) }); n != 0 {
+		t.Errorf("boundaryAt allocated %v times per call over a %d-byte "+
+			"string; it is converting the remainder to runes again, which "+
+			"is what made searchStdoutClaim quadratic", n, len(big))
+	}
 }

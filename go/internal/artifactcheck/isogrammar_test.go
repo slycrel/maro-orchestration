@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 )
@@ -280,4 +281,105 @@ func isoCorpus() []string {
 		add(string(b))
 	}
 	return out
+}
+
+// tzTimestampSrc asks CPython for `fromisoformat(s).timestamp()` in the
+// zone the environment names, with an explicit tzset() so the answer does
+// not depend on whether the C library re-reads TZ on its own.
+const tzTimestampSrc = `
+import json, sys, time
+from datetime import datetime
+time.tzset()
+out = []
+for s in json.loads(sys.argv[1]):
+    try:
+        out.append(datetime.fromisoformat(s).timestamp())
+    except Exception:
+        out.append(None)
+sys.stdout.write(json.dumps(out))
+`
+
+// TestTheNaiveTimestampAgreesAtBothENDSOfTheYearRangeInEveryZone pins the
+// r4 LOW: `_mktime` raises through its local() probe, which rebuilds a
+// datetime from localtime() and so rejects a year outside 1..9999. That
+// has TWO ends, and the port modelled one of them as a hardcoded
+// `y == 1 && mo == 1 && d == 1`.
+//
+// Every other test in this package runs in the box's own zone, which is
+// west of UTC — and west of UTC only the LOW end is reachable, because the
+// offset pushes 9999-12-31T23:59:59 further into 9999 and 0001-01-01
+// backwards into year 0. That is why 96,582 generated inputs could not see
+// it. The zone is the axis the corpus does not have, so this test varies
+// it: time.Local for the Go side, TZ for the probe, one process each way.
+//
+// Asia/Kolkata and Pacific/Apia are east of UTC (one of them by a
+// half-hour, which also exercises a non-integral-hour offset); Denver and
+// Los_Angeles are west; UTC is the boundary where neither end fails.
+func TestTheNaiveTimestampAgreesAtBothENDSOfTheYearRangeInEveryZone(t *testing.T) {
+	var inputs []string
+	for _, hm := range []string{
+		"00:00:00", "00:00:01", "05:29:59", "05:30:00", "05:30:01",
+		"06:59:56", "07:00:00", "10:59:59", "11:00:00", "12:00:00",
+		"13:00:00", "18:29:59", "18:30:00", "18:30:01", "23:59:59",
+	} {
+		inputs = append(inputs,
+			"0001-01-01T"+hm, "0001-01-02T"+hm,
+			"9999-12-30T"+hm, "9999-12-31T"+hm,
+			// An ordinary stamp in each zone, so a port that refused
+			// everything could not pass this test.
+			"2026-08-22T"+hm)
+	}
+	inputs = append(inputs, "0001-01-01T23:59:59.999999",
+		"9999-12-31T23:59:59.999999", "0001-01-01", "9999-12-31")
+
+	origLocal := time.Local
+	t.Cleanup(func() { time.Local = origLocal })
+
+	sawRefusal, sawAnswer := 0, 0
+	for _, zone := range []string{
+		"UTC", "America/Denver", "America/Los_Angeles",
+		"Asia/Kolkata", "Pacific/Apia", "Australia/Lord_Howe",
+	} {
+		loc, err := time.LoadLocation(zone)
+		if err != nil {
+			t.Skipf("this box has no tzdata for %s: %v", zone, err)
+		}
+		t.Run(zone, func(t *testing.T) {
+			time.Local = loc
+			t.Setenv("TZ", zone)
+			var want []*float64
+			pyprobe.Probe{Stdlib: true}.RunJSON(t, tzTimestampSrc, &want,
+				pyprobe.Arg(t, inputs))
+			if len(want) != len(inputs) {
+				t.Fatalf("probe answered %d rows for %d inputs", len(want), len(inputs))
+			}
+			for i, s := range inputs {
+				have, ok := parseISO(s)
+				if want[i] == nil {
+					sawRefusal++
+					if ok {
+						t.Errorf("%s %q: CPython raises, the port answered %v", zone, s, have)
+					}
+					continue
+				}
+				sawAnswer++
+				if !ok {
+					t.Errorf("%s %q: CPython gives %v, the port refused", zone, s, *want[i])
+					continue
+				}
+				if math.Float64bits(have) != math.Float64bits(*want[i]) {
+					t.Errorf("%s %q: port %v, CPython %v", zone, s, have, *want[i])
+				}
+			}
+		})
+	}
+	// The guard: if no zone produced a refusal, the table has stopped
+	// reaching the rule and would pass against a port with no guard at all.
+	if sawRefusal == 0 {
+		t.Error("no input in any zone reached _mktime's ValueError; this " +
+			"test would pass against a port that never refuses")
+	}
+	if sawAnswer == 0 {
+		t.Error("no input in any zone produced a timestamp")
+	}
 }

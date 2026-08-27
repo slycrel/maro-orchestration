@@ -12638,3 +12638,104 @@ a directory inside the package directory, inside the repository. Fixed with
 now snapshots the package directory around every answer func and fails the
 case that adds an entry. The guard was checked by putting the relative path
 back in a scratch copy, because a guard that cannot fail is worse than none.
+
+## The r4 review of `internal/artifactcheck` — the first performance divergence this port has found
+
+Four findings, all four verified against the interpreter before a line was
+changed. One MEDIUM, three LOW. The round also re-derived every class r3
+fixed from the FILE rather than the diff and found each one complete —
+`pyJoin` has exactly five sites in `SnapshotDir`/`existsAnywhere`/
+`pythonCandidates` and all five are `pyJoin`; `pytext.Repr` has no
+rune-iterating twin; `sorted()` appears exactly once in Python slice 1 and
+that site is the only `FSLess` site. `pyMktime` matches `local_to_seconds`
+statement for statement in six zones including a 30-minute-DST zone.
+
+### The MEDIUM is not a wrong answer, it is a wrong shape
+
+`boundaryAt` reproduces Python's `\b`, which is O(1). It spelled the test
+`[]rune(s[i:])[0]` — a conversion that builds a rune slice for the
+**entire remainder** in order to read one code point. `searchStdoutClaim`
+calls it once per match of two branches, and a REJECTED match pays the
+cost without ending the scan, so the whole search is quadratic in the
+length of `result_text` where CPython's `.search()` is linear.
+
+Measured on an ordinary build log — 5,000 lines of `writing output to
+build/objN.o`, 169 KB:
+
+```
+CPython _claims_concrete_stdout   0.0156 s
+port    claimsConcreteStdout      2.279  s      146x
+at 240 KB                        20.9    s      ~900x
+```
+
+The value is identical in both runtimes, so this is neither fail-open nor
+fail-closed. It is still a divergence: the module's own Python docstring
+states "Zero LLM, NO code execution, **runs in <10ms**, and fails open"
+(`artifact_check.py:17`), and it sits on the per-step critical path. A
+contract stated in the source is a contract, and a build step whose
+captured output says "output to …" a few thousand times is the ordinary
+case rather than the adversarial one.
+
+The fix is `utf8.DecodeRuneInString`. **The pin is allocations, not
+time.** A timing assertion on this box is a flake generator, but the
+defect has an exact allocation signature — the rune conversion allocates a
+slice proportional to the remainder, the decode allocates nothing — so
+"zero allocations over a 600 KB string" is the same statement as "this
+does not walk the rest of the string", and it cannot pass for an unrelated
+reason. Verified failing against the old spelling.
+
+### The LOW that is really the same lesson as r3's two HIGHs
+
+`isoTimestamp` guarded `_mktime`'s ValueError with a hardcoded
+`y == 1 && mo == 1 && d == 1`. That is not the rule; it is one of the
+rule's answers. `_mktime` raises through its `local()` probe, which
+rebuilds a datetime from `localtime()` — and that constructor rejects a
+year outside 1..9999. The condition therefore has **two ends**, and which
+one is reachable depends on which way the zone's offset points:
+
+```
+TZ=Asia/Kolkata   9999-12-31T18:29:59   ->  253402261199.0
+TZ=Asia/Kolkata   9999-12-31T18:30:00   ->  ValueError
+```
+
+This box is west of UTC, which is the only reason 96,582 generated inputs
+plus the reviewer's 553,697 more could not see it: west of UTC the offset
+pushes 9999-12-31 further into 9999 and 0001-01-01 back into year 0, so
+only the low end is reachable and only the low end was modelled. The
+corpus has no zone axis at all.
+
+`pyMktime` now returns `(int64, bool)` and carries the year check inside
+`local()`, at each of the four calls CPython makes, in CPython's order —
+so both ends fall out of the rule instead of being enumerated. The
+hardcoded year-1 case is gone. The fixture varies `time.Local` and `TZ`
+across six zones and refuses to pass if no zone produces a refusal.
+
+### Two implementations of one operation, again
+
+`pyJoin`'s doc said the POSIX double-slash root "is left alone by pathlib
+and by this function" and "cannot reach here anyway, because every caller
+takes an absolute branch first". Both halves were wrong: the local
+`pyNorm` split on `/` and dropped empty components, so it collapsed `//x`
+to `/x`, and `SnapshotDir`'s walk hands its base straight through with no
+absolute branch anywhere. It also answered `""` for `PurePosixPath("") /
+""` where CPython answers `"."` — the difference between a path that
+exists and one that cannot be opened.
+
+`pypath.Join` already had the rule right, with a differential behind it.
+`pyJoin` is now a one-line wrapper and `pyNorm` is deleted. This is the
+sentence `pypath`'s own header opens with — two implementations of one
+Python operation disagreeing is a defect before they disagree — and it
+took four rounds for the second implementation to be noticed at all,
+because it was RIGHT on everything any fixture drove.
+
+That comment was the fourth in this file to be wrong about the exact
+property it was written to defend.
+
+### And the count was wrong at birth, again
+
+r3 replaced a stale "all 192 fixtures" with "223" **in the same commit
+that added nine fixtures**. The table holds 232. So the correction was
+wrong the moment it was written — the fourth stale count in this file and
+the second one wrong at birth rather than by drift. The number is gone
+rather than corrected a third time; the comment now argues for its own
+deletion, which is what it had been arguing for all along.

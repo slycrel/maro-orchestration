@@ -267,7 +267,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 18*
+*instances: 20*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 74*
+*instances: 75*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -1813,7 +1813,7 @@ The fixpoint is real and it arrives. Rounds after that are cheap insurance,
 not discovery.
 
 ### P6 — The round's HIGH lives inside the previous round's own fix
-*instances: 2 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
+*instances: 3 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
 
 The single most common shape in the whole record. A round fixes something;
 the next round's most severe finding is *in that fix*. It recurs at

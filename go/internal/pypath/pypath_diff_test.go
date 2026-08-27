@@ -180,6 +180,19 @@ func TestJoinMatchesCPython(t *testing.T) {
 		{"rel/dir", "/abs.json"},
 		{"/", "plain.json"},
 		{"//", "plain.json"},
+		// The shapes artifactcheck reaches now that its own second
+		// implementation is gone (r4). Its normaliser answered "/x/a" for
+		// the first of these and "" for the last; CPython answers "//x/a"
+		// and ".", and "." vs "" is the difference between a path that
+		// exists and one that cannot be opened.
+		{"//x", "a"},
+		{"///x", "a"},
+		{"", ""},
+		{"", "a"},
+		{"a", ""},
+		{".", "a"},
+		{"a/.", "b"},
+		{"/a/b", ".."},
 	}
 
 	var want []struct {
