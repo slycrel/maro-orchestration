@@ -555,7 +555,12 @@ func sortedFileNames(dir string) ([]string, error) {
 		}
 		names = append(names, e.Name())
 	}
-	sort.Strings(names)
+	// `sorted(src.iterdir())` over Path objects, which order by the
+	// surrogateescape decoding and not by raw byte. Python sorts the full
+	// paths and filters afterwards; this filters first and sorts the bare
+	// names, which is the same relative order because every entry shares
+	// one parent and a filter preserves order.
+	sort.Slice(names, func(i, j int) bool { return pypath.FSLess(names[i], names[j]) })
 	return names, nil
 }
 

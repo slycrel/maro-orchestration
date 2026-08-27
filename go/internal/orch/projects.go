@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -57,9 +58,17 @@ func ListProjects(ws string) ([]string, error) {
 			slugs = append(slugs, e.Name())
 		}
 	}
-	// Python's sorted() on str compares code points; Go's byte-wise
-	// compare over UTF-8 gives the same order.
-	sort.Strings(slugs)
+	// `sorted(slugs)` where each slug is `p.name` -- a DIRECTORY NAME, so
+	// Python holds it surrogateescape-decoded and sorts by code point.
+	//
+	// This comment used to read "Python's sorted() on str compares code
+	// points; Go's byte-wise compare over UTF-8 gives the same order",
+	// which is true for every name that IS UTF-8 and false for the ones
+	// that are not: against "e-acute" CPython compares U+DC80 (56448) and
+	// Go compares 0x80 (128), and the answers are opposite. A project
+	// directory whose name is not valid UTF-8 reorders the whole list, and
+	// list_projects feeds the heartbeat's per-project sweep.
+	sort.Slice(slugs, func(i, j int) bool { return pypath.FSLess(slugs[i], slugs[j]) })
 	return slugs, nil
 }
 

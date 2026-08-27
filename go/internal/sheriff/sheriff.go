@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/orch"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -341,7 +342,13 @@ func ProjectActivityAgeDays(ws, slug string, now time.Time) (float64, bool) {
 			for _, e := range entries {
 				names = append(names, filepath.Join(artifacts, e.Name()))
 			}
-			sort.Strings(names)
+			// `sorted(artifacts.iterdir())[:50]` orders Path objects -- by
+			// the surrogateescape decoding, not by raw byte -- and then
+			// TRUNCATES. That makes this the W24 shape rather than the W23
+			// one: two orderings do not merely name the same files
+			// differently, they name DIFFERENT FILES, and `newest` over
+			// that set is what decides the dormancy verdict.
+			sort.Slice(names, func(i, j int) bool { return pypath.FSLess(names[i], names[j]) })
 			if len(names) > 50 {
 				names = names[:50]
 			}

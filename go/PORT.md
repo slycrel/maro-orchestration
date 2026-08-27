@@ -12812,3 +12812,125 @@ some of them are the port's OWN determinism guarantee over something
 Python iterates as a set — `pythonCandidates` is the worked example and
 carries that reasoning at the site. Census in `scratchpad/fsless_census.md`,
 filed in BACKLOG.
+
+## The r5 review of `internal/artifactcheck` — a guard copied from the wrong CPython
+
+r5 returned one MEDIUM and three LOWs, and the MEDIUM is the third finding
+in this port to come out of the same confusion: **`_pydatetime.py` is not
+the specification.** CPython ships a C accelerator for `datetime`, and the
+pure-Python module is a *different parser wearing the same name*. This
+function's own header paragraph says so, in capitals. The port then
+transcribed a line out of `_pydatetime.py` anyway:
+
+```go
+if len(tzStr) == 0 || len(tzStr) == 1 || len(tzStr) == 3 {
+    return ..., false
+}
+```
+
+with a comment asserting all three arms unobservable and citing a
+414,589-input sweep. Two arms are inert. The third is not:
+
+```
+"2026-08-22T12:34:56+01\x00"    CPython  1787398496.0     port  refused
+```
+
+A three-character tz body *can* return true, through the
+one-stray-NUL tolerance in `hhMMSSff` — a rule **r3 added**, two hundred
+lines above, three rounds after this comment was written. The comment was
+true when it was written and nobody revisited it when the rule that
+falsified it arrived. The sweep it cited could not have caught this: it was
+Go-to-Go, and NUL was not in its alphabet.
+
+The whole guard is deleted rather than trimmed to the two inert arms.
+Keeping the inert ones is precisely what made the block look transcribed
+from the thing that runs. Eight new fixtures ride the boundary
+(`+01`, `-23`, `+`, `+0`, `+012`, `+00`, `-24`, and the basic-form
+`20260822T123456+01`).
+
+The three LOWs are all comments, and they are worth naming because a
+comment is the only artifact in this port that no test can check:
+
+- `hhMMSSff` ended a note with *"Kept because it is CPython's own test."*
+  The check is **not in the port**. Everywhere else in this file "kept"
+  means present. The elision is genuinely inert — measured, not argued:
+  adding the check back changes no answer over 156,494 inputs — but the
+  sentence claimed the opposite of the code. (L52: a comment wrong about
+  the property it defends.)
+- `CheckFabrication`'s doc said the layer ORDER "is observable and is the
+  subject of the D fixtures." It is not observable: layer 1 needs every
+  claim missing **and** an empty diff, layer 2 needs a candidate that
+  `is_file()`, and a candidate comes either from a claim (which then
+  exists) or from `changed` (which is then non-empty). The preconditions
+  are complements. Proved structurally, then measured — hoisting layer 2
+  above layer 1 leaves the suite green, D1–D3 included, and 4,000
+  randomised trees produce no input that reaches both. The order stays,
+  because it is the order the Python is written in and a transcription
+  that reorders on the grounds that nothing can tell has stopped being
+  one. What is gone is the claim that a test defends it. D1 is renamed to
+  say what it actually pins.
+- Both `pyJoin` sweep comments stated a site count, and r5 measured both
+  wrong: r1 left **four** sites, r2 left **six**, and r3's was the
+  **seventh**, not the fifth. The numbers are deleted rather than
+  corrected — this is L28 (an enumeration can be wrong at birth) landing
+  on a comment whose entire subject is *"derive the class from the FILE,
+  not from the diff"*, with its own number derived from the diff. The
+  class is closed, and `grep -c filepath.Join` answers that in a second
+  without a comment having to remember.
+
+## The filename-sort class: five shipped sites, and a pin that was inert
+
+The `sheriff.go` finding above was one site of a class, so it was fixed as
+a class. Nine of the tree's 28 non-test `sort.Strings` calls sort
+filenames; reading each one's Python counterpart left **five** that
+reproduce a `sorted()` over paths and therefore must go through
+`pypath.FSLess`:
+
+| site | Python counterpart |
+|---|---|
+| `internal/orch/projects.go:62` | `orch_items.py:428` `sorted(p.iterdir())` |
+| `internal/dispatch/envelope.go:558` | `dispatch_envelope.py:284,371` |
+| `internal/pack/adopt.go:70` | `pack.py:366,369` `sorted(d.glob("*.md"))` |
+| `internal/pack/export.go:368` | `pack.py:1195` |
+| `internal/sheriff/sheriff.go:344` | `sheriff.py:164` — the W24 shape |
+
+`orch/projects.go` carried a comment asserting *"Go's byte-wise compare
+over UTF-8 gives the same order"*, which is provably false for any name
+that is not valid UTF-8; it is replaced with the rule.
+
+The other four filename sites stay on `sort.Strings` and are now
+**listed with a reason**, because the second question is the one that
+decides a site: is this reproducing a Python `sorted()`, or is it the
+PORT's own determinism guarantee over something CPython iterates as a set
+or does not sort at all? `artifactcheck.pythonCandidates` is the worked
+example — converting it would pin an order CPython does not have.
+
+`pypath/fssort_guard_test.go` is the class guard: it scans every non-test
+`.go` in the module for `sort.Strings(` against a per-file allowlist that
+carries the reason for each of the 23 remaining calls, and fails on any
+new or unlisted one. It has a floor (`scanned < 100 || total < 15`)
+because L1 — a scan that found nothing to scan passes vacuously — is a
+failure this project keeps re-finding. Verified to fire.
+
+### The pin that could not fail, twice in one day
+
+The differential fixture for the sheriff site (`A50`) builds fifty
+`é_NN` artifacts at now−100.5d and ten `\x80_NN` artifacts, one of them
+at now−1.5d. Byte order takes the ten escapes first and reaches the recent
+file — "active yesterday". Code-point order takes the fifty `é` files,
+truncates at fifty, and never sees it — "untouched for a hundred days".
+
+The first cut of that fixture **passed against a byte-sorting port**. Both
+sides agreed on age 0, because `project_activity_age_days` also stats the
+project directory *and `artifacts/` itself*, and creating sixty files
+stamps `artifacts/` with the wall clock. The newest mtime found was a
+DIRECTORY, and the fifty names never mattered. The probe pinned the
+project dir and not the one directory the test was writing into.
+
+This is the second time this session that a new pin had to be run against
+a deliberately reverted call site before it was believed, and the second
+time that check found the pin inert. The rule earns its keep every time:
+*a guard that cannot fail is worse than no guard*, because it converts an
+untested claim into a tested-looking one. The mutation is also a reminder
+of P14 — reverting the `FSLess` call alone does not compile, since it
+strands the import; a mutation is a LIST of edits.

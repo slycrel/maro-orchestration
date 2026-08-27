@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -67,7 +68,10 @@ func Adopt(opts AdoptOpts) (*AdoptReport, error) {
 	var candidates []candidate
 	for _, kind := range []string{"skills", "personas"} {
 		matches, _ := filepath.Glob(filepath.Join(quarantine, kind, "*.md"))
-		sort.Strings(matches)
+		// `sorted(d.glob("*.md"))` orders Path objects, i.e. by the
+		// surrogateescape decoding. The candidate ORDER is what --all
+		// adopts in and what the index numbers refer to.
+		sort.Slice(matches, func(i, j int) bool { return pypath.FSLess(matches[i], matches[j]) })
 		for _, f := range matches {
 			candidates = append(candidates, candidate{kind, filepath.Base(f), f})
 		}

@@ -210,6 +210,15 @@ func isoCorpus() []string {
 		"2026-08-22T12:34:56.1", "2026-08-22T12:34:56.12345",
 		"2026-08-22T12:34:56.123456", "2026-08-22T12:34:56.1234567",
 		"2026-08-22T12:34:56Z", "2026-08-22T12:34:56+01:00",
+		// Two-digit offset BODIES. The r3 NUL sweep had none, which is why
+		// a guard that refuses `+01\x00` survived a 96,582-input corpus:
+		// no base in the list could produce a 2-character offset body with
+		// a trailing NUL. `+`, `+0` and `+012` ride along as the controls
+		// on either side of the accepted length.
+		"2026-08-22T12:34:56+01", "2026-08-22T12:34:56-23",
+		"2026-08-22T12:34:56+", "2026-08-22T12:34:56+0",
+		"2026-08-22T12:34:56+012", "2026-08-22T12:34:56+00",
+		"2026-08-22T12:34:56-24", "20260822T123456+01",
 		"2026-08-22T12:34:56.123456Z", "2026-08-22T12:34:56.123456+01:00",
 		"20260822T123456", "2026-W34-1T12:34", "2026-08-22T12:34:56-05:30:15",
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/config"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
@@ -365,7 +366,10 @@ func Export(opts ExportOpts) (*ExportResult, error) {
 	} {
 		d := filepath.Join(ws, kind.dir)
 		names, _ := filepath.Glob(filepath.Join(d, "*.md"))
-		sort.Strings(names)
+		// `sorted(skills_dir.glob("*.md"))` orders Path objects. The order
+		// reaches the pack's artifact list and therefore its canonical
+		// digest, so a divergence here is a pack two engines disagree about.
+		sort.Slice(names, func(i, j int) bool { return pypath.FSLess(names[i], names[j]) })
 		for _, f := range names {
 			// `if f.is_file()`. Python filters the glob; the port never
 			// did, and while the read merely `continue`d that was invisible.

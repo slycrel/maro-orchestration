@@ -156,6 +156,38 @@ for c in json.loads(sys.argv[1]):
                 out.append({"ok": sh._dormant_days()})
             finally:
                 _cfg.get = _real
+        elif k == "activity_fsnames":
+            # project_activity_age_days over an artifacts/ directory whose
+            # names are NOT all valid UTF-8. Names ride as lists of BYTE
+            # VALUES in both directions because json.dumps cannot encode a
+            # lone surrogate -- the same reason artifactcheck's W23/W24 do.
+            #
+            # sorted(artifacts.iterdir())[:50] TRUNCATES, so an ordering
+            # difference is not cosmetic: the two runtimes stat a different
+            # fifty files, and the newest mtime among them is the answer.
+            d = project_dir(c["slug"])
+            (d / "artifacts").mkdir(parents=True, exist_ok=True)
+            ad = os.fsencode(str(d / "artifacts"))
+            for vals, mt in zip(c["names"], c["mtimes"]):
+                fp = os.path.join(ad, bytes(vals))
+                with open(fp, "wb") as fh:
+                    fh.write(b"x")
+                os.utime(fp, (mt, mt))
+            # The project dir AND artifacts/ itself are candidates too, and
+            # creating sixty files stamps artifacts/ with the wall clock.
+            # Pin both, artifacts/ last-created-into first, or the newest
+            # mtime found is a DIRECTORY and the fifty names never matter
+            # -- which is exactly how the first cut of this fixture passed
+            # against a byte-sorting port.
+            os.utime(d / "artifacts", (c["dir_mtime"], c["dir_mtime"]))
+            os.utime(d, (c["dir_mtime"], c["dir_mtime"]))
+            _real_time = sh.time.time
+            sh.time.time = lambda: c["now"]
+            try:
+                age = sh.project_activity_age_days(c["slug"])
+            finally:
+                sh.time.time = _real_time
+            out.append({"ok": None if age is None else int(age)})
         elif k == "md5":
             out.append({"ok": hashlib.md5(c["s"].encode()).hexdigest()})
         elif k == "slice2000":
@@ -715,7 +747,89 @@ func shCases() []shCase {
 			map[string]any{"kind": "slice2000", "s": s},
 			func(string) any { return clipTail(s, 2000) })
 	}
+	// --- project_activity_age_days over undecodable artifact names -------
+	//
+	// `sorted(artifacts.iterdir())[:50]` orders Path objects, which compare
+	// by the surrogateescape DECODING; sort.Strings compares raw bytes. The
+	// two agree for all valid UTF-8, which is why this sat in shipped code
+	// unnoticed. They part in the two-byte range -- and because the list is
+	// TRUNCATED at fifty, the two runtimes do not merely order the same
+	// files differently, they STAT A DIFFERENT FIFTY.
+	//
+	// The tree is built so that difference is the whole answer: fifty
+	// "é_NN" files (0xC3 0xA9, ancient) and ten "\x80_NN" files, one of
+	// them RECENT. Byte order puts 0x80 first, so a byte-sorting port takes
+	// the ten escapes plus forty é files and finds the recent one --
+	// "active yesterday". Code-point order puts U+00E9 (233) before U+DC80
+	// (56448), so CPython takes the fifty é files and never sees it --
+	// "untouched for a hundred days", which is what decides dormancy.
+	{
+		const day = 86400.0
+		const now = 1787000000.0
+		var names []any
+		var mtimes []any
+		for i := 0; i < 50; i++ {
+			nm := append([]any{0xC3, 0xA9, int('_')}, digitVals(i)...)
+			names = append(names, nm)
+			mtimes = append(mtimes, now-100.5*day)
+		}
+		for i := 0; i < 10; i++ {
+			nm := append([]any{0x80, int('_')}, digitVals(i)...)
+			names = append(names, nm)
+			age := 100.5 * day
+			if i == 9 {
+				age = 1.5 * day // the one only a byte sort can reach
+			}
+			mtimes = append(mtimes, now-age)
+		}
+		const slug = "fsage"
+		add("A50 the fifty artifacts sorted are chosen by CODE POINT",
+			map[string]any{"kind": "activity_fsnames", "slug": slug,
+				"names": names, "mtimes": mtimes,
+				"dir_mtime": now - 100.5*day, "now": now},
+			func(ws string) any {
+				d := filepath.Join(ws, "projects", slug, "artifacts")
+				if err := os.MkdirAll(d, 0o777); err != nil {
+					panic(err)
+				}
+				for i, nm := range names {
+					b := make([]byte, 0, len(nm.([]any)))
+					for _, v := range nm.([]any) {
+						b = append(b, byte(v.(int)))
+					}
+					fp := d + "/" + string(b)
+					if err := os.WriteFile(fp, []byte("x"), 0o666); err != nil {
+						panic(err)
+					}
+					mt := time.Unix(0, int64(mtimes[i].(float64)*1e9))
+					if err := os.Chtimes(fp, mt, mt); err != nil {
+						panic(err)
+					}
+				}
+				// artifacts/ and the project dir are candidates in their
+				// own right; sixty creates leave artifacts/ stamped NOW.
+				dm := time.Unix(0, int64((now-100.5*day)*1e9))
+				for _, p := range []string{d, filepath.Join(ws, "projects", slug)} {
+					if err := os.Chtimes(p, dm, dm); err != nil {
+						panic(err)
+					}
+				}
+				age, ok := ProjectActivityAgeDays(ws, slug,
+					time.Unix(0, int64(now*1e9)))
+				if !ok {
+					return nil
+				}
+				return int(age)
+			})
+	}
+
 	return cs
+}
+
+// digitVals spells a two-digit index as byte values, so a name can be built
+// out of raw bytes rather than out of a Go string.
+func digitVals(i int) []any {
+	return []any{int('0' + i/10), int('0' + i%10)}
 }
 
 func doingLines(n int) string {

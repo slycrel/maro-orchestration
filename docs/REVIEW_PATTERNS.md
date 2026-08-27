@@ -65,7 +65,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 63 — the most frequent single defect in the Go port*
+*instances: 64 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -267,7 +267,7 @@ right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 21*
+*instances: 22*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -427,7 +427,7 @@ wrong.
 ## E. Prose, names and identity
 
 ### L26 — Content-key PROSE divergence
-*instances: 26*
+*instances: 27*
 
 Byte-diff the emitted STRINGS, not the logic. Two runtimes describing the
 same event differently reads as two different problems, and where prose
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 75*
+*instances: 76*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 15*
+*instances: 17*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an

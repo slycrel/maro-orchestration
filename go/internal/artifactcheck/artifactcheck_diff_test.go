@@ -1447,7 +1447,15 @@ func acCases() []acCase {
 		return acObjMap(CheckFabrication(acStr(c, "text"), acDir(c, base), acBefore(c),
 			acScriptedInert(t, base, script)))
 	}
-	add("D1 layer 1 fires FIRST even when layer 2 would also fire",
+	// D1's name was "layer 1 fires FIRST even when layer 2 would also
+	// fire", which is false OF D1 and false in general (r5 LOW). On this
+	// input CPython's `_inert_output_verdict` returns None, so layer 2
+	// would NOT fire; and no input reaches both layers, because layer 1
+	// needs every claim missing and an empty diff while a layer-2 candidate
+	// needs a file that exists. The row is kept — a missing claim with a
+	// concrete-stdout boast in the same sentence is worth pinning — under a
+	// name that says what it actually pins.
+	add("D1 a missing claim wins even though the text also boasts of output",
 		map[string]any{"kind": "fabrication2", "text": "wrote to gone.py and it prints 1, 2, 3",
 			"claims": []string{}, "files": map[string]any{},
 			"inert": map[string]any{}}, fab2Answer)

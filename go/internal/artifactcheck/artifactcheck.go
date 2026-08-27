@@ -447,13 +447,21 @@ func SnapshotDir(root string) map[string]float64 {
 				// scandir's is_dir() follows; a dangling link is neither.
 				//
 				// pyJoin, not filepath.Join, for the same reason as the
-				// file join below — and this is the FIFTH site of that
-				// class, found by r3 after r2's comment down there claimed
-				// the sweep "had two sites and got four". Four of five.
+				// file join below — and this site was found by r3, a round
+				// after r2's sweep of the same class stopped short of it.
 				// The tell is that the sweep was done by grepping for the
 				// sites that had CHANGED rather than for every remaining
 				// filepath.Join in the file (L13, again, one level up: a
 				// fix for the class has to be derived from the FILE).
+				//
+				// No count here, and that is deliberate. Both this comment
+				// and r2's below carried one, and r5 measured both wrong:
+				// r1 left FOUR sites, r2 six, and r3's was the SEVENTH, not
+				// the fifth. A comment whose whole point is "derive the
+				// class from the file, not from the diff" had its own
+				// number derived from the diff. The class is closed —
+				// every join in this file goes through pyJoin, which `grep
+				// -c` answers in a second and no comment has to remember.
 				//
 				// Live, not theoretical: under a root reaching a real
 				// directory through `link/..`, this stat misses, a
@@ -490,8 +498,10 @@ func SnapshotDir(root string) map[string]float64 {
 			// through `link/..` made every stat here miss, ChangedSince
 			// answered {} where CPython answers {"a.txt"}, and layer 1
 			// fired a false missing-artifact on a file plainly on disk
-			// (r2 -- L13 again, from the fix that had two sites and got
-			// four).
+			// (r2 -- L13 again, from a fix that had to be swept twice more
+			// before the class was actually closed; see the note at the
+			// symlink probe above for why the counts that used to be here
+			// are gone).
 			fp := pyJoin(dir, name)
 			st, err := os.Stat(fp)
 			if err != nil {
@@ -914,14 +924,28 @@ func parseISOTime(t string) (h, mi, sec, micro int, offMicro int64, aware, nextD
 		return h, mi, sec, micro, 0, true, nextDay, true
 	}
 	tzStr := t[tzPos+1:]
-	// CPython spells this `if len(tzstr) in (0, 1, 3)`. Lengths 1 and 3 are
-	// unobservable here -- hhMMSSff needs two digits to start, and a
-	// three-character body always breaks with one component read and no way
-	// to return true -- but the guard is transcribed, not derived, so it
-	// stays. Confirmed inert by the same 414,589-input sweep.
-	if len(tzStr) == 0 || len(tzStr) == 1 || len(tzStr) == 3 {
-		return 0, 0, 0, 0, 0, false, false, false
-	}
+	// NO `if len(tzstr) in (0, 1, 3)` HERE, and its absence is the fix, not
+	// an omission (r5 MEDIUM).
+	//
+	// That line is in `_pydatetime.py`, which this function's own "WHICH
+	// CPYTHON" paragraph rules out as the specification -- the C
+	// accelerator is what runs. The port transcribed it anyway, under a
+	// comment calling all three arms unobservable. Two of them are. The
+	// third is not, and it refuses 48 inputs CPython accepts:
+	//
+	//	"2026-08-22T12:34:56+01\x00"   CPython 1787398496.0   port: refused
+	//	"2026-08-22T12:34:56+012"       CPython ValueError     port: refused
+	//
+	// A three-character body CAN return true, through the one-stray-
+	// character NUL tolerance in hhMMSSff -- the rule r3 added two hundred
+	// lines up. The comment claiming otherwise was written before that rule
+	// existed and was never revisited when it arrived, and the 414,589-input
+	// sweep it cited was Go-to-Go with no NUL in its alphabet.
+	//
+	// Lengths 0 and 1 are genuinely inert: hhMMSSff needs two digits to
+	// start and pyInt refuses an empty component. They are gone too rather
+	// than kept, because keeping them is what made this look transcribed
+	// from the thing that runs. `+` and `+0` are in the corpus.
 	oh, om, os_, ou, ok2 := hhMMSSff(tzStr, false)
 	if !ok2 {
 		return 0, 0, 0, 0, 0, false, false, false
@@ -977,12 +1001,17 @@ func hhMMSSff(t string, hasTZ bool) (h, mi, sec, micro int, ok bool) {
 				break
 			}
 			pos++
-			// The `!isASCIIDigit` half is unobservable, and provably so: it
-			// can only fire with two or more characters left and fewer than
-			// three components read, and every path out of the break needs
-			// read==3 or exactly one character left. Without it, pyInt fails
-			// on the same non-digit. Kept because it is CPython's own test
-			// and its absence would read as an oversight.
+			// CPython has a `if (!Py_ISDIGIT(*p)) return -4;` here and this
+			// port does NOT (r5 LOW: the comment used to end "Kept because
+			// it is CPython's own test", and everywhere else in this file
+			// "kept" means present, so it read as present).
+			//
+			// The elision is inert, and measured rather than argued: adding
+			// the check back changes no answer across a 156,494-input
+			// corpus. The reason is that after `pos++` the loop top
+			// guarantees two or more bytes remain, and pyInt then refuses
+			// the same non-digit with the same ValueError -- CPython's -3
+			// and -4 both reach invalid_string_error.
 		} else if n-pos < 2 || !isASCIIDigit(t[pos]) {
 			// In the BASIC form nothing was consumed, so a lone trailing
 			// character is not an incomplete component — it is the stray
@@ -1776,10 +1805,24 @@ func inertOutputVerdict(resultText, projectDir string, claims []string,
 
 // CheckFabrication is Python's `check_fabrication` (:344).
 //
-// The layer ORDER is observable and is the subject of the D fixtures: when
-// both layers would fire, layer 1 wins, because it returns before layer 2
-// is consulted. A reading that ran both and preferred the "stronger" one
-// would produce a different kind on the same input.
+// The layer ORDER IS NOT OBSERVABLE, and this paragraph used to say the
+// opposite (r5 LOW). It claimed that when both layers would fire layer 1
+// wins and named the D fixtures as its subject. No input reaches both, so
+// there is no such property and the D fixtures pin something else.
+//
+// The proof is structural and was then measured. Layer 1 needs EVERY claim
+// missing and an EMPTY diff. Layer 2 needs a candidate that passes
+// `is_file()`, and a candidate comes either from a claim -- which would
+// then exist, so the claim is not missing -- or from `changed`, which
+// would then be non-empty. The two preconditions are complements.
+// Measured: hoisting inertOutputVerdict above the layer-1 block leaves the
+// whole suite green, D1-D3 included, and 4,000 randomised trees produce no
+// input where both fire.
+//
+// The order stays as written because it is the order the Python is written
+// in, and a transcription that reorders on the grounds that nothing can
+// tell is a transcription that has stopped being one. What is gone is the
+// CLAIM that a test defends it.
 //
 // The blanket `except Exception` is the fail-open contract: any internal
 // error yields fabricated=False with judged=FALSE, which is how a reader
