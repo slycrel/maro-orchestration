@@ -3,6 +3,7 @@ package artifactcheck
 import (
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
@@ -189,7 +190,36 @@ func isoCorpus() []string {
 	// The random half. The alphabet is the grammar's own characters plus
 	// the near-misses that separate its rules: lowercase z and t, W, and
 	// two characters ("x", "/") that belong to no rule at all.
-	const alpha = "0123456789-:.,+TZtWz _wXx/"
+	// NUL, systematically: CPython's parser reads the C string that
+	// PyUnicode_AsUTF8AndSize hands it, and several of its "is the input
+	// exhausted?" checks cannot tell an EMBEDDED NUL from the buffer's own
+	// terminator. So a NUL is not just another stray character — at three
+	// points it reads as end-of-input, and `2026-08-22T12:34:56\x00` parses
+	// where `..._` does not. No alphabet above contains \x00, so the whole
+	// class was invisible to 95,312 inputs (r3 MEDIUM).
+	//
+	// Swept rather than sampled: 0-3 NULs at EVERY position of each base,
+	// because the tolerance is position-dependent and count-dependent in
+	// ways no random draw would separate (one trailing NUL parses, two do
+	// not — except after a six-digit fraction, where any number does).
+	nulBases := []string{
+		"2026-08-22", "2026-08-22T12", "2026-08-22T1234",
+		"2026-08-22T12:34", "2026-08-22T12:34:56", "2026-08-22T123456",
+		"2026-08-22T12:34:56.1", "2026-08-22T12:34:56.12345",
+		"2026-08-22T12:34:56.123456", "2026-08-22T12:34:56.1234567",
+		"2026-08-22T12:34:56Z", "2026-08-22T12:34:56+01:00",
+		"2026-08-22T12:34:56.123456Z", "2026-08-22T12:34:56.123456+01:00",
+		"20260822T123456", "2026-W34-1T12:34", "2026-08-22T12:34:56-05:30:15",
+	}
+	for _, b := range nulBases {
+		for pos := 0; pos <= len(b); pos++ {
+			for n := 1; n <= 3; n++ {
+				add(b[:pos] + strings.Repeat("\x00", n) + b[pos:])
+			}
+		}
+	}
+
+	const alpha = "0123456789-:.,+TZtWz _wXx/\x00"
 	rng := rand.New(rand.NewSource(20260826))
 	pick := func() byte { return alpha[rng.Intn(len(alpha))] }
 	for i := 0; i < 40000; i++ {

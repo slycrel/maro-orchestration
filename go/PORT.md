@@ -12450,3 +12450,191 @@ wrapper is a property of how pytext hands a class to a caller that may set
 `(?i)`, not of today's body. `decodeReplace`'s `utf8.Valid` fast path
 returns what the loop below it returns — the correct result for a
 pure-performance branch is that removing it changes nothing.
+
+## The r3 review of `internal/artifactcheck` — two fixes that stopped one
+## site short, and a contract nothing tested
+
+Eight findings, eight verified. Three rounds now at zero hallucinated, and
+this one had the sharpest shape yet: **both HIGHs were an earlier round's
+own fix, correct as far as it went and one site short.**
+
+**F1.** r1 found `filepath.Join` where the Python uses pathlib's `/`, which
+keeps `..`. r2 found two more sites in `SnapshotDir`'s walk and wrote, at
+the site, "the fix that had two sites and got four". It had five. The one
+it missed is the `is_dir()` probe for a symlink, three lines above the file
+join it did fix — so under a root that reaches a real directory through
+`link/..`, the stat misses, a symlinked DIRECTORY is misclassified as a
+file, and it gets a snapshot row CPython never emits. `os.walk` puts a
+linked directory in `dirnames` and does not descend, so it contributes
+nothing at all; the port gave it a row of its own.
+
+One spurious row is the whole failure. `ChangedSince` goes non-empty,
+layer 1 never fires, and a step that wrote nothing but claimed
+`"wrote the report to report.md"` comes back `fabricated=false`. The
+reviewer's randomised tree differential put a number on it: 11 of 25 roots
+containing `..` diverge, 0 of 95 without one.
+
+W21 could not see it, and the reason is worth keeping: W21's `..` root has
+no symlink among its entries, so the branch never ran. A fixture that
+exercises a function is not a fixture that exercises its branches.
+
+Both sweeps were derived from what had CHANGED rather than from every
+remaining `filepath.Join` in the FILE. That is L9 pointed at a fix instead
+of at a test, and it is the same mistake in the same file twice.
+
+**F2.** `asMapping` accepted `ToolEvent` and `map[string]any`. `pyval.Obj`
+is a slice and matched neither — so a transcript decoded exactly the way
+`asMapping`'s own doc says a caller MUST decode it was invisible end to
+end. Every event skipped; the answer `judged=true`, `"no execution in
+transcript"`. Not a miss: a clean bill.
+
+The history is the finding. r1 discovered the function was blind to
+`map[string]any` and added that arm. r2 wrote the paragraph above it
+explaining that `map[string]any` is the WRONG decode and a caller should
+use `pyval.Obj` instead. Neither round noticed that the function did not
+accept the thing the paragraph prescribed. For a full round the doc and
+the code disagreed, forty lines apart, in the same file — and the doc was
+right. A prescription no test exercises is a comment, not a contract, and
+X29–X33 are now the third construction of the same fixture inputs, with a
+guard that fails if the elements ever stop decoding as `pyval.Obj`.
+
+**F3 (MEDIUM), and the method matters more than the bug.** CPython's C
+`fromisoformat` parses the NUL-terminated buffer `PyUnicode_AsUTF8AndSize`
+hands it, and its "is the input exhausted?" checks cannot tell an embedded
+NUL from the terminator. `'1970-01-01T00:00:00\x00'` parses;
+`'1970-01-01T00:00:00_'` does not. No alphabet in the corpus contained
+`\x00`, so 95,312 inputs could not reach the class at all.
+
+I spent a while trying to reconstruct the C from about forty probes, got a
+model that fit, and threw it away — a model that fits forty hand-picked
+cases is exactly the evidence this project keeps finding to be wrong.
+Instead the corpus got the input class: `\x00` in the byte alphabet, and
+0–3 NULs swept through EVERY position of seventeen bases. That produced 30
+divergences, all one-directional, and the fix was written against that
+list. It turned out to be three distinct rules, not one, and no reasonable
+model would have guessed the asymmetry:
+
+```
+12:34:56\x00        parses      12:34:56\x00\x00        ValueError
+.123456\x007        parses      12:34:56\x007           ValueError
+…56Z\x00+01:00      is UTC      …56+01:00\x00\x00       ValueError
+```
+
+One trailing NUL is tolerated after the H/M/S group (and after a numeric
+offset, which reaches the same line). A NUL ENDS the ≥6-digit fraction
+tail, unexamined. And after a trailing `Z`, everything from the first NUL
+is discarded however much there is. Each rule now carries the pair that
+separates it from its neighbour. 96,582 inputs, 0 divergences.
+
+**F4 (MEDIUM).** `FilesModifiedSince` sorted with `sort.Strings`. Python
+holds every filename `surrogateescape`-decoded, so an undecodable byte is
+the code point `0xDC00+b`; Go holds the raw byte. They agree for all valid
+UTF-8, and — this is why it survived three rounds — they also agree for
+bad bytes against ASCII and against astral characters. They part in the
+two-byte range:
+
+```
+names          b"\x80bad", "école", b"zulu"
+python sorted  'zulu', 'école', '\udc80bad'
+sort.Strings   "zulu", "\x80bad", "école"
+```
+
+Under `limit` the CONTENT differs, not merely the order, so the resume
+path names different files. The whole non-UTF-8 axis is structurally
+invisible to the differential, because the probe round-trips through
+`json.dumps` and a lone surrogate cannot be encoded — so W23/W24 carry the
+names as lists of BYTE VALUES in both directions instead. The helper went
+into `pypath`, not here: `sheriff.py`'s `check_all_projects` has the same
+`sorted()` over the same kind of name, and a second copy is how the word
+supplement ended up in three files (L14).
+
+**F5 (LOW).** `pytext.Repr` ranged over the string, so an ill-formed byte
+arrived as `utf8.RuneError` — and U+FFFD is category So, therefore
+printable, therefore written out raw. CPython reprs the same name
+`'\udc80z.py'`. Cosmetic per call, and `reprList`'s own doc is the
+standard it failed: two runtimes writing into one operator stream have to
+agree character for character or a grep keyed on one misses the other's
+rows. V1 pins six names, including the truncated sequence that is TWO
+surrogates here and would be ONE U+FFFD under the `errors="replace"` rule
+— the two rules this port implements about two hundred lines apart.
+
+**F6/F7 (LOW).** A comment said "all 192 fixtures"; there are 223 — the
+third stale count in this file, and the number is now gone rather than
+corrected. And r2 added four fixtures on ids E28–E31 that were already in
+use twenty lines below, so the pin comment naming "E30" named two
+unrelated rows. The rule it broke is one r2 wrote down itself, in the U1
+comment, in the same commit. That comment has now named E19 (a fixture
+that pins nothing), E30 (a fixture that pins two things), and finally E46.
+
+### What the round found clean, measured
+
+Worth as much as the findings, because it says where NOT to look next
+time. `maximalSubpart` over 675,484 byte sequences: 0 divergences, every
+lead-byte range matching Unicode 3.9. `pyMktime` over 66,048 datetimes in
+America/Denver plus ~27,700 more in each of eight other zones — including
+Pacific/Apia's 2011 whole-day skip, which is a 24-hour gap larger than
+`max_fold_seconds`, and Lord Howe's 30-minute DST: 0 divergences in every
+zone. The four text functions over 114,044 rows across two adversarial
+alphabets: 0. `SnapshotDir` over 95 randomly generated trees without a
+`..` root: 0. And the year-1 residual is correct for the right reason —
+`datetime(1,1,1).timestamp()` raises ValueError, not OSError, which
+`files_modified_since`'s `except (ValueError, TypeError)` catches.
+
+### The r3 battery — 26 mutants, and the gap was in a helper two hours old
+
+The mutation battery over the round's own fixes: **24 of 26 caught, one
+equivalent, one real gap.** The two HIGH fixes were both confirmed by the
+fixtures written for them — G1 (the symlink `is_dir()` probe back on
+`filepath.Join`) by W22, G2a (`asMapping` blind to `pyval.Obj` again) by
+X29–X32 — which is the point of running the battery at all: a fixture
+that cannot fail without its fix is not evidence.
+
+**G4c is the finding.** `pypath.FSLess` ends with `return len(ra) <
+len(rb)` — the prefix rule, "zz.tx" before "zz.txt". Replacing it with
+`return false` passed the entire suite, W23 and W24 included, and those
+two fixtures had been written for `FSLess` in the same sitting. The
+end-to-end path structurally cannot see it: `FilesModifiedSince` ranges a
+map, so a comparator that calls a prefix pair *equal* leaves the pair
+wherever the runtime's randomized iteration put it, and the answer is
+right about half the time. A test that is right half the time by accident
+is a test that asserts nothing about the line.
+
+The fix is not another end-to-end fixture. It is
+`TestFSLessOrdersNamesTheWayCPythonSortsThem` in `internal/pypath`, which
+drives the whole **ordered pair matrix** of a 15-name corpus against
+CPython's `sorted()` and `<` — 225 comparisons, not one sorted list —
+with the names carried as byte-value lists because `json.dumps` cannot
+encode a lone surrogate. It carries four strict-prefix pairs and a guard
+that *fails the test* if `sort.Strings` and CPython agree on the corpus,
+because a corpus on which they agree would pass against a byte-order
+port and assert nothing. Re-run of G4c against it: caught.
+
+**G2b is equivalent and recorded as such.** Making the `pyval.Obj` arm
+keep the FIRST value for a repeated key survives — and it should, because
+`LoadsOrdered`'s decoder calls `Obj.Set` per key, so no `Obj` arriving
+through the prescribed decode carries a duplicate. Last-wins stays (it is
+what `json.loads` does) with the reachability argument at the site, so the
+next battery does not re-litigate it. L8, the fourth time this arc.
+
+**Two method notes, both about the battery rather than the code.** G4a
+did not compile: `FSLess` was the file's only `pypath` reference, so
+reverting the call left an unused import — P14, a mutation is a LIST of
+edits, for the third time in this port. Re-run as the two-edit mutation it
+always was: caught by W23 and W24. And the hand-rolled re-run of it first
+reported the mutant *surviving*, because the scratch copy held only `go/`
+and the differential fixtures need a sibling `src/` to find
+`artifact_check.py` — without it every one of them skips and the package
+reports `ok`. `MARO_PYPROBE_REQUIRED=1` is what turned that silent green
+into a named failure, printing "this run would have skipped every
+differential and reported ok". The guard was written for CI. It caught a
+human.
+
+One more, found by `git status` rather than by the battery: W23 and W24
+built their tree at `filepath.Join(base, "fsnames")`, and those two cases
+carry no `"files"` key — so the harness hands them `base == ""` and the
+join is a RELATIVE path. The fixtures had been creating (and `RemoveAll`ing)
+a directory inside the package directory, inside the repository. Fixed with
+`t.TempDir()`, and the class closed rather than the instance: the harness
+now snapshots the package directory around every answer func and fails the
+case that adds an entry. The guard was checked by putting the relative path
+back in a scratch copy, because a guard that cannot fail is worse than none.

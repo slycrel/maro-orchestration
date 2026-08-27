@@ -405,7 +405,33 @@ func Repr(s string) string {
 	}
 	var b strings.Builder
 	b.WriteByte(quote)
-	for _, r := range s {
+	// Byte-wise, not `for _, r := range s`. A Go string can carry bytes
+	// that are not valid UTF-8 — every filename on Linux can — and range
+	// hands those back as utf8.RuneError. U+FFFD is category So, so
+	// IsPrintable says yes and the replacement character is written out
+	// literally. CPython never sees such a string: os.fsdecode escapes each
+	// undecodable byte to the lone surrogate U+DC00+b, which is category
+	// Cs, unprintable, and reprs as `\udcXX`. MEASURED:
+	//
+	//	repr(['\udc80z.py'])  ->  ['\udc80z.py']
+	//	this function, before ->  ['�z.py']
+	//
+	// One surrogate PER BYTE, which is the surrogateescape rule and NOT the
+	// errors="replace" rule (one U+FFFD per maximal subpart) — the two are
+	// easy to conflate and this port implements both, in different places.
+	// pypath.FSDecode is the same decoding where a caller needs the runes.
+	//
+	// A VALID encoding of U+FFFD is untouched: DecodeRuneInString returns
+	// size 3 for it, and only size 1 with RuneError means "bad byte".
+	// (r3 LOW — cosmetic per call, but reprList's own doc is the standard:
+	// two runtimes writing into one operator stream have to agree
+	// character for character or a grep keyed on one misses the other.)
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			r = rune(0xDC00) + rune(s[i])
+		}
+		i += size
 		switch {
 		case r == rune(quote) || r == '\\':
 			b.WriteByte('\\')

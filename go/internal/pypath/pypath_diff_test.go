@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -427,5 +428,121 @@ func TestRealpathMatchesCPythonOnMissingComponentsAndDotDot(t *testing.T) {
 				t.Errorf("Realpath(%q)\n go: %q\n py: %q", r.in, got, want[i])
 			}
 		})
+	}
+}
+
+// fsSortSrc is `sorted()` over names as CPython holds them — every byte
+// that is not valid UTF-8 decoded to the lone surrogate 0xDC00+b by the
+// filesystem encoding's surrogateescape handler.
+//
+// The corpus arrives as lists of BYTE VALUES rather than as strings
+// because json.dumps cannot encode a lone surrogate; a probe that took
+// strings could not carry the inputs this rule is about.
+const fsSortSrc = `
+import json, os, sys
+vals = json.loads(sys.argv[1])
+names = [os.fsdecode(bytes(v)) for v in vals]
+order = [list(os.fsencode(n)) for n in sorted(names)]
+less = [[bool(a < b) for b in names] for a in names]
+sys.stdout.write(json.dumps({"order": order, "less": less}))
+`
+
+// TestFSLessOrdersNamesTheWayCPythonSortsThem pins FSDecode and FSLess
+// against the interpreter over every ordered pair in a corpus.
+//
+// `sort.Strings` compares raw bytes; CPython compares the surrogateescape
+// DECODING code point by code point. The two agree for all valid UTF-8,
+// and they agree for a bad byte against ASCII and against an astral
+// character, which is why the divergence survived three review rounds of
+// artifactcheck.FilesModifiedSince. They part in the two-byte range:
+// against `é` CPython compares 0xDC80 to 0x00E9 and Go compares 0x80 to
+// 0xC3, and the answers are opposite.
+//
+// The whole pair matrix is driven, not just the sorted order, because the
+// sorted order of a corpus can be right while the comparator is wrong —
+// the length tie-break (a name that is a strict PREFIX of another) is
+// reachable from `sorted()` only when the two land adjacent, and a
+// mutation battery found exactly that gap: FSLess returning false for
+// every prefix pair passed the end-to-end fixtures.
+func TestFSLessOrdersNamesTheWayCPythonSortsThem(t *testing.T) {
+	raw := [][]byte{
+		[]byte("zz.txt"),
+		[]byte("zz.tx"),                 // a strict prefix of the row above
+		[]byte("zz.txt2"),               // and a strict extension of it
+		[]byte("a"),                     // the prefix rule again, one byte long
+		[]byte("ab"),                    //
+		{'a', 0x80},                     // a prefix plus an undecodable byte: 0xDC80
+		{'a', 0xC3, 0xA9},               // a prefix plus `é`: 0x00E9, so BELOW the row
+		{0x80, 'z', '.', 't', 'x', 't'}, // above `é` for CPython, below for bytes
+		{0x80, 'z'},                     // its prefix
+		{0xFF, 'q'},                     // 0xDCFF, the top of the escape range
+		{0xC3, 0xA9, 'a'},               // "éa"
+		{0xC3, 0xA9},                    // its prefix
+		{0xE1, 0x80, 0x80, 'b'},         // U+1000 + "b": astral-ish, above 0xDCFF
+		{0xF0, 0x9F, 0x98, 0x80},        // U+1F600, above every surrogate
+		{},                              // the empty name: a prefix of everything
+	}
+	vals := make([][]int, len(raw))
+	for i, b := range raw {
+		row := make([]int, len(b))
+		for j := range b {
+			row[j] = int(b[j])
+		}
+		vals[i] = row
+	}
+	names := make([]string, len(raw))
+	for i, b := range raw {
+		names[i] = string(b)
+	}
+
+	out := pyprobe.Probe{Stdlib: true}.Run(t, fsSortSrc, pyprobe.Arg(t, vals))
+	var want struct {
+		Order [][]int  `json:"order"`
+		Less  [][]bool `json:"less"`
+	}
+	if err := json.Unmarshal([]byte(out), &want); err != nil {
+		t.Fatalf("decoding the probe output: %v\nraw: %s", err, out)
+	}
+	if len(want.Order) != len(names) || len(want.Less) != len(names) {
+		t.Fatalf("%d/%d rows for %d names", len(want.Order), len(want.Less), len(names))
+	}
+
+	// The guard: a corpus on which byte order and code-point order agree
+	// would pass this test against `sort.Strings`, and would therefore
+	// assert nothing. Refuse to run silently in that state.
+	byteOrder := append([]string(nil), names...)
+	sort.Strings(byteOrder)
+	pyOrder := make([]string, len(want.Order))
+	for i, row := range want.Order {
+		b := make([]byte, len(row))
+		for j, v := range row {
+			b[j] = byte(v)
+		}
+		pyOrder[i] = string(b)
+	}
+	if strings.Join(byteOrder, "\x01") == strings.Join(pyOrder, "\x01") {
+		t.Fatal("sort.Strings and CPython agree on this corpus, so the " +
+			"corpus cannot tell a byte-order port from a correct one")
+	}
+
+	diffs := 0
+	for i := range names {
+		for j := range names {
+			if got := FSLess(names[i], names[j]); got != want.Less[i][j] {
+				t.Errorf("FSLess(%q, %q) = %v, CPython %v", names[i], names[j], got, want.Less[i][j])
+			}
+			if (names[i] < names[j]) != want.Less[i][j] {
+				diffs++
+			}
+		}
+	}
+	if diffs == 0 {
+		t.Error("no pair in the matrix separates code-point order from byte order")
+	}
+
+	got := append([]string(nil), names...)
+	sort.SliceStable(got, func(i, j int) bool { return FSLess(got[i], got[j]) })
+	if strings.Join(got, "\x01") != strings.Join(pyOrder, "\x01") {
+		t.Errorf("sorted order\n go: %q\n py: %q", got, pyOrder)
 	}
 }

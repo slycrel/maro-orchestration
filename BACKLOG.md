@@ -263,6 +263,38 @@ X25-X28 pin the rendering for int / float / list / bool, so the port is
 correct for every input it is GIVEN correctly. The open item is the
 enforcement, which belongs with the caller and not before it.
 
+**r3 update (2026-08-26): the doc comment was not merely unenforced, it was
+CONTRADICTED.** `asMapping` did not accept `pyval.Obj` at all — it is a
+slice and matched neither type-switch arm — so a transcript decoded exactly
+as the paragraph above demands answered `judged=true, "no execution in
+transcript"`, a clean bill for a fabrication. Fixed, and X29-X33 now drive
+the prescribed spelling. The open item stands unchanged: nothing in the
+tree calls the function, so nothing enforces the decode at a boundary. When
+a caller lands, the decode is part of its review, not an afterthought.
+
+### Go port: `pypath.FSLess` exists now — `sheriff.py` slice 2 must use it (FOUND 2026-08-26, artifactcheck r3)
+
+Python holds every filename `surrogateescape`-decoded, so an undecodable
+byte is the code point `0xDC00+b` and `sorted()` orders by that; Go's
+`sort.Strings` orders by raw byte. The two agree for all valid UTF-8 AND
+for bad bytes against ASCII or astral characters, so a casual probe finds
+nothing. They part in the two-byte range:
+
+```
+names          b"\x80bad", "école", b"zulu"
+python sorted  'zulu', 'école', '\udc80bad'
+sort.Strings   "zulu", "\x80bad", "école"
+```
+
+`internal/artifactcheck.FilesModifiedSince` is fixed and pinned (W23/W24,
+names carried as byte lists because `json.dumps` cannot encode a lone
+surrogate). **`sheriff.check_all_projects` has the same `sorted()` over
+the same kind of name, and `archive_dormant_projects` sorts
+`projects_dir.iterdir()`** — both are unwritten in Go today, and both must
+go through `pypath.FSLess` rather than growing a second copy of the rule.
+Filed here because the finding arrived a tranche before the code does; the
+word supplement is what happens when that note is not written down (L14).
+
 ### Python-side: CPython's two `fromisoformat` implementations disagree (FOUND 2026-08-26, artifactcheck r1 — L47)
 
 `datetime.fromisoformat` has a C accelerator in `_datetimemodule.c` and a

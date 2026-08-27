@@ -233,6 +233,51 @@ for c in json.loads(sys.argv[1]):
             os.symlink(str(outside / "proj"), str(link))
             root = os.path.join(str(link), "..")
             out.append({"ok": sorted(ac.snapshot_dir(root).keys())})
+        elif k == "snapshot_symlinked_subdir":
+            # W21's sibling, and the one branch W21 cannot reach: a
+            # SYMLINKED DIRECTORY among the entries of a '..' root. scandir's
+            # is_dir() follows the link, so os.walk puts it in dirnames and
+            # then does not descend (followlinks=False) -- it contributes no
+            # row at all. The port stat'd that probe through filepath.Join,
+            # which erases the '..', so the stat missed, the link was
+            # misclassified as a file, and it got a row of its own.
+            base = mktree(ROOT, c["files"])
+            outside = base.parent / (base.name + "-ssd")
+            if outside.exists():
+                shutil.rmtree(outside)
+            (outside / "proj").mkdir(parents=True, exist_ok=True)
+            (outside / "elsewhere").mkdir(parents=True, exist_ok=True)
+            (outside / "a.txt").write_text("a", encoding="utf-8")
+            (outside / "proj" / "deep.txt").write_text("d", encoding="utf-8")
+            (outside / "elsewhere" / "inner.txt").write_text("i", encoding="utf-8")
+            os.symlink(str(outside / "elsewhere"), str(outside / "sl2"))
+            link = base / "slink"
+            if link.is_symlink():
+                link.unlink()
+            os.symlink(str(outside / "proj"), str(link))
+            root = os.path.join(str(link), "..")
+            out.append({"ok": sorted(ac.snapshot_dir(root).keys())})
+        elif k == "sorted_fsnames":
+            # sorted() over surrogateescape-decoded str, which is what
+            # Python holds every filename as. Names ride as lists of BYTE
+            # VALUES in both directions because json.dumps cannot encode a
+            # lone surrogate -- that is precisely why no ordinary fixture
+            # could ever carry this input.
+            base = pathlib.Path(ROOT) / "fsnames"
+            if base.exists():
+                shutil.rmtree(base)
+            base.mkdir(parents=True, exist_ok=True)
+            for vals in c["names"]:
+                with open(os.path.join(os.fsencode(str(base)), bytes(vals)), "wb") as fh:
+                    fh.write(b"x")
+            got = ac.files_modified_since(str(base), c["since"], limit=c["limit"])
+            out.append({"ok": [list(os.fsencode(n)) for n in got]})
+        elif k == "repr_fsname":
+            # repr() of a surrogate-escaped filename. The ANSWER is pure
+            # ASCII -- repr writes the escape as six characters -- so this
+            # one row can ride the ordinary string channel even though its
+            # INPUT cannot, which is why the names arrive as byte values.
+            out.append({"ok": [repr([os.fsdecode(bytes(v))]) for v in c["names"]]})
         elif k == "decode_replace":
             # bytes -> str with errors="replace" substitutes ONE U+FFFD per
             # MAXIMAL SUBPART, not per byte. Byte values ride as ints

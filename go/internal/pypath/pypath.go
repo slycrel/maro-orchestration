@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"unicode/utf8"
 )
 
 // Package pypath is CPython's `pathlib.PurePosixPath` where this port leans
@@ -368,4 +369,68 @@ func Join(base, rhs string) string {
 		return Str(b + rhs)
 	}
 	return Str(b + "/" + rhs)
+}
+
+// FSDecode is `os.fsdecode` on Linux: UTF-8 with the SURROGATEESCAPE error
+// handler, which is how every filename reaches Python. A byte that cannot
+// be decoded becomes the lone surrogate U+DC00+byte, and Python then sorts,
+// compares and reprs those code points like any others.
+//
+// Go has no such step — `os.ReadDir` hands back the raw bytes — so the two
+// runtimes hold DIFFERENT VALUES for the same filename, and every operation
+// that orders or renders one is a place they can part.
+//
+// One surrogate PER BYTE, not per maximal subpart. That is the opposite of
+// `errors="replace"`, which emits one U+FFFD per subpart, and the two rules
+// live about two hundred lines apart in the artifactcheck port. Measured:
+//
+//	b"a\xe2\x82b".decode("utf-8", "surrogateescape") == 'a\udce2\udc82b'
+//	b"a\xe2\x82b".decode("utf-8", "replace")         == 'a�b'
+//
+// Go's utf8.DecodeRuneInString returns (RuneError, 1) for every ill-formed
+// byte — including a valid encoding of a surrogate and an overlong form,
+// both of which Python also escapes byte by byte — so the one-byte step is
+// exactly right here and would be wrong for the replace rule.
+func FSDecode(s string) []rune {
+	out := make([]rune, 0, len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			out = append(out, rune(0xDC00)+rune(s[i]))
+			i++
+			continue
+		}
+		out = append(out, r)
+		i += size
+	}
+	return out
+}
+
+// FSLess orders two filenames the way Python's `sorted()` orders them —
+// by CODE POINT over the surrogateescape decoding — rather than the way
+// Go's sort.Strings does, by raw byte.
+//
+// They agree for all valid UTF-8, and for undecodable bytes against ASCII
+// or astral characters, which is why a casual probe finds nothing. They
+// part in the two-byte range, where Python compares 0xDC00+b against a code
+// point below 2048 and Go compares b against that character's first byte:
+//
+//	names          b"\x80bad", "école", b"zulu"
+//	Python sorted  'zulu', 'école', '\udc80bad'
+//	sort.Strings   "zulu", "\x80bad", "école"
+//
+// The trailing length comparison is the PREFIX rule and it is load-bearing:
+// "zz.tx" sorts before "zz.txt". Returning false there passed every
+// end-to-end fixture in artifactcheck (r3 battery, G4c) because the walk
+// hands the names over in map order and a tie leaves them wherever they
+// were. TestFSLessOrdersNamesTheWayCPythonSortsThem drives the whole pair
+// matrix against the interpreter, which is what pins this line.
+func FSLess(a, b string) bool {
+	ra, rb := FSDecode(a), FSDecode(b)
+	for i := 0; i < len(ra) && i < len(rb); i++ {
+		if ra[i] != rb[i] {
+			return ra[i] < rb[i]
+		}
+	}
+	return len(ra) < len(rb)
 }

@@ -160,7 +160,7 @@ mutant survived.
 *instances: 1*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 31*
+*instances: 32*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -187,7 +187,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 4 — plus standing (Jeremy, 2026-08-16)*
+*instances: 7 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -258,7 +258,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 7*
+*instances: 8*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -442,7 +442,7 @@ field on a persisted row.
 *instances: 3*
 
 ### L28 — A comment that ASSERTS COVERAGE is a claim, and it decays
-*instances: 72*
+*instances: 74*
 
 **Canonical instance.** `matchesLookUp`'s doc comment still said "the words
 list above carries the two common spellings" after those spellings were
@@ -1218,7 +1218,7 @@ written in prose.** Mutate the copy and find out; it costs one minute.
 
 ### L52 — A rationale recorded as deliberate is still a claim
 
-*instances: 11*
+*instances: 15*
 
 A comment that says "deliberately NOT ported, named so the next reader
 knows it was a decision" reads as settled. It is not evidence. It is an
@@ -1602,7 +1602,7 @@ compile-kill is not a kill*, and *a test named for a differential must run
 the other side*.
 
 ### P14 — A mutant that does not compile is reported as caught and proves nothing
-*instances: 2 — one ledger row, but it covers six mutants across two batteries*
+*instances: 3 — one ledger row, but it covers six mutants across two batteries*
 
 `go test` exits non-zero for a build failure exactly as it does for a failed
 assertion, so a mutation battery that judges on the return code counts every

@@ -42,6 +42,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
@@ -275,12 +276,19 @@ func maximalSubpart(b []byte) int {
 // character; `t`, `i`, and `a` are word characters. No boundary can exist
 // there, so Python cannot match with an empty window either.
 //
-// The fixture is E30, "wroteto a.txt" — CPython extracts nothing, and a
+// The fixture is E46, "wroteto a.txt" — CPython extracts nothing, and a
 // three-branch `(?:|NW|NW…NW)` window would extract a.txt. This comment
 // used to name E19 instead, and E19 ("rewrote to a.txt") cannot see the
 // property at all: it fails on the LEADING boundary, identically with and
 // without a zero-width branch (r2, L52 — a fixture named as a pin that
 // pins nothing, the third instance in this file).
+//
+// It said E30 between r2 and r3, which was worse than E19: r2 added four
+// fixtures on ids that were ALREADY IN USE twenty lines further down, so
+// "E30" named two unrelated rows and the pin was ambiguous rather than
+// merely wrong. Fixed by renumbering r2's four to E44-E47 — and the rule
+// it broke was one r2 wrote down itself, in the U1 comment, in the same
+// commit.
 //
 // A fourth thing does NOT change: `[^.\n]` is a literal class in both, and
 // the non-greedy `*?` means the same thing in both, because Go's regexp
@@ -437,7 +445,25 @@ func SnapshotDir(root string) map[string]float64 {
 			isLink := e.Type()&os.ModeSymlink != 0
 			if isLink {
 				// scandir's is_dir() follows; a dangling link is neither.
-				if st, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				//
+				// pyJoin, not filepath.Join, for the same reason as the
+				// file join below — and this is the FIFTH site of that
+				// class, found by r3 after r2's comment down there claimed
+				// the sweep "had two sites and got four". Four of five.
+				// The tell is that the sweep was done by grepping for the
+				// sites that had CHANGED rather than for every remaining
+				// filepath.Join in the file (L13, again, one level up: a
+				// fix for the class has to be derived from the FILE).
+				//
+				// Live, not theoretical: under a root reaching a real
+				// directory through `link/..`, this stat misses, a
+				// symlinked DIRECTORY is misclassified as a file, and it
+				// gets a snapshot row CPython never emits. The spurious
+				// row makes ChangedSince non-empty, so layer 1 never fires
+				// and a plain missing-artifact fabrication passes as
+				// clean. W22 is the fixture; W21 could not reach it
+				// because none of its `..`-root entries is a symlink.
+				if st, err := os.Stat(pyJoin(dir, name)); err == nil {
 					isDir = st.IsDir()
 				} else {
 					isDir = false
@@ -537,7 +563,21 @@ func FilesModifiedSince(root, sinceISO string, limit int) []string {
 			changed = append(changed, rel)
 		}
 	}
-	sort.Strings(changed)
+	// `sorted(...)` over str, NOT sort.Strings over bytes. Python holds
+	// every filename surrogateescape-decoded, so an undecodable byte is the
+	// code point 0xDC00+b and sorts up there; Go holds the raw byte. The
+	// two agree for all valid UTF-8, which is why this looked right for
+	// three rounds — they part in the two-byte range, and then not only the
+	// ORDER but the CONTENT differs, because `limit` truncates a differently
+	// ordered list (r3 MEDIUM). See pypath.FSLess for the measured pair.
+	//
+	// This axis is structurally invisible to the differential: the probe
+	// round-trips through json.dumps, which cannot encode a lone surrogate,
+	// so no W fixture can carry the input. W23 drives it as a list of BYTE
+	// VALUES instead, which JSON can carry, and compares the ORDER.
+	sort.Slice(changed, func(i, j int) bool {
+		return pypath.FSLess(changed[i], changed[j])
+	})
 	if limit < 0 {
 		// Python's `changed[:limit]` with a negative limit drops from the
 		// END, which is not "no limit". Preserved rather than clamped.
@@ -859,8 +899,16 @@ func parseISOTime(t string) (h, mi, sec, micro int, offMicro int64, aware, nextD
 	}
 	sign := t[tzPos]
 	if sign == 'Z' {
-		// A trailing Z is UTC; a Z anywhere else is malformed.
-		if tzPos != len(t)-1 {
+		// A trailing Z is UTC; a Z anywhere else is malformed — except
+		// that here too a NUL reads as the end of the string, and this
+		// arm takes the LOOSEST of the three NUL rules: everything from
+		// the first NUL on is discarded unexamined, however much there is.
+		//	"…56Z"          UTC        "…56Zx"           ValueError
+		//	"…56Z\x00"      UTC        "…56Z\x00x"       UTC
+		//	"…56Z\x00\x00x" UTC        "…56Z\x00+01:00"  UTC, not +01:00
+		// Compare the offset body two lines down, where `+01:00\x00` is
+		// accepted and `+01:00\x00\x00` is not. Measured, all of it.
+		if tzPos != len(t)-1 && strings.IndexByte(t[tzPos+1:], 0) != 0 {
 			return 0, 0, 0, 0, 0, false, false, false
 		}
 		return h, mi, sec, micro, 0, true, nextDay, true
@@ -969,8 +1017,22 @@ func hhMMSSff(t string, hasTZ bool) (h, mi, sec, micro int, ok bool) {
 	bareFrac := !hasSep && read == 3 && n-pos >= 2
 	if !sepFrac && !bareFrac {
 		// Exactly one stray character is swallowed, and only ahead of an
-		// offset. Two is an error and so is one at end-of-string.
-		if hasTZ && n-pos == 1 {
+		// offset. Two is an error and so is one at end-of-string —
+		// UNLESS that one character is a NUL.
+		//
+		// CPython parses the C string PyUnicode_AsUTF8AndSize hands it,
+		// and a check written against the buffer's terminator cannot tell
+		// it from an embedded NUL. So `12:34:56\x00` is 12:34:56 while
+		// `12:34:56_` is a ValueError, and `12:34:56\x00\x00` is a
+		// ValueError again — the tolerance is for exactly ONE. Measured,
+		// not modelled; the r3 corpus sweeps 0-3 NULs through every
+		// position of seventeen bases and this is the shape that survives.
+		//
+		// The `hasTZ` half stays as it was: the tz split happens before
+		// this function is called, so `12:34:56\x00Z` arrives here as
+		// `12:34:56\x00` and needs no separate rule, and neither does
+		// `+01:00\x00`, whose offset body reaches this same line.
+		if n-pos == 1 && (hasTZ || t[pos] == 0) {
 			return h, mi, sec, 0, true
 		}
 		return 0, 0, 0, 0, false
@@ -990,6 +1052,14 @@ func hhMMSSff(t string, hasTZ bool) (h, mi, sec, micro int, ok bool) {
 		}
 		if !hasTZ {
 			for i := pos + 6; i < n; i++ {
+				if t[i] == 0 {
+					// A NUL ENDS the scan and the rest is never looked
+					// at — a different NUL rule from the one-character
+					// tolerance above, and the pair that separates them
+					// is `.123456\x007` (accepted, the 7 unexamined)
+					// against `12:34:56\x007` (a ValueError). Measured.
+					break
+				}
 				if !isASCIIDigit(t[i]) {
 					return 0, 0, 0, 0, false
 				}
@@ -1750,12 +1820,47 @@ type ToolEvent map[string]any
 // production caller of CheckExecutionClaim in this tree yet, so nothing
 // enforces that today; X25-X28 pin the rendering for each Python-typed
 // value, and BACKLOG carries the contract for whoever writes the caller.
+//
+// r3: and for two rounds this function did not ACCEPT the spelling the
+// paragraph above prescribes. r1 found it blind to `map[string]any` and
+// added that arm; r2 wrote the contract paragraph saying use pyval.Obj
+// instead — and pyval.Obj is a SLICE, so it matched neither arm, every
+// event was skipped, and a correctly-decoded transcript came back
+// `judged=true, "no execution in transcript"`. That is worse than a miss:
+// judged=true is a clean bill, not a "the check broke" marker. The
+// documentation added to defend the contract was itself the bug report,
+// which is the sharpest form of L52 this file has produced.
+//
+// Order is dropped in the conversion and that is inert HERE — every
+// consumer does keyed lookups (`name`, `input`, `is_error`, `command`) and
+// nothing iterates — while the VALUES are handed through untouched, so a
+// nested Obj still reaches pyval.Str as an Obj and reprs with its own key
+// order. Do not "simplify" this to a generic flatten that converts nested
+// values too; that would re-open the map[string]any rendering divergence
+// one level down.
 func asMapping(v any) (map[string]any, bool) {
 	switch m := v.(type) {
 	case ToolEvent:
 		return map[string]any(m), true
 	case map[string]any:
 		return m, true
+	case pyval.Obj:
+		// LoadsOrdered's decoder calls Obj.Set per key, so a decoded Obj
+		// carries no duplicates; a hand-built one might, and last-wins is
+		// what CPython's json.loads does with a repeated key anyway.
+		//
+		// EQUIVALENT MUTANT (r3 battery, G2b): making this loop keep the
+		// FIRST value for a repeated key survives the whole suite, and it
+		// is not a fixture gap — the sentence above is why. No input that
+		// arrives through LoadsOrdered can reach a duplicate, so the two
+		// spellings are the same function on the reachable domain. Kept
+		// last-wins anyway, because the day a hand-built Obj shows up the
+		// reachable domain widens and json.loads is the answer to match.
+		out := make(map[string]any, len(m))
+		for _, f := range m {
+			out[f.Key] = f.Val
+		}
+		return out, true
 	}
 	return nil, false
 }

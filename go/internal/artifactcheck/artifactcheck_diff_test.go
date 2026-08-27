@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
 // The differential for src/artifact_check.py slice 1.
@@ -70,6 +71,36 @@ func acBoolDefault(c acCase, k string, def bool) bool {
 		return v
 	}
 	return def
+}
+
+// acPkgDirEntries lists the package directory, which is the test binary's
+// working directory. It exists so a fixture that builds its tree through a
+// relative path is caught by the suite rather than by `git status`.
+type acDirSet map[string]bool
+
+func acPkgDirEntries(t *testing.T) acDirSet {
+	t.Helper()
+	ents, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(acDirSet, len(ents))
+	for _, e := range ents {
+		out[e.Name()] = true
+	}
+	return out
+}
+
+func (a acDirSet) assertNoNewSince(t *testing.T, before acDirSet) {
+	t.Helper()
+	for name := range a {
+		if !before[name] {
+			t.Errorf("this case created %q in the PACKAGE directory — its "+
+				"answer func is building a tree through a relative path, "+
+				"which for a case with no \"files\" key is what base is",
+				name)
+		}
+	}
 }
 
 // acDir is `str(base) if c.get("with_dir", True) else None` — the two
@@ -358,13 +389,13 @@ func acCases() []acCase {
 		// extracts the claim, the port extracted nothing, and a fabrication
 		// check that finds no claim reports no fabrication. (artifactcheck
 		// r2; the class-level pin is in internal/pytext.)
-		{"E28 a fold-only word char before the verb", "x\u0345wrote to a.txt"},
-		{"E29 the same character after the verb", "wrote\u0345 to a.txt"},
+		{"E44 a fold-only word char before the verb", "x\u0345wrote to a.txt"},
+		{"E45 the same character after the verb", "wrote\u0345 to a.txt"},
 		// The zero-width-window decision's actual pin: the verb runs
 		// straight into the preposition, so a translation that kept an
 		// empty branch would extract a.txt where CPython extracts nothing.
-		{"E30 the verb runs straight into the preposition", "wroteto a.txt"},
-		{"E31 the same with a different preposition", "wroteat a.txt"},
+		{"E46 the verb runs straight into the preposition", "wroteto a.txt"},
+		{"E47 the same with a different preposition", "wroteat a.txt"},
 		{"E28 dump", "dumped to a.json"},
 		{"E29 export", "exported as a.csv"},
 		{"E30 store", "stored at a.db"},
@@ -643,6 +674,81 @@ func acCases() []acCase {
 			})
 	}
 
+	// And the THIRD spelling, which is the one the port's own contract
+	// prescribes and the one nothing tested: pyval.Obj, as
+	// pyval.LoadsOrdered yields it. asMapping listed ToolEvent and
+	// map[string]any; pyval.Obj is a SLICE and matched neither, so a
+	// transcript decoded exactly as the doc paragraph above asMapping
+	// demands was invisible end to end — every event skipped, the answer
+	// `judged=true, "no execution in transcript"`, a clean bill rather
+	// than a broken-check marker (r3 HIGH).
+	//
+	// The lesson is not "add an arm". r1 found the map[string]any gap and
+	// added that arm; r2 wrote the paragraph naming pyval.Obj as the
+	// correct decode — and the paragraph and the function disagreed for a
+	// whole round, in the same file, forty lines apart. A prescription no
+	// test exercises is a comment, not a contract (L52).
+	//
+	// These rows re-marshal the SAME fixture inputs and decode them the
+	// Python-typed way, so the three spellings are one input set with three
+	// constructions and any future arm has to satisfy all of them.
+	for _, row := range []struct {
+		name   string
+		text   string
+		events []any
+	}{
+		{"X29 a pyval.Obj transcript — the decode the contract prescribes",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": "pytest"}}}},
+		{"X30 a pyval.Obj transcript with nothing to flag", "all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": false,
+				"input": map[string]any{"command": "pytest"}}}},
+		{"X31 a pyval.Obj transcript whose name is an unhashable list",
+			"all tests passed",
+			[]any{map[string]any{"name": []any{"Bash"}, "is_error": true}}},
+		// The rendering half, and the reason the LOW about pyval.Clip needs
+		// no separate fix: a MAPPING command reaches pyval.Str as an Obj
+		// through this path and reprs with its own key order, where the
+		// map[string]any spelling reaches the refusal sentinel. Key order
+		// is deliberately not alphabetical here.
+		{"X32 a pyval.Obj command that is itself a mapping",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": map[string]any{"b": 2, "a": 1}}}}},
+		{"X33 a pyval.Obj integer command still renders without a point",
+			"all tests passed",
+			[]any{map[string]any{"name": "Bash", "is_error": true,
+				"input": map[string]any{"command": 5}}}},
+	} {
+		add(row.name,
+			map[string]any{"kind": "exec_claim", "text": row.text, "tool_events": row.events},
+			func(t *testing.T, c acCase, base string) any {
+				raw, _ := c.in["tool_events"].([]any)
+				blob, err := json.Marshal(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dec, err := pyval.LoadsOrdered(string(blob))
+				if err != nil {
+					t.Fatal(err)
+				}
+				lst, ok := dec.(pyval.List)
+				if !ok {
+					t.Fatalf("LoadsOrdered gave %T, not a pyval.List", dec)
+				}
+				// A guard, not decoration: if this ever stops producing
+				// pyval.Obj elements the rows above go on passing while
+				// testing the spelling they were written to leave behind.
+				for i, e := range lst {
+					if _, isObj := e.(pyval.Obj); !isObj {
+						t.Fatalf("element %d decoded as %T, not pyval.Obj", i, e)
+					}
+				}
+				return acObjMap(CheckExecutionClaim(acStr(c, "text"), []any(lst)))
+			})
+	}
+
 	// The walk's OWN joins, which A10 and P8c did not reach: the fix for
 	// pathlib's `/` had four sites in one function and the class had more
 	// outside it. This one feeds both snapshots, so getting it wrong empties
@@ -669,6 +775,165 @@ func acCases() []acCase {
 			}
 			return acSortedKeys(SnapshotDir(pyJoin(link, "..")))
 		})
+
+	// W22 is W21's missing branch. W21 proved the FILE join in the walk
+	// needs pyJoin; the symlink is_dir() PROBE three lines above it still
+	// used filepath.Join, and W21 could not see that because none of its
+	// `..`-root entries is a symlink. One spurious row is all it takes:
+	// ChangedSince goes non-empty, layer 1 never fires, and a plain
+	// missing-artifact fabrication is reported clean (r3 HIGH).
+	add("W22 a '..' root whose entries include a symlinked DIRECTORY",
+		map[string]any{"kind": "snapshot_symlinked_subdir",
+			"files": map[string]any{"keep.txt": "k"}},
+		func(t *testing.T, c acCase, base string) any {
+			outside := base + "-ssd"
+			for _, d := range []string{"proj", "elsewhere"} {
+				if err := os.MkdirAll(filepath.Join(outside, d), 0o777); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for p, body := range map[string]string{
+				"a.txt": "a", "proj/deep.txt": "d", "elsewhere/inner.txt": "i"} {
+				if err := os.WriteFile(filepath.Join(outside, p),
+					[]byte(body), 0o666); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sl2 := filepath.Join(outside, "sl2")
+			_ = os.Remove(sl2)
+			if err := os.Symlink(filepath.Join(outside, "elsewhere"), sl2); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(base, "slink")
+			_ = os.Remove(link)
+			if err := os.Symlink(filepath.Join(outside, "proj"), link); err != nil {
+				t.Fatal(err)
+			}
+			return acSortedKeys(SnapshotDir(pyJoin(link, "..")))
+		})
+
+	// --- the sort is over surrogateescape-decoded str, not over bytes ----
+	//
+	// Names travel as lists of BYTE VALUES in both directions. That is not
+	// a convenience: json.dumps cannot encode a lone surrogate, so a
+	// filename with an undecodable byte cannot ride the ordinary string
+	// channel at all, and the entire non-UTF-8 axis was structurally
+	// unreachable by every other fixture in this file (r3 MEDIUM).
+	//
+	// The byte 0x80 against "é" (0xC3 0xA9) is the pair that separates the
+	// two orderings: Python compares U+DC80 (56448) against U+00E9 (233)
+	// and puts é first; sort.Strings compares 0x80 (128) against 0xC3 (195)
+	// and puts the escape first. Against ASCII or an astral character the
+	// two agree, which is how this survived three rounds.
+	{
+		names := [][]int{
+			{'z', 'z', '.', 't', 'x', 't'},
+			{0xC3, 0xA9, 'a', '.', 't', 'x', 't'}, // "éa.txt"
+			{0x80, 'z', '.', 't', 'x', 't'},
+			{0xFF, 'q', '.', 't', 'x', 't'},
+			{0xE1, 0x80, 0x80, 'b', '.', 't', 'x', 't'}, // U+1000 + "b"
+		}
+		vals := make([]any, 0, len(names))
+		for _, n := range names {
+			row := make([]any, 0, len(n))
+			for _, b := range n {
+				row = append(row, b)
+			}
+			vals = append(vals, row)
+		}
+		mk := func(t *testing.T, base string, limit int) any {
+			// t.TempDir(), NOT base: these two cases carry no "files" key,
+			// so the harness hands them base == "" and filepath.Join("",
+			// "fsnames") is a RELATIVE path — the first run of this fixture
+			// created the tree inside the package directory and left it
+			// there for git to find. The guard in the harness now fails the
+			// test if any case does that again.
+			dir := filepath.Join(t.TempDir(), "fsnames")
+			if err := os.MkdirAll(dir, 0o777); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range names {
+				b := make([]byte, len(n))
+				for i, v := range n {
+					b[i] = byte(v)
+				}
+				if err := os.WriteFile(dir+"/"+string(b), []byte("x"), 0o666); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := FilesModifiedSince(dir, "1970-01-01T00:00:00", limit)
+			out := make([]any, 0, len(got))
+			for _, g := range got {
+				row := make([]any, 0, len(g))
+				for i := 0; i < len(g); i++ {
+					row = append(row, int(g[i]))
+				}
+				out = append(out, row)
+			}
+			return out
+		}
+		add("W23 the changed-file ORDER over undecodable filenames",
+			map[string]any{"kind": "sorted_fsnames", "names": vals,
+				"since": "1970-01-01T00:00:00", "limit": 20},
+			func(t *testing.T, c acCase, base string) any {
+				return mk(t, base, 20)
+			})
+		// The order is not cosmetic once `limit` truncates: at 2 the two
+		// runtimes name DIFFERENT FILES, not the same files in a different
+		// order, and the resume path then redoes work it has already done.
+		add("W24 the same list truncated by limit, so the CONTENT differs",
+			map[string]any{"kind": "sorted_fsnames", "names": vals,
+				"since": "1970-01-01T00:00:00", "limit": 2},
+			func(t *testing.T, c acCase, base string) any {
+				return mk(t, base, 2)
+			})
+	}
+
+	// --- repr of a filename Python holds surrogate-escaped ---------------
+	//
+	// This one is reachable by an ordinary fixture where W23/W24 are not,
+	// because repr's OUTPUT is pure ASCII: it writes the lone surrogate as
+	// the six characters `\udc80`. The input still has to arrive as bytes.
+	//
+	// The reason string this feeds is written into the operator stream by
+	// BOTH runtimes, so `['\udc80z.py']` against `['<U+FFFD>z.py']` is two
+	// different rows for one event and a grep keyed on either misses the
+	// other. The ASCII control is not decoration: the assertion "the port
+	// reprs a bad byte correctly" also holds for a port that mangles every
+	// name, and without the control the pin could not tell the difference
+	// (the syshealth r5 lesson, applied here).
+	{
+		names := [][]int{
+			{0x80, 'z', '.', 'p', 'y'},
+			{'a', 'z', '.', 'p', 'y'},        // the ASCII control
+			{0xC3, 0xA9, '.', 'p', 'y'},      // valid UTF-8: NOT escaped
+			{0xE2, 0x82, 'b', '.', 'p', 'y'}, // truncated: TWO surrogates,
+			// where errors="replace" would give ONE U+FFFD
+			{0xEF, 0xBF, 0xBD, '.', 'p', 'y'}, // a REAL U+FFFD, untouched
+			{'i', 't', 0xFF, '.', 'p', 'y'},   // forces repr's double quotes?
+		}
+		vals := make([]any, 0, len(names))
+		for _, n := range names {
+			row := make([]any, 0, len(n))
+			for _, b := range n {
+				row = append(row, b)
+			}
+			vals = append(vals, row)
+		}
+		add("V1 repr of names Python holds surrogate-escaped",
+			map[string]any{"kind": "repr_fsname", "names": vals},
+			func(t *testing.T, c acCase, base string) any {
+				out := make([]any, 0, len(names))
+				for _, n := range names {
+					b := make([]byte, len(n))
+					for i, v := range n {
+						b[i] = byte(v)
+					}
+					out = append(out, reprList([]string{string(b)}))
+				}
+				return out
+			})
+	}
 
 	// --- decode_replace: one U+FFFD per MAXIMAL SUBPART, not per byte -----
 	//
@@ -1246,7 +1511,13 @@ func TestTheArtifactCheckAgreesWithCPythonOnEveryFixture(t *testing.T) {
 				acMktree(t, base, acFiles(c), acMtimes(c))
 			}
 
+			// A case whose answer func writes through a RELATIVE path lands
+			// in the package directory, which is inside the repository. It
+			// happened (W23/W24, r3): base is "" for every case without a
+			// "files" key, and filepath.Join("", x) is just x.
+			before := acPkgDirEntries(t)
 			have := acGeneric(t, c.answer(t, c, base))
+			acPkgDirEntries(t).assertNoNewSince(t, before)
 			if !reflect.DeepEqual(have, want) {
 				t.Errorf("port and CPython disagree\n  input:   %s\n"+
 					"  CPython: %#v\n  port:    %#v", acJSON(t, c.in), want, have)
@@ -1326,7 +1597,11 @@ func TestTheVerdictRendersItsFieldsInTheDataclassOrder(t *testing.T) {
 // fresh candidate.
 //
 // The mutation battery is what found that hole: commenting out the sort
-// left all 192 fixtures green.
+// left the ENTIRE fixture table green. (It said "all 192 fixtures" until
+// r3 counted 223 — the third time in this file a stated fixture count has
+// gone stale, and ExtractWriteClaims' own doc already says why: a
+// conclusion that has to be re-counted to stay true is the wrong spelling
+// of the conclusion. The number is load-bearing for nothing here.)
 func TestTheFreshCandidateOrderIsThePortsOwnGuaranteeNotCPythons(t *testing.T) {
 	base := t.TempDir()
 	// Names chosen so sorted order and creation order disagree, or the
