@@ -35,9 +35,20 @@ var secretRes = []*regexp.Regexp{
 	// closure_verdicts.jsonl and metadata.json). A redaction that fires
 	// where the other runtime's does not is a fork in the direction that
 	// loses evidence (adversarial mission-r6 LOW).
-	regexp.MustCompile(`(?i)(bearer|authorization|api[_-]?key|token|secret|password)` +
+	// PyFoldI, because `authorization` and `api` carry an `i` and
+	// re.IGNORECASE also matches U+0130/U+0131 there. Measured before the
+	// fix, both engines, on the same string:
+	//
+	//	"ap\u0131_key: ABCDEFGH12345678"
+	//	  CPython  "[REDACTED]"
+	//	  Go       "ap\u0131_key: ABCDEFGH12345678"   <- secret in the clear
+	//
+	// A redaction bypass reachable with one homoglyph, in the function
+	// whose output reaches exported artifacts. Direction is the opposite
+	// of the `\S` note above: that one over-redacts, this one under-redacts.
+	regexp.MustCompile(pytext.PyFoldI(`(?i)(bearer|authorization|api[_-]?key|token|secret|password)` +
 		pytext.SpaceClass + `*[:=]` + pytext.SpaceClass + `*` +
-		pytext.NotClass("") + `{8,}`),
+		pytext.NotClass("") + `{8,}`)),
 }
 
 // Secrets redacts secret-shaped substrings from s.

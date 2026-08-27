@@ -334,7 +334,18 @@ func escapeInClass(s string) string {
 // Spelled `(?-i:...)` and listing both cases explicitly, so it means the
 // same thing whether or not the enclosing pattern sets `(?i)` and cannot
 // fold-grow the way a spliced WordClassBody does (see WordClass).
-const IClass = `(?-i:[iI\x{130}\x{131}])`
+const IClass = `(?-i:[` + IClassBody + `])`
+
+// IClassBody is the same set as a CLASS BODY, for the case IClass cannot
+// serve: a bare `i` already inside a character class, where a group
+// cannot go. `exfiltrat[ei]` in internal/guard is the live one — under
+// re.IGNORECASE that class matches e E i I U+0130 U+0131, and Go's `(?i)`
+// stops at the first four, so the class body has to name the last two.
+//
+// Splice it, do not retype it: PyFoldI's panic names this const, and the
+// point of a named const is that the four code points are written down
+// once.
+const IClassBody = `iI\x{130}\x{131}`
 
 // FoldI rewrites a LITERAL word into the pattern CPython's IGNORECASE
 // would match for it, by replacing each `i`/`I` with IClass.
@@ -422,13 +433,23 @@ func PyFoldI(pattern string) string {
 				j++
 			}
 			for j < len(rs) && rs[j] != ']' {
+				// The declared spelling passes through as a unit. Without
+				// this, a class a caller has ALREADY fixed by hand looks
+				// exactly like one nobody has touched -- and the first
+				// such caller (guard's `exfiltrat[e` + IClassBody + `]`)
+				// tripped the panic on a pattern that was correct.
+				if strings.HasPrefix(string(rs[j:]), IClassBody) {
+					j += len([]rune(IClassBody))
+					continue
+				}
 				if rs[j] == '\\' && j+1 < len(rs) {
 					j++
 				}
 				if rs[j] == 'i' || rs[j] == 'I' {
 					panic("pytext.PyFoldI: a bare i/I inside a character " +
 						"class cannot be rewritten (a class cannot hold a " +
-						"group). Spell it iI\\x{130}\\x{131} in the class: " +
+						"group). Splice pytext.IClassBody into the " +
+						"class instead: " +
 						pattern)
 				}
 				j++

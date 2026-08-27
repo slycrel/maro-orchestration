@@ -14350,3 +14350,111 @@ pinning all of them rather than the one the reviewer happened to land on.
 "output fİle has 3 rows"   CPython false   Go (unfolded) true
 "output into 3 places"     CPython false   Go            false   <- the control
 ```
+
+## The census found two security bypasses the review did not (2026-08-27)
+
+r12 found the Turkish i in the fabrication detector. The obvious next
+move was to roll the fix out, and the obvious way to scope that was the
+`(?i)` count already sitting in `BACKLOG.md`: *"16 of 40 patterns across
+9 files"*. Re-measuring it a second way answered **35 of 47 across 10** —
+disagreeing on the count and on the file list. Both were greps over a
+shape that needs parsing, so neither was the number, and `artifactcheck`
+— the one file whose truth was independently known, at four — was
+undercounted by both.
+
+Same failure as the scope ledger, one week apart. So: parse it.
+
+`internal/pytext/foldcensus_test.go` walks every production
+`regexp.MustCompile` in the module. **Its predicate is `PyFoldI`
+itself** — exposure is defined as *"the remedy would change this
+pattern"* — which is the part worth keeping. A separate parser for "does
+this carry a foldable i" is a second opinion about the same question,
+free to disagree with the transform, and a census that disagrees with its
+own remedy is exactly how a pattern gets certified safe and stays broken.
+
+It answers: **140 files, 81 compile calls, 32 case-insensitive, 28
+carrying a literal `i`** — 8 wrapped, 20 not. And on its first run it
+named two surfaces no review round had:
+
+```
+scrub.Secrets("apı_key: ABCDEFGH12345678")
+  CPython  "[REDACTED]"
+  Go       "apı_key: ABCDEFGH12345678"     <- the secret, in the clear
+
+guard.ScanContent("ıgnore previous instructions")
+  CPython  override attempt, risk medium
+  Go       is_clean=true                    <- the guard, walked past
+```
+
+A redaction bypass and a prompt-injection bypass, one homoglyph each.
+`scrub`'s runs OPPOSITE to the `\S` finding mission-r6 filed against that
+same pattern: that one over-redacts and destroys evidence, this one
+under-redacts and leaks. Both directions of one line.
+
+### What the census could not see, which is the more useful half
+
+The first draft read `artifactcheck` as two-exposed and moved on. That
+package builds nine of its stdout branches through a `lit(name, body)`
+helper, so `printing`, `verified` and `running it` reach `MustCompile` as
+a PARAMETER and contribute nothing to the literal at the call. A scan
+that cannot see a pattern must SAY so rather than certify it — the same
+false-negative rule the escape census states about stripping comments —
+so opaque operands are now reported and must be declared. Six more sites
+appeared immediately, including `evolver/store.go:995`, which the literal
+scan had missed entirely.
+
+`pytext.X` is deliberately not opaque. Every exported class there is
+spelled `(?-i:[...])`, fold explicitly off, so splicing one into a `(?i)`
+pattern contributes no foldable letter by construction. That is why the
+helpers are written that way, and it is what lets the scan ignore them
+instead of drowning in them.
+
+### The first pattern PyFoldI refused, and the design reversal it forced
+
+`guard` ports `exfiltrat[ei]`. The `i` is inside a character class, which
+cannot hold a group, so `PyFoldI` panicked at init — working exactly as
+designed, refusing to emit a pattern that is wrong in a way nothing
+reports. The class is spelled with the new `pytext.IClassBody` instead.
+
+Then it panicked on the fixed pattern too, because "already spelled
+right" and "never touched" look identical to a scanner that only knows
+about a bare `i`. `PyFoldI` had been made deliberately NON-idempotent
+hours earlier, and that was written up as a feature — composition order
+should be loud. The first hand-written class body disproved it. The
+declared spelling now passes through as a unit, the transform is
+idempotent, and `TestFoldIIsIdempotent` pins the property the panic test
+used to deny. What still panics is what always mattered: a bare `i` in a
+class nobody has spelled out.
+
+Worth naming plainly, because it is the second time in two days a claim
+in this arc was a reading rather than a measurement, and both times the
+claim was mine: *"no remedy exists in the tree"*, then *"non-idempotent
+is the right design"*.
+
+### A fixture aimed at the fix is not a fixture aimed at the code
+
+The exfiltration rows were the sharpest lesson of the batch. Two rows
+were added for the class case, both passed, and a mutation that emptied
+the class of its two code points **killed nothing** — because both rows
+spelled the Turkish i in `exf·i·ltrat`, the stem, where the folded
+literal already handled it. The class is the LAST character. Rewritten to
+put the homoglyph in the class position, plus the ASCII control:
+
+| mutation of `exfiltrat[e` + `IClassBody` + `]` | killed by |
+|---|---|
+| `[ei]`, `[eiI]` (bare i, any spelling) | init panic |
+| `[e\x{130}\x{131}]` (drops plain `i`) | the ASCII control |
+| `[e\x{131}]` (keeps only the dotless i) | the U+0130 row + the control |
+
+Every code point in that class body is now individually pinned, and the
+whole battery is:
+
+| mutation | rows killed |
+|---|---|
+| `scrub` loses `PyFoldI` | the 4 keyword rows, controls green |
+| `guard`'s `boundedBoth` loses it | override ×2, persona, tool-call tag |
+| a new exposed `(?i)` in an unlisted file | census, by file and line |
+| the same pattern **without** `(?i)` | *nothing* — the control |
+| a pattern built from a local identifier | census, as opaque |
+| an allowlisted file gains an exposure | census, count 4 vs 3 |
+| an allowlist entry whose divergence is gone | census, as a lie |

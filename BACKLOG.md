@@ -570,6 +570,37 @@ A detector that fails OPEN. The ASCII control agrees on both sides, so it
 is a real hole rather than a broken fixture. FIXED in `artifactcheck`'s
 four `(?i)` patterns via `pytext.PyFoldI`.
 
+**Two SECURITY surfaces, both fail-open, both fixed 2026-08-27.** Found
+by running the parsed census below rather than by review. Measured on
+both engines before the fix:
+
+```
+scrub.Secrets("apı_key: ABCDEFGH12345678")
+  CPython  "[REDACTED]"
+  Go       "apı_key: ABCDEFGH12345678"     <- secret in the clear
+
+guard.ScanContent("ıgnore previous instructions")
+  CPython  override attempt, risk medium
+  Go       is_clean=true                    <- injection guard walked past
+```
+
+A redaction bypass and a prompt-injection-guard bypass, each reachable
+with one homoglyph. `scrub`'s direction is the OPPOSITE of the `\S`
+finding already filed against the same pattern: that one over-redacts and
+loses evidence, this one under-redacts and leaks. Both now go through
+`pytext.PyFoldI`, wrapped at `boundedBoth`/`boundedStart` in `guard` so
+every override and tool-call body added later is folded without its
+author knowing to.
+
+`guard`'s `exfiltrat[ei]` is the first pattern PyFoldI **refuses**: the
+`i` is inside a character class, which cannot hold a group. It panics at
+init rather than emitting a silently-wrong pattern, and the class is
+spelled with the new `pytext.IClassBody` instead. That also forced a
+design reversal — PyFoldI was deliberately non-idempotent, which made a
+correctly hand-spelled class indistinguishable from an untouched one. The
+declared spelling now passes through as a unit and the transform is
+idempotent; `TestFoldIIsIdempotent` pins it.
+
 **Still open: the rollout — and the denominator for it is not known.**
 This entry said "16 of 40 `(?i)` patterns across 9 files". Re-measuring
 the same question a second way answered 35 of 47 across 10. Both are
@@ -584,13 +615,41 @@ attributed to it, and the mutation battery proves each of the four kills
 rows nothing else kills. So the census undercounted the one file where
 the truth is independently known.
 
-The answer is the one `escape_census_test.go` already demonstrates for
-the sibling class: a parsed census with a hand-written allowlist, so an
-unwrapped exposed pattern cannot reach a commit silently. That is the
-next slice; until it lands, treat the rollout list as unenumerated rather
-than as 16 or 35. `provenance`'s patterns remain next by consequence, and
-the three `provenance_diff_test.go` rows pinned with cause `whyFold` come
-out when they are done.
+**SHIPPED same day: `pytext/foldcensus_test.go`**, the parsed census, and
+the answer it gives is neither hand-count:
+
+> 140 production files, 81 `regexp.MustCompile` calls, **32
+> case-insensitive, 28 of those carrying a literal `i`/`I`** — 8 wrapped,
+> 20 not, across 7 files.
+
+Its predicate is `PyFoldI` itself: exposure is DEFINED as "the remedy
+would change this pattern", so the census and the fix cannot drift the
+way a second parser would. It also reports **opaque** operands — a
+pattern assembled from an identifier or a helper's parameter, which the
+literal scan cannot read. That was not a hypothetical: `artifactcheck`
+builds nine stdout branches through a `lit(name, body)` helper, so
+`printing` / `verified` / `running it` never appear at the call, and the
+first draft of the census read the file as two-exposed and moved on.
+
+The allowlist IS the rollout queue, one entry per file with the reason
+and the direction, and it cannot grow silently. Remaining: `artifactcheck`
+3 (the `lit()` branches), `closure` 1 + 8, `evolver` 1, `intent` 2,
+`jsonx` 2, `provenance` 3.
+
+`evolver/store.go:995` is on that list but is NOT the same shape and must
+not be "fixed" the same way: it is `regexp.Compile("(?i)" + pattern)`
+over a RUNTIME string from an LLM guardrail suggestion, so there is no
+literal to wrap — the equivalent fix folds the incoming pattern at the
+call, which changes what a suggestion MEANS and wants its own decision.
+
+`provenance`'s three remain next by consequence and are the only ones on
+the list already measured unsafe. They are not wrapped yet for a stated
+reason: the literals are kept byte-identical to `lesson_provenance.py`
+and `TestRegexSourceMatchesCPython` pins that by un-substituting
+`SpaceClass` back out of the COMPILED pattern. `IClass` has to be
+un-substituted too, and it folds `i` and `I` to one spelling, so that
+test needs a real answer rather than a second `ReplaceAll`. The three
+`provenance_diff_test.go` rows with cause `whyFold` stay pinned meanwhile.
 
 ### Go port: three more provenance divergences, all fail-closed (FOUND 2026-08-27, provenance differential)
 

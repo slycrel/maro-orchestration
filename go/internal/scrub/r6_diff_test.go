@@ -48,6 +48,29 @@ func TestSecretsMatchesCPython(t *testing.T) {
 		// \S{8,} stops at it, so the redaction covers less text.
 		"password: hunter2\u00a0hunter2",
 		"secret = abcd\u2028efghijkl",
+		// The Turkish i, in the KEYWORD half of the pattern. CPython's
+		// re.IGNORECASE also matches U+0130/U+0131 for an `i`; Go's `(?i)`
+		// does not, so before pytext.PyFoldI the port left the secret in
+		// the clear where CPython redacted it:
+		//
+		//	"ap\u0131_key: ABCDEFGH12345678"
+		//	  CPython  "[REDACTED]"
+		//	  Go       unchanged
+		//
+		// A redaction BYPASS reachable with one homoglyph, and the
+		// opposite direction from the \S finding above -- that one
+		// over-redacts and loses evidence, this one under-redacts and
+		// leaks. `authorization` and `api` are the two keywords with an i.
+		"ap\u0131_key: ABCDEFGH12345678",
+		"AP\u0130_KEY: ABCDEFGH12345678",
+		"author\u0131zation: ABCDEFGH12345678",
+		"AUTHOR\u0130ZATION: ABCDEFGH12345678",
+		// Controls. Without these the four rows above would agree just as
+		// well between two engines that had both stopped matching.
+		"api_key: ABCDEFGH12345678",
+		"authorization: ABCDEFGH12345678",
+		// A keyword with no i at all must be untouched by the fold.
+		"password: ABCDEFGH12345678",
 		// The ASCII lane, which already agreed and must keep agreeing.
 		"key sk-ant-abcdefghijklmnop1234 inline",
 		"key sk-abcdefghijklmnop1234 inline",

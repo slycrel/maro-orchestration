@@ -244,13 +244,28 @@ func TestPyFoldISkipsWhatItMustNotTouch(t *testing.T) {
 // quietly. This is the only failure mode of PyFoldI that a caller could
 // otherwise ship: a pattern that looks rewritten and is not.
 func TestPyFoldIRefusesABareIInsideAClass(t *testing.T) {
-	// The last row is IClass itself. PyFoldI is deliberately NOT
-	// idempotent: IClass's own class body holds a literal `i`, so applying
-	// the transform to an already-transformed pattern panics rather than
-	// producing a nested one. Composition order therefore matters, and it
-	// failing loudly is how a caller finds that out at init instead of at
-	// match time.
-	for _, in := range []string{`[i]`, `[abci]`, `[^i]`, `(?i)x[Ij]y`, IClass} {
+	// IClass is NOT in this list, and it used to be. The first draft made
+	// PyFoldI deliberately non-idempotent — IClass's own class body holds
+	// a literal `i`, so re-applying the transform panicked — and called
+	// that a feature, on the grounds that a caller composing the transform
+	// twice should hear about it.
+	//
+	// The first hand-written class body proved that wrong. internal/guard
+	// ports `exfiltrat[ei]`, where the `i` is inside a class and PyFoldI
+	// cannot help; the fix is to name the code points in the class, which
+	// is what IClassBody is for. That pattern is CORRECT, and the old rule
+	// panicked on it — because "already spelled right" and "never touched"
+	// look identical to a scanner that only knows about a bare `i`.
+	//
+	// So the declared spelling now passes through as a unit, and PyFoldI
+	// is idempotent as a consequence. What still panics is what always
+	// mattered: a bare i/I in a class that nobody has spelled out, which
+	// is a divergence the transform must not hide. TestFoldIIsIdempotent
+	// pins the other half.
+	for _, in := range []string{`[i]`, `[abci]`, `[^i]`, `(?i)x[Ij]y`,
+		// A class holding only PART of the declared spelling is still
+		// wrong, and must not slip through the prefix skip.
+		`[i\x{130}]`, `[iI]`} {
 		t.Run(in, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
@@ -260,6 +275,33 @@ func TestPyFoldIRefusesABareIInsideAClass(t *testing.T) {
 				}
 			}()
 			_ = PyFoldI(in)
+		})
+	}
+}
+
+// The half TestPyFoldIRefusesABareIInsideAClass no longer covers. This is
+// a property, not a convenience: callers compose PyFoldI with pySpace-style
+// splices, and a transform whose result changes on a second application
+// makes composition ORDER load-bearing for every caller. It is also what
+// lets the (?i) census use PyFoldI as its own predicate — a pattern
+// already wrapped must measure as unchanged.
+func TestFoldIIsIdempotent(t *testing.T) {
+	for _, in := range []string{
+		`(?i)hi`,
+		`(?i)` + WordStart + `(ignore` + SpaceClass + `+previous)` + WordEnd,
+		`(?i)exfiltrat[e` + IClassBody + `]`,
+		IClass,
+		`(?i)nothing here`,
+	} {
+		t.Run(in, func(t *testing.T) {
+			once := PyFoldI(in)
+			if twice := PyFoldI(once); twice != once {
+				t.Fatalf("PyFoldI is not idempotent on %q\n once %q\ntwice %q",
+					in, once, twice)
+			}
+			if _, err := regexp.Compile(once); err != nil {
+				t.Fatalf("PyFoldI(%q) does not compile: %v", in, err)
+			}
 		})
 	}
 }
