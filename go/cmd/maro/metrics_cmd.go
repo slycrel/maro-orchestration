@@ -26,7 +26,9 @@ func runMetrics(args []string) error {
 	fs := flag.NewFlagSet("metrics", flag.ContinueOnError)
 	limit := fs.Int("limit", 100, "how many recent outcomes to read")
 	format := fs.String("format", "text", "text (json is not ported yet)")
-	if err := fs.Parse(args); err != nil {
+	// Same reason as the pack verbs: this command reads no positional, so a
+	// bare Parse turned a stray word into a silent `-limit` drop.
+	if _, err := parseArgs(fs, args, 0); err != nil {
 		return err
 	}
 	if *format != "text" {

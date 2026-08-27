@@ -340,7 +340,10 @@ func scanLegacyRunDirs(runsRoot string, yield func(dir string, meta map[string]a
 		return pypath.FSLess(entries[i].Name(), entries[j].Name())
 	})
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		// runs.py:200 is `d.is_dir()` over a sorted iterdir(); the
+		// dot-prefix test is the same line's second half. Path.is_dir()
+		// follows a symlink and DirEntry.IsDir() does not (r10).
+		if !pypath.EntryIsDir(runsRoot, e) || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		dir := filepath.Join(runsRoot, e.Name())

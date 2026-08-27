@@ -51,7 +51,11 @@ func ListProjects(ws string) ([]string, error) {
 	}
 	var slugs []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		// pypath.EntryIsDir, not e.IsDir(): orch_items.py:426 asks
+		// `p.is_dir()` on an iterdir() entry, and Path.is_dir() FOLLOWS a
+		// symlink. A project reached through `projects/linked -> real`
+		// is listed by CPython and was silently missing here (r10).
+		if !pypath.EntryIsDir(ProjectsRoot(ws), e) {
 			continue
 		}
 		if _, err := os.Stat(NextPath(ws, e.Name())); err == nil {

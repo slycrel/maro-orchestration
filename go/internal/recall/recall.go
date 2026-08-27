@@ -42,6 +42,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/budget"
 	"github.com/slycrel/maro-orchestration/go/internal/knowledge"
+	"github.com/slycrel/maro-orchestration/go/internal/pypath"
 )
 
 // MetadataScanCap is recall.py's _METADATA_SCAN_CAP: newest-first bound
@@ -294,11 +295,25 @@ func FindPriorAttempts(workspaceDir, goal string, windowHours float64, project, 
 	}
 	var dirs []dirM
 	for _, e := range entries {
-		if !e.IsDir() {
+		// recall.py:407-410 is
+		//   sorted((d for d in root.iterdir() if d.is_dir()),
+		//          key=lambda d: d.stat().st_mtime, reverse=True)
+		// and BOTH calls follow symlinks. DirEntry.IsDir() and
+		// DirEntry.Info() are the Lstat-shaped pair, so a run reached
+		// through a symlink was dropped, and one that survived would have
+		// been ordered by the LINK's mtime rather than the run's (r10).
+		if !pypath.EntryIsDir(root, e) {
 			continue
 		}
-		info, ierr := e.Info()
+		info, ierr := os.Stat(filepath.Join(root, e.Name()))
 		if ierr != nil {
+			// Named residual, not the Python's shape: CPython's `stat()`
+			// raises here and the enclosing `except OSError` returns []
+			// for the WHOLE call, where this drops one entry and keeps
+			// the rest. EntryIsDir already stat'd this path successfully
+			// one line above, so reaching this branch means the entry
+			// vanished between the two calls — a race, and the only
+			// input that can tell the two behaviours apart.
 			continue
 		}
 		dirs = append(dirs, dirM{name: e.Name(), mtime: info.ModTime()})

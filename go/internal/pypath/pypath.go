@@ -434,3 +434,40 @@ func FSLess(a, b string) bool {
 	}
 	return len(ra) < len(rb)
 }
+
+// EntryIsDir answers CPython's `Path.is_dir()` / `os.scandir` entry
+// `is_dir()` for one `os.ReadDir` entry: it FOLLOWS a symlink, and it is
+// False — not an error — when the stat fails.
+//
+// Go's `os.DirEntry.IsDir()` reads the entry's OWN type bits, which is
+// `Path.is_symlink()`-shaped, not `is_dir()`-shaped. The two questions
+// differ on exactly one input and they differ in BOTH directions
+// depending on which Python call is being ported:
+//
+//	CPython call                 a symlink to a directory
+//	root.iterdir() + is_dir()    kept   — Path.is_dir() follows
+//	os.walk(followlinks=False)   put in dirnames, so emitted NOWHERE
+//	Go DirEntry.IsDir()          False  — always
+//
+// So a port that transcribes `is_dir()` as `IsDir()` silently DROPS a
+// symlinked project/mission/run from an `iterdir` listing (measured
+// 2026-08-26, r10: `projects/linked -> real` carrying a NEXT.md was
+// listed by `list_projects` and missing from `orch.ListProjects`), and
+// the same spelling in an `os.walk` port INVENTS a file that CPython
+// never names (measured 2026-08-26, r9, in closure's inventory). One
+// helper, two call shapes — the caller still has to know which Python
+// call it is reproducing.
+//
+// The "False on stat error" half is load-bearing: a DANGLING symlink is
+// not a directory to CPython either, and a helper that propagated the
+// error would have to invent a third answer where the Python has two.
+func EntryIsDir(dir string, e os.DirEntry) bool {
+	if e.IsDir() {
+		return true
+	}
+	if e.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	st, err := os.Stat(Join(dir, e.Name()))
+	return err == nil && st.IsDir()
+}

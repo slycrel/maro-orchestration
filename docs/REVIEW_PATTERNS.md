@@ -487,7 +487,7 @@ timestamps differ by an ulp", "5004 code points" — and those should carry
 the measurement that produced them.
 
 ### L29 — An idiom is not a defect — the defect is a spelling that does not match the spelling at ITS OWN site
-*instances: 2*
+*instances: 4*
 
 ### L30 — A fixture travels through a channel, and the channel has opinions about what it carries
 *instances: 4*
@@ -1274,7 +1274,7 @@ value that renders identically as a Python int and a Go float64. A
 
 ### L53 — A correct assertion can still cover the wrong blast radius
 
-*instances: 7*
+*instances: 8*
 
 The ordinary missing-test finding is "nobody wrote one". This is not
 that. The assertion existed, it was correct, it ran on every suite, and
@@ -1561,7 +1561,7 @@ suite.** This is L1 wearing a different hat — the battery is a test of the
 tests, and it agreed because nothing could disagree.
 
 ### P10 — A harness whose subject is an external process must prove it ran
-*instances: 1*
+*instances: 2*
 
 Every differential in this port is `go test` plus a live CPython. When the
 Python side cannot be found, `pyprobe.SrcDir` calls `t.Skipf` — the right
@@ -1813,7 +1813,7 @@ The fixpoint is real and it arrives. Rounds after that are cheap insurance,
 not discovery.
 
 ### P6 — The round's HIGH lives inside the previous round's own fix
-*instances: 3 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
+*instances: 4 attributed; ~25 in the mined cluster — the largest, and the reason P2 exists*
 
 The single most common shape in the whole record. A round fixes something;
 the next round's most severe finding is *in that fix*. It recurs at
@@ -1844,7 +1844,7 @@ assumption that lets it through.
 each: what did this fix newly make possible? Then check that.
 
 ### P15 — A widened guard's own census is the population; a review's findings are a sample
-*instances: 2*
+*instances: 3*
 
 When a guard is broadened to cover a new spelling of a known class, the
 temptation is to fix the sites the review named and then run the guard to

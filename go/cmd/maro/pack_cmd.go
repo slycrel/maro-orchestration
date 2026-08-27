@@ -83,7 +83,12 @@ func packExport(args []string) error {
 	includeMedium := fs.Bool("include-medium", false, "also export medium-tier lessons")
 	includeKnowledge := fs.Bool("include-knowledge", false, "also export knowledge web")
 	includePlaybook := fs.Bool("include-playbook", false, "also export playbook.md")
-	if err := fs.Parse(args); err != nil {
+	// parseArgs with a zero arity, not a bare fs.Parse: the Go takes every
+	// input as a flag, so a stray positional is an error on both engines —
+	// and a bare Parse would STOP at it and silently drop every flag after
+	// it. `pack export -name x -label y stray -include-medium` exported a
+	// smaller pack than it was asked for, with no diagnostic (r10 census).
+	if _, err := parseArgs(fs, args, 0); err != nil {
 		return err
 	}
 	if *name == "" || *label == "" {
@@ -110,7 +115,7 @@ func packSeal(args []string) error {
 	fs := flag.NewFlagSet("pack seal", flag.ContinueOnError)
 	packPath := fs.String("pack", "", "path to the .maropack.tar.gz (required)")
 	yes := fs.Bool("yes", false, "confirm the REVIEW.md was read by a human")
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args, 0); err != nil {
 		return err
 	}
 	if *packPath == "" {
@@ -134,7 +139,7 @@ func packImport(args []string) error {
 	allowUnreviewed := fs.Bool("allow-unreviewed", false,
 		"accept an unsealed pack (self-to-self transfers only)")
 	dryRun := fs.Bool("dry-run", false, "report without writing")
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args, 0); err != nil {
 		return err
 	}
 	if *packPath == "" || *label == "" {
@@ -160,7 +165,7 @@ func packAdopt(args []string) error {
 	target := fs.String("target", "", "target workspace (default: resolved)")
 	all := fs.Bool("all", false, "adopt everything quarantined under the label")
 	dryRun := fs.Bool("dry-run", false, "report without writing")
-	// parseInterleaved, not fs.Parse: the item list is positional and
+	// parseArgs, not fs.Parse: the item list is positional and
 	// pack.py's `adopt` takes `--all` / `--target` / `--dry-run` AFTER it
 	// (argparse interleaves). With stdlib parsing, `pack adopt -label x
 	// foo.md --all` swallows "--all" into Items and adopts one file where
@@ -170,7 +175,10 @@ func packAdopt(args []string) error {
 	// the label as a positional and the Go takes it as -label. That is a
 	// surface difference like `maro task` vs `python3 -m task_store`, not a
 	// silently dropped argument, and it is filed rather than papered over.
-	items, err := parseInterleaved(fs, args)
+	// UnlimitedPositionals: `adopt` is the one subcommand whose positional
+	// really is `nargs="*"` (pack.py's item list), so there is no arity to
+	// enforce — unlike the task verbs, where the missing limit was the bug.
+	items, err := parseArgs(fs, args, UnlimitedPositionals)
 	if err != nil {
 		return err
 	}

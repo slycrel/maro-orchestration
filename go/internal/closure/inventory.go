@@ -55,7 +55,7 @@ func projectFileInventory(root string, cap int) string {
 		// Files in this dir first, then subdirs — matching os.walk's
 		// per-directory visit order closely enough for a prompt listing.
 		//
-		// isDir, not it.IsDir(). os.ReadDir reports the entry's OWN type
+		// pypath.EntryIsDir, not it.IsDir(). os.ReadDir reports the entry's OWN type
 		// bits, so a symlink pointing at a directory is not a directory to
 		// it — and the entry then falls into the file loop below and is
 		// emitted as a file. os.walk splits on `entry.is_dir()`, which
@@ -68,9 +68,9 @@ func projectFileInventory(root string, cap int) string {
 		// CPython names z.txt (adversarial r9, MEDIUM, codex seat).
 		//
 		// A DANGLING symlink stays a file in both: scandir's is_dir()
-		// returns False when the stat fails, and so does isDir here.
+		// returns False when the stat fails, and so does EntryIsDir here.
 		for _, it := range items {
-			if isDir(dir, it) {
+			if pypath.EntryIsDir(dir, it) {
 				continue
 			}
 			if strings.HasSuffix(it.Name(), ".lock") {
@@ -86,7 +86,7 @@ func projectFileInventory(root string, cap int) string {
 				return false
 			}
 		}
-		// it.IsDir() here, deliberately, and NOT isDir: the two loops split
+		// it.IsDir() here, deliberately, and NOT EntryIsDir: the two loops split
 		// on different questions and os.walk splits on them the same way.
 		// Whether a name is EMITTED follows the link (scandir is_dir), and
 		// whether it is DESCENDED INTO does not (os.walk's followlinks
@@ -108,20 +108,4 @@ func projectFileInventory(root string, cap int) string {
 	}
 	walk(root, "")
 	return strings.Join(entries, "\n")
-}
-
-// isDir answers os.scandir's `entry.is_dir()`: it FOLLOWS a symlink, and
-// it is False — not an error — when the stat fails. That second half is
-// load-bearing: a dangling symlink is a file to CPython's walk, and a
-// helper that propagated the error would have to invent a third answer
-// where the Python has two.
-func isDir(dir string, e os.DirEntry) bool {
-	if e.IsDir() {
-		return true
-	}
-	if e.Type()&os.ModeSymlink == 0 {
-		return false
-	}
-	st, err := os.Stat(filepath.Join(dir, e.Name()))
-	return err == nil && st.IsDir()
 }

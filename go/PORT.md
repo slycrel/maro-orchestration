@@ -13657,12 +13657,14 @@ side that emitted five timestamps where the other emitted four has a real
 difference the normaliser would otherwise erase (L51).
 
 The harness proves itself twice before it is believed (P10). `selftest()`
-builds two trees differing in one byte, one mode, and one missing file and
-requires exactly 3 findings and 0 false positives. `normalize_selftest()`
-checks each elision in **both** directions over nine shapes — a v1 UUID, an
-all-zero UUID, `"claimed_by_pid": 0`, `null`, and the same number under a
-different key must all come through UNTOUCHED. The negative half is the
-half that matters; a too-greedy elision still prints "identical".
+builds two trees differing in one byte, one mode, one missing file, one
+retargeted symlink and one directory-became-symlink, and requires exactly 5
+findings and 0 false positives (the two symlink shapes were added by r10,
+below — the count was 3). `normalize_selftest()` checks each elision in
+**both** directions over fourteen shapes — a v1 UUID, an all-zero UUID,
+`"claimed_by_pid": 0`, `null`, and the same number under a different key
+must all come through UNTOUCHED. The negative half is the half that
+matters; a too-greedy elision still prints "identical".
 
 **What it found on its first run.**
 
@@ -13707,3 +13709,189 @@ both engines**, directory modes included, with the elision counts agreeing
 on both sides. That is the first end-to-end WRITE-path agreement this port
 has measured, and it covers the whole state machine of the one ported
 surface where a state machine writes.
+
+## The r10 review — `is_dir()` is not `IsDir()`, and the round's medium lived inside r9's own fix
+
+Two seats, neither shown the other's findings, over the whole chunk (P2):
+opus same-family, `gpt-5.6-terra` cross-family. Five findings, **all five
+confirmed by measurement**, and four of them are one class seen from two
+directions.
+
+### The class: one Python question, two Go spellings, and the answer differs both ways
+
+r9 had just fixed `closure`'s inventory, where the port asked
+`DirEntry.IsDir()` and CPython's `os.walk` — with its DEFAULT
+`followlinks=False` — puts a symlink-to-directory in `dirnames`, so CPython
+names the link NOWHERE and the port INVENTED a file. r10 found the same
+spelling pointing the other way, at four listing sites that are not
+`os.walk` at all:
+
+| CPython call | a symlink to a directory |
+|---|---|
+| `root.iterdir()` + `Path.is_dir()` | **kept** — `Path.is_dir()` follows the link |
+| `os.walk(followlinks=False)` | put in `dirnames`, so emitted nowhere |
+| Go `DirEntry.IsDir()` | **False** — always; it reads the entry's own type bits |
+
+`DirEntry.IsDir()` is `Path.is_symlink()`-shaped, not `is_dir()`-shaped, and
+the two questions differ on exactly one input. So the identical
+transcription is a **dropped** entry in one place and an **invented** one in
+the other, and no single rule about the spelling is right — the caller has
+to know which Python call it is reproducing.
+
+| site | Python | measured effect |
+|---|---|---|
+| `orch/projects.go:ListProjects` | `orch_items.py:426` `p.is_dir()` | `projects/linked -> real` with a NEXT.md: listed by CPython, missing from the port |
+| `orch/mission.go:ListMissions` | `mission.py:1117` | same, one listing over |
+| `runs/index.go:scanLegacyRunDirs` | `runs.py:200` | **W24** — see below |
+| `recall/recall.go` | `recall.py:407-410` | two failures behind one spelling — see below |
+
+`pypath.EntryIsDir(dir, e)` is the one helper: `IsDir()` first, then — only
+for a symlink — a following `os.Stat`, and **False on a stat error**, because
+a dangling link is not a directory to CPython either and a helper that
+propagated the error would have to invent a third answer where the Python
+has two. `closure`'s local copy was deleted in favour of it (L15); its
+descend arm still deliberately uses `!it.IsDir()`, because that arm is
+reproducing `os.walk`, and the asymmetry is now commented as such at the
+site.
+
+### Why `runs` is a W24 and not a W23
+
+`_scan_legacy_run_dirs` feeds `_legacy_run_dir`, which returns the **first**
+directory claiming a `loop_id`. With `alink -> real` sorting ahead of
+`real`, CPython resolves a duplicate reference to `alink` and the port
+resolved it to `real`. The two runtimes name **different runs** for the same
+input. The differential asserts the resolved basename, not just the scan
+list — a fixture that checked membership alone would have passed a fix that
+only restored membership.
+
+### Why `recall` is two failures, and how the fixture separates them
+
+```python
+sorted((d for d in root.iterdir() if d.is_dir()),
+       key=lambda d: d.stat().st_mtime, reverse=True)
+```
+
+Both calls follow. The port used the Lstat-shaped **pair** —
+`DirEntry.IsDir()` and `DirEntry.Info()` — so a linked run was dropped, and
+had only the filter been fixed the survivor would have been ordered by the
+LINK's mtime rather than the run's. The fixture puts the target OUTSIDE
+`runs/` with the oldest mtime while the link keeps its own newest one, so
+the two orders are exact reverses and neither mutant can pass by luck. Both
+were run: dropping the link gives one row, reading the link's mtime gives
+the reverse order.
+
+The target lives outside `runs/` on purpose. A link pointing at a sibling
+INSIDE `runs/` makes one directory reachable twice with the same mtime, and
+that tie is broken by raw readdir order — which r8 established has no
+CPython order to reproduce. A fixture resting on it would be measuring the
+platform (P11).
+
+### P6, on the round's own previous fix
+
+The medium in `cmd/maro` lived inside r1's fix. `parseInterleaved` restored
+flag INTERLEAVING and never modelled positional ARITY, which is the other
+half of what argparse enforces — and `flag.Parse` consumes `--` and stops,
+so the loop's next iteration parsed the tail as flags again:
+
+```
+argv                          python                        go (before)
+fail <id> -- --error boom     rc=2, task stays QUEUED       rc=0, task FAILED, error dropped
+fail <id> job-2               rc=2, unrecognized arguments  rc=0, acts on job-1
+```
+
+A different store row, from the helper written last round to stop a
+different store row. `parseArgs` now splits at the first `--` before parsing
+anything and takes each subcommand's declared count from `task_store.py`
+(`claim/complete/fail/archive` 1, `enqueue`/`list` 0, `pack adopt`
+genuinely unlimited), returning argparse's own `unrecognized arguments:`
+sentence. `refuseExtra` covers `status` and `recover`, which built no
+`FlagSet` at all and so ignored trailing argv entirely — `maro task status
+queued` looked like a filter and was silently a full listing.
+
+Five argv shapes were re-run against both engines after the fix and all
+five agree, the happy path (`fail <id> --error boom` → `failed`/`"boom"`)
+included.
+
+**And then the census, again — because r1's census had the wrong
+population.** r1 enumerated every `fs.Arg(0)` after a bare `fs.Parse`. But
+reading a positional is not the defect; the defect is a `FlagSet` that
+neither reads positionals nor refuses them, because `flag.Parse` stops at
+the first one and silently drops every flag after it. Four sites read
+`fs.Args()` *nowhere* and were therefore invisible to that enumeration:
+
+```
+maro pack export -name p -label l stray -include-medium
+  before: exit 0, pack exported WITHOUT medium lessons, no diagnostic
+  after:  error: unrecognized arguments: stray
+```
+
+Measured against the pre-fix binary, which was still on disk. `pack seal`,
+`pack import` and `metrics` had the same shape; all four now take a zero
+arity. `inspect`/`evolve`/`graduate` already refuse positionals explicitly,
+and `run`/`director` refuse post-positional flags by design — those five
+are the population's correct members and are unchanged.
+
+This is L28's other half. An enumeration can be wrong at BIRTH, and the way
+to catch it is to state the population as a **property** — *does a stray
+positional change what this command does?* — rather than as a code pattern,
+because a code pattern only finds the sites that look like the one you
+already found. Three differences are **filed, not fixed**, and the reasoning is
+that none of them changes what is WRITTEN for an argv both engines accept:
+long-option abbreviation (argparse permits, `flag` does not — fail closed),
+single-dash long options (argparse rejects `-error`, and rejecting it would
+break the port's own documented `-backend` / `-max-steps` spelling), and
+exit code 2 vs 1 on a refusal (CLI-wide, not argv-specific).
+
+### The fifth finding was in the instrument
+
+`write-compare.py`'s `snapshot()` recorded `os.walk` `dirnames` entries as
+`("dir", mode, b"")` without checking `islink`, so two trees with
+`link -> left` and `link -> right` compared **equal** — both sides reading
+`0o777` from the link's own `lstat`. A blind spot in the instrument is worse
+than one in the port, because the instrument is what decides whether the
+port has one.
+
+The fix is three lines and the fixture is the point. The differ's self-test
+now carries both a retargeted link and a real-dir-vs-link pair and asserts
+5 differences; reverting the fix drops it to 4, with the retarget vanishing
+entirely and the kind change reported as `MODE 775 vs 777` — the wrong
+sentence about the right tree.
+
+### And the harness reached the interop format
+
+`pack` was added to the write comparison: export, export+seal, a minimal
+export with no `--include-*` flags, a full export → seal → import → adopt
+round trip into a nested second workspace, and an `import --dry-run` that
+must write nothing. All seven `task` scenarios stay byte-identical; all six
+`pack` scenarios differ, and the tranche is real:
+
+* `pack.json` **key order** — Python insertion order vs Go alphabetical, in
+  the manifest AND in `imports.jsonl` report rows (the Go needs `pyval.Obj`,
+  not `map[string]any`)
+* `origin.maro_version`: `"0.8.0"` vs `"go-port"`
+* the MODE class with numbers: dirs 775/755, export files 664/644,
+  quarantine files 664/**600**, adopted files 775/644
+* Python's `import --dry-run` creates `inbox/memory/long` and
+  `inbox/memory/medium`; the Go creates nothing
+* export stdout prose
+
+Two of the divergences it re-derived were **already documented as
+deliberate** (`skill_records` routed to quarantine at `import.go:15`;
+`rowID`'s refusal of id-less rows at `import.go:385-398`, where CPython
+mints a colliding `imported-<pack>-` id and silently eats the second as
+`already_imported`). An instrument that independently re-finds the
+divergences someone already reasoned about is an instrument worth trusting
+about the ones nobody has.
+
+The id-less rows got their own scenario rather than a row smuggled into the
+main seed: mixed in, every trust lane showed only that one known divergence
+and hid whether the happy path agreed (L41).
+
+Pack's tar archives are expanded rather than byte-compared, and the reason
+is stated at the site because it is the one place this harness looks away
+from bytes: gzip stores an mtime in its header. Measured — two CPython
+exports 119 ms apart produced inner-tar digests `28b724195933` and
+`3865dc7764ab` — even though `pack.py:246` pins every tar MEMBER's mtime to
+0 and the gzip header mtime matched. What is compared instead: member
+ORDER as a synthetic entry, and every member's name, type, mode and
+content.

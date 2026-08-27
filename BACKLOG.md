@@ -477,6 +477,79 @@ Related and NOT to be changed: `run` and `director` deliberately REFUSE a
 flag written after their positional rather than interleaving. That refusal
 is documented at both sites and is louder than either alternative.
 
+**Three more argv differences, measured 2026-08-26 (adversarial r10, LOW).**
+Each argv below was run against both engines on this box; the table is the
+measurement, not a reading of the source. `<id>` is a real queued job.
+
+```
+argv                          python                       go
+fail <id> --err boom          rc=0, failed, error="boom"   rc=1, "flag provided but not defined: -err"
+fail <id> -error boom         rc=2, unrecognized arguments rc=0, failed, error="boom"
+<any argparse refusal>        rc=2                         rc=1
+```
+
+* **Long-option abbreviation.** argparse accepts any unambiguous prefix of
+  a long option; `flag` does not. Adding it would only widen what the Go
+  accepts, and the port's rule is to fail closed where the two differ on
+  permissiveness.
+* **Single-dash long options.** argparse rejects `-error`; Go's `flag`
+  treats `-x` and `--x` as the same flag. Rejecting the single-dash
+  spelling would break the port's OWN documented invocation — `maro run
+  -backend dry`, `-max-steps`, `-limit` are all single-dash in the help
+  text and in every script written against it.
+* **Exit code on a refusal.** argparse exits 2; `main.go` exits 1 for
+  every error it prints. This is CLI-wide, not specific to argv parsing,
+  and changing it means deciding which Go errors are "usage" errors.
+
+All three are surface-shape differences on argv both CLIs would otherwise
+agree about: none of them changes what is WRITTEN for an argv both engines
+accept, which is the line this arc draws. They belong with the `-label`
+difference above, and they land or do not land together with the
+drop-in-CLI decision.
+
+**Fixed in the same round, and NOT in this list:** `fail <id> -- --error
+boom` marked the task failed where argparse exits 2 and leaves it queued —
+`parseInterleaved` re-entered `flag.Parse` after the `--` separator, and
+its callers read `positional[0]` and dropped the rest. That is a silently
+different STORE ROW, not a surface difference, so it was fixed rather than
+filed (`parseArgs` now splits at `--` and enforces each subcommand's
+declared positional arity, `refuseExtra` covers the two flagless verbs).
+
+### Go port: the `pack` write-path divergence tranche — five named differences in the INTEROP format (FOUND 2026-08-26, write-path harness)
+
+`go/tools/write-compare.py` was extended from `task` to `pack` and runs six
+scenarios: export, export+seal, a minimal export with no `--include-*`
+flags, a full export -> seal -> import -> adopt round trip into a nested
+second workspace, the same round trip with an id-less row per trust lane,
+and an `import --dry-run` that must write nothing. All seven `task`
+scenarios are byte-identical. **All six `pack` scenarios differ**, and every
+difference below was verified against `src/pack.py` rather than inferred
+from the diff.
+
+This one matters more than an ordinary tranche: `pack` is the format two
+Maro installs use to hand each other learning. A divergence here is not two
+engines disagreeing privately, it is two engines producing artifacts the
+other side reads.
+
+| # | Divergence | Detail |
+|---|---|---|
+| 1 | **Key ORDER** in `pack.json` and in `imports.jsonl` report rows | Python emits insertion order; the Go emits alphabetical. The port's oldest recurring family — the Go builds these with `map[string]any` where it needs `pyval.Obj` |
+| 2 | `origin.maro_version` | `"0.8.0"` vs `"go-port"` |
+| 3 | The MODE class, with numbers | dirs 775/755, export files 664/644, quarantine files 664/**600**, adopted files 775/644. Related to the directory-mode census entry, but the 664/600 pair is its own decision, not a umask artifact |
+| 4 | `import --dry-run` is not inert on the Python side | CPython creates `inbox/memory/long` and `inbox/memory/medium`; the Go creates nothing. One of the two is wrong about what `--dry-run` means and it is worth deciding which |
+| 5 | export stdout prose | Content-key prose divergence, the family this arc keeps hitting |
+
+**Two divergences it found are already documented as deliberate and are NOT
+in the list**: `skill_records` routed to quarantine (`import.go:15`) and
+`rowID`'s refusal of id-less rows (`import.go:385-398`, where CPython mints
+a colliding `imported-<pack>-` id and silently eats the second row as
+`already_imported`). That the harness independently re-derived both is the
+best available evidence that the five above are real.
+
+**Not fixed in the round that found them**, deliberately: this is a tranche
+with its own review cycle, and #1 and #3 are class fixes with a census to
+run first, not site fixes.
+
 ### Go port: `internal/missionrun` has no test file at all (FOUND 2026-08-26, go-port coverage census)
 
 A per-package census of the Go tree — Go lines vs test lines, counted in

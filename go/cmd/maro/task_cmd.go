@@ -47,7 +47,10 @@ func runTask(args []string) error {
 		reason := fs.String("reason", "", "why")
 		parent := fs.String("parent-job-id", "", "parent job id")
 		blockedBy := fs.String("blocked-by", "", "comma-separated job ids")
-		if err := fs.Parse(args[1:]); err != nil {
+		// `enqueue` declares no positionals in task_store.py, so argparse
+		// refuses any. Plain fs.Parse would stop at the stray word and
+		// silently discard both it AND every flag written after it.
+		if _, err := parseArgs(fs, args[1:], 0); err != nil {
 			return err
 		}
 		var blocked []string
@@ -68,7 +71,12 @@ func runTask(args []string) error {
 	case "claim", "complete", "fail", "archive":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		errText := fs.String("error", "", "failure reason (fail only)")
-		positional, err := parseInterleaved(fs, args[1:])
+		// Each of these four declares exactly one positional (`job_id`) in
+		// task_store.py. The arity is the argument, not a sanity check: a
+		// helper that collected positionals without limit let
+		// `fail <id> -- --error boom` mark the task failed where argparse
+		// exits 2 and leaves it queued (adversarial r10).
+		positional, err := parseArgs(fs, args[1:], 1)
 		if err != nil {
 			return err
 		}
@@ -95,7 +103,7 @@ func runTask(args []string) error {
 	case "list":
 		fs := flag.NewFlagSet("list", flag.ContinueOnError)
 		status := fs.String("status", "", "filter by status")
-		if err := fs.Parse(args[1:]); err != nil {
+		if _, err := parseArgs(fs, args[1:], 0); err != nil {
 			return err
 		}
 		rows, err := tasks.List(ws, *status)
@@ -109,6 +117,12 @@ func runTask(args []string) error {
 		return emit(out)
 
 	case "status":
+		// `status` and `recover` declare neither flags nor positionals, so
+		// argparse rejects anything after the verb. These two took no
+		// FlagSet at all and so silently ignored it.
+		if err := refuseExtra(args[1:]); err != nil {
+			return err
+		}
 		counts, err := tasks.StatusSummary(ws)
 		if err != nil {
 			return err
@@ -136,6 +150,9 @@ func runTask(args []string) error {
 		return emit(out)
 
 	case "recover":
+		if err := refuseExtra(args[1:]); err != nil {
+			return err
+		}
 		recovered, err := tasks.RecoverStaleClaims(ws)
 		if err != nil {
 			return err

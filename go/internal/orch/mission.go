@@ -607,7 +607,10 @@ func ListMissions(ws string) []MissionSummary {
 		return pypath.FSLess(entries[i].Name(), entries[j].Name())
 	})
 	for _, e := range entries {
-		if !e.IsDir() {
+		// mission.py:1117 is `project_dir.is_dir()` over a sorted
+		// iterdir() — Path.is_dir() follows the link (r10, same class as
+		// projects.go above).
+		if !pypath.EntryIsDir(ProjectsRoot(ws), e) {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(ProjectsRoot(ws), e.Name(), "mission.json"))

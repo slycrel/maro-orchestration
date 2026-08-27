@@ -129,11 +129,11 @@ scripts so these can be recomputed rather than trusted.
 | Test lines | 81,834 (**1.38 : 1**) | ditto |
 | Packages with a live CPython differential | **37 of 46** — 56,870 lines, **95.7% of production** | ditto; "live" = the test starts a real interpreter and compares, not a transcribed expectation |
 | Python modules with **no Go reference anywhere** | **118 of 183** — 59,962 lines, **45.2%** | ditto. This is a **FLOOR**: "reference" is the loosest test (filename appears anywhere in the Go tree, comments included), so the true unported figure is worse and nothing yet measures how much worse |
-| Review-ledger rows, this arc | **865** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
+| Review-ledger rows, this arc | **871** (836 at the 08-26 audit, +18 r8, +2 recall, +9 r9/sh6/census/CLI, +5 r10, +1 r10 census) | `review/findings.jsonl`, arc `go-port`; counted by `review-ledger.py report`, not added up — the first draft of this row said 862 by arithmetic and the ledger said 854 |
 | Measured hallucination rate | **15 of 807 judged rows** retracted as `hallucinated` — **2%** | ditto. Well under the ~30–50% historical baseline; the delta is attributed to briefs that require a runnable repro. Still a floor: only retractions a reviewer VOLUNTEERS reach the ledger |
 | Tranches needing 4+ review rounds | **33 of 66** targets | ditto. Deepest: `guard` 18, `handlequeue` 13, `evolver` 12, `dispatch` 12 |
 | Both engines compared, READ path | **6 renderers, 6 identical, 0 differ, 0 refused** | `go/tools/engine-compare.py` over a copy of the live workspace, 2026-08-26 |
-| Both engines compared, WRITE path | **7 `task` scenarios, 7 byte-identical, 0 differ, 0 refused** — after fixing the divergence its first run found | `go/tools/write-compare.py`, 2026-08-26. Trees byte-diffed including directory MODES; volatile fields elided by positive shape with per-side counts required to agree, and the harness self-tests its differ AND its normaliser (both directions) before comparing anything |
+| Both engines compared, WRITE path | **7 `task` scenarios byte-identical; 6 `pack` scenarios DIFFER** — after fixing the divergence its first run found, and a second (the `--` separator hole) that r10 found in that fix | `go/tools/write-compare.py`, 2026-08-26. Trees byte-diffed including directory MODES; volatile fields elided by positive shape with per-side counts required to agree, and the harness self-tests its differ AND its normaliser (both directions) before comparing anything. The `pack` tranche is characterised and unfixed: manifest/report key ORDER (Python insertion order vs Go alphabetical), `origin.maro_version`, the MODE class (dirs 775/755, files 664/644, quarantine 664/**600**), Python's `import --dry-run` creating two `inbox/memory` dirs the Go does not, and export stdout prose |
 | Can the port run a mission end to end? | **No** | `go/COVERAGE.md` |
 | Interpreter every differential runs against | CPython **3.14.3** (bare `python3` is linuxbrew's; `/usr/bin/python3` is 3.12.3) | measured 2026-08-26 |
 
@@ -151,7 +151,7 @@ composition-only wiring.
 divergences that are bugs or latent bugs in behaviour **both** runtimes now
 share, found only because two implementations had to agree. That is the
 "meaningful edges" half of Jeremy's 2026-08-22 question, and it has an
-affirmative answer with 836 rows behind it. `docs/REVIEW_PATTERNS.md`
+affirmative answer with 871 rows behind it. `docs/REVIEW_PATTERNS.md`
 computes the recurrence counts.
 
 **The fair complaint, stated equally plainly:** 45% of the Python has no Go
@@ -217,18 +217,20 @@ either outcome.
 
 | Thread | State |
 |---|---|
-| `internal/artifactcheck` review to fixpoint | **r9 landed** — 1 MEDIUM (a dir symlink counted as a file in `closure`, fail-open at the inventory cap), 1 LOW (the P8b fixture required an `AF_UNIX` bind and failed the whole package where the kernel forbids one), 1 self-retraction. `LOWS ONLY: no`, so **r10 is the open gate** |
+| `internal/artifactcheck` review to fixpoint | **r10 landed** — 5 findings, all 5 confirmed by measurement, 4 of them one class (`Path.is_dir()` follows a symlink, `DirEntry.IsDir()` does not — the same spelling r9 fixed pointing the OTHER way). LOWS-ONLY by content, so **r11 is the open gate** |
 | `internal/syshealth` review to fixpoint | **AT FIXPOINT.** r6 returned `LOWS ONLY: yes` with one doc LOW (r5's factual correction had not reached the harness copy — L13) and one self-retraction. Fix landed |
 | `internal/recall` CPython differential | **CLOSED.** Landed `73cf930b`; the owed deeper mutation pass then ran — 51 mutants derived from `recall.go` itself, 29/51 → **49/51** after `census_test.go`, the 2 survivors equivalent mutants named before the re-run. One divergence stands reported and NOT fixed: `goal_achieved: "false"` (a string) → CPython `None` (unjudged), Go `false` (judged not achieved), fail-closed in Go |
 | `internal/provenance` CPython differential | open, unscheduled |
 | `internal/missionrun` has no test file at all | open, unscheduled |
-| Write-path comparison harness | **BUILT and paying.** `go/tools/write-compare.py`; found a silently dropped CLI argument on its first run, then all 7 `task` scenarios byte-identical. Next targets: a second write surface (`orch_items` / `record`) and the directory-mode thread, which this harness can now measure |
+| Write-path comparison harness | **BUILT and paying.** `go/tools/write-compare.py`; found a silently dropped CLI argument on its first run, then all 7 `task` scenarios byte-identical. Extended to `pack` (the interop format): 6 scenarios, all differ, tranche characterised in Compiled truth and unfixed. r10 found the harness itself blind to directory symlinks; fixed, and the differ's self-test now asserts 5 findings instead of 3. Next targets: the `pack` tranche's own review cycle, then a third write surface (`orch_items` / `record`) |
 | Remaining first-pass tranches, sequenced | **planner returned** → `scratchpad/PORT_PLAN.md`. First pass = 74 modules / 37,777 py lines, ~29 review units, **~120–170 review rounds**. Recommends Option B (comparable core: 62 modules, 25,972 lines, ~90–120 rounds) stopping at a mission dry-run comparison. Unacted |
 | Directory-mode fix: 33 `0o755` + 7 inline `0o777` → `record.NewDirMode` | filed in BACKLOG |
 | `check_system_health` | blocked on `llm.DetectBackends` plus a python3 shell-out seam |
 | `artifact_check.py` slice 2 (~250 lines, :483–736) | design captured, unbuilt |
 | inspector/evolver guard slice-1 review | **PAUSED at r14**, r15 gated on Jeremy |
 | Stale comment `internal/pack/export.go:385` | trivial, open |
+| `pack` write-path divergence tranche | **OPEN, characterised, unfixed.** 5 named differences (key order, `maro_version`, modes, dry-run mkdir, stdout prose). Needs BACKLOG entries and its own review cycle; the key-order one is a `pyval.Obj`-vs-`map[string]any` fix, which is the port's oldest recurring family |
+| argv surface: abbreviation, single-dash long options, exit code 2 vs 1 | **FILED, not fixed** (BACKLOG, with the measured table). None changes what is WRITTEN for an argv both engines accept |
 
 ---
 
@@ -368,3 +370,73 @@ answer visible: the write path agrees where it has been measured, it did
 not before it was measured, and most writing surfaces are still unmeasured.
 The directory-mode thread — 33 `0o755` sites against Python's
 `0o777 & ~umask` — now has something that can actually observe it.
+
+### 2026-08-26 (late) — r10: the same spelling, wrong in both directions
+
+Five findings, two seats, all five confirmed by measurement. Four are one
+class, and the class is the sharpest thing this arc has found about what a
+behavioural port actually is.
+
+`Path.is_dir()` FOLLOWS a symlink. `os.DirEntry.IsDir()` reads the entry's
+own type bits and never does. r9 had just fixed `closure`, where the port's
+`IsDir()` **invented** a file CPython never names, because `os.walk`'s
+default `followlinks=False` puts the link in `dirnames` and emits it
+nowhere. r10 found the identical transcription at four `iterdir()` sites,
+where the same spelling **drops** an entry CPython lists. One Python
+question, one Go spelling, and the error runs in opposite directions
+depending on which library call is being ported. `pypath.EntryIsDir` answers
+the question; the CALLER still has to know which call it is reproducing,
+and `closure`'s descend arm deliberately keeps `!it.IsDir()` for exactly
+that reason.
+
+Two of the four are worse than an ordering difference. `runs.py:200` feeds
+`_legacy_run_dir`, which takes the FIRST match — so the two runtimes
+resolved the same duplicate loop reference to **different runs**. And
+`recall.py:407-410` uses the Lstat-shaped *pair* (`IsDir()` + `Info()`),
+which is two independent failures behind one spelling: a dropped row, and
+an order taken from the LINK's mtime rather than the run's. The fixture is
+built so those two orders are exact reverses, and both mutants were run.
+
+**P6 again, and it stings.** The round's medium lived inside r1's own fix.
+`parseInterleaved` restored flag interleaving and never modelled positional
+ARITY — and `flag.Parse` consumes `--` and stops, so the tail was re-parsed
+as flags. `task fail <id> -- --error boom` exits 2 on CPython and leaves the
+task queued; the port marked it FAILED and dropped the error. A different
+store row, from the helper written last round to stop a different store
+row. Fixed by splitting at `--` before parsing and taking each subcommand's
+declared count from `task_store.py`. Three remaining argv differences are
+FILED with their measured table, on the stated line that none of them
+changes what is written for an argv both engines accept.
+
+**The fifth was in the instrument**, which is the one that should worry us
+most: `snapshot()` recorded a directory symlink as an ordinary directory, so
+two trees with different link targets compared EQUAL. A harness blind spot
+decides whether the port has one. The self-test now plants both symlink
+shapes and asserts 5 differences; reverting the fix drops it to 4, with the
+retarget vanishing and the kind change reported as a MODE difference — the
+wrong sentence about the right tree.
+
+**And the harness reached `pack`**, the interop format, where it
+immediately produced a tranche: manifest and report **key order** (Python
+insertion order vs Go alphabetical — the port's oldest recurring family,
+`pyval.Obj` vs `map[string]any`), `maro_version`, four distinct mode
+classes, a `--dry-run` that creates two directories on one engine and none
+on the other, and stdout prose. Two of the divergences it re-derived were
+already documented as deliberate, which is the strongest available evidence
+that the instrument works: it independently found what someone had already
+reasoned about.
+
+Seven `task` scenarios still byte-identical. Six `pack` scenarios differ,
+and that is now a thread with numbers rather than a suspicion.
+
+**A postscript that is really the round's best lesson.** Censusing the argv
+class again turned up four more sites — and the reason r1's census missed
+them is that it enumerated a code PATTERN (`fs.Arg(0)` after a bare
+`fs.Parse`) rather than the PROPERTY that defines the defect (*does a stray
+positional change what this command does?*). `pack export`, `pack seal`,
+`pack import` and `metrics` read positionals nowhere at all, so they looked
+nothing like the site that was found, while behaving exactly like it:
+measured against the pre-fix binary, `pack export -name p -label l stray
+-include-medium` exits 0 and ships a pack without medium lessons. An
+enumeration can be wrong at BIRTH, which is L28 pointed at the census
+itself.
