@@ -651,9 +651,24 @@ builds nine stdout branches through a `lit(name, body)` helper, so
 first draft of the census read the file as two-exposed and moved on.
 
 The allowlist IS the rollout queue, one entry per file with the reason
-and the direction, and it cannot grow silently. Remaining: `artifactcheck`
-3 (the `lit()` branches), `closure` 1 + 8, `evolver` 1, `intent` 2,
-`jsonx` 2, `provenance` 3.
+and the direction, and it cannot grow silently. **The queue is EMPTY as of
+2026-08-27** except for `evolver`, which is a different question (below).
+`artifactcheck` 3, `closure` 1 + 8, `intent` 2, `jsonx` 2 and
+`provenance` 3 all closed; what remains on the allowlist is four
+UNREADABLE sites, not unwrapped ones — two named vars in `closure`
+(covered by their own PyFoldI-is-identity test) and two
+`regexp.QuoteMeta` calls over runtime strings, which cannot emit a `(?i)`
+at all.
+
+The last two closures are worth their direction. `jsonx`'s
+`<think>` strip was the entry carrying the word "lowest consequence": it
+is not, because the UNCLOSED arm truncates from the tag to the end of the
+reply, so `<thınk>truncated {"a":1}` left CPython with nothing to parse
+and Go with the whole object — the two runtimes disagreeing about whether
+a reply parses at all. `artifactcheck`'s `lit()` branches run the other
+way from the exclusion half that landed first: an unfolded Go
+UNDER-claims, so a step CPython credits with concrete stdout is judged
+unverified here.
 
 `evolver/store.go:995` is on that list but is NOT the same shape and must
 not be "fixed" the same way: it is `regexp.Compile("(?i)" + pattern)`

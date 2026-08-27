@@ -66,6 +66,35 @@ var fenceCorpus = []struct {
 	{"a folded non-ASCII letter inside the tag name",
 		"<thin\u212a>musing {\"decoy\":1}</think>\n{\"real\":2}"},
 
+	// The Turkish i in the TAG NAME. re.IGNORECASE folds U+0131 and
+	// U+0130 onto `i`; Go's (?i) does not, so before pytext.PyFoldI these
+	// two patterns did not see the tag at all.
+	//
+	// The closed-block rows lose a decoy: CPython strips the block and
+	// carves {"real":2}, Go carved nothing and fell through to the
+	// musing. The UNCLOSED rows are the sharp ones -- the open pattern
+	// truncates from the tag to the END, so CPython is left with nothing
+	// to parse and Go with the whole reply. The two runtimes disagree
+	// about whether the reply parses AT ALL.
+	{"a dotless i in the tag name, closed",
+		"<th\u0131nk>musing {\"decoy\":1}</th\u0131nk>\n{\"real\":2}"},
+	{"a dotted I in the tag name, closed",
+		"<th\u0130nk>musing {\"decoy\":1}</th\u0130nk>\n{\"real\":2}"},
+	// ...and only one END folded, so the close still has to match through
+	// the same fold rather than by luck.
+	{"a dotless i on the OPEN tag only",
+		"<th\u0131nk>musing {\"decoy\":1}</think>\n{\"real\":2}"},
+	{"a dotless i, UNCLOSED: nothing left to parse in CPython",
+		"<th\u0131nk>truncated trace {\"decoy\":1}"},
+	{"a dotted I, UNCLOSED",
+		"<TH\u0130NK>truncated trace {\"decoy\":1}"},
+	// The ASCII controls for the pair, so a pattern that stopped matching
+	// `<think` altogether fails here too.
+	{"the ASCII control, closed",
+		"<think>musing {\"decoy\":1}</think>\n{\"real\":2}"},
+	{"the ASCII control, UNCLOSED",
+		"<think>truncated trace {\"decoy\":1}"},
+
 	// The plain shapes the strip exists for.
 	{"a whole-message fence", "```json\n[\"a\", \"b\"]\n```"},
 	{"a fence with no language tag", "```\n[\"a\", \"b\"]\n```"},

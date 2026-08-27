@@ -1529,8 +1529,15 @@ var stdoutClaimBranches = buildStdoutBranches()
 func buildStdoutBranches() []stdoutBranch {
 	sp := pytext.SpaceClass
 	ws := pytext.WordStart
+	// PyFoldI on the helper, not on each body: six of the twelve
+	// alternatives carry an `i` (printed, printing, verified, confirmed,
+	// `the output is`, `running it`) and PyFoldI is a no-op on the six
+	// that do not, so wrapping HERE covers the class rather than the
+	// instances someone listed. That is the shape this arc keeps getting
+	// wrong one level down (L13/L9).
 	lit := func(name, body string) stdoutBranch {
-		return stdoutBranch{name: name, re: regexp.MustCompile(`(?i)` + ws + body)}
+		return stdoutBranch{name: name,
+			re: regexp.MustCompile(pytext.PyFoldI(`(?i)` + ws + body))}
 	}
 	// The excluded words after "output". Python's `\s+` is Unicode-aware,
 	// so the separator class is pytext's, and the words themselves carry
@@ -1547,8 +1554,13 @@ func buildStdoutBranches() []stdoutBranch {
 		lit("printing", `printing`),
 		lit("stdout", `stdout`),
 		{
-			name:    "output",
-			re:      regexp.MustCompile(`(?i)` + ws + `output(?:s|ted|ting)?`),
+			name: "output",
+			// The `i` here is in the `ting` alternative, not in `output`:
+			// under re.IGNORECASE "outputtıng" matches the long form and
+			// then clears the trailing \b, where an unfolded Go matches
+			// only the bare `output` and is stopped by that same \b
+			// against the following `t`. Same pattern, opposite answer.
+			re:      regexp.MustCompile(pytext.PyFoldI(`(?i)` + ws + `output(?:s|ted|ting)?`)),
 			wordEnd: true,
 			after:   func(tail string) bool { return !excl.MatchString(tail) },
 		},
@@ -1559,7 +1571,7 @@ func buildStdoutBranches() []stdoutBranch {
 		lit("when-run", `(?:when|after)`+sp+`+(?:you`+sp+`+)?run`),
 		{
 			name:    "running-the",
-			re:      regexp.MustCompile(`(?i)` + ws + `running` + sp + `+the`),
+			re:      regexp.MustCompile(pytext.PyFoldI(`(?i)` + ws + `running` + sp + `+the`)),
 			wordEnd: true,
 		},
 		lit("running-it", `running`+sp+`+it`),

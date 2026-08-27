@@ -54,14 +54,6 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 		count  int
 		reason string
 	}{
-		"internal/artifactcheck/artifactcheck.go": {3, "" +
-			"The four patterns r12 named are WRAPPED and fixtured (E47-E52, " +
-			"X19-X23, S27-S30, each proven by dropping the wrapper). These " +
-			"three are stdout-claim branches whose bodies reach MustCompile " +
-			"through the lit(name, body) helper, so the words carrying the " +
-			"i -- printing, verified, running it -- are not in the literal " +
-			"at the call. Direction UNMEASURED; the branch set decides " +
-			"whether a run is credited with concrete stdout."},
 		"internal/closure/modality.go": {2, "" +
 			"wsPattern and testRunnerPattern, which are NOT exposed and are " +
 			"unwrapped on purpose. They are named vars built from " +
@@ -91,13 +83,6 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 			"to fold at the call, on the incoming pattern, which changes " +
 			"what a suggestion means and wants its own decision. Filed, not " +
 			"deferred by oversight."},
-		"internal/jsonx/jsonx.go": {2, "" +
-			"thinkRe and thinkOpenRe, which strip `<think>` spans out of " +
-			"model output. The i is in the tag name, so reaching this " +
-			"needs a model to emit `<th\u0131nk>`. Lowest consequence on " +
-			"this list and still listed, because `low` was the word this " +
-			"arc used about the Turkish i the morning before r12 found it " +
-			"in the fabrication detector."},
 	}
 
 	root, err := filepath.Abs("../..")

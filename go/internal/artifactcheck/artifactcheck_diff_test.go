@@ -554,6 +554,43 @@ func acCases() []acCase {
 		{"S29 output ends before a multi-byte NON-word char", "output\u2014 42"},
 		{"S30 the control for output", "output\u00e9 42"},
 		{"S31 an ideographic SPACE after the branch", "running the\u3000 42"},
+		// The `i` in the BRANCH VOCABULARY, which is the other half of the
+		// same fold and was left unwrapped for a fortnight after the
+		// exclusion's half landed. Six of the twelve alternatives carry an
+		// i; the wrap is on the `lit` helper they share, and these rows
+		// reach it through four different words.
+		//
+		// Direction is the reverse of the exclusion's: a Go that fails to
+		// fold UNDER-claims, reporting no concrete stdout for a step that
+		// CPython credits -- so a run is judged unverified there and
+		// verified here, on text a model actually emits.
+		{"S32 printed, dotless i", "pr\u0131nted 42"},
+		{"S33 the ASCII control for S32", "printed 42"},
+		{"S34 printing, both i's dotless", "pr\u0131nt\u0131ng 42"},
+		{"S35 verified, dotless", "ver\u0131f\u0131ed the output: 1,2,3"},
+		{"S36 confirmed, dotless", "conf\u0131rmed output 7"},
+		{"S37 'the output is', where the i is a word of its own",
+			"the output \u0131s 5"},
+		{"S38 'running it', the second word", "runn\u0131ng it gives 1"},
+		{"S39 printed, dotted capital I", "PR\u0130NTED 42"},
+
+		// The output branch: the `i` is inside the `ting` ALTERNATIVE, so
+		// an unfolded Go still matches the bare `output` and is then
+		// stopped by its own trailing boundary against the `t`.
+		{"S40 outputting, dotless i", "outputt\u0131ng 42"},
+		{"S41 the ASCII control for S40", "outputting 42"},
+		{"S42 outputting, dotted capital I", "OUTPUTT\u0130NG 42"},
+		// ...and the branch and the EXCLUSION folding together: CPython
+		// matches the long spelling and then excludes it for naming a
+		// file. Both engines answer False, for different reasons, which is
+		// why it is a companion row and not the one that pins the fold.
+		{"S43 the folded branch meets the folded exclusion",
+			"outputt\u0131ng file 3"},
+
+		// The running-the branch, whose i is in `running`.
+		{"S44 running the, dotless i", "runn\u0131ng the script gives 1"},
+		{"S45 the ASCII control for S44", "running the script gives 1"},
+		{"S46 running the, dotted capital I", "RUNN\u0130NG THE SCRIPT GIVES 1"},
 	} {
 		add(row[0], map[string]any{"kind": "stdout_claim", "text": row[1]},
 			func(t *testing.T, c acCase, base string) any {

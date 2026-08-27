@@ -195,9 +195,18 @@ var (
 	// accent — "<thinké>" strips here and does not in CPython. Trading a
 	// 5004-code-point skew for a whole-Latin-1 skew was the wrong side of
 	// the trade (adversarial mission-r7 LOW).
-	thinkBody   = `(?:` + pytext.NotWordClassPlus(">") + `[^>]*)?>`
-	thinkRe     = regexp.MustCompile(`(?is)<think` + thinkBody + `.*?</think` + pytext.SpaceClass + `*>`)
-	thinkOpenRe = regexp.MustCompile(`(?i)<think` + thinkBody)
+	thinkBody = `(?:` + pytext.NotWordClassPlus(">") + `[^>]*)?>`
+	// PyFoldI because the tag name carries an `i`. CPython's
+	// re.IGNORECASE folds U+0130 and U+0131 onto it and Go's (?i) does
+	// not, so `<thınk>` opened a block there and not here. This was the
+	// last-listed entry on the fold census's allowlist, kept there under
+	// the word "lowest consequence" ı and the truncated-trace arm is not
+	// low at all: CPython strips from the unclosed tag to the END, so
+	// `<thınk>truncated {"a":1}` yields NOTHING to parse there, and the
+	// whole reply including the object here. Two runtimes disagreeing
+	// about whether a reply parses at all is not a cosmetic skew.
+	thinkRe     = regexp.MustCompile(pytext.PyFoldI(`(?is)<think` + thinkBody + `.*?</think` + pytext.SpaceClass + `*>`))
+	thinkOpenRe = regexp.MustCompile(pytext.PyFoldI(`(?i)<think` + thinkBody))
 	// EQUIVALENT-MUTANT NOTE. Making `(.*?)` greedy survives the whole
 	// battery, and it is genuinely equivalent HERE but not in general:
 	// over 3810 generated fence documents the two spellings never differ
