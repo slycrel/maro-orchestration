@@ -36,7 +36,7 @@ func ToDict(spec *Spec) pyval.Obj {
 		{Key: "hooks", Val: pyval.List(copyList(spec.Hooks))},
 		{Key: "composes", Val: pyval.List(copyList(spec.Composes))},
 		{Key: "source_file", Val: spec.SourceFile},
-		{Key: "system_prompt_preview", Val: strings.ReplaceAll(clipRunes(spec.SystemPrompt, 200), "\n", " ")},
+		{Key: "system_prompt_preview", Val: strings.ReplaceAll(pytext.Head(spec.SystemPrompt, 200), "\n", " ")},
 	}
 }
 
@@ -101,7 +101,7 @@ func GenerateManifest(reg *Registry) []pyval.Obj {
 			// THEN replace. Stripping first would keep 200 characters of
 			// content where Python keeps fewer.
 			{Key: "description", Val: strings.ReplaceAll(
-				pytext.Strip(clipRunes(spec.SystemPrompt, 200)), "\n", " ")},
+				pytext.Strip(pytext.Head(spec.SystemPrompt, 200)), "\n", " ")},
 		})
 	}
 	sort.SliceStable(manifest, func(i, j int) bool {

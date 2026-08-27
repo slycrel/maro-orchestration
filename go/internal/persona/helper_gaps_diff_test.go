@@ -108,7 +108,7 @@ print(json.dumps({"segment": candidate.name, "full": str(candidate)}))
 //     only when a and b are identical, and both of dedent's uses then assign
 //     a value equal to the one already there.
 //
-//   - clipRunes's `len(rs) <= n` narrowed to `<`. At exactly n runes,
+//   - pytext.Head's `stop >= len(r)` narrowed to `>`. At exactly n runes,
 //     string(rs[:n]) IS s.
 //
 //   - dedent's `margin >= len(rs)` narrowed to `>`. Equality needs a NON-BLANK

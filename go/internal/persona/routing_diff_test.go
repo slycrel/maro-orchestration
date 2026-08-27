@@ -9,6 +9,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 )
 
 var (
@@ -432,7 +433,7 @@ print(json.dumps(a.seen, ensure_ascii=False))
 	stub := &llmSelectStub{reply: ""}
 	ForGoal(context.Background(), goal, nil, 0.70, true, stub)
 	built := "Available personas: " + strings.Join(append(routingNames(), DefaultPersona), ", ") +
-		"\n\nGoal: " + clipRunes(goal, 300) +
+		"\n\nGoal: " + pytext.Head(goal, 300) +
 		"\n\nWhich single persona best fits this goal? Reply with ONLY the persona name, nothing else."
 	if built != py {
 		t.Errorf("selection prompt\n  go %q\n  py %q", built, py)

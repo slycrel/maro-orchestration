@@ -123,17 +123,9 @@ func (r EvolverReport) Summary() string {
 		fmt.Sprintf("elapsed_ms=%d", r.ElapsedMS),
 	}
 	for _, s := range r.Suggestions {
-		lines = append(lines, fmt.Sprintf("  [%s] %s: %s", s.Category, s.Target, clipRunes(s.Suggestion, 80)))
+		lines = append(lines, fmt.Sprintf("  [%s] %s: %s", s.Category, s.Target, pytext.Head(s.Suggestion, 80)))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func clipRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		r = r[:n]
-	}
-	return string(r)
 }
 
 func suggestionsPath(ws string) string {
@@ -839,7 +831,7 @@ func changeLogAppend(workspaceDir string, f applyFields, beforeState any) {
 		{Key: "suggestion_id", Val: f.suggestionID},
 		{Key: "target", Val: f.target},
 		{Key: "confidence", Val: f.confidence},
-		{Key: "suggestion_text", Val: clipRunes(f.text, 500)},
+		{Key: "suggestion_text", Val: pytext.Head(f.text, 500)},
 		{Key: "suggestion_hash", Val: hex.EncodeToString(sum[:])[:12]},
 		// before_state is a Go map and comes out key-sorted; Python's
 		// order is its own dict's. Nothing joins on it — it is read as a
@@ -1017,7 +1009,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 		entry := pyval.Obj{
 			{Key: "pattern", Val: pattern},
 			{Key: "risk", Val: "MEDIUM"},
-			{Key: "detail", Val: fmt.Sprintf("evolver guardrail (id=%s): %s", suggestionID, clipRunes(text, 80))},
+			{Key: "detail", Val: fmt.Sprintf("evolver guardrail (id=%s): %s", suggestionID, pytext.Head(text, 80))},
 			{Key: "source", Val: suggestionID},
 			// Epoch seconds: constraint._load_dynamic_constraints'
 			// TTL check compares against time.time() — an ISO string
@@ -1065,7 +1057,7 @@ func applyAction(workspaceDir string, rec *record.Recorder, d map[string]any) ac
 	}
 	_ = rec.Event("EVOLVER_APPLIED", subject,
 		fmt.Sprintf("Applied %s suggestion (confidence: %.2f). %s",
-			category, confidence, clipRunes(text, 100)),
+			category, confidence, pytext.Head(text, 100)),
 		map[string]any{"suggestion_id": suggestionID, "category": category, "confidence": confidence},
 		"")
 
@@ -1244,7 +1236,7 @@ func Apply(workspaceDir string, rec *record.Recorder, cfg map[string]any,
 		d.Set("status", "injection_risk_blocked")
 		finding := ""
 		if len(scan.Findings) > 0 {
-			finding = clipRunes(scan.Findings[0], 120)
+			finding = pytext.Head(scan.Findings[0], 120)
 		}
 		d.Set("block_reason", "injection_guard: "+finding)
 	} else {
@@ -1527,7 +1519,7 @@ func Revert(workspaceDir string, rec *record.Recorder, suggestionID string) Reve
 						// named in PORT.md). Match both forms plus the
 						// legacy prose-in-pattern fallback.
 						if src == suggestionID || src == "evolver:"+suggestionID ||
-							(suggestionText != "" && stringOr(row["pattern"]) == clipRunes(suggestionText, 200)) {
+							(suggestionText != "" && stringOr(row["pattern"]) == pytext.Head(suggestionText, 200)) {
 							removed = true
 							continue
 						}

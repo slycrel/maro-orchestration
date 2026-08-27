@@ -15842,3 +15842,28 @@ first-out — not because a test caught the other.
 Final: **59/59 killed**, spec in
 `go/tools/batteries/loopfinalize-riskmint.json`; 62 differential scenarios
 across the mint, the two lesson texts and the registry.
+
+## Closing `clipRunes`, which was seven functions and two behaviours
+
+`pytext.Head(s, n)` is Python's `s[:n]` — a plain slice by code points,
+nothing appended.
+
+It was written seven times as a private `clipRunes`: graduation, persona,
+scans, playbook, evolver, skills, director. Six were the same function in
+four spellings. **The seventh was a different function under the same
+name** — playbook's appends `…`, because `playbook.py` has both forms
+within a few lines of each other and the port kept them adjacent.
+
+That is the fourth lens with a knife in it. A reader who copies
+`clipRunes` from the wrong package gets an ellipsis Python never wrote,
+into a lesson row or a manifest field, and nothing at the call site says
+which one they got. The six plain copies are deleted, playbook's is
+renamed `clipEllipsis`, and `Head`'s doc says explicitly what it is NOT:
+`budget.Clip` is a BUDGET and appends `… [truncated: first N of M
+characters]` to be SEEN, where `Head` is a slice and is meant to be
+invisible.
+
+`Head` also takes Python's negative `n`, which no caller in this tree
+uses — so `head_test.go` asks CPython for 28 `(s, n)` pairs and compares,
+including every negative arm. An unexercised branch in a helper seven
+packages share is a liability, not generality.

@@ -49,6 +49,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/scrub"
 	"github.com/slycrel/maro-orchestration/go/internal/workers"
 
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -494,8 +495,8 @@ func Run(ctx context.Context, adapter llm.Adapter, rec *record.Recorder, directi
 // for the whole directive.
 func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry bool, res *Result) (string, []Ticket, int, int) {
 	if dry || adapter == nil {
-		return "[dry-run spec] Plan for: " + clipRunes(directive, 80),
-			[]Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: "[dry-run] " + clipRunes(directive, 60)}},
+		return "[dry-run spec] Plan for: " + pytext.Head(directive, 80),
+			[]Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: "[dry-run] " + pytext.Head(directive, 60)}},
 			0, 0
 	}
 
@@ -594,7 +595,7 @@ func produceSpec(ctx context.Context, adapter llm.Adapter, directive string, dry
 	} else {
 		res.Warnings = append(res.Warnings, "spec LLM call failed — single-ticket fallback")
 	}
-	return "Single-worker fallback for: " + clipRunes(directive, 80),
+	return "Single-worker fallback for: " + pytext.Head(directive, 80),
 		[]Ticket{{TicketID: newID(), WorkerType: workers.InferType(directive), Task: directive}},
 		in, out
 }
@@ -960,13 +961,6 @@ func titleCase(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-func clipRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
 }
 
 func newID() string {

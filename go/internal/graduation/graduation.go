@@ -310,14 +310,6 @@ func lastLines(text string, n int) []string {
 	return pyWindowLines(clean, n)
 }
 
-func clipRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
-
 // RunGraduation ports run_graduation: propose a pending suggestion per
 // repeated failure class not already proposed. Rows remain pending until a
 // human applies them (`maro evolve -apply`); once applied they flow into
@@ -355,13 +347,13 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 		text := tmpl.Suggestion
 		text = strings.ReplaceAll(text, "{count}", fmt.Sprintf("%d", c.Count))
 		text = strings.ReplaceAll(text, "{loop_ids}", loopIDsStr)
-		text = strings.ReplaceAll(text, "{evidence}", clipRunes(evidenceStr, 200))
+		text = strings.ReplaceAll(text, "{evidence}", pytext.Head(evidenceStr, 200))
 
 		entry := map[string]any{
-			"suggestion_id":     fmt.Sprintf("grad-%s-%s", runID, clipRunes(fc, 12)),
+			"suggestion_id":     fmt.Sprintf("grad-%s-%s", runID, pytext.Head(fc, 12)),
 			"category":          tmpl.Category,
 			"target":            "all",
-			"suggestion":        clipRunes(text, 500),
+			"suggestion":        pytext.Head(text, 500),
 			"failure_pattern":   "graduation:" + fc,
 			"confidence":        tmpl.Confidence,
 			"outcomes_analyzed": c.Count,
@@ -437,7 +429,7 @@ func RunGraduation(ws string, rec *record.Recorder, minCount, lookback int,
 			sug, _ := row["suggestion"].(string)
 			fp, _ := row["failure_pattern"].(string)
 			_ = rec.Event("GRADUATION_PROPOSED", fp,
-				"Graduation proposed: "+clipRunes(sug, 120),
+				"Graduation proposed: "+pytext.Head(sug, 120),
 				map[string]any{"category": row["category"], "confidence": row["confidence"]}, "")
 		}
 	}
@@ -550,12 +542,12 @@ func runPattern(repoRoot, pattern string) (bool, string) {
 	err := cmd.Run()
 	out := strings.TrimSpace(stdout.String())
 	passed := err == nil && out != ""
-	output := clipRunes(out, 200)
+	output := pytext.Head(out, 200)
 	if output == "" {
-		output = clipRunes(strings.TrimSpace(stderr.String()), 100)
+		output = pytext.Head(strings.TrimSpace(stderr.String()), 100)
 	}
 	if err != nil && output == "" {
-		output = clipRunes(err.Error(), 100)
+		output = pytext.Head(err.Error(), 100)
 	}
 	return passed, output
 }

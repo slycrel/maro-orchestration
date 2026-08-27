@@ -238,7 +238,7 @@ func TestALongAppendSummaryIsClippedWithoutAnEllipsis(t *testing.T) {
 			}
 
 			// CPython's OWN summary must not carry an ellipsis. The port's
-			// clipNoEllipsis/clipRunes split rests entirely on that, and if
+			// pytext.Head/clipEllipsis split rests entirely on that, and if
 			// upstream ever changes it this says so instead of the port
 			// quietly becoming wrong.
 			if strings.HasSuffix(want[0].Summary, "…") {

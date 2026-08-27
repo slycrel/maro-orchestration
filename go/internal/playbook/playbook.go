@@ -579,9 +579,14 @@ func collapseSpace(s string) string {
 	return strings.Join(strings.FieldsFunc(s, pytext.IsSpace), " ")
 }
 
-// clipRunes truncates to n CODE POINTS, appending the ellipsis Python
+// clipEllipsis truncates to n CODE POINTS, appending the ellipsis Python
 // appends. Python slices `entry[:500]`, which is code points.
-func clipRunes(s string, n int) string {
+//
+// It is NOT pytext.Head, and the old name — clipRunes — was the same name
+// six other packages used for the plain slice. Renamed at the point Head
+// was extracted, because a shared helper does not help if a local
+// function still answers to its name with different semantics.
+func clipEllipsis(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
@@ -712,7 +717,7 @@ func Append(ws string, rec *record.Recorder, entry, section, source, key string)
 	entry = collapseSpace(entry)
 	source = collapseSpace(source)
 	key = collapseSpace(key)
-	entry = clipRunes(entry, 500)
+	entry = clipEllipsis(entry, 500)
 
 	path := Path(ws)
 	if _, err := os.Stat(path); err != nil {
@@ -790,7 +795,7 @@ func Append(ws string, rec *record.Recorder, entry, section, source, key string)
 	// Captain's log, outside the lock — it does not need file exclusivity,
 	// and its failure must not fail the append.
 	if wrote && rec != nil {
-		_ = rec.Event("PLAYBOOK_UPDATED", section, clipNoEllipsis(entryLine, 200),
+		_ = rec.Event("PLAYBOOK_UPDATED", section, pytext.Head(entryLine, 200),
 			map[string]any{"source": source, "section": section}, "")
 	}
 	return nil
@@ -818,14 +823,4 @@ func insertEntry(text, section, entryLine string) string {
 			sectionHeader + "\n\n" + entryLine + "\n" + text[i:]
 	}
 	return pytext.TrimRight(text) + "\n\n" + sectionHeader + "\n\n" + entryLine + "\n"
-}
-
-// clipNoEllipsis is Python's `s[:n]` — a plain code-point slice with NO
-// ellipsis. clipRunes is the OTHER one, which appends "…". Both appear in
-// playbook.py within a few lines of each other.
-func clipNoEllipsis(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n])
 }

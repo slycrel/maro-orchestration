@@ -9,6 +9,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/jsonx"
 	"github.com/slycrel/maro-orchestration/go/internal/llm"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
@@ -131,9 +132,9 @@ func BuildOutcomesSummary(outcomes []map[string]any) string {
 			}
 		}
 		entry := fmt.Sprintf("  [%s]%s [%s] %s", stringOr(o["status"]), tag,
-			stringOr(o["task_type"]), clipRunes(stringOr(o["goal"]), 60))
+			stringOr(o["task_type"]), pytext.Head(stringOr(o["goal"]), 60))
 		if s := stringOr(o["summary"]); s != "" {
-			entry += " — " + clipRunes(s, 80)
+			entry += " — " + pytext.Head(s, 80)
 		}
 		lines = append(lines, entry)
 	}
@@ -143,7 +144,7 @@ func BuildOutcomesSummary(outcomes []map[string]any) string {
 			if i >= 10 {
 				break
 			}
-			lines = append(lines, "  - "+clipRunes(stringOr(o["summary"]), 120))
+			lines = append(lines, "  - "+pytext.Head(stringOr(o["summary"]), 120))
 		}
 	}
 	if len(stuck) > 0 {
@@ -152,7 +153,7 @@ func BuildOutcomesSummary(outcomes []map[string]any) string {
 			if i >= 10 {
 				break
 			}
-			lines = append(lines, "  - "+clipRunes(stringOr(o["summary"]), 120))
+			lines = append(lines, "  - "+pytext.Head(stringOr(o["summary"]), 120))
 		}
 	}
 	return strings.Join(lines, "\n")

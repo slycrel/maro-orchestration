@@ -137,7 +137,7 @@ func UpdateSkillUtility(ws, skillID string, success bool, failureReason, stepTex
 		}
 		if failureReason != "" {
 			// Keep the five most recent notes, each clipped to 200 runes.
-			notes := append(target.FailureNotes, clipRunes(failureReason, 200))
+			notes := append(target.FailureNotes, pytext.Head(failureReason, 200))
 			if len(notes) > 5 {
 				notes = notes[len(notes)-5:]
 			}
@@ -206,7 +206,7 @@ func LogCircuitTransition(rec *record.Recorder, skillID string, u UtilityUpdate,
 	// which is the one thing a circuit event exists to carry.
 	note := ""
 	if failureReason != "" {
-		note = clipRunes(failureReason, 200)
+		note = pytext.Head(failureReason, 200)
 	}
 	// The skill linkage is related_ids, NOT loop_id: filing a subject
 	// linkage as a run id invents a run and loses the linkage.
@@ -297,14 +297,6 @@ func round3(f float64) float64 { return pyRound(f, 3) }
 // hand-ported-helper family again. This name stays as the package's
 // local spelling; there is only one implementation.
 func pyRound(f float64, n int) float64 { return pyval.Round(f, n) }
-
-func clipRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n])
-}
 
 // ---------------------------------------------------------------------------
 // A/B variants

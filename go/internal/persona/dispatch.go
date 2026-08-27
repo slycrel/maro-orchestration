@@ -54,7 +54,7 @@ func RecordDispatch(ws, goal, personaName string, confidence float64,
 	isFallback bool, handleID string) error {
 
 	entry := pyval.Obj{
-		{Key: "goal_preview", Val: clipRunes(goal, 120)},
+		{Key: "goal_preview", Val: pytext.Head(goal, 120)},
 		{Key: "persona_name", Val: personaName},
 		{Key: "confidence", Val: pyval.Round(confidence, 3)},
 		{Key: "is_fallback", Val: isFallback},

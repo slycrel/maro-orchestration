@@ -152,14 +152,6 @@ func floatField(m map[string]any, key string) (float64, bool) {
 	return 0, false
 }
 
-func clipRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
-
 // ---------------------------------------------------------------------------
 // Calibration scan
 // ---------------------------------------------------------------------------
@@ -354,7 +346,7 @@ func ScanStepCosts(ws string, minEntries int) []evolver.Suggestion {
 				"routing for agentic steps.)",
 			st, commaInt(s.avgTokens), s.count, s.avgCost)
 		out = append(out, evolver.Suggestion{
-			SuggestionID:     "cost-" + clipRunes(st, 12),
+			SuggestionID:     "cost-" + pytext.Head(st, 12),
 			Category:         "cost_optimization",
 			Target:           st,
 			Suggestion:       text,
@@ -694,7 +686,7 @@ func ScanCanonCandidates(ws string, minHits, minTaskTypes int) []evolver.Suggest
 				"PROMOTE TO IDENTITY (Stage 3): '%s' — applied %dx across %d task "+
 					"types (%s). Door: maro-memory canon-promote %s (writes playbook "+
 					"Canon — always-active).",
-				clipRunes(lesson.Lesson, 200), s.totalHits, len(types),
+				pytext.Head(lesson.Lesson, 200), s.totalHits, len(types),
 				strings.Join(shown, ", "), lid),
 			FailurePattern: fmt.Sprintf("lesson_id=%s times_applied=%d task_types=%d",
 				lid, s.totalHits, len(types)),

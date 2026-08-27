@@ -701,3 +701,36 @@ func inUpperSupplement(r rune) bool {
 	_, ok := upperSupplement[r]
 	return ok
 }
+
+// Head is Python's `s[:n]` — a plain slice by CODE POINTS, with nothing
+// appended and no marker. `n` past the end returns the whole string; a
+// negative `n` counts from the end, as Python's does.
+//
+// It exists because seven packages had written it as a private
+// `clipRunes` — graduation, persona, scans, playbook, evolver, skills and
+// director — and one of the seven was a DIFFERENT FUNCTION under the same
+// name: playbook's appended "…", because playbook.py has both forms
+// within a few lines of each other. That is the fourth lens with a knife
+// in it. A reader who copies `clipRunes` from the wrong package gets an
+// ellipsis Python never wrote, into a lesson row or a manifest field, and
+// nothing about the call site says which one they got.
+//
+// Head is NOT budget.Clip. Clip is a BUDGET: it appends
+// `… [truncated: first N of M characters]` and is meant to be seen. Head
+// is a SLICE and is meant to be invisible. Reaching for the wrong one
+// puts an operator-facing marker inside a value some parser downstream
+// is about to split.
+func Head(s string, n int) string {
+	r := []rune(s)
+	stop := n
+	if stop < 0 {
+		stop = len(r) + n
+		if stop < 0 {
+			stop = 0
+		}
+	}
+	if stop >= len(r) {
+		return s
+	}
+	return string(r[:stop])
+}

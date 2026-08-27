@@ -245,7 +245,7 @@ func llmSelect(ctx context.Context, adapter llm.Adapter, goal string,
 
 	personasStr := strings.Join(availableNames, ", ")
 	prompt := "Available personas: " + personasStr + "\n\n" +
-		"Goal: " + clipRunes(goal, 300) + "\n\n" +
+		"Goal: " + pytext.Head(goal, 300) + "\n\n" +
 		"Which single persona best fits this goal? Reply with ONLY the persona name, nothing else."
 
 	resp, err := adapter.Complete(ctx, []llm.Message{{Role: "user", Content: prompt}},
@@ -270,16 +270,6 @@ func llmSelect(ctx context.Context, adapter llm.Adapter, goal string,
 		return name, true
 	}
 	return "", false
-}
-
-// clipRunes is `goal[:300]` — a CODE POINT slice. A byte slice of a goal
-// written in anything but ASCII cuts mid-rune and puts U+FFFD in a prompt.
-func clipRunes(s string, n int) string {
-	rs := []rune(s)
-	if len(rs) <= n {
-		return s
-	}
-	return string(rs[:n])
 }
 
 func containsString(list []string, want string) bool {

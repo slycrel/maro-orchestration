@@ -463,7 +463,7 @@ and the tell is the same — a correct fix, at the one site that had the
 evidence.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 34*
+*instances: 35*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,

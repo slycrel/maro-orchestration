@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/evolver"
+	"github.com/slycrel/maro-orchestration/go/internal/pytext"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -243,7 +244,7 @@ func FormatImpactSummary(records []EvolverImpactRecord) string {
 		}
 		return ts
 	}
-	id12 := func(id string) string { return clipRunes(id, 12) }
+	id12 := func(id string) string { return pytext.Head(id, 12) }
 	for _, r := range records {
 		if r.Verdict == "insufficient_data" {
 			lines = append(lines, fmt.Sprintf(
