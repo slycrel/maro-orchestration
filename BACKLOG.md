@@ -478,6 +478,48 @@ a list pruned to what the suite already covers cannot report a hole like
 this. Any package with `[no test files]` is in the same position; that
 census has not been run.
 
+### Go port: two JSON emitters, and the second one knows it (FOUND 2026-08-26)
+
+`internal/pyjson` and `internal/pyval` both exist to be THE emitter that
+stops per-package JSON drift, and each says so in its header. pyjson owns
+the single-line JSONL lane (`Ordered`, `Value`, `String`, ensure_ascii,
+HTML-off, float spelling). pyval owns the indent-2 sidecar lane
+(`DumpsIndent2`, `DumpsIndentN`, `DumpsIndentNSorted`, `DumpsIndent2Raw`)
+plus the ordered `Obj`/`List` carrier — and it calls into `pyjson.Value`
+for scalars, so the split is not clean either.
+
+This is already known and deliberate. `pyval.go`'s own header:
+
+> WHERE THIS BELONGS: internal/pyjson, next to Ordered. It is parked here
+> because pyjson was under adversarial review when the project ledger
+> needed it, and moving a file someone is reviewing is how a round's
+> findings stop landing against the thing that was reviewed. `pids.go` had
+> already rolled its own indent renderer for one specific shape, so this
+> is the second instance — which is the threshold at which the duplication
+> stops being cheap. Both fold into pyjson together.
+
+pyjson is no longer under review, so the parking reason has expired.
+
+**The cost is measured, not hypothetical.** Writing the sheriff slice-2
+design note, I grepped `internal/pyjson` for indent support, found none,
+and concluded slice 2 had to add it to a shared package. I then wrote the
+whole renderer — layout struct, empty-container rule, item-separator rule,
+a CPython differential, a 12-mutation battery, 12/12 caught — before
+discovering `pyval` had shipped the same operation months earlier, already
+differential-tested with its own anti-vacuity guard. An hour, and the
+duplicate was written by the person writing the note that warns about
+duplication (L14, one level up).
+
+The transferable rule, worth more than the fold itself: **grep the TREE
+for a capability, not the package you expect to find it in.** The design
+note now carries the correction.
+
+Not urgent — nothing is wrong on disk, both lanes are pinned against
+CPython. The fold is a tidy-up with a real prerequisite: `pyval.Obj` is
+the ordered carrier and `pyjson.Ordered`'s map+modeled-keys signature is a
+different shape, so folding means picking ONE carrier, which is a
+decision, not a move.
+
 ### Go port: the directory-MODE census — 34 sites still pass a literal `0o755` (FOUND 2026-08-26, go-port chunk A)
 
 `record.NewDirMode` is `0o777`, which is what `Path.mkdir()` passes, and
