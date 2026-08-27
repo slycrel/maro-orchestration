@@ -13935,3 +13935,97 @@ flags by accident.
 Measured after the fix: `complete`, `claim` and `archive` refuse `-error`
 on both engines and `fail` still accepts it. The remaining difference on
 the refusal path is exit code 2 vs 1, which is CLI-wide and already filed.
+
+## `internal/provenance` gets a CPython differential (2026-08-27)
+
+The package that decides whether a lesson is QUARANTINED had tests but no
+interpreter behind them. Its whole content is three regexes transcribed
+from `src/lesson_provenance.py` and a killswitch normalizer, and every
+fixture it carried was ASCII — so what it was measuring was that a
+transcription is a transcription, which is exactly the belief this arc
+keeps finding wrong.
+
+Three test files' worth of subject, in one package: the classifier
+(`TestClassifyMatchesCPython`, 106 fixtures over every alternation member,
+every branch, and both boundaries of the `[^.]{0,60}` window), the
+whitespace class generalized from samples to a swept set
+(`TestWhitespaceClassMatchesCPython`), the pattern SOURCE text and the
+`minted_from` stamp values (`TestRegexSourceMatchesCPython`), and the
+killswitch composed the way production composes it —
+`GateEnabled(GetRaw(...))` against `provenance_gate_enabled()` over a real
+`config.yml`, 43 bodies (`TestGateEnabledMatchesCPython`).
+
+**Six divergences, none fixed here — the fix is a decision, not a
+cleanup.** They fall in three classes, and the first two have a remedy
+already sitting in this tree that this package never used:
+
+1. **`\s`** — Python's is 29 code points, Go's is 5. Eleven pinned rows;
+   the whole gap is 24 code points, swept. `U+000B` needs no Unicode at
+   all. **Direction is UNSAFE**: CPython quarantines, the port does not,
+   and an unquarantined lesson is injectable into every later run
+   forever. It reaches the SOURCE leg too, where the text is the
+   untrusted dispatch prompt itself. `pytext.SpaceClass` is the remedy
+   and is a drop-in.
+2. **`\b` / `\w`** — Python's `\w` is 142,940 code points, Go's is 63, so
+   a non-ASCII letter touching a keyword suppresses `\b` in CPython and
+   not here. Five pinned rows. **Direction is SAFE** (the port
+   quarantines more). `pytext.WordStart`/`WordEnd` is the remedy for the
+   OUTER boundaries only: `_SCAFFOLDING_RE` has two INTERIOR `\b` inside
+   its `{0,60}` window, which is precisely the shape mission-r7 caught —
+   a consuming boundary eats the window's own character and breaks the
+   most ordinary input. Fixing 2 is arithmetic, not substitution.
+3. **`re.IGNORECASE` folds the Turkish i** — CPython's fold table maps
+   U+0130 and U+0131 to `i`; Go's `unicode.SimpleFold` does not. Three
+   pinned rows. **Direction is UNSAFE, and it is the one an author can
+   reach on purpose**: a dotless i is a one-character homoglyph edit that
+   walks an instruction-derived lesson past this gate and not past
+   CPython's. No remedy exists in the tree. This is NOT
+   provenance-specific — `pytext`'s fold-invariance sweep covers the
+   exported CLASSES, and this is about LITERALS: any `(?i)` pattern in
+   the port with an `i` in a literal has the same hole (40 such patterns
+   across 11 files). U+017F/`s` and U+212A/`k`, the other two special
+   folds an ASCII pattern can reach, DO agree — measured, which is why
+   the rows name the Turkish i rather than "unicode folding".
+
+And in the killswitch, both safe-direction:
+
+4. `provenance_gate_enabled: "\x1cfalse"` — Python's `str.strip()` strips
+   the C0 separators U+001C..1F, `strings.TrimSpace` (`unicode.IsSpace`)
+   does not. Gate OFF in CPython, ON here.
+5. `[]` and `{}` — Python's fallthrough is `bool(val)` and an empty
+   container is falsy; `GateEnabled`'s default arm returns true. Gate OFF
+   in CPython, ON here.
+
+Two non-findings worth recording, because both look like divergences:
+
+- `off`/`no`/`yes`/`on` decode as BOOLEANS in PyYAML (YAML 1.1) and as
+  STRINGS in yaml.v3 (1.2). The verdicts agree only because
+  `GateEnabled`'s string denylist happens to spell all four. That is
+  agreement by construction and is pinned as a TYPE divergence with a
+  matching verdict, so deleting the string arm as dead code fails here.
+  Single-letter `y`/`n` are strings in both — PyYAML does not resolve
+  them — which is why the four cannot be generalized.
+- An explicit `provenance_gate_enabled: null` AGREES: `GetRaw` reports
+  the key present, and `GateEnabled`'s nil arm answers Python's
+  `bool(None)`. The pin at `pack/hostile_test.go:568` describes the
+  `Get[any]` composition, which is not the one `import.go:273` performs.
+
+Every pinned row asserts the disagreement PERSISTS, so closing one fails
+the test and forces the ledger to be updated rather than quietly
+shrinking — proven by widening the port's `\s` toward Python's and
+watching eleven rows and the swept class fail together.
+
+The CPython premise is checked before either side is compared, and it
+earned its keep immediately: two rows of the first draft claimed to
+exercise the `as an excuse to stop` branch with goal text that had no
+`as` in it, and a third assumed a divergence where two ASCII-vs-Unicode
+differences cancel (a separator after the OPTIONAL determiner leaves Go
+matching the bare noun, because U+00A0 is not a word character to it).
+All three were green-and-measuring-nothing until the premise check fired.
+
+Eight mutations, eight killed: an alternation member dropped, the excuse
+window widened by one, the source-echo requirement removed, `off` dropped
+from the denylist, `TrimSpace` dropped, nil read as absent, a stated
+CPython premise flipped, and one `goDiff` deleted from the ledger. A
+ninth (deleting the string arm outright) did not COMPILE and was replaced
+rather than counted — a mutant that does not build proves nothing.
