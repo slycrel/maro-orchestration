@@ -90,7 +90,7 @@ def main():
         sys.exit("the tree is ALREADY red; every mutation would report as "
                  "covered. Fix the tree first (P7).\n" + out[-2000:])
 
-    survivors, unmatched = [], []
+    survivors, unmatched, buildfails = [], [], []
     for m in muts:
         path = os.path.join(gosrc.GO_ROOT, m["file"])
         src = originals[path]
@@ -119,7 +119,15 @@ def main():
             # named test.
             print("  killed    %-36s (panic or deadlock)" % m["name"])
         else:
-            print("  killed    %-36s (build)" % m["name"])
+            # NOT a kill. A mutant that does not compile has tested
+            # nothing: the compiler rejected an identifier that went
+            # unused, and no assertion ever ran. L8 has said since the
+            # metrics battery that a BUILDFAIL is a fault in the battery,
+            # and this runner used to print it in the killed column and
+            # exit 0 anyway — so three rows in the riskmint battery
+            # (2026-08-27) counted as coverage they had not measured.
+            buildfails.append(m["name"])
+            print("  !BUILD    %-36s does not compile" % m["name"])
 
     print()
     if unmatched:
@@ -130,12 +138,18 @@ def main():
         # about its own denominator (P16).
         print("%d SPEC BUG(S): %s" % (len(unmatched),
               ", ".join("%s (%d)" % u for u in unmatched)))
+    if buildfails:
+        print("%d MUTANT(S) DID NOT COMPILE: %s" % (len(buildfails),
+              ", ".join(buildfails)))
+        print("\nA build break is not a kill. Re-spell each one so it "
+              "compiles — usually by keeping the identifier the deletion "
+              "orphaned — and let a test do the killing (L8).")
     if survivors:
         print("%d SURVIVED: %s" % (len(survivors), ", ".join(survivors)))
         print("\nEach needs a fixture that fails with the mutation applied, "
               "or a comment at the site saying why no input can observe it "
               "(L8). The answer belongs next to the code either way.")
-    if unmatched or survivors:
+    if unmatched or survivors or buildfails:
         sys.exit(1)
     print("all %d mutation(s) killed at least one test" % len(muts))
 

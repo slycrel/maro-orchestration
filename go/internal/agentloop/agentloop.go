@@ -270,6 +270,20 @@ func RunParallelLoops[T any](goals []string, maxWorkers int,
 	// observes start order — but run() is a caller's function, and a caller
 	// whose steps log their own start is entitled to the order Python gives
 	// them.
+	//
+	// NOT IN THE BATTERY, and the reason is L8 plus L51. The
+	// semaphore/queue mutation was killed by the CPython differential on
+	// three runs and survived a fourth, because the only thing the two
+	// spellings disagree about is which goal takes a freed slot — and the
+	// differential normalises start order into waves of `effective`
+	// precisely because raw start order races in BOTH languages. What is
+	// left after that normaliser is a probabilistic remnant, so the kill
+	// was evidence about the scheduler that day and not about the code. A
+	// battery row that flakes is worse than no row: it makes every future
+	// run non-reproducible. No deterministic fixture can distinguish them
+	// either, since Go releases channel waiters in ARRIVAL order and
+	// arrival order is the race. The FIFO spelling stays because it is
+	// the faithful one, not because a test caught the other.
 	queue := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < effective; w++ {

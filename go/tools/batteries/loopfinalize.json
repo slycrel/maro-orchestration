@@ -1,621 +1,621 @@
 {
-  "packages": {
-    "default": [
-      "./internal/loopfinalize/"
-    ]
-  },
-  "mutations": [
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "elapsed-ms-scale",
-      "old": "* 1000)",
-      "new": "* 100)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "elapsed-ignores-started-at",
-      "old": "int((d.Monotonic() - ctx.StartedAt) * 1000)",
-      "new": "int(d.Monotonic() * 1000)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "manifest-gate-is-or",
-      "old": "if ctx.Project != \"\" && len(in.ManifestSteps) > 0 {",
-      "new": "if ctx.Project != \"\" || len(in.ManifestSteps) > 0 {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "manifest-ignores-steps",
-      "old": "if ctx.Project != \"\" && len(in.ManifestSteps) > 0 {",
-      "new": "if ctx.Project != \"\" {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "report-skipped-when-manifest-fails",
-      "old": "\t\tif err := call(d.WritePlanManifest, mi); err != nil {\n\t\t\td.warn(\"plan manifest write failed (affects replay/debugging): %s\", err)\n\t\t}",
-      "new": "\t\tif err := call(d.WritePlanManifest, mi); err != nil {\n\t\t\td.warn(\"plan manifest write failed (affects replay/debugging): %s\", err)\n\t\t\treturn nil, err\n\t\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "runs-index-not-forced",
-      "old": "d.WriteRunsIndex(true)",
-      "new": "d.WriteRunsIndex(false)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "loop-log-failure-swallowed",
-      "old": "\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\t// 2026-07-08 adversarial review",
-      "new": "\tif err != nil {\n\t\td.warn(\"loop log write failed: %s\", err)\n\t}\n\n\t// 2026-07-08 adversarial review",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "decision-line-wording",
-      "old": "\"[loop:%s] finished status=%s steps=%d tokens=%d+%d\"",
-      "new": "\"[loop:%s] done status=%s steps=%d tokens=%d+%d\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "decision-tokens-summed",
-      "old": "in.TotalTokensIn, in.TotalTokensOut)}); err != nil {",
-      "new": "in.TotalTokensIn+in.TotalTokensOut, 0)}); err != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "decision-failure-swallowed",
-      "old": "\t\tin.TotalTokensIn, in.TotalTokensOut)}); err != nil {\n\t\treturn nil, err\n\t}",
-      "new": "\t\tin.TotalTokensIn, in.TotalTokensOut)}); err != nil {\n\t\td.warn(\"decision failed: %s\", err)\n\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-ignores-dry-run",
-      "old": "if in.PFReview != nil && !ctx.DryRun {",
-      "new": "if in.PFReview != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-wide-only",
-      "old": "predictedWide := pf.Scope == \"wide\" || pf.Scope == \"deep\"",
-      "new": "predictedWide := pf.Scope == \"wide\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-stuck-is-not-done",
-      "old": "actualStuck := in.LoopStatus == \"stuck\"",
-      "new": "actualStuck := in.LoopStatus != \"done\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-steps-done-counts-all",
-      "old": "\tstepsDone := countDone(in.StepOutcomes)",
-      "new": "\tstepsDone := len(in.StepOutcomes)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-flag-kinds-counts-one",
-      "old": "\t\tseen[f.Kind]++",
-      "new": "\t\tseen[f.Kind] = 1",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-flag-kinds-unsorted",
-      "old": "\tsort.Strings(kinds)\n",
-      "new": "",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-flag-count-is-distinct",
-      "old": "entry.Set(\"flag_count\", len(pf.Flags))",
-      "new": "entry.Set(\"flag_count\", len(seen))",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-milestone-candidates",
-      "old": "entry.Set(\"milestone_candidates\", len(pf.MilestoneStepIndices))",
-      "new": "entry.Set(\"milestone_candidates\", len(in.MilestoneExpanded))",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-false-negative-flipped",
-      "old": "entry.Set(\"false_negative\", !predictedWide && actualStuck)",
-      "new": "entry.Set(\"false_negative\", predictedWide && !actualStuck)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-json-is-indented",
-      "old": "pyval.DumpsCompactPy(entry)",
-      "new": "pyval.DumpsIndent2(entry)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "calibration-log-uses-go-bools",
-      "old": "\tif b {\n\t\treturn \"True\"\n\t}\n\treturn \"False\"",
-      "new": "\tif b {\n\t\treturn \"true\"\n\t}\n\treturn \"false\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "event-detail-dropped",
-      "old": "\t\tev.Set(\"detail\", derefOr(in.StuckReason, \"\"))",
-      "new": "\t\tev.Set(\"detail\", \"\")",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "event-name-changed",
-      "old": "d.WriteEvent(\"loop_done\", ev)",
-      "new": "d.WriteEvent(\"loop-done\", ev)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "result-drops-ctx-verdict",
-      "old": "\t\tStopVerdict:        ctx.StopVerdict,",
-      "new": "\t\tStopVerdict:        \"\",",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-kind-not-done",
-      "old": "\tif loopStatus == \"done\" {\n\t\tkind = \"RESULT\"",
-      "new": "\tif loopStatus != \"stuck\" {\n\t\tkind = \"RESULT\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-head-swapped",
-      "old": "\thead := \"Partial result\"",
-      "new": "\thead := \"Result\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-header-counts-all",
-      "old": "\t\tloopStatus, doneSteps, len(outcomes), tokensIn+tokensOut, elapsedMS))",
-      "new": "\t\tloopStatus, len(outcomes), len(outcomes), tokensIn+tokensOut, elapsedMS))",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-tokens-in-only",
-      "old": "tokensIn+tokensOut, elapsedMS))",
-      "new": "tokensIn, elapsedMS))",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-stuck-gate-is-nil-check",
-      "old": "\tif derefOr(stuckReason, \"\") != \"\" {",
-      "new": "\tif stuckReason != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-rule-loses-newline",
-      "old": "\tlines = append(lines, \"---\\n\")",
-      "new": "\tlines = append(lines, \"---\")",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-step-numbered-by-ledger",
-      "old": "\t\t\ti+1, len(outcomes), s.Index,",
-      "new": "\t\t\ts.Index, len(outcomes), s.Index,",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-step-zero-based",
-      "old": "\t\t\ti+1, len(outcomes), s.Index,",
-      "new": "\t\t\ti, len(outcomes), s.Index,",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-icon-swapped",
-      "old": "\t\ticon := \"BLOCKED\"\n\t\tif s.Status == \"done\" {\n\t\t\ticon = \"Done\"\n\t\t}",
-      "new": "\t\ticon := \"Done\"\n\t\tif s.Status == \"done\" {\n\t\t\ticon = \"BLOCKED\"\n\t\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-icon-loses-newline",
-      "old": "\t\tlines = append(lines, fmt.Sprintf(\"*[%s]*\\n\", icon))",
-      "new": "\t\tlines = append(lines, fmt.Sprintf(\"*[%s]*\", icon))",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-text-head-200",
-      "old": "TranscriptStepTextHead  = 100",
-      "new": "TranscriptStepTextHead  = 200",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-result-cap-4000",
-      "old": "TranscriptStepResultCap = 2000",
-      "new": "TranscriptStepResultCap = 4000",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-truncation-counts-bytes",
-      "old": "if n := len([]rune(s.Result)); n > TranscriptStepResultCap {",
-      "new": "if n := len(s.Result); n > TranscriptStepResultCap {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-drops-blank-line",
-      "old": "\t\tlines = append(lines, \"\")\n\t}\n\treturn kind, strings.Join(lines, \"\\n\")",
-      "new": "\t}\n\treturn kind, strings.Join(lines, \"\\n\")",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-joined-with-blank",
-      "old": "return kind, strings.Join(lines, \"\\n\")",
-      "new": "return kind, strings.Join(lines, \"\\n\\n\")",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "head-counts-bytes",
-      "old": "\tr := []rune(s)\n\tif len(r) <= n {\n\t\treturn s\n\t}\n\treturn string(r[:n])",
-      "new": "\tif len(s) <= n {\n\t\treturn s\n\t}\n\treturn s[:n]",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-gate-is-any-step",
-      "old": "\tif doneSteps == 0 {\n\t\treturn\n\t}",
-      "new": "\tif len(in.StepOutcomes) == 0 {\n\t\treturn\n\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-gate-is-status",
-      "old": "\tif doneSteps == 0 {\n\t\treturn\n\t}",
-      "new": "\tif in.LoopStatus != \"done\" {\n\t\treturn\n\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "fallback-artdir-no-parents",
-      "old": "\t\tif err := d.MakeDirs(artDir, true); err != nil {",
-      "new": "\t\tif err := d.MakeDirs(artDir, false); err != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "scratchpad-json-compact",
-      "old": "\t\ttext, err := pyval.DumpsIndent2(f.Val)",
-      "new": "\t\ttext, err := pyval.DumpsCompactPy(f.Val)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-filename",
-      "old": "name := fmt.Sprintf(\"loop-%s-%s.md\", ctx.LoopID, kind)",
-      "new": "name := fmt.Sprintf(\"loop-%s-%s.md\", kind, ctx.LoopID)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "transcript-log-wording",
-      "old": "\"wrote loop transcript: %s (%d steps)\"",
-      "new": "\"wrote transcript: %s (%d steps)\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "cleanup-runs-on-dry-run",
-      "old": "\tif !ctx.DryRun && ctx.Project != \"\" && d.CleanupStepArtifacts != nil {",
-      "new": "\tif ctx.Project != \"\" && d.CleanupStepArtifacts != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "cleanup-does-not-exclude-self",
-      "old": "d.CleanupStepArtifacts(ctx.Project, ctx.LoopID)",
-      "new": "d.CleanupStepArtifacts(ctx.Project, \"\")",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "premerge-verdict-empty",
-      "old": "\tpreMergeVerdict := result.StopVerdict",
-      "new": "\tpreMergeVerdict := \"\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "merge-order-swapped",
-      "old": "\tmergeBackClone(ctx, d, result)\n\tmergeBackWorktree(ctx, d, result)",
-      "new": "\tmergeBackWorktree(ctx, d, result)\n\tmergeBackClone(ctx, d, result)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-unconditional",
-      "old": "\tif result.Status == \"done\" {\n\t\tresult.Status = \"partial\"\n\t}",
-      "new": "\tresult.Status = \"partial\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-separator",
-      "old": "\t\tprev += \"; \"",
-      "new": "\t\tprev += \", \"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-reason-prepended",
-      "old": "\tjoined := prev + reason",
-      "new": "\tjoined := reason + prev",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-overwrites-verdict",
-      "old": "\tif result.StopVerdict == \"\" {",
-      "new": "\tif true {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-verdict-name",
-      "old": "\t\tresult.StopVerdict = \"external-interrupt\"",
-      "new": "\t\tresult.StopVerdict = \"interrupted\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "downgrade-evidence-cap",
-      "old": "MergeVerdictEvidenceCap = 800",
-      "new": "MergeVerdictEvidenceCap = 900",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "clone-cleanup-keep-flag",
-      "old": "\t\t\terr = d.CleanupClone(!m.Ok)",
-      "new": "\t\t\terr = d.CleanupClone(m.Ok)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "clone-error-message",
-      "old": "\"container clone merge errored — work preserved in %s (branch %s): %s\"",
-      "new": "\"container clone merge errored — work preserved in %s (branch %s)\"",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "clone-failure-message",
-      "old": "\"container clone merge failed — work preserved: \"+m.Detail",
-      "new": "\"container clone merge failed: \"+m.Detail",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "worktree-error-downgrades",
-      "old": "\t\t// Python logs and moves on WITHOUT downgrading — see PORT.md.\n\t\td.warn(\"run worktree finalize error: %s\", err)",
-      "new": "\t\td.warn(\"run worktree finalize error: %s\", err)\n\t\tdowngrade(result, err.Error(), err.Error())",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "worktree-cleanup-keep-flag",
-      "old": "\tif err := d.CleanupWT(!m.Ok); err != nil {",
-      "new": "\tif err := d.CleanupWT(m.Ok); err != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "worktree-prune-skipped",
-      "old": "\tif err := d.PruneWT(); err != nil {\n\t\treturn err\n\t}\n",
-      "new": "",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "slot-cleared-before-release",
-      "old": "\t\tif err := releaseOrImport(d.ReleaseSlot); err != nil {\n\t\t\td.debug(\"project slot release failed: %s\", err)\n\t\t} else {\n\t\t\tctx.ProjectSlot = nil\n\t\t}",
-      "new": "\t\tctx.ProjectSlot = nil\n\t\tif err := releaseOrImport(d.ReleaseSlot); err != nil {\n\t\t\td.debug(\"project slot release failed: %s\", err)\n\t\t}",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "stamp-run-gated-on-verdict",
-      "old": "\tif d.StampRunStop == nil {",
-      "new": "\tif result.StopVerdict == \"\" {\n\t} else if d.StampRunStop == nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "heartbeat-payload-is-loop-id",
-      "old": "d.PostHeartbeat(\"loop_done\", ctx.Project)",
-      "new": "d.PostHeartbeat(\"loop_done\", ctx.LoopID)",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "landfacts-zero-still-logs",
-      "old": "\t} else if anec != 0 || hyp != 0 {",
-      "new": "\t} else {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "verbose-gate-dropped",
-      "old": "\tif ctx.Verbose && d.Stderr != nil {",
-      "new": "\tif d.Stderr != nil {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    },
-    {
-      "file": "internal/loopfinalize/loopfinalize.go",
-      "name": "scratchpad-keys-sorted",
-      "old": "\tkeys := make([]any, 0, len(in.Scratchpad))\n\tfor _, f := range in.Scratchpad {",
-      "new": "\tkeys := make([]any, 0, len(in.Scratchpad))\n\tsorted := append(pyval.Obj{}, in.Scratchpad...)\n\tsort.Slice(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })\n\tfor _, f := range sorted {",
-      "packages": [
-        "./internal/loopfinalize/"
-      ]
-    }
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/"
   ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "elapsed-ms-scale",
+   "old": "* 1000)",
+   "new": "* 100)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "elapsed-ignores-started-at",
+   "old": "int((d.Monotonic() - ctx.StartedAt) * 1000)",
+   "new": "int(d.Monotonic() * 1000)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "manifest-gate-is-or",
+   "old": "if ctx.Project != \"\" && len(in.ManifestSteps) > 0 {",
+   "new": "if ctx.Project != \"\" || len(in.ManifestSteps) > 0 {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "manifest-ignores-steps",
+   "old": "if ctx.Project != \"\" && len(in.ManifestSteps) > 0 {",
+   "new": "if ctx.Project != \"\" {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "report-skipped-when-manifest-fails",
+   "old": "\t\tif err := call(d.WritePlanManifest, mi); err != nil {\n\t\t\td.warn(\"plan manifest write failed (affects replay/debugging): %s\", err)\n\t\t}",
+   "new": "\t\tif err := call(d.WritePlanManifest, mi); err != nil {\n\t\t\td.warn(\"plan manifest write failed (affects replay/debugging): %s\", err)\n\t\t\treturn nil, err\n\t\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "runs-index-not-forced",
+   "old": "d.WriteRunsIndex(true)",
+   "new": "d.WriteRunsIndex(false)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "loop-log-failure-swallowed",
+   "old": "\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\t// 2026-07-08 adversarial review",
+   "new": "\tif err != nil {\n\t\td.warn(\"loop log write failed: %s\", err)\n\t}\n\n\t// 2026-07-08 adversarial review",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "decision-line-wording",
+   "old": "\"[loop:%s] finished status=%s steps=%d tokens=%d+%d\"",
+   "new": "\"[loop:%s] done status=%s steps=%d tokens=%d+%d\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "decision-tokens-summed",
+   "old": "in.TotalTokensIn, in.TotalTokensOut)}); err != nil {",
+   "new": "in.TotalTokensIn+in.TotalTokensOut, 0)}); err != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "decision-failure-swallowed",
+   "old": "\t\tin.TotalTokensIn, in.TotalTokensOut)}); err != nil {\n\t\treturn nil, err\n\t}",
+   "new": "\t\tin.TotalTokensIn, in.TotalTokensOut)}); err != nil {\n\t\td.warn(\"decision failed: %s\", err)\n\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-ignores-dry-run",
+   "old": "if in.PFReview != nil && !ctx.DryRun {",
+   "new": "if in.PFReview != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-wide-only",
+   "old": "predictedWide := pf.Scope == \"wide\" || pf.Scope == \"deep\"",
+   "new": "predictedWide := pf.Scope == \"wide\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-stuck-is-not-done",
+   "old": "actualStuck := in.LoopStatus == \"stuck\"",
+   "new": "actualStuck := in.LoopStatus != \"done\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-steps-done-counts-all",
+   "old": "\tstepsDone := countDone(in.StepOutcomes)",
+   "new": "\tstepsDone := len(in.StepOutcomes)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-flag-kinds-counts-one",
+   "old": "\t\tseen[f.Kind]++",
+   "new": "\t\tseen[f.Kind] = 1",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-flag-kinds-reverse-sorted",
+   "old": "\tsort.Strings(kinds)\n",
+   "new": "\tsort.Sort(sort.Reverse(sort.StringSlice(kinds)))\n",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-flag-count-is-distinct",
+   "old": "entry.Set(\"flag_count\", len(pf.Flags))",
+   "new": "entry.Set(\"flag_count\", len(seen))",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-milestone-candidates",
+   "old": "entry.Set(\"milestone_candidates\", len(pf.MilestoneStepIndices))",
+   "new": "entry.Set(\"milestone_candidates\", len(in.MilestoneExpanded))",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-false-negative-flipped",
+   "old": "entry.Set(\"false_negative\", !predictedWide && actualStuck)",
+   "new": "entry.Set(\"false_negative\", predictedWide && !actualStuck)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-json-is-indented",
+   "old": "pyval.DumpsCompactPy(entry)",
+   "new": "pyval.DumpsIndent2(entry)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "calibration-log-uses-go-bools",
+   "old": "\tif b {\n\t\treturn \"True\"\n\t}\n\treturn \"False\"",
+   "new": "\tif b {\n\t\treturn \"true\"\n\t}\n\treturn \"false\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "event-detail-dropped",
+   "old": "\t\tev.Set(\"detail\", derefOr(in.StuckReason, \"\"))",
+   "new": "\t\tev.Set(\"detail\", \"\")",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "event-name-changed",
+   "old": "d.WriteEvent(\"loop_done\", ev)",
+   "new": "d.WriteEvent(\"loop-done\", ev)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "result-drops-ctx-verdict",
+   "old": "\t\tStopVerdict:        ctx.StopVerdict,",
+   "new": "\t\tStopVerdict:        \"\",",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-kind-not-done",
+   "old": "\tif loopStatus == \"done\" {\n\t\tkind = \"RESULT\"",
+   "new": "\tif loopStatus != \"stuck\" {\n\t\tkind = \"RESULT\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-head-swapped",
+   "old": "\thead := \"Partial result\"",
+   "new": "\thead := \"Result\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-header-counts-all",
+   "old": "\tdoneSteps := countDone(outcomes)",
+   "new": "\tdoneSteps := len(outcomes)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-tokens-in-only",
+   "old": "tokensIn+tokensOut, elapsedMS))",
+   "new": "tokensIn, elapsedMS))",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-stuck-gate-is-nil-check",
+   "old": "\tif derefOr(stuckReason, \"\") != \"\" {",
+   "new": "\tif stuckReason != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-rule-loses-newline",
+   "old": "\tlines = append(lines, \"---\\n\")",
+   "new": "\tlines = append(lines, \"---\")",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-steps-numbered-from-zero",
+   "old": "\t\t\ti+1, len(outcomes), s.Index,",
+   "new": "\t\t\ti, len(outcomes), s.Index,",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-step-zero-based",
+   "old": "\t\t\ti+1, len(outcomes), s.Index,",
+   "new": "\t\t\ti, len(outcomes), s.Index,",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-icon-swapped",
+   "old": "\t\ticon := \"BLOCKED\"\n\t\tif s.Status == \"done\" {\n\t\t\ticon = \"Done\"\n\t\t}",
+   "new": "\t\ticon := \"Done\"\n\t\tif s.Status == \"done\" {\n\t\t\ticon = \"BLOCKED\"\n\t\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-icon-loses-newline",
+   "old": "\t\tlines = append(lines, fmt.Sprintf(\"*[%s]*\\n\", icon))",
+   "new": "\t\tlines = append(lines, fmt.Sprintf(\"*[%s]*\", icon))",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-text-head-200",
+   "old": "TranscriptStepTextHead  = 100",
+   "new": "TranscriptStepTextHead  = 200",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-result-cap-4000",
+   "old": "TranscriptStepResultCap = 2000",
+   "new": "TranscriptStepResultCap = 4000",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-truncation-counts-bytes",
+   "old": "if n := len([]rune(s.Result)); n > TranscriptStepResultCap {",
+   "new": "if n := len(s.Result); n > TranscriptStepResultCap {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-drops-blank-line",
+   "old": "\t\tlines = append(lines, \"\")\n\t}\n\treturn kind, strings.Join(lines, \"\\n\")",
+   "new": "\t}\n\treturn kind, strings.Join(lines, \"\\n\")",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-joined-with-blank",
+   "old": "return kind, strings.Join(lines, \"\\n\")",
+   "new": "return kind, strings.Join(lines, \"\\n\\n\")",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "head-counts-bytes",
+   "old": "\tr := []rune(s)\n\tif len(r) <= n {\n\t\treturn s\n\t}\n\treturn string(r[:n])",
+   "new": "\tif len(s) <= n {\n\t\treturn s\n\t}\n\treturn s[:n]",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-gate-is-any-step",
+   "old": "\tif doneSteps == 0 {\n\t\treturn\n\t}",
+   "new": "\tif len(in.StepOutcomes) == 0 {\n\t\treturn\n\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-gate-is-status",
+   "old": "\tif doneSteps == 0 {\n\t\treturn\n\t}",
+   "new": "\tif in.LoopStatus != \"done\" {\n\t\treturn\n\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "fallback-artdir-no-parents",
+   "old": "\t\tif err := d.MakeDirs(artDir, true); err != nil {",
+   "new": "\t\tif err := d.MakeDirs(artDir, false); err != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "scratchpad-json-compact",
+   "old": "\t\ttext, err := pyval.DumpsIndent2(f.Val)",
+   "new": "\t\ttext, err := pyval.DumpsCompactPy(f.Val)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-filename",
+   "old": "name := fmt.Sprintf(\"loop-%s-%s.md\", ctx.LoopID, kind)",
+   "new": "name := fmt.Sprintf(\"loop-%s-%s.md\", kind, ctx.LoopID)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "transcript-log-wording",
+   "old": "\"wrote loop transcript: %s (%d steps)\"",
+   "new": "\"wrote transcript: %s (%d steps)\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "cleanup-runs-on-dry-run",
+   "old": "\tif !ctx.DryRun && ctx.Project != \"\" && d.CleanupStepArtifacts != nil {",
+   "new": "\tif ctx.Project != \"\" && d.CleanupStepArtifacts != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "cleanup-does-not-exclude-self",
+   "old": "d.CleanupStepArtifacts(ctx.Project, ctx.LoopID)",
+   "new": "d.CleanupStepArtifacts(ctx.Project, \"\")",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "premerge-verdict-empty",
+   "old": "\tpreMergeVerdict := result.StopVerdict",
+   "new": "\tpreMergeVerdict := \"\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "merge-order-swapped",
+   "old": "\tmergeBackClone(ctx, d, result)\n\tmergeBackWorktree(ctx, d, result)",
+   "new": "\tmergeBackWorktree(ctx, d, result)\n\tmergeBackClone(ctx, d, result)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-unconditional",
+   "old": "\tif result.Status == \"done\" {\n\t\tresult.Status = \"partial\"\n\t}",
+   "new": "\tresult.Status = \"partial\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-separator",
+   "old": "\t\tprev += \"; \"",
+   "new": "\t\tprev += \", \"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-reason-prepended",
+   "old": "\tjoined := prev + reason",
+   "new": "\tjoined := reason + prev",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-overwrites-verdict",
+   "old": "\tif result.StopVerdict == \"\" {",
+   "new": "\tif true {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-verdict-name",
+   "old": "\t\tresult.StopVerdict = \"external-interrupt\"",
+   "new": "\t\tresult.StopVerdict = \"interrupted\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "downgrade-evidence-cap",
+   "old": "MergeVerdictEvidenceCap = 800",
+   "new": "MergeVerdictEvidenceCap = 900",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "clone-cleanup-keep-flag",
+   "old": "\t\t\terr = d.CleanupClone(!m.Ok)",
+   "new": "\t\t\terr = d.CleanupClone(m.Ok)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "clone-error-message",
+   "old": "\"container clone merge errored — work preserved in %s (branch %s): %s\"",
+   "new": "\"container clone merge failed — work preserved in %s (branch %s): %s\"",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "clone-failure-message",
+   "old": "\"container clone merge failed — work preserved: \"+m.Detail",
+   "new": "\"container clone merge failed: \"+m.Detail",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "worktree-error-downgrades",
+   "old": "\t\t// Python logs and moves on WITHOUT downgrading — see PORT.md.\n\t\td.warn(\"run worktree finalize error: %s\", err)",
+   "new": "\t\td.warn(\"run worktree finalize error: %s\", err)\n\t\tdowngrade(result, err.Error(), err.Error())",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "worktree-cleanup-keep-flag",
+   "old": "\tif err := d.CleanupWT(!m.Ok); err != nil {",
+   "new": "\tif err := d.CleanupWT(m.Ok); err != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "worktree-prune-skipped",
+   "old": "\tif err := d.PruneWT(); err != nil {\n\t\treturn err\n\t}\n",
+   "new": "",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "slot-cleared-before-release",
+   "old": "\t\tif err := releaseOrImport(d.ReleaseSlot); err != nil {\n\t\t\td.debug(\"project slot release failed: %s\", err)\n\t\t} else {\n\t\t\tctx.ProjectSlot = nil\n\t\t}",
+   "new": "\t\tctx.ProjectSlot = nil\n\t\tif err := releaseOrImport(d.ReleaseSlot); err != nil {\n\t\t\td.debug(\"project slot release failed: %s\", err)\n\t\t}",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "stamp-run-gated-on-verdict",
+   "old": "\tif d.StampRunStop == nil {",
+   "new": "\tif result.StopVerdict == \"\" {\n\t} else if d.StampRunStop == nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "heartbeat-payload-is-loop-id",
+   "old": "d.PostHeartbeat(\"loop_done\", ctx.Project)",
+   "new": "d.PostHeartbeat(\"loop_done\", ctx.LoopID)",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "landfacts-zero-still-logs",
+   "old": "\t} else if anec != 0 || hyp != 0 {",
+   "new": "\t} else {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "verbose-gate-dropped",
+   "old": "\tif ctx.Verbose && d.Stderr != nil {",
+   "new": "\tif d.Stderr != nil {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  },
+  {
+   "file": "internal/loopfinalize/loopfinalize.go",
+   "name": "scratchpad-keys-sorted",
+   "old": "\tkeys := make([]any, 0, len(in.Scratchpad))\n\tfor _, f := range in.Scratchpad {",
+   "new": "\tkeys := make([]any, 0, len(in.Scratchpad))\n\tsorted := append(pyval.Obj{}, in.Scratchpad...)\n\tsort.Slice(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })\n\tfor _, f := range sorted {",
+   "packages": [
+    "./internal/loopfinalize/"
+   ]
+  }
+ ]
 }

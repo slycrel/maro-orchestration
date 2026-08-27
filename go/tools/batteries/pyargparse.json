@@ -63,9 +63,9 @@
   },
   {
    "file": "internal/pyargparse/pyargparse.go",
-   "name": "ambiguous-names-the-prefix",
+   "name": "ambiguous-names-the-first-char",
    "old": "\t\t\tnames[j] = t.str",
-   "new": "\t\t\tnames[j] = s.argv[startIndex]"
+   "new": "\t\t\tnames[j] = t.str[:1]"
   },
   {
    "file": "internal/pyargparse/pyargparse.go",
@@ -125,7 +125,7 @@
    "file": "internal/pyargparse/pyargparse.go",
    "name": "terminator-never-removed",
    "old": "\t\t\tif a == \"--\" {",
-   "new": "\t\t\tif false {"
+   "new": "\t\t\tif a == \"--\" && false {"
   },
   {
    "file": "internal/pyargparse/pyargparse.go",
@@ -190,8 +190,8 @@
   {
    "file": "internal/pyargparse/pyargparse.go",
    "name": "int-negative-saturates-up",
-   "old": "\tif strings.HasPrefix(pytext.Strip(raw), \"-\") {\n\t\treturn math.MinInt, nil\n\t}\n",
-   "new": ""
+   "old": "\t\treturn math.MinInt, nil",
+   "new": "\t\treturn math.MaxInt, nil"
   },
   {
    "file": "internal/pyargparse/pyargparse.go",

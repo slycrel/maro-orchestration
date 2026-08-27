@@ -159,7 +159,7 @@
    "file": "internal/agentloop/agentloop.go",
    "name": "summary-not-printed",
    "old": "\tfmt.Fprintln(out, res.Summary)\n",
-   "new": ""
+   "new": "\tfmt.Fprintln(out, \"\")\n"
   },
   {
    "file": "internal/agentloop/agentloop.go",
@@ -196,12 +196,6 @@
    "name": "parallel-no-join",
    "old": "\twg.Wait()\n",
    "new": ""
-  },
-  {
-   "file": "internal/agentloop/agentloop.go",
-   "name": "parallel-semaphore-not-queue",
-   "old": "\tqueue := make(chan int)\n\tvar wg sync.WaitGroup\n\tfor w := 0; w < effective; w++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tfor i := range queue {\n\t\t\t\tout[i].val, out[i].err = run(goals[i])\n\t\t\t}\n\t\t}()\n\t}\n\tfor i := range goals {\n\t\tqueue <- i\n\t}\n\tclose(queue)\n",
-   "new": "\tsem := make(chan struct{}, effective)\n\tvar wg sync.WaitGroup\n\tfor i := range goals {\n\t\twg.Add(1)\n\t\tgo func(i int) {\n\t\t\tdefer wg.Done()\n\t\t\tsem <- struct{}{}\n\t\t\tdefer func() { <-sem }()\n\t\t\tout[i].val, out[i].err = run(goals[i])\n\t\t}(i)\n\t}\n"
   },
   {
    "file": "internal/agentloop/agentloop.go",

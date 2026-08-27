@@ -7919,3 +7919,30 @@ design sign-off before any public release. Still open:
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
+
+## Go port: five hand-written `[Errno N]` sites to retrofit onto `internal/pyos`
+
+`internal/pyos` (added 2026-08-27 with the loop_finalize risk mint) is the
+one place that spells CPython's `OSError.__str__` — `[Errno N] Strerror:
+'path'` — and derives the strerror text from Go's own errno table rather
+than a retyped copy, with `pyos_test.go` pinning all 31 errnos against
+CPython.
+
+Five sites predate it and each carries a hand-written literal for the one
+or two errnos it happened to hit:
+
+- `internal/dispatch/envelope.go:580`
+- `internal/sheriff/slice2.go:60`
+- `internal/syshealth/syshealth.go:328,344`
+- `internal/worktree/gitrun.go:207,212`
+- `internal/worktree/fsops.go:81,89`
+
+They are not wrong — each was measured for its own errno — but they are
+five places for the same string to drift, and none of them answers for an
+errno its author did not anticipate. The retrofit is mechanical and each
+site has a differential that will catch a mistake, but it touches four
+packages and a battery run owns the working tree (P4), so it is a tranche
+of its own rather than a rider on this one.
+
+Do it with the batteries for those four packages in hand: the fixtures
+that pin the current literals are the ones that prove the swap is pure.

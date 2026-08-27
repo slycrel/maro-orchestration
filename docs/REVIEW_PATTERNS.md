@@ -251,7 +251,7 @@ mutant survived.
 *instances: 2*
 
 ### L8 — A mutant that cannot change an answer is a bad mutant, not a test gap
-*instances: 42*
+*instances: 47*
 
 The battery's own failure mode, and it costs real time to misread.
 
@@ -266,6 +266,25 @@ a fault in the battery, not a survivor.
 **Tripwire.** Before recording a MISS, prove the mutant changes behaviour on
 *some* input. If it cannot, fix the mutant.
 
+**The 2026-08-27 sub-shape, and it is now CLOSED: a BUILDFAIL printed in
+the killed column.** `mutate-subs.py` had one branch for "no named killer"
+and it printed `killed ... (build)` and exited 0. Three rows in the
+riskmint battery landed there — a deletion had orphaned an identifier, Go
+refused to compile, and no assertion ever ran — and the run reported
+59/59. The runner now reports `!BUILD`, lists them in the summary, and
+exits 1. Turning that on found **eight more** in three batteries that had
+already been declared converged. The lens had said this since the metrics
+battery; what was missing was the check.
+
+**And its twin: a mutant killed by the SCHEDULER.**
+`parallel-semaphore-not-queue` (internal/agentloop) was killed on three
+runs and survived a fourth. The two spellings disagree only about which
+task takes a freed worker slot, and the differential normalises start
+order into waves because raw start order races in both languages — so what
+survives the normaliser is a probabilistic remnant (L51). A row that
+flakes is worse than no row, because it makes every later run
+non-reproducible. Removed, with the reasoning moved to the site.
+
 **And the reviewer's half of it, added round 4: an exemption is a claim,
 so execute it.** A battery that skips sites "because no input can observe
 them" is asserting something about the whole input space, in a comment,
@@ -278,7 +297,7 @@ reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
 ### L9 — Derive must-detect mutations from the FILE, not the diff
-*instances: 15 — plus standing (Jeremy, 2026-08-16)*
+*instances: 16 — plus standing (Jeremy, 2026-08-16)*
 
 A guard derived from what changed cannot catch what was always wrong.
 
@@ -444,7 +463,7 @@ and the tell is the same — a correct fix, at the one site that had the
 evidence.
 
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 32*
+*instances: 34*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -1311,7 +1330,7 @@ can tie — mtimes, counts, scores, anything quantised — the tie fixture is
 required (P11), and it is the ONLY thing that can catch this.
 
 ### L51 — A differential that normalises before comparing has moved the assertion into the normaliser
-*instances: 8*
+*instances: 9*
 
 **Instance 6 is the one no fixture can reach** (syshealth r3, 2026-08-26).
 The first five erased a value or a question on ONE side. This one erased a
@@ -2387,3 +2406,38 @@ Regenerate any count in this file with:
 python3 scripts/review-ledger.py report --by lens
 python3 scripts/review-ledger.py report --by reviewer
 ```
+
+---
+
+### L58 — A differential's SEED has to be bytes, or the fixture is testing the seeder
+
+*instances: 1*
+
+L51's mirror image. There the shim sits between the two answers and erases
+a difference the comparison should have seen; here it sits in FRONT of the
+two runs, and *invents* one.
+
+**Canonical instance** (`internal/loopfinalize` riskmint, 2026-08-27). A
+fixture seeded a `RISKS.md` that is deliberately not valid UTF-8, to prove
+that the mint's pre-check raises on it and warns. The spec carried the
+content as a string; the Go seeder wrote `[]byte(s)` and the Python seeder
+wrote `Path.write_text(s, encoding="utf-8")`. `write_text` **encodes**. So
+Python's file held two perfectly valid codepoints and Go's held two invalid
+bytes, and the differential reported a divergence in behaviour that was
+really a divergence in seeding — with the port, correctly, on the losing
+side.
+
+The tell is that both halves of the seed *read* the same in the spec. A
+string field is a string field; nothing in the fixture says one side will
+encode it and the other will not. The same trap is waiting in any seed
+that goes through a text API on one side and a byte API on the other:
+line endings, BOMs, surrogates, trailing newlines, file modes.
+
+> **Anything a fixture seeds to be MALFORMED must be seeded as bytes on
+> both sides.** If the spec cannot carry bytes, the fixture cannot express
+> the malformation.
+
+**Tripwire.** For every fixture whose point is that the input is *wrong*,
+name the exact bytes it puts on disk, and check that both seeders write
+those bytes. `base64` in the spec is the cheap answer and reads as a
+deliberate signal: a b64 field says "these bytes, not this text".

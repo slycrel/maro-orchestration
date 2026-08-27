@@ -1,0 +1,364 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/",
+   "./internal/pyos/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "project-guard-dropped",
+   "old": "\tif project == \"\" || loopID == \"\" {",
+   "new": "\tif loopID == \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "loop-id-guard-dropped",
+   "old": "\tif project == \"\" || loopID == \"\" {",
+   "new": "\tif project == \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "mint-error-not-warned",
+   "old": "\t\td.Warning(fmt.Sprintf(\"risk mint failed for loop %s: %s\", loopID, err))\n\t\treturn 0",
+   "new": "\t\treturn 0"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "mint-warning-names-the-project",
+   "old": "\"risk mint failed for loop %s: %s\", loopID, err",
+   "new": "\"risk mint failed for loop %s: %s\", project, err"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "risk-mint-flag-inverted",
+   "old": "\tif !on {\n\t\treturn 0, nil\n\t}",
+   "new": "\tif on {\n\t\treturn 0, nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "missing-run-dir-continues",
+   "old": "\trd := runs.ResolveRunDir(ws, loopID)\n\tif rd == \"\" {",
+   "new": "\trd := runs.ResolveRunDir(ws, loopID)\n\tif rd != \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "verdicts-read-unconditionally",
+   "old": "\tif pathExists(vpath) {",
+   "new": "\tif true {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "verdicts-never-read",
+   "old": "\tif pathExists(vpath) {",
+   "new": "\tif false {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "verdicts-path-is-the-run-root",
+   "old": "vpath := filepath.Join(rd, \"build\", \"closure_verdicts.jsonl\")",
+   "new": "vpath := filepath.Join(rd, \"closure_verdicts.jsonl\")"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "any-row-becomes-the-verdict",
+   "old": "\t\t\tif v, ok := row.Get(\"loop_id\"); ok {\n\t\t\t\tif s, isStr := v.(string); isStr && s == loopID {\n\t\t\t\t\tverdictRow, haveRow = row, true\n\t\t\t\t}\n\t\t\t}",
+   "new": "\t\t\tverdictRow, haveRow = row, true"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "loop-id-match-inverted",
+   "old": "if s, isStr := v.(string); isStr && s == loopID {",
+   "new": "if s, isStr := v.(string); isStr && s != loopID {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "first-matching-row-wins",
+   "old": "\t\t\t\tif s, isStr := v.(string); isStr && s == loopID {\n\t\t\t\t\tverdictRow, haveRow = row, true\n\t\t\t\t}",
+   "new": "\t\t\t\tif s, isStr := v.(string); isStr && s == loopID && !haveRow {\n\t\t\t\t\tverdictRow, haveRow = row, true\n\t\t\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "skipped-tested-for-presence",
+   "old": "\t\tif !pyval.Truthy(skipped) {",
+   "new": "\t\tif skipped == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "skipped-ignored",
+   "old": "\t\tskipped, _ := verdictRow.Get(\"skipped\")\n\t\tif !pyval.Truthy(skipped) {",
+   "new": "\t\tskipped, _ := verdictRow.Get(\"skipped\")\n\t\t_ = skipped\n\t\tif true {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "skipped-inverted",
+   "old": "\t\tif !pyval.Truthy(skipped) {",
+   "new": "\t\tif pyval.Truthy(skipped) {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "falsy-gaps-not-coerced",
+   "old": "\t\t\traw, _ := verdictRow.Get(\"gaps\")\n\t\t\tif !pyval.Truthy(raw) {\n\t\t\t\traw = nil\n\t\t\t}",
+   "new": "\t\t\traw, _ := verdictRow.Get(\"gaps\")"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gap-whitespace-not-collapsed",
+   "old": "gap := strings.Join(pytext.Split(pyval.Str(g)), \" \")",
+   "new": "gap := pyval.Str(g)"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gap-only-trimmed",
+   "old": "gap := strings.Join(pytext.Split(pyval.Str(g)), \" \")",
+   "new": "gap := strings.TrimSpace(pyval.Str(g))"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gap-joined-without-spaces",
+   "old": "gap := strings.Join(pytext.Split(pyval.Str(g)), \" \")",
+   "new": "gap := strings.Join(pytext.Split(pyval.Str(g)), \"\")"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "empty-gaps-kept",
+   "old": "\t\t\t\tif gap != \"\" {\n\t\t\t\t\tgaps = append(gaps, gap)\n\t\t\t\t}",
+   "new": "\t\t\t\tgaps = append(gaps, gap)"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "sentinel-file-renamed",
+   "old": "\"scope-raw-FAILED.txt\"",
+   "new": "\"scope-raw.txt\""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "sentinel-text-loses-the-cause",
+   "old": "\t\tsentinel = fmt.Sprintf(\"Run %s executed without scope injection \"+\n\t\t\t\"(scope parse failed; raw output in build/scope-raw-FAILED.txt)\",\n\t\t\tloopID)",
+   "new": "\t\tsentinel = fmt.Sprintf(\"Run %s executed without scope injection\", loopID)"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "cap-is-four",
+   "old": "\tgapSlots := RiskLinesCap",
+   "new": "\tgapSlots := RiskLinesCap + 1"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "sentinel-does-not-take-a-slot",
+   "old": "\tif sentinel != \"\" {\n\t\tgapSlots--\n\t}",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gaps-never-capped",
+   "old": "\tshown := gaps[:pyval.SliceStop(len(gaps), gapSlots)]",
+   "new": "\tshown := gaps"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "sentinel-before-the-gaps",
+   "old": "\tvar lines []string\n\tfor _, gap := range shown {",
+   "new": "\tvar lines []string\n\tif sentinel != \"\" {\n\t\tlines = append(lines, sentinel)\n\t}\n\tfor _, gap := range shown {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "note-emitted-when-nothing-omitted",
+   "old": "\tif len(gaps) > len(shown) {",
+   "new": "\tif len(gaps) >= len(shown) {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "note-counts-all-gaps",
+   "old": "\"the run's closure verdict)\", len(gaps)-len(shown), loopID))",
+   "new": "\"the run's closure verdict)\", len(gaps), loopID))"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "empty-lines-still-appended",
+   "old": "\tif len(lines) == 0 {\n\t\treturn 0, nil\n\t}",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gap-not-clipped",
+   "old": "\t\t\tbudget.Clip(gap, RiskGapClip)))",
+   "new": "\t\t\tbudget.Clip(gap, len(gap)+RiskGapClip)))"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "gap-clip-off-by-one",
+   "old": "\tRiskGapClip = 500",
+   "new": "\tRiskGapClip = 501"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "precheck-skipped",
+   "old": "\tif pathExists(rp) {",
+   "new": "\tif false {"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "path-exists-means-regular-file",
+   "old": "func pathExists(path string) bool {\n\t_, err := os.Stat(path)\n\treturn err == nil\n}",
+   "new": "func pathExists(path string) bool {\n\tst, err := os.Stat(path)\n\treturn err == nil && st.Mode().IsRegular()\n}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "read-text-not-strict",
+   "old": "\ts, derr := pyval.DecodeUTF8Strict(raw)\n\tif derr != nil {\n\t\treturn \"\", derr\n\t}",
+   "new": "\ts := string(raw)"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "read-error-loses-the-path",
+   "old": "\t\treturn \"\", errors.New(pyos.ErrorText(path, err))",
+   "new": "\t\treturn \"\", errors.New(pyos.ErrorText(\"\", err))"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "string-gaps-yield-the-whole-string",
+   "old": "\tcase string:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, r := range t {\n\t\t\tout = append(out, string(r))\n\t\t}\n\t\treturn out, nil",
+   "new": "\tcase string:\n\t\treturn []any{t}, nil"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "dict-gaps-yield-values",
+   "old": "\tcase pyval.Obj:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Key)\n\t\t}\n\t\treturn out, nil",
+   "new": "\tcase pyval.Obj:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Val)\n\t\t}\n\t\treturn out, nil"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "nil-gaps-are-not-iterable",
+   "old": "\tcase nil:\n\t\treturn nil, nil",
+   "new": "\tcase struct{ never int }:\n\t\treturn nil, nil"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "not-iterable-message-drops-the-type",
+   "old": "\treturn nil, fmt.Errorf(\"'%s' object is not iterable\", pyTypeName(v))",
+   "new": "\treturn nil, fmt.Errorf(\"object is not iterable\")"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "json-number-always-int",
+   "old": "\t\tif strings.ContainsAny(string(n), \".eE\") {\n\t\t\treturn \"float\"\n\t\t}\n\t\treturn \"int\"",
+   "new": "\t\t_ = n\n\t\treturn \"int\""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "json-number-always-float",
+   "old": "\t\tif strings.ContainsAny(string(n), \".eE\") {\n\t\t\treturn \"float\"\n\t\t}\n\t\treturn \"int\"",
+   "new": "\t\t_ = n\n\t\treturn \"float\""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "bool-reported-as-object",
+   "old": "\tswitch v.(type) {\n\tcase bool:\n\t\treturn \"bool\"",
+   "new": "\tswitch v.(type) {\n\tcase struct{ never int }:\n\t\treturn \"bool\""
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "drain-does-not-clear",
+   "old": "\tfns := r.fns[handleID]\n\tdelete(r.fns, handleID)",
+   "new": "\tfns := r.fns[handleID]"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "drain-returns-zero",
+   "old": "\treturn len(fns)\n}",
+   "new": "\treturn 0\n}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "drain-stops-at-the-first-failure",
+   "old": "\t\tif err := fn(); err != nil {\n\t\t\twarn(fmt.Sprintf(\"deferred maintenance failed for handle %s: %s\",\n\t\t\t\thandleID, err))\n\t\t}",
+   "new": "\t\tif err := fn(); err != nil {\n\t\t\twarn(fmt.Sprintf(\"deferred maintenance failed for handle %s: %s\",\n\t\t\t\thandleID, err))\n\t\t\tbreak\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "drain-warning-drops-the-handle",
+   "old": "\"deferred maintenance failed for handle %s: %s\",\n\t\t\t\thandleID, err",
+   "new": "\"deferred maintenance failed: %s\",\n\t\t\t\terr"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "defer-replaces-instead-of-appending",
+   "old": "\tr.fns[handleID] = append(r.fns[handleID], fn)",
+   "new": "\tr.fns[handleID] = []func() error{fn}"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "recovery-text-loses-the-unverified-mark",
+   "old": "\"diagnosed on a run; advisor-proposed recovery (unverified): \" + action",
+   "new": "\"diagnosed on a run; advisor-proposed recovery: \" + action"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "recovery-text-loses-the-tag",
+   "old": "return \"[recovery-plan] \" + failureClass",
+   "new": "return \"recovery-plan \" + failureClass"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "auto-diagnosis-text-loses-the-tag",
+   "old": "return \"[auto-diagnosis] \" + failureClass",
+   "new": "return \"auto-diagnosis \" + failureClass"
+  },
+  {
+   "file": "internal/loopfinalize/riskmint.go",
+   "name": "auto-diagnosis-text-loses-the-unverified-mark",
+   "old": "\"classifier recommendation (unverified): \" + recommendation",
+   "new": "\"classifier recommendation: \" + recommendation"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "errno-text-not-capitalized",
+   "old": "\t\tcapitalize(errno.Error()), pytext.Repr(path))",
+   "new": "\t\terrno.Error(), pytext.Repr(path))"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "errno-text-keeps-only-the-first-letter",
+   "old": "\treturn string(unicode.ToUpper(r)) + s[size:]",
+   "new": "\treturn string(unicode.ToUpper(r))"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "errno-text-drops-the-path",
+   "old": "capitalize(errno.Error()), pytext.Repr(path))",
+   "new": "capitalize(errno.Error()), pytext.Repr(\"\"))"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "errno-path-repred-twice",
+   "old": "capitalize(errno.Error()), pytext.Repr(path))",
+   "new": "capitalize(errno.Error()), pytext.Repr(pytext.Repr(path)))"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "eperm-is-not-a-permission-error",
+   "old": "\tcase syscall.EACCES, syscall.EPERM:",
+   "new": "\tcase syscall.EACCES:"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "espipe-is-a-broken-pipe",
+   "old": "\tcase syscall.EPIPE, syscall.ESHUTDOWN:",
+   "new": "\tcase syscall.EPIPE, syscall.ESHUTDOWN, syscall.ESPIPE:"
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "eisdir-is-a-plain-oserror",
+   "old": "\tcase syscall.EISDIR:\n\t\treturn \"IsADirectoryError\"",
+   "new": "\tcase syscall.EISDIR:\n\t\treturn \"OSError\""
+  },
+  {
+   "file": "internal/pyos/pyos.go",
+   "name": "no-errno-invents-one",
+   "old": "\tif !errors.As(err, &errno) {\n\t\treturn err.Error()\n\t}",
+   "new": "\tif !errors.As(err, &errno) {\n\t\treturn fmt.Sprintf(\"[Errno 0] %s\", err)\n\t}"
+  }
+ ]
+}

@@ -15686,3 +15686,159 @@ that compares against asdict.
 
 Final: **51/51 killed**, spec in
 `go/tools/batteries/loopparallel-folds.json`.
+
+## Phase J: the risk mint, and an errno spelled six times (2026-08-27)
+
+`loop_finalize.py`'s second slice is the self-contained half: the run-risk
+mint, the two lesson-text helpers, and the post-notify maintenance
+registry. `internal/loopfinalize/riskmint.go`.
+
+`_mint_run_risks_to_project` is Jeremy's 2026-08-10 ruling — risks and
+unknowns a run discovered belong in the project's RISKS.md, feeding the
+"RISKS.md as reviewer input" direction. Mechanical v1, no LLM, two
+sources: the run's persisted closure-verdict gaps and the scope-parse
+failure sentinel.
+
+### Every interesting rule in it is a rule about malformed input
+
+`gaps` comes out of an LLM-fed closure verdict, and the function iterates
+whatever it was handed. A list yields its elements. A **string yields its
+characters**, so `"gaps": "abc"` mints three risk lines reading `a`, `b`
+and `c`. A dict yields its **keys**. An int raises `'int' object is not
+iterable` into the outer `except`, which turns it into a warning and a
+zero — and `5` and `5.0` name different classes in that message, which is
+why `pyTypeName` reads the `json.Number` token's own spelling instead of
+its decoded value.
+
+The `or []` in front of the loop is what separates the two halves: it runs
+BEFORE the iteration, so a FALSY non-iterable (`0`, `false`, `""`, `{}`)
+becomes an empty list and mints nothing, while a truthy one raises. Both
+groups are fixtured, because the mutation that drops the coercion is
+invisible without the falsy half.
+
+None of these shapes exist until JSON has been through `json.loads`, which
+is why this tranche is a differential over a **seeded workspace on disk**
+rather than a unit test holding a tidy dict. Both runtimes seed their own
+workspace from one declarative spec, run their own resolve/append path,
+and the RISKS.md each one wrote is read back and compared. The only value
+normalised away is the wall-clock stamp `append_section_lines` writes, and
+the only path normalised is the workspace root — the `runs/<dir>/build/<file>`
+tail of every OSError message is still compared, because that tail is what
+the message is FOR.
+
+### The cap is on risk lines, and the omission note is not one
+
+`_gap_slots = 3 - (1 if _sentinel else 0)`, and the note that says how many
+gaps were dropped is appended AFTER the cap. So a run with a scope failure
+and four gaps mints two gaps, the sentinel and the note — four lines, under
+a constant called `RiskLinesCap = 3`. That is Python's behaviour, it is
+deliberate (the note is an annotation on the selection, not a risk), and
+`TestOmissionNoteRidesOutsideTheCap` pins it so the next reader meets it as
+a documented shape rather than as a suspected off-by-one.
+
+The ordering is the round-15 review's fix and it is load-bearing: the note
+is computed from what SURVIVED the cap. A note rendered before the cap got
+capped along with the gaps and became a lie — "three below" printed above
+two survivors, with a middle gap silently dropped.
+
+### `[Errno 21] Is a directory:` had been written by hand five times
+
+The warning this function logs is `str(exc)`, and for a `closure_verdicts
+.jsonl` that is somehow a directory CPython spells that
+`[Errno 21] Is a directory: '<path>'` where Go spells it
+`open <path>: is a directory`. The differential caught it immediately.
+
+The fix is `internal/pyos`, and it is a **closure, not a sixth copy**.
+`dispatch/envelope.go`, `sheriff/slice2.go`, `syshealth/syshealth.go`,
+`worktree/gitrun.go` and `worktree/fsops.go` each already carried a
+hand-written `[Errno 13] Permission denied:` or `[Errno 21] Is a
+directory:` literal for the one or two errnos that site happened to hit —
+the exact shape of the 2026-08-27 decree that a lens firing twice on a
+surface should be CLOSED. The sixth site built the helper.
+
+The strerror table is **not retyped**. Go's linux errno strings come from
+the same glibc catalogue CPython's do, lowercased — `ENOENT` is "no such
+file or directory" here and "No such file or directory" there — so the
+message is Go's own errno text with its first rune upper-cased, and
+`pyos_test.go` asks CPython for the answer for 31 errnos and compares. A
+hand-copied table would have been a second place for the strings to be
+wrong; the measured rule held for all 31, and the one thing it did NOT
+predict was the CLASS mapping: `ESPIPE` looks like a broken pipe and is a
+plain `OSError`. Measured, not assumed.
+
+The remaining five sites are not retrofitted here (a battery run owns the
+tree, P4); that is a BACKLOG item.
+
+### `pyval.ReadText` exists and is deliberately not used
+
+It is the same function — strict UTF-8, universal newlines — and it wraps
+the decode failure as `"<path>: <codec message>"`. The warning this feeds
+is `str(exc)`, which carries no path. So `readTextPy` is spelled out here
+with a comment saying which half of `ReadText` it declines and why, rather
+than either silently diverging or quietly "improving" the shared helper for
+one caller.
+
+### Two equivalent mutants, answered at the site
+
+- **`non-object-rows-accepted`.** `isinstance(row, dict)` is load-bearing
+  in Python — deleting it makes `row.get` an AttributeError on the list or
+  number a JSONL line is allowed to be. In Go a failed type assertion
+  gives a ZERO `pyval.Obj`, whose `Get` misses every key, so a non-object
+  row falls out of the loop-id match one line down instead. The guard
+  stays as the readable form of Python's rule.
+- **`precheck-is-equality-not-containment`.** `AppendRisk` does the
+  identical `strings.Contains(existing, token)` inside the lock, so
+  weakening the pre-check's comparison changes no answer. What IS
+  observable is that the branch READS the file at all: a RISKS.md that is
+  not UTF-8 raises here and warns, where the in-lock check would have
+  appended to it. So the branch is pinned (`precheck-skipped`) and its
+  predicate is not, which is the honest split.
+
+Two more are marked EQUIVALENT MUTANT in the source without a battery row:
+the blank-line skip (a whitespace-only line is not valid JSON and would
+`continue` from the decoder one line down anyway), and `TranslateNewlines`
+(both readers of this text already treat CRLF the way translation would —
+for THIS caller, which is why the call stays).
+
+### One survivor by construction, and it is Python's too
+
+`if not append_risk(...): return 0` — the "a race-losing finalizer's
+in-lock dedupe is a no-op" branch — is unreachable from any differential,
+because reaching it needs a concurrent writer between the pre-check and
+the lock. No mutation is written for it. It is recorded here rather than
+allowlisted silently.
+
+### A build failure is not a kill
+
+Three rows in the first battery run were reported in the `killed` column
+with `(build)` next to them: the deletion had orphaned an identifier, Go
+refused to compile, and no assertion ever ran. `mutate-subs.py` printed
+that and exited 0.
+
+L8 has said since the metrics battery that a BUILDFAIL is a fault in the
+battery and not a survivor, and the runner was quietly contradicting it.
+It now reports `!BUILD`, lists them in the summary, and exits 1 — so a
+battery cannot claim coverage it never measured. The three rows were
+re-spelled to compile (keeping the orphaned identifier) and all three are
+killed by tests.
+
+**Turning it on found eight more, in batteries already declared
+converged**: three in `pyargparse`, one in `agentloop`, four in
+`loopfinalize`. Every one had orphaned an identifier or an argument;
+every one is now killed by a named test. That is the cost of a runner
+that reports its own gaps in the pass column.
+
+The same re-run surfaced a **flaky killer**.
+`parallel-semaphore-not-queue` was killed on three runs and survived a
+fourth: the two spellings disagree only about which goal takes a freed
+worker slot, and the differential normalises start order into waves
+precisely because raw start order races in BOTH languages. What survives
+that normaliser is a probabilistic remnant, so the kill was evidence
+about the scheduler that day, not about the code (L51). The row is gone
+and the reasoning is at the site; the FIFO spelling stays because it is
+the faithful one — `ThreadPoolExecutor`'s work queue is first-in
+first-out — not because a test caught the other.
+
+Final: **59/59 killed**, spec in
+`go/tools/batteries/loopfinalize-riskmint.json`; 62 differential scenarios
+across the mint, the two lesson texts and the registry.
