@@ -642,14 +642,34 @@ over a RUNTIME string from an LLM guardrail suggestion, so there is no
 literal to wrap — the equivalent fix folds the incoming pattern at the
 call, which changes what a suggestion MEANS and wants its own decision.
 
-`provenance`'s three remain next by consequence and are the only ones on
-the list already measured unsafe. They are not wrapped yet for a stated
-reason: the literals are kept byte-identical to `lesson_provenance.py`
-and `TestRegexSourceMatchesCPython` pins that by un-substituting
-`SpaceClass` back out of the COMPILED pattern. `IClass` has to be
-un-substituted too, and it folds `i` and `I` to one spelling, so that
-test needs a real answer rather than a second `ReplaceAll`. The three
-`provenance_diff_test.go` rows with cause `whyFold` stay pinned meanwhile.
+**`provenance` CLOSED 2026-08-27**, same day, and it was the only entry on
+the list already measured unsafe. The gate now answers `prompt` for all
+three homoglyph spellings and still answers `outcome` for an ordinary
+lesson.
+
+The blocker was real and had an answer: `TestRegexSourceMatchesCPython`
+pins the port's patterns byte-for-byte against CPython's by un-substituting
+`SpaceClass` out of the compiled pattern, and `IClass` has to come out the
+same way — except it stands in for both `i` and `I`, so the round-trip is
+only unambiguous while CPython's patterns contain no uppercase `I`. They
+contain none (measured: 11/5/1 lowercase, 0 uppercase), so that is now
+licensed edit 3 **with the property asserted** — a pattern that gains an
+`I` fails there rather than silently comparing the wrong string.
+
+The three `whyFold` rows lost their `goDiff` and the cause left the
+ledger (`whyBoundary: 5`, total 5). Removing the census allowlist entry
+was the last step, and the census's own stale-entry check fired first —
+the rollout tripped its own tripwire, which is the check working.
+
+Two of the three wraps were initially unfixtured: dropping `PyFoldI` from
+`obedienceRe` or `scaffoldingRe` killed only the structural IClass
+assertion, not a behavioural row. That assertion proves the wrap is
+PRESENT; it does not prove it MATTERS. Four rows added — the obedience
+`i` is in `follow (it|them) exactly`, and `scaffoldingRe` carries exactly
+one, in `give\s+up`. **Third time in one day** that a fix landed broader
+than the fixtures written for it (`artifactcheck`'s `excl`, `guard`'s
+exfiltration class, these two). The pattern is now explicit: derive the
+mutation list from the SET OF SITES CHANGED, not from the finding.
 
 ### Go port: three more provenance divergences, all fail-closed (FOUND 2026-08-27, provenance differential)
 

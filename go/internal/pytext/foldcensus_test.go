@@ -96,17 +96,6 @@ func TestNoProductionPatternFoldsAnUnwrappedI(t *testing.T) {
 			"this list and still listed, because `low` was the word this " +
 			"arc used about the Turkish i the morning before r12 found it " +
 			"in the fabrication detector."},
-		"internal/provenance/provenance.go": {3, "" +
-			"NEXT BY CONSEQUENCE, and the only one on this list already " +
-			"MEASURED unsafe: Classify(\"the prompt \\u0131nstructs x\") " +
-			"is \"prompt\" in CPython (quarantined) and \"outcome\" here " +
-			"(injectable). Not wrapped yet because these three literals are " +
-			"kept byte-identical to lesson_provenance.py and " +
-			"TestRegexSourceMatchesCPython pins that by un-substituting " +
-			"SpaceClass out of the COMPILED pattern -- IClass has to be " +
-			"un-substituted too, and it folds i and I to one spelling, so " +
-			"that test needs a real answer rather than a second " +
-			"ReplaceAll. Pinned meanwhile: three rows, cause whyFold."},
 	}
 
 	root, err := filepath.Abs("../..")

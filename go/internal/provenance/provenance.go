@@ -62,25 +62,43 @@ func pySpace(pattern string) string {
 	return strings.ReplaceAll(pattern, `\s`, pytext.SpaceClass)
 }
 
+// The three patterns below are also wrapped in pytext.PyFoldI, which is
+// the SECOND transform applied to a literal kept byte-identical to
+// lesson_provenance.py. It is spelled out at each call rather than folded
+// into pySpace so the (?i) census can see it structurally -- a helper
+// that hides the wrap would read as unwrapped, which is the correct
+// answer for a census that only knows what it can parse.
+//
+// This was the divergence that had been PINNED rather than fixed, and it
+// was the unsafe direction: CPython quarantines, the port did not.
+//
+//	Classify("the prompt \u0131nstructs x", "", "")
+//	  CPython  "prompt"    quarantined
+//	  Go       "outcome"   injectable
+//
+// The order does not matter -- PyFoldI skips `\s` as an escape, and
+// SpaceClass's body is all \x{...} escapes with no bare i -- but pySpace
+// runs first so PyFoldI sees the pattern the engine will.
+
 // Regexes ported one-for-one from lesson_provenance.py; that file's pin
 // tests (tests/test_lesson_provenance.py) against the four real incident
 // lessons are the shared contract.
-var promptAuthorityRe = regexp.MustCompile(pySpace(
+var promptAuthorityRe = regexp.MustCompile(pytext.PyFoldI(pySpace(
 	`(?i)\b(?:the\s+|a\s+|your\s+)?(?:prompt|instructions?|directives?)\s+` +
 		`(?:explicitly\s+|clearly\s+)?` +
 		`(?:says?|said|states?|stated|instructs?|tells?|told|demands?|` +
-		`forbids?|prohibits?)\b`))
+		`forbids?|prohibits?)\b`)))
 
-var obedienceRe = regexp.MustCompile(pySpace(
+var obedienceRe = regexp.MustCompile(pytext.PyFoldI(pySpace(
 	`(?i)\btreat\s+(?:that|this|it|them)\s+as\s+(?:a\s+)?hard\s+constraints?\b` +
 		`|\bmust\s+be\s+obeyed\b` +
 		`|\bas\s+non-negotiable\b` +
-		`|\bfollow\s+(?:it|them)\s+(?:exactly|to\s+the\s+letter)\b`))
+		`|\bfollow\s+(?:it|them)\s+(?:exactly|to\s+the\s+letter)\b`)))
 
-var scaffoldingRe = regexp.MustCompile(pySpace(
+var scaffoldingRe = regexp.MustCompile(pytext.PyFoldI(pySpace(
 	`(?i)\bdo\s+not\s+(?:escalate|stop|abandon|refuse|give\s+up)\b` +
 		`|\bcannot\s+use\b[^.]{0,60}\bas\s+an\s+excuse\b` +
-		`|\bas\s+an\s+excuse\s+to\s+(?:stop|escalate)\b`))
+		`|\bas\s+an\s+excuse\s+to\s+(?:stop|escalate)\b`)))
 
 // Classify returns MintedFromPrompt when the lesson generalizes
 // instruction text (prompt-authority phrasing, obedience generalization,

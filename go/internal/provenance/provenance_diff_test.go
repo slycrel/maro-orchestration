@@ -334,20 +334,45 @@ func classifyCases() []provCase {
 		{name: "a curly quote before the noun", py: "prompt",
 			lesson: ldquo + "prompt says x"},
 
-		// --- DIVERGENCE 3: IGNORECASE folds the Turkish i in Python -------
-		// Direction is UNSAFE, and this one is reachable on purpose: a
-		// dotless i is a one-character homoglyph edit that walks an
-		// instruction-derived lesson past the port's gate and not past
-		// CPython's.
+		// --- DIVERGENCE 3: CLOSED 2026-08-27 -----------------------------
+		// These three were pinned as an unsafe divergence, with the note
+		// that no remedy existed in the tree. That was a reading, not a
+		// measurement: pytext.PyFoldI is the remedy, and the three
+		// patterns now go through it. The rows stay -- a closed divergence
+		// keeps its fixtures, it just stops being a divergence -- and they
+		// are the reason this file un-substitutes IClass as licensed edit
+		// 3 in TestRegexSourceMatchesCPython.
+		//
+		// Before the fix, and the reason the direction mattered: a dotless
+		// i is a one-character homoglyph edit that walked an
+		// instruction-derived lesson past the port's quarantine gate and
+		// not past CPython's.
 		{name: "a dotless i in the verb", py: "prompt",
-			lesson: "the prompt " + dotles + "nstructs x",
-			goDiff: "outcome", why: whyFold},
+			lesson: "the prompt " + dotles + "nstructs x"},
 		{name: "a dotted capital I in the verb", py: "prompt",
-			lesson: "the prompt " + dotI + "NSTRUCTS x",
-			goDiff: "outcome", why: whyFold},
+			lesson: "the prompt " + dotI + "NSTRUCTS x"},
 		{name: "a dotted capital I in the noun", py: "prompt",
-			lesson: "the " + dotI + "NSTRUCTIONS say x",
-			goDiff: "outcome", why: whyFold},
+			lesson: "the " + dotI + "NSTRUCTIONS say x"},
+		// The rows above only reach _PROMPT_AUTHORITY_RE. All three
+		// patterns were wrapped, and dropping the wrapper from either of
+		// the other two killed no behavioural row -- only the structural
+		// IClass assertion in TestRegexSourceMatchesCPython. That
+		// assertion proves the wrap is PRESENT; these two prove it
+		// MATTERS, which is a different claim and the one a reader wants.
+		//
+		// _OBEDIENCE_RE's i is in `follow (it|them) exactly`.
+		{name: "a dotless i in the obedience verb", py: "prompt",
+			lesson: "follow " + dotles + "t exactly"},
+		{name: "a dotted capital I in the obedience verb", py: "prompt",
+			lesson: "FOLLOW " + dotI + "T EXACTLY"},
+		// _SCAFFOLDING_RE carries exactly ONE i, in `give\s+up`, and the
+		// scaffolding signal needs the goal as well as the lesson.
+		{name: "a dotless i in the scaffolding verb", py: "prompt",
+			lesson: "do not g" + dotles + "ve up",
+			goal:   "do not g" + dotles + "ve up"},
+		{name: "a dotted capital I in the scaffolding verb", py: "prompt",
+			lesson: "DO NOT G" + dotI + "VE UP",
+			goal:   "DO NOT G" + dotI + "VE UP"},
 		// The other special fold an ASCII pattern can reach — LATIN SMALL
 		// LETTER LONG S against `s` — DOES agree, which is why the rows
 		// above name the Turkish i specifically rather than "unicode
@@ -636,11 +661,21 @@ print(json.dumps({
 		//     spells a flag there being no flags argument to MustCompile.
 		//  2. every `\s` rewritten to pytext.SpaceClass by pySpace(),
 		//     because Go's own `\s` is 5 code points to CPython's 29.
+		//  3. every literal `i` rewritten to pytext.IClass by PyFoldI,
+		//     because re.IGNORECASE also folds U+0130/U+0131 onto `i` and
+		//     Go's (?i) does not.
 		//
-		// Un-substituting with the same constant pySpace() uses is not
-		// circular: the constant is not what is being checked here, the
-		// PATTERN is, and a pattern that expanded the class by hand would
-		// not round-trip back to `\s`.
+		// Un-substituting with the same constants those helpers use is not
+		// circular: the constants are not what is being checked here, the
+		// PATTERN is, and a pattern that expanded either class by hand
+		// would not round-trip.
+		//
+		// Edit 3 round-trips only because CPython's three patterns contain
+		// no UPPERCASE `I` — IClass stands in for both cases, so `i` is
+		// the only spelling it can be undone to. That is a property of
+		// today's Python, not a law, so it is asserted below rather than
+		// assumed: a pattern that gains an `I` fails here instead of
+		// silently comparing the wrong string.
 		stripped := strings.TrimPrefix(c.got, "(?i)")
 		if stripped == c.got {
 			t.Errorf("%s: the port's pattern carries no inline (?i) to stand "+
@@ -654,6 +689,24 @@ print(json.dumps({
 			continue
 		}
 		stripped = strings.ReplaceAll(stripped, pytext.SpaceClass, `\s`)
+
+		if strings.ContainsRune(c.want.Pattern, 'I') {
+			t.Errorf("%s now carries an uppercase I, which pytext.IClass "+
+				"cannot be un-substituted back to unambiguously — this "+
+				"comparison would silently check the wrong string. Teach "+
+				"the round-trip about case before trusting it again: %q",
+				c.name, c.want.Pattern)
+			continue
+		}
+		if !strings.Contains(stripped, pytext.IClass) {
+			t.Errorf("%s: the port's pattern carries no pytext.IClass — "+
+				"either PyFoldI was dropped from it or CPython stopped "+
+				"spelling an `i` here, and the Turkish-i quarantine hole "+
+				"is open again: %q", c.name, stripped)
+			continue
+		}
+		stripped = strings.ReplaceAll(stripped, pytext.IClass, "i")
+
 		if stripped != c.want.Pattern {
 			t.Errorf("%s pattern text differs\ncpython: %q\n     go: %q",
 				c.name, c.want.Pattern, stripped)
@@ -677,9 +730,13 @@ func TestClassifyDivergenceLedger(t *testing.T) {
 	for _, n := range byWhy {
 		total += n
 	}
-	want := map[string]int{whyBoundary: 5, whyFold: 3}
-	if total != 8 {
-		t.Errorf("the table pins %d divergent rows, not the 8 on record", total)
+	// whyFold was 3 rows and is now 0: the Turkish-i divergence CLOSED
+	// 2026-08-27 (pytext.PyFoldI), so its rows lost their goDiff and its
+	// cause left this map. A cause with no rows is not allowed to sit here
+	// looking guarded -- the loop below would report 0 vs 0 and pass.
+	want := map[string]int{whyBoundary: 5}
+	if total != 5 {
+		t.Errorf("the table pins %d divergent rows, not the 5 on record", total)
 	}
 	for why, n := range want {
 		if byWhy[why] != n {
