@@ -7,6 +7,7 @@
 **Start-of-session checklist:**
 1. Read this file (CLAUDE.md)
 2. Read GOAL_BRAIN.md — compiled truth: Jeremy's invariants (quoted), verified state, decisions, open threads. **When it disagrees with any other doc, GOAL_BRAIN.md wins** — all other docs are best-guess by decree. Update its system-maintained sections at end-of-chunk.
+   - **On branch `go-port`, also read `GOAL_BRAIN_GOPORT.md`** — the branch-scoped addendum carrying the port arc's own intent, invariants, measured truth, decisions and open threads. Same ownership rules, same precedence over narrative prose; it merges into GOAL_BRAIN.md section-by-section if the port lands and moves to `docs/history/` whole if it does not.
 3. Read MILESTONES.md — prioritized work queue. This is what to do next.
 4. Read BACKLOG.md — active deferred items, bugs, ideas. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
 5. Looking for a specific doc? `docs/INDEX.md` maps questions → docs and carries the status legend (living / dormant-design / history).
