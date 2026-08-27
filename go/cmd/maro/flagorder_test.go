@@ -204,3 +204,44 @@ func TestRefuseExtraMatchesArgparseOnAFlaglessSubcommand(t *testing.T) {
 		}
 	}
 }
+
+// `task_store.py` builds FOUR subparsers for claim/complete/fail/archive and
+// only `p_fail` calls `add_argument("--error")`. The Go handles the four in
+// one case arm, which is fine — until the shared `FlagSet` shares the
+// ARGUMENT SURFACE too, and `task complete <id> --error boom` completes the
+// task where argparse exits 2 (adversarial r11, MEDIUM).
+//
+// Derived from task_store.py, not from the diff (L9): the table below is the
+// Python's four subparser specs, so a future verb added to the case arm
+// without a matching subparser fails here.
+func TestOnlyFailDeclaresTheErrorFlag(t *testing.T) {
+	for _, c := range []struct {
+		verb      string
+		declaresE bool
+	}{
+		{"claim", false},
+		{"complete", false},
+		{"fail", true},
+		{"archive", false},
+	} {
+		t.Run(c.verb, func(t *testing.T) {
+			// Rebuilt exactly as runTask builds it, because the thing under
+			// test is WHICH flags the verb registers.
+			fs := flag.NewFlagSet(c.verb, flag.ContinueOnError)
+			fs.SetOutput(new(strings.Builder))
+			if c.verb == "fail" {
+				fs.String("error", "", "failure reason")
+			}
+			_, err := parseArgs(fs, []string{"job-1", "--error", "boom"}, 1)
+			if c.declaresE && err != nil {
+				t.Fatalf("%s refused -error: %v — task_store.py's p_fail "+
+					"declares it", c.verb, err)
+			}
+			if !c.declaresE && err == nil {
+				t.Errorf("%s accepted -error, but task_store.py's p_%s "+
+					"declares only job_id, so argparse exits 2 on it",
+					c.verb, c.verb)
+			}
+		})
+	}
+}

@@ -536,7 +536,7 @@ other side reads.
 | 1 | **Key ORDER** in `pack.json` and in `imports.jsonl` report rows | Python emits insertion order; the Go emits alphabetical. The port's oldest recurring family — the Go builds these with `map[string]any` where it needs `pyval.Obj` |
 | 2 | `origin.maro_version` | `"0.8.0"` vs `"go-port"` |
 | 3 | The MODE class, with numbers | dirs 775/755, export files 664/644, quarantine files 664/**600**, adopted files 775/644. Related to the directory-mode census entry, but the 664/600 pair is its own decision, not a umask artifact |
-| 4 | `import --dry-run` is not inert on the Python side | CPython creates `inbox/memory/long` and `inbox/memory/medium`; the Go creates nothing. One of the two is wrong about what `--dry-run` means and it is worth deciding which |
+| 4 | `import --dry-run` is not inert on the Python side | CPython creates `inbox/memory/long` and `inbox/memory/medium`; the Go creates nothing. **Root cause found 2026-08-26**: `knowledge_web._tiered_lessons_path` (`:300-303`) does `d.mkdir(parents=True, exist_ok=True)` on the **READ** path, and `_import_lessons` calls `load_tiered_lessons` for MEDIUM and LONG before deciding anything. So the dry run's writes are a side effect of a path helper, not a deliberate choice — which makes "match it" and "stay inert" both defensible and neither obvious |
 | 5 | export stdout prose | Content-key prose divergence, the family this arc keeps hitting |
 
 **Two divergences it found are already documented as deliberate and are NOT

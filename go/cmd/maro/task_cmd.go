@@ -70,7 +70,19 @@ func runTask(args []string) error {
 
 	case "claim", "complete", "fail", "archive":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
-		errText := fs.String("error", "", "failure reason (fail only)")
+		// -error is registered ONLY for `fail`. task_store.py builds four
+		// separate subparsers and only `p_fail` calls
+		// `add_argument("--error")`; the other three declare `job_id` alone.
+		// Sharing one FlagSet across the four verbs because they share a
+		// code path shared the ARGUMENT SURFACE too, so
+		// `task complete <id> --error boom` completed the task where
+		// argparse exits 2 (adversarial r11, MEDIUM). The four verbs are one
+		// case arm here and four parsers there; where the two disagree, the
+		// PARSER is the observable half.
+		var errText = new(string)
+		if args[0] == "fail" {
+			errText = fs.String("error", "", "failure reason")
+		}
 		// Each of these four declares exactly one positional (`job_id`) in
 		// task_store.py. The arity is the argument, not a sanity check: a
 		// helper that collected positionals without limit let
