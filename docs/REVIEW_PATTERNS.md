@@ -296,6 +296,27 @@ worth writing down — so the comments now carry the number rather than the
 reasoning. A reasoned exemption and a measured one are indistinguishable
 in prose, which is exactly the gap L28 names.
 
+**And the third sub-shape, CLOSED 2026-08-27: the equivalent survivor
+that gets DELETED.** Every loopfinalize tranche produced one or two
+survivors of one shape — a mutation substituting a value that a guard
+ABOVE the site has already pinned (`LoopStatus: "done"` under a
+`status != "done"` return; `dry_run` under `if dry_run { return }`;
+`isTrue`'s `ok &&` under a first gate that consumes every False). Four
+instances across three tranches. Each time the answer was "delete the row
+and write a comment at the site", and each time the reasoning left the
+battery — so the next round has no way to notice when it goes stale.
+
+`mutate-subs.py` now takes an `"equivalent": "<why>"` field on a
+mutation. Such a row is EXPECTED to survive, prints as `equiv` with its
+reason, and does not fail the run — but if a fixture ever KILLS it the run
+fails with `STALE EQUIVALENCE NOTE`, because a guard moved or the note was
+wrong. The deleted rows from the finalize and maintenance batteries were
+restored under it.
+
+That is Jeremy's rule for a pinned difference, applied to the battery: the
+note is a tripwire on itself, and it is deleted when it goes stale rather
+than when it is inconvenient.
+
 ### L9 — Derive must-detect mutations from the FILE, not the diff
 *instances: 16 — plus standing (Jeremy, 2026-08-16)*
 
@@ -2540,3 +2561,68 @@ before any scenario runs; give every recorder positional-only parameters;
 and clear every module-level registry the subject writes to at the top of
 each scenario, because the Go side gets a fresh one per record and the
 Python side does not.
+
+---
+
+### L60 — An argument expression is a statement, and a swallowing block turns it into control flow
+
+*instances: 2 (2026-08-27, `_finalize_loop` and `finalize_deferred_learning`)*
+
+An expression written inside a call's parentheses runs **where it is
+written**, not where its consumer runs. Inside a block whose handler
+swallows, that makes it a place the block can exit — and everything after
+it never happens.
+
+Two shapes, one week apart, both real divergences in the port:
+
+```python
+try:
+    from memory import record_tiered_lesson          # <- may raise here
+    record_tiered_lesson(
+        ...,
+        grounding=_grounding_for(loop_id, project),  # <- a RETRIEVAL QUERY
+    )
+except Exception:
+    ...
+```
+
+The port built the argument struct first — grounding call and all — and
+checked the nil dep after. With `memory` absent, Go queried the retrieval
+index and Python did not. The import is above the argument in the source,
+so the guard standing in for it has to be above the argument in the port.
+
+```python
+if _row is not None and _row.goal_achieved is False:
+    log.info("... loop %s judged not-achieved (%s)",
+             loop_id, _row.goal_verdict_source)     # <- may raise here
+    return
+except Exception:
+    pass  # fail open
+```
+
+A row that omits `goal_verdict_source` raises at the argument, before
+`log.info` is entered. The blanket handler eats **the log line and the
+`return` together**, so a gate that had already decided to BLOCK
+crystallisation instead allows it — silently, on a field the gate never
+tests. The port's `if !ok { return true }` inside the gate looks like
+defensive noise until you see that it is the only spelling that reproduces
+this.
+
+> **The failure of a log line's arguments is not a logging failure. In a
+> swallowing block it is a branch.**
+
+**Tripwire.** For each `except` that swallows, list every expression that
+appears ONLY inside another call's arguments — a lookup, an attribute
+read, a helper call, a format argument. Each one is an exit the block's
+own conditions do not mention. Then check the port: if it hoisted any of
+them into a variable, moved one across a guard, or normalised a `None` out
+of one, it changed which side effects happen.
+
+**Why it is hard to close.** The check that would catch both is a fixture
+rule, not a static one: drive every swallowing block with an input that
+makes its *argument* expressions fail, not its *guarded* ones. In the
+differential that is one probe feature (a row built from the fixture's own
+key set, so a field can genuinely be ABSENT rather than None) and one
+fixture per log line. Two of the deferred-learning tranche's fixtures
+exist only to say this — `not-achieved-without-a-source-fails-open-silently`
+and `achieved-untrusted-without-a-source-fails-open`.

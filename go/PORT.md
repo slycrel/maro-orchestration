@@ -16093,3 +16093,265 @@ orphaning the identifier that made the file compile. `budget` became an
 unused import the moment the store-grade call was replaced, so that row is
 now a SWAP of the two budgets between the two evidence strings — which is
 the more interesting mutation anyway.
+
+## Phase K: four blocks swallow ImportError and one does not (2026-08-27)
+
+`run_post_run_maintenance` (`src/loop_finalize.py:934-1048`) — the run's
+maintenance tail, extracted from `_finalize_loop` by the async-tail decree
+so the closure lane can defer it past the `run_completed` notify. Ported to
+`go/internal/loopfinalize/maintenance.go`. 58 scenarios; battery 51/51.
+
+Five blocks, run unconditionally in order: skill maintenance, health
+probes, the statistical scans, the evolver's run-cadence meta-cycle, the
+inspector's. Every one swallows its own failures, so the function's
+RETURN says nothing about which of them ran. The record is the calls and
+the log lines, and the levels are again the specification.
+
+### The asymmetry the tranche is named for
+
+Four of the five carry a bare `except ImportError: pass` above their
+general handler. The health-probe block does not:
+
+```python
+try:
+    from system_health import run_health_probes
+    run_health_probes()
+except Exception as _health_exc:
+    log.debug("health probes failed (non-critical): %s", _health_exc)
+```
+
+So a missing `system_health` writes a debug line and a missing `evolver`
+writes nothing at all. That is one line of difference across five blocks
+that otherwise read identically, and a port that unified them would pass
+every test that did not distinguish an ImportError from any other error.
+The fixture spec therefore carries the raised class, not just a message
+(`finErr` is `[class, message]`), and `asErr` turns `ImportError` into the
+port's own `errImport` sentinel — because a nil dep IS that state, and the
+handlers must not be able to tell the two apart.
+
+### An import that costs nothing when the branch is not taken
+
+```python
+if evolver_cadence_tick(_cadence):
+    from evolver import run_evolver
+```
+
+`run_evolver` is imported INSIDE the `if`. A box with no evolver module
+and a cadence that does not fire is indistinguishable from a healthy one;
+the same box with a cadence that DOES fire silently skips the cycle,
+because the `except ImportError: pass` at the bottom of that block catches
+an import that happened halfway through it. Go models it as a nil
+`RunEvolver` checked at the same point rather than at the top of
+`evolverCycle`, and `run-evolver-guard-hoisted-above-the-tick` is the
+mutation that says so.
+
+### A literal 50 next to an imported constant
+
+```python
+_limit = DEEP_PASS_LIMIT if _mode == "deep" else 50
+```
+
+The deep limit is imported from `inspector`; the standard one is a bare
+literal at the call site. The port keeps both shapes — `DeepPassLimit *int`
+is a dep (a pointer, so "the module is missing" and "the module says 0"
+stay distinct) and `InspectorStandardPassLimit = 50` is a const — because
+collapsing them into one constant would make an inspector module that
+disagrees about its own deep limit unobservable.
+
+### `or 0` on two different defaults
+
+```python
+_insp_cadence = int(_cfg_get("inspector.run_cadence", 0) or 0)
+_deep_every   = int(_cfg_get("inspector.deep_every", 5) or 0)
+```
+
+The `or 0` is the same on both lines and it means something different on
+each. On the first it is a no-op. On the second it turns an EXPLICIT zero
+into a zero and an ABSENT key into 5 — so a config that disables the deep
+rider and a config that never mentioned it end up two lines apart. `cfgInt`
+reproduces it and the fixtures pin both readings.
+
+The short-circuit above the tick is also load-bearing and also from a
+review: `cadence <= 0` returns "none" WITHOUT calling
+`inspector_cadence_tick`, because counting while disabled created the state
+file on fresh installs and made a later enable fire immediately instead of
+waiting N enabled runs.
+
+### The battery, and the one row that was deleted
+
+51 mutations derived from the file, all killed. Two were the usual **P14**
+build failures — a deletion orphaning the identifier that kept the file
+compiling — and both were re-spelled into the more interesting mutation
+underneath (`scan-log-fires-before-the-save` became a straight reorder;
+`inspector-log-counts-the-limit` became a swap of limit and sessions).
+
+One survivor was a genuine **equivalent mutant**:
+`skill-maintenance-nil-dep-is-not-an-import-error` replaced that block's
+`errImport` sentinel with a NIL error, and both spellings are silent —
+because that block HAS an ImportError arm, and a nil error returns at the
+same test. The same substitution in `healthProbes` is NOT equivalent, and
+the battery kills it there.
+
+The row was deleted at the time. It is back, marked `equivalent` (see the
+deferred tranche below), and restoring it caught a real mistake in the
+first minute: it was re-derived from the site comment as a plain non-nil
+error, which is a DIFFERENT mutation — `isImportErr` recognises the
+sentinel and the PyErr class and nothing else, so the block logs. The
+runner reported `STALE EQUIVALENCE NOTE`, the row was corrected, and the
+plain-error spelling is now its own killed row. **A comment is not a
+battery row, and reconstructing one from the other is exactly the decay
+L28 names.**
+
+### An ops finding, from the battery that died after one mutation
+
+A `nohup … &` child launched from a Bash tool call shares its parent's
+process group, so killing the waiting task kills the battery. The first
+maintenance run died after mutation 1 — cleanly, because the runner's
+signal-safe restore handlers put the tree back, which is the only reason
+this is a footnote instead of a section. Batteries are launched with
+`setsid nohup … </dev/null &` now.
+
+## Phase K: four halves, three returns, and two gates that fail open (2026-08-27)
+
+`finalize_deferred_learning` (`src/loop_finalize.py:1201-1319`) — the
+learning `_finalize_loop` deferred, run once closure has stamped a verdict
+onto the outcomes row. Ported to `go/internal/loopfinalize/deferred.go`.
+47 scenarios; battery 74 rows, 71 killed and 3 documented
+equivalents.
+
+The whole point of the function is data-r2-01: **lessons and skills must
+not be extracted verdict-blind.** So its body is four halves separated by
+three returns, and which half a given loop reaches is the specification:
+
+1. deferred lessons, one call per loop id, extras first and this loop last;
+2. the risk mint;
+3. per-step lessons, but only for a row the learnability gate REFUSES;
+4. crystallisation, behind two verdict gates.
+
+It returns nothing and never raises. Everything observable is a call or a
+log line, so the differential records both, in order, with arguments.
+
+### The skip test sits BETWEEN the halves
+
+```python
+for _lid in [*(extra_loop_ids or []), loop_id]:
+    if _lid and _lid not in _skip: ...
+...
+if loop_id in _skip:
+    return
+```
+
+A loop whose verdict audit is unresolved is filtered out of the lesson
+loop AND returns before everything below — but its EXTRAS still had their
+lessons extracted on the way past. Move the return one line up and every
+fixture without extras still passes.
+
+`unstamped_loop_ids` is a compatibility alias unioned with `skip_loop_ids`,
+and the union is two separate loops in the port for the same reason it is
+two separate names in the source: `skip-ids-are-not-unioned` and
+`unstamped-ids-are-not-unioned` are different mutations.
+
+### `is True` / `is False` are identity, and the row comes from JSON
+
+Both verdict gates spell the test as identity against the singletons:
+
+```python
+if _row is not None and _row.goal_achieved is False:
+```
+
+A ledger row rehydrated from JSON can carry a `0` or a `1` where a bool
+was meant, and neither gate fires on those. `isTrue`/`isFalse` are the
+type assertion, not truthiness, and the two fixtures that say so
+(`numeric-zero-is-not-the-False-singleton`,
+`numeric-one-is-not-the-True-singleton`) are the only ones that can tell
+the spellings apart.
+
+### What stays real
+
+`verdict_trust`, `VERDICT_TRUST_FULL` and `is_learnable_outcome` are the
+real implementations on BOTH sides — `record.VerdictTrust` and
+`outcomepolicy.IsLearnable` in Go, the real modules in the probe. They are
+package calls in the port rather than injectable deps, so an absence
+fixture would be testing the probe's reach; instead the seam is covered by
+driving them with rows that reach every branch (audit-incomplete, a
+declared-but-unknown `success_class`, an out-of-budget stop verdict with
+no verdict, directional confidence, `closure_unverifiable`).
+
+`_crystallize_and_synthesize` stays real too, wired to the already-ported
+`CrystallizeAndSynthesize`. Only `load_outcome_by_loop_id` (not yet
+ported — it belongs to the memory_ledger tranche) and the two `memory`
+functions are stubbed.
+
+### The row has to be a real dataclass, and its FIELD SET is the fixture
+
+```python
+_row = load_outcome_by_loop_id(loop_id)
+if _row is not None and not is_learnable_outcome(_dc.asdict(_row)):
+```
+
+`asdict` rejects anything that is not a dataclass, so the probe builds the
+row with `dataclasses.make_dataclass` from the fixture's own key list. That
+is not a convenience: `"success_class" in outcome` inside
+`is_learnable_outcome` asks whether the field was DECLARED, so a row that
+omits it is a different row, not the same row with a `None` in it. The Go
+side builds a `pyval.Obj` from the same ordered key list.
+
+It is also what makes **L60** testable: a field can be genuinely ABSENT
+rather than None, which is the input the two fail-open divergences below
+need (`docs/REVIEW_PATTERNS.md`).
+
+### Two real divergences, both about a value read as an ARGUMENT
+
+Reproducing them cost two `if !ok { return true }` arms that read like
+defensive noise:
+
+```python
+if _row is not None and _row.goal_achieved is False:
+    log.info("... loop %s judged not-achieved (%s)",
+             loop_id, _row.goal_verdict_source)
+    return
+...
+except Exception:
+    pass  # fail open to pre-fix behavior: done is enough when unreadable
+```
+
+`_row.goal_verdict_source` is an argument to `log.info`. A row that never
+declares it raises **before the log is entered**, and the blanket handler
+swallows the log line and the `return` together — so a gate that had
+decided to BLOCK crystallisation allows it, silently, over a field the
+gate does not test. The same holds at the trust gate. The port logged and
+returned false in both places.
+
+That is the second instance of an argument expression acting as control
+flow inside a swallowing block (the first was the recovery-plan grounding
+query in `_finalize_loop`, one file over), so it is now **L60**.
+
+### The `or ""` chain, twice
+
+`project or getattr(loop_result, "project", "") or ""` appears at the mint
+and again at the crystallisation call. The port computes it once and the
+mutation `crystallize-project-ignores-the-keyword` is what says the second
+site really is the same expression and not `loop_result.project`.
+
+### Three equivalent survivors, and a battery field instead of three deletions
+
+All three survivors were the same shape: a mutation substituting a value
+that a guard ABOVE the site has already pinned.
+
+- `LoopStatus: "done"` under a gate that returns unless the status is
+  `"done"`.
+- `dry_run` passed to `extract_step_lessons` under a caller that returns
+  when `dry_run`. **Python passes it anyway**, and so does the port.
+- `isTrue`'s `ok &&` half, under a first gate that consumes every bool
+  False on both of its arms.
+
+That is the fourth instance of this shape across three tranches, and each
+previous one was answered by deleting the battery row and writing a
+comment. So the runner grew an `"equivalent": "<why>"` field instead: the
+row stays, prints as `equiv`, does not fail the run — and FAILS it with
+`STALE EQUIVALENCE NOTE` if a fixture ever kills it. The rows deleted from
+the finalize and maintenance batteries are restored under it. **L8** now
+records this as its third closed sub-shape.
+
+The two build failures were **P14** again, both from a deletion orphaning
+an identifier (`learnable`, `source`), and both re-spelled to keep it.

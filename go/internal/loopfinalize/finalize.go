@@ -489,8 +489,9 @@ func verifiedRecoveryPhase(a FinalizeArgs, d FinalizeDeps) {
 	// cannot be told apart from here. The guard four lines up returns
 	// unless the status IS "done", so the literal and the field are the
 	// same string on every input that reaches this line. The battery row
-	// was removed rather than kept as a passing check; the literal is
-	// what Python writes, and this note is why nothing pins it.
+	// is KEPT and marked `equivalent`, so this note is a tripwire on
+	// itself: if a fixture ever kills that row, the guard moved and this
+	// comment is stale. The literal is what Python writes.
 	if err := d.RecordTieredLesson(TieredLesson{
 		LessonText:      text,
 		TaskType:        "agenda",

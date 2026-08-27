@@ -38,6 +38,21 @@ packages that can SEE the change: narrowing it to the one you are
 building makes a shared helper's mutation report SURVIVED because its
 killers were never run.
 
+`equivalent` on a mutation says NO INPUT CAN OBSERVE IT, and its value is
+the reason. Such a row is expected to survive; it is reported as `equiv`
+and does not fail the run. If it is ever KILLED the run fails, because
+the reason has gone stale — a guard moved, a fixture widened, or the
+equivalence was wrong to begin with.
+
+This field exists because the alternative was DELETING the row. Every
+tranche so far has produced one or two survivors of the same shape — a
+mutation that substitutes a value some guard ABOVE the site has already
+pinned (`LoopStatus: "done"` under a `status != "done"` return;
+`dry_run` under a `if dry_run { return }`) — and deleting them loses the
+reasoning and invites the next round to re-derive it. Keeping the row
+makes the note a tripwire on itself, which is the standing rule for a
+pinned difference.
+
 Usage:
     python3 go/tools/mutate-subs.py spec.json
     python3 go/tools/mutate-subs.py spec.json --only clip-counts-bytes
@@ -90,7 +105,7 @@ def main():
         sys.exit("the tree is ALREADY red; every mutation would report as "
                  "covered. Fix the tree first (P7).\n" + out[-2000:])
 
-    survivors, unmatched, buildfails = [], [], []
+    survivors, unmatched, buildfails, stale = [], [], [], []
     for m in muts:
         path = os.path.join(gosrc.GO_ROOT, m["file"])
         src = originals[path]
@@ -108,10 +123,20 @@ def main():
         finally:
             gosrc.restore_all()
         if ok:
-            survivors.append(m["name"])
-            print("  SURVIVED  %s" % m["name"])
+            if m.get("equivalent"):
+                print("  equiv     %-36s %s" % (m["name"], m["equivalent"]))
+            else:
+                survivors.append(m["name"])
+                print("  SURVIVED  %s" % m["name"])
         elif killers:
-            print("  killed    %-36s %s" % (m["name"], ", ".join(killers[:3])))
+            if m.get("equivalent"):
+                # The row claims no input can observe this. One just did.
+                stale.append((m["name"], killers[0]))
+                print("  STALE     %-36s killed by %s" % (m["name"],
+                                                          killers[0]))
+            else:
+                print("  killed    %-36s %s" % (m["name"],
+                                                ", ".join(killers[:3])))
         elif "panic:" in out:
             # A mutation that DEADLOCKS is killed by the test binary's
             # own timeout, not by an assertion. Saying so distinguishes
@@ -144,14 +169,23 @@ def main():
         print("\nA build break is not a kill. Re-spell each one so it "
               "compiles — usually by keeping the identifier the deletion "
               "orphaned — and let a test do the killing (L8).")
+    if stale:
+        print("%d STALE EQUIVALENCE NOTE(S): %s" % (len(stale),
+              ", ".join("%s (%s)" % t for t in stale)))
+        print("\nA row marked `equivalent` was killed. Either the guard "
+              "that made it unobservable moved, or the note was wrong. "
+              "Re-read the site before touching the spec.")
     if survivors:
         print("%d SURVIVED: %s" % (len(survivors), ", ".join(survivors)))
         print("\nEach needs a fixture that fails with the mutation applied, "
               "or a comment at the site saying why no input can observe it "
               "(L8). The answer belongs next to the code either way.")
-    if unmatched or survivors or buildfails:
+    if unmatched or survivors or buildfails or stale:
         sys.exit(1)
-    print("all %d mutation(s) killed at least one test" % len(muts))
+    n_equiv = sum(1 for m in muts if m.get("equivalent"))
+    print("all %d mutation(s) killed at least one test (%d expected-"
+          "equivalent row(s) survived as documented)"
+          % (len(muts) - n_equiv, n_equiv))
 
 
 if __name__ == "__main__":

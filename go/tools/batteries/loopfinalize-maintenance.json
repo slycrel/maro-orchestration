@@ -1,0 +1,328 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "health-probes-before-skill-maintenance",
+   "old": "\tskillMaintenance(adapter, d)\n\thealthProbes(d)",
+   "new": "\thealthProbes(d)\n\tskillMaintenance(adapter, d)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-after-the-evolver",
+   "old": "\tstatisticalScans(verbose, d)\n\tevolverCadence(adapter, verbose, d)",
+   "new": "\tevolverCadence(adapter, verbose, d)\n\tstatisticalScans(verbose, d)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-before-the-evolver",
+   "old": "\tevolverCadence(adapter, verbose, d)\n\tinspectorCadence(adapter, verbose, d)",
+   "new": "\tinspectorCadence(adapter, verbose, d)\n\tevolverCadence(adapter, verbose, d)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "import-error-sentinel-not-recognised",
+   "old": "\tif errors.Is(err, errImport) {\n\t\treturn true\n\t}",
+   "new": "\tif errors.Is(err, errImport) {\n\t\treturn false\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "import-error-class-not-recognised",
+   "old": "\t\treturn pe.Class == \"ImportError\"",
+   "new": "\t\treturn pe.Class == \"ImportWarning\""
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "every-error-is-an-import-error",
+   "old": "func isImportErr(err error) bool {\n\tif err == nil {\n\t\treturn false\n\t}",
+   "new": "func isImportErr(err error) bool {\n\tif err != nil {\n\t\treturn true\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "config-falsy-not-coerced-to-zero",
+   "old": "\tif !pyval.Truthy(raw) {\n\t\treturn 0, nil\n\t}",
+   "new": "\tif raw == nil {\n\t\treturn 0, nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "config-default-is-the-value",
+   "old": "\traw, err := d.ConfigGet(key, def)\n\tif err != nil {\n\t\treturn 0, err\n\t}",
+   "new": "\traw, err := d.ConfigGet(key, def)\n\tif err != nil {\n\t\treturn 0, nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "config-int-conversion-dropped",
+   "old": "\treturn pyval.Int(raw)",
+   "new": "\tif n, ok := raw.(int); ok {\n\t\treturn n, nil\n\t}\n\treturn 0, nil"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "skill-maintenance-has-no-import-arm",
+   "old": "\tif err == nil || isImportErr(err) {\n\t\treturn\n\t}\n\td.debugf(\"skill maintenance failed",
+   "new": "\tif err == nil {\n\t\treturn\n\t}\n\td.debugf(\"skill maintenance failed"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "skill-maintenance-failure-is-a-warning",
+   "old": "d.debugf(\"skill maintenance failed (non-critical): %s\", err)",
+   "new": "d.warnf(\"skill maintenance failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "skill-maintenance-drops-the-adapter",
+   "old": "\t\terr = d.RunSkillMaintenance(adapter)",
+   "new": "\t\terr = d.RunSkillMaintenance(nil)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "health-probes-gain-an-import-arm",
+   "old": "\tif err == nil {\n\t\treturn\n\t}\n\td.debugf(\"health probes failed",
+   "new": "\tif err == nil || isImportErr(err) {\n\t\treturn\n\t}\n\td.debugf(\"health probes failed"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "health-probes-nil-dep-is-silent",
+   "old": "\terr := errImport\n\tif d.RunHealthProbes != nil {\n\t\terr = d.RunHealthProbes()\n\t}",
+   "new": "\tvar err error\n\tif d.RunHealthProbes != nil {\n\t\terr = d.RunHealthProbes()\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "health-probes-failure-is-a-warning",
+   "old": "d.debugf(\"health probes failed (non-critical): %s\", err)",
+   "new": "d.warnf(\"health probes failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-have-no-import-arm",
+   "old": "\tif err := scans(verbose, d); err != nil && !isImportErr(err) {",
+   "new": "\tif err := scans(verbose, d); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-failure-is-a-warning",
+   "old": "d.debugf(\"post-run statistical scan failed (non-critical): %s\", err)",
+   "new": "d.warnf(\"post-run statistical scan failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-guard-drops-save-suggestions",
+   "old": "\tif d.RunStatisticalScans == nil || d.SaveSuggestions == nil {",
+   "new": "\tif d.RunStatisticalScans == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-guard-drops-run-statistical-scans",
+   "old": "\tif d.RunStatisticalScans == nil || d.SaveSuggestions == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.SaveSuggestions == nil {\n\t\treturn errImport\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scans-drop-verbose",
+   "old": "\tsugg, err := d.RunStatisticalScans(verbose)",
+   "new": "\tsugg, err := d.RunStatisticalScans(false)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "empty-scan-result-is-still-saved",
+   "old": "\tif len(sugg) == 0 {\n\t\treturn nil\n\t}",
+   "new": "\tif len(sugg) < 0 {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scan-log-counts-something-else",
+   "old": "d.info(\"post-run statistical scan: %d suggestion(s) saved\", len(sugg))",
+   "new": "d.info(\"post-run statistical scan: %d suggestion(s) saved\", 1)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "scan-log-fires-before-the-save",
+   "old": "\tif err := d.SaveSuggestions(sugg); err != nil {\n\t\treturn err\n\t}\n\td.info(\"post-run statistical scan: %d suggestion(s) saved\", len(sugg))",
+   "new": "\td.info(\"post-run statistical scan: %d suggestion(s) saved\", len(sugg))\n\tif err := d.SaveSuggestions(sugg); err != nil {\n\t\treturn err\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-failure-is-a-debug-line",
+   "old": "d.warnf(\"run-cadence evolver cycle failed (non-fatal): %s\", err)",
+   "new": "d.debugf(\"run-cadence evolver cycle failed (non-fatal): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-has-no-import-arm",
+   "old": "\tif err := evolverCycle(adapter, verbose, d); err != nil &&\n\t\t!isImportErr(err) {",
+   "new": "\tif err := evolverCycle(adapter, verbose, d); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-guard-drops-config",
+   "old": "\tif d.ConfigGet == nil || d.EvolverCadenceTick == nil {",
+   "new": "\tif d.EvolverCadenceTick == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-guard-drops-the-tick",
+   "old": "\tif d.ConfigGet == nil || d.EvolverCadenceTick == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.ConfigGet == nil {\n\t\treturn errImport\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-cadence-key",
+   "old": "cfgInt(d, \"evolver.run_cadence\", EvolverRunCadenceDefault)",
+   "new": "cfgInt(d, \"evolver.cadence\", EvolverRunCadenceDefault)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-cadence-default-is-one",
+   "old": "\tcadence, err := cfgInt(d, \"evolver.run_cadence\", EvolverRunCadenceDefault)",
+   "new": "\tcadence, err := cfgInt(d, \"evolver.run_cadence\", 1)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-tick-result-inverted",
+   "old": "\tif !fired {\n\t\treturn nil\n\t}",
+   "new": "\tif fired {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "run-evolver-guard-hoisted-above-the-tick",
+   "old": "\tif d.ConfigGet == nil || d.EvolverCadenceTick == nil {\n\t\treturn errImport\n\t}\n\tcadence, err := cfgInt",
+   "new": "\tif d.ConfigGet == nil || d.EvolverCadenceTick == nil ||\n\t\td.RunEvolver == nil {\n\t\treturn errImport\n\t}\n\tcadence, err := cfgInt"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-log-drops-the-cadence",
+   "old": "\"suggestions=%d\", cadence, rep.OutcomesReviewed,",
+   "new": "\"suggestions=%d\", 0, rep.OutcomesReviewed,"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-log-counts-reviewed-as-suggestions",
+   "old": "\t\tlen(rep.Suggestions))",
+   "new": "\t\trep.OutcomesReviewed)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "evolver-run-drops-verbose",
+   "old": "\trep, err := d.RunEvolver(adapter, verbose)",
+   "new": "\trep, err := d.RunEvolver(adapter, false)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-failure-is-a-debug-line",
+   "old": "d.warnf(\"run-cadence inspector failed (non-fatal): %s\", err)",
+   "new": "d.debugf(\"run-cadence inspector failed (non-fatal): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-has-no-import-arm",
+   "old": "\tif err := inspectorCycle(adapter, verbose, d); err != nil &&\n\t\t!isImportErr(err) {",
+   "new": "\tif err := inspectorCycle(adapter, verbose, d); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-guard-drops-deep-pass-limit",
+   "old": "\t\td.RunInspector == nil || d.DeepPassLimit == nil {",
+   "new": "\t\td.RunInspector == nil {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-guard-drops-run-inspector",
+   "old": "\t\td.RunInspector == nil || d.DeepPassLimit == nil {\n\t\treturn errImport\n\t}",
+   "new": "\t\td.DeepPassLimit == nil {\n\t\treturn errImport\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-cadence-key",
+   "old": "\tcadence, err := cfgInt(d, \"inspector.run_cadence\",",
+   "new": "\tcadence, err := cfgInt(d, \"inspector.cadence\","
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-deep-every-key",
+   "old": "\tdeepEvery, err := cfgInt(d, \"inspector.deep_every\",",
+   "new": "\tdeepEvery, err := cfgInt(d, \"inspector.deep\","
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-deep-every-default-is-zero",
+   "old": "\tdeepEvery, err := cfgInt(d, \"inspector.deep_every\",\n\t\tInspectorDeepEveryDefault)",
+   "new": "\tdeepEvery, err := cfgInt(d, \"inspector.deep_every\", 0)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-short-circuit-removed",
+   "old": "\tmode := \"none\"\n\tif cadence > 0 {",
+   "new": "\tmode := \"none\"\n\tif cadence >= 0 {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-short-circuit-inverted",
+   "old": "\tif cadence > 0 {\n\t\tmode, err = d.InspectorCadenceTick(cadence, deepEvery)",
+   "new": "\tif cadence < 0 {\n\t\tmode, err = d.InspectorCadenceTick(cadence, deepEvery)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-tick-args-swapped",
+   "old": "d.InspectorCadenceTick(cadence, deepEvery)",
+   "new": "d.InspectorCadenceTick(deepEvery, cadence)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-none-mode-still-runs",
+   "old": "\tif mode == \"none\" {\n\t\treturn nil\n\t}",
+   "new": "\tif mode == \"nothing\" {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-standard-limit",
+   "old": "\tlimit := InspectorStandardPassLimit",
+   "new": "\tlimit := 100"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-deep-limit-not-used",
+   "old": "\tif mode == \"deep\" {\n\t\tlimit = *d.DeepPassLimit\n\t}",
+   "new": "\tif mode == \"deeper\" {\n\t\tlimit = *d.DeepPassLimit\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-every-mode-is-deep",
+   "old": "\tif mode == \"deep\" {",
+   "new": "\tif mode != \"\" {"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-run-drops-verbose",
+   "old": "\trep, err := d.RunInspector(limit, adapter, verbose)",
+   "new": "\trep, err := d.RunInspector(limit, adapter, false)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-log-drops-the-mode",
+   "old": "\td.info(\"run-cadence inspector fired (%s pass, cadence=%d, limit=%d): \"+\n\t\t\"%d outcome(s) inspected\", mode, cadence, limit,",
+   "new": "\td.info(\"run-cadence inspector fired (%s pass, cadence=%d, limit=%d): \"+\n\t\t\"%d outcome(s) inspected\", \"standard\", cadence, limit,"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "inspector-log-swaps-limit-and-sessions",
+   "old": "\t\t\"%d outcome(s) inspected\", mode, cadence, limit,\n\t\trep.InspectedSessions)",
+   "new": "\t\t\"%d outcome(s) inspected\", mode, cadence, rep.InspectedSessions,\n\t\tlimit)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "skill-maintenance-nil-dep-is-not-an-import-error",
+   "old": "\terr := errImport\n\tif d.RunSkillMaintenance != nil {",
+   "new": "\tvar err error\n\tif d.RunSkillMaintenance != nil {",
+   "equivalent": "THIS block has an ImportError arm and a nil err returns at the same test, so both spellings are silent; a plain NON-nil error is a different mutation and is killed (skill-maintenance-sentinel-is-a-plain-error)"
+  },
+  {
+   "file": "internal/loopfinalize/maintenance.go",
+   "name": "skill-maintenance-sentinel-is-a-plain-error",
+   "old": "\terr := errImport\n\tif d.RunSkillMaintenance != nil {",
+   "new": "\terr := errors.New(\"no module\")\n\tif d.RunSkillMaintenance != nil {"
+  }
+ ]
+}

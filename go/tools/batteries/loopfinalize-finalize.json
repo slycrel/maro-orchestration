@@ -916,6 +916,13 @@
    "name": "ping-failure-is-a-warning",
    "old": "\t\td.debugf(\"loop-boundary Telegram ping failed (non-critical): %s\", err)",
    "new": "\t\td.warnf(\"loop-boundary Telegram ping failed (non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/finalize.go",
+   "name": "verified-recovery-outcome-is-the-loop-status",
+   "old": "\t\tOutcome:         \"done\",",
+   "new": "\t\tOutcome:         a.LoopStatus,",
+   "equivalent": "the guard four lines up returns unless the status IS \"done\", so the literal and the field are the same string on every input that reaches this line"
   }
  ]
 }

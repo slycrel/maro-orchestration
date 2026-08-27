@@ -1,0 +1,456 @@
+{
+ "packages": {
+  "default": [
+   "./internal/loopfinalize/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "unstamped-ids-are-not-unioned",
+   "old": "\tfor _, id := range a.UnstampedLoopIDs {\n\t\tskip[id] = true\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "skip-ids-are-not-unioned",
+   "old": "\tfor _, id := range a.SkipLoopIDs {\n\t\tskip[id] = true\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "skip-return-runs-before-the-lessons",
+   "old": "\tdeferredLessons(a, d, loopID, skip)\n",
+   "new": "\tif skip[loopID] {\n\t\treturn\n\t}\n\tdeferredLessons(a, d, loopID, skip)\n"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "skip-return-is-gone",
+   "old": "\tif skip[loopID] {\n\t\treturn\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "result-project-wins-over-the-keyword",
+   "old": "\tproject := a.Project\n\tif project == \"\" {\n\t\tproject = a.Result.Project\n\t}",
+   "new": "\tproject := a.Result.Project\n\tif project == \"\" {\n\t\tproject = a.Project\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "project-has-no-fallback",
+   "old": "\tproject := a.Project\n\tif project == \"\" {\n\t\tproject = a.Result.Project\n\t}",
+   "new": "\tproject := a.Project"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "mint-arguments-swapped",
+   "old": "\t\td.MintRunRisks(project, loopID)",
+   "new": "\t\td.MintRunRisks(loopID, project)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "mint-runs-after-the-step-lessons",
+   "old": "\tif d.MintRunRisks != nil {\n\t\td.MintRunRisks(project, loopID)\n\t}\n\n\tsteps := a.Result.Steps\n\tpostVerdictStepLessons(a, d, loopID, steps)",
+   "new": "\tsteps := a.Result.Steps\n\tpostVerdictStepLessons(a, d, loopID, steps)\n\tif d.MintRunRisks != nil {\n\t\td.MintRunRisks(project, loopID)\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "mint-is-skipped",
+   "old": "\tif d.MintRunRisks != nil {\n\t\td.MintRunRisks(project, loopID)\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "dry-run-does-not-block-crystallization",
+   "old": "\tif a.DryRun || a.Result.Status != \"done\" || len(steps) == 0 {",
+   "new": "\tif a.Result.Status != \"done\" || len(steps) == 0 {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "only-a-done-status-is-refused",
+   "old": "\tif a.DryRun || a.Result.Status != \"done\" || len(steps) == 0 {",
+   "new": "\tif a.DryRun || a.Result.Status == \"done\" || len(steps) == 0 {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "empty-steps-do-not-block-crystallization",
+   "old": "\tif a.DryRun || a.Result.Status != \"done\" || len(steps) == 0 {",
+   "new": "\tif a.DryRun || a.Result.Status != \"done\" {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "verdict-gate-inverted",
+   "old": "\tif !crystallizationAllowed(d, loopID) {\n\t\treturn\n\t}",
+   "new": "\tif crystallizationAllowed(d, loopID) {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "verdict-gate-is-not-consulted",
+   "old": "\tif !crystallizationAllowed(d, loopID) {\n\t\treturn\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-status-is-the-runs-own",
+   "old": "\t\tLoopStatus:    \"done\",",
+   "new": "\t\tLoopStatus:    a.Result.Status,",
+   "equivalent": "the skill gate three lines up returns unless Status == \"done\", so the literal and the field are the same string on every input that reaches this line"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-project-ignores-the-keyword",
+   "old": "\t\tProject:       project,",
+   "new": "\t\tProject:       a.Result.Project,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-loses-the-adapter",
+   "old": "\t\tAdapter:       a.Adapter,",
+   "new": "\t\tAdapter:       nil,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-loses-verbose",
+   "old": "\t\tVerbose:       a.Verbose,",
+   "new": "\t\tVerbose:       false,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-always-synthesizes",
+   "old": "\t\tHadNoMatching: a.Result.HadNoMatchingSkill,",
+   "new": "\t\tHadNoMatching: true,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-never-synthesizes",
+   "old": "\t\tHadNoMatching: a.Result.HadNoMatchingSkill,",
+   "new": "\t\tHadNoMatching: false,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-gets-the-project-as-its-loop-id",
+   "old": "\t\tLoopID:        loopID,",
+   "new": "\t\tLoopID:        project,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "crystallize-gets-the-goal-as-its-status",
+   "old": "\t\tGoal:          a.Result.Goal,",
+   "new": "\t\tGoal:          a.Result.Status,"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "missing-extractor-is-silent",
+   "old": "\t\td.warnf(\"deferred lesson extraction unavailable: %s\", errImport)\n\t\treturn",
+   "new": "\t\treturn"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "import-warning-uses-the-per-loop-wording",
+   "old": "\t\td.warnf(\"deferred lesson extraction unavailable: %s\", errImport)",
+   "new": "\t\td.warnf(\"deferred lesson extraction failed: %s\", errImport)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "import-warning-is-an-info-line",
+   "old": "\t\td.warnf(\"deferred lesson extraction unavailable: %s\", errImport)",
+   "new": "\t\td.info(\"deferred lesson extraction unavailable: %s\", errImport)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "this-loop-is-extracted-before-the-extras",
+   "old": "\tids := append(append([]string{}, a.ExtraLoopIDs...), loopID)",
+   "new": "\tids := append([]string{loopID}, a.ExtraLoopIDs...)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "extras-are-not-extracted",
+   "old": "\tids := append(append([]string{}, a.ExtraLoopIDs...), loopID)",
+   "new": "\tids := []string{loopID}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "this-loop-is-not-extracted",
+   "old": "\tids := append(append([]string{}, a.ExtraLoopIDs...), loopID)",
+   "new": "\tids := append([]string{}, a.ExtraLoopIDs...)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "an-empty-id-reaches-the-extractor",
+   "old": "\t\tif id == \"\" || skip[id] {\n\t\t\tcontinue\n\t\t}",
+   "new": "\t\tif skip[id] {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-skip-set-does-not-filter-the-lesson-loop",
+   "old": "\t\tif id == \"\" || skip[id] {\n\t\t\tcontinue\n\t\t}",
+   "new": "\t\tif id == \"\" {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-failing-loop-ends-the-lesson-half",
+   "old": "\t\t\td.warnf(\"deferred lesson extraction failed for loop %s: %s\",\n\t\t\t\tid, err)\n\t\t}",
+   "new": "\t\t\td.warnf(\"deferred lesson extraction failed for loop %s: %s\",\n\t\t\t\tid, err)\n\t\t\treturn\n\t\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "per-loop-failure-is-silent",
+   "old": "\t\tif err := d.ExtractDeferredLessons(id, a.Adapter, a.DryRun); err != nil {\n\t\t\td.warnf(\"deferred lesson extraction failed for loop %s: %s\",\n\t\t\t\tid, err)\n\t\t}",
+   "new": "\t\t_ = d.ExtractDeferredLessons(id, a.Adapter, a.DryRun)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "per-loop-warning-swaps-id-and-error",
+   "old": "\t\t\td.warnf(\"deferred lesson extraction failed for loop %s: %s\",\n\t\t\t\tid, err)",
+   "new": "\t\t\td.warnf(\"deferred lesson extraction failed for loop %s: %s\",\n\t\t\t\terr, id)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "every-loop-is-extracted-as-this-one",
+   "old": "\t\tif err := d.ExtractDeferredLessons(id, a.Adapter, a.DryRun); err != nil {",
+   "new": "\t\tif err := d.ExtractDeferredLessons(loopID, a.Adapter, a.DryRun); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "lesson-extraction-never-hears-about-dry-run",
+   "old": "\t\tif err := d.ExtractDeferredLessons(id, a.Adapter, a.DryRun); err != nil {",
+   "new": "\t\tif err := d.ExtractDeferredLessons(id, a.Adapter, false); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "lesson-extraction-loses-the-adapter",
+   "old": "\t\tif err := d.ExtractDeferredLessons(id, a.Adapter, a.DryRun); err != nil {",
+   "new": "\t\tif err := d.ExtractDeferredLessons(id, nil, a.DryRun); err != nil {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-run-in-a-dry-run",
+   "old": "\tif len(steps) == 0 || a.DryRun {\n\t\treturn\n\t}",
+   "new": "\tif len(steps) == 0 {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-run-with-no-steps",
+   "old": "\tif len(steps) == 0 || a.DryRun {\n\t\treturn\n\t}",
+   "new": "\tif a.DryRun {\n\t\treturn\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-failure-is-a-warning",
+   "old": "\t\td.debugf(\"post-verdict step-lesson extraction failed \"+\n\t\t\t\"(non-critical): %s\", err)",
+   "new": "\t\td.warnf(\"post-verdict step-lesson extraction failed \"+\n\t\t\t\"(non-critical): %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-failure-is-silent",
+   "old": "\tif err := stepLessonsAfterVerdict(a, d, loopID, steps); err != nil {\n\t\td.debugf(\"post-verdict step-lesson extraction failed \"+\n\t\t\t\"(non-critical): %s\", err)\n\t}",
+   "new": "\t_ = stepLessonsAfterVerdict(a, d, loopID, steps)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-failure-drops-the-non-critical-note",
+   "old": "\t\td.debugf(\"post-verdict step-lesson extraction failed \"+\n\t\t\t\"(non-critical): %s\", err)",
+   "new": "\t\td.debugf(\"post-verdict step-lesson extraction failed: %s\", err)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-guard-ignores-the-ledger",
+   "old": "\tif d.ExtractStepLessons == nil || d.LoadOutcomeByLoopID == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.ExtractStepLessons == nil {\n\t\treturn errImport\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-guard-ignores-the-extractor",
+   "old": "\tif d.ExtractStepLessons == nil || d.LoadOutcomeByLoopID == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.LoadOutcomeByLoopID == nil {\n\t\treturn errImport\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lesson-guard-is-silent",
+   "old": "\tif d.ExtractStepLessons == nil || d.LoadOutcomeByLoopID == nil {\n\t\treturn errImport\n\t}",
+   "new": "\tif d.ExtractStepLessons == nil || d.LoadOutcomeByLoopID == nil {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-missing-row-extracts-step-lessons",
+   "old": "\tif !found {\n\t\treturn nil\n\t}",
+   "new": "\tif found && false {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "only-a-missing-row-extracts-step-lessons",
+   "old": "\tif !found {\n\t\treturn nil\n\t}",
+   "new": "\tif found {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "learnable-rows-extract-step-lessons",
+   "old": "\tif learnable {\n\t\treturn nil\n\t}",
+   "new": "\tif !learnable {\n\t\treturn nil\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "every-row-extracts-step-lessons",
+   "old": "\tif learnable {\n\t\treturn nil\n\t}\n",
+   "new": "\t_ = learnable\n"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-load-failure-does-not-stop-the-step-half",
+   "old": "\trow, found, err := d.LoadOutcomeByLoopID(loopID)\n\tif err != nil {\n\t\treturn err\n\t}",
+   "new": "\trow, found, _ := d.LoadOutcomeByLoopID(loopID)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-are-not-agenda",
+   "old": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)",
+   "new": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"\", a.Adapter,\n\t\tloopID, a.DryRun)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-lose-the-goal",
+   "old": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)",
+   "new": "\treturn d.ExtractStepLessons(\"\", steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-lose-the-adapter",
+   "old": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)",
+   "new": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", nil,\n\t\tloopID, a.DryRun)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-never-hear-about-dry-run",
+   "old": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)",
+   "new": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, false)",
+   "equivalent": "postVerdictStepLessons returns when a.DryRun, so dry_run is false on every input that reaches the call — Python passes it anyway and so does the port"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "step-lessons-get-no-steps",
+   "old": "\treturn d.ExtractStepLessons(a.Result.Goal, steps, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)",
+   "new": "\treturn d.ExtractStepLessons(a.Result.Goal, nil, \"agenda\", a.Adapter,\n\t\tloopID, a.DryRun)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-missing-ledger-blocks-crystallization",
+   "old": "func crystallizationAllowed(d DeferredDeps, loopID string) bool {\n\tif d.LoadOutcomeByLoopID == nil {\n\t\treturn true\n\t}",
+   "new": "func crystallizationAllowed(d DeferredDeps, loopID string) bool {\n\tif d.LoadOutcomeByLoopID == nil {\n\t\treturn false\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "an-unreadable-ledger-fails-closed",
+   "old": "\tif err != nil || !found {\n\t\treturn true\n\t}",
+   "new": "\tif err != nil || !found {\n\t\treturn false\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-missing-row-fails-closed",
+   "old": "\tif err != nil || !found {\n\t\treturn true\n\t}",
+   "new": "\tif err != nil {\n\t\treturn true\n\t}\n\tif !found {\n\t\treturn false\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "a-row-without-a-verdict-field-fails-closed",
+   "old": "\tachieved, ok := row.Get(\"goal_achieved\")\n\tif !ok {\n\t\treturn true\n\t}",
+   "new": "\tachieved, ok := row.Get(\"goal_achieved\")\n\tif !ok {\n\t\treturn false\n\t}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-first-gate-fires-on-achieved",
+   "old": "\tif isFalse(achieved) {",
+   "new": "\tif isTrue(achieved) {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "not-achieved-without-a-source-fails-closed",
+   "old": "\t\tsource, ok := row.Get(\"goal_verdict_source\")\n\t\tif !ok {\n\t\t\treturn true\n\t\t}\n\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))",
+   "new": "\t\tsource, ok := row.Get(\"goal_verdict_source\")\n\t\tif !ok {\n\t\t\treturn false\n\t\t}\n\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-first-gate-logs-and-allows",
+   "old": "\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))\n\t\treturn false",
+   "new": "\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))\n\t\treturn true"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-first-gate-is-silent",
+   "old": "\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))\n\t\treturn false",
+   "new": "\t\t_ = source\n\t\treturn false"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-first-gate-swaps-loop-and-source",
+   "old": "\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))",
+   "new": "\t\t\t\"not-achieved (%s)\", pyval.Str(source), loopID)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-first-gate-is-a-warning",
+   "old": "\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))",
+   "new": "\t\td.warnf(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"not-achieved (%s)\", loopID, pyval.Str(source))"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-trust-gate-does-not-need-a-verdict",
+   "old": "\tif isTrue(achieved) && trust != record.VerdictTrustFull {",
+   "new": "\tif trust != record.VerdictTrustFull {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-trust-gate-fires-on-full-trust",
+   "old": "\tif isTrue(achieved) && trust != record.VerdictTrustFull {",
+   "new": "\tif isTrue(achieved) && trust == record.VerdictTrustFull {"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-trust-gate-reads-an-empty-row",
+   "old": "\ttrust := record.VerdictTrust(objToMap(row))",
+   "new": "\ttrust := record.VerdictTrust(nil)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-trust-gate-logs-and-allows",
+   "old": "\t\t\tpyval.Str(source))\n\t\treturn false\n\t}\n\treturn true",
+   "new": "\t\t\tpyval.Str(source))\n\t}\n\treturn true"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "the-trust-gate-swaps-trust-and-source",
+   "old": "\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"achieved but verdict trust is %s (source %s)\", loopID, trust,\n\t\t\tpyval.Str(source))",
+   "new": "\t\td.info(\"deferred skill crystallization skipped — loop %s judged \"+\n\t\t\t\"achieved but verdict trust is %s (source %s)\", loopID,\n\t\t\tpyval.Str(source), trust)"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "everything-is-blocked",
+   "old": "\t\t\tpyval.Str(source))\n\t\treturn false\n\t}\n\treturn true\n}",
+   "new": "\t\t\tpyval.Str(source))\n\t\treturn false\n\t}\n\treturn false\n}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "is-true-accepts-any-present-value",
+   "old": "func isTrue(v any) bool {\n\tb, ok := v.(bool)\n\treturn ok && b\n}",
+   "new": "func isTrue(v any) bool {\n\t_, ok := v.(bool)\n\treturn ok\n}",
+   "equivalent": "the first gate consumes every bool False (it returns on both of its arms), so isTrue is only ever called with a value that is not the False singleton, and `ok` and `ok && b` agree there"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "is-false-treats-a-non-bool-as-false",
+   "old": "func isFalse(v any) bool {\n\tb, ok := v.(bool)\n\treturn ok && !b\n}",
+   "new": "func isFalse(v any) bool {\n\tb, _ := v.(bool)\n\treturn !b\n}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "is-false-is-is-true",
+   "old": "func isFalse(v any) bool {\n\tb, ok := v.(bool)\n\treturn ok && !b\n}",
+   "new": "func isFalse(v any) bool {\n\tb, ok := v.(bool)\n\treturn ok && b\n}"
+  },
+  {
+   "file": "internal/loopfinalize/deferred.go",
+   "name": "obj-to-map-drops-the-values",
+   "old": "\t\tm[f.Key] = f.Val",
+   "new": "\t\tm[f.Key] = nil"
+  }
+ ]
+}
