@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os/exec"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
@@ -82,6 +84,55 @@ func TestIntMatchesCPython(t *testing.T) {
 		{"a signed numeric string", "+7", "'+7'", false},
 		{"a negatively signed numeric string", "-7", "'-7'", false},
 		{"an underscored numeric string", "1_0", "'1_0'", false},
+
+		// int(str) reads DECIMAL DIGITS, not ASCII ones, and skips a
+		// whitespace set of its own. Both were wrong here until
+		// loopparallel's MARO_STEP_TIMEOUT differential asked -- and the
+		// fix is in this file, so the rows that pin it belong in this
+		// file too. A guard that lives only in the caller that found it
+		// is the same shape as the finding (L15).
+		{"an arabic-indic numeric string", "\u0660\u0666\u0660",
+			"'\\u0660\\u0666\\u0660'", false},
+		{"a fullwidth numeric string", "\uff16\uff10", "'\\uff16\\uff10'", false},
+		{"two scripts in one number", "6\u0660", "'6\\u0660'", false},
+		{"mathematical bold digits, five blocks in one Go range",
+			"\U0001d7d2\U0001d7d0", "'\\U0001d7d2\\U0001d7d0'", false},
+		// U+1D7CE..U+1D7FF is the ONE Nd range Go packs more than one
+		// alphabet into — 50 code points, five zero-to-nines. Bold sits at
+		// offset 0..9 and cannot separate `(c-Lo)%10` from `c-Lo`; these
+		// are DOUBLE-STRUCK (offset 10..19) and MONOSPACE (offset 40..49),
+		// where the two spellings answer 12 and 2, 42 and 2.
+		{"double-struck digits, the SECOND block in that range",
+			"\U0001d7da\U0001d7d8", "'\\U0001d7da\\U0001d7d8'", false},
+		{"monospace digits, the LAST block in it",
+			"\U0001d7fa\U0001d7f8", "'\\U0001d7fa\\U0001d7f8'", false},
+		// The SUPPLEMENT: Go ships Unicode 15.0.0 and this interpreter has
+		// 16.0.0, so these are digits to int() and absent from Go's Nd
+		// table entirely. Reading them takes pytext's seven hand-carried
+		// ranges — a census over all 760 decimal digits found this on its
+		// first run, after a version of decimalValue that walked Go's
+		// table alone had already passed everything else in this file.
+		{"an OL ONAL digit, Unicode 16 and not in Go's table",
+			"\U0001e5f4\U0001e5f1", "'\\U0001e5f4\\U0001e5f1'", false},
+		{"a GARAY digit, the first supplement block",
+			"\U00010d44", "'\\U00010d44'", false},
+		{"an OUTLINED digit", "\U0001ccf7", "'\\U0001ccf7'", false},
+		{"a supplement digit next to an ASCII one",
+			"4\U00016d75", "'4\\U00016d75'", false},
+		{"an underscore between digits of DIFFERENT scripts",
+			"\u0660_\u0666", "'\\u0660_\\u0666'", false},
+		{"superscript two is a digit to isdigit() and not to int()",
+			"\u00b2", "'\\u00b2'", false},
+		{"a NO-BREAK SPACE is skipped", "\u00a07", "'\\u00a07'", false},
+		{"a LINE SEPARATOR is skipped", "\u20287", "'\\u20287'", false},
+		// THE four. str.strip() removes them and int() does not, which is
+		// why reaching for pytext.Strip here was wrong.
+		{"FILE SEPARATOR is NOT skipped", "\u001c7", "'\\u001c7'", false},
+		{"GROUP SEPARATOR is NOT skipped", "\u001d7", "'\\u001d7'", false},
+		{"RECORD SEPARATOR is NOT skipped", "\u001e7", "'\\u001e7'", false},
+		{"UNIT SEPARATOR is NOT skipped", "\u001f7", "'\\u001f7'", false},
+		{"...and one TRAILING, which strip() would also have taken",
+			"7\u001f", "'7\\u001f'", false},
 		{"prose", "high", "'high'", false},
 		{"a decimal string", "7.5", "'7.5'", false},
 		{"an exponent string", "7e2", "'7e2'", false},
@@ -1040,5 +1091,80 @@ func TestIntInvalidLiteralMessageIsTruncatedTheWayCPythonTruncatesIt(t *testing.
 					want[i].Msg, len([]rune(want[i].Msg)))
 			}
 		})
+	}
+}
+
+// TestGosSpaceSetIsIntsSpaceSet is the check that lets intStrip be
+// strings.TrimSpace instead of a hand-copied table of 25 code points.
+//
+// It censuses BOTH sides over the whole code space — CPython for the
+// characters int() skips, Go for unicode.IsSpace — and fails naming the
+// code point if they ever part. The equality is a coincidence of two
+// standards agreeing today, not a guarantee; a table would rot silently
+// at the next Unicode revision, and this goes red instead.
+//
+// It also re-measures the FOUR that separate int()'s set from
+// str.strip()'s, so the claim in intStrip's comment is a test rather
+// than a sentence (L52: a rationale recorded as deliberate is still a
+// claim).
+func TestGosSpaceSetIsIntsSpaceSet(t *testing.T) {
+	// The probe SURROUNDS the digit: `int(ch + "5" + ch) == 5` is true
+	// for whitespace and for nothing else. `int(ch + "5")` alone also
+	// accepts the sign characters and the digit zero (int("05") is 5),
+	// which is how the first draft of this test reported U+002B as
+	// whitespace CPython skips.
+	out, perr := exec.Command("python3", "-c",
+		"import json\n"+
+			"skips, strips = [], []\n"+
+			"for cp in range(0x110000):\n"+
+			"    ch = chr(cp)\n"+
+			"    if ch.strip() == '': strips.append(cp)\n"+
+			"    try:\n"+
+			"        if int(ch + '5' + ch) == 5: skips.append(cp)\n"+
+			"    except Exception: pass\n"+
+			"print(json.dumps([skips, strips]))").Output()
+	if perr != nil {
+		if _, lookErr := exec.LookPath("python3"); lookErr != nil {
+			t.Skipf("python3 unavailable: %v", lookErr)
+		}
+		t.Fatalf("the CPython probe could not run: %v", perr)
+	}
+	var got [][]int
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("probe output was not JSON: %v", err)
+	}
+	skips, strips := map[rune]bool{}, map[rune]bool{}
+	for _, cp := range got[0] {
+		skips[rune(cp)] = true
+	}
+	for _, cp := range got[1] {
+		strips[rune(cp)] = true
+	}
+	if len(skips) == 0 || len(strips) == 0 {
+		t.Fatal("the probe found no whitespace at all; it measured nothing")
+	}
+
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if unicode.IsSpace(r) != skips[r] {
+			t.Fatalf("U+%04X: go unicode.IsSpace=%v, int() skips it=%v — "+
+				"intStrip is strings.TrimSpace ONLY while these agree. "+
+				"Restore the explicit set in pyint.go and list this code "+
+				"point in it.", r, unicode.IsSpace(r), skips[r])
+		}
+	}
+
+	// The four, by name. If a future CPython starts skipping them too,
+	// intStrip's whole reason to exist as a named thing is gone and the
+	// comment above it is wrong.
+	for _, r := range []rune{0x1c, 0x1d, 0x1e, 0x1f} {
+		if !strips[r] || skips[r] {
+			t.Errorf("U+%04X: str.strip removes it=%v, int() skips it=%v; "+
+				"want true/false — the two predicates have converged and "+
+				"intStrip's comment no longer describes CPython", r, strips[r], skips[r])
+		}
+	}
+	if n := len(strips) - len(skips); n != 4 {
+		t.Errorf("str.strip's set is %d wider than int()'s, want 4 "+
+			"(strip=%d int=%d)", n, len(strips), len(skips))
 	}
 }

@@ -42,6 +42,43 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### PYTHON-side: four things `loop_parallel.py` does quietly (FOUND 2026-08-27, loopparallel differential)
+
+All four reproduced faithfully in `internal/loopparallel` and fixtured
+there. **Filed, not fixed** — the Go port reproduces Python, and each of
+these is a decision for the Python side.
+
+**1. A dependency tag naming a step that does not exist strands that step
+forever, silently.** `remaining_deps` is built from `deps.get(i, set())`
+with no bound check, so `[after:9]` on a three-step plan leaves `{9}` in
+step 2's set, 9 never completes, step 2 is never submitted, and it comes
+back `dag: upstream dep did not complete`. Nothing raises and nothing
+logs. A self-dependency (`deps[2] = {2}`) and a two-step cycle do the
+same. The tags are written by `parse_dependencies` from planner output,
+so this is reachable from a plan an LLM wrote.
+
+**2. `dag timeout (Ns)` is usually overwritten before anyone sees it.**
+The timeout arm fills every in-flight step and `break`s — but the break
+leaves the `while`, not the `with ThreadPoolExecutor(...)`, whose exit is
+`shutdown(wait=True)`. The in-flight step runs to completion and
+`_run_one` writes its own result over the filler before the `return`.
+So the sentence survives only for a step that never finishes at all, and
+its DEPENDENTS still say `dag: upstream dep did not complete` about an
+upstream that visibly succeeded. `_run_steps_parallel` does not share
+this: only the main thread writes there, so its filler is final.
+
+**3. The post-step security scan runs on the fan-out path and NOT on the
+DAG path.** `_run_steps_parallel._run_one` calls
+`security.scan_external_content` on a done step and sanitizes in place;
+`_run_steps_dag._run_one` has no such block. A DAG step's result reaches
+`completed_context` of its dependents unscanned.
+
+**4. A malformed `MARO_STEP_TIMEOUT` kills the fan-out.**
+`int(os.environ.get("MARO_STEP_TIMEOUT", "600"))` is uncaught in both
+schedulers, so `10m` or `60s` raises `ValueError` before a single step is
+submitted rather than falling back to 600. (int() is also wider than it
+looks: `"6_0"`, `" 60 "` and `"٦٠"` all read as 60.)
+
 ### Go port: `loop_init.py`'s three stateful halves are unported by design (FILED 2026-08-27, loopinit tranche)
 
 `internal/loopinit` ports `_budget_gate` and `_coerce_cap` — the pure

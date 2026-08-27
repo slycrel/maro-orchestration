@@ -369,12 +369,16 @@ func hbCases() []hbCase {
 		}), nil)
 
 	// --- the cadence resolvers --------------------------------------------
-	// int() accepts far more than an int, and the two resolvers disagree at
-	// most of it. "١٧" is deliberately absent — see the pinned divergence
-	// below.
+	// int() accepts far more than an int, and the two resolvers agree at
+	// all of it. The Arabic-Indic row was a PINNED DIVERGENCE here until
+	// 2026-08-27, when pyval's int lane grew Unicode decimal digits; the
+	// pin fired on the day of the fix and this is where its fixture
+	// landed. The U+001F row is the other half of that fix: str.strip()
+	// removes it and int() does not.
 	vals := []any{nil, 0, 1, 5, -3, true, false, 2.9, -2.9, "7", "  7  ",
 		"abc", "", []any{}, map[string]any{}, "0x10", "1_0", "+4", "9.5",
-		"  -8  ", " 1_0 "}
+		"  -8  ", " 1_0 ", "\u0661\u0667", "\uff11\uff17", "\u001f17",
+		"\u00a017"}
 	for _, v := range vals {
 		v := v
 		cs = append(cs, hbCase{
@@ -510,32 +514,6 @@ func sameJSON(t *testing.T, a, b string) bool {
 		t.Fatalf("python side is not JSON: %v (%s)", err, b)
 	}
 	return fmt.Sprintf("%#v", x) == fmt.Sprintf("%#v", y)
-}
-
-// TestNonAsciiDigitCadenceIsANamedDivergence pins the one input in the
-// resolver's reachable domain where this port and CPython disagree.
-//
-// CPython's int() accepts any Unicode decimal digit, so
-// `_resolve_backlog_every("١٧")` is 17 — measured. pyval.intFromString
-// accepts ASCII only and raises ValueError, which the blanket catch turns
-// into the DEFAULT. So the Go answer is 5 where Python's is 17.
-//
-// This is filed rather than fixed: the fix belongs in pyval's int lane, not
-// in a workaround here, and it has consumers waiting. When it lands, this
-// test goes RED and is the thing that tells you.
-func TestNonAsciiDigitCadenceIsANamedDivergence(t *testing.T) {
-	const arabicIndic17 = "\u0661\u0667"
-	if got := ResolveBacklogEvery(arabicIndic17, nil); got != DefaultBacklogEvery {
-		t.Fatalf("the non-ascii-digit divergence changed: backlog(%q) = %d, "+
-			"was %d (CPython answers 17). If pyval's int lane grew Unicode "+
-			"digits, delete this test and add the fixture to hbCases",
-			arabicIndic17, got, DefaultBacklogEvery)
-	}
-	// Anti-vacuity: the ASCII lane must still work, or this test would pass
-	// against a resolver that defaults on everything.
-	if got := ResolveBacklogEvery("17", nil); got != 17 {
-		t.Fatalf("backlog(%q) = %d, want 17", "17", got)
-	}
 }
 
 // TestResolverConfigLaneIsNotTheExplicitLane covers the branch every

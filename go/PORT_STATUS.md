@@ -70,13 +70,13 @@ reading like one.
 | `pack.py` | 1355 | `cmd/maro`, `internal/pack` |
 | `knowledge_lens.py` | 1342 | `internal/record`, `internal/scope` |
 | `captains_log.py` | 1327 | `internal/record` |
-| `loop_blocked.py` | 1287 | `internal/loop` |
+| `loop_blocked.py` | 1287 | `internal/loop`, `internal/looptypes` |
 | `memory.py` | 1233 | `internal/record` |
 | `navigator_shadow.py` | 1231 | `internal/scope` |
 | `evolver.py` | 1183 | `internal/evolver`, `internal/record` |
 | `provenance.py` | 1156 | `internal/now` |
 | `interrupt.py` | 1128 | `internal/artifactcheck`, `internal/loop` |
-| `loop_post_step.py` | 1127 | `internal/loop` |
+| `loop_post_step.py` | 1127 | `internal/loop`, `internal/looptypes` |
 | `inspector.py` | 1066 | `internal/inspector` |
 | `persona.py` | 1060 | `internal/persona` |
 | `recall.py` | 1005 | `internal/recall` |
@@ -92,6 +92,7 @@ reading like one.
 | `graduation.py` | 698 | `internal/graduation` |
 | `system_health.py` | 693 | `internal/syshealth` |
 | `checkpoint.py` | 684 | `internal/artifactcheck` |
+| `loop_parallel.py` | 684 | `internal/loopparallel`, `internal/looptypes` |
 | `loop_types.py` | 659 | `internal/looptypes` |
 | `observe.py` | 655 | `internal/evolver`, `internal/loop` |
 | `sheriff.py` | 641 | `internal/sheriff` |
@@ -127,9 +128,9 @@ reading like one.
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**76 modules / 78671 lines** carry a declaration. **107 modules / 54059 lines** do not.
+**77 modules / 79355 lines** carry a declaration. **106 modules / 53375 lines** do not.
 
-### The undeclared queue — 107 modules, 54059 lines, UNJUDGED
+### The undeclared queue — 106 modules, 53375 lines, UNJUDGED
 
 | Python module | lines |
 |---|---:|
@@ -152,7 +153,6 @@ reading like one.
 | `delta_replay.py` | 729 |
 | `discretion_readout.py` | 710 |
 | `memory_backends.py` | 689 |
-| `loop_parallel.py` | 684 |
 | `conductor.py` | 676 |
 | `hooks.py` | 662 |
 | `map_lens.py` | 644 |
@@ -248,9 +248,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **76 of 183 modules (78,671 of 132,730
-> lines, 59%) are named by a Go production package. The other
-> 107 have no declaration either way.**
+> **77 of 183 modules (79,355 of 132,730
+> lines, 60%) are named by a Go production package. The other
+> 106 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.

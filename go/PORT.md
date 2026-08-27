@@ -14787,3 +14787,191 @@ The negative-cap rows in the corpus are the other half of that honesty:
 and it is the ONLY input that separates `if _warn and _warn >= cap` from a
 bare `_warn >= cap`. Contrived and reachable — `cost_budget` is a plain
 caller argument with no validation anywhere between here and it.
+
+
+## The schedulers, and a known gap that had three pins waiting for it (2026-08-27)
+
+`internal/loopparallel` ports `_run_steps_parallel` and `_run_steps_dag`
+with the step body lifted out as a `RunFn`. Everything inside `_run_one`
+below the scheduling belongs to other tranches -- `_execute_step`,
+`_run_in_step_worktree`, `metrics.record_step_cost`, the post-step
+security scan -- and the package doc names each. `_run_parallel_batch`
+and `_run_parallel_path`, the two folds that build StepOutcomes and a
+LoopResult, are slice 2.
+
+The differential drives the REAL functions with two things replaced:
+`_execute_step`, and `_run_in_step_worktree`. The second replacement is
+not a convenience. That function asks `llm` for the run-scoped cwd and,
+if it is a git checkout, provisions a worktree and merges it back -- and
+a test in this port has already created a linked worktree of the maro
+repository and left an autocommit on the branch it checked out (L56, five
+sections up). It is stubbed, and the file says why at the stub.
+
+### What a step that never ran is told
+
+Six sentences, and they are the reason this is worth porting at all:
+
+	parallel execution error: %s          the step raised
+	parallel fan-out timeout (%ds)        the batch ran out of time
+	missing from fan-out results          defensive; unreachable today
+	dag execution error: %s               the step raised
+	dag timeout (%ds)                     the dag ran out of time
+	dag: upstream dep did not complete    a dep never resolved
+
+Two of the six are reachable from a plan a PLANNER wrote. A dependency
+tag naming a step that does not exist -- `[after:9]` on a three-step plan
+-- leaves `remaining_deps[2] = {9}`, and 9 never completes, so step 2 is
+never submitted and comes back with the last sentence. Nothing raises,
+nothing logs. A self-dependency and a two-step cycle do the same. All
+three are fixtured.
+
+### The timeout filler is not the last word
+
+The differential's find, and it is a shape review does not catch because
+the control flow is right and the SCOPE is wrong. `_run_steps_dag`
+handles its timeout by filling every in-flight step with
+`dag timeout (Ns)` and then `break`-ing -- but the break leaves the
+`while`, not the `with ThreadPoolExecutor(...)`, and that block's exit is
+`shutdown(wait=True)`. Every in-flight step therefore runs to completion,
+and `_run_one` writes its own result BEFORE the return statement is
+reached, overwriting the row that was just put there for it.
+
+So `dag timeout` survives only for a step that never finishes at all, or
+one that raises. Its DEPENDENTS, meanwhile, keep
+`dag: upstream dep did not complete` -- a plan where the upstream visibly
+succeeded and the downstream says it did not.
+
+`_run_steps_parallel` does not share this: only the main thread writes
+`outcomes_by_idx`, from `f.result()`, so its own filler is final. Two
+paths, one clock, opposite answers. The port had the parallel behaviour
+in both places until a fixture with a three-second sleep and a
+one-second `MARO_STEP_TIMEOUT` said otherwise.
+
+### An empty plan raises on one path and not the other
+
+`_run_steps_parallel` passes `min(max_workers, len(steps))` to the pool
+and `ThreadPoolExecutor` refuses a `max_workers` of zero -- so an EMPTY
+step list raises `ValueError` rather than returning an empty list, and so
+does a configured `parallel_fan_out` of 0. `_run_steps_dag` passes
+`max_workers` through unclamped, so the same empty plan returns `[]`.
+Both are pinned; neither is fixed, because this port reproduces Python.
+
+### `int()` reads more digits than a port assumed, and three pins knew it
+
+`MARO_STEP_TIMEOUT` is read with `int(os.environ.get(..., "600"))` and
+nothing catches what `int()` raises, so a value of `"10m"` does not fall
+back to the default -- it kills the fan-out before a step is submitted.
+Building the corpus for that expression found two defects in
+`pyval.intFromString`, which is one of this port's most-used helpers:
+
+1. it scanned BYTES for `'0'..'9'`, where CPython converts through
+   `Py_UNICODE_TODECIMAL` and accepts every character with a decimal
+   digit value. `int("٦٠")` is 60, `int("６０")` is 60, and `int("6٠")`
+   mixes two scripts in one number and is also 60.
+2. it stripped with `pytext.Strip`, which is `str.strip()`'s rule. It is
+   not `int()`'s. Measured over all 1.1M code points: `str.strip()`
+   removes 29 characters and `int()` skips 25 -- the same set MINUS
+   U+001C..U+001F, the four ASCII information separators. So
+   `int("\x1c60")` raises where `"\x1c60".strip()` is `"60"`.
+
+Those four code points are the same ones that separate Go's `\s` from
+Python's in this port's regexes. This is their fourth appearance and the
+first where they divide two PYTHON predicates rather than the two
+languages.
+
+The first defect was a FILED known gap with pin tests in three packages.
+All three fired on the run that closed it, and each said what to do:
+
+	internal/heartbeat   TestNonAsciiDigitCadenceIsANamedDivergence
+	internal/introspect  TestNonASCIIDigitIsAKnownGap
+	internal/syshealth   TestACounterInNonASCIIDigitsIsRefusedWhereCPythonReadsIt
+
+Each pin is deleted and its fixture moved into the table beside it, with
+a U+001F row alongside for the half of the fix that still refuses. The
+residual note at `pyval/pyint.go` is rewritten to say it is closed.
+
+That is the argument for pinning an accepted residual rather than
+describing one, made concrete: syshealth's prose had been true for five
+review rounds and would have stayed on the page for five more.
+
+### A field with no reader
+
+`looptypes.LoopContext.StepCallback` was declared `func(StepOutcome)`.
+The Python signature is `callable(step_num, step_text, summary, status)`
+(agent_loop.py:161) and no site in the tree uses the other shape. Nothing
+caught it because the field has no Go caller either -- a field is two
+claims and this one had no reader to contradict the writer (L16). Fixed
+before building on it, with the three call sites listed at the
+declaration, because the THIRD argument is not a summary at all of them:
+
+	loop_post_step.py:1123  step_summary          (the docstring's name)
+	loop_blocked.py:540     stuck_reason or "blocked"
+	loop_parallel.py:388    result[:120]          (the raw step output)
+
+PYTHON-side inconsistency, filed not fixed: a parallel step's live
+channel line shows raw result text where a sequential step's shows a
+summary.
+
+### The obvious helper was the untested one
+
+`_drain_pending_context` is eleven lines, pure, and had no differential.
+Five of the battery's mutations survived it — including one that swapped
+`drain()` for a peek, which returns the same two strings and leaves the
+batch to be delivered to the NEXT boundary as well. A helper being
+obvious is not coverage, and a comparison of return values alone cannot
+see a consume: `TestDrainPendingContextMatchesCPython` asserts what is
+left pending on both sides as well as what came back.
+
+The corpus is twelve rows, and the two that matter most are the ones
+about ORDER of operations: `drop_source("time")` runs before the empty
+check, so a ledger holding only a `[time]` contribution renders nothing
+and hands back the bare ancestry — a wall-clock claim never replays,
+because it is stale by the time a batch drains it.
+
+### Go's Unicode table is a revision behind CPython's, and the fix was already written
+
+Making `pyval.Int` read Unicode digits meant recovering a digit's VALUE,
+which Go does not export. The first version walked `unicode.Nd`'s ranges
+directly and passed every fixture in `pyint_diff_test.go`. Then a census
+comparing CPython's Nd against the Go helper, code point by code point,
+failed on its first run at U+1E5F4.
+
+Go ships Unicode 15.0.0; the interpreter on this box has 16.0.0. Eighty
+code points in seven blocks — Garay, Myanmar Pao, Eastern Pwo Karen,
+Sunuwar, Gurung Khema, Kirat Rai, Outlined, Ol Onal — are digits to
+`int()` and absent from Go's table entirely.
+
+`internal/pytext` has carried exactly those seven ranges, and a sweep
+that re-derives them from the interpreter, since the `\w` supplement
+work: `pytext.DecimalDigit` exists for `record`'s float() coercion and
+`playbook`'s alarm dates. So the answer was not to fix the new table but
+to DELETE it — `decimalValue` is four lines calling the helper, and the
+two guards it had grown that no input could reach went with it (L14, and
+the census is what made the ninth copy visible before it shipped).
+
+### The battery moved into the repo, because one of them damaged the tree
+
+The mutation battery for this chunk hit its runner's ten-minute cap
+mid-row and was killed. Python does not run `finally` blocks for a
+default-disposition signal, so the row it was on stayed on disk:
+`if nWorkers < 0` where the file says `<= 0`. The next five runs of
+`internal/loopparallel` deadlocked identically — an unbuffered semaphore
+and three senders — and the first three explanations were all wrong,
+including a `git status` that showed the package as untracked and
+therefore showed nothing.
+
+`gosrc.py` has carried `install_restore_handlers` since the week
+`mutate-wraps` did the same thing to `provenance.go`. The batteries never
+imported it, because each one was a throwaway script in a scratchpad
+directory. That is L13 pointed at the tooling: a correct fix, at the one
+site that had the evidence.
+
+`go/tools/mutate-subs.py` is the class fix — one runner, gosrc's
+signal-safe restore, a `--only` flag, a matched-count check that EXITS
+rather than warns, and a per-mutation package set (a shared helper's
+mutation has to be tested against every package that can see it, or it
+reports SURVIVED because its killers were never compiled). The spec lives
+in `go/tools/batteries/*.json`, so a later round can re-run what an
+earlier round converged instead of re-deriving it. This chunk's is
+`loopparallel.json`, 46 mutations across the schedulers and pyval's two
+widened alphabets.

@@ -951,7 +951,26 @@ type LoopContext struct {
 	DirectorBudgetCeiling int
 
 	// StepCallback is Python's Optional[Callable]; nil is None.
-	StepCallback func(StepOutcome)
+	//
+	// The signature is agent_loop.py:161's, spelled out:
+	// `callable(step_num, step_text, summary, status)`. It was declared
+	// here as `func(StepOutcome)` -- a shape no caller in the tree uses,
+	// and nothing caught it because the field has no Go caller yet
+	// either. A field is TWO claims and this one had no reader to
+	// contradict the writer (L16).
+	//
+	// The THIRD argument is not a summary at every site, which is worth
+	// knowing before a Go caller picks one:
+	//
+	//	loop_post_step.py:1123  step_summary          (the docstring's name)
+	//	loop_blocked.py:540     stuck_reason or "blocked"
+	//	loop_parallel.py:388    result[:120]          (the raw step output)
+	//
+	// The consumer is handle.py's channel live update, which renders it
+	// as a summary line either way. PYTHON-side inconsistency, filed not
+	// fixed: a parallel step's live line shows raw result text where a
+	// sequential step's shows a summary.
+	StepCallback func(stepNum int, stepText, summary, status string)
 	// Channel is an optional ConversationChannel for mid-loop escalation.
 	Channel        any
 	InterruptQueue any

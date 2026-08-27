@@ -165,28 +165,34 @@ func intFromFloat(f float64) (int, error) {
 }
 
 // intFromString is int(s) for a str: surrounding whitespace is stripped
-// with Python's own rule (str.strip removes more than Go's TrimSpace), an
-// optional sign is allowed, PEP 515 underscores may separate digits — and a
-// decimal point or an exponent is a ValueError, unlike float(). A model
-// that answers "7" is read as 7; one that answers "7.5" or "high" is not
-// read at all.
+// with int()'s OWN rule (intStrip — narrower than str.strip's), an
+// optional sign is allowed, PEP 515 underscores may separate digits, any
+// character with a decimal digit VALUE counts as a digit — and a decimal
+// point or an exponent is a ValueError, unlike float(). A model that
+// answers "7" is read as 7; one that answers "7.5" or "high" is not read
+// at all.
 //
-// Named residual: CPython also accepts non-ASCII decimal digits, so
-// int("\uff17") is 7 there and a ValueError here.
+// The named residual that used to stand here — "CPython also accepts
+// non-ASCII decimal digits, so int('\uff17') is 7 there and a ValueError
+// here" — is CLOSED (2026-08-27). It was filed as an accepted gap and
+// pinned in three packages: heartbeat's cadence, the CLI's --history,
+// and syshealth's cycle counter. All three pins fired the moment the
+// lane grew Unicode digits, which is what a known-gap pin is for.
 func intFromString(s string) (int, error) {
 	bad := func() (int, error) {
 		return 0, &PyErr{Class: "ValueError",
 			Msg: "invalid literal for int() with base 10: " +
 				Clip(Repr(s), intReprLimit)}
 	}
-	t := pytext.Strip(s)
+	t := intStrip(s)
 	if t == "" {
 		return bad()
 	}
+	r := []rune(t)
 	i := 0
 	neg := false
-	if t[0] == '+' || t[0] == '-' {
-		neg = t[0] == '-'
+	if r[0] == '+' || r[0] == '-' {
+		neg = r[0] == '-'
 		i++
 	}
 	digits := 0
@@ -200,17 +206,30 @@ func intFromString(s string) (int, error) {
 	var mag uint64
 	tooLarge := false
 	prevUnderscore := false
-	for ; i < len(t); i++ {
-		c := t[i]
+	// RUNES, not bytes. CPython converts a string digit through
+	// Py_UNICODE_TODECIMAL, which answers for every character with a
+	// DECIMAL digit value — so int("٦٠") is 60, int("６０") is 60, and
+	// int("6٠") mixes two scripts in one number and is also 60. A
+	// byte loop over '0'..'9' refuses all three, and refuses them with a
+	// ValueError that never happens in production, which is the
+	// dangerous direction: MARO_STEP_TIMEOUT is read with no except
+	// around it (loopparallel.FanoutTimeout).
+	//
+	// SUPERSCRIPT TWO is the control on the other side: str.isdigit()
+	// says yes, category No is not Nd, and int() raises.
+	for ; i < len(r); i++ {
+		c := r[i]
+		d, isDigit := decimalValue(c)
 		switch {
 		case c == '_':
 			// An underscore must sit BETWEEN digits: leading, trailing and
-			// doubled underscores are all ValueError in CPython.
+			// doubled underscores are all ValueError in CPython. The
+			// digits either side may be from different scripts.
 			if digits == 0 || prevUnderscore {
 				return bad()
 			}
 			prevUnderscore = true
-		case c >= '0' && c <= '9':
+		case isDigit:
 			prevUnderscore = false
 			digits++
 			if !tooLarge && mag > (math.MaxUint64-9)/10 {
@@ -221,7 +240,7 @@ func intFromString(s string) (int, error) {
 				tooLarge = true
 			}
 			if !tooLarge {
-				mag = mag*10 + uint64(c-'0')
+				mag = mag*10 + uint64(d)
 			}
 		default:
 			return bad()
@@ -255,6 +274,48 @@ func intFromString(s string) (int, error) {
 		return 0, ErrIntTooLarge
 	}
 	return int(mag), nil
+}
+
+// intStrip is the whitespace int() skips, and it is NOT str.strip()'s.
+//
+// Measured over all 1.1M code points on CPython 3.14.3: str.strip()
+// removes 29 characters, int() skips 25 — the same set MINUS the four
+// ASCII information separators U+001C..U+001F. So `int("\x1c60")` raises
+// where `"\x1c60".strip()` gives "60", and a port that reached for the
+// strip helper it already had (this one did) accepts a value CPython
+// refuses. Those four code points are the same ones that separate Go's
+// `\s` from Python's in this port's regexes; this is the first place
+// where they divide two PYTHON predicates rather than the two languages.
+//
+// The 25 that remain are, character for character, Go's own
+// unicode.IsSpace — measured, not assumed, and asserted every run by
+// TestGosSpaceSetIsIntsSpaceSet. So this is strings.TrimSpace and not a
+// hand-copied table: a table would rot silently at the next Unicode
+// revision, where the census goes red and names the code point.
+func intStrip(s string) string {
+	return strings.TrimSpace(s)
+}
+
+// decimalValue is Py_UNICODE_TODECIMAL: the value of a character that
+// carries one, and whether it does.
+//
+// It is pytext.DecimalDigit and NOT a table here. The first version of
+// this walked unicode.Nd's ranges directly, which is correct for Go's
+// table and wrong for CPython's: Go ships Unicode 15.0.0 and the
+// interpreter on this box has 16.0.0, so 80 code points in seven blocks
+// — Garay, Myanmar Pao, Eastern Pwo Karen, Sunuwar, Gurung Khema, Kirat
+// Rai, Outlined, Ol Onal — are digits to int() and absent from Go's Nd.
+// A census of all 760 caught it on its first run.
+//
+// pytext already carried exactly those seven ranges and a sweep that
+// re-derives them from the interpreter, for record's float() coercion
+// and playbook's alarm dates. Writing an eighth copy of the same table
+// here is the lens this port keeps closing (L14), and the version that
+// was DELETED to write this comment had already grown two guards no
+// input could reach.
+func decimalValue(c rune) (int, bool) {
+	b, ok := pytext.DecimalDigit(c)
+	return int(b - '0'), ok
 }
 
 // intMaxStrDigits is CPython's sys.get_int_max_str_digits() default.

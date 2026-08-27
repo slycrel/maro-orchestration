@@ -851,6 +851,17 @@ func syCases() []syCase {
 			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": [1], "processes": {}}`},
 		{name: "C41 a DICT cycle counter is a TypeError too",
 			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": {"a": 1}, "processes": {}}`},
+		// The lane that used to be a knowngap pin. int() reads any Unicode
+		// decimal digit, so this counter is 41 and the cycle writes 42;
+		// pyval's int lane grew that on 2026-08-27 and the pin fired the
+		// same run. U+001F is the other half of the same fix: str.strip()
+		// removes it and int() does not, so THAT one still raises.
+		{name: "C42a an arabic-indic cycle counter counts",
+			probes: `[["p1", ` + okp + `]]`,
+			prior:  `{"cycle": "\u0664\u0661", "processes": {}}`},
+		{name: "C42b a unit separator is not whitespace to int()",
+			probes: `[["p1", ` + okp + `]]`,
+			prior:  `{"cycle": "\u001f41", "processes": {}}`},
 		// bool IS an int in Python, so this does not raise: it counts 2.
 		{name: "C42 a TRUE cycle counter is an int",
 			probes: `[["p1", ` + okp + `]]`, prior: `{"cycle": true, "processes": {}}`},

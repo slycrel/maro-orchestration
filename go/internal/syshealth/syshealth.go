@@ -776,18 +776,18 @@ func RunAndPersist(ws string, decls []Declaration, cfg func() (any, error), now 
 // correctly, because pyval.reprNumber keeps an integer literal verbatim
 // rather than forcing it through an int64. Only the WRITER is bounded.
 //
-// There is a SECOND refusing lane, and it went unnamed here for five
-// rounds (r5 F3) while the first one had a table row, three paragraphs and
-// a knowngap pin. CPython's `int()` accepts any Unicode decimal digit, so
-// a snapshot whose counter is the string "٤١" reads as 41 and the cycle
-// proceeds; pyval.Int accepts ASCII only and refuses, which aborts the
-// cycle with a ValueError message and writes nothing. The residual is
-// named where it lives (pyval/pyint.go:174) and was simply absent from
-// this table — which is the failure mode a table has, since a reader
-// takes it for the list. It is a REAL input: the snapshot is an
-// operator-editable file and a string counter is already an acknowledged
-// lane (fixture C18). Now pinned in knowngap_test.go beside the int64 one,
-// so closing either fails a test.
+// There WAS a second refusing lane, and it is closed. CPython's `int()`
+// accepts any Unicode decimal digit, so a snapshot whose counter is the
+// string "٤١" reads as 41 — and pyval.Int accepted ASCII only, aborting
+// the cycle and writing nothing. It went unnamed here for five rounds
+// (r5 F3) while the first gap had a table row, three paragraphs and a
+// pin; naming it is what put a pin on it, and the pin is what fired on
+// 2026-08-27 when loopparallel's MARO_STEP_TIMEOUT differential made
+// pyval's int lane Unicode-aware. Its fixtures are C42a/C42b now.
+//
+// That is the whole argument for pinning an accepted residual rather
+// than describing one: the prose had been true for five rounds and could
+// have stayed on the page for five more.
 func nextCycle(snapshot pyval.Obj) (int, error) {
 	v, ok := snapshot.Get("cycle")
 	if !ok || !pyval.Truthy(v) {

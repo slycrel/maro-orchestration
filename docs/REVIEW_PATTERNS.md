@@ -156,7 +156,7 @@ The largest family by a wide margin. Every one of these produces a GREEN
 test suite that is evidence of nothing.
 
 ### L1 — A test reporting AGREEMENT may be testing nothing
-*instances: 69 — the most frequent single defect in the Go port*
+*instances: 70 — the most frequent single defect in the Go port*
 
 A differential that passes because both sides were skipped, both returned
 empty, or the assertion could not fail.
@@ -411,7 +411,7 @@ auto-revert guard `applied_manually=false` for a row a human had applied.
 happens to a row the constructor rejects. Silence is the wrong answer.
 
 ### L13 — A fix at the site that has the fixture is not a fix for the class
-*instances: 16*
+*instances: 17*
 
 **Canonical instance.** `dailylog.go` already carried the outcome schema
 filter, measured and correct, with a comment quoting CPython's own warning —
@@ -419,8 +419,32 @@ applied one layer too low, with the reasoning "LoadOutcomes' tolerance is
 right for its other consumers" written down. That reasoning was wrong, and
 the comment recording it had to be corrected in place.
 
+**Instance: the fix went to the tool that had the bug, not to the class of
+tools** (2026-08-27, loopparallel). `gosrc.py` carries
+`install_restore_handlers` and a paragraph explaining exactly why: a tool
+that rewrites the working tree to measure it must not be able to damage
+the tree when interrupted, because Python does not run `finally` blocks
+for a default-disposition signal. That was written after a killed
+`mutate-wraps` run left `internal/provenance/provenance.go` mutated on
+disk.
+
+Every hand-written mutation battery in this port is a throwaway script in
+a scratchpad directory, and none of them imported it. One hit its
+runner's ten-minute cap mid-row and left `if nWorkers < 0` in
+`loopparallel.go`. The next five test runs deadlocked identically, and
+the first three explanations were all wrong — including a `git status`
+that showed the package as untracked and therefore showed nothing — for
+the plain reason that the file on disk was not the file in the diff.
+
+The class fix is `go/tools/mutate-subs.py`: one runner, gosrc's
+signal-safe restore, and the battery spec kept on disk under
+`go/tools/batteries/` so a later round can re-run what an earlier round
+converged. The lens fires on TOOLING as readily as on production code,
+and the tell is the same — a correct fix, at the one site that had the
+evidence.
+
 ### L14 — A helper you did not look for is a helper you will write again
-*instances: 29*
+*instances: 30*
 
 **Canonical instance.** `pyval.Clip` is the shared Python-semantics rune
 slicer. Six packages carry a private `clipRunes` copy (`scans`,
@@ -451,7 +475,7 @@ that covers part of a class silently splits the class.
 *instances: 10*
 
 ### L16 — A field is TWO claims (the writer's and the reader's)
-*instances: 7*
+*instances: 8*
 
 ### L36 — A hardening is a fork
 *instances: 3 attributed; ~4 in the mined cluster*
@@ -1063,7 +1087,7 @@ difference is real but out of scope, pin it in the comment (as the
 newest.
 
 ### L48 — A flattened control flow is a different program
-*instances: 15*
+*instances: 16*
 
 **The flattening you cannot see as code** (syshealth r3, 2026-08-26 — the
 arc's first HIGH after two rounds of lows). Python's `config.memory_dir()`
@@ -1179,7 +1203,7 @@ structure is load-bearing until an input proves otherwise, and the proof is
 a fixture, not an argument.
 
 ### L49 — A builtin's implementation exceeds its definition
-*instances: 16*
+*instances: 17*
 
 When a port hand-writes one of the original's BUILTINS, it implements the
 author's model of that builtin — the one-line definition anyone would give

@@ -209,6 +209,27 @@ def pkg_of(path):
     return "./" + rel + "/" if rel != "." else "./"
 
 
+def run_tests_multi(pkgs, quick=False, extra_env=None):
+    """run_tests over SEVERAL package patterns in one `go test`.
+
+    Separate from run_tests because a mutation to a shared helper has to
+    be tested against every package that can see it: narrowing the run to
+    the package being built is how a helper's mutation reports SURVIVED
+    while its real killers sit in a package that was never compiled.
+    """
+    env = dict(os.environ, MARO_PYPROBE_REQUIRED="1")
+    if extra_env:
+        env.update(extra_env)
+    cmd = ["go", "test"] + list(pkgs) + ["-count=1"]
+    if quick:
+        cmd.append("-short")
+    p = subprocess.run(cmd, cwd=GO_ROOT, env=env,
+                       capture_output=True, text=True)
+    killers = sorted(set(re.findall(r"--- FAIL: (\S+)", p.stdout)))
+    panicked = "panic:" in p.stdout or "panic:" in p.stderr
+    return p.returncode == 0, killers, p.stdout + p.stderr
+
+
 def run_tests(pkg, quick=False, extra_env=None):
     env = dict(os.environ, MARO_PYPROBE_REQUIRED="1")
     if extra_env:

@@ -1,0 +1,408 @@
+{
+  "packages": {
+    "default": [
+      "./internal/loopparallel/"
+    ]
+  },
+  "mutations": [
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "timeout-default-600",
+      "old": "DefaultStepTimeout = \"600\"",
+      "new": "DefaultStepTimeout = \"300\"",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "timeout-empty-is-default",
+      "old": "\tif !present {\n\t\traw = DefaultStepTimeout\n\t}",
+      "new": "\tif !present || raw == \"\" {\n\t\traw = DefaultStepTimeout\n\t}",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "timeout-falls-back-on-error",
+      "old": "\treturn pyval.Int(raw)",
+      "new": "\tn, err := pyval.Int(raw)\n\tif err != nil {\n\t\treturn 600, nil\n\t}\n\treturn n, err",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "drain-keeps-time-source",
+      "old": "\tledger.DropSource(\"time\")\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "drain-does-not-consume",
+      "old": "looptypes.RenderContributions(ledger.Drain())",
+      "new": "looptypes.RenderContributions(ledger.Pending())",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "drain-empty-still-appends",
+      "old": "\tif rendered == \"\" {\n\t\treturn \"\", ancestry\n\t}\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "drain-separator-one-newline",
+      "old": "\"\\n\\n\" + rendered",
+      "new": "\"\\n\" + rendered",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "drain-empty-ancestry-prefixed",
+      "old": "\tif ancestry != \"\" {\n\t\treturn rendered, ancestry + \"\\n\\n\" + rendered\n\t}\n\treturn rendered, rendered",
+      "new": "\treturn rendered, ancestry + \"\\n\\n\" + rendered",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-no-min-clamp",
+      "old": "\tnWorkers := maxWorkers\n\tif len(steps) < nWorkers {\n\t\tnWorkers = len(steps)\n\t}",
+      "new": "\tnWorkers := maxWorkers",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-zero-workers-allowed",
+      "old": "\tif nWorkers <= 0 {",
+      "new": "\tif nWorkers < 0 {",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-error-wording",
+      "old": "fmt.Sprintf(\"parallel execution error: %s\", err.Error())",
+      "new": "fmt.Sprintf(\"parallel step error: %s\", err.Error())",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-error-uses-class",
+      "old": "fmt.Sprintf(\"parallel execution error: %s\", err.Error())",
+      "new": "fmt.Sprintf(\"parallel execution error: %v\", err)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-error-summary-wording",
+      "old": "\"step %d failed in fan-out\"",
+      "new": "\"step %d failed\"",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-error-index-zero-based",
+      "old": "fmt.Sprintf(\"step %d failed in fan-out\", i+1)",
+      "new": "fmt.Sprintf(\"step %d failed in fan-out\", i)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-timeout-wording",
+      "old": "Val: fmt.Sprintf(\"parallel fan-out timeout (%ds)\", timeoutSecs)},",
+      "new": "Val: fmt.Sprintf(\"fan-out timeout (%ds)\", timeoutSecs)},",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-timeout-summary",
+      "old": "\"step %d timed out in fan-out\"",
+      "new": "\"step %d timed out\"",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-timeout-overwrites",
+      "old": "\t\t\tif _, ok := byIdx[i+1]; !ok {",
+      "new": "\t\t\tif true {",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-missing-filler-wording",
+      "old": "oc = blockedOutcome(\"missing from fan-out results\")",
+      "new": "oc = blockedOutcome(\"missing from results\")",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-order-unsorted",
+      "old": "\tsort.Ints(idxs)\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-text-clip-60",
+      "old": "pyval.Clip(depText, 60)",
+      "new": "pyval.Clip(depText, 80)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-result-clip-600",
+      "old": "pyval.SliceHead(depResult, 600)",
+      "new": "pyval.SliceHead(depResult, 800)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-clip-counts-bytes",
+      "old": "pyval.Clip(depText, 60)",
+      "new": "depText[:min(len(depText), 60)]",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-empty-result-emits-a-line",
+      "old": "\t\tif !pyval.Truthy(depResult) {\n\t\t\tcontinue\n\t\t}\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-truthiness-is-string-empty",
+      "old": "if !pyval.Truthy(depResult) {",
+      "new": "if depResult == \"\" {",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-out-of-range-text-panics",
+      "old": "\t\tif depIdx >= 1 && depIdx <= n {\n\t\t\tdepText = steps[depIdx-1]\n\t\t}",
+      "new": "\t\tdepText = steps[depIdx-1]",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-line-format",
+      "old": "fmt.Sprintf(\"Step %d (%s):\\n%s\"",
+      "new": "fmt.Sprintf(\"Step %d (%s): %s\"",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-typeerror-swallowed",
+      "old": "\t\t\treturn nil, err\n\t\t}\n\t\tout = append",
+      "new": "\t\t\thead = nil\n\t\t}\n\t\tout = append",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dep-str-is-repr",
+      "old": "pyval.Str(head)",
+      "new": "pyval.Repr(head)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-min-clamps-like-parallel",
+      "old": "\tif maxWorkers <= 0 {\n\t\treturn nil, &pyval.PyErr{Class: \"ValueError\",\n\t\t\tMsg: \"max_workers must be greater than 0\"}\n\t}\n\tn := len(steps)",
+      "new": "\tif maxWorkers <= 0 || len(steps) == 0 {\n\t\treturn nil, &pyval.PyErr{Class: \"ValueError\",\n\t\t\tMsg: \"max_workers must be greater than 0\"}\n\t}\n\tn := len(steps)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-unblock-touches-inflight",
+      "old": "\t\t\tif active[idx] {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tdelete(remaining[idx], l.idx)",
+      "new": "\t\t\tdelete(remaining[idx], l.idx)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-unreached-wording",
+      "old": "oc = blockedOutcome(\"dag: upstream dep did not complete\")",
+      "new": "oc = blockedOutcome(\"dag: dep did not complete\")",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-timeout-wording",
+      "old": "fmt.Sprintf(\"dag timeout (%ds)\", timeoutSecs))",
+      "new": "fmt.Sprintf(\"dag fan-out timeout (%ds)\", timeoutSecs))",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-error-wording",
+      "old": "fmt.Sprintf(\"dag execution error: %s\", l.err.Error()))",
+      "new": "fmt.Sprintf(\"dag step error: %s\", l.err.Error()))",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-late-result-discarded",
+      "old": "\twg.Wait()\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-error-writes-a-result",
+      "old": "\t\tif l.err != nil {\n\t\t\tresults[l.idx] = blockedOutcome(",
+      "new": "\t\tif l.err == nil {\n\t\t\tresults[l.idx] = blockedOutcome(",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-submits-with-pending-deps",
+      "old": "\t\t\tif len(remaining[idx]) > 0 {\n\t\t\t\tcontinue\n\t\t\t}\n",
+      "new": "",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "dag-label-shares-the-parallel-name",
+      "old": "return fmt.Sprintf(\"dagstep%d\", stepIdx)",
+      "new": "return fmt.Sprintf(\"step%d\", stepIdx)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "parallel-label-wording",
+      "old": "return fmt.Sprintf(\"step%d\", stepIdx)",
+      "new": "return fmt.Sprintf(\"s%d\", stepIdx)",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "blocked-filler-drops-tokens",
+      "old": "\t\t{Key: \"tokens_in\", Val: 0},\n\t\t{Key: \"tokens_out\", Val: 0},\n\t}\n}",
+      "new": "\t}\n}",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/loopparallel/loopparallel.go",
+      "name": "blocked-filler-status",
+      "old": "\t\t{Key: \"status\", Val: \"blocked\"},\n\t\t{Key: \"stuck_reason\", Val: reason},",
+      "new": "\t\t{Key: \"status\", Val: \"stuck\"},\n\t\t{Key: \"stuck_reason\", Val: reason},",
+      "packages": [
+        "./internal/loopparallel/"
+      ]
+    },
+    {
+      "file": "internal/pyval/pyint.go",
+      "name": "int-digits-ascii-only",
+      "old": "\t\td, isDigit := decimalValue(c)",
+      "new": "\t\td, isDigit := int(c-'0'), c >= '0' && c <= '9'",
+      "packages": [
+        "./internal/pyval/",
+        "./internal/loopparallel/",
+        "./internal/heartbeat/",
+        "./internal/introspect/",
+        "./internal/syshealth/"
+      ]
+    },
+    {
+      "file": "internal/pyval/pyint.go",
+      "name": "int-strip-is-str-strip",
+      "old": "\treturn strings.TrimSpace(s)",
+      "new": "\treturn strings.Trim(s, \"\\x1c\\x1d\\x1e\\x1f \\t\\n\\v\\f\\r\")",
+      "packages": [
+        "./internal/pyval/",
+        "./internal/loopparallel/",
+        "./internal/heartbeat/",
+        "./internal/introspect/",
+        "./internal/syshealth/"
+      ]
+    },
+    {
+      "file": "internal/pyval/pyint.go",
+      "name": "int-digit-value-off-by-zero",
+      "old": "\treturn int(b - '0'), ok",
+      "new": "\treturn int(b), ok",
+      "packages": [
+        "./internal/pyval/",
+        "./internal/loopparallel/",
+        "./internal/heartbeat/",
+        "./internal/introspect/",
+        "./internal/syshealth/"
+      ]
+    }
+  ]
+}

@@ -427,10 +427,32 @@ func TestCLIMatchesCPython(t *testing.T) {
 			store: "events", rows: explosion},
 		// Python's int() strips surrounding whitespace, so " 5" is 5 — where
 		// Go's strconv.Atoi refuses it. (pyval.Int carries the whole rule,
-		// underscores and all; the named residual is non-ascii digits.)
+		// underscores and all.)
 		{name: "an int value with surrounding whitespace",
 			argv: []string{"--history", " 5"}, store: "diagnoses",
 			rows: []string{diagRow("r1", "healthy", "info", 1, 1, 1)}},
+		// The two rows that used to be TestNonASCIIDigitIsAKnownGap. int()
+		// reads any Unicode decimal digit, so U+0665 is 5, and the negated
+		// form takes the truthy-negative branch above. pyval's int lane
+		// grew that on 2026-08-27 and the pin fired the same run; these are
+		// its fixtures, in the table where every other row asserts
+		// agreement.
+		{name: "an arabic-indic history",
+			argv: []string{"--history", "\u0665"}, store: "diagnoses",
+			rows: []string{
+				diagRow("k1", "healthy", "info", 1, 1, 1),
+				diagRow("k2", "token_explosion", "warning", 2, 2, 2)}},
+		{name: "a NEGATED arabic-indic history",
+			argv: []string{"--history", "-\u0665"}, store: "diagnoses",
+			rows: []string{
+				diagRow("k1", "healthy", "info", 1, 1, 1),
+				diagRow("k2", "token_explosion", "warning", 2, 2, 2)}},
+		// The other half of the same fix: str.strip() removes U+001F and
+		// int() does not, so this stays a usage error on BOTH sides.
+		{name: "a unit separator is not whitespace to int()",
+			argv: []string{"--history", "\u001f5"}, store: "diagnoses",
+			rows:     []string{diagRow("r1", "healthy", "info", 1, 1, 1)},
+			wantExit: 2},
 		// Only the FIRST `--` terminates; a second one is an ordinary token.
 		{name: "a second double dash is a loop id",
 			argv: []string{"--", "--"}, store: "events", rows: explosion},
@@ -712,85 +734,6 @@ func showWhitespace(s string) string {
 		lines[i] = "|" + strings.ReplaceAll(l, " ", "·") + "|"
 	}
 	return strings.Join(lines, "\n")
-}
-
-// TestNonASCIIDigitIsAKnownGap pins a divergence the port does NOT close,
-// which is why it is a test of its own rather than a row in the table
-// above: every case there asserts AGREEMENT, and this one asserts the
-// disagreement so that closing the gap turns the pin red instead of
-// leaving it quietly measuring nothing.
-//
-// Python's `int()` accepts any Unicode decimal digit — `int("٥")` is 5 —
-// because the conversion walks Unicode's Nd category. pyval.Int scans
-// ASCII only. So `--history ٥` renders a history in CPython and is a usage
-// error in Go, and `--history -٥` renders one row where Go refuses.
-//
-// The gap was named in prose from the round it was found and re-measured
-// by hand every round since. Round 4's finding was that a residual with no
-// executable pin is a residual nobody can tell has moved: prose does not
-// go red. When pyval.Int learns Unicode digits, THIS is what fails, and
-// the fix is to delete this test and add the two lines to the table.
-func TestNonASCIIDigitIsAKnownGap(t *testing.T) {
-	rows := []string{
-		diagRow("k1", "healthy", "info", 1, 1, 1),
-		diagRow("k2", "token_explosion", "warning", 2, 2, 2),
-	}
-	type payload struct {
-		WS   string   `json:"ws"`
-		Argv []string `json:"argv"`
-	}
-	// U+0665 ARABIC-INDIC DIGIT FIVE, bare and negated.
-	argvs := [][]string{{"--history", "٥"}, {"--history", "-٥"}}
-
-	goWS := make([]string, len(argvs))
-	pyArgs := make([]payload, len(argvs))
-	for i, argv := range argvs {
-		ws := seedStore(t, "diagnoses.jsonl", rows)
-		goWS[i] = ws
-		pyArgs[i] = payload{WS: copyStore(t, ws), Argv: argv}
-	}
-	type answer struct {
-		Code int    `json:"code"`
-		Out  string `json:"out"`
-		Err  string `json:"err"`
-	}
-	var want []answer
-	probe := pyprobe.Probe{Marker: "introspect.py"}
-	probe.RunJSON(t, pyCLISrc, &want, pyprobe.Arg(t, pyArgs))
-	if len(want) != len(argvs) {
-		t.Fatalf("probe returned %d answers for %d cases", len(want), len(argvs))
-	}
-
-	for i, argv := range argvs {
-		t.Run(strings.Join(argv, " "), func(t *testing.T) {
-			// CPython side: it must RENDER. If a future interpreter starts
-			// refusing non-ASCII digits, the gap closed from the other
-			// direction and this pin is what says so.
-			if want[i].Code != 0 || strings.TrimSpace(want[i].Out) == "" {
-				t.Fatalf("cpython no longer reads %q as a number "+
-					"(exit %d, stdout %q) — the gap closed on the PYTHON "+
-					"side; re-measure before deleting anything",
-					argv[1], want[i].Code, want[i].Out)
-			}
-
-			var buf bytes.Buffer
-			gotErr, gotCode, handled := ExitStatus(Main(goWS[i], argv, &buf))
-			if !handled {
-				t.Fatalf("go Main returned a non-usage error")
-			}
-			if gotCode != 2 {
-				t.Fatalf("KNOWN GAP CLOSED: go now accepts %q (exit %d). "+
-					"Delete this test and add both lines to the table in "+
-					"TestCLIMatchesCPython.", argv[1], gotCode)
-			}
-			// And the refusal is argparse's own wording, not a Go one —
-			// the gap is in the CONVERSION, not in the error surface.
-			if wantMsg := "invalid int value: '" + argv[1] + "'"; !strings.Contains(gotErr, wantMsg) {
-				t.Errorf("go refused for the wrong reason\nwant substring: %s\ngot:\n%s",
-					wantMsg, gotErr)
-			}
-		})
-	}
 }
 
 // snapshotDir maps every file under root to its contents. Comparing two
