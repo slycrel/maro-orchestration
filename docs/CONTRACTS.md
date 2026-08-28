@@ -583,7 +583,12 @@ follow. Cross-process, therefore cross-engine.
   fixed-shape fallback row `{"event_type": "event_truncated", "ts",
   "orig_event_type"}`, itself provably tiny. The append is literally one
   `os.write` of the encoded bytes on an `O_APPEND|O_CREAT|O_WRONLY` fd —
-  not a buffered file object, whose flush may legally split. (Was
+  not a buffered file object, whose flush may legally split. The return
+  value is honest about that write (round 3, R3-2): True means the FULL
+  buffer was accepted by that one write(2); a short write returns False
+  and logs (stdlib logging only — never recursing into write_event or a
+  lock), and the remainder is deliberately NOT retried, because a second
+  unlocked append could interleave with another writer's row. (Was
   **DEFECT C0.3** — five fields uncapped, caps were CHARACTER caps while
   the obligation is BYTES, nothing measured the encoded line. FIXED
   2026-08-28, `1e5c77fe`. Round 2 `7229a44b`: numeric fields were still

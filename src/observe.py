@@ -578,7 +578,8 @@ def write_event(
     Called from agent_loop.py after each step so maro-observe events can
     display a live feed of what the system is doing.
 
-    Never raises — returns True on success, False on failure.
+    Never raises — True means the full encoded line was accepted by one
+    write(2); a short write (torn row) or any failure returns False.
 
     event_type values: "step_done" | "step_stuck" | "loop_start" | "loop_done"
     """
@@ -676,9 +677,23 @@ def write_event(
         fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY,
                      0o666)
         try:
-            os.write(fd, encoded)
+            n = os.write(fd, encoded)
         finally:
             os.close(fd)
+        if n != len(encoded):
+            # R3-2: a short write(2) left a TORN row while this returned
+            # True. True now means the full buffer was accepted by one
+            # write; anything less is False. No retry of the remainder — a
+            # second unlocked append could interleave with another writer's
+            # row, turning one torn line into two. Diagnostic is stdlib
+            # logging only (NEVER write_event, NEVER a lock: file_lock
+            # reports its own failures through this function).
+            import logging
+            logging.getLogger("maro.observe").warning(
+                "write_event: short write to %s (%d of %d bytes) — torn "
+                "JSONL row for event %r", path, n, len(encoded),
+                entry.get("event_type", ""))
+            return False
         return True
     except Exception:
         return False

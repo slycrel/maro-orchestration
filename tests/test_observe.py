@@ -919,3 +919,38 @@ def test_write_event_single_os_write_append(monkeypatch, tmp_path):
     assert event_writes[0].endswith(b"\n")
     entry = json.loads(event_writes[0].decode("utf-8"))
     assert entry["detail"] == "payload"
+
+
+def test_write_event_short_write_returns_false_and_logs(
+        monkeypatch, tmp_path, caplog):
+    """R3-2 must-detect: os.write accepting fewer bytes than the encoded
+    line is a TORN row — write_event must return False and emit a
+    non-recursive diagnostic, and must NOT retry the remainder (a second
+    unlocked append could interleave with another writer)."""
+    import logging
+    import os as _os
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    calls = []
+    real_write = _os.write
+
+    def short_write(fd, data):
+        calls.append(bytes(data))
+        real_write(fd, bytes(data)[:-1])  # torn: one byte never lands
+        return len(data) - 1
+    monkeypatch.setattr(_os, "write", short_write)
+    with caplog.at_level(logging.WARNING, logger="maro.observe"):
+        ok = write_event("step_done", status="done", detail="payload")
+    assert ok is False
+    # No retry of the remainder: exactly one write attempt for this event.
+    assert len([c for c in calls if b'"step_done"' in c]) == 1
+    assert any("short write" in r.getMessage() for r in caplog.records)
+
+
+def test_write_event_full_write_still_true(monkeypatch, tmp_path):
+    """R3-2 negative control: a normal full write keeps returning True."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    assert write_event("step_done", status="done", detail="payload") is True
+    line = (mem / "events.jsonl").read_text().strip().splitlines()[-1]
+    assert json.loads(line)["event_type"] == "step_done"
