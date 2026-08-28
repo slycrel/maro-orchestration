@@ -1269,9 +1269,9 @@ def verify_applied_suggestions(
     No LLM calls; rides the evolver cadence hook (no daemon). dry_run renders
     and logs but writes nothing. Returns a summary dict of counts.
     """
-    from config import get as _cfg_get
+    from config import get as _cfg_get, get_bool as _cfg_get_bool
 
-    if not bool(_cfg_get("evolver.verify_cadence_verdicts", True)):
+    if not _cfg_get_bool("evolver.verify_cadence_verdicts", True):
         return {"enabled": False, "skipped": "disabled"}
 
     if min_post_apply is None:
@@ -1286,7 +1286,8 @@ def verify_applied_suggestions(
     # class-neutral stuck-rate when the class data is thin, so it is never worse
     # than V2. A knob only so the class path can be forced off for A/B or debug.
     if use_class_signal is None:
-        use_class_signal = bool(_cfg_get("evolver.verify_use_class_signal", True))
+        use_class_signal = _cfg_get_bool("evolver.verify_use_class_signal",
+                                         True)
     # Baseline floor: don't auto-revert off a statistically thin baseline. A hard
     # floor of 3 against a post-apply window of 10 lets a degraded verdict fire
     # from a 3-run baseline vs 10-run post — poor structural fit for a default-on

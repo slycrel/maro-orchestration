@@ -451,7 +451,7 @@ def world_facts_enabled() -> bool:
     """Single kill switch for capture (render of an empty ledger is already
     a no-op, so gating capture gates everything)."""
     try:
-        from config import get as _cfg_get
-        return bool(_cfg_get("world_facts.enabled", True))
+        from config import get_bool as _cfg_get_bool
+        return _cfg_get_bool("world_facts.enabled", True)
     except Exception:
         return True

@@ -272,8 +272,8 @@ def handle_task(
             except Exception as _rerun_exc:
                 log.debug("handle_task rerun brief skipped: %s", _rerun_exc)
             try:
-                from config import get as _cfg_get
-                _guard_on = bool(_cfg_get("recall.dispatch_guard", True))
+                from config import get as _cfg_get, get_bool as _cfg_get_bool
+                _guard_on = _cfg_get_bool("recall.dispatch_guard", True)
                 _guard_attempts = int(_cfg_get("recall.guard_attempts", 3))
                 _guard_window = float(_cfg_get("recall.guard_window_minutes", 60))
             except Exception:

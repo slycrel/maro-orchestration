@@ -357,7 +357,10 @@ def test_heartbeat_loop_none_autonomy_uses_config(monkeypatch):
     monkeypatch.setattr(hb, "run_heartbeat", lambda **kwargs: None)
     monkeypatch.setattr(hb._wakeup_event, "wait", lambda timeout=None: (_ for _ in ()).throw(RuntimeError("stop")))
     monkeypatch.setattr(hb, "_task_store_drain_active", True)
-    monkeypatch.setitem(sys.modules, "config", types.SimpleNamespace(get=lambda key, default=None: True if key == "heartbeat.autonomy" else default))
+    # R3-1: the autonomy gate reads config.get_bool now (strict parse).
+    monkeypatch.setitem(sys.modules, "config", types.SimpleNamespace(
+        get=lambda key, default=None: True if key == "heartbeat.autonomy" else default,
+        get_bool=lambda key, default=False: True if key == "heartbeat.autonomy" else default))
     called = []
     monkeypatch.setattr(scheduler, "drain_due_jobs", lambda **kwargs: called.append(kwargs) or 0)
 

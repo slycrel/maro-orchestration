@@ -785,8 +785,8 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
                 _should_apply = False
             else:
                 try:
-                    from config import get as _cfg_get
-                    _should_apply = bool(_cfg_get("evolver.auto_apply", False))
+                    from config import get_bool as _cfg_get_bool
+                    _should_apply = _cfg_get_bool("evolver.auto_apply", False)
                 except Exception:
                     _should_apply = False
 
@@ -827,8 +827,9 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
             # ever did).
             _auto_enqueue = False
             try:
-                from config import get as _cfg_get
-                _auto_enqueue = bool(_cfg_get("evolver.auto_enqueue_signals", False))
+                from config import get_bool as _cfg_get_bool
+                _auto_enqueue = _cfg_get_bool(
+                    "evolver.auto_enqueue_signals", False)
             except Exception:
                 _auto_enqueue = False
             if manual or _auto_enqueue:

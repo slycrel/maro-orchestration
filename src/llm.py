@@ -1389,8 +1389,10 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             else:
                 child_env[_k] = _v
     try:
-        from config import get as _cfg_get
-        if bool(_cfg_get("workers.allow_main_push", False)):
+        # get_bool (R3-1): a quoted "false" in YAML arrives as a string and
+        # bool("false") is True — this gate EXPORTS the push-guard bypass.
+        from config import get_bool as _cfg_get_bool
+        if _cfg_get_bool("workers.allow_main_push", False):
             child_env["MARO_ALLOW_MAIN_PUSH"] = "1"
     except Exception:
         pass
@@ -2367,8 +2369,9 @@ def _session_fork_enabled() -> bool:
     """config: subprocess.session_fork (default ON; see docs/DEFAULTS.md).
     Flip OFF in config to restore bare cold-start calls."""
     try:
-        from config import get as _cfg_get
-        return bool(_cfg_get("subprocess.session_fork", _SESSION_FORK_DEFAULT))
+        from config import get_bool as _cfg_get_bool
+        return _cfg_get_bool("subprocess.session_fork",
+                             bool(_SESSION_FORK_DEFAULT))
     except Exception:
         return bool(_SESSION_FORK_DEFAULT)
 

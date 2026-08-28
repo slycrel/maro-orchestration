@@ -174,7 +174,13 @@ follow. Cross-process, therefore cross-engine.
   (`src/config.py:318-348`, `get_bool` delegates) — `file_lock._fail_open`
   (`src/file_lock.py:85-99`), `runs.recording_enabled` and
   `run_trace._enabled` all use it, closing the same string-"false"
-  defect on the recording/trace persistence gates.) Full-file rewrites go
+  defect on the recording/trace persistence gates. Round 3 (R3-1): the
+  CLASS is closed — every remaining `bool(<config getter>(...))` gate
+  over authority/persistence/spend/pushes/autonomy migrated to
+  `config.get_bool` (~28 sites, `workers.allow_main_push` the worst: a
+  quoted "false" exported the push-guard bypass), and a census tripwire
+  (`tests/test_config_bool_gates.py`) fails on any NEW bare site not in
+  its justified cosmetic allowlist.) Full-file rewrites go
   through
   `atomic_write` — temp file in the same dir, fsync, `os.replace`, target's
   permission bits preserved (`src/file_lock.py:229-281`). JSONL appends go

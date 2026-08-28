@@ -2485,8 +2485,8 @@ def _pass_audit_enabled() -> bool:
     # (spends an adapter call, degrades verdict trust) — boxes opt in via
     # workspace config.
     try:
-        from config import get
-        return bool(get("closure.pass_audit", False))
+        from config import get_bool
+        return get_bool("closure.pass_audit", False)
     except Exception:
         return False
 
@@ -2587,8 +2587,8 @@ def _verdict_audit_enabled() -> bool:
     # fresh-installs-conservative pattern (scope_generation, run-cadence
     # knobs) — boxes opt in via workspace config. This box opts in.
     try:
-        from config import get
-        return bool(get("closure.verdict_audit", False))
+        from config import get_bool
+        return get_bool("closure.verdict_audit", False)
     except Exception:
         return False
 

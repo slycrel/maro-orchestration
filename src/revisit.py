@@ -326,8 +326,8 @@ def sweep(verbose: bool = False) -> dict:
     """
     out = {"total": 0, "matched": 0, "new": 0}
     try:
-        from config import get as _cfg_get
-        if not bool(_cfg_get("revisit.enabled", True)):
+        from config import get_bool as _cfg_get_bool
+        if not _cfg_get_bool("revisit.enabled", True):
             return out
         # One sweep at a time: load-state → emit → save-state is a
         # read-decide-write sequence, and two overlapping sweeps would

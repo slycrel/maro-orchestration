@@ -261,8 +261,8 @@ def apply_backchain(goal: str, steps: List[str], adapter) -> List[str]:
     """
     try:
         try:
-            from config import get as _cfg_get
-            if not bool(_cfg_get("planner.backchain", False)):
+            from config import get_bool as _cfg_get_bool
+            if not _cfg_get_bool("planner.backchain", False):
                 return steps
         except Exception:
             return steps  # no config machinery → fail closed, no spend

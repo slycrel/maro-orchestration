@@ -273,8 +273,8 @@ def _persistence_allowed() -> bool:
     if val is not None:
         return val.strip().lower() in ("1", "true", "yes", "on")
     try:
-        from config import get as _cfg_get
-        return bool(_cfg_get("constraints.allow_persistence_install", False))
+        from config import get_bool as _cfg_get_bool
+        return _cfg_get_bool("constraints.allow_persistence_install", False)
     except Exception:
         return False
 

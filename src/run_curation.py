@@ -628,8 +628,8 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
         return
     goal = str(meta.get("prompt") or card.get("goal") or "").strip()
     try:
-        from config import get as _cfg_get
-        _synth_on = bool(_cfg_get("curation.answer_synthesis", False))
+        from config import get_bool as _cfg_get_bool
+        _synth_on = _cfg_get_bool("curation.answer_synthesis", False)
     except Exception:
         _synth_on = False
     if _synth_on and goal:
@@ -771,8 +771,8 @@ _LITE_SCAN_CAP = 200      # .md files examined per run before giving up
 
 def _lite_enabled() -> bool:
     try:
-        from config import get as _cfg_get
-        return bool(_cfg_get("skills.lite_promotion", True))
+        from config import get_bool as _cfg_get_bool
+        return _cfg_get_bool("skills.lite_promotion", True)
     except Exception:
         return True
 

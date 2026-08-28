@@ -1329,8 +1329,8 @@ def heartbeat_loop(
 
     if autonomy is None:
         try:
-            from config import get as _cfg_get
-            autonomy = bool(_cfg_get("heartbeat.autonomy", False))
+            from config import get_bool as _cfg_get_bool
+            autonomy = _cfg_get_bool("heartbeat.autonomy", False)
         except Exception:
             autonomy = False
     if verbose:

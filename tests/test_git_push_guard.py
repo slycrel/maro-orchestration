@@ -125,3 +125,32 @@ class TestSubprocessEnvMarker:
         )
         llm._run_subprocess_safe(["true"], timeout=5)
         assert captured["env"].get("MARO_ALLOW_MAIN_PUSH") == "1"
+
+    def test_config_allow_main_push_string_false_does_not_bypass(
+            self, monkeypatch):
+        """R3-1 must-detect: a quoted "false" in YAML arrives as a string,
+        and bool("false") is True — pre-fix this EXPORTED
+        MARO_ALLOW_MAIN_PUSH=1, silently defeating the push guard."""
+        import llm
+        captured = {}
+
+        class _FakeProc:
+            pid = 99999
+            returncode = 0
+            def poll(self):
+                return 0
+            def wait(self, timeout=None):
+                return 0
+
+        def _fake_popen(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _FakeProc()
+
+        monkeypatch.setattr("subprocess.Popen", _fake_popen)
+        monkeypatch.setattr(
+            "config.get",
+            lambda key, default=None: (
+                "false" if key == "workers.allow_main_push" else default),
+        )
+        llm._run_subprocess_safe(["true"], timeout=5)
+        assert "MARO_ALLOW_MAIN_PUSH" not in captured["env"]

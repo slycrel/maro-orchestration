@@ -358,13 +358,13 @@ def shadow_dispatch_live(
     compare against.
     """
     try:
-        from config import get as cfg_get
+        from config import get as cfg_get, get_bool as cfg_get_bool
         # act_dispatch implies the decide call: a deployment that turned the
         # dispatch class live needs the decision even with shadowing off.
         # act_dispatch defaults ON (2026-07-08) — so a clean install pays one
         # cheap-tier call per autonomous dispatch unless it opts out.
-        if not (bool(cfg_get("navigator.shadow_dispatch", False))
-                or bool(cfg_get("navigator.act_dispatch", True))):
+        if not (cfg_get_bool("navigator.shadow_dispatch", False)
+                or cfg_get_bool("navigator.act_dispatch", True)):
             return None
         if tiers is None:
             # Default cheap-only: live shadow wants volume of dispatch-class
@@ -374,7 +374,7 @@ def shadow_dispatch_live(
             tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))
         # Independent gate (default off): rides the SAME decide() call above,
         # so enabling it costs no extra model call — only a longer prompt.
-        judge_depth = bool(cfg_get("navigator.shadow_planning_depth", False))
+        judge_depth = cfg_get_bool("navigator.shadow_planning_depth", False)
     except Exception:
         return None
 
@@ -490,9 +490,9 @@ def shadow_blocked_step_live(
     Returns the decision or None.
     """
     try:
-        from config import get as cfg_get
-        if not (bool(cfg_get("navigator.shadow_blocked_step", False))
-                or bool(cfg_get("navigator.act_blocked_step", False))):
+        from config import get as cfg_get, get_bool as cfg_get_bool
+        if not (cfg_get_bool("navigator.shadow_blocked_step", False)
+                or cfg_get_bool("navigator.act_blocked_step", False)):
             return None
         if tiers is None:
             tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))

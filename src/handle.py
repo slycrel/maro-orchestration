@@ -1368,8 +1368,9 @@ def _handle_impl(
         # run is still recorded done. Disable via now_lane.escalate_to_director.
         _now_escalate_enabled = True
         try:
-            from config import get as _cfg_get
-            _now_escalate_enabled = bool(_cfg_get("now_lane.escalate_to_director", True))
+            from config import get_bool as _cfg_get_bool
+            _now_escalate_enabled = _cfg_get_bool(
+                "now_lane.escalate_to_director", True)
         except Exception:
             pass
         # An explicit force_lane="now" wins over escalation — the caller
@@ -2263,9 +2264,9 @@ def _handle_impl(
         _scope = None
         _resolved_intent = None
         try:
-            from config import get as _config_get
-            _scope_on = bool(_config_get("scope_generation", False))
-            _scope_ab_skip = bool(_config_get("scope_ab_skip", False))
+            from config import get_bool as _config_get_bool
+            _scope_on = _config_get_bool("scope_generation", False)
+            _scope_ab_skip = _config_get_bool("scope_ab_skip", False)
         except Exception:
             _scope_on = False
             _scope_ab_skip = False
@@ -2714,8 +2715,8 @@ def _handle_impl(
                     "verdict (source=closure_error): %s", _closure_error)
 
             try:
-                from config import get as _config_get
-                _closure_restart = bool(_config_get("closure_restart", True))
+                from config import get_bool as _config_get_bool
+                _closure_restart = _config_get_bool("closure_restart", True)
             except Exception:
                 _closure_restart = True
 
@@ -4068,8 +4069,8 @@ def _navigator_act_dispatch(
         return None
     try:
         try:
-            from config import get as _cfg_get
-            if not bool(_cfg_get("navigator.act_dispatch", True)):
+            from config import get as _cfg_get, get_bool as _cfg_get_bool
+            if not _cfg_get_bool("navigator.act_dispatch", True):
                 return None
             _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
             _act_moves = set(_cfg_get("navigator.act_moves", ["escalate"]) or [])

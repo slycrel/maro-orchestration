@@ -747,6 +747,31 @@ def test_apply_suggestion_stamps_applied_at(tmp_path):
     datetime.fromisoformat(d["applied_at"])  # parseable, raises otherwise
 
 
+def test_auto_apply_config_string_false_holds_guardrail(tmp_path, monkeypatch):
+    """R3-1 must-detect: evolver.auto_apply quoted "false" was truthy
+    pre-fix — a new_guardrail AUTO-APPLIED when the operator had written
+    the gate off. It must hold for review."""
+    monkeypatch.delenv("MARO_AUTO_APPLY_GUARDRAILS", raising=False)
+    import config
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: (
+            "false" if key == "evolver.auto_apply" else default))
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="g1", category="new_guardrail",
+                    target="build", suggestion="Always run tests after build",
+                    failure_pattern="x", confidence=0.9,
+                    outcomes_analyzed=12, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver_store._suggestions_path", return_value=path):
+        assert apply_suggestion("g1", manual=False) is True
+
+    d = json.loads(path.read_text(encoding="utf-8").strip())
+    assert d["applied"] is False
+    assert d["status"] == "held_for_review"
+
+
 def test_apply_suggestion_persists_manual_authority(tmp_path):
     path = tmp_path / "suggestions.jsonl"
     s1 = Suggestion(suggestion_id="s1", category="observation", target="all",

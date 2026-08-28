@@ -756,8 +756,8 @@ def run_skill_maintenance(
     # exactly what makes contested_rules() below non-empty for the first time.
     adjudicated: dict = {}
     try:
-        from config import get as _cfg_get
-        if bool(_cfg_get("knowledge.contradiction_adjudication_enabled", True)):
+        from config import get_bool as _cfg_get_bool
+        if _cfg_get_bool("knowledge.contradiction_adjudication_enabled", True):
             from knowledge_lens import adjudicate_contradiction_candidates
             adjudicated = adjudicate_contradiction_candidates(
                 adapter, dry_run=dry_run, verbose=verbose)

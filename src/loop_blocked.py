@@ -758,8 +758,8 @@ def _navigator_act_blocked_step(
         return None
     try:
         try:
-            from config import get as _cfg_get
-            if not bool(_cfg_get("navigator.act_blocked_step", False)):
+            from config import get as _cfg_get, get_bool as _cfg_get_bool
+            if not _cfg_get_bool("navigator.act_blocked_step", False):
                 return None
             _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
         except Exception:
