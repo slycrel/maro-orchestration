@@ -16355,3 +16355,153 @@ records this as its third closed sub-shape.
 
 The two build failures were **P14** again, both from a deletion orphaning
 an identifier (`learnable`, `source`), and both re-spelled to keep it.
+
+## Phase L: the fence, and a function with no seam (2026-08-27)
+
+`src/agent_loop.py:245-430` is the first chunk of `run_agent_loop`: the
+**execution fence**. It binds the run-scoped subprocess cwd, resets three
+pieces of container state, optionally provisions a scratch clone so a
+self-dev run never mounts the live repo rw, computes the container's
+writable-root set, and — if any of that raises — refuses the loop before
+decomposition, unwinding everything it touched.
+
+Ported to `go/internal/agentloop/fence.go` as `SetUpExecutionFence`,
+which returns `nil` when the fence is up and a `*looptypes.LoopResult`
+when the run is refused.
+
+### The differential problem: there is nothing to call
+
+Every previous tranche had a function to call. This one does not — the
+fence is a hundred and eighty lines in the middle of `run_agent_loop`,
+between `_initialize_loop` and `_decompose_goal`, reachable only by
+running the loop. There is no seam, and adding one to the Python would
+have been the port editing its own source of truth.
+
+So the probe drives the **real** `run_agent_loop`, with three fakes:
+
+- `al._initialize_loop` returns a duck-typed `Ctx` built from the
+  scenario,
+- `al._project_dir_root` / `al._goal_to_slug` are faked so the fence dir
+  is derivable,
+- `al._decompose_goal` raises a `ReachedDecompose` sentinel.
+
+Everything recorded before the sentinel is the unit under test, and the
+sentinel escaping is itself the assertion that the fence went up. A
+refusal returns a `LoopResult` instead, and the probe records that. This
+is a technique worth keeping: **fake the entry, sentinel the exit, and
+the span between them is the seam you were not given.**
+
+### Import failure is three different failures
+
+The fence's outer `try` catches `Exception`, so what matters is not *that*
+an import fails but *which line* it fails on and *what string* the
+operator sees. The probe makes that falsifiable at three granularities,
+each landing in a different handler:
+
+| Fixture | Python object | Raises |
+|---|---|---|
+| a missing NAME | `PartialModule` whose `__getattr__` raises | `ImportError` |
+| a missing MODULE | `sys.meta_path` finder | `ModuleNotFoundError` |
+| a present module missing an attribute | a plain `ModuleType` | `AttributeError` |
+
+The middle row cost a real correction. A `sys.modules` stub whose
+attribute access raises is **not** a missing module: `import X as _y`
+succeeds against it and binds `_y`, because the import machinery never
+touches an attribute. Making a module genuinely unimportable takes
+`sys.modules.pop(name)` **plus** a `sys.meta_path` finder that raises
+`ModuleNotFoundError(..., name=name)`. The first attempt at this fixture
+was a `DeadModule` populated with attributes — which defeats its own
+`__getattr__`, since that hook fires only for names that are *missing*.
+The dead module has to be swapped in at registration time, not filled.
+
+### `from llm import a, b` binds `a` even when `b` is missing
+
+The fence's first statement is
+`from llm import set_default_subprocess_cwd, set_default_container_rw_roots`,
+and the refusal path later calls both names from lambdas. Whether a name
+is bound decides whether the refusal's neutralisation loop calls the
+setter or raises `NameError`, so the port tracked "did the llm import
+succeed" as one flag.
+
+It is two. CPython compiles a multi-name from-import into one
+`IMPORT_FROM`/`STORE_FAST` pair **per name, in source order** — so an
+`llm` that has the first name but not the second still binds the first,
+and the refusal calls `set_default_subprocess_cwd(None)` while raising
+`NameError` on the rw-root setter. `fenceBindings` now carries `cwd`,
+`rw` and `ce` separately, and the differential has a fixture for each.
+
+This is an amendment to **L59**, which had recorded the coarser claim.
+
+The `NameError` message matters too and is not the common one: the
+neutralisers are lambdas, so the names are *free variables* of a closure,
+and CPython says `cannot access free variable 'X' where it is not
+associated with a value in enclosing scope` — not `name 'X' is not
+defined`.
+
+### The dead-`llm` fixture that could not exist
+
+The obvious fixture — `llm` missing entirely — is unreachable. Line 221,
+`from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER`, sits **outside**
+every handler, twenty-four lines above the fence. A missing `llm` module
+raises straight out of `run_agent_loop`; the fence's own `llm` guard is
+reachable only through a missing NAME. The fixture was removed and the
+reason written next to where it would have been.
+
+### A real port bug: the fence dir does not use the caller's project
+
+`_fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))`
+reads like it uses `run_agent_loop`'s `project` keyword. It does not:
+`project = ctx.project` is rebound about twenty lines above, so the fence
+dir follows the **context**, not the argument. The port had a
+`FenceArgs.Project` field. It was deleted, and the differential is what
+found it — a scenario where the two disagree.
+
+Two smaller ordering facts came out of the same expression: Python
+evaluates the LEFT operand of `/` first, so `_project_dir_root()` runs
+before `_goal_to_slug()`, and the probe had to record the call to prove
+it.
+
+### The battery
+
+113 mutations derived from `fence.go` (L9 — from the FILE, not the diff),
+across the import bindings, the three resets and their order, the
+worktree-vs-project-dir branch, mkdir placement, the clone seam and its
+two fail-closed suppressions, the rw-root filter, and every one of the
+refusal path's twenty-odd observable effects: the message format, the log
+levels, the cleanup order, the four neutralisers, the slot/lease release
+and clearing, the silent `write_event` and stop-verdict stamp, and every
+field of the returned `LoopResult`.
+
+First run: 12 survivors, 4 that did not compile. Second run: **110 killed,
+3 documented equivalents, 0 build failures**, over 59 differential
+scenarios.
+
+Six of the survivors were fixture gaps and one was a real shape finding.
+Two setters are called TWICE — the resets spend the first call of
+`set_container_suppressed` and `set_default_container_rw_roots` before the
+fence body reaches its own use of them — so a fixture that raises on every
+call can only ever test the reset. The spec's `[class, message]` grew an
+optional third element, the 1-based call index, and the fail-closed
+suppression and the mandatory rw-root bind became reachable.
+
+The shape finding: `rwRootsFor` returned `nil` on every error, which made
+the caller's `rwRoots = []string{}` reset unobservable — the mutation that
+deleted it survived. Python's `_rw_roots` is a list that *already holds the
+declared roots* when `_cfg_get` raises, and the `except` is what throws
+them away. Returning the partial set is what makes the reset load-bearing,
+and a config raise with two declared roots in hand is the fixture. **A
+guard that cannot fail is worse than no guard (L9), and a port that
+discards state early is how a guard stops being able to fail.**
+
+The three equivalents are all "a guard above has already pinned this":
+the fail-closed warning prints `*liveRepo`, which on that branch is the
+same string as `fenceDir`; the `intended && clone == nil` test cannot see
+its second half, because nothing between the clone assignment and the end
+of the try can raise (the only statement left is a log call, and the
+logging module swallows handler errors rather than propagating); and
+`!b.cwd` agrees with `d.SetDefaultSubprocessCwd == nil` on every input,
+because the deps are fixed for a run. The last one stays spelled as the
+flag anyway — Python reads a NAME there, and the name is what the
+differential drops. That is **L8**'s fourth closed sub-shape, and the
+`equivalent` field built one tranche earlier is what let all three stay in
+the battery as tripwires instead of being deleted.

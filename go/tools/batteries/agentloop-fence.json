@@ -1,0 +1,690 @@
+{
+ "packages": {
+  "default": [
+   "./internal/agentloop/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "cwd-name-is-not-tracked-as-bound",
+   "old": "\tb.cwd = true\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "rw-name-is-not-tracked-as-bound",
+   "old": "\tb.rw = true\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "ce-module-is-not-tracked-as-bound",
+   "old": "\tb.ce = true\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "both-llm-names-are-bound-together",
+   "old": "\tif d.SetDefaultSubprocessCwd == nil {\n\t\treturn errImportFence\n\t}\n\tb.cwd = true\n\tif d.SetDefaultContainerRWRoots == nil {\n\t\treturn errImportFence\n\t}\n\tb.rw = true",
+   "new": "\tif d.SetDefaultSubprocessCwd == nil || d.SetDefaultContainerRWRoots == nil {\n\t\treturn errImportFence\n\t}\n\tb.cwd = true\n\tb.rw = true"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-llm-names-bind-in-the-other-order",
+   "old": "\tif d.SetDefaultSubprocessCwd == nil {\n\t\treturn errImportFence\n\t}\n\tb.cwd = true\n\tif d.SetDefaultContainerRWRoots == nil {\n\t\treturn errImportFence\n\t}\n\tb.rw = true",
+   "new": "\tif d.SetDefaultContainerRWRoots == nil {\n\t\treturn errImportFence\n\t}\n\tb.rw = true\n\tif d.SetDefaultSubprocessCwd == nil {\n\t\treturn errImportFence\n\t}\n\tb.cwd = true"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-container-exec-is-a-plain-import-error",
+   "old": "\t\treturn moduleNotFound(\"container_exec\")",
+   "new": "\t\treturn errImportFence"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-container-exec-names-the-wrong-module",
+   "old": "\t\treturn moduleNotFound(\"container_exec\")",
+   "new": "\t\treturn moduleNotFound(\"worktree\")"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-suppression-reset-suppresses",
+   "old": "\tif err := ce.SetContainerSuppressed(false); err != nil {",
+   "new": "\tif err := ce.SetContainerSuppressed(true); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-rw-reset-runs-before-the-suppression-reset",
+   "old": "\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\treturn err\n\t}\n\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}",
+   "new": "\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}\n\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\treturn err\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-introspection-reset-runs-before-the-rw-reset",
+   "old": "\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}\n\tif ce.SetIntrospectionRun == nil {\n\t\treturn ceAttr(\"set_introspection_run\")\n\t}\n\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {\n\t\treturn err\n\t}",
+   "new": "\tif ce.SetIntrospectionRun == nil {\n\t\treturn ceAttr(\"set_introspection_run\")\n\t}\n\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {\n\t\treturn err\n\t}\n\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-introspection-grant-is-hardcoded-off",
+   "old": "\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {",
+   "new": "\tif err := ce.SetIntrospectionRun(false); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-introspection-grant-is-hardcoded-on",
+   "old": "\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {",
+   "new": "\tif err := ce.SetIntrospectionRun(true); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-rw-reset-is-skipped",
+   "old": "\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}\n\tif ce.SetIntrospectionRun == nil {",
+   "new": "\tif ce.SetIntrospectionRun == nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-suppression-reset-swallows-its-error",
+   "old": "\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\treturn err\n\t}",
+   "new": "\t_ = ce.SetContainerSuppressed(false)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-suppression-attr-guard-names-the-other-setter",
+   "old": "\t\treturn ceAttr(\"set_container_suppressed\")\n\t}\n\tif err := ce.SetContainerSuppressed(false); err != nil {",
+   "new": "\t\treturn ceAttr(\"set_introspection_run\")\n\t}\n\tif err := ce.SetContainerSuppressed(false); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-run-worktree-is-ignored",
+   "old": "\tif ctx.RunWorktree != nil {\n\t\t// busy_policy=worktree",
+   "new": "\tif false && ctx.RunWorktree != nil {\n\t\t// busy_policy=worktree"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-worktree-branch-is-inverted",
+   "old": "\tfenceDir := \"\"\n\tif ctx.RunWorktree != nil {",
+   "new": "\tfenceDir := \"\"\n\tif ctx.RunWorktree == nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-slug-is-derived-before-the-root",
+   "old": "\t\troot := d.ProjectDirRoot()\n\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}",
+   "new": "\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}\n\t\troot := d.ProjectDirRoot()"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-slug-always-comes-from-the-goal",
+   "old": "\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}",
+   "new": "\t\tslug := d.GoalToSlug(ctx.Goal)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-project-never-falls-back",
+   "old": "\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}",
+   "new": "\t\tslug := ctx.Project"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-fence-dir-is-not-created",
+   "old": "\tif err := d.MkdirParents(fenceDir); err != nil {\n\t\treturn err\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-fence-dir-that-cannot-be-created-is-ignored",
+   "old": "\tif err := d.MkdirParents(fenceDir); err != nil {\n\t\treturn err\n\t}",
+   "new": "\t_ = d.MkdirParents(fenceDir)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-fence-dir-is-created-before-the-resets",
+   "old": "\tif ce.SetContainerSuppressed == nil {\n\t\treturn ceAttr(\"set_container_suppressed\")\n\t}\n\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\treturn err\n\t}\n\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}\n\tif ce.SetIntrospectionRun == nil {\n\t\treturn ceAttr(\"set_introspection_run\")\n\t}\n\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {\n\t\treturn err\n\t}\n\n\tfenceDir := \"\"\n\tif ctx.RunWorktree != nil {\n\t\t// busy_policy=worktree: the whole run works in its isolated\n\t\t// worktree and loop_finalize merges back into the project dir.\n\t\tfenceDir = ctx.RunWorktree.Path\n\t} else {\n\t\t// A project-less run is NOT exempt (BACKLOG #1, third repro:\n\t\t// dispatched goals arrived with project=None and the whole run\n\t\t// executed with the inherited launch cwd, leaking relative writes\n\t\t// into the repo root). The fallback is the goal-slug project dir,\n\t\t// the same identity the scope pass derives, and it is CREATED,\n\t\t// because Popen raises on a missing cwd.\n\t\t// `_project_dir_root() / (project or _goal_to_slug(ctx.goal))` —\n\t\t// the LEFT operand is evaluated first, and the slug is only\n\t\t// derived when the project is blank.\n\t\troot := d.ProjectDirRoot()\n\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}\n\t\tfenceDir = joinPath(root, slug)\n\t}\n\tif err := d.MkdirParents(fenceDir); err != nil {\n\t\treturn err\n\t}\n",
+   "new": "\tfenceDir := \"\"\n\tif ctx.RunWorktree != nil {\n\t\t// busy_policy=worktree: the whole run works in its isolated\n\t\t// worktree and loop_finalize merges back into the project dir.\n\t\tfenceDir = ctx.RunWorktree.Path\n\t} else {\n\t\t// A project-less run is NOT exempt (BACKLOG #1, third repro:\n\t\t// dispatched goals arrived with project=None and the whole run\n\t\t// executed with the inherited launch cwd, leaking relative writes\n\t\t// into the repo root). The fallback is the goal-slug project dir,\n\t\t// the same identity the scope pass derives, and it is CREATED,\n\t\t// because Popen raises on a missing cwd.\n\t\t// `_project_dir_root() / (project or _goal_to_slug(ctx.goal))` —\n\t\t// the LEFT operand is evaluated first, and the slug is only\n\t\t// derived when the project is blank.\n\t\troot := d.ProjectDirRoot()\n\t\tslug := ctx.Project\n\t\tif slug == \"\" {\n\t\t\tslug = d.GoalToSlug(ctx.Goal)\n\t\t}\n\t\tfenceDir = joinPath(root, slug)\n\t}\n\tif err := d.MkdirParents(fenceDir); err != nil {\n\t\treturn err\n\t}\n\tif ce.SetContainerSuppressed == nil {\n\t\treturn ceAttr(\"set_container_suppressed\")\n\t}\n\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\treturn err\n\t}\n\tif err := d.SetDefaultContainerRWRoots([]string{}); err != nil {\n\t\treturn err\n\t}\n\tif ce.SetIntrospectionRun == nil {\n\t\treturn ceAttr(\"set_introspection_run\")\n\t}\n\tif err := ce.SetIntrospectionRun(a.IntrospectionAccess); err != nil {\n\t\treturn err\n\t}\n"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-cwd-is-bound-before-the-clone",
+   "old": "\tliveRepo := \"\"\n\tif newDir, err := containerClone(ctx, d, fenceDir, &liveRepo); err != nil {\n\t\treturn err\n\t} else {\n\t\tfenceDir = newDir\n\t}",
+   "new": "\tliveRepo := \"\"\n\tif err := d.SetDefaultSubprocessCwd(&fenceDir); err != nil {\n\t\treturn err\n\t}\n\tif newDir, err := containerClone(ctx, d, fenceDir, &liveRepo); err != nil {\n\t\treturn err\n\t} else {\n\t\tfenceDir = newDir\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-does-not-move-the-fence-dir",
+   "old": "\t} else {\n\t\tfenceDir = newDir\n\t}",
+   "new": "\t} else {\n\t\t_ = newDir\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-clone-failure-does-not-refuse",
+   "old": "\tif newDir, err := containerClone(ctx, d, fenceDir, &liveRepo); err != nil {\n\t\treturn err\n\t} else {\n\t\tfenceDir = newDir\n\t}",
+   "new": "\tif newDir, _ := containerClone(ctx, d, fenceDir, &liveRepo); true {\n\t\tfenceDir = newDir\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-cwd-setter-failure-is-swallowed",
+   "old": "\tif err := d.SetDefaultSubprocessCwd(&fenceDir); err != nil {\n\t\treturn err\n\t}",
+   "new": "\t_ = d.SetDefaultSubprocessCwd(&fenceDir)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-root-discovery-failure-refuses-the-loop",
+   "old": "\trwRoots, err := rwRootsFor(ctx, d, liveRepo)\n\tif err != nil {",
+   "new": "\trwRoots, err := rwRootsFor(ctx, d, liveRepo)\n\tif err != nil && false {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-root-discovery-failure-keeps-what-it-found",
+   "old": "\t\trwRoots = []string{}\n\t}",
+   "new": "\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-root-discovery-warning-is-silent",
+   "old": "\t\td.warnf(\"container rw-roots discovery failed; using cwd only: %s\",\n\t\t\terr)\n\t\trwRoots = []string{}",
+   "new": "\t\trwRoots = []string{}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-root-discovery-failure-is-an-error-line",
+   "old": "\t\td.warnf(\"container rw-roots discovery failed; using cwd only: %s\",\n\t\t\terr)",
+   "new": "\t\td.errorf(\"container rw-roots discovery failed; using cwd only: %s\",\n\t\t\terr)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-fallback-root-set-is-not-bound",
+   "old": "\treturn d.SetDefaultContainerRWRoots(rwRoots)",
+   "new": "\tif len(rwRoots) == 0 {\n\t\treturn nil\n\t}\n\treturn d.SetDefaultContainerRWRoots(rwRoots)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-final-root-setter-swallows",
+   "old": "\treturn d.SetDefaultContainerRWRoots(rwRoots)",
+   "new": "\t_ = d.SetDefaultContainerRWRoots(rwRoots)\n\treturn nil"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "container-configured-raising-still-counts-as-intended",
+   "old": "\t\tintended, err = ce.ContainerConfigured()\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}",
+   "new": "\t\tvar cfg bool\n\t\tcfg, err = ce.ContainerConfigured()\n\t\tintended = true\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tintended = cfg"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-preset-clone-is-reprovisioned",
+   "old": "\t\tif ctx.ContainerClone != nil || !intended {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\tif !intended {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "an-unconfigured-run-still-clones",
+   "old": "\t\tif ctx.ContainerClone != nil || !intended {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\tif ctx.ContainerClone != nil {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-worktree-module-is-a-plain-import-error",
+   "old": "\t\tif d.Worktree == nil {\n\t\t\treturn moduleNotFound(\"worktree\")\n\t\t}\n\t\tif d.Worktree.IsGitRepo == nil {",
+   "new": "\t\tif d.Worktree == nil {\n\t\t\treturn errImportFence\n\t\t}\n\t\tif d.Worktree.IsGitRepo == nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-non-repo-fence-dir-is-cloned-anyway",
+   "old": "\t\tif !isRepo {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\tif isRepo && false {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "only-a-non-repo-fence-dir-is-cloned",
+   "old": "\t\tif !isRepo {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\tif isRepo {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-is-never-recorded",
+   "old": "\t\t*liveRepo = fenceDir\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-is-recorded-after-the-clone-moves-the-dir",
+   "old": "\t\t*liveRepo = fenceDir\n\t\tvar clone *Clone",
+   "new": "\t\tvar clone *Clone"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "provision-clone-is-asked-for-the-wrong-kind",
+   "old": "\t\t\tc, perr = d.Worktree.ProvisionClone(fenceDir, \"container\",\n\t\t\t\tctx.LoopID)",
+   "new": "\t\t\tc, perr = d.Worktree.ProvisionClone(fenceDir, \"worktree\",\n\t\t\t\tctx.LoopID)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "provision-clone-is-not-told-the-loop-id",
+   "old": "\t\t\tc, perr = d.Worktree.ProvisionClone(fenceDir, \"container\",\n\t\t\t\tctx.LoopID)",
+   "new": "\t\t\tc, perr = d.Worktree.ProvisionClone(fenceDir, \"container\",\n\t\t\t\t\"\")"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-provision-clone-refuses-instead-of-suppressing",
+   "old": "\t\tif d.Worktree.ProvisionClone == nil {\n\t\t\tperr = wtAttr(\"provision_clone\")\n\t\t} else {",
+   "new": "\t\tif d.Worktree.ProvisionClone == nil {\n\t\t\treturn wtAttr(\"provision_clone\")\n\t\t} else {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-provision-failure-is-silent",
+   "old": "\t\tif perr != nil {\n\t\t\td.warnf(\"container scratch-clone provision error: %s\", perr)\n\t\t} else {",
+   "new": "\t\tif perr != nil {\n\t\t} else {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-provision-failure-refuses-the-loop",
+   "old": "\t\t\td.warnf(\"container scratch-clone provision error: %s\", perr)\n\t\t} else {",
+   "new": "\t\t\td.warnf(\"container scratch-clone provision error: %s\", perr)\n\t\t\treturn perr\n\t\t} else {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-is-not-remembered-on-the-context",
+   "old": "\t\t\tctx.ContainerClone = clone\n\t\t\tfenceDir = clone.Path",
+   "new": "\t\t\tfenceDir = clone.Path"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-does-not-become-the-fence-dir",
+   "old": "\t\t\tctx.ContainerClone = clone\n\t\t\tfenceDir = clone.Path",
+   "new": "\t\t\tctx.ContainerClone = clone"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-log-is-a-warning",
+   "old": "\t\t\td.info(\"container self-dev: working in scratch clone %s \"+\n\t\t\t\t\"(branch %s)\", clone.Path, clone.Branch)",
+   "new": "\t\t\td.warnf(\"container self-dev: working in scratch clone %s \"+\n\t\t\t\t\"(branch %s)\", clone.Path, clone.Branch)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-log-swaps-path-and-branch",
+   "old": "\t\t\t\t\"(branch %s)\", clone.Path, clone.Branch)",
+   "new": "\t\t\t\t\"(branch %s)\", clone.Branch, clone.Path)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-clone-does-not-suppress",
+   "old": "\t\tif err := ce.SetContainerSuppressed(true); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): the row that\n\t\t// prints fenceDir instead of *liveRepo. This branch runs only\n\t\t// when the clone was NOT provisioned, and the two names are the\n\t\t// same string until a clone moves the fence dir.\n\t\td.warnf(\"container self-dev: could not provision a scratch clone \"+",
+   "new": "\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): the row that\n\t\t// prints fenceDir instead of *liveRepo. This branch runs only\n\t\t// when the clone was NOT provisioned, and the two names are the\n\t\t// same string until a clone moves the fence dir.\n\t\td.warnf(\"container self-dev: could not provision a scratch clone \"+"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-clone-unsuppresses",
+   "old": "\t\tif err := ce.SetContainerSuppressed(true); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): the row that\n\t\t// prints fenceDir instead of *liveRepo. This branch runs only\n\t\t// when the clone was NOT provisioned, and the two names are the\n\t\t// same string until a clone moves the fence dir.\n\t\td.warnf(\"container self-dev: could not provision a scratch clone \"+",
+   "new": "\t\tif err := ce.SetContainerSuppressed(false); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): the row that\n\t\t// prints fenceDir instead of *liveRepo. This branch runs only\n\t\t// when the clone was NOT provisioned, and the two names are the\n\t\t// same string until a clone moves the fence dir.\n\t\td.warnf(\"container self-dev: could not provision a scratch clone \"+"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-fail-closed-warning-is-silent",
+   "old": "\t\td.warnf(\"container self-dev: could not provision a scratch clone \"+\n\t\t\t\"of %s — executor steps run on the HOST under the fence, NOT \"+\n\t\t\t\"containerized (the live repo is never mounted rw)\", *liveRepo)\n\t\treturn nil",
+   "new": "\t\treturn nil"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-fail-closed-warning-names-the-clone-dir",
+   "old": "\t\t\t\"containerized (the live repo is never mounted rw)\", *liveRepo)",
+   "new": "\t\t\t\"containerized (the live repo is never mounted rw)\", fenceDir)",
+   "equivalent": "this branch runs only when the clone was NOT provisioned, so fenceDir and *liveRepo are the same string on every input that reaches the line"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-setup-skipped-warning-is-silent",
+   "old": "\t\td.warnf(\"container scratch-clone setup skipped: %s\", err)",
+   "new": "\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-setup-failure-suppresses-regardless-of-intent",
+   "old": "\t\tif intended && ctx.ContainerClone == nil {",
+   "new": "\t\tif ctx.ContainerClone == nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-setup-failure-suppresses-even-with-a-clone",
+   "old": "\t\tif intended && ctx.ContainerClone == nil {",
+   "new": "\t\tif intended {",
+   "equivalent": "nothing between the clone assignment and the end of the try can raise (the only statement is a log call, and logging swallows handler errors), so reaching the handler with intended=True implies no clone was recorded"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-setup-failure-never-suppresses",
+   "old": "\t\tif intended && ctx.ContainerClone == nil {",
+   "new": "\t\tif intended && ctx.ContainerClone == nil && false {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-second-suppression-failure-is-swallowed",
+   "old": "\t\t\tif serr := ce.SetContainerSuppressed(true); serr != nil {\n\t\t\t\treturn fenceDir, serr\n\t\t\t}",
+   "new": "\t\t\t_ = ce.SetContainerSuppressed(true)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-config-import-is-checked-before-artifact-check",
+   "old": "\tif d.GoalDeclaredRoots == nil {\n\t\treturn nil, d.importFailure(\"artifact_check\")\n\t}\n\tif d.ConfigGet == nil {\n\t\treturn nil, d.importFailure(\"config\")\n\t}",
+   "new": "\tif d.ConfigGet == nil {\n\t\treturn nil, d.importFailure(\"config\")\n\t}\n\tif d.GoalDeclaredRoots == nil {\n\t\treturn nil, d.importFailure(\"artifact_check\")\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-missing-artifact-check-module-is-a-plain-import-error",
+   "old": "\t\treturn nil, d.importFailure(\"artifact_check\")",
+   "new": "\t\treturn nil, errImportFence"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-config-key-is-wrong",
+   "old": "\tallow, err := d.ConfigGet(\"validate.write_fence_allow\", pyval.List{})",
+   "new": "\tallow, err := d.ConfigGet(\"validate.write_fence_deny\", pyval.List{})"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-config-default-is-nil-not-an-empty-list",
+   "old": "\tallow, err := d.ConfigGet(\"validate.write_fence_allow\", pyval.List{})",
+   "new": "\tallow, err := d.ConfigGet(\"validate.write_fence_allow\", nil)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "declared-roots-are-dropped",
+   "old": "\tout := append([]string{}, roots...)",
+   "new": "\t_ = roots\n\tout := []string{}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-falsy-config-entry-is-kept",
+   "old": "\t\tif !pyval.Truthy(r) {\n\t\t\tcontinue\n\t\t}",
+   "new": "\t\tif pyval.Truthy(r) && false {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "only-falsy-config-entries-are-kept",
+   "old": "\t\tif !pyval.Truthy(r) {\n\t\t\tcontinue\n\t\t}",
+   "new": "\t\tif pyval.Truthy(r) {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "config-entries-are-not-user-expanded",
+   "old": "\t\tout = append(out, d.ExpandUser(pyval.Str(r)))",
+   "new": "\t\tout = append(out, pyval.Str(r))"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-filter-never-runs",
+   "old": "\tif liveRepo != \"\" {",
+   "new": "\tif liveRepo != \"\" && false {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-filter-always-runs",
+   "old": "\tif liveRepo != \"\" {",
+   "new": "\tif true {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-is-compared-unresolved",
+   "old": "\t\tlr := d.Realpath(liveRepo)",
+   "new": "\t\tlr := liveRepo"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-candidate-roots-are-compared-unresolved",
+   "old": "\t\t\tif d.Realpath(r) != lr {",
+   "new": "\t\t\tif r != lr {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-live-repo-filter-keeps-only-the-live-repo",
+   "old": "\t\t\tif d.Realpath(r) != lr {",
+   "new": "\t\t\tif d.Realpath(r) == lr {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-non-iterable-config-value-is-treated-as-empty",
+   "old": "\titems, err := iterAny(allow)\n\tif err != nil {\n\t\treturn out, err\n\t}",
+   "new": "\titems, _ := iterAny(allow)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-message-drops-the-exception-class",
+   "old": "\tmsg := fmt.Sprintf(\"execution fence setup failed: %s: %s\",\n\t\texcName(cause), cause)",
+   "new": "\tmsg := fmt.Sprintf(\"execution fence setup failed: %s\", cause)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-message-swaps-class-and-text",
+   "old": "\t\texcName(cause), cause)",
+   "new": "\t\tcause, excName(cause))"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-is-a-warning",
+   "old": "\td.errorf(\"loop refused before decomposition — %s\", msg)",
+   "new": "\td.warnf(\"loop refused before decomposition — %s\", msg)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-is-silent",
+   "old": "\td.errorf(\"loop refused before decomposition — %s\", msg)\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-is-not-cleaned-up",
+   "old": "\tif ctx.ContainerClone != nil {\n\t\tif err := func() error {",
+   "new": "\tif ctx.ContainerClone != nil && false {\n\t\tif err := func() error {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-reference-is-cleared-before-the-cleanup",
+   "old": "\t\t\tif err := d.Worktree.CleanupClone(ctx.ContainerClone); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tctx.ContainerClone = nil\n\t\t\treturn nil",
+   "new": "\t\t\tclone := ctx.ContainerClone\n\t\t\tctx.ContainerClone = nil\n\t\t\tif err := d.Worktree.CleanupClone(clone); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn nil"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-clone-cleanup-failure-is-silent",
+   "old": "\t\t\td.warnf(\"execution fence scratch-clone cleanup failed: %s\", err)",
+   "new": "\t\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-worktree-is-pruned-before-it-is-cleaned",
+   "old": "\t\t\tif err := d.Worktree.Cleanup(ctx.RunWorktree); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tif d.Worktree.Prune == nil {\n\t\t\t\treturn wtAttr(\"prune\")\n\t\t\t}\n\t\t\tif err := d.Worktree.Prune(ctx.RunWorktree.RepoDir); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+   "new": "\t\t\tif d.Worktree.Prune == nil {\n\t\t\t\treturn wtAttr(\"prune\")\n\t\t\t}\n\t\t\tif err := d.Worktree.Prune(ctx.RunWorktree.RepoDir); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tif err := d.Worktree.Cleanup(ctx.RunWorktree); err != nil {\n\t\t\t\treturn err\n\t\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-worktree-is-not-pruned",
+   "old": "\t\t\tif d.Worktree.Prune == nil {\n\t\t\t\treturn wtAttr(\"prune\")\n\t\t\t}\n\t\t\tif err := d.Worktree.Prune(ctx.RunWorktree.RepoDir); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-worktree-cleanup-failure-is-silent",
+   "old": "\t\t\td.warnf(\"execution fence worktree cleanup failed: %s\", err)",
+   "new": "\t\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-cwd-neutraliser-runs-with-an-unbound-name",
+   "old": "\t\t{\"subprocess cwd\", func() error {\n\t\t\tif !b.cwd {\n\t\t\t\treturn unboundLocal(\"set_default_subprocess_cwd\")\n\t\t\t}",
+   "new": "\t\t{\"subprocess cwd\", func() error {\n\t\t\tif d.SetDefaultSubprocessCwd == nil {\n\t\t\t\treturn unboundLocal(\"set_default_subprocess_cwd\")\n\t\t\t}",
+   "equivalent": "b.cwd is set exactly when d.SetDefaultSubprocessCwd is non-nil and the deps are fixed for the run, so the flag and the nil-check agree on every input; the flag is what the port MEANS — Python reads a name, not a dep"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-rw-neutraliser-runs-with-an-unbound-name",
+   "old": "\t\t{\"rw-root policy\", func() error {\n\t\t\tif !b.rw {\n\t\t\t\treturn unboundLocal(\"set_default_container_rw_roots\")\n\t\t\t}",
+   "new": "\t\t{\"rw-root policy\", func() error {\n\t\t\tif d.SetDefaultContainerRWRoots == nil {\n\t\t\t\treturn unboundLocal(\"set_default_container_rw_roots\")\n\t\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-cwd-neutraliser-binds-a-path-instead-of-none",
+   "old": "\t\t\treturn d.SetDefaultSubprocessCwd(nil)",
+   "new": "\t\t\tempty := \"\"\n\t\t\treturn d.SetDefaultSubprocessCwd(&empty)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-suppression-neutraliser-unsuppresses",
+   "old": "\t\t\treturn d.ContainerExec.SetContainerSuppressed(true)",
+   "new": "\t\t\treturn d.ContainerExec.SetContainerSuppressed(false)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-introspection-neutraliser-grants",
+   "old": "\t\t\treturn d.ContainerExec.SetIntrospectionRun(false)",
+   "new": "\t\t\treturn d.ContainerExec.SetIntrospectionRun(true)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-failing-neutraliser-skips-the-rest",
+   "old": "\t\tif err := n.fn(); err != nil {\n\t\t\td.warnf(\"execution fence refusal could not neutralize %s: %s\",\n\t\t\t\tn.label, err)\n\t\t}",
+   "new": "\t\tif err := n.fn(); err != nil {\n\t\t\td.warnf(\"execution fence refusal could not neutralize %s: %s\",\n\t\t\t\tn.label, err)\n\t\t\tbreak\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "a-failing-neutraliser-is-silent",
+   "old": "\t\t\td.warnf(\"execution fence refusal could not neutralize %s: %s\",\n\t\t\t\tn.label, err)",
+   "new": "\t\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-neutralisation-warning-swaps-label-and-error",
+   "old": "\t\t\td.warnf(\"execution fence refusal could not neutralize %s: %s\",\n\t\t\t\tn.label, err)",
+   "new": "\t\t\td.warnf(\"execution fence refusal could not neutralize %s: %s\",\n\t\t\t\terr, n.label)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-unbound-name-error-is-a-plain-name-error",
+   "old": "\treturn &pyval.PyErr{Class: \"NameError\", Msg: \"cannot access free \" +\n\t\t\"variable '\" + name + \"' where it is not associated with a \" +\n\t\t\"value in enclosing scope\"}",
+   "new": "\treturn &pyval.PyErr{Class: \"NameError\",\n\t\tMsg: \"name '\" + name + \"' is not defined\"}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-slot-is-cleared-even-when-the-release-fails",
+   "old": "\t\tif err := ctx.ProjectSlot.Release(); err != nil {\n\t\t\td.warnf(\"execution fence refusal project-slot release \"+\n\t\t\t\t\"failed: %s\", err)\n\t\t} else {\n\t\t\tctx.ProjectSlot = nil\n\t\t}",
+   "new": "\t\terr := ctx.ProjectSlot.Release()\n\t\tctx.ProjectSlot = nil\n\t\tif err != nil {\n\t\t\td.warnf(\"execution fence refusal project-slot release \"+\n\t\t\t\t\"failed: %s\", err)\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-lease-is-cleared-even-when-the-release-fails",
+   "old": "\t\tif err := ctx.RunLease.Release(); err != nil {\n\t\t\td.warnf(\"execution fence refusal run-lease release failed: %s\",\n\t\t\t\terr)\n\t\t} else {\n\t\t\tctx.RunLease = nil\n\t\t}",
+   "new": "\t\terr := ctx.RunLease.Release()\n\t\tctx.RunLease = nil\n\t\tif err != nil {\n\t\t\td.warnf(\"execution fence refusal run-lease release failed: %s\",\n\t\t\t\terr)\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-lease-is-released-before-the-slot",
+   "old": "\tif ctx.ProjectSlot != nil {\n\t\tif err := ctx.ProjectSlot.Release(); err != nil {",
+   "new": "\tif ctx.RunLease != nil {\n\t\tif err := ctx.RunLease.Release(); err != nil {\n\t\t\td.warnf(\"execution fence refusal run-lease release failed: %s\",\n\t\t\t\terr)\n\t\t} else {\n\t\t\tctx.RunLease = nil\n\t\t}\n\t}\n\tif ctx.ProjectSlot != nil {\n\t\tif err := ctx.ProjectSlot.Release(); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-running-state-clear-failure-is-silent",
+   "old": "\t\td.warnf(\"execution fence refusal running-state clear failed: %s\",\n\t\t\terr)",
+   "new": "\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-stop-verdict-is-stamped-before-the-event",
+   "old": "\tif d.WriteEvent != nil {\n\t\t_ = d.WriteEvent(\"loop_done\", pyval.Obj{\n\t\t\t{Key: \"goal\", Val: ctx.Goal},\n\t\t\t{Key: \"project\", Val: ctx.Project},\n\t\t\t{Key: \"loop_id\", Val: ctx.LoopID},\n\t\t\t{Key: \"status\", Val: \"stuck\"},\n\t\t\t{Key: \"detail\", Val: msg},\n\t\t})\n\t}",
+   "new": "\tif d.StampRunStopVerdict != nil {\n\t\t_ = d.StampRunStopVerdict(FenceRefusalStopVerdict, msg)\n\t}\n\tif d.WriteEvent != nil {\n\t\t_ = d.WriteEvent(\"loop_done\", pyval.Obj{\n\t\t\t{Key: \"goal\", Val: ctx.Goal},\n\t\t\t{Key: \"project\", Val: ctx.Project},\n\t\t\t{Key: \"loop_id\", Val: ctx.LoopID},\n\t\t\t{Key: \"status\", Val: \"stuck\"},\n\t\t\t{Key: \"detail\", Val: msg},\n\t\t})\n\t}\n\t_ = 0"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-event-is-not-written",
+   "old": "\tif d.WriteEvent != nil {\n\t\t_ = d.WriteEvent(\"loop_done\", pyval.Obj{",
+   "new": "\tif false && d.WriteEvent != nil {\n\t\t_ = d.WriteEvent(\"loop_done\", pyval.Obj{"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-event-detail-is-not-the-refusal-message",
+   "old": "\t\t\t{Key: \"detail\", Val: msg},",
+   "new": "\t\t\t{Key: \"detail\", Val: \"\"},"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-event-status-is-not-stuck",
+   "old": "\t\t\t{Key: \"status\", Val: \"stuck\"},",
+   "new": "\t\t\t{Key: \"status\", Val: \"error\"},"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-stop-verdict-is-not-stamped",
+   "old": "\tif d.StampRunStopVerdict != nil {\n\t\t_ = d.StampRunStopVerdict(FenceRefusalStopVerdict, msg)\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-stamped-verdict-is-out-of-budget",
+   "old": "const FenceRefusalStopVerdict = \"external-interrupt\"",
+   "new": "const FenceRefusalStopVerdict = \"out_of_budget\""
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-stamp-arguments-are-swapped",
+   "old": "\t\t_ = d.StampRunStopVerdict(FenceRefusalStopVerdict, msg)",
+   "new": "\t\t_ = d.StampRunStopVerdict(msg, FenceRefusalStopVerdict)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-is-an-error-status",
+   "old": "\t\tStatus:       \"stuck\",",
+   "new": "\t\tStatus:       \"error\","
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-has-an-empty-stuck-reason",
+   "old": "\treason := msg\n",
+   "new": "\treason := \"\"\n"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-has-no-evidence",
+   "old": "\t\tStopEvidence: msg,",
+   "new": "\t\tStopEvidence: \"\","
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-loses-the-project",
+   "old": "\t\tProject:      ctx.Project,",
+   "new": "\t\tProject:      \"\","
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-loses-the-goal",
+   "old": "\t\tGoal:         ctx.Goal,",
+   "new": "\t\tGoal:         \"\","
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-refusal-result-loses-the-elapsed-time",
+   "old": "\t\tElapsedMS:    elapsed,",
+   "new": "\t\tElapsedMS:    elapsed * 0,"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-scratch-dir-is-the-workspace-root",
+   "old": "\t\treturn d.MkdirParents(joinPath(root, \"tmp\"))",
+   "new": "\t\treturn d.MkdirParents(root)"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-scratch-dir-failure-is-silent",
+   "old": "\t\td.warnf(\"workspace scratch directory setup skipped: %s\", err)",
+   "new": "\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-scratch-dir-runs-before-the-fence",
+   "old": "\tvar bound fenceBindings\n\tif err := fenceSetup(ctx, a, d, &bound); err != nil {\n\t\treturn fenceRefusal(ctx, d, bound, err)\n\t}\n\tscratchDir(d)",
+   "new": "\tvar bound fenceBindings\n\tscratchDir(d)\n\tif err := fenceSetup(ctx, a, d, &bound); err != nil {\n\t\treturn fenceRefusal(ctx, d, bound, err)\n\t}"
+  },
+  {
+   "file": "internal/agentloop/fence.go",
+   "name": "the-scratch-dir-runs-after-a-refusal-too",
+   "old": "\t\treturn fenceRefusal(ctx, d, bound, err)\n\t}\n\tscratchDir(d)",
+   "new": "\t\tres := fenceRefusal(ctx, d, bound, err)\n\t\tscratchDir(d)\n\t\treturn res\n\t}\n\tscratchDir(d)"
+  }
+ ]
+}

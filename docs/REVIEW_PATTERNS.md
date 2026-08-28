@@ -2467,7 +2467,7 @@ deliberate signal: a b64 field says "these bytes, not this text".
 
 ### L59 — Names imported together fail together, and a whole-module stub cannot see it
 
-*instances: 1 (2026-08-27, `_finalize_loop`)*
+*instances: 2 (2026-08-27, `_finalize_loop`; 2026-08-27, the execution fence)*
 
 Python bundles names per import statement:
 
@@ -2516,9 +2516,62 @@ invisible among them.
 > not where the call is — and the fixture that proves it is one dropped
 > name, not one deleted module.**
 
+**Amendment 1 (2026-08-27, the execution fence): they fail together, but
+they do not fail ATOMICALLY.** CPython compiles a multi-name from-import
+into one `IMPORT_FROM`/`STORE_FAST` pair **per name, in source order**, so
+
+```python
+from llm import set_default_subprocess_cwd, set_default_container_rw_roots
+```
+
+against an `llm` that has the first name and not the second **binds the
+first** and then raises. The handler catches the statement as a unit — but
+the enclosing scope is left holding one of the two names, and code in the
+`except` branch that calls both gets a working call and a `NameError`. The
+port had tracked "did this import succeed" as a single flag; it is one
+flag per name, and the fixture that shows it is the SECOND name dropped,
+not the first.
+
+The `NameError` text is the closure one when the caller is a lambda —
+`cannot access free variable 'X' where it is not associated with a value
+in enclosing scope`, not `name 'X' is not defined` — and a port that
+spells the common message diverges on a path that only fires when the
+fence has already failed.
+
+**Amendment 2 (same chunk): a module STUB is not a missing MODULE, and
+the difference is a whole handler.** `import X as _y` against a
+`sys.modules` entry whose every attribute raises **succeeds** and binds
+`_y` — the import machinery never touches an attribute. So the "module is
+gone" fixture built out of a stub silently tests the "module is present"
+path. A genuinely unimportable module takes `sys.modules.pop(name)` PLUS a
+`sys.meta_path` finder raising `ModuleNotFoundError(..., name=name)`.
+
+Related: a `DeadModule` whose `__getattr__` raises must be **swapped in**,
+never populated — `__getattr__` fires only for names that are missing, so
+every attribute you assign onto it is an attribute that does not raise.
+
+Three fixtures, three different operator-visible strings, three different
+handlers:
+
+| fixture | mechanism | raises |
+|---|---|---|
+| missing NAME | `PartialModule.__getattr__` | `ImportError` |
+| missing MODULE | `sys.meta_path` finder | `ModuleNotFoundError` |
+| present module, missing attribute | plain `ModuleType` | `AttributeError` |
+
+**Amendment 3 (same chunk): some import fixtures are unreachable, and
+that is a finding to write down, not a gap to fill.** The fence guards
+`llm`, but `from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER` sits
+twenty-four lines ABOVE it, outside every handler — a missing `llm`
+raises out of the whole function and the fence's guard is reachable only
+through a missing NAME. Deleting the fixture is correct; deleting it
+without the comment is how the next round re-adds it.
+
 **Tripwire.** Count the importable names the ported function reaches. If
 the differential has fewer failure fixtures than that, the missing ones
-are guard placements nothing measures.
+are guard placements nothing measures. Then check the reverse: for each
+whole-module fixture, prove the module is actually absent (pop + finder)
+rather than stubbed.
 
 ---
 
