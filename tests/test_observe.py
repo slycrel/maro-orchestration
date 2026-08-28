@@ -765,3 +765,157 @@ class TestSuggestionStats:
     # test_snapshot_includes_suggestion_stats and test_dashboard_html_contains_suggestion_panel
     # tested the archived HTTP dashboard — moved to archive/test_observe_dashboard.py
     # (TestSuggestionStatsDashboardHTML), 2026-07-02.
+
+
+# ---------------------------------------------------------------------------
+# R2-3: numeric-field coercion, final encoded-size authority, event_truncated
+# fallback — hostile values in ANY kwarg must never write an oversize line or
+# silently drop an event.
+# ---------------------------------------------------------------------------
+
+def test_write_event_container_typed_tokens_rejected(monkeypatch, tmp_path):
+    """R2-3 must-detect: a container smuggled into tokens_in bypassed the
+    shed ladder entirely (probe: 4276-byte line, returned True). Numeric
+    projections accept int/float only; invalid values are dropped from the
+    row and named in invalid_fields."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", status="done",
+                     tokens_in={"k": "v" * 2000})
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert len(line.encode("utf-8")) + 1 <= 4096
+    entry = json.loads(line)
+    assert "tokens_in" not in entry
+    assert "tokens_in" in entry["invalid_fields"]
+    assert entry["event_type"] == "step_done"
+
+
+def test_write_event_huge_int_still_lands(monkeypatch, tmp_path):
+    """R2-3 must-detect: a >4300-digit int made json.dumps raise (CPython
+    int->str digit limit) and the event was SILENTLY dropped. An event must
+    still land — coerced — and the function must return True."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", status="done", tokens_in=10 ** 5000)
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert len(line.encode("utf-8")) + 1 <= 4096
+    entry = json.loads(line)
+    assert entry["event_type"] == "step_done"
+    assert "tokens_in" not in entry
+    assert "tokens_in" in entry["invalid_fields"]
+
+
+def test_write_event_nan_never_reaches_the_line(monkeypatch, tmp_path):
+    """R2-3 must-detect: json.dumps happily emits bare NaN, which is not
+    JSON (contract B2 forbids it). A NaN float field must be stripped."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", status="done", elapsed_ms=float("nan"))
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert "NaN" not in line and "Infinity" not in line
+    entry = json.loads(line)  # would raise on bare NaN in strict parsers
+    assert "elapsed_ms" not in entry
+    assert "elapsed_ms" in entry["invalid_fields"]
+
+
+def test_write_event_numeric_negative_control(monkeypatch, tmp_path):
+    """Sane numerics ride through untouched, no invalid_fields note."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", status="done", tokens_in=123,
+                     tokens_out=45, elapsed_ms=6789.5, step_idx=2,
+                     cache_read_tokens=99)
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    entry = json.loads(line)
+    assert entry["tokens_in"] == 123
+    assert entry["tokens_out"] == 45
+    assert entry["elapsed_ms"] == 6789.5
+    assert entry["step_idx"] == 2
+    assert entry["cache_read_tokens"] == 99
+    assert "invalid_fields" not in entry
+
+
+_HOSTILE_BY_KWARG = {
+    # str-projected fields: byte-blowup strings and containers
+    "goal": "\U0001d54f" * 5000,
+    "project": {"nested": ["x" * 5000]},
+    "loop_id": "l" * 20000,
+    "step": "\U0001d54f" * 5000,
+    "status": ["not", "a", "string", "y" * 5000],
+    "model": "\U0001d54f" * 5000,
+    "detail": "d" * 100000,
+    # numeric fields: monster ints, containers, non-finite floats
+    "step_idx": 10 ** 5000,
+    "tokens_in": {"a": "b" * 5000},
+    "tokens_out": float("inf"),
+    "cache_read_tokens": [1] * 4000,
+    "elapsed_ms": float("nan"),
+    # optional payload
+    "tool_pathologies": [{"cls": "z" * 9000, "evidence": "e" * 9000}] * 50,
+}
+
+
+@pytest.mark.parametrize("kwarg", sorted(_HOSTILE_BY_KWARG))
+def test_write_event_every_kwarg_survives_hostile_value(
+        monkeypatch, tmp_path, kwarg):
+    """The catches-next-month's-field instrument (R2-3): EVERY kwarg of
+    write_event, fed a hostile value, must still produce exactly one valid
+    JSON line whose encoded length (with newline) is <= 4096 bytes — and
+    the call must report success."""
+    import inspect
+    sig = inspect.signature(write_event)
+    assert kwarg in sig.parameters, f"stale hostile map: {kwarg}"
+    # The map must cover every kwarg so a field added later fails loudly.
+    payload_params = set(sig.parameters) - {"event_type"}
+    assert payload_params == set(_HOSTILE_BY_KWARG), (
+        "write_event grew/changed kwargs — extend _HOSTILE_BY_KWARG")
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", **{kwarg: _HOSTILE_BY_KWARG[kwarg]})
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert len(line.encode("utf-8")) + 1 <= 4096
+    entry = json.loads(line)
+    assert "NaN" not in line and "Infinity" not in line
+    assert entry["event_type"] in ("step_done", "event_truncated")
+
+
+def test_write_event_hostile_event_type_still_lands(monkeypatch, tmp_path):
+    """event_type itself gets the same treatment (str() of a >4300-digit
+    int raises; a huge string must be capped)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    assert write_event("e" * 50000, status="done") is True
+    assert write_event(10 ** 5000, status="done") is True
+    lines = _read_event_lines(tmp_path)
+    assert len(lines) == 2
+    for line in lines:
+        assert len(line.encode("utf-8")) + 1 <= 4096
+        json.loads(line)
+
+
+def test_write_event_single_os_write_append(monkeypatch, tmp_path):
+    """B9 honesty (R2-3d): the append is ONE os.write of the fully encoded
+    bytes on an O_APPEND fd — not a buffered file object whose flush may
+    legally split."""
+    import os as _os
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    writes = []
+    real_write = _os.write
+
+    def spy(fd, data):
+        writes.append(bytes(data))
+        return real_write(fd, data)
+    monkeypatch.setattr(_os, "write", spy)
+    ok = write_event("step_done", status="done", detail="payload")
+    assert ok is True
+    event_writes = [w for w in writes if b'"step_done"' in w]
+    assert len(event_writes) == 1
+    assert event_writes[0].endswith(b"\n")
+    entry = json.loads(event_writes[0].decode("utf-8"))
+    assert entry["detail"] == "payload"

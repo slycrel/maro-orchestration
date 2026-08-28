@@ -23,6 +23,8 @@ surface (`maro ancestry` CLI).
 from __future__ import annotations
 
 import json
+import math
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -521,6 +523,39 @@ def _truncate_encoded(value: str, max_bytes: int) -> str:
     return value[:lo]
 
 
+# Numeric projections may carry only sane finite numbers (R2-3): the caps
+# ladder budgets STRING fields, so a container smuggled into tokens_in or a
+# multi-thousand-digit int bypassed it entirely — the latter even makes
+# json.dumps raise (CPython's int->str digit limit), silently dropping the
+# event. Anything outside this bound could also threaten the PIPE_BUF line
+# budget; 10**15 is far beyond any honest token/ms count.
+_EVENT_NUM_BOUND = 10 ** 15
+
+
+def _coerce_event_num(value: Any, name: str, invalid: List[str]) -> Optional[int | float]:
+    """int/float only, finite, |v| < 10**15 — else None + a note in invalid."""
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, int) and -_EVENT_NUM_BOUND < value < _EVENT_NUM_BOUND:
+        return value
+    if isinstance(value, float) and math.isfinite(value) \
+            and abs(value) < _EVENT_NUM_BOUND:
+        return value
+    if len(invalid) < 8:  # capped — the note must not become a payload
+        invalid.append(name)
+    return None
+
+
+def _event_str(value: Any, cap: int) -> str:
+    """str(value)[:cap], surviving values str() itself rejects (a >4300-digit
+    int trips CPython's int->str limit) — a hostile field must degrade, not
+    take the whole event down."""
+    try:
+        return str(value)[:cap]
+    except Exception:
+        return f"<unrepresentable {type(value).__name__}>"[:cap]
+
+
 def write_event(
     event_type: str,
     *,
@@ -550,62 +585,100 @@ def write_event(
     try:
         path = _events_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        # R2-3: numeric projections are coerced, not copied — a container or
+        # a huge int in any of them either bypassed the shed ladder or made
+        # json.dumps raise (silent drop). Invalid values are DROPPED from
+        # the row and named in `invalid_fields` (capped) so the event still
+        # lands and the corruption is visible.
+        invalid: List[str] = []
         entry = {
             # C0.3: EVERY string field is capped — the previously-uncapped
             # ones (event_type/project/loop_id/status/model) let one long
             # value blow the PIPE_BUF atomicity budget for the whole line.
-            "event_type": str(event_type)[:64],
+            "event_type": _event_str(event_type, 64),
             "ts": datetime.now(timezone.utc).isoformat(),
-            "goal": str(goal)[:80],
-            "project": str(project)[:120],
-            "loop_id": str(loop_id)[:64],
-            "step": str(step)[:120],
-            "step_idx": step_idx,
-            "status": str(status)[:64],
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cache_read_tokens": cache_read_tokens,
-            "model": str(model)[:120],
-            "elapsed_ms": elapsed_ms,
+            "goal": _event_str(goal, 80),
+            "project": _event_str(project, 120),
+            "loop_id": _event_str(loop_id, 64),
+            "step": _event_str(step, 120),
+            "step_idx": _coerce_event_num(step_idx, "step_idx", invalid),
+            "status": _event_str(status, 64),
+            "tokens_in": _coerce_event_num(tokens_in, "tokens_in", invalid),
+            "tokens_out": _coerce_event_num(tokens_out, "tokens_out", invalid),
+            "cache_read_tokens": _coerce_event_num(
+                cache_read_tokens, "cache_read_tokens", invalid),
+            "model": _event_str(model, 120),
+            "elapsed_ms": _coerce_event_num(elapsed_ms, "elapsed_ms", invalid),
             # 200 is load-bearing (PIPE_BUF row atomicity) — kept, but the
             # cut announces itself now.
-            "detail": _cb_clip(detail, 200),
+            "detail": _cb_clip(_event_str(detail, 4096)
+                               if not isinstance(detail, str) else detail,
+                               200),
         }
-        if tool_pathologies:
+        for _name in invalid:
+            entry.pop(_name, None)  # absent, not null — readers .get(x, 0)
+        if invalid:
+            entry["invalid_fields"] = invalid
+        if tool_pathologies and isinstance(tool_pathologies, list):
             # Bounded like every other field (PIPE_BUF atomicity): at most 3
             # entries, evidence trimmed — the full text lives on the step
             # outcome / transcript artifact.
             entry["tool_pathologies"] = [
-                {"cls": str(p.get("cls", ""))[:40],
-                 "evidence": str(p.get("evidence", ""))[:160]}
-                for p in tool_pathologies[:3]
+                {"cls": _event_str(p.get("cls", ""), 40),
+                 "evidence": _event_str(p.get("evidence", ""), 160)}
+                for p in tool_pathologies[:3] if isinstance(p, dict)
             ]
         # Character caps alone don't bound BYTES (json.dumps ASCII-escapes:
         # a multibyte char can encode 12 bytes) — measure the encoded line
         # and shed weight until line+"\n" fits PIPE_BUF. Never block, never
         # lock: drop optional payload first, then byte-budget every string
-        # field so the sum provably fits.
-        line = json.dumps(entry)
-        if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
-            entry.pop("tool_pathologies", None)
-            line = json.dumps(entry)
-        if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
-            # Encoded-representation budgets (quotes included); they sum to
-            # ~2000 bytes, leaving ample room for keys, numerics and ts.
-            for key, budget in (("event_type", 128), ("goal", 256),
-                                ("project", 256), ("loop_id", 128),
-                                ("step", 384), ("status", 128),
-                                ("model", 256), ("detail", 512)):
-                val = entry.get(key)
-                if isinstance(val, str):
-                    entry[key] = _truncate_encoded(val, budget)
-            line = json.dumps(entry)
+        # field so the sum provably fits. allow_nan=False (B2 wire format):
+        # bare NaN/Infinity is not JSON — coercion above strips non-finite
+        # floats, and the ValueError fallback catches anything that slips.
+        try:
+            line = json.dumps(entry, allow_nan=False)
+            if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
+                entry.pop("tool_pathologies", None)
+                line = json.dumps(entry, allow_nan=False)
+            if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
+                # Encoded-representation budgets (quotes included); they sum
+                # to ~2000 bytes, leaving ample room for keys, numerics, ts.
+                for key, budget in (("event_type", 128), ("goal", 256),
+                                    ("project", 256), ("loop_id", 128),
+                                    ("step", 384), ("status", 128),
+                                    ("model", 256), ("detail", 512)):
+                    val = entry.get(key)
+                    if isinstance(val, str):
+                        entry[key] = _truncate_encoded(val, budget)
+                line = json.dumps(entry, allow_nan=False)
+            encoded = (line + "\n").encode("utf-8")
+        except (TypeError, ValueError):
+            encoded = None
+        # ONE authoritative final check (R2-3): whatever the ladder above
+        # did, nothing oversize — and nothing unencodable — reaches the
+        # append. The fallback row is fixed-shape and provably tiny; an
+        # event is NEVER silently dropped for being hostile.
+        if encoded is None or len(encoded) > _EVENT_LINE_MAX_BYTES:
+            fallback = {
+                "event_type": "event_truncated",
+                "ts": entry.get("ts")
+                or datetime.now(timezone.utc).isoformat(),
+                "orig_event_type": _event_str(event_type, 64),
+            }
+            encoded = (json.dumps(fallback) + "\n").encode("utf-8")
         # Deliberately UNLOCKED: the enforcement above keeps the line under
-        # PIPE_BUF (single O_APPEND write, atomic on Linux), and
-        # file_lock._report_timeout calls this — locking here would recurse
-        # into the lock machinery while it's reporting a timeout.
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        # PIPE_BUF, and file_lock._report_timeout calls this — locking here
+        # would recurse into the lock machinery while it's reporting a
+        # timeout. "Single write" is literal (R2-3, B9): one os.write of
+        # the fully encoded bytes on an O_APPEND fd — a buffered file
+        # object could legally split the flush and void the atomicity the
+        # contract claims.
+        fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+                     0o666)
+        try:
+            os.write(fd, encoded)
+        finally:
+            os.close(fd)
         return True
     except Exception:
         return False
