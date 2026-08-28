@@ -359,3 +359,82 @@ def test_record_cost_usd_defaults_to_zero(workspace):
     out = record_llm_call("p", "r")
     rec = json.loads(out.read_text())
     assert rec["cost_usd"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# R2-1: temp-then-link publication — the final name only ever appears with
+# the complete payload; a crash before publish strands NOTHING at a
+# reader-visible name.
+# ---------------------------------------------------------------------------
+
+def test_record_crash_before_publish_leaves_no_final_file(workspace, monkeypatch):
+    """R2-1 must-detect: the old O_EXCL-at-final-name publication made
+    call-NNNNN.json visible EMPTY before the payload write. With link
+    publication, a failure at publish time must leave no call-*.json at
+    all (and no reader-matching debris)."""
+    import os as _os
+    rd = create_run_dir("hid00r21", prompt="g")
+    set_current_run_dir(rd)
+
+    def _boom(src, dst, *a, **k):
+        raise OSError("simulated crash at publish")
+    monkeypatch.setattr(_os, "link", _boom)
+
+    out = record_llm_call("p", "r")
+    assert out is None  # capture is fail-open, never raises
+    calls = _calls_dir(rd)
+    # No final-name file appeared — empty or partial.
+    assert list(calls.glob("call-*.json")) == []
+    # The temp was cleaned up (and could never match a reader glob anyway).
+    assert list(calls.glob(".call-tmp-*")) == []
+
+
+def test_record_final_name_never_visible_empty(workspace, monkeypatch):
+    """At the instant of publication the final file already holds the full
+    payload: os.link publishes the flushed temp, so a reader that wins the
+    race sees complete JSON, never zero bytes."""
+    import os as _os
+    real_link = _os.link
+    seen = {}
+
+    def _spy(src, dst, *a, **k):
+        # The temp being published must already hold complete JSON.
+        seen["payload"] = Path(src).read_text()
+        return real_link(src, dst, *a, **k)
+    monkeypatch.setattr(_os, "link", _spy)
+
+    rd = create_run_dir("hid00r22", prompt="g")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r", backend="b")
+    assert out is not None
+    rec = json.loads(seen["payload"])
+    assert rec["prompt"] == "p" and rec["backend"] == "b"
+
+
+def test_reader_globs_never_match_temp_names(workspace):
+    """The temp prefix must be invisible to _scan_highest_seq and every
+    call-record reader — their globs all require `call-*.json`."""
+    rd = create_run_dir("hid00r23", prompt="g")
+    calls = _calls_dir(rd)
+    calls.mkdir(parents=True, exist_ok=True)
+    (calls / ".call-tmp-1234-deadbeef").write_text('{"seq": 99}')
+    assert runs._scan_highest_seq(rd) == 0
+    assert list(calls.glob("call-*.json")) == []
+
+
+def test_record_collision_retry_via_link(workspace):
+    """Collision recovery still works through the link primitive, and the
+    published record's seq matches its filename after the bump."""
+    rd = create_run_dir("hid00r24", prompt="g")
+    set_current_run_dir(rd)
+    calls = _calls_dir(rd)
+    calls.mkdir(parents=True, exist_ok=True)
+    (calls / "call-00001.json").write_text('{"seq": 1}')
+    (calls / "call-00002.json").write_text('{"seq": 2}')
+    runs._CALL_COUNTERS[str(rd)] = 0
+
+    out = record_llm_call("p", "r")
+    assert out is not None and out.name == "call-00003.json"
+    assert json.loads(out.read_text())["seq"] == 3
+    # No temp debris left behind.
+    assert list(calls.glob(".call-tmp-*")) == []

@@ -1603,25 +1603,40 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             "error": str(error)[:500] if error else "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })
-        # Exclusive-create publication (C0.4): write-once is enforced, not
-        # conventional. Two processes sharing a run dir can allocate the
-        # same seq (the counter is process-local); O_EXCL makes the loser
-        # land on the next free number instead of overwriting the winner.
+        # Temp-then-link publication (C0.4 + R2-1): write-once is enforced,
+        # not conventional, AND the final name only ever appears with the
+        # complete payload. Bare O_EXCL at the final name published an EMPTY
+        # file before the payload write — a crash in that window permanently
+        # stranded the seq with a zero-byte record, and readers could see
+        # partial JSON. Now the payload lands (flushed + fsynced) in a
+        # dot-prefixed temp in the same calls/ dir — invisible to
+        # _scan_highest_seq and every call-record reader, whose globs all
+        # require `call-*.json` — and os.link publishes it atomically:
+        # FileExistsError on collision means the loser bumps the seq and
+        # retries (bounded), exactly the old O_EXCL discipline.
         payload = json.dumps(rec, default=str)
-        for _ in range(10):  # bounded — capture must never block the call
-            out = calls / f"call-{seq:05d}.json"
+        tmp = calls / f".call-tmp-{os.getpid()}-{os.urandom(4).hex()}"
+        try:
+            for _ in range(10):  # bounded — capture must never block the call
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                out = calls / f"call-{seq:05d}.json"
+                try:
+                    os.link(str(tmp), str(out))
+                except FileExistsError:
+                    seq = _bump_call_seq(Path(rd))
+                    rec["seq"] = seq
+                    payload = json.dumps(rec, default=str)
+                    continue
+                return out
+            return None
+        finally:
             try:
-                fd = os.open(str(out), os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                             0o666)
-            except FileExistsError:
-                seq = _bump_call_seq(Path(rd))
-                rec["seq"] = seq
-                payload = json.dumps(rec, default=str)
-                continue
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-            return out
-        return None
+                os.unlink(tmp)
+            except OSError:
+                pass
     except Exception:
         return None
 
