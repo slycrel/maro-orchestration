@@ -174,19 +174,27 @@ def verdict_trust(outcome: Any) -> str:
     # Explicit exclusion flag (C1.2): judges stamp exclusion-class verdicts
     # additively; honoring the flag OR the legacy value below means a new
     # exclusion-class source from either engine is safe by construction.
-    # Strict parse (R2-2d): bool("false") is True, so a drifted string flag
-    # excluded in the WRONG direction. Exactly True (or a true-shaped
-    # string) excludes; false-shaped/unrecognized strings do not; any other
-    # truthy non-bool value (dict, int) excludes — conservative.
-    flag = _get("verdict_excluded", False)
-    if isinstance(flag, bool):
-        if flag:
+    # Strict TRI-STATE (R3-4, rule A9 — malformed hard gate errs DOWN):
+    # bool True / true-shaped string → excluded; bool False / absent /
+    # explicit null / false-shaped string ("", "0", "false", "no", "off")
+    # → not excluded; EVERY OTHER present value — unknown string, number,
+    # container — is drifted/forged and EXCLUDES. The R2-2d parse let
+    # unknown strings ("garbage") and falsy non-bools (0, 0.0, []) fall
+    # through to normal grading, i.e. to FULL. config.parse_bool shares
+    # the string vocabulary but returns a DEFAULT for unrecognized input;
+    # we need present-and-unrecognized → excluded, so classify locally
+    # against config's shared string tables instead of a third vocabulary.
+    flag = _get("verdict_excluded", None)
+    if flag is not None:
+        from config import _FALSY_STRINGS
+        if isinstance(flag, bool):
+            if flag:
+                return VERDICT_TRUST_EXCLUDED
+        elif isinstance(flag, str):
+            if flag.strip().lower() not in _FALSY_STRINGS:
+                return VERDICT_TRUST_EXCLUDED
+        else:
             return VERDICT_TRUST_EXCLUDED
-    elif isinstance(flag, str):
-        if flag.strip().lower() in ("1", "true", "yes", "on"):
-            return VERDICT_TRUST_EXCLUDED
-    elif flag:
-        return VERDICT_TRUST_EXCLUDED
 
     # Hard-value validation (R2-2a): "" and ABSENT are the legacy-known
     # shapes; explicit None behaves as absent too — the codebase's
@@ -255,9 +263,12 @@ class OutcomeVerdictStampResult:
     while ``write_failed`` means a present/possibly-present row could not be
     made honest.  Keeping those states distinct prevents callers from either
     aborting useful recovery on absence or swallowing a persistence failure.
+    ``invalid`` (R3-3) means the CALLER's verdict value was malformed
+    (non-bool ``goal_achieved``) and the row was deliberately left
+    untouched — the smallest honest signal for a refused stamp.
     """
 
-    status: Literal["updated", "missing", "write_failed"]
+    status: Literal["updated", "missing", "write_failed", "invalid"]
     attempts: int = 0
     error: str = ""
 
@@ -672,6 +683,14 @@ def record_outcome(
                       stop_verdict)
             stop_verdict = ""
             stop_evidence = ""
+    # Mirror of stamp_outcome_verdict's ingress validation (R3-3): a
+    # caller-supplied non-bool verdict ("false", 1, {}) must not become a
+    # judged row — record as unjudged (None) and say so, never coerce.
+    if not (goal_achieved is None or type(goal_achieved) is bool):
+        log.warning(
+            "record_outcome: malformed goal_achieved %s (%r) — recording "
+            "unjudged", type(goal_achieved).__name__, goal_achieved)
+        goal_achieved = None
     cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
     outcome = Outcome(
         outcome_id=str(uuid.uuid4())[:8],
@@ -889,6 +908,34 @@ def stamp_outcome_verdict(
     """
     if not loop_id:
         return OutcomeVerdictStampResult("missing")
+    # Ingress validation (R3-3): the old ``bool(goal_achieved)`` LAUNDERED
+    # malformed verdicts — the string "false" stored as True and graded
+    # FULL downstream. A verdict is None (leave untouched) or exactly bool;
+    # anything else must not mutate the row's verdict fields at all.
+    if not (goal_achieved is None or type(goal_achieved) is bool):
+        log.warning(
+            "stamp_outcome_verdict: malformed goal_achieved %s (%r) for "
+            "loop %s — refusing to stamp",
+            type(goal_achieved).__name__, goal_achieved, loop_id)
+        return OutcomeVerdictStampResult(
+            "invalid",
+            error=f"goal_achieved must be bool or None, got "
+                  f"{type(goal_achieved).__name__}")
+    # Confidence stamps only when parseable to a FINITE float; otherwise
+    # the key is omitted (absent = not judged, rule A6) and logged.
+    if goal_verdict_confidence is not None:
+        try:
+            _conf = float(goal_verdict_confidence)
+        except (TypeError, ValueError):
+            _conf = None
+        if _conf is None or not math.isfinite(_conf):
+            log.warning(
+                "stamp_outcome_verdict: unparseable/non-finite "
+                "goal_verdict_confidence %r for loop %s — omitting",
+                goal_verdict_confidence, loop_id)
+            goal_verdict_confidence = None
+        else:
+            goal_verdict_confidence = _conf
     path = _outcomes_path()
 
     attempts = max(1, int(max_attempts))
@@ -931,7 +978,8 @@ def stamp_outcome_verdict(
                     "superseded_by": goal_verdict_source,
                 })
             if goal_achieved is not None:
-                row["goal_achieved"] = bool(goal_achieved)
+                # Validated exactly-bool at ingress (R3-3) — no coercion.
+                row["goal_achieved"] = goal_achieved
             row["goal_verdict_source"] = goal_verdict_source
             if goal_verdict_source in _EXCLUSION_CLASS_SOURCES:
                 # C1.2: stamp the exclusion CLASS alongside the value so
@@ -951,7 +999,8 @@ def stamp_outcome_verdict(
             # not verify" is itself a verdict event.
             row["goal_verdict_at"] = datetime.now(timezone.utc).isoformat()
             if goal_verdict_confidence is not None:
-                row["goal_verdict_confidence"] = float(goal_verdict_confidence)
+                # Validated finite-float at ingress (R3-3).
+                row["goal_verdict_confidence"] = goal_verdict_confidence
             lines[target_idx] = json.dumps(row)
             updated["hit"] = True
             updated["row"] = row

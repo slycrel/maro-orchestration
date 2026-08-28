@@ -449,10 +449,22 @@ follow. Cross-process, therefore cross-engine.
   the omit-when-None discipline; any non-string source → EXCLUDED),
   `goal_achieved` must be exactly bool (anything else non-None →
   EXCLUDED), confidence must parse finite (unparseable or NaN/inf →
-  EXCLUDED), and the exclusion flag parses strictly (True / true-shaped
-  strings / truthy non-bool non-strings exclude; the string "false" does
-  not). Malformed always errs DOWN, never to FULL
-  (`src/memory_ledger.py:145-250`).
+  EXCLUDED), and the exclusion flag classifies as a strict TRI-STATE
+  (round 3, R3-4): bool True / true-shaped strings exclude; bool False /
+  absent / null / false-shaped strings ("", "0", "false", "no", "off" —
+  config.parse_bool's shared tables) do not; EVERY other present value
+  (unknown string, number, container) excludes — the R2-2 parse let
+  "garbage", 0, and [] fall through to normal grading. Malformed always
+  errs DOWN, never to FULL (`src/memory_ledger.py:145-260`).
+  (6) The verdict STAMP boundary validates too (round 3, R3-3): both
+  `stamp_outcome_verdict` and `record_outcome` accept `goal_achieved`
+  only as None or exactly bool — a malformed value never mutates/creates
+  verdict fields (the stamp refuses with the distinct result status
+  `invalid`; record_outcome records the row unjudged) — and
+  `goal_verdict_confidence` is stamped only when parseable to a finite
+  float, else omitted and logged. Before R3-3, `bool(goal_achieved)` at
+  the stamp laundered the string "false" into a stored True that graded
+  FULL.
 
 ### B7. lesson-stores v1 (`memory/lessons.jsonl` + `memory/{medium,long}/lessons.jsonl`)
 

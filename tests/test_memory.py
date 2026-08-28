@@ -165,6 +165,92 @@ def test_authoritative_restamp_clears_verdict_excluded(monkeypatch, tmp_path):
     assert any(h.get("goal_achieved") is False for h in history)
 
 
+def test_stamp_malformed_goal_achieved_refused_end_to_end(monkeypatch, tmp_path):
+    """R3-3 must-detect: stamp_outcome_verdict laundered malformed verdicts
+    at ingress — bool("false") stored True and the ACTUAL stored row graded
+    FULL. A malformed value must not mutate the row's verdict fields; the
+    result signals the refusal distinctly."""
+    from memory import _outcomes_path, stamp_outcome_verdict
+    from memory_ledger import verdict_trust, VERDICT_TRUST_FULL
+    _setup(monkeypatch, tmp_path)
+    record_outcome("g", "done", "s", loop_id="loop-r33")
+    before = _outcomes_path().read_text()
+    res = stamp_outcome_verdict(
+        "loop-r33", goal_achieved="false", goal_verdict_source="closure",
+        goal_verdict_confidence=0.9)
+    assert res.status == "invalid"
+    # Row untouched: no goal_achieved flip, no source/confidence stamp.
+    assert _outcomes_path().read_text() == before
+    row = json.loads(before.strip().splitlines()[-1])
+    assert "goal_achieved" not in row
+    assert verdict_trust(row) != VERDICT_TRUST_FULL
+    # Negative control: a real bool verdict works and grades FULL over the
+    # ACTUAL stored row.
+    res2 = stamp_outcome_verdict(
+        "loop-r33", goal_achieved=True, goal_verdict_source="closure",
+        goal_verdict_confidence=0.9)
+    assert res2.status == "updated"
+    stored = json.loads(
+        _outcomes_path().read_text().strip().splitlines()[-1])
+    assert stored["goal_achieved"] is True
+    assert verdict_trust(stored) == VERDICT_TRUST_FULL
+
+
+def test_stamp_unparseable_confidence_omitted(monkeypatch, tmp_path):
+    """R3-3: confidence stamps only when parseable to a FINITE float."""
+    from memory import _outcomes_path, stamp_outcome_verdict
+    _setup(monkeypatch, tmp_path)
+    record_outcome("g", "done", "s", loop_id="loop-conf")
+    res = stamp_outcome_verdict(
+        "loop-conf", goal_achieved=True, goal_verdict_source="closure",
+        goal_verdict_confidence="not-a-number")
+    assert res.status == "updated"
+    row = json.loads(_outcomes_path().read_text().strip().splitlines()[-1])
+    assert row["goal_achieved"] is True
+    assert "goal_verdict_confidence" not in row
+    res2 = stamp_outcome_verdict(
+        "loop-conf", goal_achieved=True, goal_verdict_source="closure",
+        goal_verdict_confidence=float("nan"))
+    assert res2.status == "updated"
+    row = json.loads(_outcomes_path().read_text().strip().splitlines()[-1])
+    assert "goal_verdict_confidence" not in row
+
+
+def test_record_outcome_malformed_goal_achieved_records_unjudged(
+        monkeypatch, tmp_path):
+    """R3-3 mirror: record_outcome's construction site must not let a
+    caller-supplied non-bool verdict become a judged row."""
+    from memory import _outcomes_path
+    _setup(monkeypatch, tmp_path)
+    record_outcome("g", "done", "s", loop_id="loop-ro",
+                   goal_achieved="false", goal_verdict_source="closure")
+    row = json.loads(_outcomes_path().read_text().strip().splitlines()[-1])
+    assert "goal_achieved" not in row  # unjudged, absent-not-null
+
+
+def test_verdict_excluded_strict_tristate(monkeypatch, tmp_path):
+    """R3-4 must-detect: unknown strings and falsy non-bools fell through
+    the flag classification to normal grading (FULL). Rule A9: every
+    present value that is not bool/known-string errs DOWN to EXCLUDED."""
+    from memory_ledger import verdict_trust, VERDICT_TRUST_EXCLUDED
+    _setup(monkeypatch, tmp_path)
+    base = {"goal_achieved": True, "goal_verdict_source": "closure",
+            "goal_verdict_confidence": 0.95}
+    for bad in ("garbage", 0, 0.0, [], {}, 2, ("x",)):
+        row = dict(base, verdict_excluded=bad)
+        assert verdict_trust(row) == VERDICT_TRUST_EXCLUDED, repr(bad)
+    # True-shaped values exclude.
+    for true_shaped in (True, "true", "1", "yes", "on"):
+        row = dict(base, verdict_excluded=true_shaped)
+        assert verdict_trust(row) == VERDICT_TRUST_EXCLUDED, repr(true_shaped)
+    # Negative controls: bool False, false-shaped strings, absent, null —
+    # NOT excluded.
+    for ok in (False, "false", "", "0", "no", "off", None):
+        row = dict(base, verdict_excluded=ok)
+        assert verdict_trust(row) != VERDICT_TRUST_EXCLUDED, repr(ok)
+    assert verdict_trust(dict(base)) != VERDICT_TRUST_EXCLUDED  # absent
+
+
 # ---------------------------------------------------------------------------
 # load_outcomes
 # ---------------------------------------------------------------------------
