@@ -407,6 +407,54 @@ def create_run_dir(
     return rd
 
 
+def _parse_meta_or_park(old: str, meta_path: Path, caller: str) -> dict:
+    """Parse metadata.json content inside a locked merge — or PARK it.
+
+    THE corrupt-metadata posture, shared by every metadata mutator (R2-5:
+    the C0.2 park landed only in finalize_run; ~11 sibling sites still did
+    `except Exception: existing = {}`, so any stamp on a crash-torn file
+    silently replaced it with a fresh plausible object — the doc's
+    merge-on-write guarantee was false everywhere except finalize).
+
+    Empty/absent content is a legitimate fresh start ({}). Unparseable or
+    non-object content is parked VERBATIM to a UNIQUE sidecar
+    (`metadata.json.corrupt.<utcstamp>-<pid>[-<n>]`, O_CREAT|O_EXCL) so
+    repeat incidents never overwrite earlier evidence — and {} is returned
+    only AFTER the park succeeded. If the park itself fails, this RAISES:
+    the original bytes stay on disk untouched rather than being
+    destructively replaced (best-effort stampers swallow the raise and
+    simply don't stamp; write_metadata/finalize_run surface it).
+    """
+    if not old.strip():
+        return {}
+    try:
+        meta = json.loads(old)
+        if not isinstance(meta, dict):
+            raise ValueError(
+                f"metadata.json holds {type(meta).__name__}, not an object")
+        return meta
+    except Exception as exc:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        for n in range(10):
+            suffix = f".corrupt.{stamp}-{os.getpid()}" + (f"-{n}" if n else "")
+            side = meta_path.with_name(meta_path.name + suffix)
+            try:
+                fd = os.open(str(side),
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            except FileExistsError:
+                continue  # same stamp+pid twice — bump the -n suffix
+            with os.fdopen(fd, "w", encoding="utf-8",
+                           errors="surrogateescape") as fh:
+                fh.write(old)
+            log.warning(
+                "%s: metadata.json unparseable (%s) — original preserved "
+                "at %s", caller, exc, side)
+            return {}
+        raise OSError(
+            f"{caller}: metadata.json unparseable ({exc}) and no free "
+            f"sidecar name after 10 tries — refusing to overwrite")
+
+
 def write_metadata(
     rd: Path,
     *,
@@ -422,12 +470,7 @@ def write_metadata(
     meta_path = rd / "metadata.json"
 
     def _merge(old: str) -> str:
-        try:
-            existing = json.loads(old) if old else {}
-        except Exception:
-            existing = {}
-        if not isinstance(existing, dict):
-            existing = {}
+        existing = _parse_meta_or_park(old, meta_path, "write_metadata")
         meta = {
             "handle_id": handle_id,
             "nickname": nickname(handle_id),
@@ -492,12 +535,7 @@ def _stamp_metadata_at(rd: Optional[Path], fields: dict) -> Optional[Path]:
             return None
         meta_path = rd / "metadata.json"
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "_stamp_metadata_at")
             for k, v in fields.items():
                 if v is not None:
                     existing[k] = v
@@ -531,12 +569,7 @@ def stamp_run_loop_lineage(entry: dict) -> Optional[Path]:
         meta_path = rd / "metadata.json"
 
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_run_loop_lineage")
             loops = existing.get("loops")
             if not isinstance(loops, list):
                 loops = []
@@ -569,12 +602,7 @@ def stamp_run_audit_failure(fields: dict) -> Optional[Path]:
             return None
         meta_path = rd / "metadata.json"
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_run_audit_failure")
             repairs = existing.get("audit_repairs")
             repairs = list(repairs) if isinstance(repairs, list) else []
             legacy = existing.get("audit_repair")
@@ -737,12 +765,7 @@ def stamp_run_verdict(
             return None
         meta_path = rd / "metadata.json"
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_run_verdict")
             _apply_verdict_tuple(
                 existing, goal_achieved=goal_achieved, source=source,
                 confidence=confidence, summary=summary,
@@ -820,12 +843,7 @@ def stamp_run_stop_verdict(
         meta_path = rd / "metadata.json"
 
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_run_stop_verdict")
             evidence = stop_evidence
             if refine_note and stop_verdict:
                 _prior = existing.get("stop_verdict") or ""
@@ -873,12 +891,7 @@ def stamp_unjudged_verdict_source(source: str, summary: str = "") -> Optional[Pa
         meta_path = rd / "metadata.json"
 
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_unjudged_verdict_source")
             existing["goal_verdict_source"] = str(source)
             if summary:
                 existing["goal_verdict_summary"] = clip(
@@ -919,12 +932,7 @@ def stamp_run_verdict_contested(
         meta_path = rd / "metadata.json"
 
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_run_verdict_contested")
             existing["goal_verdict_contested"] = True
             existing["goal_verdict_contested_by"] = str(contested_by)
             for k, v in (extra or {}).items():
@@ -1001,12 +1009,7 @@ def stamp_delivered_now_retry(
         meta_path = rd / "metadata.json"
 
         def _merge(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "stamp_delivered_now_retry")
             existing["now_artifact_retry"] = retry_marker
             if judged:
                 # THE shared tuple replacement — every member set or
@@ -1051,12 +1054,7 @@ def clear_run_stop_verdict() -> Optional[Path]:
         meta_path = rd / "metadata.json"
 
         def _strip(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "clear_run_stop_verdict")
             for key in ("stop_verdict", "stop_evidence"):
                 existing.pop(key, None)
             index_run_dir(rd, existing)
@@ -1091,12 +1089,7 @@ def clear_run_verdict() -> Optional[Path]:
         meta_path = rd / "metadata.json"
 
         def _strip(old: str) -> str:
-            try:
-                existing = json.loads(old) if old else {}
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = _parse_meta_or_park(old, meta_path, "clear_run_verdict")
             _clear_verdict_keys(existing)
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
@@ -1135,30 +1128,12 @@ def finalize_run(
     def _merge(old: str) -> str:
         # Same locked-RMW shape as the stamp_run_* family (C0.2): the old
         # bare read→mutate→atomic_write raced every concurrent stamper and
-        # dropped whichever keys the loser had written.
-        try:
-            meta = json.loads(old) if old.strip() else {}
-            if not isinstance(meta, dict):
-                raise ValueError(
-                    f"metadata.json holds {type(meta).__name__}, not an object")
-        except Exception as exc:
-            # Never silently destroy another writer's keys: the old path
-            # replaced an unparseable file with {} + two keys. Park the
-            # bytes in a sidecar so nothing is lost, then finalize onto a
-            # fresh object — the run must still reach a terminal status.
-            meta = {}
-            side = meta_path.with_name(meta_path.name + ".corrupt")
-            try:
-                side.write_text(old, encoding="utf-8",
-                                errors="surrogateescape")
-                log.warning(
-                    "finalize_run(%s): metadata.json unparseable (%s) — "
-                    "original preserved at %s", handle_id, exc, side.name)
-            except OSError as werr:
-                log.warning(
-                    "finalize_run(%s): metadata.json unparseable (%s) and "
-                    "sidecar write failed (%s) — finalizing fresh",
-                    handle_id, exc, werr)
+        # dropped whichever keys the loser had written. Corrupt-park via
+        # the shared helper (R2-5): unique sidecar per incident, and a
+        # failed park RAISES — finalize must not destroy the only copy of
+        # another writer's bytes to reach a terminal status (the old
+        # fixed-name sidecar also clobbered earlier specimens).
+        meta = _parse_meta_or_park(old, meta_path, f"finalize_run({handle_id})")
         meta["status"] = status
         meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
         if extra:

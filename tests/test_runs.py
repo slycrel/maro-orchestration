@@ -177,9 +177,11 @@ def test_finalize_run_parse_failure_keeps_original_bytes(workspace):
     out = json.loads(meta_path.read_text())
     assert out["status"] == "completed"
     assert out["ended_at"]
-    side = rd / "metadata.json.corrupt"
-    assert side.exists()
-    assert side.read_text() == corrupt
+    # R2-5: the sidecar is UNIQUE per incident (utcstamp+pid), so repeat
+    # corruptions never overwrite earlier evidence.
+    sides = list(rd.glob("metadata.json.corrupt.*"))
+    assert len(sides) == 1
+    assert sides[0].read_text() == corrupt
 
 
 def test_create_run_dir_extra_metadata(workspace):
@@ -1080,3 +1082,105 @@ class TestStampRunLoopLineage:
             assert "loops" not in meta
         finally:
             runs_mod.set_current_run_dir(None)
+
+
+# ---------------------------------------------------------------------------
+# R2-5 — corrupt-metadata park is shared by EVERY metadata mutator, sidecars
+# are unique per incident, and a failed park never proceeds destructively.
+# ---------------------------------------------------------------------------
+
+def _mutators(handle_id):
+    """(name, callable) pairs covering write_metadata, two stamp_run_*
+    sites, and finalize_run — each mutates <run-dir>/metadata.json."""
+    import runs as _runs
+
+    def _write_metadata(rd):
+        write_metadata(rd, handle_id=handle_id, prompt="p", status="going")
+
+    def _stamp_metadata(rd):
+        return _runs._stamp_metadata_at(rd, {"experiment": "arm-b"})
+
+    def _stamp_stop_verdict(rd):
+        return _runs.stamp_run_stop_verdict(
+            stop_verdict="lost-the-plot", stop_evidence="ev", run_dir=rd)
+
+    def _finalize(rd):
+        finalize_run(handle_id, status="completed")
+
+    return [
+        ("write_metadata", _write_metadata),
+        ("stamp_run_metadata", _stamp_metadata),
+        ("stamp_run_stop_verdict", _stamp_stop_verdict),
+        ("finalize_run", _finalize),
+    ]
+
+
+@pytest.mark.parametrize("which", [0, 1, 2, 3],
+                         ids=["write_metadata", "stamp_run_metadata",
+                              "stamp_run_stop_verdict", "finalize_run"])
+def test_corrupt_metadata_parked_by_every_mutator(workspace, which):
+    """R2-5 must-detect: the corrupt-park landed ONLY in finalize_run —
+    every sibling mutator silently replaced a crash-torn metadata.json
+    with a fresh plausible object. Each mutator must park the original
+    bytes to a UNIQUE sidecar, and a SECOND incident must create a SECOND
+    sidecar (finalize's old fixed-name sidecar clobbered prior specimens)."""
+    handle_id = f"c0r5{which:04d}"
+    rd = create_run_dir(handle_id, prompt="p")
+    meta_path = rd / "metadata.json"
+    name, mutate = _mutators(handle_id)[which]
+
+    corrupt1 = '{"handle_id": "' + handle_id + '", "torn'
+    meta_path.write_text(corrupt1)
+    mutate(rd)
+    sides = sorted(rd.glob("metadata.json.corrupt.*"))
+    assert len(sides) == 1, name
+    assert sides[0].read_text() == corrupt1
+    # The mutation itself landed on a fresh object.
+    json.loads(meta_path.read_text())
+
+    # Second incident: a NEW sidecar, first specimen untouched.
+    corrupt2 = "]]] second corruption [[["
+    meta_path.write_text(corrupt2)
+    mutate(rd)
+    sides = sorted(rd.glob("metadata.json.corrupt.*"))
+    assert len(sides) == 2, name
+    contents = {s.read_text() for s in sides}
+    assert contents == {corrupt1, corrupt2}
+
+
+@pytest.mark.parametrize("which", [0, 1, 2, 3],
+                         ids=["write_metadata", "stamp_run_metadata",
+                              "stamp_run_stop_verdict", "finalize_run"])
+def test_park_failure_never_proceeds_destructively(workspace, monkeypatch,
+                                                   which):
+    """R2-5 must-detect: when the park itself cannot be written the mutator
+    must NOT replace the file — the original (possibly the only copy of
+    another writer's bytes) stays on disk untouched. write_metadata and
+    finalize_run raise; the best-effort stampers swallow and return None."""
+    import os as _os
+
+    import runs as _runs
+    handle_id = f"c0r6{which:04d}"
+    rd = create_run_dir(handle_id, prompt="p")
+    meta_path = rd / "metadata.json"
+    name, mutate = _mutators(handle_id)[which]
+
+    corrupt = '{"handle_id": "x", "torn'
+    meta_path.write_text(corrupt)
+
+    real_open = _os.open
+
+    def deny_sidecar(path, flags, *a, **k):
+        if ".corrupt" in str(path):
+            raise PermissionError("sidecar denied")
+        return real_open(path, flags, *a, **k)
+    monkeypatch.setattr(_os, "open", deny_sidecar)
+
+    if name in ("write_metadata", "finalize_run"):
+        with pytest.raises(Exception):
+            mutate(rd)
+    else:
+        assert mutate(rd) is None  # best-effort: swallowed, not stamped
+    # The one assertion that matters: original bytes untouched.
+    assert meta_path.read_text() == corrupt
+    assert list(rd.glob("metadata.json.corrupt.*")) == []
