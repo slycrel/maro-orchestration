@@ -1218,3 +1218,43 @@ def test_park_failure_never_proceeds_destructively(workspace, monkeypatch,
     # The one assertion that matters: original bytes untouched.
     assert meta_path.read_text() == corrupt
     assert list(rd.glob("metadata.json.corrupt.*")) == []
+
+
+def test_park_is_fsynced_before_replacement(workspace, monkeypatch):
+    """R3-7 must-detect: the sidecar park was a buffered write with no
+    flush/fsync — a crash after the mutator's replacement write could lose
+    the ONLY copy of the original bytes while 'successful park' had already
+    licensed the destruction. The sidecar data AND its directory entry must
+    be fsynced while metadata.json still holds the corrupt original."""
+    import os as _os
+    import runs as _runs
+    handle_id = "c0r70000"
+    rd = create_run_dir(handle_id, prompt="p")
+    meta_path = rd / "metadata.json"
+    corrupt = '{"handle_id": "' + handle_id + '", "torn'
+    meta_path.write_text(corrupt)
+
+    synced = []  # (resolved target of the fd, metadata content at that moment)
+    real_fsync = _os.fsync
+
+    def spy(fd):
+        try:
+            target = _os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            target = "?"
+        synced.append((target, meta_path.read_text()))
+        return real_fsync(fd)
+    monkeypatch.setattr(_os, "fsync", spy)
+
+    _runs._stamp_metadata_at(rd, {"experiment": "arm-b"})
+
+    # Sidecar file fsynced while the original was still the live copy.
+    assert any(".corrupt." in target and content == corrupt
+               for target, content in synced), synced
+    # Its directory entry too (the name must survive a crash as well).
+    assert any(target == str(rd) and content == corrupt
+               for target, content in synced), synced
+    # And the park + replacement both actually happened.
+    sides = list(rd.glob("metadata.json.corrupt.*"))
+    assert len(sides) == 1 and sides[0].read_text() == corrupt
+    json.loads(meta_path.read_text())

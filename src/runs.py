@@ -446,6 +446,21 @@ def _parse_meta_or_park(old: str, meta_path: Path, caller: str) -> dict:
             with os.fdopen(fd, "w", encoding="utf-8",
                            errors="surrogateescape") as fh:
                 fh.write(old)
+                # R3-7: the park must be DURABLE before {} licenses the
+                # destructive replacement of the original bytes. A buffered
+                # write alone could vanish in a crash after the caller has
+                # already atomic-written fresh metadata over the only other
+                # copy. fsync the data, then the directory entry (the name
+                # itself must survive too). A failed fsync raises out of
+                # here — original bytes stay untouched, same posture as a
+                # failed O_EXCL create.
+                fh.flush()
+                os.fsync(fh.fileno())
+            dfd = os.open(str(meta_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
             log.warning(
                 "%s: metadata.json unparseable (%s) — original preserved "
                 "at %s", caller, exc, side)
