@@ -1,0 +1,871 @@
+{
+ "packages": {
+  "default": [
+   "./internal/agentloop/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "resolve-tools-is-captured-once",
+   "old": "\tresolveTools := func() ([]any, error) {\n\t\tif ctx.PermCtx == nil {\n\t\t\treturn append([]any{}, d.ExecuteTools...), nil\n\t\t}\n\t\trole, deny := permParts(ctx.PermCtx)\n\t\treturn d.GetToolsForRole(role, deny)\n\t}",
+   "new": "\tvar cached []any\n\tresolveTools := func() ([]any, error) {\n\t\tif cached != nil {\n\t\t\treturn cached, nil\n\t\t}\n\t\tif ctx.PermCtx == nil {\n\t\t\tcached = append([]any{}, d.ExecuteTools...)\n\t\t\treturn cached, nil\n\t\t}\n\t\trole, deny := permParts(ctx.PermCtx)\n\t\tvar terr error\n\t\tcached, terr = d.GetToolsForRole(role, deny)\n\t\treturn cached, terr\n\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-permission-context-is-ignored",
+   "old": "\t\tif ctx.PermCtx == nil {\n\t\t\treturn append([]any{}, d.ExecuteTools...), nil\n\t\t}",
+   "new": "\t\tif true {\n\t\t\treturn append([]any{}, d.ExecuteTools...), nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "only-a-permission-context-gets-the-defaults",
+   "old": "\t\tif ctx.PermCtx == nil {",
+   "new": "\t\tif ctx.PermCtx != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-role-and-the-deny-list-are-swapped",
+   "old": "\t\treturn d.GetToolsForRole(role, deny)",
+   "new": "\t\treturn d.GetToolsForRole(deny, role)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "decompose-runs-before-its-phase-is-set",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhaseDecompose, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}\n\tdec, err := d.DecomposeGoal(",
+   "new": "\tdec, err := d.DecomposeGoal("
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-decompose-phase-is-the-pre-flight-one",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhaseDecompose, d.PhaseTrace); err != nil {",
+   "new": "\tif err := ctx.SetPhase(looptypes.PhasePreFlight, d.PhaseTrace); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-phase-transition-is-not-traced",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhaseDecompose, d.PhaseTrace); err != nil {",
+   "new": "\tif err := ctx.SetPhase(looptypes.PhaseDecompose, nil); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-invalid-transition-is-swallowed",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhasePreFlight, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}\n\tpfv, err := d.PreflightChecks(",
+   "new": "\t_ = ctx.SetPhase(looptypes.PhasePreFlight, d.PhaseTrace)\n\tpfv, err := d.PreflightChecks(",
+   "equivalent": "only the FIRST transition can be refused — every later one starts from a phase this function just set, and each pair is in the table"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-prepare-phase-is-never-entered",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhasePrepare, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-execute-phase-is-set-after-the-circuit-is-armed",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhaseExecute, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}\n\tdisarm := armRunaway(ctx, d)",
+   "new": "\tdisarm := armRunaway(ctx, d)\n\tif err := ctx.SetPhase(looptypes.PhaseExecute, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "finalize-runs-before-its-phase-is-set",
+   "old": "\tif err := ctx.SetPhase(looptypes.PhaseFinalize, d.PhaseTrace); err != nil {\n\t\treturn nil, err\n\t}\n\tresult, err := d.BuildResultAndFinalize(",
+   "new": "\tresult, err := d.BuildResultAndFinalize("
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "decompose-is-not-told-the-preset-steps",
+   "old": "\t\t{Key: \"preset_steps\", Val: a.PresetSteps},\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "decompose-gets-the-wrong-step-cap",
+   "old": "\t\t{Key: \"max_steps\", Val: a.MaxSteps},\n\t\t{Key: \"knowledge_sub_goals\"",
+   "new": "\t\t{Key: \"max_steps\", Val: 8},\n\t\t{Key: \"knowledge_sub_goals\""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "decompose-gets-the-context-instead-of-the-keyword",
+   "old": "\t\t{Key: \"permission_context\", Val: a.PermissionContext},",
+   "new": "\t\t{Key: \"permission_context\", Val: ctx.PermCtx},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-decompose-keywords-are-reordered",
+   "old": "\t\t{Key: \"preset_steps\", Val: a.PresetSteps},\n\t\t{Key: \"max_steps\", Val: a.MaxSteps},",
+   "new": "\t\t{Key: \"max_steps\", Val: a.MaxSteps},\n\t\t{Key: \"preset_steps\", Val: a.PresetSteps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-decompose-tuple-is-five-wide",
+   "old": "\tif err := unpack(dec, 6); err != nil {",
+   "new": "\tif err := unpack(dec, 5); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-decompose-tuple-is-not-checked",
+   "old": "\tif err := unpack(dec, 6); err != nil {\n\t\treturn nil, err\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-preflight-tuple-is-four-wide",
+   "old": "\tif err := unpack(pfv, 3); err != nil {",
+   "new": "\tif err := unpack(pfv, 4); err != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-prepare-tuple-is-not-checked",
+   "old": "\tif err := unpack(prep, 3); err != nil {\n\t\treturn nil, err\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "too-few-values-reports-the-other-message",
+   "old": "\tif len(vals) < n {\n\t\treturn &pyval.PyErr{Class: \"ValueError\",\n\t\t\tMsg: fmt.Sprintf(\n\t\t\t\t\"not enough values to unpack (expected %d, got %d)\",\n\t\t\t\tn, len(vals))}\n\t}",
+   "new": "\tif len(vals) < n {\n\t\treturn &pyval.PyErr{Class: \"ValueError\",\n\t\t\tMsg: fmt.Sprintf(\n\t\t\t\t\"too many values to unpack (expected %d, got %d)\",\n\t\t\t\tn, len(vals))}\n\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-too-many-message-omits-the-count",
+   "old": "\t\t\tMsg: fmt.Sprintf(\"too many values to unpack (expected %d, got %d)\",\n\t\t\t\tn, len(vals))}",
+   "new": "\t\t\tMsg: fmt.Sprintf(\"too many values to unpack (expected %d)\", n)}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-unpack-failure-is-a-type-error",
+   "old": "\tif len(vals) < n {\n\t\treturn &pyval.PyErr{Class: \"ValueError\",",
+   "new": "\tif len(vals) < n {\n\t\treturn &pyval.PyErr{Class: \"TypeError\","
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-prereq-context-is-the-lessons-context",
+   "old": "\tprereqContext := dec[1]",
+   "new": "\tprereqContext := dec[2]"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-skill-flag-is-the-cost-context",
+   "old": "\thadNoMatchingSkill := dec[5]",
+   "new": "\thadNoMatchingSkill := dec[4]"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-steps-are-not-replaced-by-pre-flight",
+   "old": "\tsteps = pfv[0]\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-steps-are-not-replaced-by-prepare",
+   "old": "\tsteps, stepIndices, manifestSteps := prep[0], prep[1], prep[2]",
+   "new": "\t_, stepIndices, manifestSteps := prep[0], prep[1], prep[2]\n\t_ = steps"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "prepare-does-not-replace-the-manifest",
+   "old": "\tsteps, stepIndices, manifestSteps := prep[0], prep[1], prep[2]",
+   "new": "\tsteps, stepIndices := prep[0], prep[1]\n\t_ = prep[2]"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-pre-flight-refusal-does-not-return",
+   "old": "\tif early, ok := pfv[2].(*looptypes.LoopResult); ok && early != nil {\n\t\treturn early, nil\n\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-pre-flight-refusal-returns-an-error",
+   "old": "\t\treturn early, nil\n\t}",
+   "new": "\t\treturn nil, keyError(\"early\")\n\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-pre-flight-keys-are-read-in-another-order",
+   "old": "\t\t\"resume_completed\", \"resume_executor_session\", \"pf_review\",\n\t\t\"clean_steps\", \"deps\", \"levels\", \"parallel_levels\",",
+   "new": "\t\t\"resume_completed\", \"resume_executor_session\", \"pf_review\",\n\t\t\"levels\", \"clean_steps\", \"deps\", \"parallel_levels\","
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-missing-pre-flight-key-is-not-fatal",
+   "old": "\t\tv, err := dictGet(pf, k)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tpfVals[i] = v",
+   "new": "\t\tv, _ := dictGet(pf, k)\n\t\tpfVals[i] = v"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-key-error-drops-the-quotes",
+   "old": "\treturn &pyval.PyErr{Class: \"KeyError\", Msg: pytext.Repr(key)}",
+   "new": "\treturn &pyval.PyErr{Class: \"KeyError\", Msg: key}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-missing-key-is-an-attribute-error",
+   "old": "\treturn &pyval.PyErr{Class: \"KeyError\", Msg: pytext.Repr(key)}",
+   "new": "\treturn &pyval.PyErr{Class: \"AttributeError\", Msg: pytext.Repr(key)}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-present-key-whose-value-is-nil-is-missing",
+   "old": "\tv, ok := m[key]\n\tif !ok {",
+   "new": "\tv, ok := m[key]\n\tif !ok || v == nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-gate-needs-both",
+   "old": "\tif pyval.Truthy(useDAG) || pyval.Truthy(useFanout) {",
+   "new": "\tif pyval.Truthy(useDAG) && pyval.Truthy(useFanout) {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "only-a-dag-run-goes-parallel",
+   "old": "\tif pyval.Truthy(useDAG) || pyval.Truthy(useFanout) {",
+   "new": "\tif pyval.Truthy(useDAG) || (pyval.Truthy(useFanout) && false) {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-gate-tests-presence-not-truth",
+   "old": "\tif pyval.Truthy(useDAG) || pyval.Truthy(useFanout) {",
+   "new": "\tif useDAG != nil || useFanout != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-nil-parallel-result-still-returns",
+   "old": "\t\tif par != nil {\n\t\t\tparallelTrace(ctx, d, par, useDAG)",
+   "new": "\t\tif true {\n\t\t\tparallelTrace(ctx, d, par, useDAG)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-runs-before-the-trace",
+   "old": "\t\t\tparallelTrace(ctx, d, par, useDAG)\n\t\t\tparallelReport(ctx, d, par, manifestSteps, replanCount)",
+   "new": "\t\t\tparallelReport(ctx, d, par, manifestSteps, replanCount)\n\t\t\tparallelTrace(ctx, d, par, useDAG)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-report-is-skipped",
+   "old": "\t\t\tparallelReport(ctx, d, par, manifestSteps, replanCount)\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-report-gets-the-executes-manifest",
+   "old": "\t\t\tparallelReport(ctx, d, par, manifestSteps, replanCount)",
+   "new": "\t\t\tparallelReport(ctx, d, par, cleanSteps, replanCount)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-path-gets-the-clean-steps-as-its-steps",
+   "old": "\t\t\t{Key: \"steps\", Val: steps},\n\t\t\t{Key: \"clean_steps\", Val: cleanSteps},",
+   "new": "\t\t\t{Key: \"steps\", Val: cleanSteps},\n\t\t\t{Key: \"clean_steps\", Val: cleanSteps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-path-is-not-told-the-levels",
+   "old": "\t\t\t{Key: \"levels\", Val: levels},\n\t\t\t{Key: \"parallel_levels\", Val: parallelLevels},",
+   "new": "\t\t\t{Key: \"parallel_levels\", Val: parallelLevels},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-parallel-path-gets-a-cached-tool-list",
+   "old": "\t\t\t{Key: \"resolve_tools_fn\", Val: resolveTools},\n\t\t})",
+   "new": "\t\t\t{Key: \"resolve_tools_fn\", Val: nil},\n\t\t})"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-trace-import-failure-is-a-warning",
+   "old": "\t\td.debugf(\"edge trace for parallel path failed: %s\", err)",
+   "new": "\t\td.warnf(\"edge trace for parallel path failed: %s\", err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-trace-failure-is-silent",
+   "old": "\tif err != nil {\n\t\td.debugf(\"edge trace for parallel path failed: %s\", err)\n\t}",
+   "new": "\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "blocked-steps-are-counted-as-done",
+   "old": "\t\t\tif s.Status == \"blocked\" {",
+   "new": "\t\t\tif s.Status == \"done\" {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-blocked-count-is-the-step-count",
+   "old": "\t\t\t{Key: \"blocked\", Val: blocked},",
+   "new": "\t\t\t{Key: \"blocked\", Val: len(par.Steps)},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-mode-labels-are-swapped",
+   "old": "\t\tmode := \"fanout\"\n\t\tif pyval.Truthy(useDAG) {\n\t\t\tmode = \"dag\"\n\t\t}",
+   "new": "\t\tmode := \"dag\"\n\t\tif pyval.Truthy(useDAG) {\n\t\t\tmode = \"fanout\"\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-first-edge-is-not-recorded",
+   "old": "\t\tif err := d.RecordEdge(\"phase.parallel\", \"exec.parallel\", pyval.Obj{\n\t\t\t{Key: \"loop_id\", Val: ctx.LoopID},\n\t\t\t{Key: \"steps\", Val: len(par.Steps)},\n\t\t\t{Key: \"blocked\", Val: blocked},\n\t\t\t{Key: \"mode\", Val: mode},\n\t\t}); err != nil {\n\t\t\treturn err\n\t\t}\n",
+   "new": "\t\t_ = blocked\n\t\t_ = mode\n"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-first-edge-failure-does-not-skip-the-second",
+   "old": "\t\t\t{Key: \"mode\", Val: mode},\n\t\t}); err != nil {\n\t\t\treturn err\n\t\t}",
+   "new": "\t\t\t{Key: \"mode\", Val: mode},\n\t\t}); err != nil {\n\t\t\t_ = err\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-done-parallel-run-ends-at-fin-partial",
+   "old": "\t\tto := \"fin.result\"\n\t\tif par.Status != \"done\" {\n\t\t\tto = \"fin.partial\"\n\t\t}",
+   "new": "\t\tto := \"fin.partial\"\n\t\tif par.Status != \"done\" {\n\t\t\tto = \"fin.result\"\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-terminal-is-always-the-same",
+   "old": "\t\tif par.Status != \"done\" {\n\t\t\tto = \"fin.partial\"\n\t\t}\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-edge-does-not-say-finalize-was-bypassed",
+   "old": "\t\t\t{Key: \"bypassed_finalize\", Val: true},",
+   "new": "\t\t\t{Key: \"bypassed_finalize\", Val: false},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-edge-renders-a-missing-reason-as-none",
+   "old": "\t\treason := \"\"\n\t\tif par.StuckReason != nil {\n\t\t\treason = *par.StuckReason\n\t\t}",
+   "new": "\t\treason := \"None\"\n\t\tif par.StuckReason != nil {\n\t\t\treason = *par.StuckReason\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-failure-is-a-debug-line",
+   "old": "\t\td.warnf(\"run report write failed for parallel loop %s: %s\",\n\t\t\tctx.LoopID, err)",
+   "new": "\t\td.debugf(\"run report write failed for parallel loop %s: %s\",\n\t\t\tctx.LoopID, err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-warning-omits-the-loop-id",
+   "old": "\t\td.warnf(\"run report write failed for parallel loop %s: %s\",\n\t\t\tctx.LoopID, err)",
+   "new": "\t\td.warnf(\"run report write failed for parallel loop: %s\", err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-warning-swaps-its-arguments",
+   "old": "\t\t\tctx.LoopID, err)\n\t}\n}\n\n// armRunaway",
+   "new": "\t\t\terr, ctx.LoopID)\n\t}\n}\n\n// armRunaway"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-missing-index-writer-is-not-an-import-failure",
+   "old": "\t\tif d.WriteRunReport == nil || d.WriteRunsIndex == nil {",
+   "new": "\t\tif d.WriteRunReport == nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-index-is-written-before-the-loop-log",
+   "old": "\t\tif err := d.WriteLoopLog(pyval.Obj{",
+   "new": "\t\tif err := d.WriteRunsIndex(true); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif err := d.WriteLoopLog(pyval.Obj{"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-loop-log-carries-the-normalised-stuck-reason",
+   "old": "\t\t\t{Key: \"stuck_reason\", Val: par.StuckReason},",
+   "new": "\t\t\t{Key: \"stuck_reason\", Val: pyval.Str(par.StuckReason)},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-loop-log-failure-does-not-skip-the-report",
+   "old": "\t\t}); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t// A project-less run has nowhere",
+   "new": "\t\t}); err != nil {\n\t\t\t_ = err\n\t\t}\n\t\t// A project-less run has nowhere"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-gate-ignores-the-project",
+   "old": "\t\tif ctx.Project != \"\" && pyval.Truthy(manifestSteps) {",
+   "new": "\t\tif pyval.Truthy(manifestSteps) {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-gate-ignores-the-manifest",
+   "old": "\t\tif ctx.Project != \"\" && pyval.Truthy(manifestSteps) {",
+   "new": "\t\tif ctx.Project != \"\" {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-gate-tests-the-manifest-for-presence",
+   "old": "\t\tif ctx.Project != \"\" && pyval.Truthy(manifestSteps) {",
+   "new": "\t\tif ctx.Project != \"\" && manifestSteps != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-plans-the-parallel-steps",
+   "old": "\t\t\t\t{Key: \"planned_steps\", Val: manifestSteps},",
+   "new": "\t\t\t\t{Key: \"planned_steps\", Val: par.Steps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-report-loses-the-injections",
+   "old": "\t\t\t\t{Key: \"injections\", Val: append([]pyval.Obj{},\n\t\t\t\t\tctx.Injections...)},",
+   "new": "\t\t\t\t{Key: \"injections\", Val: []pyval.Obj{}},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-index-is-not-forced",
+   "old": "\t\treturn d.WriteRunsIndex(true)",
+   "new": "\t\treturn d.WriteRunsIndex(false)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-index-is-written-even-when-the-report-fails",
+   "old": "\t\t\t}); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\treturn d.WriteRunsIndex(true)",
+   "new": "\t\t\t}); err != nil {\n\t\t\t\t_ = err\n\t\t\t}\n\t\t}\n\t\treturn d.WriteRunsIndex(true)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-zero-budget-still-arms",
+   "old": "\tif ctx.CostBudget == nil || *ctx.CostBudget == 0 {",
+   "new": "\tif ctx.CostBudget == nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "no-budget-still-arms",
+   "old": "\tif ctx.CostBudget == nil || *ctx.CostBudget == 0 {\n\t\treturn nil\n\t}\n",
+   "new": "\tif ctx.CostBudget == nil {\n\t\treturn nil\n\t}\n"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-multiplier-default-is-one",
+   "old": "\t\traw, err := d.ConfigGet(\"budget.runaway_multiplier\", 1.5)",
+   "new": "\t\traw, err := d.ConfigGet(\"budget.runaway_multiplier\", 1.0)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-multiplier-key-is-wrong",
+   "old": "\t\traw, err := d.ConfigGet(\"budget.runaway_multiplier\", 1.5)",
+   "new": "\t\traw, err := d.ConfigGet(\"budget.runaway_ceiling\", 1.5)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-null-multiplier-is-the-default",
+   "old": "\t\tmult := 0.0\n\t\tif raw != nil {",
+   "new": "\t\tmult := 1.5\n\t\tif raw != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-zero-multiplier-still-arms",
+   "old": "\t\tif mult > 0 {",
+   "new": "\t\tif mult >= 0 {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-ceiling-is-the-budget",
+   "old": "\t\t\tdisarm, err = d.ArmCostMeter(*ctx.CostBudget * mult)",
+   "new": "\t\t\tdisarm, err = d.ArmCostMeter(*ctx.CostBudget)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-ceiling-is-the-multiplier",
+   "old": "\t\t\tdisarm, err = d.ArmCostMeter(*ctx.CostBudget * mult)",
+   "new": "\t\t\tdisarm, err = d.ArmCostMeter(mult)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-arming-failure-is-silent",
+   "old": "\t\td.warnf(\"runaway cost circuit not armed: %s\", err)",
+   "new": "\t\t_ = err"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-arming-failure-is-an-info-line",
+   "old": "\t\td.warnf(\"runaway cost circuit not armed: %s\", err)",
+   "new": "\t\td.info(\"runaway cost circuit not armed: %s\", err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-arming-failure-keeps-the-disarm",
+   "old": "\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): returning `disarm`\n\t\t// here. It is assigned only by a SUCCESSFUL ArmCostMeter, so it is\n\t\t// nil on every path that reaches this line.\n\t\treturn nil",
+   "new": "\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): returning `disarm`\n\t\t// here. It is assigned only by a SUCCESSFUL ArmCostMeter, so it is\n\t\t// nil on every path that reaches this line.\n\t\treturn disarm",
+   "equivalent": "disarm is assigned only by a SUCCESSFUL ArmCostMeter, so it is nil on every path that reaches the warning — Python's _disarm_runaway is None there for the same reason"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-string-multiplier-is-a-type-error",
+   "old": "\tcase string:\n\t\tvar f float64\n\t\tif _, err := fmt.Sscanf(t, \"%g\", &f); err != nil {",
+   "new": "\tcase string:\n\t\tvar f float64\n\t\tif _, err := fmt.Sscanf(t, \"%g\", &f); err == nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-float-error-drops-the-repr",
+   "old": "\t\t\treturn 0, &pyval.PyErr{Class: \"ValueError\",\n\t\t\t\tMsg: \"could not convert string to float: \" +\n\t\t\t\t\tpytext.Repr(t)}",
+   "new": "\t\t\treturn 0, &pyval.PyErr{Class: \"ValueError\",\n\t\t\t\tMsg: \"could not convert string to float: \" + t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-type-error-names-the-value",
+   "old": "\t\tMsg: \"float() argument must be a string or a real number, not \" +\n\t\t\tpytext.Repr(pyval.TypeName(v))}",
+   "new": "\t\tMsg: \"float() argument must be a string or a real number, not \" +\n\t\t\tpytext.Repr(pyval.Str(v))}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-circuit-is-not-disarmed",
+   "old": "\t\tif disarm != nil {\n\t\t\tif derr := disarm(); derr != nil {",
+   "new": "\t\tif disarm != nil && false {\n\t\t\tif derr := disarm(); derr != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-disarm-failure-is-swallowed",
+   "old": "\t\t\tif derr := disarm(); derr != nil {\n\t\t\t\treturn nil, derr\n\t\t\t}",
+   "new": "\t\t\t_ = disarm()"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-disarm-runs-only-on-success",
+   "old": "\t\tif disarm != nil {\n\t\t\tif derr := disarm(); derr != nil {",
+   "new": "\t\tif disarm != nil && err == nil {\n\t\t\tif derr := disarm(); derr != nil {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "execute-gets-the-pre-flight-manifest",
+   "old": "\t\t\t{Key: \"manifest_steps\", Val: manifestSteps},\n\t\t\t{Key: \"replan_count\", Val: replanCount},\n\t\t\t{Key: \"loop_shared_ctx\"",
+   "new": "\t\t\t{Key: \"manifest_steps\", Val: pfVals[7]},\n\t\t\t{Key: \"replan_count\", Val: replanCount},\n\t\t\t{Key: \"loop_shared_ctx\""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "execute-is-not-told-the-tier-order",
+   "old": "\t\t\t{Key: \"tier_order\", Val: a.TierOrder},\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "execute-gets-its-steps-and-indices-swapped",
+   "old": "\t\t\t{Key: \"steps\", Val: steps},\n\t\t\t{Key: \"step_indices\", Val: stepIndices},",
+   "new": "\t\t\t{Key: \"steps\", Val: stepIndices},\n\t\t\t{Key: \"step_indices\", Val: steps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-execute-keys-are-read-in-another-order",
+   "old": "\t\t\"step_outcomes\", \"loop_status\", \"stuck_reason\", \"total_tokens_in\",\n\t\t\"total_tokens_out\", \"interrupts_applied\", \"march_of_nines_alert\",",
+   "new": "\t\t\"step_outcomes\", \"loop_status\", \"stuck_reason\", \"total_tokens_out\",\n\t\t\"total_tokens_in\", \"interrupts_applied\", \"march_of_nines_alert\","
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-executes-goal-is-not-read",
+   "old": "\t\t\"scratchpad_lock\", \"goal\", \"max_iterations\",",
+   "new": "\t\t\"scratchpad_lock\", \"max_iterations\", \"goal\","
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "finalize-gets-the-pre-flight-manifest",
+   "old": "\t\t{Key: \"manifest_steps\", Val: exVals[7]},",
+   "new": "\t\t{Key: \"manifest_steps\", Val: manifestSteps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "finalize-gets-the-pre-flight-replan-count",
+   "old": "\t\t{Key: \"replan_count\", Val: exVals[8]},",
+   "new": "\t\t{Key: \"replan_count\", Val: replanCount},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "finalize-gets-the-wrong-start-stamp",
+   "old": "\t\t// start_ts is ctx.start_ts, rebound above the fence.\n\t\t{Key: \"start_ts\", Val: ctx.StartTS},",
+   "new": "\t\t// start_ts is ctx.start_ts, rebound above the fence.\n\t\t{Key: \"start_ts\", Val: ctx.StartedAt},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-missing-skill-flag-is-inverted",
+   "old": "\t\t{Key: \"had_no_matching_skill\", Val: hadNoMatchingSkill},",
+   "new": "\t\t{Key: \"had_no_matching_skill\", Val: !pyval.Truthy(hadNoMatchingSkill)},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "finalize-gets-the-scratchpad-and-its-lock-swapped",
+   "old": "\t\t{Key: \"scratchpad\", Val: exVals[12]},\n\t\t{Key: \"scratchpad_lock\", Val: exVals[13]},",
+   "new": "\t\t{Key: \"scratchpad\", Val: exVals[13]},\n\t\t{Key: \"scratchpad_lock\", Val: exVals[12]},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-done-run-also-recovers",
+   "old": "\tif result != nil && result.Status == \"stuck\" && !a.DryRun &&\n\t\t!a.RecoveryInProgress {",
+   "new": "\tif result != nil && !a.DryRun &&\n\t\t!a.RecoveryInProgress {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-dry-run-recovers-too",
+   "old": "\tif result != nil && result.Status == \"stuck\" && !a.DryRun &&\n\t\t!a.RecoveryInProgress {",
+   "new": "\tif result != nil && result.Status == \"stuck\" &&\n\t\t!a.RecoveryInProgress {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-gate-reads-the-context-flag",
+   "old": "\tif result != nil && result.Status == \"stuck\" && !a.DryRun &&\n\t\t!a.RecoveryInProgress {",
+   "new": "\tif result != nil && result.Status == \"stuck\" && !ctx.DryRun &&\n\t\t!a.RecoveryInProgress {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-recovery-re-run-recovers-again",
+   "old": "\t\t!a.RecoveryInProgress {\n\t\tresult = autoRecover(",
+   "new": "\t\ttrue {\n\t\tresult = autoRecover("
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "recovery-gets-the-callers-goal",
+   "old": "\t\tresult = autoRecover(ctx, a, d, result, exVals[14], exVals[15])",
+   "new": "\t\tresult = autoRecover(ctx, a, d, result, ctx.Goal, exVals[15])"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "recovery-gets-the-callers-iteration-cap",
+   "old": "\t\tresult = autoRecover(ctx, a, d, result, exVals[14], exVals[15])",
+   "new": "\t\tresult = autoRecover(ctx, a, d, result, exVals[14], ctx.MaxIterations)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-result-is-discarded",
+   "old": "\t\tresult = autoRecover(ctx, a, d, result, exVals[14], exVals[15])",
+   "new": "\t\t_ = autoRecover(ctx, a, d, result, exVals[14], exVals[15])"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "an-import-failure-in-recovery-is-logged",
+   "old": "\t\tif !isImportError(err) {\n\t\t\td.debugf(\"auto-recovery failed: %s\", err)\n\t\t}",
+   "new": "\t\td.debugf(\"auto-recovery failed: %s\", err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "only-a-module-not-found-is-silent",
+   "old": "\treturn pe.Class == \"ImportError\" || pe.Class == \"ModuleNotFoundError\"",
+   "new": "\treturn pe.Class == \"ModuleNotFoundError\""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "every-recovery-failure-is-silent",
+   "old": "\tif err != nil {\n\t\t// `except ImportError: pass` comes FIRST and says nothing.",
+   "new": "\tif false && err != nil {\n\t\t// `except ImportError: pass` comes FIRST and says nothing."
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-failure-is-a-warning",
+   "old": "\t\t\td.debugf(\"auto-recovery failed: %s\", err)",
+   "new": "\t\t\td.warnf(\"auto-recovery failed: %s\", err)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "diagnose-is-given-the-goal",
+   "old": "\t\tdiag, err := d.DiagnoseLoop(ctx.LoopID)",
+   "new": "\t\tdiag, err := d.DiagnoseLoop(ctx.Goal)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-falsy-plan-is-still-applied",
+   "old": "\t\tif !pyval.Truthy(rec) {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\tif rec == nil {\n\t\t\treturn nil\n\t\t}",
+   "equivalent": "plan_recovery returns a RecoveryPlan dataclass or None, and a dataclass without __bool__ is always truthy, so `if _recovery` is a None check and Truthy and != nil agree on every reachable input"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-risk-is-read-before-the-auto-apply-flag",
+   "old": "\t\tauto, err := d.RecoveryAutoApply(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !auto {\n\t\t\treturn nil\n\t\t}\n\t\trisk, err := d.RecoveryRisk(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif risk != \"low\" {\n\t\t\treturn nil\n\t\t}",
+   "new": "\t\trisk, err := d.RecoveryRisk(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif risk != \"low\" {\n\t\t\treturn nil\n\t\t}\n\t\tauto, err := d.RecoveryAutoApply(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !auto {\n\t\t\treturn nil\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-medium-risk-plan-is-applied",
+   "old": "\t\tif risk != \"low\" {",
+   "new": "\t\tif risk == \"never\" {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-failure-class-is-read-before-the-action",
+   "old": "\t\taction, err := d.RecoveryAction(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tfclass, err := d.DiagFailureClass(diag)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}",
+   "new": "\t\tfclass, err := d.DiagFailureClass(diag)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\taction, err := d.RecoveryAction(rec)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-info-line-is-a-debug-line",
+   "old": "\t\td.info(\"auto-recovery: %s (class=%s)\", action, fclass)",
+   "new": "\t\td.debugf(\"auto-recovery: %s (class=%s)\", action, fclass)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-info-line-swaps-its-arguments",
+   "old": "\t\td.info(\"auto-recovery: %s (class=%s)\", action, fclass)",
+   "new": "\t\td.info(\"auto-recovery: %s (class=%s)\", fclass, action)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-captains-log-failure-stops-the-recovery",
+   "old": "\t\tif cerr := captainsLogRecovery(ctx, d, diag, rec); cerr != nil {\n\t\t\td.debugf(\"auto-recovery captain's log write failed: %s\", cerr)\n\t\t}",
+   "new": "\t\tif cerr := captainsLogRecovery(ctx, d, diag, rec); cerr != nil {\n\t\t\treturn cerr\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-captains-log-failure-is-silent",
+   "old": "\t\t\td.debugf(\"auto-recovery captain's log write failed: %s\", cerr)",
+   "new": "\t\t\t_ = cerr"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-captains-log-runs-after-the-params-are-popped",
+   "old": "\t\tif cerr := captainsLogRecovery(ctx, d, diag, rec); cerr != nil {\n\t\t\td.debugf(\"auto-recovery captain's log write failed: %s\", cerr)\n\t\t}\n\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-step-cap-default-is-the-iteration-cap",
+   "old": "\t\tnewMaxSteps := popOr(&params, \"max_steps\", a.MaxSteps)",
+   "new": "\t\tnewMaxSteps := popOr(&params, \"max_steps\", maxIterations)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-iteration-cap-default-is-the-callers",
+   "old": "\t\tnewMaxIter := popOr(&params, \"max_iterations\", maxIterations)",
+   "new": "\t\tnewMaxIter := popOr(&params, \"max_iterations\", a.MaxSteps)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "pop-returns-the-default-even-when-the-key-is-present",
+   "old": "\tfor i, f := range *o {\n\t\tif f.Key == key {",
+   "new": "\tfor i, f := range *o {\n\t\tif f.Key == key && false {"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "pop-does-not-remove-the-key",
+   "old": "\t\t\tv := f.Val\n\t\t\t*o = append((*o)[:i:i], (*o)[i+1:]...)\n\t\t\treturn v",
+   "new": "\t\t\tv := f.Val\n\t\t\t_ = i\n\t\t\treturn v",
+   "equivalent": "the copy is dead after the two pops and a dict cannot hold a key twice, so the removal cannot change what the second pop finds"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-hand-off-edge-is-not-recorded",
+   "old": "\t\tfunc() {\n\t\t\tif d.RecordEdge == nil {\n\t\t\t\treturn\n\t\t\t}\n\t\t\t_ = d.RecordEdge(\"fin.diagnose\", \"fin.auto_recovery\", pyval.Obj{\n\t\t\t\t{Key: \"loop_id\", Val: ctx.LoopID},\n\t\t\t\t{Key: \"parent_loop_id\", Val: ctx.LoopID},\n\t\t\t\t{Key: \"max_steps\", Val: newMaxSteps},\n\t\t\t})\n\t\t}()\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-hand-off-edge-has-no-parent",
+   "old": "\t\t\t\t{Key: \"parent_loop_id\", Val: ctx.LoopID},",
+   "new": "\t\t\t\t{Key: \"parent_loop_id\", Val: \"\"},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-hand-off-edge-carries-the-old-step-cap",
+   "old": "\t\t\t\t{Key: \"max_steps\", Val: newMaxSteps},\n\t\t\t})",
+   "new": "\t\t\t\t{Key: \"max_steps\", Val: a.MaxSteps},\n\t\t\t})"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-gets-the-caller-project",
+   "old": "\t\t\t// project, adapter and interrupt_queue are the CONTEXT's,\n\t\t\t// rebound above the fence.\n\t\t\t{Key: \"project\", Val: ctx.Project},",
+   "new": "\t\t\t// project, adapter and interrupt_queue are the CONTEXT's,\n\t\t\t// rebound above the fence.\n\t\t\t{Key: \"project\", Val: a.PresetSteps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-gets-the-caller-adapter",
+   "old": "\t\t\t{Key: \"adapter\", Val: ctx.Adapter},",
+   "new": "\t\t\t{Key: \"adapter\", Val: nil},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-gets-the-caller-interrupt-queue",
+   "old": "\t\t\t{Key: \"interrupt_queue\", Val: ctx.InterruptQueue},",
+   "new": "\t\t\t{Key: \"interrupt_queue\", Val: nil},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-is-not-marked-as-a-recovery",
+   "old": "\t\t\t{Key: \"_recovery_in_progress\", Val: true},",
+   "new": "\t\t\t{Key: \"_recovery_in_progress\", Val: false},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-does-not-inherit-the-maintenance-deferral",
+   "old": "\t\t\t{Key: \"defer_maintenance\", Val: ctx.DeferMaintenance},",
+   "new": "\t\t\t{Key: \"defer_maintenance\", Val: false},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-does-not-inherit-the-learning-deferral",
+   "old": "\t\t\t{Key: \"defer_learning\", Val: ctx.DeferLearning},",
+   "new": "\t\t\t{Key: \"defer_learning\", Val: false},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-loses-the-handle-id",
+   "old": "\t\t\t{Key: \"handle_id\", Val: ctx.HandleID},",
+   "new": "\t\t\t{Key: \"handle_id\", Val: \"\"},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-re-run-gets-the-new-caps-swapped",
+   "old": "\t\t\t{Key: \"max_steps\", Val: newMaxSteps},\n\t\t\t{Key: \"max_iterations\", Val: newMaxIter},",
+   "new": "\t\t\t{Key: \"max_steps\", Val: newMaxIter},\n\t\t\t{Key: \"max_iterations\", Val: newMaxSteps},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "a-failed-re-run-replaces-the-result",
+   "old": "\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tout = res",
+   "new": "\t\tout = res\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-result-line-is-a-debug-line",
+   "old": "\t\td.info(\"auto-recovery result: status=%s\", status)",
+   "new": "\t\td.debugf(\"auto-recovery result: status=%s\", status)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-recovery-result-line-reports-the-old-status",
+   "old": "\t\tstatus := \"\"\n\t\tif res != nil {\n\t\t\tstatus = res.Status\n\t\t}",
+   "new": "\t\tstatus := result.Status"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-event-subject-is-the-action",
+   "old": "\tsubject, err := d.DiagFailureClass(diag)",
+   "new": "\tsubject, err := d.RecoveryAction(rec)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-summary-reads-the-class-once",
+   "old": "\tfclass, err := d.DiagFailureClass(diag)\n\tif err != nil {\n\t\treturn err\n\t}\n\tsummary := fmt.Sprintf(",
+   "new": "\tfclass := subject\n\tsummary := fmt.Sprintf("
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-summary-sentence-loses-its-period",
+   "old": "\tsummary := fmt.Sprintf(\"Auto-recovery triggered: %s. Class: %s.\",\n\t\taction, fclass)",
+   "new": "\tsummary := fmt.Sprintf(\"Auto-recovery triggered: %s. Class: %s\",\n\t\taction, fclass)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-summary-swaps-action-and-class",
+   "old": "\t\taction, fclass)\n\tcAction, err := d.RecoveryAction(rec)",
+   "new": "\t\tfclass, action)\n\tcAction, err := d.RecoveryAction(rec)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-context-action-is-read-once",
+   "old": "\tcAction, err := d.RecoveryAction(rec)\n\tif err != nil {\n\t\treturn err\n\t}\n\trisk, err := d.RecoveryRisk(rec)",
+   "new": "\tcAction := action\n\trisk, err := d.RecoveryRisk(rec)"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-event-type-is-not-the-auto-recovery-key",
+   "old": "\t\t{Key: \"event_type\", Val: d.AutoRecoveryEventKey},",
+   "new": "\t\t{Key: \"event_type\", Val: \"loop_done\"},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-event-context-keys-are-reordered",
+   "old": "\t\t\t{Key: \"action\", Val: cAction},\n\t\t\t{Key: \"risk\", Val: risk},",
+   "new": "\t\t\t{Key: \"risk\", Val: risk},\n\t\t\t{Key: \"action\", Val: cAction},"
+  },
+  {
+   "file": "internal/agentloop/spine.go",
+   "name": "the-event-loses-the-loop-id",
+   "old": "\t\t{Key: \"loop_id\", Val: ctx.LoopID},\n\t})\n}\n\n// popOr",
+   "new": "\t\t{Key: \"loop_id\", Val: \"\"},\n\t})\n}\n\n// popOr"
+  }
+ ]
+}

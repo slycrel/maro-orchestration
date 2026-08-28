@@ -2577,7 +2577,27 @@ rather than stubbed.
 
 ### P17 — The probe's own machinery fails the way the code under test would
 
-*instances: 2 (2026-08-27, both in one probe)*
+*instances: 4 (2026-08-27, two in the loop_finalize probe; 2026-08-27,
+two in the spine probe)*
+
+**Instances 3 and 4 (the spine probe).** Both are about a probe that
+drives the REAL function and therefore shares its namespace.
+
+The spine probe intercepts `run_agent_loop`'s recursive call by rebinding
+the module global — correct, because the recursion is a global lookup and
+the call the probe makes itself holds a direct reference. It captured
+that direct reference INSIDE the per-scenario function, so scenario two
+captured scenario one's FAKE as its "real" and every scenario after the
+first collapsed into a `TypeError` about positional arguments. A probe
+that rebinds a global must capture what it is replacing exactly once, at
+import.
+
+The second is worse because it was silent: `_project_dir_root` was left
+real, and the code under test MKDIRS what it returns. It happened to
+raise on a stubbed `config` before reaching the mkdir. A probe for a
+function that writes must fake every path-producing call it reaches, and
+the reason belongs at the fake — not in the fixture that got lucky.
+
 
 A differential probe is code. When it breaks, it breaks *inside* the
 handler it is observing, and the report you get is a divergence in the
@@ -2614,6 +2634,54 @@ before any scenario runs; give every recorder positional-only parameters;
 and clear every module-level registry the subject writes to at the top of
 each scenario, because the Go side gets a fresh one per record and the
 Python side does not.
+
+---
+
+### L61 — An inconsistency between two adjacent sites is a FACT, and a port that tidies it is wrong
+
+*instances: 1 (2026-08-27, the orchestration spine)*
+
+The fan-out early return records a trace edge and, eleven lines later,
+writes the loop log. Both pass a `stuck_reason`. The edge normalises it:
+
+```python
+stuck_reason=_parallel_result.stuck_reason or ""
+```
+
+The loop log does not:
+
+```python
+stuck_reason=_parallel_result.stuck_reason
+```
+
+The port normalised both. Reading the second site after writing the
+first, the `or ""` looks like the shape of the thing rather than a
+property of one call — and a clean parallel run then wrote `""` into the
+loop log where CPython writes `None`. Nothing about that is visible in a
+log line; it is visible in the artifact an operator reads, and in the
+index that reads the artifact.
+
+This is not L46 (a substituted library) and not L48 (a flattened control
+flow). It is narrower and more common than either: **two neighbouring
+calls that share an argument NAME do not necessarily share its
+EXPRESSION**, and the port's author is the person most likely to make
+them agree, because they just wrote the first one.
+
+The generalisation is worth stating, because the tidying instinct fires
+on more than normalisation: a default supplied at one call and omitted at
+the next, a `str()` at one and a raw value at the next, a key present in
+one dict literal and absent from its neighbour. Every one of those looks
+like an oversight in the original and is a fixture in the port.
+
+> **Diff the EXPRESSIONS of same-named arguments across neighbouring
+> calls, not the names. An asymmetry you would have "fixed" is a
+> divergence you are about to introduce.**
+
+**Tripwire.** When two calls within a screen of each other pass the same
+keyword, copy both expressions into the comment and compare them
+character by character before writing either. If they differ, the port
+carries both spellings and the differential gets a fixture where the two
+answers are distinguishable — here, a parallel run that ended clean.
 
 ---
 

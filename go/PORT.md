@@ -16505,3 +16505,127 @@ flag anyway — Python reads a NAME there, and the name is what the
 differential drops. That is **L8**'s fourth closed sub-shape, and the
 `equivalent` field built one tranche earlier is what let all three stay in
 the battery as tripwires instead of being deleted.
+
+## Phase L: the spine, where almost nothing happens (2026-08-27)
+
+`src/agent_loop.py:434-712` is the rest of `run_agent_loop`: phases B
+through G, the parallel fan-out's early return, the runaway cost circuit,
+and the Phase-45 auto-recovery re-run. Ported to
+`go/internal/agentloop/spine.go` as `RunSpine`.
+
+Almost none of the work is here. Each phase is one call into a module this
+package does not own. What the spine contributes is the ORDER of those
+calls, the gates that skip them, the ARGUMENTS it computes for them, and
+where each failure is caught — which is exactly the part of a port that
+goes wrong without a type error. So all six phase functions are injected
+and the differential compares the calls and their keywords, in order.
+
+### Three names that are not what they look like
+
+`project`, `adapter` and `interrupt_queue` are rebound from the context
+twenty lines above the fence, so the auto-recovery re-run passes the
+CONTEXT's values and not the caller's keywords — the same shape as the
+fence's `project` bug, three more times, in the arguments of a recursive
+call. `goal` and `max_iterations` are rebound AGAIN, out of the execute
+phase's result dict: **a run whose executor rewrote the goal recovers on
+the rewritten one.** And `dry_run` is NOT rebound — the recovery gate
+reads the argument, while `ctx.dry_run` is the copy `_initialize_loop`
+made. Each of those is a fixture where the two values differ.
+
+### The dicts are modelled as dicts
+
+`_pf` gives up thirteen values and `_ex` sixteen, read by key in a fixed
+order. A struct cannot be missing a field, so the port reads them through
+`dictGet` and a missing key is a `KeyError` naming the FIRST absent one.
+The read order is then observable, and it is pinned by three fixtures.
+
+The same reasoning covers the three tuple unpacks: `a, b, c = f()` against
+a four-tuple is a ValueError with its own message, and CPython names the
+actual count in both directions — `too many values to unpack (expected 6,
+got 7)`, not the older `(expected 6)`.
+
+### A real divergence: one of two adjacent writers normalises
+
+The fan-out's early return records two trace edges and writes three
+artifacts. The edge does
+
+```python
+stuck_reason=_parallel_result.stuck_reason or ""
+```
+
+and the loop log, eleven lines later, does
+
+```python
+stuck_reason=_parallel_result.stuck_reason
+```
+
+The port normalised both, because the first one established the pattern.
+A clean parallel run therefore wrote `""` where Python writes `None` — a
+difference invisible in every log line and visible in the artifact an
+operator reads. That is **L61**: an inconsistency between two adjacent
+sites is a FACT about the original, and a port that tidies it is wrong.
+
+### Two probe findings, both about the harness being the subject
+
+The probe drives the real `run_agent_loop` again, this time all the way
+through, with the six phase functions faked and the RECURSION intercepted
+by rebinding `al.run_agent_loop` — a module-global lookup, so the fake
+catches the auto-recovery re-entry without touching the call the probe
+makes itself. Two things went wrong with that:
+
+- The real function was captured per scenario, INSIDE the loop. Scenario
+  two therefore captured scenario one's fake as its "real", and the whole
+  run collapsed into a `TypeError` about positional arguments. The capture
+  has to happen once, at import.
+- `_project_dir_root` was left real. It reaches `config.projects_dir`
+  through `orch_items`, and the fence **mkdirs what it returns** — a probe
+  that let that through would create directories under the live workspace.
+  It failed on the stubbed `config` before the mkdir, which is luck, not
+  design. Both `_project_dir_root` and `_goal_to_slug` are faked now, with
+  the reason written at the site.
+
+Two fixtures are unreachable and say so: `captains_log` can never be the
+MISSING module, because `run_agent_loop` imports `loop_id_scope` from it
+at the top, outside every handler; and the runaway circuit's `from config
+import get` cannot fail, because the fence imported the same name first.
+Only a missing NAME is reachable for the first, and nothing for the second
+(L59, amendment 3).
+
+### The battery
+
+`tools/batteries/agentloop-spine.json` — 143 mutations over `spine.go`,
+run to fixpoint in three rounds:
+
+| round | killed | survived | did not build |
+|---|---|---|---|
+| 1 | 120 | 11 | 12 |
+| 2 | 141 |  2 |  0 |
+| 3 | 139 |  0 (4 marked `equivalent`) | 0 |
+
+Round one's eleven survivors were nine fixture gaps and two equivalents.
+The fixture gaps clustered: the probe's `Attrs` bag carried a `__bool__`
+that production's `plan_recovery` result does not have (a dataclass with
+no `__bool__` is ALWAYS truthy, so `if _recovery` is a None check and
+nothing else — the probe was testing a state the original cannot reach);
+the tool answers were per-scenario rather than per-call, so a mutation
+that swapped two `get_tools_for_role` results could not show; and the
+state machine always started from the same phase, so a refused
+transition was unreachable.
+
+The last two survivors are documented equivalents, and both are worth
+stating because they are the same kind of fact:
+
+- Swallowing the pre-flight `SetPhase` error. The FIRST transition is
+  the only one that can be refused, because it is the only one starting
+  from a phase the caller controls; every later transition starts from a
+  phase this function has just set, and each of those pairs is in the
+  table. The `StartPhase: "finalize"` fixture proves the first is
+  reachable. Nothing reaches the second.
+- `popOr` not removing the key. The copy is dead after the two pops, and
+  a dict cannot hold the same key twice, so the removal cannot change
+  what the second pop finds.
+
+Both checks stay in the code, because Python's `set_phase` raises there
+too and `pop` is what Python calls. The difference is only that no input
+can make either matter — which is a statement about the ORIGINAL, not
+about the port.
