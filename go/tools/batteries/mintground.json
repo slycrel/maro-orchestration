@@ -1,0 +1,1081 @@
+{
+  "packages": {
+    "default": [
+      "./internal/mintground/"
+    ]
+  },
+  "mutations": [
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-quoted-span-is-not-masked",
+      "old": "\tfor _, loc := range quotedSpanRe.FindAllStringIndex(body, -1) {\n\t\tfor i := loc[0]; i < loc[1]; i++ {\n\t\t\tmasked[i] = ' '\n\t\t}\n\t}",
+      "new": "\t_ = quotedSpanRe"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-mask-starts-one-late",
+      "old": "\t\tfor i := loc[0]; i < loc[1]; i++ {",
+      "new": "\t\tfor i := loc[0] + 1; i < loc[1]; i++ {",
+      "equivalent": "every alternative of quotedSpanRe opens on a quote, a bracket or a backtick, so the first masked byte is never the comma sought"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-mask-stops-one-early",
+      "old": "for i := loc[0]; i < loc[1]; i++ {",
+      "new": "for i := loc[0]; i < loc[1]-1; i++ {",
+      "equivalent": "and closes on one, so the last masked byte is never one either"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-last-comma-is-taken-not-the-first",
+      "old": "\treturn bytes.IndexByte(masked, ',')",
+      "new": "\treturn bytes.LastIndexByte(masked, ',')"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-tail-is-the-whole-of-before",
+      "old": "\tlocs := clauseBreakRe.FindAllStringIndex(before, -1)\n\tif len(locs) == 0 {",
+      "new": "\tlocs := clauseBreakRe.FindAllStringIndex(before, -1)\n\tif true {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-tail-starts-at-the-first-break",
+      "old": "\treturn before[locs[len(locs)-1][1]:]",
+      "new": "\treturn before[locs[0][1]:]"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-tail-keeps-the-break-itself",
+      "old": "\treturn before[locs[len(locs)-1][1]:]",
+      "new": "\treturn before[locs[len(locs)-1][0]:]",
+      "equivalent": "clauseTail feeds only wordRe (which skips punctuation) and negatorBeforeRe, whose leading WordStart is satisfied by `^` without the break character and by that character with it"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-opener-is-not-case-folded",
+      "old": "\tif len(words) == 0 || !imperativeOpeners[pytext.Lower(words[0])] {",
+      "new": "\tif len(words) == 0 || !imperativeOpeners[words[0]] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "any-first-word-opens-imperatively",
+      "old": "\tif len(words) == 0 || !imperativeOpeners[pytext.Lower(words[0])] {\n\t\treturn false\n\t}",
+      "new": "\tif len(words) == 0 {\n\t\treturn false\n\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-window-is-two-tokens",
+      "old": "\tstop := 4\n",
+      "new": "\tstop := 3\n"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-window-is-four-tokens",
+      "old": "\tstop := 4\n",
+      "new": "\tstop := 5\n"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-window-includes-the-opener",
+      "old": "\tfor _, w := range words[1:stop] {",
+      "new": "\tfor _, w := range words[0:stop] {",
+      "equivalent": "words[0] is an imperative opener on this path, and no imperative opener is an auxiliary (TestTheTablesThatMustNotOverlapDoNot)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-list-drops-have",
+      "old": "\t\tcase \"was\", \"were\", \"is\", \"are\", \"had\", \"has\", \"have\":",
+      "new": "\t\tcase \"was\", \"were\", \"is\", \"are\", \"had\", \"has\":"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-list-drops-is",
+      "old": "\t\tcase \"was\", \"were\", \"is\", \"are\", \"had\", \"has\", \"have\":",
+      "new": "\t\tcase \"was\", \"were\", \"are\", \"had\", \"has\", \"have\":"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-is-not-case-folded",
+      "old": "\t\tswitch pytext.Lower(w) {",
+      "new": "\t\tswitch w {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-leading-tag-is-not-stripped",
+      "old": "\tbody := leadingTagRe.ReplaceAllString(sentence, \"\")",
+      "new": "\tbody := sentence"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-word-window-is-121-characters",
+      "old": "\twords := wordRe.FindAllString(pytext.Head(body, 120), -1)",
+      "new": "\twords := wordRe.FindAllString(pytext.Head(body, 121), -1)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-word-window-counts-bytes",
+      "old": "\twords := wordRe.FindAllString(pytext.Head(body, 120), -1)",
+      "new": "\twords := wordRe.FindAllString(body[:min(len(body), 120)], -1)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-leading-sequencers-are-not-skipped",
+      "old": "\tfor len(words) > 0 && sequencers[pytext.Lower(words[0])] {\n\t\twords = words[1:]\n\t}",
+      "new": "\t_ = sequencers"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-sentence-of-only-sequencers-orders",
+      "old": "\tif len(words) == 0 {\n\t\treturn false\n\t}\n\tif opensImperatively(words) {",
+      "new": "\tif len(words) == 0 {\n\t\treturn true\n\t}\n\tif opensImperatively(words) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-subordinator-table-is-the-subordinating-one",
+      "old": "\tif subordinator[pytext.Lower(words[0])] {",
+      "new": "\tif subordinating[pytext.Lower(words[0])] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-comma-at-position-zero-is-ignored",
+      "old": "\t\tif i := clauseComma(body); i >= 0 {",
+      "new": "\t\tif i := clauseComma(body); i > 0 {",
+      "equivalent": "a comma at 0 has no word character before it, so the clause's first token IS words[0], which this branch has already established is a subordinator and therefore not an opener (TestTheTablesThatMustNotOverlapDoNot)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-window-includes-the-comma",
+      "old": "\t\t\tafter := wordRe.FindAllString(pytext.Head(body[i+1:], 60), -1)",
+      "new": "\t\t\tafter := wordRe.FindAllString(pytext.Head(body[i:], 60), -1)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-window-is-61-characters",
+      "old": "\t\t\tafter := wordRe.FindAllString(pytext.Head(body[i+1:], 60), -1)",
+      "new": "\t\t\tafter := wordRe.FindAllString(pytext.Head(body[i+1:], 61), -1)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-sequencers-are-not-skipped",
+      "old": "\t\t\tfor len(after) > 0 && sequencers[pytext.Lower(after[0])] {\n\t\t\t\tafter = after[1:]\n\t\t\t}",
+      "new": "\t\t\t_ = after"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-clause-opener-is-read-from-the-main-clause",
+      "old": "\t\t\tif opensImperatively(after) {",
+      "new": "\t\t\tif opensImperatively(words) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-one-word-prefix-can-embed",
+      "old": "\tif len(words) < 2 { // sentence-initial subject, not a complementizer",
+      "new": "\tif len(words) < 1 { // sentence-initial subject, not a complementizer"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-two-word-prefix-cannot-embed",
+      "old": "\tif len(words) < 2 { // sentence-initial subject, not a complementizer",
+      "new": "\tif len(words) < 3 { // sentence-initial subject, not a complementizer"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "only-the-word-before-the-marker-complementizes",
+      "old": "\tfor _, w := range words[len(words)-2:] {",
+      "new": "\tfor _, w := range words[len(words)-1:] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "every-word-before-the-marker-complementizes",
+      "old": "\tfor _, w := range words[len(words)-2:] {",
+      "new": "\tfor _, w := range words {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-complementizer-table-is-the-subordinating-one",
+      "old": "\t\tif complementizers[pytext.Lower(w)] {",
+      "new": "\t\tif subordinating[pytext.Lower(w)] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-subordinator-search-is-not-clause-local",
+      "old": "\tfor _, w := range wordRe.FindAllString(clauseTail(before), -1) {",
+      "new": "\tfor _, w := range wordRe.FindAllString(before, -1) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-subordinating-table-is-the-complementizer-one",
+      "old": "\t\tif subordinating[pytext.Lower(w)] {",
+      "new": "\t\tif complementizers[pytext.Lower(w)] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-finite-marker-is-not-scanned",
+      "old": "\tfor _, re := range []*regexp.Regexp{retroAuxRe, retroFiniteRe} {",
+      "new": "\tfor _, re := range []*regexp.Regexp{retroAuxRe} {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auxiliary-marker-is-not-scanned",
+      "old": "\tfor _, re := range []*regexp.Regexp{retroAuxRe, retroFiniteRe} {",
+      "new": "\tfor _, re := range []*regexp.Regexp{retroFiniteRe} {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-embedded-marker-is-the-one-that-reports",
+      "old": "\t\t\tif !markerIsEmbedded(sentence, m.start) {",
+      "new": "\t\t\tif markerIsEmbedded(sentence, m.start) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-embedding-test-reads-past-the-marker",
+      "old": "\t\t\tif !markerIsEmbedded(sentence, m.start) {",
+      "new": "\t\t\tif !markerIsEmbedded(sentence, m.end) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-hypothetical-veto-is-dropped",
+      "old": "\tif hypotheticalRe.MatchString(sentence) || isInstruction(sentence) {",
+      "new": "\tif isInstruction(sentence) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-instruction-veto-is-dropped",
+      "old": "\tif hypotheticalRe.MatchString(sentence) || isInstruction(sentence) {",
+      "new": "\tif hypotheticalRe.MatchString(sentence) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-hyphen-veto-reads-the-wrong-end",
+      "old": "\tif strings.HasSuffix(before, \"-\") && !rePrefixedRe.MatchString(before) {",
+      "new": "\tif strings.HasPrefix(before, \"-\") && !rePrefixedRe.MatchString(before) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-re-prefix-exception-is-inverted",
+      "old": "\tif strings.HasSuffix(before, \"-\") && !rePrefixedRe.MatchString(before) {",
+      "new": "\tif strings.HasSuffix(before, \"-\") && rePrefixedRe.MatchString(before) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-re-prefix-exception-is-dropped",
+      "old": "\tif strings.HasSuffix(before, \"-\") && !rePrefixedRe.MatchString(before) {",
+      "new": "\tif strings.HasSuffix(before, \"-\") {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-trailing-hyphen-veto-reads-the-wrong-end",
+      "old": "\tif strings.HasPrefix(after, \"-\") {",
+      "new": "\tif strings.HasSuffix(after, \"-\") {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-modal-window-is-the-whole-prefix",
+      "old": "\tif modalGovernsRe.MatchString(lastRunes(before, 48)) {",
+      "new": "\tif modalGovernsRe.MatchString(before) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-modal-window-is-47-characters",
+      "old": "\tif modalGovernsRe.MatchString(lastRunes(before, 48)) {",
+      "new": "\tif modalGovernsRe.MatchString(lastRunes(before, 47)) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-modal-window-counts-bytes",
+      "old": "\tif modalGovernsRe.MatchString(lastRunes(before, 48)) {",
+      "new": "\tif modalGovernsRe.MatchString(before[max(0, len(before)-48):]) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-negator-search-is-not-clause-local",
+      "old": "\treturn !negatorBeforeRe.MatchString(clauseTail(before))",
+      "new": "\treturn !negatorBeforeRe.MatchString(before)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-negator-veto-is-inverted",
+      "old": "\treturn !negatorBeforeRe.MatchString(clauseTail(before))",
+      "new": "\treturn negatorBeforeRe.MatchString(clauseTail(before))"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-tail-window-is-taken-from-the-front",
+      "old": "\treturn string(r[len(r)-n:])",
+      "new": "\treturn string(r[:n])"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-tail-window-is-one-short",
+      "old": "\tif len(r) <= n {\n\t\treturn s\n\t}\n\treturn string(r[len(r)-n:])",
+      "new": "\tif len(r) <= n {\n\t\treturn s\n\t}\n\treturn string(r[len(r)-n+1:])"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-leading-boundary-is-not-checked",
+      "old": "\t\tif !leadingWordBoundary(text, i) {\n\t\t\ti += runeLen(text, i)\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\t_ = leadingWordBoundary"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-match-extent-is-the-whole-match",
+      "old": "\t\tout = append(out, span{i + loc[2], i + loc[3]})",
+      "new": "\t\tout = append(out, span{i + loc[0], i + loc[1]})"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-scan-resumes-past-the-consumed-boundary",
+      "old": "\t\ti += loc[3]\n\t}\n\treturn out",
+      "new": "\t\ti += loc[1]\n\t}\n\treturn out",
+      "equivalent": "WordEnd consumes at most one NON-word character, and a position immediately after a word character is never a leading boundary, so the skipped step is skipped again on the next iteration"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-scan-advances-one-byte-at-a-time",
+      "old": "\t\tif !leadingWordBoundary(text, i) {\n\t\t\ti += runeLen(text, i)",
+      "new": "\t\tif !leadingWordBoundary(text, i) {\n\t\t\ti++",
+      "equivalent": "a match can only begin on an ASCII letter, which is always a rune start, so the extra byte positions match nothing"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-failed-match-advances-one-byte-at-a-time",
+      "old": "\t\tif loc == nil {\n\t\t\ti += runeLen(text, i)",
+      "new": "\t\tif loc == nil {\n\t\t\ti++",
+      "equivalent": "same"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-text-start-is-not-a-word-boundary",
+      "old": "\tif i == 0 {\n\t\treturn true\n\t}",
+      "new": "\tif i == 0 {\n\t\treturn false\n\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-boundary-reads-the-character-after",
+      "old": "\tr, _ := utf8.DecodeLastRuneInString(text[:i])\n\treturn !pytext.IsWordChar(r)",
+      "new": "\tr, _ := utf8.DecodeRuneInString(text[i:])\n\treturn !pytext.IsWordChar(r)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-boundary-test-is-inverted",
+      "old": "\treturn !pytext.IsWordChar(r)\n}",
+      "new": "\treturn pytext.IsWordChar(r)\n}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-rune-is-always-one-byte-wide",
+      "old": "\t_, n := utf8.DecodeRuneInString(text[i:])\n\tif n == 0 {\n\t\treturn 1\n\t}\n\treturn n",
+      "new": "\treturn 1",
+      "equivalent": "same"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-period-does-not-end-a-sentence",
+      "old": "\t\t\tif prev == '.' || prev == ';' || prev == '!' || prev == '?' {",
+      "new": "\t\t\tif prev == ';' || prev == '!' || prev == '?' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-semicolon-does-not-end-a-sentence",
+      "old": "\t\t\tif prev == '.' || prev == ';' || prev == '!' || prev == '?' {",
+      "new": "\t\t\tif prev == '.' || prev == '!' || prev == '?' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-bang-does-not-end-a-sentence",
+      "old": "\t\t\tif prev == '.' || prev == ';' || prev == '!' || prev == '?' {",
+      "new": "\t\t\tif prev == '.' || prev == ';' || prev == '?' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-question-mark-does-not-end-a-sentence",
+      "old": "\t\t\tif prev == '.' || prev == ';' || prev == '!' || prev == '?' {",
+      "new": "\t\t\tif prev == '.' || prev == ';' || prev == '!' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-comma-ends-a-sentence",
+      "old": "\t\t\tif prev == '.' || prev == ';' || prev == '!' || prev == '?' {",
+      "new": "\t\t\tif prev == ',' || prev == ';' || prev == '!' || prev == '?' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-whitespace-run-is-one-character",
+      "old": "\t\t\t\tj := i\n\t\t\t\tfor j < len(text) {\n\t\t\t\t\trr, sz := utf8.DecodeRuneInString(text[j:])\n\t\t\t\t\tif !pytext.IsSpace(rr) {\n\t\t\t\t\t\tbreak\n\t\t\t\t\t}\n\t\t\t\t\tj += sz\n\t\t\t\t}\n\t\t\t\tend = j",
+      "new": "\t\t\t\tend = i + size"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-whitespace-run-is-gos-whitespace",
+      "old": "\t\t\t\t\tif !pytext.IsSpace(rr) {",
+      "new": "\t\t\t\t\tif rr != ' ' && rr != '\\t' && rr != '\\n' && rr != '\\r' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-newline-alternative-is-tried-first",
+      "old": "\t\tif end < 0 && r == '\\n' {",
+      "new": "\t\tif r == '\\n' {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-newline-run-is-one-character",
+      "old": "\t\t\tj := i\n\t\t\tfor j < len(text) && text[j] == '\\n' {\n\t\t\t\tj++\n\t\t\t}\n\t\t\tend = j",
+      "new": "\t\t\tend = i + 1"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-carriage-return-splits-on-its-own",
+      "old": "\t\tif end < 0 && r == '\\n' {",
+      "new": "\t\tif end < 0 && (r == '\\n' || r == '\\r') {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-separator-is-kept-in-the-part",
+      "old": "\t\tout = append(out, text[segStart:i])",
+      "new": "\t\tout = append(out, text[segStart:end])"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-scan-restarts-inside-the-separator",
+      "old": "\t\tsegStart, i = end, end",
+      "new": "\t\tsegStart, i = end, i+size"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-final-part-is-dropped",
+      "old": "\treturn append(out, text[segStart:])",
+      "new": "\treturn out"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-lookbehind-fires-at-position-zero",
+      "old": "\t\tif i > 0 && pytext.IsSpace(r) {",
+      "new": "\t\tif pytext.IsSpace(r) {",
+      "equivalent": "DecodeLastRuneInString(\"\") is RuneError, which is none of the four punctuation marks"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-exec-tool-name-is-not-case-folded",
+      "old": "func isExec(ev Event) bool { return execTools[pytext.Lower(ev.Name)] }",
+      "new": "func isExec(ev Event) bool { return execTools[ev.Name] }"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-fetch-in-the-tool-name-is-not-a-fetch",
+      "old": "\tif strings.Contains(name, \"fetch\") || strings.Contains(name, \"search\") {",
+      "new": "\tif strings.Contains(name, \"search\") {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-search-in-the-tool-name-is-not-a-fetch",
+      "old": "\tif strings.Contains(name, \"fetch\") || strings.Contains(name, \"search\") {",
+      "new": "\tif strings.Contains(name, \"fetch\") {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-network-command-need-not-be-executed",
+      "old": "\treturn isExec(ev) && netCmdRe.MatchString(ev.Input)",
+      "new": "\treturn netCmdRe.MatchString(ev.Input)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-network-command-is-read-from-the-output",
+      "old": "\treturn isExec(ev) && netCmdRe.MatchString(ev.Input)",
+      "new": "\treturn isExec(ev) && netCmdRe.MatchString(ev.Output)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "auth-material-alone-is-auth",
+      "old": "\treturn isFetch(ev) && authMarkRe.MatchString(ev.Input)",
+      "new": "\treturn authMarkRe.MatchString(ev.Input)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "auth-is-exec-with-credentials-not-fetch",
+      "old": "\treturn isFetch(ev) && authMarkRe.MatchString(ev.Input)",
+      "new": "\treturn isExec(ev) && authMarkRe.MatchString(ev.Input)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-test-command-need-not-be-executed",
+      "old": "\treturn isExec(ev) && testCmdRe.MatchString(ev.Input)",
+      "new": "\treturn testCmdRe.MatchString(ev.Input)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-exec-event-is-not-a-probe",
+      "old": "\treturn isExec(ev) || isFetch(ev) || readTools[pytext.Lower(ev.Name)]",
+      "new": "\treturn isFetch(ev) || readTools[pytext.Lower(ev.Name)]"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-fetch-event-is-not-a-probe",
+      "old": "\treturn isExec(ev) || isFetch(ev) || readTools[pytext.Lower(ev.Name)]",
+      "new": "\treturn isExec(ev) || readTools[pytext.Lower(ev.Name)]"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-read-tool-is-not-a-probe",
+      "old": "\treturn isExec(ev) || isFetch(ev) || readTools[pytext.Lower(ev.Name)]",
+      "new": "\treturn isExec(ev) || isFetch(ev)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-probe-family-grounds-on-presence",
+      "old": "\t\"probe\":   {isProbe, \"unprobed\"},",
+      "new": "\t\"probe\":   {isProbe, \"supported\"},"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-fetch-family-needs-a-tie",
+      "old": "\t\"fetch\":   {isFetch, \"supported\"},",
+      "new": "\t\"fetch\":   {isFetch, \"unprobed\"},"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-auth-family-is-wired-to-the-fetch-predicate",
+      "old": "\t\"auth\":    {isAuth, \"supported\"},",
+      "new": "\t\"auth\":    {isFetch, \"supported\"},"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-tie-tokens-use-gos-lowercase",
+      "old": "\tfor _, t := range tieTokenRe.FindAllString(pytext.Lower(sentence), -1) {",
+      "new": "\tfor _, t := range tieTokenRe.FindAllString(strings.ToLower(sentence), -1) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-stopwords-are-not-dropped",
+      "old": "\t\tif !stopwords[t] && !verbTokens[t] {",
+      "new": "\t\tif !verbTokens[t] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-lexicon-verbs-are-not-dropped",
+      "old": "\t\tif !stopwords[t] && !verbTokens[t] {",
+      "new": "\t\tif !stopwords[t] {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-boundary-punctuation-is-not-stripped",
+      "old": "\t\tif identifierShapedRe.MatchString(strings.Trim(t, \"./_-\")) {",
+      "new": "\t\tif identifierShapedRe.MatchString(t) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-strip-set-drops-the-period",
+      "old": "\t\tif identifierShapedRe.MatchString(strings.Trim(t, \"./_-\")) {",
+      "new": "\t\tif identifierShapedRe.MatchString(strings.Trim(t, \"/_-\")) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-strip-set-trims-only-the-left",
+      "old": "\t\tif identifierShapedRe.MatchString(strings.Trim(t, \"./_-\")) {",
+      "new": "\t\tif identifierShapedRe.MatchString(strings.TrimLeft(t, \"./_-\")) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-file-named-calls-is-a-directory",
+      "old": "\tif err != nil || !st.IsDir() {",
+      "new": "\tif err != nil || st == nil {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "every-file-in-the-calls-directory-is-a-record",
+      "old": "\t\tif pytext.FnMatch(e.Name(), \"call-*.json\") {",
+      "new": "\t\tif true {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-record-glob-drops-the-extension",
+      "old": "\t\tif pytext.FnMatch(e.Name(), \"call-*.json\") {",
+      "new": "\t\tif pytext.FnMatch(e.Name(), \"call-*\") {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-records-are-sorted-by-raw-byte",
+      "old": "\tsort.Slice(names, func(i, j int) bool {\n\t\treturn pypath.FSLess(names[i], names[j])\n\t})",
+      "new": "\tsort.Strings(names)",
+      "packages": [
+        "./internal/mintground/",
+        "./internal/pypath/"
+      ]
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-records-are-read-in-directory-order",
+      "old": "\tsort.Slice(names, func(i, j int) bool {\n\t\treturn pypath.FSLess(names[i], names[j])\n\t})\n",
+      "new": "",
+      "packages": [
+        "./internal/mintground/",
+        "./internal/pypath/"
+      ]
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-unreadable-record-is-not-skipped",
+      "old": "\t\traw, err := os.ReadFile(pypath.Join(callsDir, name))\n\t\tif err != nil {\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\traw, _ := os.ReadFile(pypath.Join(callsDir, name))",
+      "equivalent": "os.ReadFile returns no bytes on error and no bytes never parse, so the json branch below swallows it either way"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-record-bytes-are-not-decoded",
+      "old": "\t\trec, err := pyval.LoadsOrdered(pytext.DecodeReplace(raw))",
+      "new": "\t\trec, err := pyval.LoadsOrdered(string(raw))"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "unparseable-json-is-not-skipped",
+      "old": "\t\tif err != nil {\n\t\t\tcontinue\n\t\t}\n\t\tobj, ok := rec.(pyval.Obj)",
+      "new": "\t\tif err != nil {\n\t\t\treturn nil, false, err\n\t\t}\n\t\tobj, ok := rec.(pyval.Obj)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-non-dict-record-is-skipped-not-raised",
+      "old": "\t\tobj, ok := rec.(pyval.Obj)\n\t\tif !ok {\n\t\t\treturn nil, false, &pyval.PyErr{Class: \"AttributeError\",\n\t\t\t\tMsg: \"'\" + pyval.TypeName(rec) +\n\t\t\t\t\t\"' object has no attribute 'get'\"}\n\t\t}",
+      "new": "\t\tobj, ok := rec.(pyval.Obj)\n\t\tif !ok {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-attribute-error-names-the-wrong-attribute",
+      "old": "\"' object has no attribute 'get'\"}",
+      "new": "\"' object has no attribute 'items'\"}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-falsy-tool-events-is-iterated",
+      "old": "\t\tif !pyval.Truthy(raws) {\n\t\t\traws = pyval.List{}\n\t\t}",
+      "new": "\t\t_ = pyval.Truthy"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-type-error-does-not-stop-the-read",
+      "old": "\t\titems, err := enumerable(raws)\n\t\tif err != nil {\n\t\t\treturn nil, false, err\n\t\t}",
+      "new": "\t\titems, err := enumerable(raws)\n\t\tif err != nil {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-non-dict-event-is-not-skipped",
+      "old": "\t\t\tev, ok := it.(pyval.Obj)\n\t\t\tif !ok {\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tev, _ := it.(pyval.Obj)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-receipt-ref-drops-the-directory",
+      "old": "\t\t\t\tRef:     \"build/calls/\" + name + \"#tool_events[\" + strconv.Itoa(i) + \"]\",",
+      "new": "\t\t\t\tRef:     name + \"#tool_events[\" + strconv.Itoa(i) + \"]\","
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-receipt-index-is-one-based",
+      "old": "\t\t\t\tRef:     \"build/calls/\" + name + \"#tool_events[\" + strconv.Itoa(i) + \"]\",",
+      "new": "\t\t\t\tRef:     \"build/calls/\" + name + \"#tool_events[\" + strconv.Itoa(i+1) + \"]\","
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-name-is-read-from-the-input",
+      "old": "\t\t\t\tName:    pyval.Str(getOr(ev, \"name\", \"\")),",
+      "new": "\t\t\t\tName:    pyval.Str(getOr(ev, \"input\", \"\")),"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-name-is-capped-too",
+      "old": "\t\t\t\tName:    pyval.Str(getOr(ev, \"name\", \"\")),",
+      "new": "\t\t\t\tName:    pytext.Head(pyval.Str(getOr(ev, \"name\", \"\")), eventTextCap),"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-input-is-not-capped",
+      "old": "\t\t\t\tInput:   pytext.Head(pyval.Str(getOr(ev, \"input\", \"\")), eventTextCap),",
+      "new": "\t\t\t\tInput:   pyval.Str(getOr(ev, \"input\", \"\")),"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-output-is-not-capped",
+      "old": "\t\t\t\tOutput:  pytext.Head(pyval.Str(getOr(ev, \"output\", \"\")), eventTextCap),",
+      "new": "\t\t\t\tOutput:  pyval.Str(getOr(ev, \"output\", \"\")),"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-cap-is-checked-before-the-append",
+      "old": "\t\t\tif len(events) >= maxEvents {",
+      "new": "\t\t\tif len(events) > maxEvents {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-cap-stops-the-file-not-the-read",
+      "old": "\t\t\t\treturn events, true, nil\n\t\t\t}\n\t\t}\n\t}\n\treturn events, true, nil",
+      "new": "\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t}\n\treturn events, true, nil"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-empty-run-has-no-ground-truth",
+      "old": "\t\t}\n\t}\n\treturn events, true, nil\n}",
+      "new": "\t\t}\n\t}\n\treturn events, len(events) > 0, nil\n}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-missing-key-takes-none-not-the-default",
+      "old": "\tif v, ok := o.Get(key); ok {\n\t\treturn v\n\t}\n\treturn def",
+      "new": "\tv, _ := o.Get(key)\n\treturn v"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-truthy-is-error-is-an-error",
+      "old": "\t\tif b, isBool := v.(bool); isBool && b {",
+      "new": "\t\tif b, isBool := v.(bool); isBool || b {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-is-error-string-is-not-case-folded",
+      "old": "\treturn pytext.Lower(pyval.Str(getOr(ev, \"is_error\", \"\"))) == \"true\"",
+      "new": "\treturn pyval.Str(getOr(ev, \"is_error\", \"\")) == \"true\""
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-missing-is-error-stringifies-to-none",
+      "old": "\treturn pytext.Lower(pyval.Str(getOr(ev, \"is_error\", \"\"))) == \"true\"",
+      "new": "\treturn pytext.Lower(pyval.Str(getOr(ev, \"is_error\", nil))) == \"true\"",
+      "equivalent": "\"\" and \"None\" are both not \"true\""
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-string-is-not-iterable",
+      "old": "\tcase string:\n\t\tout := []any{}\n\t\tfor _, r := range t {\n\t\t\tout = append(out, string(r))\n\t\t}\n\t\treturn out, nil",
+      "new": "\tcase string:\n\t\t_ = t"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-dict-is-not-iterable",
+      "old": "\tcase pyval.Obj:\n\t\tout := []any{}\n\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Key)\n\t\t}\n\t\treturn out, nil",
+      "new": "\tcase pyval.Obj:\n\t\t_ = t"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-dict-enumerates-its-values",
+      "old": "\t\t\tout = append(out, f.Key)",
+      "new": "\t\t\tout = append(out, f.Val)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-type-error-says-not-subscriptable",
+      "old": "\t\tMsg: \"'\" + pyval.TypeName(v) + \"' object is not iterable\"}",
+      "new": "\t\tMsg: \"'\" + pyval.TypeName(v) + \"' object is not subscriptable\"}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-sentence-is-stripped-gos-way",
+      "old": "\t\tsentence := pytext.Strip(raw)",
+      "new": "\t\tsentence := strings.TrimSpace(raw)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-empty-sentence-is-not-skipped",
+      "old": "\t\tif sentence == \"\" || !isRetrospective(sentence) {",
+      "new": "\t\tif !isRetrospective(sentence) {",
+      "equivalent": "isRetrospective(\"\") is false on every path"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-retrospective-gate-is-inverted",
+      "old": "\t\tif sentence == \"\" || !isRetrospective(sentence) {",
+      "new": "\t\tif sentence == \"\" || isRetrospective(sentence) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-claim-excerpt-is-the-whole-sentence",
+      "old": "\t\t\t\t\t\tClaim:    pytext.Head(sentence, claimExcerpt),",
+      "new": "\t\t\t\t\t\tClaim:    sentence,"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-claim-excerpt-counts-bytes",
+      "old": "\t\t\t\t\t\tClaim:    pytext.Head(sentence, claimExcerpt),",
+      "new": "\t\t\t\t\t\tClaim:    sentence[:min(len(sentence), claimExcerpt)],"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-tie-sentence-is-the-excerpt",
+      "old": "\t\t\t\t\t\tSentence: sentence,",
+      "new": "\t\t\t\t\t\tSentence: pytext.Head(sentence, claimExcerpt),"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-family-mints-once-per-hit",
+      "old": "\t\t\t\t\tbreak\n\t\t\t\t}",
+      "new": "\t\t\t\t\t_ = 0\n\t\t\t\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-errored-event-can-be-a-receipt",
+      "old": "\t\t\tif !e.IsError && rule.pred(e) {",
+      "new": "\t\t\tif rule.pred(e) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "every-family-joins-on-the-probe-predicate",
+      "old": "\t\t\tif !e.IsError && rule.pred(e) {",
+      "new": "\t\t\tif !e.IsError && isProbe(e) {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-unsupported-note-names-no-family",
+      "old": "\t\t\t\tNote: \"no \" + c.Family +\n\t\t\t\t\t\"-family tool events in the minting run\",",
+      "new": "\t\t\t\tNote: \"no tool events in the minting run\","
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-unsupported-stamp-carries-no-note",
+      "old": "\t\t\t\tHasNote: true,\n\t\t\t})\n\t\t\tcontinue",
+      "new": "\t\t\t\tHasNote: false,\n\t\t\t})\n\t\t\tcontinue"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-tie-tokens-come-from-the-excerpt",
+      "old": "\t\ttoks := tieTokens(c.Sentence)",
+      "new": "\t\ttoks := tieTokens(c.Claim)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-text-drops-the-output",
+      "old": "\t\t\tevText := pytext.Lower(e.Name + \" \" + e.Input + \" \" + e.Output)",
+      "new": "\t\t\tevText := pytext.Lower(e.Name + \" \" + e.Input)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-text-drops-the-tool-name",
+      "old": "\t\t\tevText := pytext.Lower(e.Name + \" \" + e.Input + \" \" + e.Output)",
+      "new": "\t\t\tevText := pytext.Lower(e.Input + \" \" + e.Output)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-text-is-lowered-gos-way",
+      "old": "\t\t\tevText := pytext.Lower(e.Name + \" \" + e.Input + \" \" + e.Output)",
+      "new": "\t\t\tevText := strings.ToLower(e.Name + \" \" + e.Input + \" \" + e.Output)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-zero-score-still-ties",
+      "old": "\t\t\tif score != 0 {",
+      "new": "\t\t\tif score >= 0 {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-receipts-are-ranked-worst-first",
+      "old": "\t\t\treturn scored[i].score > scored[j].score",
+      "new": "\t\t\treturn scored[i].score < scored[j].score"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "four-receipts-survive",
+      "old": "\t\t\tstop := maxReceipts\n",
+      "new": "\t\t\tstop := maxReceipts + 1\n"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-family-level-receipt-is-the-last-candidate",
+      "old": "\t\t\t\tStatus: \"supported\", Receipts: []string{cands[0].Ref},",
+      "new": "\t\t\t\tStatus: \"supported\", Receipts: []string{cands[len(cands)-1].Ref},"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-family-level-branch-serves-the-untied-families",
+      "old": "\t\tcase rule.untied == \"supported\" && len(specificTokens(toks)) == 0:",
+      "new": "\t\tcase rule.untied != \"supported\" && len(specificTokens(toks)) == 0:"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-specific-claim-takes-a-family-level-receipt",
+      "old": "\t\tcase rule.untied == \"supported\" && len(specificTokens(toks)) == 0:",
+      "new": "\t\tcase rule.untied == \"supported\":"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-unprobed-note-counts-the-tied-events",
+      "old": "\t\t\t\tNote: strconv.Itoa(len(cands)) + \" \" + c.Family +",
+      "new": "\t\t\t\tNote: strconv.Itoa(len(scored)) + \" \" + c.Family +"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-empty-run-ref-still-resolves",
+      "old": "\tif runRef == \"\" || len(lessonTexts) == 0 {",
+      "new": "\tif len(lessonTexts) == 0 {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-unresolved-import-is-called-anyway",
+      "old": "\tif d.ResolveRunDir == nil {\n\t\treturn empty\n\t}",
+      "new": "\tif d.ResolveRunDir == nil {\n\t\t_ = d\n\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-unresolvable-run-grounds-anyway",
+      "old": "\trd, ok, err := d.ResolveRunDir(runRef)\n\tif err != nil || !ok {",
+      "new": "\trd, ok, err := d.ResolveRunDir(runRef)\n\t_ = ok\n\tif err != nil {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-raising-resolver-grounds-anyway",
+      "old": "\trd, ok, err := d.ResolveRunDir(runRef)\n\tif err != nil || !ok {",
+      "new": "\trd, ok, err := d.ResolveRunDir(runRef)\n\t_ = err\n\tif !ok {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-absent-event-log-grounds-anyway",
+      "old": "\tevents, present, err := CollectRunToolEvents(rd)\n\tif err != nil || !present {",
+      "new": "\tevents, present, err := CollectRunToolEvents(rd)\n\t_ = present\n\tif err != nil {"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "a-raising-record-grounds-anyway",
+      "old": "\tevents, present, err := CollectRunToolEvents(rd)\n\tif err != nil || !present {",
+      "new": "\tevents, present, err := CollectRunToolEvents(rd)\n\t_ = err\n\tif !present {",
+      "equivalent": "every error return from CollectRunToolEvents also reports absent"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-unsupported-flag-reads-unprobed",
+      "old": "\t\tif g.Status == \"unsupported\" {\n\t\t\treturn true",
+      "new": "\t\tif g.Status == \"unprobed\" {\n\t\t\treturn true"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "an-empty-grounding-still-renders",
+      "old": "\tif len(grounding) == 0 {\n\t\treturn \"\"\n\t}\n\tn := map[string]int",
+      "new": "\tif false {\n\t\treturn \"\"\n\t}\n\tn := map[string]int"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-summary-counts-supported-as-unsupported",
+      "old": "\treturn \" [claims: \" + strconv.Itoa(n[\"supported\"]) + \"✓/\" +",
+      "new": "\treturn \" [claims: \" + strconv.Itoa(n[\"unsupported\"]) + \"✓/\" +"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-summary-tick-is-a-cross",
+      "old": "\treturn \" [claims: \" + strconv.Itoa(n[\"supported\"]) + \"✓/\" +",
+      "new": "\treturn \" [claims: \" + strconv.Itoa(n[\"supported\"]) + \"✗/\" +"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-reports-the-supported-claims",
+      "old": "\t\tif g.Status == \"unsupported\" {\n\t\t\tbad = append(bad, g)",
+      "new": "\t\tif g.Status == \"supported\" {\n\t\t\tbad = append(bad, g)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-shows-one-head",
+      "old": "\tstop := 2\n",
+      "new": "\tstop := 1\n"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-shows-three-heads",
+      "old": "\tstop := 2\n",
+      "new": "\tstop := 3\n"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-head-is-the-whole-claim",
+      "old": "\t\theads = append(heads, pytext.Head(b.Claim, 40))",
+      "new": "\t\theads = append(heads, b.Claim)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-head-counts-bytes",
+      "old": "\t\theads = append(heads, pytext.Head(b.Claim, 40))",
+      "new": "\t\theads = append(heads, b.Claim[:min(len(b.Claim), 40)])"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-is-plural-for-one",
+      "old": "\tplural := \"s\"\n\tif len(bad) == 1 {\n\t\tplural = \"\"\n\t}",
+      "new": "\tplural := \"s\"\n\tif len(bad) != 1 {\n\t\tplural = \"\"\n\t}"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-marker-heads-are-comma-separated",
+      "old": "\t\tstrings.Join(heads, \"; \") + \"\\\"]\"",
+      "new": "\t\tstrings.Join(heads, \", \") + \"\\\"]\""
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-opener-table-drops-download",
+      "old": "\t\tdescribe describes detect determine document download draft embed",
+      "new": "\t\tdescribe describes detect determine document draft embed"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-sequencer-table-drops-then",
+      "old": "\t\tplease second then third`)",
+      "new": "\t\tplease second third`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-subordinator-table-drops-for",
+      "old": "\t\tafter at before by during for given if in on once since to unless",
+      "new": "\t\tafter at before by during given if in on once since to unless"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-complementizer-table-drops-each",
+      "old": "\t\teach every how it that what whether which who whom why`)",
+      "new": "\t\tevery how it that what whether which who whom why`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-subordinating-table-drops-until",
+      "old": "\t\twhen whenever wherever while`)",
+      "new": "\t\twhen whenever wherever`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-stopword-table-drops-session",
+      "old": "\t\tthis was were what when with`)",
+      "new": "\t\tthis was were what when`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-verb-token-table-drops-pytest",
+      "old": "\t\tfetched logged measured passed probed pytest retrieved scraped tested",
+      "new": "\t\tfetched logged measured passed probed retrieved scraped tested"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-exec-tool-table-drops-shell",
+      "old": "\t\tbash run_command shell`)",
+      "new": "\t\tbash run_command`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-read-tool-table-drops-glob",
+      "old": "\t\tglob grep ls read`)",
+      "new": "\t\tgrep ls read`)"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-cap-is-4001",
+      "old": "var maxEvents = 4000",
+      "new": "var maxEvents = 4001"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-event-text-cap-is-1999",
+      "old": "\teventTextCap = 2000",
+      "new": "\teventTextCap = 1999"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-receipt-cap-is-two",
+      "old": "\tmaxReceipts  = 3",
+      "new": "\tmaxReceipts  = 2"
+    },
+    {
+      "file": "internal/mintground/mintground.go",
+      "name": "the-claim-excerpt-is-161",
+      "old": "\tclaimExcerpt = 160",
+      "new": "\tclaimExcerpt = 161"
+    }
+  ]
+}

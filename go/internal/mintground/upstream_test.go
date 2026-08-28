@@ -695,3 +695,32 @@ func funcNameFor(pred func(Event) bool) string {
 	full := runtime.FuncForPC(reflect.ValueOf(pred).Pointer()).Name()
 	return full[strings.LastIndex(full, ".")+1:]
 }
+
+// TestTheTablesThatMustNotOverlapDoNot pins two disjointnesses that two
+// branches of the port lean on, so that a table edit cannot quietly make
+// dead code live again:
+//
+//   - opensImperatively reads its auxiliary window as words[1:4] and not
+//     words[0:4], which is the same window only while no imperative
+//     opener is itself an auxiliary.
+//   - isInstruction's clause-comma branch cannot fire on a comma at
+//     position 0: there are no word characters before such a comma, so
+//     the clause's first token IS words[0], and words[0] is a
+//     subordinator on that branch. That reasoning holds only while no
+//     subordinator is also an imperative opener.
+func TestTheTablesThatMustNotOverlapDoNot(t *testing.T) {
+	auxiliaries := wordSet(`was were is are had has have`)
+	for _, pair := range []struct {
+		why  string
+		a, b map[string]bool
+	}{
+		{"an imperative opener is an auxiliary", imperativeOpeners, auxiliaries},
+		{"an imperative opener is a subordinator", imperativeOpeners, subordinator},
+	} {
+		for w := range pair.a {
+			if pair.b[w] {
+				t.Errorf("%s: %q", pair.why, w)
+			}
+		}
+	}
+}

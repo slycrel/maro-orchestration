@@ -227,6 +227,12 @@ func runScenarios() []mgSpec {
 				append(append([]byte(`{"tool_events":[{"name":"`), 0xE2, 0x82),
 					[]byte(`"}]}`)...))}),
 
+		// enumerate(dict) yields KEYS, and a key is a string, not a
+		// record — so a dict of well-formed events produces none.
+		col("a-dict-of-tool-events-enumerates-its-keys",
+			[]mgEntry{f("build/calls/call-1.json",
+				`{"tool_events":{"a":`+oneEvent("bash", "ls")+`}}`)}),
+
 		// --- ground_lessons_for_run ---
 		gl("no-lessons-grounds-nothing", "r1", []string{}, "run",
 			[]mgEntry{f("run/build/calls/call-1.json",
@@ -237,6 +243,12 @@ func runScenarios() []mgSpec {
 				rec(`[`+oneEvent("web_fetch", "https://a.b")+`]`))}),
 		gl("an-unresolvable-run-grounds-nothing", "r1",
 			[]string{"The page was fetched"}, "", nil),
+		// The resolver's own answer is what decides, not whether the
+		// directory it handed back happens to hold records.
+		gl("an-unresolvable-run-ignores-a-readable-directory", "r1",
+			[]string{"The page was fetched"}, "",
+			[]mgEntry{f("build/calls/call-1.json",
+				rec(`[`+oneEvent("web_fetch", "https://a.b")+`]`))}),
 		gl("a-run-without-call-records-grounds-nothing", "r1",
 			[]string{"The page was fetched"}, "run",
 			[]mgEntry{f("run/notes.md", "hi")}),

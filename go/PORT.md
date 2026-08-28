@@ -17915,3 +17915,84 @@ covered by batteries that would have to move with them.
 - The "note" key is ABSENT on a tied-supported stamp, not empty. `Stamp`
   carries `HasNote` for that, and the differential reports the key's
   absence rather than normalising it away.
+
+### The battery: 175 rows, and what six of them were really asking
+
+Fixtures derived from the file (L9), not from the diff: 175 mutations
+across every decision the module makes, run to fixpoint in two rounds.
+Round 1 was 128 killed, 43 survived, 4 mislabelled `!BUILD`. Round 2 is
+161 killed and 14 equivalent, each equivalent carrying its argument in
+the battery row AND a comment at the site.
+
+**The 4 `!BUILD`s were not all build breaks, and the runner could not
+tell.** Two were mine — a mutation that orphaned `st` and one that
+orphaned `i` — and re-spelling them was the whole fix. The other two were
+kills the runner put in the battery-bug column: both made
+`splitSentences` stop advancing (`end = i`, then `segStart, i = end,
+end`), and the test binary appended to `out` until the OOM killer took
+it, 21 seconds in, with `signal: killed` on stdout and no `--- FAIL:`
+line to name a killer. `mutate-subs.py` read "no named test failed" as
+"did not compile", because those two questions had the same answer for
+every mutant it had seen.
+
+They are different questions and the compiler will answer one of them,
+so it now does: `gosrc.compiles(pkgs)` builds the test binary alone, and
+a non-zero run with no named killer is reported as `killed (hung or died
+outside a test)` unless the build actually fails. The second half of that
+fix is `gosrc._mutant_env`, which sets `GOMEMLIMIT=2GiB` and a `-timeout
+120s` on every mutant run: a mutation that turns a scanner into a
+non-advancing loop is a normal thing for a battery to produce, and it
+should not mean an unbounded Go heap and a swap storm on a 15GB box that
+another session is working in.
+
+That is a fault in a shared tool found by a module's own battery, which
+is the second time the mutation runner has been wrong about its own
+denominator (the first was `!BUILD` printing in the killed column at
+all, riskmint, 2026-08-27). Both times the shape was the same: a verdict
+INFERRED from a proxy that had never been wrong before.
+
+**Five of the six round-2 survivors were one fixture asking two
+questions.** The three modal-window scenarios were written as *"the page
+must not have been …ly fetched"*, and every one of them survived every
+mutation of the 48-code-point window. The window was never read: veto 3
+(polarity) fires on the `not` and returns before veto 2's window is cut.
+The fixtures were testing the negator, three times, under three names.
+Dropping the `not` — *"the page must have been …ly fetched"* — killed all
+five rows at once: the far edge (47 vs 48), the units (bytes vs code
+points), the existence of a window at all (48 vs the whole prefix), and
+both halves of `lastRunes`.
+
+The lesson generalises past this module: **a fixture that exercises a
+sequence of vetoes tests the FIRST one that fires.** Naming a scenario
+after the veto you meant to reach does not make it reach it, and a
+battery row is the only thing that will say so. When a mutation site sits
+behind other guards, the fixture has to be built to arrive there — which
+means reading the guards ABOVE the site, not just the site.
+
+**The 14 equivalents are arguments, not shrugs.** Two of them turned into
+a test rather than a comment: `opensImperatively`'s `words[1:4]` is the
+same window as `words[0:4]` only while no imperative opener is an
+auxiliary, and `isInstruction`'s clause branch cannot fire on a comma at
+position 0 only while no subordinator is an imperative opener.
+`TestTheTablesThatMustNotOverlapDoNot` pins both, so a table edit cannot
+quietly make either piece of dead reasoning live again. The rest are
+comments at their sites: the mask endpoints of `clauseComma` (every
+quoted span opens and closes on punctuation, so neither endpoint can be
+the comma), `findBounded`'s rune walk (every alternative opens on an
+ASCII letter, so a byte walk visits strictly more positions and matches
+at none of the extras — it is spelled in runes because the Python scan
+is, and an alternative opening on a non-ASCII letter would make the
+difference real), `splitSentences`' `i > 0`, `ExtractClaims`' empty-string
+short circuit, `isErrorFlag`'s `""` default, `CollectRunToolEvents`'
+read-error skip, and `GroundLessonsForRun`'s error test — which today is
+decided by `!present` on every path, because every error return from
+`CollectRunToolEvents` also reports absent.
+
+**One equivalent was made real instead.** `depsFor` — the differential's
+fake `runs` seam — used to return `""` alongside its failure, which made
+`GroundLessonsForRun`'s `err != nil || !ok` look load-bearing when only
+`!ok` was. The fake now hands back a USABLE directory on failure, and the
+new scenario `an-unresolvable-run-ignores-a-readable-directory` puts real
+call records in it. A test double that fails in the most convenient way
+possible is a test double that cannot tell you which check you are
+relying on.

@@ -8,6 +8,8 @@ package mintground
 // a window counts code points, that an alternation's order is or is not
 // load-bearing — and the scenario is what makes the claim falsifiable.
 
+import "strings"
+
 // The one-line spellings. A scenario is read as (name, input), and the
 // kind is carried by which helper built it.
 func sen(name, text string) mgSpec { return mgSpec{Name: name, Kind: "sentences", Text: text} }
@@ -100,6 +102,11 @@ func sentenceScenarios() []mgSpec {
 		sen("a-carriage-return-after-a-period-does", "one.\rtwo"),
 		sen("a-lookbehind-cannot-fire-at-position-zero", " one"),
 		sen("an-astral-character-before-the-split", "\U0001F600. two"),
+		// The two alternatives are tried in the pattern's order, so a run
+		// that is BOTH — a newline opening a whitespace run after a period
+		// — belongs whole to the first one.
+		sen("a-punctuated-break-swallows-a-run-that-starts-with-a-newline",
+			"one.\n \ntwo"),
 	}
 }
 
@@ -161,6 +168,22 @@ func instructionScenarios() []mgSpec {
 			"\U0001F600 For each question, state the answer"),
 		ins("a-word-carries-an-apostrophe", "Don't verify the mount"),
 		ins("an-empty-sentence-orders-nothing", ""),
+
+		// The two windows the clause branch cuts, at the code point where
+		// each one's edge changes the answer.
+		ins("the-first-comma-is-the-clause-break",
+			"If the tool, run the check, quickly."),
+		ins("the-auxiliary-window-stops-at-three-tokens",
+			"Check the first two was fine"),
+		ins("the-auxiliary-is-read-case-folded", "Check the tool WAS broken"),
+		ins("a-word-window-edge-truncates-an-auxiliary",
+			"Run "+strings.Repeat("y", 113)+" was fine"),
+		ins("the-word-window-counts-code-points",
+			"Run x"+strings.Repeat("\u00e9", 80)+" was fine"),
+		ins("the-clause-window-opens-after-the-comma",
+			"If, run "+strings.Repeat("y", 51)+" was tail"),
+		ins("the-clause-window-stops-at-sixty-code-points",
+			"If, run "+strings.Repeat("y", 52)+" was tail"),
 	}
 }
 
@@ -220,6 +243,13 @@ func retrospectiveScenarios() []mgSpec {
 		ret("an-instruction-with-an-embedded-marker-is-not-a-report",
 			"Verify the mount, which was checked yesterday"),
 		ret("an-empty-sentence-reports-nothing", ""),
+
+		// The embedding net: how much of the prefix it reads, and where.
+		ret("a-two-word-prefix-can-still-embed", "Notes that were tested."),
+		ret("a-subordinator-before-the-clause-break-does-not-embed",
+			"While ready, the page was fetched."),
+		ret("an-order-with-a-main-clause-report-is-still-an-order",
+			"Run the check now, the page was fetched."),
 	}
 }
 
@@ -324,6 +354,26 @@ func claimScenarios() []mgSpec {
 				"probe is the cost driver"),
 		cla("the-empty-text-mints-nothing", ""),
 		cla("whitespace-only-mints-nothing", "   \n  "),
+
+		// The modal window is 48 CODE POINTS ending at the token, and
+		// these three put its far edge, its units and its existence each
+		// on their own falsifier. No "not" in any of them: the negator
+		// veto would answer first and the modal window would go unread.
+		cla("the-modal-window-reaches-exactly-48-code-points",
+			"the page must have been "+strings.Repeat("a", 30)+"ly fetched."),
+		cla("the-modal-window-counts-code-points",
+			"the page must have been "+strings.Repeat("\u00e9", 30)+
+				"ly fetched."),
+		cla("a-modal-beyond-the-window-does-not-veto",
+			"the page must have been "+strings.Repeat("a", 60)+"ly fetched."),
+		cla("the-negator-veto-is-clause-local",
+			"the page - not yet - was fetched."),
+		cla("a-python-space-is-stripped-off-the-sentence",
+			"\u001cThe page was fetched."),
+		cla("a-lexicon-hit-inside-a-word-is-not-a-hit",
+			"The page was ready and prefetched the data."),
+		cla("a-lexicon-hit-may-open-the-sentence",
+			"Fetched the page and the run was clean."),
 	}
 }
 
@@ -441,6 +491,18 @@ func groundTextScenarios() []mgSpec {
 	const rankedFetches = `[` +
 		`{"ref":"r1","name":"web_fetch","input":"vendor.example","output":"","is_error":false},` +
 		`{"ref":"r2","name":"web_fetch","input":"vendor.example/rows.json","output":"","is_error":false}]`
+	const twoUntiedFetches = `[` +
+		`{"ref":"r1","name":"web_fetch","input":"https://a.b","output":"","is_error":false},` +
+		`{"ref":"r2","name":"web_fetch","input":"https://c.d","output":"","is_error":false}]`
+	// A dotted capital I: Python lowercases it to "i" plus a combining
+	// dot and Go lowercases it to a bare "i", so the tie token spans the
+	// difference.
+	const fetchOfDottedI = `[{"ref":"r1","name":"web_fetch",` +
+		`"input":"https://x/ABC\u0130DEF","output":"","is_error":false}]`
+	// 187 code points before the identifier, so the 160-point claim
+	// excerpt cannot see it and the sentence can.
+	longTiedClaim := "The rows were fetched from " +
+		strings.Repeat("padword ", 20) + "vendor.example"
 
 	return []mgSpec{
 		grt("no-candidates-is-unsupported",
@@ -479,6 +541,13 @@ func groundTextScenarios() []mgSpec {
 		grt("a-text-with-no-claims-has-no-stamps", "Verify the totals", oneFetch),
 		grt("an-auth-claim-without-auth-material-is-unsupported",
 			"The fetch was authenticated", oneFetch),
+
+		grt("the-tie-tokens-come-from-the-whole-sentence",
+			longTiedClaim, fetchOfVendor),
+		grt("the-event-text-is-lowered-the-python-way",
+			"The rows abcidef were fetched", fetchOfDottedI),
+		grt("the-family-level-receipt-is-the-first-candidate",
+			"The content was fetched", twoUntiedFetches),
 	}
 }
 
@@ -491,6 +560,13 @@ func renderScenarios() []mgSpec {
 		`{"claim":"c","family":"probe","status":"unprobed"}]`
 	const unknown = `[{"claim":"a","family":"fetch","status":"weird"}]`
 	const oneBad = `[{"claim":"only one","family":"fetch","status":"unsupported"}]`
+	const lopsided = `[{"claim":"a","family":"fetch","status":"supported"},` +
+		`{"claim":"b","family":"fetch","status":"supported"},` +
+		`{"claim":"c","family":"probe","status":"unsupported"},` +
+		`{"claim":"d","family":"probe","status":"unprobed"},` +
+		`{"claim":"e","family":"probe","status":"unprobed"},` +
+		`{"claim":"f","family":"probe","status":"unprobed"}]`
+	const unprobedOnly = `[{"claim":"a","family":"probe","status":"unprobed"}]`
 	const twoBad = `[{"claim":"first","family":"fetch","status":"unsupported"},` +
 		`{"claim":"second","family":"probe","status":"unsupported"}]`
 	const threeBad = `[{"claim":"first","family":"fetch","status":"unsupported"},` +
@@ -512,6 +588,7 @@ func renderScenarios() []mgSpec {
 		smy("an-empty-list-renders-nothing", empty),
 		smy("the-three-counts-render", mixed),
 		smy("an-unknown-status-is-counted-nowhere", unknown),
+		smy("the-three-counts-are-not-interchangeable", lopsided),
 		mrk("no-grounding-marks-nothing", none),
 		mrk("an-empty-list-marks-nothing", empty),
 		mrk("a-supported-stamp-marks-nothing",
@@ -526,5 +603,6 @@ func renderScenarios() []mgSpec {
 		hus("a-mixed-list-has-one", mixed),
 		hus("a-supported-only-list-has-none",
 			`[{"claim":"a","family":"fetch","status":"supported"}]`),
+		hus("an-unprobed-only-list-has-none", unprobedOnly),
 	}
 }

@@ -144,15 +144,26 @@ def main():
             # named test.
             print("  killed    %-36s (panic or deadlock)" % m["name"])
         else:
-            # NOT a kill. A mutant that does not compile has tested
-            # nothing: the compiler rejected an identifier that went
-            # unused, and no assertion ever ran. L8 has said since the
-            # metrics battery that a BUILDFAIL is a fault in the battery,
-            # and this runner used to print it in the killed column and
-            # exit 0 anyway — so three rows in the riskmint battery
-            # (2026-08-27) counted as coverage they had not measured.
-            buildfails.append(m["name"])
-            print("  !BUILD    %-36s does not compile" % m["name"])
+            # A mutant that does not compile has tested nothing: the
+            # compiler rejected an identifier that went unused, and no
+            # assertion ever ran. L8 has said since the metrics battery
+            # that a BUILDFAIL is a fault in the battery, and this runner
+            # used to print it in the killed column and exit 0 anyway —
+            # so three rows in the riskmint battery (2026-08-27) counted
+            # as coverage they had not measured.
+            #
+            # But "no named test failed" is not the same question as "did
+            # it compile", and reading one off the other put two REAL
+            # kills in the battery-bug column (mintground, 2026-08-28):
+            # both mutants made splitSentences stop advancing, and the
+            # test binary was OOM-killed with `signal: killed` and no
+            # `--- FAIL:` line to its name. Ask the compiler instead.
+            if gosrc.compiles(pkgs):
+                print("  killed    %-36s (hung or died outside a test)"
+                      % m["name"])
+            else:
+                buildfails.append(m["name"])
+                print("  !BUILD    %-36s does not compile" % m["name"])
 
     print()
     if unmatched:

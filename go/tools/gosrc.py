@@ -209,6 +209,25 @@ def pkg_of(path):
     return "./" + rel + "/" if rel != "." else "./"
 
 
+def _mutant_env(extra_env=None):
+    """The environment a mutant's tests run in.
+
+    GOMEMLIMIT is a good-citizen bound, not a tuning knob. A mutation can
+    turn a scanner into a loop that never advances and appends forever —
+    mintground's splitSentences did exactly that twice on 2026-08-28 —
+    and an unbounded Go heap on this 15GB box means the OOM killer, and
+    a swap storm on the way there, while another session is working.
+    With a soft limit the runtime spends its time collecting instead of
+    growing, so the -timeout fires first and the mutant dies as a panic
+    the runner can read.
+    """
+    env = dict(os.environ, MARO_PYPROBE_REQUIRED="1")
+    env.setdefault("GOMEMLIMIT", "2GiB")
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
 def run_tests_multi(pkgs, quick=False, extra_env=None):
     """run_tests over SEVERAL package patterns in one `go test`.
 
@@ -217,10 +236,8 @@ def run_tests_multi(pkgs, quick=False, extra_env=None):
     the package being built is how a helper's mutation reports SURVIVED
     while its real killers sit in a package that was never compiled.
     """
-    env = dict(os.environ, MARO_PYPROBE_REQUIRED="1")
-    if extra_env:
-        env.update(extra_env)
-    cmd = ["go", "test"] + list(pkgs) + ["-count=1"]
+    env = _mutant_env(extra_env)
+    cmd = ["go", "test"] + list(pkgs) + ["-count=1", "-timeout", "120s"]
     if quick:
         cmd.append("-short")
     p = subprocess.run(cmd, cwd=GO_ROOT, env=env,
@@ -230,11 +247,27 @@ def run_tests_multi(pkgs, quick=False, extra_env=None):
     return p.returncode == 0, killers, p.stdout + p.stderr
 
 
+def compiles(pkgs, extra_env=None):
+    """Does the TEST binary for these packages build?
+
+    Asked of the compiler rather than inferred. A mutant run that exits
+    non-zero with no `--- FAIL:` line has three possible causes, and only
+    one of them is a fault in the battery: the package did not compile
+    (battery bug), the test binary hung until it was killed (a kill), or
+    it died outside any test function (also a kill). Guessing "did not
+    compile" from the absent test name mislabels the other two, so this
+    runs the build alone and lets the answer be the answer.
+    """
+    env = _mutant_env(extra_env)
+    p = subprocess.run(["go", "test", "-run", "ZzNoSuchTestZz", "-count=1"] +
+                       list(pkgs), cwd=GO_ROOT, env=env,
+                       capture_output=True, text=True)
+    return p.returncode == 0
+
+
 def run_tests(pkg, quick=False, extra_env=None):
-    env = dict(os.environ, MARO_PYPROBE_REQUIRED="1")
-    if extra_env:
-        env.update(extra_env)
-    cmd = ["go", "test", pkg, "-count=1"]
+    env = _mutant_env(extra_env)
+    cmd = ["go", "test", pkg, "-count=1", "-timeout", "120s"]
     if quick:
         cmd.append("-short")
     p = subprocess.run(cmd, cwd=GO_ROOT, env=env,

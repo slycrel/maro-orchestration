@@ -280,13 +280,17 @@ func depsFor(sc mgSpec, base string) Deps {
 	if sc.ImportFails {
 		return Deps{}
 	}
+	// Adversarial on purpose: a seam that FAILS still hands back a usable
+	// directory. A fake that returned "" on failure would make either of
+	// GroundLessonsForRun's two checks look load-bearing when only the
+	// other one was — the failure is the resolver's answer, not the path.
 	return Deps{ResolveRunDir: func(string) (string, bool, error) {
 		if sc.ResolveRaises {
-			return "", false, &pyval.PyErr{Class: "RuntimeError",
-				Msg: "no such run"}
+			return filepath.Join(base, sc.ResolveTo), true,
+				&pyval.PyErr{Class: "RuntimeError", Msg: "no such run"}
 		}
 		if sc.ResolveTo == "" {
-			return "", false, nil
+			return base, false, nil
 		}
 		return filepath.Join(base, sc.ResolveTo), true, nil
 	}}

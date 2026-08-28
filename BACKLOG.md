@@ -7972,3 +7972,55 @@ of its own rather than a rider on this one.
 
 Do it with the batteries for those four packages in hand: the fixtures
 that pin the current literals are the ones that prove the swap is pure.
+
+## Go port: `pytext.DecodeReplace` has two older copies to absorb
+
+`internal/pytext/decode.go` (added 2026-08-27 with `internal/mintground`)
+is the canonical spelling of CPython's `bytes.decode("utf-8",
+errors="replace")` — the maximal-subpart rule of Unicode 15.0 §3.9, which
+is why an ill-formed sequence collapses to ONE U+FFFD in some shapes and
+expands to several in others. `decode_diff_test.go` sweeps all 65,792 one-
+and two-byte sequences against CPython plus 24 longer specimens.
+
+Two packages predate it and carry their own `decodeReplace` /
+`maximalSubpart` pair:
+
+- `internal/metrics`
+- `internal/artifactcheck`
+
+Both are correct today — each was measured — but three copies of a rule
+this fiddly is three places for it to drift, and only one of them has the
+exhaustive sweep. The migration is mechanical (delete the local pair, call
+`pytext.DecodeReplace`), but both copies have batteries whose rows name the
+local function, so the battery rows move with the code and a battery run
+owns the working tree (P4). Tranche of its own.
+
+## Go port: two boundary-anchored scanners that want to be one
+
+`internal/claimverify`'s `scanBoundaried` and `internal/mintground`'s
+`findBounded` are the same answer to the same problem — Python's `\b` in a
+pattern whose match OFFSETS are load-bearing, which RE2 cannot spell and
+`pytext.WordStart`/`WordEnd` can only spell by CONSUMING the boundary. Both
+scan candidate start positions, refuse a position whose preceding
+character is a word character, anchor the pattern with `\A`, and read the
+real extent out of a capture group.
+
+They are not yet the same function because claimverify's takes a
+per-alternative extent callback (its symbol patterns do not all end on a
+word character) and mintground's does not need one (every alternative of
+every claim family both begins and ends on a word character, which is what
+lets the trailing `\b` be factored out of the alternation). Unify when a
+third caller arrives — two is the number at which the shared shape is
+visible and the wrong abstraction is still cheap; the extra parameter is
+exactly the thing a premature merge would force on both.
+
+## Go port: `os.walk` is hand-rolled in three places
+
+`internal/closure/inventory.go`, `internal/artifactcheck`, and
+`internal/claimverify` each walk a tree the way `os.walk` does — top-down,
+directories and files separated, symlinks not followed — and each wrote
+its own. `filepath.WalkDir` is not the same function (it is depth-first
+over a merged entry list and it does not hand the caller a mutable
+directory list), which is why nobody used it, but three copies is one more
+than the rule allows. The shared spelling belongs next to `pypath`, with
+the entry ordering (`pypath.FSLess`) it already has to get right.

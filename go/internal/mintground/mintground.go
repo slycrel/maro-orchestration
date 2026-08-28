@@ -341,6 +341,12 @@ var readTools = wordSet(`
 // so the index it finds is still an index into the original. Masking
 // byte-for-byte here keeps the same invariant in Go's units, and the
 // result is a byte offset that slices `body` at the same character.
+//
+// The two ENDS of a masked span are unobservable: every alternative of
+// quotedSpanRe opens and closes on a quote, a bracket, or a backtick, so
+// neither endpoint can be the comma this is looking for. Widening or
+// narrowing the mask by one is equivalent; the mask is here for the
+// commas strictly inside.
 func clauseComma(body string) int {
 	masked := []byte(body)
 	for _, loc := range quotedSpanRe.FindAllStringIndex(body, -1) {
@@ -353,6 +359,14 @@ func clauseComma(body string) int {
 
 // clauseTail is `_clause_tail`: the part of `before` inside the token's
 // own clause.
+//
+// Whether the break character itself is kept is not observable: the two
+// consumers are wordRe.FindAllString, which finds no words in
+// punctuation, and negatorBeforeRe, whose leading WordStart is satisfied
+// by `^` when the tail starts at the negator and by the break character
+// when it does not. Which break is taken IS observable — the LAST one is
+// the clause boundary, and an earlier one carries in words from a clause
+// the token does not belong to.
 func clauseTail(before string) string {
 	locs := clauseBreakRe.FindAllStringIndex(before, -1)
 	if len(locs) == 0 {
@@ -554,6 +568,15 @@ func leadingWordBoundary(text string, i int) bool {
 	return !pytext.IsWordChar(r)
 }
 
+// runeLen is the width of the rune at i, never 0 so the scan terminates.
+//
+// Advancing by whole runes rather than by bytes is not observable with
+// today's tables: every alternative of every bounded pattern begins with
+// an ASCII letter, and no interior byte of a multi-byte rune is one, so
+// a byte walk visits strictly more positions and matches at none of the
+// extras. It is spelled this way because the scan is over CODE POINTS in
+// Python, and an alternative that could open on a non-ASCII letter would
+// make the difference real.
 func runeLen(text string, i int) int {
 	_, n := utf8.DecodeRuneInString(text[i:])
 	if n == 0 {
@@ -581,6 +604,10 @@ func splitSentences(text string) []string {
 	for i < len(text) {
 		r, size := utf8.DecodeRuneInString(text[i:])
 		end := -1
+		// `i > 0` is the lookbehind's own requirement, not a guard against
+		// the empty slice: DecodeLastRuneInString("") returns RuneError,
+		// which is none of the four marks, so position zero falls through
+		// either way.
 		if i > 0 && pytext.IsSpace(r) {
 			prev, _ := utf8.DecodeLastRuneInString(text[:i])
 			if prev == '.' || prev == ';' || prev == '!' || prev == '?' {
@@ -785,6 +812,9 @@ func CollectRunToolEvents(runDir string) ([]Event, bool, error) {
 
 	events := []Event{}
 	for _, name := range names {
+		// A failed read is skipped here rather than at the parse below
+		// only for clarity: os.ReadFile returns no bytes on error, and no
+		// bytes never parse, so the next branch would swallow it anyway.
 		raw, err := os.ReadFile(pypath.Join(callsDir, name))
 		if err != nil {
 			continue
@@ -853,6 +883,8 @@ func isErrorFlag(ev pyval.Obj) bool {
 			return true
 		}
 	}
+	// The "" default is upstream's spelling; None would render "None", and
+	// neither string is "true", so the default itself decides nothing.
 	return pytext.Lower(pyval.Str(getOr(ev, "is_error", ""))) == "true"
 }
 
@@ -899,6 +931,10 @@ func ExtractClaims(text string) []Claim {
 	claims := []Claim{}
 	for _, raw := range splitSentences(text) {
 		sentence := pytext.Strip(raw)
+		// The empty test is upstream's short circuit, not a correctness
+		// guard — isRetrospective("") is false on every path — but
+		// pytext.Strip is load-bearing: Python's str.strip() removes
+		// U+001C..U+001F and Go's TrimSpace does not.
 		if sentence == "" || !isRetrospective(sentence) {
 			continue
 		}
@@ -1044,6 +1080,10 @@ func GroundLessonsForRun(lessonTexts []string, runRef string, d Deps) [][]Stamp 
 	if err != nil || !ok {
 		return empty
 	}
+	// Every error return from CollectRunToolEvents also reports absent, so
+	// today `!present` alone decides this; the error test is kept because
+	// the two answers are independent in the exported signature and a
+	// direct caller has to read both.
 	events, present, err := CollectRunToolEvents(rd)
 	if err != nil || !present {
 		return empty
