@@ -643,6 +643,40 @@ def test_close_run_finalizes_and_curates(workspace):
     assert card is not None and card.get("handle_id") == "closerun1"
 
 
+def test_close_run_finalize_failure_is_loud(workspace, monkeypatch, caplog):
+    """R3-5 must-detect: a finalize_run raise through the literal close_run
+    path used to be swallowed (`except Exception: pass`) — a normal-looking
+    completed card while metadata.json stayed non-terminal, with zero
+    diagnostics. Now: warning logged, run_finalize_failed event written,
+    card stamped finalize_failed=true. The close still completes
+    (availability posture)."""
+    import logging
+    import runs as runs_mod
+    from runs import open_run, close_run, set_current_run_dir
+    try:
+        open_run("closerun3", prompt="do it", lane="agenda")
+    finally:
+        set_current_run_dir(None)
+
+    def _boom(handle_id, *, status, extra=None):
+        raise RuntimeError("park failed: sidecar refused")
+
+    monkeypatch.setattr(runs_mod, "finalize_run", _boom)
+    with caplog.at_level(logging.WARNING, logger="maro.runs"):
+        card = close_run("closerun3", status="done")
+    assert any("finalize_run failed" in r.getMessage()
+               for r in caplog.records)
+    assert isinstance(card, dict)
+    assert card.get("finalize_failed") is True
+    from orch_items import memory_dir
+    events = (memory_dir() / "events.jsonl")
+    assert events.is_file()
+    rows = [json.loads(l) for l in events.read_text().splitlines()
+            if l.strip()]
+    assert any(r.get("event_type") == "run_finalize_failed"
+               and "closerun3" in r.get("detail", "") for r in rows)
+
+
 def test_close_run_stamps_backend_error(workspace):
     from runs import open_run, close_run, run_dir, set_current_run_dir
 

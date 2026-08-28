@@ -278,7 +278,19 @@ follow. Cross-process, therefore cross-engine.
   and caller extras never override the core set (`src/runs.py:446-453`) — a
   second engine must implement the same merge, not blind overwrite. Verdict
   keys follow absent-not-null. `create_run_dir` is idempotent by design
-  (restart re-entry).
+  (restart re-entry). Close posture (round 3, R3-5, honest and
+  scope-controlled): `close_run` CONTINUES past a `finalize_run` failure
+  (availability), so metadata.json may remain non-terminal after a
+  "completed" close — but the failure is no longer silent: it is
+  log.warning'd, emitted as an events.jsonl `run_finalize_failed` row and
+  a captain's-log `RUN_FINALIZE_FAILED` entry (both non-recursing
+  channels), and the curated card carries `finalize_failed: true`
+  (additive key) so downstream consumers can distinguish the split-brain.
+  Full typed-close-result / commit-point semantics are deliberately
+  deferred to the Go-successor backbone. Park durability (round 3, R3-7):
+  a corrupt-metadata sidecar park is fsynced — file AND directory —
+  before `{}` licenses the destructive replacement, so "successful park"
+  survives a crash.
 
 ### B4. call-records v1 (`build/calls/call-NNNNN.json`)
 

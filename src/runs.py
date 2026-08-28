@@ -1347,16 +1347,53 @@ def close_run(
                 extra["goal_verdict_source"] = VERDICT_SOURCE_RUN_ERRORED
         except Exception:
             pass
+    finalize_failed = False
     try:
         finalize_run(handle_id, status=status, extra=extra)
-    except Exception:
-        pass
+    except Exception as _fin_exc:
+        # R3-5 (scope-controlled): a swallowed finalize failure produced a
+        # normal-looking completed card while metadata.json stayed corrupt/
+        # non-terminal — silent split-brain. The close CONTINUES
+        # (availability posture preserved), but the failure is now loud on
+        # every non-recursing channel: log.warning, an events.jsonl row
+        # (write_event is lock-free by design), a captain's-log entry, and
+        # a `finalize_failed: true` stamp on the returned card. Full typed
+        # close-result / commit-point semantics are deliberately deferred
+        # to the Go-successor backbone.
+        finalize_failed = True
+        log.warning("close_run: finalize_run failed for %s (status=%s): %s",
+                    handle_id, status, _fin_exc)
+        try:
+            from observe import write_event
+            write_event(
+                "run_finalize_failed", status=str(status),
+                detail=(f"{handle_id}: {type(_fin_exc).__name__}: "
+                        f"{_fin_exc}"))
+        except Exception:
+            pass
+        try:
+            from captains_log import log_event, RUN_FINALIZE_FAILED
+            log_event(
+                RUN_FINALIZE_FAILED,
+                subject=handle_id,
+                summary=("run close continued but the terminal metadata "
+                         f"stamp failed ({type(_fin_exc).__name__}) — "
+                         "metadata.json may be non-terminal"),
+                context={"handle_id": handle_id, "status": str(status),
+                         "error": str(_fin_exc)[:300]},
+            )
+        except Exception:
+            pass
     card = None
     try:
         from run_curation import curate_run
         card = curate_run(handle_id, status=status)
     except Exception:
         card = None
+    if finalize_failed and isinstance(card, dict):
+        # Additive, writer-private: downstream consumers CAN distinguish a
+        # card whose run-dir metadata never reached its terminal state.
+        card["finalize_failed"] = True
     try:
         from loop_report import write_reports_for_run_dir
         write_reports_for_run_dir(run_dir(handle_id))

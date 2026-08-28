@@ -272,6 +272,14 @@ QUALITY_GATE_OVERRULED = "QUALITY_GATE_OVERRULED"  # gate ESCALATE vs judged clo
 # gap, it does not adjudicate it.
 DONE_WITHOUT_VERDICT = "DONE_WITHOUT_VERDICT"
 
+# close_run's finalize_run call raised (R3-5): the terminal status stamp on
+# metadata.json failed, but the close CONTINUES (availability posture) — the
+# curated card is stamped `finalize_failed: true` and this event makes the
+# split-brain (normal-looking card, non-terminal/corrupt metadata) operator-
+# visible instead of silent. Full commit-point semantics are deferred to the
+# Go-successor backbone.
+RUN_FINALIZE_FAILED = "RUN_FINALIZE_FAILED"
+
 # Budget extension ladder rung granted (Jeremy 2026-08-02: out-of-budget is
 # a notification + one-run-budget extension the first two times in a run,
 # pause-ask-user the third). Emitted by the between-step breaker in
@@ -392,7 +400,8 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
-    QUALITY_GATE_OVERRULED, DONE_WITHOUT_VERDICT, BUDGET_EXTENDED,
+    QUALITY_GATE_OVERRULED, DONE_WITHOUT_VERDICT, RUN_FINALIZE_FAILED,
+    BUDGET_EXTENDED,
     QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED, NOW_ARTIFACT_RETRY,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,

@@ -376,7 +376,10 @@ class TestEventTypes:
         # — edge-traversal arc: co_derived edges minted from shared outcome
         # provenance; one-hop expansion actually changed a recall injection
         # (the A/B denominator for knowledge.edge_expansion).
-        assert len(EVENT_TYPES) == 91
+        # +1 (2026-08-28): RUN_FINALIZE_FAILED — R3-5: close_run continues
+        # past a finalize_run raise but the split-brain (completed card,
+        # non-terminal metadata) is now operator-visible.
+        assert len(EVENT_TYPES) == 92
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
