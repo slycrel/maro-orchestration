@@ -3276,18 +3276,32 @@ class TestExplicitBackendAlwaysWrapped:
     escape (pre_flight drives backend="anthropic"/"openrouter" directly),
     found by the 2026-08-28 behavior-suite review."""
 
-    def test_explicit_anthropic_backend_is_wrapped(self):
+    @pytest.mark.parametrize("backend,inner,setup", [
+        ("anthropic", "AnthropicSDKAdapter", {"api_key": "sk-ant-test"}),
+        ("openrouter", "OpenRouterAdapter", {"api_key": "sk-or-test"}),
+        ("openai", "OpenAIAdapter", {"api_key": "sk-oa-test"}),
+        ("xai", "XAIAdapter", {"env": ("XAI_API_KEY", "xai-test")}),
+        ("subprocess", "ClaudeSubprocessAdapter", {"claude_bin": True}),
+        ("claude", "ClaudeSubprocessAdapter", {"claude_bin": True}),
+        ("codex", "CodexCLIAdapter", {"codex_auth": True}),
+    ])
+    def test_every_explicit_backend_is_wrapped(self, monkeypatch, backend,
+                                               inner, setup):
+        import llm
         from llm import FailoverAdapter, build_adapter
-        adapter = build_adapter(backend="anthropic", api_key="sk-ant-test")
+        monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+        kwargs = {}
+        if "api_key" in setup:
+            kwargs["api_key"] = setup["api_key"]
+        if "env" in setup:
+            monkeypatch.setenv(*setup["env"])
+        if setup.get("claude_bin"):
+            monkeypatch.setattr("llm._claude_bin_available", lambda: True)
+        if setup.get("codex_auth"):
+            monkeypatch.setattr("llm._codex_auth_available", lambda: True)
+        adapter = build_adapter(backend=backend, **kwargs)
         assert isinstance(adapter, FailoverAdapter)
-        # The wrap stays transparent to identity readers.
-        assert adapter.backend == "anthropic"
-
-    def test_explicit_openrouter_backend_is_wrapped(self):
-        from llm import FailoverAdapter, build_adapter
-        adapter = build_adapter(backend="openrouter", api_key="sk-or-test")
-        assert isinstance(adapter, FailoverAdapter)
-        assert adapter.backend == "openrouter"
+        assert type(adapter._adapters[0]) is getattr(llm, inner)
 
     def test_maro_backend_env_recursion_does_not_double_wrap(self, monkeypatch):
         from llm import FailoverAdapter, build_adapter

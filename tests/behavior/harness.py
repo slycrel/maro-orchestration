@@ -129,6 +129,16 @@ def _reject_constant(name: str):
     raise AssertionError(f"bare {name} on the wire — forbidden by B2")
 
 
+def _reject_duplicate_keys(pairs):
+    """B2: duplicate keys are undefined behavior — no writer may emit them.
+    Plain json.loads keeps the last silently; the acceptance oracle raises."""
+    obj = {}
+    for k, v in pairs:
+        assert k not in obj, f"duplicate key {k!r} on the wire (B2)"
+        obj[k] = v
+    return obj
+
+
 def read_jsonl(path: Path) -> List[dict]:
     """STRICT acceptance reader: every non-empty line must be one valid JSON
     object with no NaN/Infinity tokens. Production readers are tolerant per
@@ -143,7 +153,8 @@ def read_jsonl(path: Path) -> List[dict]:
         if not line:
             continue
         try:
-            row = json.loads(line, parse_constant=_reject_constant)
+            row = json.loads(line, parse_constant=_reject_constant,
+                             object_pairs_hook=_reject_duplicate_keys)
         except AssertionError:
             raise
         except Exception as exc:
@@ -218,7 +229,9 @@ def assert_events_line_discipline(events_path: Path) -> int:
             assert len(raw) <= EVENTS_LINE_BUDGET, (
                 f"events.jsonl line {n} is {len(raw)} bytes (> {EVENTS_LINE_BUDGET})"
             )
-            row = json.loads(raw.decode("utf-8"))
+            row = json.loads(raw.decode("utf-8"),
+                             parse_constant=_reject_constant,
+                             object_pairs_hook=_reject_duplicate_keys)
             assert "event_type" in row, f"events.jsonl line {n} missing event_type"
             assert "ts" in row, f"events.jsonl line {n} missing ts"
     return n
@@ -340,8 +353,13 @@ def assert_common_contracts(sc: GoalScenario, result, rd: Path) -> None:
         assert row.get(key) == val, f"outcome[{key}]={row.get(key)!r} != {val!r}"
 
     # B8 captains-log: append-only event bus saw THIS run — at least one
-    # row joined by handle_id (rows carry the required timestamp/event_type;
-    # audience is the derived stamp). A global-traffic-only log fails.
+    # row ATTRIBUTED to it by handle_id (rows carry the required
+    # timestamp/event_type; audience is the derived stamp). This pins
+    # attribution, not operator visibility: handle_id rides ambiently on
+    # any log_event while the run-dir pin is active, and the NOW lane's
+    # only guaranteed row today is incidental maintenance traffic
+    # (MEMORY_CONSOLIDATED) — see README FINDINGS. A global-traffic-only
+    # log still fails (kill-proof M3).
     log_rows = read_jsonl(ws / "memory" / "captains_log.jsonl")
     assert log_rows, "captains_log.jsonl has no rows"
     for entry in log_rows:
@@ -349,8 +367,8 @@ def assert_common_contracts(sc: GoalScenario, result, rd: Path) -> None:
         assert entry.get("audience") in ("user", "system")
     joined = [r for r in log_rows if r.get("handle_id") == result.handle_id]
     assert joined, (
-        "captains_log.jsonl has no row joined to this run's handle_id — "
-        "the run left no operator-visible trace (B8)"
+        "captains_log.jsonl has no row attributed to this run's handle_id "
+        "(B8)"
     )
 
     # B9 events feed: the run must EMIT events, and every line obeys the

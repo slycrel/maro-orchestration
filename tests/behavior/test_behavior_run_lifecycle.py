@@ -174,25 +174,45 @@ def test_agenda_flow_reaches_durable_evidence():
     loop_ids = {l.get("loop_id") for l in loops}
     assert all(loop_ids), "every lineage entry carries a loop_id (B3)"
 
-    # Every scripted step result reaches SOME durable build/ artifact.
-    build_text = "".join(
-        p.read_text(encoding="utf-8", errors="replace")
-        for p in (rd / "build").rglob("*")
-        if p.is_file() and p.suffix in (".md", ".json", ".jsonl", ".html")
-    )
-    for scripted in ("Collected 12 rows of numbers", "Summary written: revenue flat"):
-        assert scripted in build_text, (
-            f"scripted step result {scripted!r} reached no durable build/ "
-            f"artifact — the run's evidence dropped the work (B3)"
+    # Every scripted step result reaches its OWN step artifact — the
+    # contractual evidence writer's files, NOT the captains-log slice
+    # (build/captains_log_slice.jsonl is a byte-copy of the global bus;
+    # counting it as evidence let a logging-only engine pass — round-2
+    # review catch). Step N's artifact carries step N's result, and the
+    # final result also lands in the loop RESULT.md.
+    scripted_results = [
+        "Collected 12 rows of numbers", "Summary written: revenue flat",
+    ]
+    for n, scripted in enumerate(scripted_results, 1):
+        step_files = list((rd / "build").glob(f"loop-*-step-{n:02d}.md"))
+        assert step_files, f"no step-{n:02d} artifact under build/ (B3)"
+        step_text = "".join(
+            p.read_text(encoding="utf-8") for p in step_files
         )
+        assert scripted in step_text, (
+            f"step {n} artifact does not carry its scripted result "
+            f"{scripted!r} — the evidence dropped the work (B3)"
+        )
+    result_files = list((rd / "build").glob("loop-*-RESULT.md"))
+    assert result_files, "no loop RESULT.md under build/ (B3)"
+    assert any(scripted_results[-1] in p.read_text(encoding="utf-8")
+               for p in result_files), (
+        "the final step result must reach the loop RESULT.md (B3)"
+    )
 
-    # Events join the run through its loop lineage (B9).
+    # Events join the run through its loop lineage (B9): ONE loop must own
+    # a complete lifecycle pair — aggregating types across loops would
+    # accept a loop_start from loop A spliced with a loop_done from loop B.
     ev_rows = read_jsonl(workspace() / "memory" / "events.jsonl")
     mine = [r for r in ev_rows if r.get("loop_id") in loop_ids]
     assert mine, "no events.jsonl row joins the run's loop_id (B9)"
-    types = {r["event_type"] for r in mine}
-    assert "loop_start" in types and "loop_done" in types, (
-        f"loop lifecycle events missing for the run's loop: {sorted(types)}"
+    by_loop = {}
+    for r in mine:
+        by_loop.setdefault(r["loop_id"], set()).add(r["event_type"])
+    assert any({"loop_start", "loop_done"} <= types
+               for types in by_loop.values()), (
+        f"no single loop carries a complete loop_start+loop_done "
+        f"lifecycle: {by_loop}"
     )
 
 

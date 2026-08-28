@@ -58,7 +58,9 @@ additionally asserts the resolved workspace is never the live one.
 **Must-detect evidence (2026-08-28):** the suite is an instrument, so it
 carries kill proof, re-runnable by hand: (M1) `write_event` early-return
 → 8 tests red; (M2) stuck runs classified `success` → 2 red; (M3)
-`handle_inputs.jsonl` intake write dropped → 7 red. Before the round-1
+`handle_inputs.jsonl` intake write dropped → 7 red; (M4) step-artifact
+writer suppressed → flow-evidence test red (round-2 hardening: the
+captains-log slice no longer counts as evidence). Before the round-1
 review fixes, M1 and M3 passed clean — the B9/B11 blocks were vacuous
 (missing-file readers returned `[]`, counts went unasserted).
 
@@ -168,6 +170,15 @@ seams, that's a finding, not a blocker — and these are the findings.
    Go engine must port those batteries (or the conformance harness grows
    subprocess fault injection in Phase 2) — passing THIS suite alone does
    not certify the concurrency/durability half of the contract.*
+9. **NOW-lane runs have no run-correlated B9/B8 lifecycle guarantee.**
+   `events.jsonl` rows join by `loop_id` only — a NOW run owns no loop,
+   so its events are not attributable at the workspace boundary; and the
+   only captains-log row a NOW run reliably produces today is incidental
+   maintenance traffic (`MEMORY_CONSOLIDATED`) attributed via the ambient
+   run-dir pin. The suite therefore pins existence + attribution, not
+   lane lifecycle. *Design input: Go events should carry `handle_id`
+   (key-required at emission when a run is pinned), and each lane should
+   emit at least one contractual lifecycle bus event.*
 
 ## Doc/code mismatches found
 
