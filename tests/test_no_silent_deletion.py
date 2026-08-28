@@ -74,6 +74,11 @@ ALLOWED_DELETION_SITES = {
         "user-invoked: the user clearing their own kill switch",
     ("llm.py", "_run_subprocess_safe"):
         "ephemeral: temp prompt file for subprocess adapter",
+    ("runs.py", "record_llm_call"):
+        "ephemeral: unlinks its own .call-tmp-* staging file after the "
+        "os.link publication (R2-1, 2026-08-28) — the published "
+        "call-NNNNN.json record itself is never deleted; the temp is a "
+        "second hard link to the same inode, so no data is lost",
     ("web_fetch.py", "capture_raw"):
         "ephemeral: (a) unlinks its own just-created capture temp file when the "
         "write fails, and (b) unlinks a non-regular entry squatting the capture "

@@ -66,7 +66,6 @@
  "src/notify_telegram.py::reason::300": 2,
  "src/notify_telegram.py::verdict::300": 1,
  "src/observe.py::detail::60": 1,
- "src/observe.py::evidence::160": 1,
  "src/observe.py::summary::120": 1,
  "src/prereq.py::stuck_reason::300": 1,
  "src/quality_gate.py::_sf_reason::400": 2,
