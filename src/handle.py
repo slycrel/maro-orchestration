@@ -1582,9 +1582,8 @@ def _handle_impl(
                 and not dry_run):
             _rung_enabled = False
             try:
-                from config import get as _rr_cfg_get
-                _rung_enabled = bool(
-                    _rr_cfg_get("now_lane.artifact_retry", False))
+                from config import get_bool as _rr_cfg_get
+                _rung_enabled = _rr_cfg_get("now_lane.artifact_retry", False)
             except Exception:
                 _rung_enabled = False
             if _rung_enabled and not _is_complex_directive(message):
@@ -1750,10 +1749,9 @@ def _handle_impl(
         _verdict_escalate = False
         if outcome.get("goal_achieved") is False and not force_lane:
             try:
-                from config import get as _ve_cfg_get
-                _verdict_escalate = bool(
-                    _ve_cfg_get("now_lane.escalate_on_not_achieved", False)
-                )
+                from config import get_bool as _ve_cfg_get
+                _verdict_escalate = _ve_cfg_get(
+                    "now_lane.escalate_on_not_achieved", False)
             except Exception:
                 _verdict_escalate = False
         if _verdict_escalate:
@@ -3401,9 +3399,9 @@ def _handle_impl(
                 # dissent is recorded (QUALITY_GATE_OVERRULED), never lost —
                 # stack, don't substitute.
                 try:
-                    from config import get as _qg_config_get
-                    _closure_overrule = bool(
-                        _qg_config_get("quality_gate.closure_overrule", True))
+                    from config import get_bool as _qg_config_get
+                    _closure_overrule = _qg_config_get(
+                        "quality_gate.closure_overrule", True)
                 except Exception:
                     _closure_overrule = True
                 _closure_defends = (

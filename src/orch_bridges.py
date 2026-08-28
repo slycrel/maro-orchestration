@@ -1516,18 +1516,23 @@ def _default_validation_bridge(run: RunRecord, execution: ExecutionResult) -> Va
 
 
 def _merge_notes(*notes: Optional[str]) -> Optional[str]:
-    # Round 4: dedup exact fragments — merge-not-replace callers (run_tick's
-    # note set, finalize) legitimately re-merge fragments the note already
-    # carries; without dedup every re-merge doubled them. Inputs that are
-    # themselves prior merges are split on the join delimiter first, so a
-    # fragment inside an accumulated note also counts as seen.
-    seen = []
+    # Round 4/5: dedup WITHOUT rebuilding — merge-not-replace callers
+    # (run_tick's note set, finalize) legitimately re-merge fragments the
+    # note already carries, so a later argument that is already present in
+    # a kept one (exactly, or as a delimiter-bounded fragment) is skipped.
+    # Kept arguments are joined verbatim, never split and reassembled — a
+    # note whose CONTENT contains "; " rides through untouched. Known
+    # accepted edge: a later single-fragment arg that coincides with a
+    # fragment inside earlier content is treated as already-said.
+    kept = []
     for n in notes:
-        if not n or not n.strip():
+        n = n.strip() if n else ""
+        if not n:
             continue
-        for chunk in (c.strip() for c in n.split("; ")):
-            if chunk and chunk not in seen:
-                seen.append(chunk)
-    if not seen:
+        acc = "; " + "; ".join(kept) + "; " if kept else ""
+        if acc and ("; " + n + "; ") in acc:
+            continue
+        kept.append(n)
+    if not kept:
         return None
-    return "; ".join(seen)
+    return "; ".join(kept)

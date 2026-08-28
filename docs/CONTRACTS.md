@@ -877,6 +877,24 @@ each red-verified):**
   (EACCES/ENOSPC) was still silent under the blanket handler — now warns
   non-recursively and returns False (B9).
 
+**Round-5 amendments (adversarial round 5, 2026-08-28 — delta check on the
+round-4 commit; NO HIGHs, two mediums + one low, all shipped):**
+
+- **R5-1** (amends R4-1): the census scanned per-line, so
+  `bool(\n alias(...))` spanning a line break evaded it — three live
+  gates wore exactly that formatting (`now_lane.artifact_retry`,
+  `now_lane.escalate_on_not_achieved`, `quality_gate.closure_overrule`).
+  Census now scans whole-text (comments blanked, line numbers true), the
+  three gates are migrated, and the instrument carries a multiline
+  must-detect.
+- **R5-2** (amends R4-2): the finalize_failed republish wrote close_run's
+  DETACHED card snapshot — the stale-object RMW class again. Now patches
+  the fresh on-disk card under the lock; a concurrent classification
+  write landing mid-close survives (race-tested).
+- **R5-3** (low): `_merge_notes` dedup no longer splits and reassembles
+  kept content — later arguments already present (exactly or as a
+  delimiter-bounded fragment) are skipped, kept arguments ride verbatim.
+
 1. **Lesson-store RMW raw round-tripping** (tiered + flat — C2.1/C2.2
    promoted). — **SHIPPED `010d3d11`**: unknown keys ride rehydrated rows
    as an `_extras` attribute and every rewrite/promotion/archive/

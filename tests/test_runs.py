@@ -1266,3 +1266,43 @@ def test_park_is_fsynced_before_replacement(workspace, monkeypatch):
     sides = list(rd.glob("metadata.json.corrupt.*"))
     assert len(sides) == 1 and sides[0].read_text() == corrupt
     json.loads(meta_path.read_text())
+
+
+def test_close_run_finalize_flag_preserves_concurrent_card_write(
+        workspace, monkeypatch):
+    """Round-5 must-detect: close_run republished its DETACHED card
+    snapshot, so a classification/maintenance write landing after
+    curate_run returned was overwritten. The flag must be patched into the
+    FRESH on-disk card under the lock."""
+    import json as _json
+    import runs as runs_mod
+    import run_curation
+    from runs import open_run, close_run, run_dir, set_current_run_dir
+    try:
+        open_run("closerun5", prompt="do it", lane="agenda")
+    finally:
+        set_current_run_dir(None)
+
+    def _boom(handle_id, *, status, extra=None):
+        raise RuntimeError("park failed")
+
+    real_curate = run_curation.curate_run
+
+    def curate_then_race(handle_id, status=None, run_dir_arg=None):
+        card = real_curate(handle_id, status=status)
+        # Concurrent writer (classification refresh / another engine)
+        # updates the on-disk card AFTER curate_run returned, BEFORE
+        # close_run publishes the finalize_failed flag.
+        card_path = run_dir(handle_id) / "run_card.json"
+        raw = _json.loads(card_path.read_text(encoding="utf-8"))
+        raw["classification_v2"] = "landed-mid-close"
+        card_path.write_text(_json.dumps(raw), encoding="utf-8")
+        return card
+
+    monkeypatch.setattr(runs_mod, "finalize_run", _boom)
+    monkeypatch.setattr(run_curation, "curate_run", curate_then_race)
+    close_run("closerun5", status="done")
+    after = _json.loads(
+        (run_dir("closerun5") / "run_card.json").read_text())
+    assert after.get("finalize_failed") is True
+    assert after.get("classification_v2") == "landed-mid-close"

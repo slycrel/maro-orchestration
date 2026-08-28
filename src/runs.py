@@ -1412,10 +1412,26 @@ def close_run(
         # Round 4: the flag must reach the DURABLE card, not just this
         # return value — curate_run persisted run_card.json before we knew
         # finalize failed, and on-disk readers are the consumers the
-        # contract exists for. Republish through the same locked writer.
+        # contract exists for. Round 5: patch the FRESH on-disk card under
+        # the lock rather than republishing our detached snapshot — a
+        # concurrent classification/maintenance write landing after
+        # curate_run returned must survive (the stale-object RMW class).
         try:
-            from run_curation import _write_run_card
-            _write_run_card(run_dir(handle_id), card)
+            from file_lock import atomic_write, locked_write
+            card_path = run_dir(handle_id) / "run_card.json"
+            with locked_write(card_path):
+                fresh = None
+                try:
+                    fresh = json.loads(
+                        card_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    fresh = None
+                if not isinstance(fresh, dict):
+                    # Missing/corrupt on-disk card: our snapshot is the
+                    # best card that exists — publish it, flagged.
+                    fresh = dict(card)
+                fresh["finalize_failed"] = True
+                atomic_write(card_path, json.dumps(fresh, indent=2))
         except Exception as exc:
             log.warning(
                 "close_run(%s): could not persist finalize_failed flag "

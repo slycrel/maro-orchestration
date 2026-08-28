@@ -76,12 +76,17 @@ ALLOWED = {
 def _census_text(name, text):
     names = set(_CANONICAL_NAMES) | set(_ALIAS_PATTERN.findall(text))
     pattern = _bool_gate_pattern(names)
+    # Round 5: scan the WHOLE text, not per-line — `bool(\n alias(...))`
+    # spans a line break (three live gates wore exactly that formatting and
+    # evaded the per-line scan). Comment lines are blanked (not removed) so
+    # line numbers in findings stay true.
+    scrubbed = "\n".join(
+        "" if line.lstrip().startswith("#") else line
+        for line in text.splitlines())
     found = []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith("#"):
-            continue
-        for m in pattern.finditer(line):
-            found.append((name, m.group(2), lineno))
+    for m in pattern.finditer(scrubbed):
+        lineno = scrubbed.count("\n", 0, m.start()) + 1
+        found.append((name, m.group(2), lineno))
     return found
 
 
@@ -104,6 +109,20 @@ def test_census_catches_arbitrary_getter_aliases():
     )
     hits = _census_text("synthetic.py", synthetic)
     assert hits == [("synthetic.py", "fake.gate", 2)]
+
+
+def test_census_catches_multiline_bool_call():
+    """Round-5 must-detect for the instrument: `bool(` and the getter on
+    DIFFERENT lines — the formatting three live handle.py gates wore while
+    the per-line scan reported the tree clean."""
+    synthetic = (
+        "from config import get as _ml_cfg_get\n"
+        "x = bool(\n"
+        '    _ml_cfg_get("fake.multiline_gate", False))\n'
+    )
+    hits = _census_text("synthetic.py", synthetic)
+    assert [(f, k) for f, k, _ in hits] == [("synthetic.py",
+                                             "fake.multiline_gate")]
 
 
 def test_no_new_bool_config_gate_sites():
