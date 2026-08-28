@@ -181,6 +181,15 @@ func filesystemScenarios() []cvSpec {
 		si("a-name-starting-with-a-digit", f("src/a.py", "def 9bad():\n")),
 		// `errors="ignore"` — the file is read, the bad bytes vanish, and
 		// the declarations around them still count.
+		// The bad byte inside the NAME: `errors="ignore"` drops it and the
+		// two halves close up, so the symbol is `iotau` and not `io`.
+		si("a-def-whose-name-carries-a-bad-byte",
+			cvEntry{Path: "src/a.py", Kind: "file",
+				Data: "ZGVmIGlv/3RhdSgpOgogICAgcGFzcwo="}),
+		// `str.splitlines` breaks on a form feed and `split("\n")` does
+		// not, and the declaration is only at a line start under the
+		// first reading.
+		si("a-form-feed-inside-a-line", f("src/a.py", "x\x0cdef sigma_16():\n")),
 		si("a-file-with-invalid-utf8",
 			cvEntry{Path: "src/a.py", Kind: "file",
 				Data: "ZGVmIGlvdGFfbmluZSgpOgogICAg/wogICAgcGFzcwo="}),
@@ -290,6 +299,11 @@ func filesystemScenarios() []cvSpec {
 			true, false, f("src/a.py", "def beta_two():\n")),
 		an("both-halves-hallucinated", "we wrote gone.py and call `alpha_one`",
 			true, true, f("src/a.py", "def beta_two():\n")),
+		// A hallucination AND a verified claim under only_if=True: the
+		// VERIFIED line is suppressed, and that suppression is the only
+		// thing this scenario is about.
+		an("an-annotated-result-that-also-verified-one",
+			"we wrote a.py and gone.py", true, true, f("a.py", "")),
 		an("a-clean-result-reported-anyway", "we wrote a.py", false, true,
 			f("a.py", "")),
 		// only_if_hallucinations=False also turns ON the VERIFIED line,

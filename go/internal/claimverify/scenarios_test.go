@@ -146,6 +146,11 @@ func extractionScenarios() []cvSpec {
 		fp("a-prefixed-doubled-extension", "see src/a.py.rs here"),
 		fp("a-prefixed-path-whose-tail-fails", "see src/main.rs.txt here"),
 		fp("a-dotted-name-with-many-dots", "see a.b.c.py here"),
+		// The dot walk runs from the RIGHT, so a repeated extension is
+		// matched WHOLE — `re` releases the greedy run's characters from
+		// the right and takes the last dot that carries a valid tail.
+		fp("a-name-whose-extension-repeats", "see a.py.py here"),
+		fp("a-prefixed-name-whose-extension-repeats", "see src/a.py.py here"),
 		fp("a-run-that-ends-on-a-dot", "see handle.py.. here"),
 		fp("a-run-of-only-dots", "see ... here"),
 		fp("a-single-character-before-the-dot", "see a.py here"),
@@ -184,6 +189,14 @@ func extractionScenarios() []cvSpec {
 		sy("a-backticked-call-with-arguments", "call `apply_suggestion(a, b)` now"),
 		sy("a-backticked-call-with-long-arguments",
 			"call `apply_suggestion("+"x, "+"yyyyyyyyyy, zzzzzzzzzz, wwwwwwwwww, vvvvvvvvvv)` now"),
+		// `[^)]{0,40}` counted exactly.
+		sy("a-backticked-call-with-forty-characters",
+			"call `apply_suggestion(aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd)` now"),
+		sy("a-backticked-call-with-forty-one-characters",
+			"call `apply_suggestion(aaaaaaaaaabbbbbbbbbbccccccccccddddddddddd)` now"),
+		sy("a-backticked-name-starting-with-a-digit", "call `9alpha_one` now"),
+		// Four RUNES and five BYTES: the length filter counts runes.
+		sy("a-backticked-four-rune-non-ascii-name", "call `caf\u00e9` now"),
 		sy("a-backticked-name-of-one-character", "call `a` now"),
 		sy("a-backticked-name-of-four-characters", "call `abcd` now"),
 		sy("a-backticked-name-of-five-characters", "call `abcde` now"),
@@ -244,6 +257,10 @@ func extractionScenarios() []cvSpec {
 		sn("the-keyword-conclusion", "reach a Conclusion"),
 		sn("the-keyword-aggregate", "AGGREGATE the numbers"),
 		sn("the-keyword-final-summary", "write the final summary"),
+		// CPython lowercases U+0130 to `i` PLUS a combining dot, so the
+		// keyword does NOT survive the fold; Go's ToLower drops the dot and
+		// would find it.
+		sn("a-keyword-with-a-dotted-capital-i", "SYNTHES\u0130ZE the findings"),
 
 		// --- the two report renderings -------------------------------
 		cs("a-report-with-nothing-in-it",

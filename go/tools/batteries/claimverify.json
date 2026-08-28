@@ -1,0 +1,741 @@
+{
+  "packages": {
+    "default": [
+      "./internal/claimverify/"
+    ]
+  },
+  "mutations": [
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-hallucination-flag-is-inclusive",
+      "old": "func (r ClaimReport) HasHallucinations() bool { return len(r.NotFound) > 0 }",
+      "new": "func (r ClaimReport) HasHallucinations() bool { return len(r.NotFound) >= 0 }"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-rate-denominator-drops-the-verified",
+      "old": "\tcheckable := len(r.Verified) + len(r.NotFound)",
+      "new": "\tcheckable := len(r.NotFound)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-rate-denominator-counts-the-unresolvable",
+      "old": "\tcheckable := len(r.Verified) + len(r.NotFound)",
+      "new": "\tcheckable := len(r.Verified) + len(r.NotFound) + len(r.Unresolvable)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-rate-numerator-is-the-verified",
+      "old": "\treturn float64(len(r.NotFound)) / float64(checkable)",
+      "new": "\treturn float64(len(r.Verified)) / float64(checkable)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-empty-rate-is-not-guarded",
+      "old": "\tif checkable == 0 {\n\t\treturn 0.0\n\t}",
+      "new": "\tif checkable < 0 {\n\t\treturn 0.0\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-verified-count-is-capitalised",
+      "old": "\t\tparts = append(parts, strconv.Itoa(len(r.Verified))+\" verified\")",
+      "new": "\t\tparts = append(parts, strconv.Itoa(len(r.Verified))+\" Verified\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-file-summary-lists-two-names",
+      "old": "\t\t\tstrings.Join(head(r.NotFound, 3), \", \"))",
+      "new": "\t\t\tstrings.Join(head(r.NotFound, 2), \", \"))"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-file-summary-separator-changes",
+      "old": "\treturn strings.Join(parts, \"; \")\n}\n\n// SymbolReport",
+      "new": "\treturn strings.Join(parts, \", \")\n}\n\n// SymbolReport"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-empty-file-summary-text-changes",
+      "old": "\t\treturn \"no file claims found\"",
+      "new": "\t\treturn \"no claims found\""
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-empty-file-summary-is-unreachable",
+      "old": "\tif len(parts) == 0 {\n\t\treturn \"no file claims found\"\n\t}",
+      "new": "\tif len(parts) < 0 {\n\t\treturn \"no file claims found\"\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-hallucination-flag-is-inclusive",
+      "old": "func (r SymbolReport) HasHallucinations() bool { return len(r.NotFound) > 0 }",
+      "new": "func (r SymbolReport) HasHallucinations() bool { return len(r.NotFound) >= 0 }"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-count-loses-its-parenthesis",
+      "old": "\t\t\tstrconv.Itoa(len(r.Verified))+\" symbol(s) verified\")",
+      "new": "\t\t\tstrconv.Itoa(len(r.Verified))+\" symbols verified\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-summary-lists-four-names",
+      "old": "\t\t\t\" symbol(s) NOT FOUND: \"+strings.Join(head(r.NotFound, 3), \", \"))",
+      "new": "\t\t\t\" symbol(s) NOT FOUND: \"+strings.Join(head(r.NotFound, 4), \", \"))"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-empty-symbol-summary-says-file",
+      "old": "\t\treturn \"no symbol claims found\"",
+      "new": "\t\treturn \"no file claims found\""
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-slice-does-not-clamp",
+      "old": "\tif len(ss) < n {\n\t\treturn ss\n\t}",
+      "new": "\tif len(ss) < 0 {\n\t\treturn ss\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-slice-is-one-short",
+      "old": "\treturn ss[:n]\n}",
+      "new": "\treturn ss[:n-1]\n}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-singular-prefix-is-gone",
+      "old": "\t\"src\", \"tests\", \"test\", \"docs\", \"doc\", \"lat.md\",",
+      "new": "\t\"src\", \"tests\", \"docs\", \"doc\", \"lat.md\","
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-prefix-pair-is-tried-the-other-way-round",
+      "old": "\t\"src\", \"tests\", \"test\", \"docs\", \"doc\", \"lat.md\",",
+      "new": "\t\"src\", \"test\", \"tests\", \"docs\", \"doc\", \"lat.md\",",
+      "equivalent": "Every prefix must be followed by a literal `/`, and the only pairs here differ by a trailing `s` \u2014 so at any position at most ONE of them can be followed by the slash, and the two orders cannot disagree. The EXPANSION is load-bearing (see `the-singular-prefix-is-gone`); its order is not."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "an-extra-prefix-is-admitted",
+      "old": "\t\"scripts\", \"script\", \"personas\", \"persona\", \"memory\", \"deploy\",",
+      "new": "\t\"scripts\", \"script\", \"personas\", \"persona\", \"memory\", \"deploy\", \"lib\","
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dotted-prefix-is-misspelt",
+      "old": "\"docs\", \"doc\", \"lat.md\",",
+      "new": "\"docs\", \"doc\", \"lat.mx\","
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-last-extension-is-gone",
+      "old": "\t\"py\", \"md\", \"json\", \"yaml\", \"yml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\",",
+      "new": "\t\"py\", \"md\", \"json\", \"yaml\", \"yml\", \"sh\", \"txt\", \"toml\", \"cfg\","
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-extension-pair-is-tried-the-other-way-round",
+      "old": "\t\"py\", \"md\", \"json\", \"yaml\", \"yml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\",",
+      "new": "\t\"py\", \"md\", \"json\", \"yml\", \"yaml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\",",
+      "equivalent": "No extension in this list is a PREFIX of another, so at a given dot position at most one can match and the try order cannot be observed. (`_PATH_TOKEN` in the receipts tranche has `json`/`jsonl` and IS order-sensitive; this list is not.)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-skip-name-is-gone",
+      "old": "\"hashlib.py\": true,",
+      "new": "\"hashlib.pz\": true,"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-skip-pattern-is-gone",
+      "old": "var skipPatterns = map[string]bool{\"setup.py\": true, \"manage.py\": true}",
+      "new": "var skipPatterns = map[string]bool{\"manage.py\": true}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-strip-set-loses-the-semicolon",
+      "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
+      "new": "\t\tp = strings.Trim(p, \" .,:\\\"'`\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-strip-is-a-prefix-cut",
+      "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
+      "new": "\t\tp = strings.TrimLeft(p, \" .,;:\\\"'`\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-skip-name-is-the-whole-claim",
+      "old": "\t\tif skipNames[name] || skipPatterns[p] {",
+      "new": "\t\tif skipNames[p] || skipPatterns[p] {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-skip-pattern-is-the-basename",
+      "old": "\t\tif skipNames[name] || skipPatterns[p] {",
+      "new": "\t\tif skipNames[name] || skipPatterns[name] {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dedup-is-gone",
+      "old": "\t\tif !seen[p] {\n\t\t\tseen[p] = true\n\t\t\tresult = append(result, p)\n\t\t}",
+      "new": "\t\tif true {\n\t\t\tseen[p] = true\n\t\t\tresult = append(result, p)\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-match-is-rescanned-from-the-next-character",
+      "old": "\t\tif n := matchPrefixedPath(r, i); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti += n\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif n := matchPrefixedPath(r, i); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti++\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bare-alternatives-are-tried-md-first",
+      "old": "\t\tif n := matchBareName(r, i, \"py\"); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti += n\n\t\t\tcontinue\n\t\t}\n\t\tif n := matchBareName(r, i, \"md\"); n > 0 {",
+      "new": "\t\tif n := matchBareName(r, i, \"md\"); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti += n\n\t\t\tcontinue\n\t\t}\n\t\tif n := matchBareName(r, i, \"py\"); n > 0 {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-start-of-the-text-is-not-a-boundary",
+      "old": "\tif i == 0 {\n\t\treturn true\n\t}\n\treturn !blocksLeft(r[i-1])",
+      "new": "\tif i == 0 {\n\t\treturn false\n\t}\n\treturn !blocksLeft(r[i-1])"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-left-boundary-loses-the-open-paren",
+      "old": "\treturn pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"' ||\n\t\tc == '('",
+      "new": "\treturn pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"'"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-left-boundary-gains-the-close-paren",
+      "old": "\treturn pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"' ||\n\t\tc == '('",
+      "new": "\treturn pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"' ||\n\t\tc == '(' || c == ')'"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-right-boundary-blocks-the-open-paren",
+      "old": "\treturn !(pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"' ||\n\t\tc == ')')",
+      "new": "\treturn !(pytext.IsWordChar(c) || c == '`' || c == '\\'' || c == '\"' ||\n\t\tc == '(')"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-end-of-the-text-is-not-a-boundary",
+      "old": "\tif i >= len(r) {\n\t\treturn true\n\t}\n\tc := r[i]",
+      "new": "\tif i >= len(r) {\n\t\treturn false\n\t}\n\tc := r[i]"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-prefix-does-not-need-its-slash",
+      "old": "\t\tif j >= len(r) || string(r[i:j]) != p || r[j] != '/' {\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif j > len(r) || string(r[i:j]) != p {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-failed-prefix-tail-abandons-the-alternation",
+      "old": "\t\tif n := matchDottedTail(r, j+1, filePathExts); n > 0 {\n\t\t\treturn j + 1 + n - i\n\t\t}\n\t}\n\treturn 0",
+      "new": "\t\treturn matchDottedTail(r, j+1, filePathExts) + j + 1 - i\n\t}\n\treturn 0",
+      "equivalent": "At most one prefix can match at a given position: the pairs differ by a trailing `s`, and both spellings cannot be followed by the same `/`. So the loop never reaches a second candidate after a tail failure, and continuing is indistinguishable from returning."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dotted-run-may-be-empty-before-the-dot",
+      "old": "\tfor d := end - 1; d >= j+1; d-- {",
+      "new": "\tfor d := end - 1; d >= j; d-- {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dot-positions-are-walked-from-the-left",
+      "old": "\tfor d := end - 1; d >= j+1; d-- {",
+      "new": "\tfor d := j + 1; d < end; d++ {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-extension-may-run-past-the-class",
+      "old": "\t\t\tif stop > end || string(r[d+1:stop]) != ext {",
+      "new": "\t\t\tif stop > len(r) || string(r[d+1:stop]) != ext {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-right-lookahead-is-not-consulted",
+      "old": "\t\t\tif rightBoundaryOK(r, stop) {\n\t\t\t\treturn stop - j\n\t\t\t}",
+      "new": "\t\t\tif true {\n\t\t\t\treturn stop - j\n\t\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-path-class-loses-the-slash",
+      "old": "func isPathRune(c rune) bool { return isBareRune(c) || c == '/' }",
+      "new": "func isPathRune(c rune) bool { return isBareRune(c) }"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bare-class-loses-the-dash",
+      "old": "\treturn pytext.IsWordChar(c) || c == '.' || c == '-'",
+      "new": "\treturn pytext.IsWordChar(c) || c == '.'"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bare-class-loses-the-dot",
+      "old": "\treturn pytext.IsWordChar(c) || c == '.' || c == '-'",
+      "new": "\treturn pytext.IsWordChar(c) || c == '-'"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-backtick-argument-budget-is-shorter",
+      "old": "\t\t\")\" + spaceRun + `*(?:\\([^)]{0,40}\\))?` + \"`\")",
+      "new": "\t\t\")\" + spaceRun + `*(?:\\([^)]{0,39}\\))?` + \"`\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-backtick-name-cannot-start-with-an-underscore",
+      "old": "symbolBacktickRe = regexp.MustCompile(\"`([A-Za-z_]\" + wordRun +",
+      "new": "symbolBacktickRe = regexp.MustCompile(\"`([A-Za-z]\" + wordRun +"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-backtick-space-is-mandatory",
+      "old": "\t\t\")\" + spaceRun + `*(?:\\([^)]{0,40}\\))?` + \"`\")",
+      "new": "\t\t\")\" + spaceRun + `+(?:\\([^)]{0,40}\\))?` + \"`\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-def-pattern-drops-the-class-keyword",
+      "old": "\tsymbolDefRe = regexp.MustCompile(`\\A(?:def|class)` + spaceRun +",
+      "new": "\tsymbolDefRe = regexp.MustCompile(`\\A(?:def)` + spaceRun +"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-def-pattern-is-not-anchored",
+      "old": "\tsymbolDefRe = regexp.MustCompile(`\\A(?:def|class)` + spaceRun +",
+      "new": "\tsymbolDefRe = regexp.MustCompile(`(?:def|class)` + spaceRun +"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-context-extent-is-always-the-whole-match",
+      "old": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[3]\n\t\t}\n\t\treturn loc[1]",
+      "new": "\t\tif loc[2] < 0 {\n\t\t\treturn loc[3]\n\t\t}\n\t\treturn loc[1]"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-context-extent-includes-the-consumed-boundary",
+      "old": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[3]\n\t\t}\n\t\treturn loc[1]",
+      "new": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[1]\n\t\t}\n\t\treturn loc[1]"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-second-context-group-is-not-consulted",
+      "old": "\t\tsym := m[2]\n\t\tif sym == \"\" {\n\t\t\tsym = m[4]\n\t\t}",
+      "new": "\t\tsym := m[2]\n\t\tif sym == \"\" {\n\t\t\tsym = \"\"\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-leading-boundary-is-not-checked",
+      "old": "\t\tif !leadingWordBoundary(text, i) {\n\t\t\ti += runeLen(text, i)\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif false {\n\t\t\ti += runeLen(text, i)\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-start-of-the-text-is-not-a-word-boundary",
+      "old": "\tif i == 0 {\n\t\treturn true\n\t}\n\tr, _ := utf8.DecodeLastRuneInString(text[:i])",
+      "new": "\tif i == 0 {\n\t\treturn false\n\t}\n\tr, _ := utf8.DecodeLastRuneInString(text[:i])"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-word-boundary-test-is-inverted",
+      "old": "\treturn !pytext.IsWordChar(r)\n}",
+      "new": "\treturn pytext.IsWordChar(r)\n}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-zero-width-guard-is-narrowed",
+      "old": "\t\tif end <= 0 {",
+      "new": "\t\tif end < 0 {",
+      "equivalent": "Every alternative in all three patterns requires at least two characters, so a zero-width match cannot happen and the guard cannot fire. It is kept because a pattern that COULD produce one would loop here forever."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-symbol-skip-entry-is-gone",
+      "old": "\"continue\": true,",
+      "new": "\"cont\u0131nue\": true,"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-minimum-symbol-length-is-four",
+      "old": "const symbolMinLen = 5",
+      "new": "const symbolMinLen = 4"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-length-counts-bytes",
+      "old": "\t\tif symbolSkip[s] || len([]rune(s)) < symbolMinLen ||",
+      "new": "\t\tif symbolSkip[s] || len(s) < symbolMinLen ||"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dunder-filter-is-a-single-underscore",
+      "old": "\t\t\tstrings.HasPrefix(s, \"__\") {",
+      "new": "\t\t\tstrings.HasPrefix(s, \"_\") {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-run-cwd-need-not-be-a-directory",
+      "old": "\t\t\tif st, serr := os.Stat(runCwd); serr == nil && st.IsDir() {",
+      "new": "\t\t\tif st, serr := os.Stat(runCwd); serr == nil && !st.IsDir() {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-run-cwd-stat-failure-is-ignored",
+      "old": "\t\t\tif st, serr := os.Stat(runCwd); serr == nil && st.IsDir() {",
+      "new": "\t\t\tif st, serr := os.Stat(runCwd); serr != nil && st.IsDir() {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-walk-skips-the-directory-it-starts-in",
+      "old": "\tfor _, p := range append([]string{cwd}, parentsOf(cwd)...) {",
+      "new": "\tfor _, p := range parentsOf(cwd) {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-walk-does-not-look-for-src",
+      "old": "\t\tif exists(pypath.Join(p, \"pyproject.toml\")) ||\n\t\t\texists(pypath.Join(p, \"src\")) {",
+      "new": "\t\tif exists(pypath.Join(p, \"pyproject.toml\")) {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-walk-looks-for-a-different-marker",
+      "old": "\t\tif exists(pypath.Join(p, \"pyproject.toml\")) ||",
+      "new": "\t\tif exists(pypath.Join(p, \"pyproject.yaml\")) ||"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-walk-answers-with-the-cwd-it-started-from",
+      "old": "\t\t\texists(pypath.Join(p, \"src\")) {\n\t\t\treturn p\n\t\t}",
+      "new": "\t\t\texists(pypath.Join(p, \"src\")) {\n\t\t\treturn cwd\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "existence-does-not-follow-a-symlink",
+      "old": "func exists(p string) bool {\n\t_, err := os.Stat(p)",
+      "new": "func exists(p string) bool {\n\t_, err := os.Lstat(p)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-directory-cap-is-exclusive",
+      "old": "\t\tif visited >= indexMaxDirs {\n\t\t\treturn false\n\t\t}",
+      "new": "\t\tif visited > indexMaxDirs {\n\t\t\treturn false\n\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-directory-count-never-advances",
+      "old": "\t\tvisited++\n\t\tfiles, subdirs := scandirSplit(dir)",
+      "new": "\t\tvisited += 0\n\t\tfiles, subdirs := scandirSplit(dir)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-root-relpaths-carry-a-dot-prefix",
+      "old": "\t\t\tprefix := \"\"\n\t\t\tif rel != \".\" {\n\t\t\t\tprefix = rel + \"/\"\n\t\t\t}",
+      "new": "\t\t\tprefix := rel + \"/\"\n\t\t\tif false {\n\t\t\t\tprefix = rel + \"/\"\n\t\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-relative-to-failure-is-not-honoured",
+      "old": "\t\tif rel, ok := relativeTo(dir, root); ok {",
+      "new": "\t\tif rel, _ := relativeTo(dir, root); true {",
+      "equivalent": "`relative_to` only raises for a directory that is not under the root, and every directory this walk yields came from descending FROM the root. Nothing a fixture can build reaches the ValueError arm, so the two spellings cannot disagree."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-skipped-directories-are-descended-into",
+      "old": "\t\t\tif indexSkipDirs[d] {\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tif false {\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symlinked-directory-is-descended-into",
+      "old": "\t\t\tif isSymlink(sub) {\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tif false {\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-cap-does-not-propagate-upward",
+      "old": "\t\t\tif !walk(sub) {\n\t\t\t\treturn false\n\t\t\t}",
+      "new": "\t\t\twalk(sub)",
+      "equivalent": "`walk` returns false ONLY when `visited >= indexMaxDirs`, and that test is at its own entry \u2014 so once one call refuses, every later call refuses immediately on its own. Propagating the refusal upward saves recursion and changes no answer."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-listing-is-classified-on-the-entrys-own-type",
+      "old": "\t\tst, serr := os.Stat(pypath.Join(dir, name))",
+      "new": "\t\tst, serr := os.Lstat(pypath.Join(dir, name))"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-listing-is-truncated",
+      "old": "\tentries, err := fh.Readdirnames(-1)\n\tif err != nil {\n\t\treturn nil, nil\n\t}",
+      "new": "\tentries, err := fh.Readdirnames(1)\n\tif err != nil {\n\t\treturn nil, nil\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-failed-stat-is-a-directory",
+      "old": "\t\tif serr == nil && st.IsDir() {\n\t\t\tsubdirs = append(subdirs, name)",
+      "new": "\t\tif serr != nil || st.IsDir() {\n\t\t\tsubdirs = append(subdirs, name)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-upward-relative-path-is-accepted",
+      "old": "\tif err != nil || rel == \"..\" || strings.HasPrefix(rel, \"../\") {",
+      "new": "\tif err != nil {",
+      "equivalent": "Every directory handed to `relativeTo` was reached by descending from the root, so `filepath.Rel` never has to walk upward and the two extra tests cannot fire. They are kept because Go's Rel is happy to answer with `..` where pathlib raises, and the guard is the whole reason the two agree."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-project-root-is-not-searched",
+      "old": "\tsearchDirs := []string{pypath.Join(root, \"src\"),\n\t\tpypath.Join(root, \"tests\"), root}",
+      "new": "\tsearchDirs := []string{pypath.Join(root, \"src\"),\n\t\tpypath.Join(root, \"tests\")}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-tests-directory-is-not-searched",
+      "old": "\tsearchDirs := []string{pypath.Join(root, \"src\"),\n\t\tpypath.Join(root, \"tests\"), root}",
+      "new": "\tsearchDirs := []string{pypath.Join(root, \"src\"), root}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-search-dir-dedup-is-gone",
+      "old": "\t\tif err != nil || !st.IsDir() || seen[dir] {\n\t\t\tcontinue\n\t\t}\n\t\tseen[dir] = true",
+      "new": "\t\tif err != nil || !st.IsDir() {\n\t\t\tcontinue\n\t\t}\n\t\tseen[dir] = true",
+      "equivalent": "The dedup is on the SEARCH DIR and the result is a SET, so scanning `src` and `tests` a second time under the root pass adds the same symbols again. It is faithful to the Python, which also keeps the seen-set, but no answer depends on it."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-search-dir-is-not-followed",
+      "old": "\t\tst, err := os.Stat(dir)\n\t\tif err != nil || !st.IsDir() || seen[dir] {",
+      "new": "\t\tst, err := os.Lstat(dir)\n\t\tif err != nil || !st.IsDir() || seen[dir] {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-read-failure-is-not-tolerated",
+      "old": "\t\t\tdata, rerr := os.ReadFile(py)\n\t\t\tif rerr != nil {",
+      "new": "\t\t\tdata, rerr := os.ReadFile(py)\n\t\t\tif rerr == nil && false {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-declaration-must-be-at-the-line-start",
+      "old": "var defOrClassRe = regexp.MustCompile(\"^\" + pytext.SpaceClass +\n\t\"*(?:async\" + pytext.SpaceClass + \"+)?def\"",
+      "new": "var defOrClassRe = regexp.MustCompile(\"^\" + pytext.SpaceClass +\n\t\"{0}(?:async\" + pytext.SpaceClass + \"+)?def\""
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-async-prefix-is-mandatory",
+      "old": "\t\"*(?:async\" + pytext.SpaceClass + \"+)?def\" + pytext.SpaceClass +",
+      "new": "\t\"*(?:async\" + pytext.SpaceClass + \"+)def\" + pytext.SpaceClass +"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-class-arm-is-gone",
+      "old": "\t\"+([A-Za-z_]\" + pytext.WordClass + \"+)|^\" + pytext.SpaceClass +\n\t\"*class\"",
+      "new": "\t\"+([A-Za-z_]\" + pytext.WordClass + \"+)|^\" + pytext.SpaceClass +\n\t\"*klass\""
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-lines-are-split-on-newlines-only",
+      "old": "\t\t\tfor _, line := range pytext.SplitLines(decodeIgnore(data)) {",
+      "new": "\t\t\tfor _, line := range strings.Split(decodeIgnore(data), \"\\n\") {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-undecodable-bytes-are-kept",
+      "old": "\t\t\tfor _, line := range pytext.SplitLines(decodeIgnore(data)) {",
+      "new": "\t\t\tfor _, line := range pytext.SplitLines(string(data)) {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-glob-is-case-insensitive",
+      "old": "\t\t\tif pytext.FnMatch(name, \"*.py\") {",
+      "new": "\t\t\tif pytext.FnMatch(name, \"*.PY\") {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-rglob-follows-symlinked-directories",
+      "old": "\t\t\tst, serr := os.Lstat(full)\n\t\t\tif serr == nil && st.IsDir() {\n\t\t\t\twalk(full)\n\t\t\t}",
+      "new": "\t\t\tst, serr := os.Stat(full)\n\t\t\tif serr == nil && st.IsDir() {\n\t\t\t\twalk(full)\n\t\t\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bad-byte-becomes-a-replacement-character",
+      "old": "\t\tif r == utf8.RuneError && size <= 1 {",
+      "new": "\t\tif r == utf8.RuneError && size < 1 {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-candidate-path-is-cleaned",
+      "old": "\t\tcandidate := pypath.Join(root, claim)",
+      "new": "\t\tcandidate := filepath.Join(root, claim)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bare-name-test-cleans-the-claim",
+      "old": "\t\tif claimHasNoDirectory(claim) {",
+      "new": "\t\tif path.Dir(claim) == \".\" {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-single-component-is-not-bare",
+      "old": "\treturn n <= 1\n}",
+      "new": "\treturn n < 1\n}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-dot-components-are-counted",
+      "old": "\t\tif p == \"\" || p == \".\" {",
+      "new": "\t\tif p == \"\" {",
+      "equivalent": "No claim the pattern can produce carries a `.` component that changes the count across the `<= 1` threshold: a bare name has no slash at all, and anything with a slash already has two real components. `./x.py` is not extractable \u2014 the bare alternative's class has no `/`."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-absolute-claim-test-is-a-relative-one",
+      "old": "\t\t} else if !strings.HasPrefix(claim, \"/\") {",
+      "new": "\t\t} else if !strings.HasPrefix(claim, \"./\") {",
+      "equivalent": "`_FILE_PATH_RE`'s lookbehind does not block a leading `/`, but no alternative can MATCH one: the bare classes exclude it and the prefixed branch starts on a known directory name. So no claim is absolute and no claim starts `./`, and both spellings admit exactly the same claims."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-claim-is-not-normalised",
+      "old": "\t\t\tnorm := normpath(claim)",
+      "new": "\t\t\tnorm := claim"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-upward-claim-is-not-refused",
+      "old": "\t\t\tif !strings.HasPrefix(norm, \"..\") &&\n\t\t\t\t!strings.HasPrefix(norm, \"/\") {",
+      "new": "\t\t\tif true {",
+      "equivalent": "A normalised claim beginning `..` or `/` is compared against relative paths that a walk built from the root, and none of those can start with either \u2014 so the suffix search finds nothing and the claim lands in not_found exactly as the guard would have left it."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-suffix-loses-its-separator",
+      "old": "\t\t\t\tsuffix := \"/\" + norm",
+      "new": "\t\t\t\tsuffix := norm"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-exact-relpath-is-not-a-match",
+      "old": "\t\t\t\t\tif rp == norm || strings.HasSuffix(rp, suffix) {",
+      "new": "\t\t\t\t\tif strings.HasSuffix(rp, suffix) {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "one-match-is-already-ambiguous",
+      "old": "\t\t\t\tif len(matches) > 1 {",
+      "new": "\t\t\t\tif len(matches) >= 1 {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "an-ambiguous-claim-is-a-hallucination",
+      "old": "\t\t\t\t\tunresolvable = append(unresolvable, claim)",
+      "new": "\t\t\t\t\tnotFound = append(notFound, claim)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-suffix-match-is-not-recorded",
+      "old": "\t\t\t\t\tsuffixMatched = append(suffixMatched,\n\t\t\t\t\t\tSuffixMatch{Claim: claim, RelPath: matches[0]})",
+      "new": "\t\t\t\t\t_ = matches"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-bare-lookup-uses-the-whole-claim",
+      "old": "\t\t\tfound = names[pypath.Name(claim)]",
+      "new": "\t\t\tfound = names[claim]",
+      "equivalent": "This arm runs only when the claim has NO directory component, and for such a claim `pypath.Name` is the identity. The call says what the Python says (`claim_path.name`) rather than relying on that."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-raw-claims-are-the-verified-ones",
+      "old": "\treturn ClaimReport{RawClaims: claims, Verified: verified,",
+      "new": "\treturn ClaimReport{RawClaims: verified, Verified: verified,"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-empty-claim-list-still-builds-the-index",
+      "old": "\tif len(claims) == 0 {",
+      "new": "\tif len(claims) < 0 {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-verdict-is-inverted",
+      "old": "\t\tif index[s] {\n\t\t\tverified = append(verified, s)",
+      "new": "\t\tif !index[s] {\n\t\t\tverified = append(verified, s)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-annotation-fires-on-either-condition",
+      "old": "\tif onlyIfHallucinations && !hasAny {",
+      "new": "\tif onlyIfHallucinations || !hasAny {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "both-halves-must-hallucinate",
+      "old": "\thasAny := fileReport.HasHallucinations() || symbolReport.HasHallucinations()",
+      "new": "\thasAny := fileReport.HasHallucinations() && symbolReport.HasHallucinations()"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-symbol-check-is-unconditional",
+      "old": "\tif checkSymbols {\n\t\tsymbolReport = VerifySymbolClaims(resultText, projectRoot, d)\n\t}",
+      "new": "\tif true {\n\t\tsymbolReport = VerifySymbolClaims(resultText, projectRoot, d)\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-not-found-label-loses-its-underscore",
+      "old": "\t\tparts = append(parts, \"FILE_CLAIMS_NOT_FOUND: \"+",
+      "new": "\t\tparts = append(parts, \"FILE_CLAIMS_NOTFOUND: \"+"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-verified-line-is-not-suppressed",
+      "old": "\tif len(fileReport.Verified) > 0 && !onlyIfHallucinations {",
+      "new": "\tif len(fileReport.Verified) > 0 {"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-verified-line-lists-four",
+      "old": "\t\t\tstrings.Join(head(fileReport.Verified, 5), \", \"))",
+      "new": "\t\t\tstrings.Join(head(fileReport.Verified, 4), \", \"))"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-annotation-parts-are-comma-separated",
+      "old": "\treturn resultText + \"\\n\\n[claim-verifier] \" + strings.Join(parts, \" | \")",
+      "new": "\treturn resultText + \"\\n\\n[claim-verifier] \" + strings.Join(parts, \", \")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-annotation-is-one-line-down",
+      "old": "\treturn resultText + \"\\n\\n[claim-verifier] \" + strings.Join(parts, \" | \")",
+      "new": "\treturn resultText + \"\\n[claim-verifier] \" + strings.Join(parts, \" | \")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "an-empty-part-list-still-annotates",
+      "old": "\tif len(parts) == 0 {\n\t\treturn resultText\n\t}",
+      "new": "\tif len(parts) < 0 {\n\t\treturn resultText\n\t}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-lowercase-fold-is-gos-own",
+      "old": "\tlower := pytext.Lower(stepText)",
+      "new": "\tlower := strings.ToLower(stepText)"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "a-synthesis-keyword-is-gone",
+      "old": "\t\"combine findings\", \"final report\", \"final summary\", \"conclusion\",",
+      "new": "\t\"combine findings\", \"final report\", \"final summary\","
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-keyword-must-open-the-step",
+      "old": "\t\tif strings.Contains(lower, kw) {",
+      "new": "\t\tif strings.HasPrefix(lower, kw) {"
+    }
+  ]
+}
