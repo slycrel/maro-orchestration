@@ -298,9 +298,11 @@ follow. Cross-process, therefore cross-engine.
   loop's transcript/final result (writer `src/loop_finalize.py:290`;
   reader `notify_telegram`, which also DERIVES the sibling report name
   by string-replacing the `-RESULT.md` suffix,
-  `src/notify_telegram.py:140-147` — so THAT suffix is load-bearing: an
-  engine that names its result file differently leaves delivery
-  notifications dark). Loop ownership: each evidence file is attributed
+  `src/notify_telegram.py:140-147` — so THAT suffix is load-bearing for
+  the FALLBACK report link specifically: a differently-named result file
+  still notifies (any `result_path` is read, and a curated
+  `deliverable_link_path` bypasses the derivation), but the fallback
+  sibling-report link goes dark). Loop ownership: each evidence file is attributed
   to the loop that did the work via its embedded `<loop_id>`; multi-loop
   histories (replanning, retry) are legitimate — `metadata.loops` stays
   the authoritative attempt order, and nothing requires prior-attempt
