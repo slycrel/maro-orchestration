@@ -3726,40 +3726,45 @@ def build_adapter(
     """
     env = _load_env_file()
 
+    # Every branch wraps in FailoverAdapter: its complete() is the one seam
+    # carrying record-mode capture, the runaway-cost meter, and the utility
+    # cap warning. The explicit-backend branches were the last bare-adapter
+    # escape (pre_flight drives backend="anthropic"/"openrouter" directly),
+    # sibling of the 2026-07-29 explicit-api-key fix below.
     if backend == "codex":
         if not _codex_auth_available():
             raise RuntimeError("codex not available: binary missing or ~/.codex/auth.json not found")
-        return CodexCLIAdapter(model=model)
+        return FailoverAdapter([CodexCLIAdapter(model=model)])
 
     if backend == "subprocess" or backend == "claude":
         if not _claude_bin_available():
             raise RuntimeError(f"claude binary not found at {_CLAUDE_BIN}")
         kwargs = {"timeout": timeout} if timeout is not None else {}
-        return ClaudeSubprocessAdapter(model=model, **kwargs)
+        return FailoverAdapter([ClaudeSubprocessAdapter(model=model, **kwargs)])
 
     if backend == "anthropic":
         key = api_key or _get_key("ANTHROPIC_API_KEY", env)
         if not key:
             raise RuntimeError("No ANTHROPIC_API_KEY found")
-        return AnthropicSDKAdapter(api_key=key, model=model)
+        return FailoverAdapter([AnthropicSDKAdapter(api_key=key, model=model)])
 
     if backend == "openrouter":
         key = api_key or _get_key("OPENROUTER_API_KEY", env)
         if not key:
             raise RuntimeError("No OPENROUTER_API_KEY found")
-        return OpenRouterAdapter(api_key=key, model=model)
+        return FailoverAdapter([OpenRouterAdapter(api_key=key, model=model)])
 
     if backend == "openai":
         key = api_key or _get_key("OPENAI_API_KEY", env)
         if not key:
             raise RuntimeError("No OPENAI_API_KEY found")
-        return OpenAIAdapter(api_key=key, model=model)
+        return FailoverAdapter([OpenAIAdapter(api_key=key, model=model)])
 
     if backend == "xai":
         key = api_key or _get_key("XAI_API_KEY", env)
         if not key:
             raise RuntimeError("No XAI_API_KEY found")
-        return XAIAdapter(api_key=key, model=model)
+        return FailoverAdapter([XAIAdapter(api_key=key, model=model)])
 
     # Auto-detect
     assert backend == "auto", f"Unknown backend: {backend!r}"

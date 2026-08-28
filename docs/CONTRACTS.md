@@ -329,6 +329,12 @@ follow. Cross-process, therefore cross-engine.
   and on failed/killed attempts (`src/llm.py:868-877`). Secret-scrubbed via
   `secret_scrub.scrub` before write. Record-mode default ON; `MARO_RECORD=0`
   disables — so the directory may legitimately be absent or sparse.
+  (Was DEFECT: `build_adapter`'s explicit-backend branches returned BARE
+  adapters, so explicit `backend=` callers — pre-flight plan review among
+  them — ran outside the record/meter/cap seam entirely. FIXED 2026-08-28
+  behavior-suite review r1: every branch wraps; pinned by
+  `tests/test_llm.py::TestExplicitBackendAlwaysWrapped`. Only direct
+  adapter INJECTION — a test-only seam — bypasses recording now.)
 - **Readers:** `loop_report` (`src/loop_report.py:1029`), `delta_replay`
   (`src/delta_replay.py:118`), `mint_grounding` — lesson receipts cite
   `build/calls/<file>#tool_events[i]` (`src/mint_grounding.py:447-456`).

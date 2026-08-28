@@ -1366,9 +1366,13 @@ def test_run_subprocess_safe_cleans_temp_files(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_build_adapter_subprocess_explicit(monkeypatch):
+    # Explicit backends wrap too (2026-08-28): the FailoverAdapter is the
+    # record/meter/cap seam and no branch may opt out of it.
+    from llm import FailoverAdapter
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     a = build_adapter("subprocess")
-    assert isinstance(a, ClaudeSubprocessAdapter)
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], ClaudeSubprocessAdapter)
 
 
 def test_build_adapter_auto_prefers_anthropic(monkeypatch):
@@ -1516,11 +1520,15 @@ def test_build_adapter_xai_explicit_no_key_raises(monkeypatch):
 
 
 def test_build_adapter_xai_explicit(monkeypatch):
-    from llm import XAIAdapter
+    from llm import FailoverAdapter, XAIAdapter
     monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     a = build_adapter("xai")
-    assert isinstance(a, XAIAdapter)
+    # Wrapped like every branch (2026-08-28 record-seam fix); identity
+    # forwards through.
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], XAIAdapter)
+    assert a.backend == "xai"
 
 
 def test_xai_not_in_default_backend_order():
@@ -1760,7 +1768,11 @@ def test_maro_backend_env_var_ignored_when_explicit_backend(monkeypatch):
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     a = build_adapter("subprocess")
-    assert isinstance(a, ClaudeSubprocessAdapter)
+    from llm import FailoverAdapter
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], ClaudeSubprocessAdapter), (
+        "explicit backend= wins over MARO_BACKEND"
+    )
 
 
 def test_openrouter_model_map_uses_current_ids():
@@ -3255,3 +3267,31 @@ class TestTailCostScope:
         fa = self._fa()
         fa.complete([LLMMessage("user", "plain call")])
         assert rows == []
+
+
+class TestExplicitBackendAlwaysWrapped:
+    """Every build_adapter branch returns FailoverAdapter — its complete()
+    is the one seam carrying record-mode capture, the cost meter, and the
+    utility cap warning. The explicit-backend branches were the last bare
+    escape (pre_flight drives backend="anthropic"/"openrouter" directly),
+    found by the 2026-08-28 behavior-suite review."""
+
+    def test_explicit_anthropic_backend_is_wrapped(self):
+        from llm import FailoverAdapter, build_adapter
+        adapter = build_adapter(backend="anthropic", api_key="sk-ant-test")
+        assert isinstance(adapter, FailoverAdapter)
+        # The wrap stays transparent to identity readers.
+        assert adapter.backend == "anthropic"
+
+    def test_explicit_openrouter_backend_is_wrapped(self):
+        from llm import FailoverAdapter, build_adapter
+        adapter = build_adapter(backend="openrouter", api_key="sk-or-test")
+        assert isinstance(adapter, FailoverAdapter)
+        assert adapter.backend == "openrouter"
+
+    def test_maro_backend_env_recursion_does_not_double_wrap(self, monkeypatch):
+        from llm import FailoverAdapter, build_adapter
+        monkeypatch.setenv("MARO_BACKEND", "anthropic")
+        adapter = build_adapter(api_key="sk-ant-test")
+        assert isinstance(adapter, FailoverAdapter)
+        assert not isinstance(adapter._adapters[0], FailoverAdapter)
