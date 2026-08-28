@@ -1,0 +1,520 @@
+{
+ "packages": {
+  "default": [
+   "./internal/agentloop/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-project-keyword-is-renamed",
+   "old": "\t\t{Key: \"project\", Val: a.Project},\n",
+   "new": "\t\t{Key: \"project_\", Val: a.Project},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-project-keyword-carries-another-value",
+   "old": "\t\t{Key: \"project\", Val: a.Project},\n",
+   "new": "\t\t{Key: \"project\", Val: a.RepoPath},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-repo-path-keyword-is-renamed",
+   "old": "\t\t{Key: \"repo_path\", Val: a.RepoPath},\n",
+   "new": "\t\t{Key: \"repo_path_\", Val: a.RepoPath},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-repo-path-keyword-carries-another-value",
+   "old": "\t\t{Key: \"repo_path\", Val: a.RepoPath},\n",
+   "new": "\t\t{Key: \"repo_path\", Val: a.Model},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-model-keyword-is-renamed",
+   "old": "\t\t{Key: \"model\", Val: a.Model},\n",
+   "new": "\t\t{Key: \"model_\", Val: a.Model},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-model-keyword-carries-another-value",
+   "old": "\t\t{Key: \"model\", Val: a.Model},\n",
+   "new": "\t\t{Key: \"model\", Val: a.Backend},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-backend-keyword-is-renamed",
+   "old": "\t\t{Key: \"backend\", Val: a.Backend},\n",
+   "new": "\t\t{Key: \"backend_\", Val: a.Backend},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-backend-keyword-carries-another-value",
+   "old": "\t\t{Key: \"backend\", Val: a.Backend},\n",
+   "new": "\t\t{Key: \"backend\", Val: a.Adapter},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-adapter-keyword-is-renamed",
+   "old": "\t\t{Key: \"adapter\", Val: a.Adapter},\n",
+   "new": "\t\t{Key: \"adapter_\", Val: a.Adapter},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-adapter-keyword-carries-another-value",
+   "old": "\t\t{Key: \"adapter\", Val: a.Adapter},\n",
+   "new": "\t\t{Key: \"adapter\", Val: a.DryRun},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-dry-run-keyword-is-renamed",
+   "old": "\t\t{Key: \"dry_run\", Val: a.DryRun},\n",
+   "new": "\t\t{Key: \"dry_run_\", Val: a.DryRun},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-dry-run-keyword-carries-another-value",
+   "old": "\t\t{Key: \"dry_run\", Val: a.DryRun},\n",
+   "new": "\t\t{Key: \"dry_run\", Val: a.Verbose},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-verbose-keyword-is-renamed",
+   "old": "\t\t{Key: \"verbose\", Val: a.Verbose},\n",
+   "new": "\t\t{Key: \"verbose_\", Val: a.Verbose},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-verbose-keyword-carries-another-value",
+   "old": "\t\t{Key: \"verbose\", Val: a.Verbose},\n",
+   "new": "\t\t{Key: \"verbose\", Val: a.InterruptQueue},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-interrupt-queue-keyword-is-renamed",
+   "old": "\t\t{Key: \"interrupt_queue\", Val: a.InterruptQueue},\n",
+   "new": "\t\t{Key: \"interrupt_queue_\", Val: a.InterruptQueue},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-interrupt-queue-keyword-carries-another-value",
+   "old": "\t\t{Key: \"interrupt_queue\", Val: a.InterruptQueue},\n",
+   "new": "\t\t{Key: \"interrupt_queue\", Val: a.HookRegistry},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-hook-registry-keyword-is-renamed",
+   "old": "\t\t{Key: \"hook_registry\", Val: a.HookRegistry},\n",
+   "new": "\t\t{Key: \"hook_registry_\", Val: a.HookRegistry},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-hook-registry-keyword-carries-another-value",
+   "old": "\t\t{Key: \"hook_registry\", Val: a.HookRegistry},\n",
+   "new": "\t\t{Key: \"hook_registry\", Val: a.AncestryContextExtra},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-ancestry-context-extra-keyword-is-renamed",
+   "old": "\t\t{Key: \"ancestry_context_extra\", Val: a.AncestryContextExtra},\n",
+   "new": "\t\t{Key: \"ancestry_context_extra_\", Val: a.AncestryContextExtra},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-ancestry-context-extra-keyword-carries-another-value",
+   "old": "\t\t{Key: \"ancestry_context_extra\", Val: a.AncestryContextExtra},\n",
+   "new": "\t\t{Key: \"ancestry_context_extra\", Val: a.PermissionContext},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-permission-context-keyword-is-renamed",
+   "old": "\t\t{Key: \"permission_context\", Val: a.PermissionContext},\n",
+   "new": "\t\t{Key: \"permission_context_\", Val: a.PermissionContext},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-permission-context-keyword-carries-another-value",
+   "old": "\t\t{Key: \"permission_context\", Val: a.PermissionContext},\n",
+   "new": "\t\t{Key: \"permission_context\", Val: a.ContinuationDepth},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-continuation-depth-keyword-is-renamed",
+   "old": "\t\t{Key: \"continuation_depth\", Val: a.ContinuationDepth},\n",
+   "new": "\t\t{Key: \"continuation_depth_\", Val: a.ContinuationDepth},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-continuation-depth-keyword-carries-another-value",
+   "old": "\t\t{Key: \"continuation_depth\", Val: a.ContinuationDepth},\n",
+   "new": "\t\t{Key: \"continuation_depth\", Val: a.CostBudget},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-cost-budget-keyword-is-renamed",
+   "old": "\t\t{Key: \"cost_budget\", Val: a.CostBudget},\n",
+   "new": "\t\t{Key: \"cost_budget_\", Val: a.CostBudget},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-cost-budget-keyword-carries-another-value",
+   "old": "\t\t{Key: \"cost_budget\", Val: a.CostBudget},\n",
+   "new": "\t\t{Key: \"cost_budget\", Val: a.TokenBudget},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-token-budget-keyword-is-renamed",
+   "old": "\t\t{Key: \"token_budget\", Val: a.TokenBudget},\n",
+   "new": "\t\t{Key: \"token_budget_\", Val: a.TokenBudget},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-token-budget-keyword-carries-another-value",
+   "old": "\t\t{Key: \"token_budget\", Val: a.TokenBudget},\n",
+   "new": "\t\t{Key: \"token_budget\", Val: a.RalphVerify},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-ralph-verify-keyword-is-renamed",
+   "old": "\t\t{Key: \"ralph_verify\", Val: a.RalphVerify},\n",
+   "new": "\t\t{Key: \"ralph_verify_\", Val: a.RalphVerify},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-ralph-verify-keyword-carries-another-value",
+   "old": "\t\t{Key: \"ralph_verify\", Val: a.RalphVerify},\n",
+   "new": "\t\t{Key: \"ralph_verify\", Val: a.MaxSteps},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-max-steps-keyword-is-renamed",
+   "old": "\t\t{Key: \"max_steps\", Val: a.MaxSteps},\n",
+   "new": "\t\t{Key: \"max_steps_\", Val: a.MaxSteps},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-max-steps-keyword-carries-another-value",
+   "old": "\t\t{Key: \"max_steps\", Val: a.MaxSteps},\n",
+   "new": "\t\t{Key: \"max_steps\", Val: a.MaxIterations},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-max-iterations-keyword-is-renamed",
+   "old": "\t\t{Key: \"max_iterations\", Val: a.MaxIterations},\n",
+   "new": "\t\t{Key: \"max_iterations_\", Val: a.MaxIterations},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-max-iterations-keyword-carries-another-value",
+   "old": "\t\t{Key: \"max_iterations\", Val: a.MaxIterations},\n",
+   "new": "\t\t{Key: \"max_iterations\", Val: a.StepCallback},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-step-callback-keyword-is-renamed",
+   "old": "\t\t{Key: \"step_callback\", Val: a.StepCallback},\n",
+   "new": "\t\t{Key: \"step_callback_\", Val: a.StepCallback},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-step-callback-keyword-carries-another-value",
+   "old": "\t\t{Key: \"step_callback\", Val: a.StepCallback},\n",
+   "new": "\t\t{Key: \"step_callback\", Val: a.LoopReason},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-loop-reason-keyword-is-renamed",
+   "old": "\t\t{Key: \"loop_reason\", Val: a.LoopReason},\n",
+   "new": "\t\t{Key: \"loop_reason_\", Val: a.LoopReason},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-loop-reason-keyword-carries-another-value",
+   "old": "\t\t{Key: \"loop_reason\", Val: a.LoopReason},\n",
+   "new": "\t\t{Key: \"loop_reason\", Val: a.ParentLoopID},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-parent-loop-id-keyword-is-renamed",
+   "old": "\t\t{Key: \"parent_loop_id\", Val: a.ParentLoopID},\n",
+   "new": "\t\t{Key: \"parent_loop_id_\", Val: a.ParentLoopID},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-parent-loop-id-keyword-carries-another-value",
+   "old": "\t\t{Key: \"parent_loop_id\", Val: a.ParentLoopID},\n",
+   "new": "\t\t{Key: \"parent_loop_id\", Val: a.AdmissionWaitS},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-admission-wait-s-keyword-is-renamed",
+   "old": "\t\t{Key: \"admission_wait_s\", Val: a.AdmissionWaitS},\n",
+   "new": "\t\t{Key: \"admission_wait_s_\", Val: a.AdmissionWaitS},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-admission-wait-s-keyword-carries-another-value",
+   "old": "\t\t{Key: \"admission_wait_s\", Val: a.AdmissionWaitS},\n",
+   "new": "\t\t{Key: \"admission_wait_s\", Val: a.DeferLearning},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-defer-learning-keyword-is-renamed",
+   "old": "\t\t{Key: \"defer_learning\", Val: a.DeferLearning},\n",
+   "new": "\t\t{Key: \"defer_learning_\", Val: a.DeferLearning},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-defer-learning-keyword-carries-another-value",
+   "old": "\t\t{Key: \"defer_learning\", Val: a.DeferLearning},\n",
+   "new": "\t\t{Key: \"defer_learning\", Val: a.DeferMaintenance},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-defer-maintenance-keyword-is-renamed",
+   "old": "\t\t{Key: \"defer_maintenance\", Val: a.DeferMaintenance},\n",
+   "new": "\t\t{Key: \"defer_maintenance_\", Val: a.DeferMaintenance},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-defer-maintenance-keyword-carries-another-value",
+   "old": "\t\t{Key: \"defer_maintenance\", Val: a.DeferMaintenance},\n",
+   "new": "\t\t{Key: \"defer_maintenance\", Val: a.MeasurementClass},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-measurement-class-keyword-is-renamed",
+   "old": "\t\t{Key: \"measurement_class\", Val: a.MeasurementClass},\n",
+   "new": "\t\t{Key: \"measurement_class_\", Val: a.MeasurementClass},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-measurement-class-keyword-carries-another-value",
+   "old": "\t\t{Key: \"measurement_class\", Val: a.MeasurementClass},\n",
+   "new": "\t\t{Key: \"measurement_class\", Val: a.HandleID},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-handle-id-keyword-is-renamed",
+   "old": "\t\t{Key: \"handle_id\", Val: a.HandleID},\n",
+   "new": "\t\t{Key: \"handle_id_\", Val: a.HandleID},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-handle-id-keyword-carries-another-value",
+   "old": "\t\t{Key: \"handle_id\", Val: a.HandleID},\n",
+   "new": "\t\t{Key: \"handle_id\", Val: a.Project},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "two-keywords-are-passed-in-the-other-order",
+   "old": "\t\t{Key: \"project\", Val: a.Project},\n\t\t{Key: \"repo_path\", Val: a.RepoPath},\n",
+   "new": "\t\t{Key: \"repo_path\", Val: a.RepoPath},\n\t\t{Key: \"project\", Val: a.Project},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-last-two-keywords-are-passed-in-the-other-order",
+   "old": "\t\t{Key: \"measurement_class\", Val: a.MeasurementClass},\n\t\t{Key: \"handle_id\", Val: a.HandleID},\n",
+   "new": "\t\t{Key: \"handle_id\", Val: a.HandleID},\n\t\t{Key: \"measurement_class\", Val: a.MeasurementClass},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "a-keyword-is-dropped",
+   "old": "\t\t{Key: \"dry_run\", Val: a.DryRun},\n",
+   "new": ""
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-goal-is-not-positional",
+   "old": "d.InitializeLoop(a.Goal, pyval.Obj{",
+   "new": "d.InitializeLoop(\"\", pyval.Obj{"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-initialize-error-is-swallowed",
+   "old": "\t})\n\tif err != nil {\n\t\treturn nil, err\n\t}",
+   "new": "\t})\n\tif err != nil {\n\t\terr = nil\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-early-return-is-a-truthiness-check",
+   "old": "\tif early != nil {\n\t\treturn early, nil\n\t}",
+   "new": "\tif early != nil && early.Status != \"\" {\n\t\treturn early, nil\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-early-return-is-inverted",
+   "old": "\tif early != nil {\n\t\treturn early, nil",
+   "new": "\tif early == nil {\n\t\treturn early, nil"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-early-return-is-dropped",
+   "old": "\tif early != nil {\n\t\treturn early, nil\n\t}",
+   "new": "\tif early != nil {\n\t\tearly = nil\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-early-return-returns-nothing",
+   "old": "\t\treturn early, nil\n\t}",
+   "new": "\t\treturn nil, nil\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-captains-log-import-failure-is-swallowed",
+   "old": "\tif err := d.ImportLoopIDScope(); err != nil {\n\t\treturn nil, err\n\t}",
+   "new": "\t_ = d.ImportLoopIDScope()"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-captains-log-import-runs-above-the-early-return",
+   "old": "\tif early != nil {\n\t\treturn early, nil\n\t}\n\n\t// BACKLOG #17",
+   "new": "\tif ierr := d.ImportLoopIDScope(); ierr != nil {\n\t\treturn nil, ierr\n\t}\n\tif early != nil {\n\t\treturn early, nil\n\t}\n\n\t// BACKLOG #17"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-scope-is-entered-on-the-wrong-loop-id",
+   "old": "d.LoopIDScope(ctx.LoopID)",
+   "new": "d.LoopIDScope(a.Goal)"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-scope-setup-failure-still-exits-the-scope",
+   "old": "\texit, err := d.LoopIDScope(ctx.LoopID)\n\tif err != nil {",
+   "new": "\texit, err := d.LoopIDScope(ctx.LoopID)\n\tif err != nil && exit != nil {\n\t\t_ = exit()\n\t}\n\tif err != nil {",
+   "equivalent": "a context manager whose __enter__ raised does not exist, so there is no exit half to call — the dep cannot hand back both an error and an exit function"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-scope-setup-failure-is-swallowed",
+   "old": "\tif err != nil {\n\t\t// `with`'s setup raised: there is no context manager yet, so\n\t\t// nothing to exit.\n\t\t//\n\t\t// EQUIVALENT MUTANT (kept, marked `equivalent`): calling exit()\n\t\t// here anyway. A context manager whose __enter__ raised does not\n\t\t// exist, so the dep cannot hand back both an error and an exit\n\t\t// half, and no input reaches a state where the extra call does\n\t\t// anything.\n\t\treturn nil, err\n\t}",
+   "new": "\tif err != nil {\n\t\terr = nil\n\t}\n\tif exit == nil {\n\t\texit = func() error { return nil }\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-scope-is-never-exited",
+   "old": "\tif exitErr := exit(); exitErr != nil {\n\t\treturn nil, exitErr\n\t}\n\tif bodyErr",
+   "new": "\tif exitErr := func() error { _ = exit; return nil }(); exitErr != nil {\n\t\treturn nil, exitErr\n\t}\n\tif bodyErr"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-exit-error-is-swallowed",
+   "old": "\tif exitErr := exit(); exitErr != nil {\n\t\treturn nil, exitErr\n\t}\n\tif bodyErr",
+   "new": "\t_ = exit()\n\tif bodyErr"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-body-error-wins-over-the-exit-error",
+   "old": "\tif exitErr := exit(); exitErr != nil {\n\t\treturn nil, exitErr\n\t}\n\tif bodyErr != nil {\n\t\treturn nil, bodyErr\n\t}",
+   "new": "\texitErr := exit()\n\tif bodyErr != nil {\n\t\treturn nil, bodyErr\n\t}\n\tif exitErr != nil {\n\t\treturn nil, exitErr\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-body-error-is-swallowed",
+   "old": "\tif bodyErr != nil {\n\t\treturn nil, bodyErr\n\t}",
+   "new": "\tif bodyErr != nil {\n\t\tbodyErr = nil\n\t}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-body-result-is-dropped",
+   "old": "\treturn res, nil\n}",
+   "new": "\tif res != nil {\n\t\tres = nil\n\t}\n\treturn res, nil\n}"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-channel-is-never-parked",
+   "old": "\tctx.Channel = a.Channel // Phase 64C",
+   "new": "\t_ = a.Channel // Phase 64C"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-channel-is-the-goal",
+   "old": "\tctx.Channel = a.Channel // Phase 64C",
+   "new": "\tctx.Channel = a.Goal // Phase 64C"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-tier-import-failure-is-swallowed",
+   "old": "\tcheap, mid, power, err := d.ImportTierConstants()\n\tif err != nil {\n\t\treturn nil, err\n\t}",
+   "new": "\tcheap, mid, power, _ := d.ImportTierConstants()"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-cheap-tier-is-not-zero",
+   "old": "\ttierOrder[cheap] = 0\n",
+   "new": "\ttierOrder[cheap] = 3\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-mid-tier-is-not-one",
+   "old": "\ttierOrder[mid] = 1\n",
+   "new": "\ttierOrder[mid] = 0\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-power-tier-is-not-two",
+   "old": "\ttierOrder[power] = 2\n",
+   "new": "\ttierOrder[power] = 1\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-tiers-are-assigned-in-the-other-order",
+   "old": "\ttierOrder[cheap] = 0\n\ttierOrder[mid] = 1\n\ttierOrder[power] = 2\n",
+   "new": "\ttierOrder[power] = 2\n\ttierOrder[mid] = 1\n\ttierOrder[cheap] = 0\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "a-tier-is-missing",
+   "old": "\ttierOrder[mid] = 1\n",
+   "new": "\t_ = mid\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-loopid-rebind-reads-the-argument",
+   "old": "\t\tLoopID:         ctx.LoopID,\n",
+   "new": "\t\tLoopID: a.Goal,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-startts-rebind-reads-the-argument",
+   "old": "\t\tStartTS:        ctx.StartTS,\n",
+   "new": "\t\tStartTS: a.RepoPath,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-project-rebind-reads-the-argument",
+   "old": "\t\tProject:        ctx.Project,\n",
+   "new": "\t\tProject: a.Project,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-adapter-rebind-reads-the-argument",
+   "old": "\t\tAdapter:        ctx.Adapter,\n",
+   "new": "\t\tAdapter: a.Adapter,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-interruptqueue-rebind-reads-the-argument",
+   "old": "\t\tInterruptQueue: ctx.InterruptQueue,\n",
+   "new": "\t\tInterruptQueue: a.InterruptQueue,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-permctx-rebind-reads-the-argument",
+   "old": "\t\tPermCtx:        ctx.PermCtx,\n",
+   "new": "\t\tPermCtx:        a.PermissionContext,\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-bound-context-is-not-the-one-initialize-returned",
+   "old": "\t\tCtx:            ctx,\n",
+   "new": "\t\tCtx:            &HeadCtx{},\n"
+  },
+  {
+   "file": "internal/agentloop/head.go",
+   "name": "the-tier-map-is-not-passed-on",
+   "old": "\t\tTierOrder:      tierOrder,\n",
+   "new": "\t\tTierOrder:      nil,\n"
+  }
+ ]
+}

@@ -23,9 +23,6 @@ import (
 // no differential and says why; it leaves when the differential lands.
 func TestEveryPackageHasADifferential(t *testing.T) {
 	allowed := map[string]string{
-		"internal/pyprobe": "" +
-			"the probe harness itself — it has no CPython counterpart to " +
-			"differ from, and every diff test in the tree is its test.",
 		"internal/missionrun": "" +
 			"ported, unreferenced, and never given a differential. Predates " +
 			"this census and is the reason it is scoped to `no tests at " +

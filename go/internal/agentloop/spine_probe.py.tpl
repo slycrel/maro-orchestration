@@ -26,23 +26,6 @@ class PartialModule(types.ModuleType):
         raise ImportError("no module")
 
 
-class Blocker:
-    """A meta-path finder that makes named modules genuinely unimportable.
-
-    A stub whose attributes raise is not the same state: the import
-    SUCCEEDS against it. See L59.
-    """
-
-    def __init__(self, names):
-        self.names = set(names)
-
-    def find_spec(self, name, path=None, target=None):
-        if name in self.names:
-            raise ModuleNotFoundError("No module named %r" % name,
-                                      name=name)
-        return None
-
-
 class Log:
     def __init__(self, sink):
         self.sink = sink
@@ -396,8 +379,7 @@ def run_one(sc):
         return mkresult(sc["recursion_result"])
     al.run_agent_loop = fake_run
 
-    blocker = Blocker(dead)
-    sys.meta_path.insert(0, blocker)
+    blocker = _pyprobe_block(dead)
     result, exc = None, None
     err = io.StringIO()
     try:
@@ -410,7 +392,7 @@ def run_one(sc):
     except BaseException as e:
         exc = [type(e).__name__, str(e)]
     finally:
-        sys.meta_path.remove(blocker)
+        _pyprobe_unblock(blocker)
 
     return {"name": sc["name"], "calls": calls, "logs": logs,
             "result": result, "exc": exc, "phase": ctx.phase}

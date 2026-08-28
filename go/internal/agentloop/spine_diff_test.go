@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/looptypes"
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -924,18 +924,20 @@ func runSpineProbe(t *testing.T, dir string,
 	if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("python3", "spine_probe.py.tpl", srcDirAL(t),
-		specPath)
-	out, err := cmd.Output()
+	src, err := os.ReadFile("spine_probe.py.tpl")
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			t.Fatalf("probe failed: %v\n%s", err, ee.Stderr)
-		}
-		t.Fatalf("probe failed: %v", err)
+		t.Fatal(err)
 	}
+	// Through pyprobe, not exec.Command: this probe WRITES, and
+	// running it by hand is how it ended up outside the sandbox,
+	// the live-workspace refusal and the one shared module
+	// Blocker. Two hand-rolled runners is how the last eight
+	// started.
+	out := pyprobe.Probe{Marker: "agent_loop.py",
+		Workspace: t.TempDir()}.Run(t, string(src), srcDirAL(t),
+		specPath)
 	var recs []map[string]any
-	if err := json.Unmarshal(out, &recs); err != nil {
+	if err := json.Unmarshal([]byte(out), &recs); err != nil {
 		t.Fatalf("probe output: %v\n%s", err, out)
 	}
 	return recs

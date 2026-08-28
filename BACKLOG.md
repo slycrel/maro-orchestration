@@ -75,6 +75,32 @@ Anything reading `StepOutcome.index` as a ledger reference (the run report's
 item ids on this path. Worth deciding whether the honest value is `-1`
 here, the way the batch path spells "I do not have one".
 
+### Go port: ninety-seven differential probes still bypass the pyprobe harness (FOUND 2026-08-27, pyprobe closure)
+
+`internal/pyprobe`'s own doc says there were EIGHT hand-rolled probe
+runners and that consolidating them is what made a failing probe fatal, a
+writing probe guarded, and the operator's config isolated. The
+consolidation gave the eight a shared ANSWER and never replaced the
+callers: a census on 2026-08-27 found **97 direct `exec.Command("python3"`
+sites across ~66 test files**, every one of them outside the sandbox, the
+live-workspace refusal and the shared module Blocker.
+
+This is not theoretical — it is the population the 648-row live captain's
+log contamination came out of (see PORT.md, "The probes were writing to
+the live workspace"). That site is fixed at the source, and a whole-suite
+run with HOME repointed at a temp dir showed it was the only one currently
+writing outside its own tree, so what is left is LATENT rather than live.
+
+Converting 97 sites is a sweep, not a fix, and it wants its own chunk. In
+the meantime `internal/pyprobe/harness_guard_test.go` pins the number so
+the class cannot GROW: a new direct site fails the guard, and the fix is
+to use `pyprobe.Probe` rather than to bump the constant.
+
+Two conversions are already done and are the worked examples — the fence
+and spine probes in `internal/agentloop`, which this session had just
+written as hand-rolled runners without noticing they were re-creating the
+thing the harness exists to prevent.
+
 ### Go port: `StepOutcome.injected_steps` is typed and Python's is not (FOUND 2026-08-27, loopparallel folds tranche)
 
 Both folds pass `_batch_oc.get("inject_steps", [])` — the RAW dict value —

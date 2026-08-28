@@ -75,7 +75,7 @@ reading like one.
 | `knowledge_web.py` | 4828 | `internal/knowledge` |
 | `handle.py` | 4309 | `internal/loop`, `internal/loopfinalize`, `internal/looptypes`, `internal/now`, `internal/record`, `internal/scope` |
 | `llm.py` | 3930 | `cmd/maro`, `internal/llm`, `internal/metrics` |
-| `skills.py` | 3038 | `cmd/maro`, `internal/pyjson`, `internal/record`, `internal/skills` |
+| `skills.py` | 3038 | `cmd/maro`, `internal/agentloop`, `internal/pyjson`, `internal/record`, `internal/skills` |
 | `closure_verify.py` | 2758 | `internal/closure`, `internal/runs`, `internal/scope` |
 | `cli.py` | 2705 | `cmd/maro`, `internal/tasks` |
 | `step_exec.py` | 2455 | `internal/loop` |
@@ -90,13 +90,13 @@ reading like one.
 | `planner.py` | 1434 | `internal/director`, `internal/loop`, `internal/planner`, `internal/recall` |
 | `evolver_store.py` | 1366 | `internal/evolver`, `internal/guard` |
 | `pack.py` | 1355 | `cmd/maro`, `internal/pack` |
-| `knowledge_lens.py` | 1342 | `internal/record`, `internal/scope` |
+| `knowledge_lens.py` | 1342 | `internal/agentloop`, `internal/record`, `internal/scope` |
 | `captains_log.py` | 1327 | `internal/record` |
 | `loop_finalize.py` | 1319 | `internal/loopfinalize` |
 | `loop_blocked.py` | 1287 | `internal/loop`, `internal/looptypes` |
 | `memory.py` | 1233 | `internal/record` |
 | `navigator_shadow.py` | 1231 | `internal/scope` |
-| `evolver.py` | 1183 | `internal/evolver`, `internal/record` |
+| `evolver.py` | 1183 | `internal/agentloop`, `internal/evolver`, `internal/record` |
 | `provenance.py` | 1156 | `internal/now` |
 | `interrupt.py` | 1128 | `internal/artifactcheck`, `internal/loop` |
 | `loop_post_step.py` | 1127 | `internal/loop`, `internal/looptypes` |

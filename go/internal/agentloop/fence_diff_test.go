@@ -2,15 +2,14 @@ package agentloop
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/slycrel/maro-orchestration/go/internal/looptypes"
 	"github.com/slycrel/maro-orchestration/go/internal/pypath"
+	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
 )
 
@@ -675,18 +674,20 @@ func runFenceProbe(t *testing.T, dir string,
 	if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("python3", "fence_probe.py.tpl", srcDirAL(t),
-		specPath)
-	out, err := cmd.Output()
+	src, err := os.ReadFile("fence_probe.py.tpl")
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			t.Fatalf("probe failed: %v\n%s", err, ee.Stderr)
-		}
-		t.Fatalf("probe failed: %v", err)
+		t.Fatal(err)
 	}
+	// Through pyprobe, not exec.Command: this probe WRITES, and
+	// running it by hand is how it ended up outside the sandbox,
+	// the live-workspace refusal and the one shared module
+	// Blocker. Two hand-rolled runners is how the last eight
+	// started.
+	out := pyprobe.Probe{Marker: "agent_loop.py",
+		Workspace: t.TempDir()}.Run(t, string(src), srcDirAL(t),
+		specPath)
 	var recs []map[string]any
-	if err := json.Unmarshal(out, &recs); err != nil {
+	if err := json.Unmarshal([]byte(out), &recs); err != nil {
 		t.Fatalf("probe output: %v\n%s", err, out)
 	}
 	return recs
@@ -700,6 +701,14 @@ func canonFence(m map[string]any) map[string]any {
 }
 
 func TestExecutionFenceMatchesCPython(t *testing.T) {
+	// One fixture's write-fence allow list carries `~/c`, and BOTH
+	// engines expand it — the port with os.UserHomeDir, CPython with
+	// Path.expanduser. Pinning HOME here is what makes them the same
+	// question: without it the answer was whichever home each process
+	// happened to have, which agreed only because nothing sandboxed the
+	// probe. pyprobe passes a HOME a test set on purpose straight
+	// through, precisely for this.
+	t.Setenv("HOME", t.TempDir())
 	scs := fenceScenarios()
 	pyRecs := runFenceProbe(t, t.TempDir(), scs)
 	if len(pyRecs) != len(scs) {

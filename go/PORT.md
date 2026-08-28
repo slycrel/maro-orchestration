@@ -16704,3 +16704,145 @@ then removed by exact signature (`SKILL_VARIANT_CREATED` with
 648 dropped, zero unparseable. The eight genuine `SKILL_VARIANT_CREATED`
 rows from real runs are still there. Verified afterwards that
 `go test ./internal/skills/` moves the live log by zero rows.
+
+## Phase L: the head, which computes nothing (2026-08-27)
+
+`src/agent_loop.py:119-244` — the signature down to the execution fence's
+first statement, and the last of run_agent_loop's three chunks. With this
+the whole function is ported.
+
+It computes nothing. One call into `_initialize_loop` with twenty-six
+keywords, an early return, an ambient loop-id scope, and six locals
+rebound out of the context. The part that cannot go wrong is the part
+that already did: the fence read the `project` KEYWORD where Python reads
+`ctx.project`, and picked a different directory for the entire run.
+
+### Three orderings, none of them obvious
+
+- `from captains_log import loop_id_scope` runs BELOW the early return. A
+  run that `_initialize_loop` turns away never imports it, so a missing
+  `captains_log` is invisible on that path and fatal on the other. Two
+  fixtures, one for each.
+- `from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER` runs INSIDE the
+  scope, so its failure has to leave the scope the way any other
+  exception does. The scope's exit call is in the record.
+- The `with` exits however the body left, and an exception from the exit
+  REPLACES the body's. That is why the port does not spell it as a defer
+  that swallows its error.
+
+### What the differential can and cannot see
+
+The probe drives the real `run_agent_loop` with `_initialize_loop` faked
+and the fence's first call — `_ce.set_container_suppressed`, which the
+fence performs before anything else on purpose — raising a sentinel. The
+sentinel derives from **BaseException**, because every handler in the
+fence is `except Exception`: a sentinel the subject can catch measures
+the subject's handlers rather than the span above them.
+
+That makes the twenty-six keywords, their ORDER, the early return, the
+scope's enter and exit, and the channel assignment all observable. Two
+things in the span are not:
+
+- **The tier map** is a local built between the tier import and the
+  fence, and CPython offers no observation point in between. It reaches
+  the phases eventually — the spine's differential compares the
+  `tier_order` keyword the execute phase receives — but by then three
+  distinct constants have already folded into three entries. So its
+  dict-literal property is pinned by a Go-only test: a repeated key keeps
+  the LAST index, and two equal tier constants produce a map with two
+  entries. The tiers are configuration strings; neither case is
+  hypothetical.
+- **The six rebinds** have no observation point anywhere in the span.
+  `project = ctx.project` is a local assignment, and the first thing that
+  reads it is the fence — a different chunk whose own probe pins exactly
+  this. What is left here is the SEAM between chunks, and it gets a
+  Go-only test because the port has been wrong about it once already.
+
+The scenario table's first row passes every keyword at its signature
+default and the second overrides all of them, so a default the port
+guessed wrong shows up as a disagreement in the recorded call rather than
+as a fixture nobody wrote.
+
+### The battery
+
+`tools/batteries/agentloop-head.json` — 85 mutations, two rounds:
+
+| round | killed | survived | did not build |
+|---|---|---|---|
+| 1 | 73 | 7 | 5 |
+| 2 | 84 | 0 (1 marked `equivalent`) | 0 |
+
+Round one's seven survivors were six fixture gaps and one equivalent, and
+the gaps are worth naming because four of them are the same shape: a
+fixture where two things that should differ happened to agree.
+
+- Two adjacent boolean keywords were both `true` in the
+  everything-overridden scenario, so a mutation that swapped them was
+  invisible. Every keyword being overridden is not the same as every
+  keyword being DISTINCT.
+- Nothing made `_initialize_loop` raise, nothing gave an early return an
+  empty status (which is what makes `is not None` different from
+  truthiness), and nothing made the scope's exit fail — alone or on top
+  of a failing body, which is where Python lets `__exit__`'s exception
+  replace the body's.
+
+The one equivalent is calling `exit()` after the scope's SETUP raised: a
+context manager whose `__enter__` raised does not exist, so no input
+reaches a state where the extra call does anything.
+
+`the-body-result-is-dropped` deserves its own line, because it survived
+for a reason that is neither a gap in the fixtures nor an equivalence: the
+probe's sentinel stops at the fence, so in THIS table the body never
+returns at all. That is a limit of the observation point, and the answer
+is a Go-only test that says so rather than a fixture pretending otherwise.
+
+All three of run_agent_loop's batteries were re-run after the harness
+changes below: **84 / 110 / 139 killed, eight documented equivalents,
+zero survivors.**
+
+### The harness caught itself again (P17, fifth-and-a-half)
+
+The "a missing captains_log is fatal" fixture passed on the port and NOT
+on CPython: the probe imports `captains_log` two lines earlier to patch
+`loop_id_scope`, and a meta-path finder is never consulted for a module
+already in `sys.modules`. The fixture ran the LIVE module and would have
+agreed with the port for the wrong reason. The fixture now evicts what it
+blocks.
+
+### The harness, again: one Blocker and a census
+
+Closing L59's module-absence half turned into three findings, each one
+larger than the last.
+
+**The Blocker.** Three probe templates each defined `class Blocker`, and
+the third copy — written this session, from the same shape — dropped the
+`sys.modules.pop`. It now lives in `pyprobe` as a prepended preamble with
+the eviction AND a proof: after installing the finder, `_pyprobe_block`
+IMPORTS each name and refuses to run if one still resolves. A fixture that
+cannot fail is worse than no fixture.
+
+**The two runners.** The fence and spine probes were being run with
+`exec.Command("python3", "…_probe.py.tpl", …)`, which is why the preamble
+never reached them. Both now go through `pyprobe.Probe` — which is where
+they should have been from the start, since `pyprobe`'s own doc opens by
+explaining that there were eight hand-rolled runners and what each of them
+got wrong.
+
+Routing them through the harness immediately found a latent one: the
+fence's write-fence fixture carries `~/c`, and BOTH engines expand it —
+the port with `os.UserHomeDir`, CPython with `Path.expanduser`. It had
+been comparing "whichever home each process happened to have", which
+agreed only because nothing sandboxed the probe. `HOME` is pinned in that
+test now, which is what makes the two sides the same question.
+
+**The census.** Ninety-seven `exec.Command("python3"` sites remain across
+about sixty-six test files. The consolidation `pyprobe` describes gave the
+eight a shared answer and never replaced the callers. That is the
+population the 648-row contamination came out of; a whole-suite run with
+`HOME` repointed showed the skills probe was the only site currently
+writing outside its own tree, so the rest is latent.
+
+Converting ninety-seven sites is a sweep and it is filed, not done.
+`internal/pyprobe/harness_guard_test.go` pins the number in the meantime,
+in the same idiom as this tree's other counting guards: a new direct site
+fails, and the fix is to use the harness rather than to bump the constant.

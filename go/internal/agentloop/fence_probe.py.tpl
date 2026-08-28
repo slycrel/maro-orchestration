@@ -32,29 +32,6 @@ class PartialModule(types.ModuleType):
         raise ImportError("no module")
 
 
-class Blocker:
-    """A meta-path finder that makes named modules genuinely unimportable.
-
-    A stub whose every attribute raises is NOT the same state. `import
-    container_exec as _ce` against such a stub SUCCEEDS — it binds the
-    module object, and the failure happens later, at the attribute, with
-    `_ce` bound. A module that is actually missing raises at the import
-    statement and leaves `_ce` unbound, which is what the refusal's
-    neutralisation lambdas close over.
-
-    The message is CPython's own, exactly: an operator searches for it.
-    """
-
-    def __init__(self, names):
-        self.names = set(names)
-
-    def find_spec(self, name, path=None, target=None):
-        if name in self.names:
-            raise ModuleNotFoundError("No module named %r" % name,
-                                      name=name)
-        return None
-
-
 class P:
     """A stand-in for pathlib.Path.
 
@@ -335,8 +312,7 @@ def run_one(sc):
             return 100.25
     al.time = FakeTime
 
-    blocker = Blocker(dead)
-    sys.meta_path.insert(0, blocker)
+    blocker = _pyprobe_block(dead)
 
     result = None
     reached = False
@@ -355,7 +331,7 @@ def run_one(sc):
     except ReachedDecompose:
         reached = True
     finally:
-        sys.meta_path.remove(blocker)
+        _pyprobe_unblock(blocker)
 
     return {"name": sc["name"], "calls": calls, "logs": logs,
             "reached_decompose": reached, "result": result,

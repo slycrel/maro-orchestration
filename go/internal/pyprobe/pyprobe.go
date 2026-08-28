@@ -136,6 +136,68 @@ if _real == _live or _os.path.commonpath([_real, _live]) == _live:
         % (_ws, _real, _live))
 `
 
+// blockerPreamble is the ONE way a probe makes a module unimportable.
+//
+// It is prepended to every probe because there were three hand-copies of
+// it, and the third lost a line. L59's tripwire already said what the line
+// was for — "prove the module is actually absent (pop + finder) rather
+// than stubbed" — and the head probe still shipped without it: a meta-path
+// finder is never consulted for a module already in sys.modules, and the
+// probe had imported captains_log two lines earlier to patch it. The
+// fixture ran the LIVE module and agreed with the port for the wrong
+// reason.
+//
+// So the eviction is not advice here, and neither is the proof: after
+// installing the finder this IMPORTS each name and refuses to continue if
+// one still resolves. A fixture that cannot fail is worse than no fixture.
+const blockerPreamble = `
+import importlib as _pyprobe_il, sys as _pyprobe_sys
+
+
+class _PyprobeBlocker:
+    """A meta-path finder that makes named modules genuinely unimportable.
+
+    A stub whose every attribute raises is a DIFFERENT state: the import
+    statement SUCCEEDS against it and the failure lands somewhere else,
+    with the name bound. The message is CPython's own, exactly, because
+    an operator searches for it.
+    """
+
+    def __init__(self, names):
+        self.names = set(names)
+
+    def find_spec(self, name, path=None, target=None):
+        if name in self.names:
+            raise ModuleNotFoundError("No module named %r" % name, name=name)
+        return None
+
+
+def _pyprobe_block(names):
+    """Block ` + "`names`" + `, and prove they are blocked. Returns the finder."""
+    names = list(names or [])
+    for _n in names:
+        _pyprobe_sys.modules.pop(_n, None)
+    _b = _PyprobeBlocker(names)
+    _pyprobe_sys.meta_path.insert(0, _b)
+    for _n in names:
+        try:
+            _pyprobe_il.import_module(_n)
+        except ModuleNotFoundError:
+            continue
+        except BaseException as _e:
+            raise SystemExit(
+                "pyprobe: blocking %r raised %s rather than "
+                "ModuleNotFoundError: %s" % (_n, type(_e).__name__, _e))
+        raise SystemExit(
+            "pyprobe: %r is STILL IMPORTABLE after blocking it — the "
+            "fixture that depends on it being gone cannot fail" % _n)
+    return _b
+
+
+def _pyprobe_unblock(_b):
+    _pyprobe_sys.meta_path.remove(_b)
+`
+
 // perCaseGuard is liveGuard for a probe that writes to MORE THAN ONE
 // workspace in a single invocation — a table-driven differential with a
 // fresh tree per case, which is the shape every metrics probe has.
@@ -260,6 +322,7 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	case p.Guard != "":
 		src = p.Guard + src
 	}
+	src = blockerPreamble + src
 	userDir := p.UserDir
 	if userDir == "" {
 		userDir = t.TempDir()

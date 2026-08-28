@@ -2467,7 +2467,9 @@ deliberate signal: a b64 field says "these bytes, not this text".
 
 ### L59 — Names imported together fail together, and a whole-module stub cannot see it
 
-*instances: 2 (2026-08-27, `_finalize_loop`; 2026-08-27, the execution fence)*
+*instances: 3 (2026-08-27, `_finalize_loop`; 2026-08-27, the execution
+fence; 2026-08-27, the head — and the third is the argument for closing
+it, see amendment 4)*
 
 Python bundles names per import statement:
 
@@ -2566,6 +2568,22 @@ twenty-four lines ABOVE it, outside every handler — a missing `llm`
 raises out of the whole function and the fence's guard is reachable only
 through a missing NAME. Deleting the fixture is correct; deleting it
 without the comment is how the next round re-adds it.
+
+**Amendment 4 (2026-08-27, the head): the tripwire below was already
+written and the third probe broke it anyway.** The head's "a missing
+captains_log is fatal" fixture passed on the port and NOT on CPython — the
+probe imports `captains_log` two lines earlier to patch `loop_id_scope`,
+and **a meta-path finder is never consulted for a module already in
+`sys.modules`**. The fixture ran the LIVE module and would have agreed
+with the port for the wrong reason.
+
+The fence's and the spine's Blockers both carry the `sys.modules.pop`.
+The head's, written fresh from the same shape, did not. That is three
+hand-copies of one class and the third losing a line, which is not a
+discipline problem — it is a missing abstraction. `pyprobe.Run` already
+prepends Python to a probe (`liveGuard`, `perCaseGuard`); the Blocker
+belongs there too, with the pop and an assertion that the named module
+really is gone, so a fourth copy cannot exist.
 
 **Tripwire.** Count the importable names the ported function reaches. If
 the differential has fewer failure fixtures than that, the missing ones
