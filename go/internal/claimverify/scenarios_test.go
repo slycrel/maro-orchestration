@@ -165,6 +165,10 @@ func extractionScenarios() []cvSpec {
 		// --- extract_file_claims: strip, skip, dedup ------------------
 		fc("a-claim-stripped-of-punctuation", "see handle.py; and more"),
 		fc("a-claim-stripped-of-a-trailing-colon", "see handle.py: here"),
+		// The strip set has eight characters and only ONE of them can be
+		// inside a match: the classes admit `.`, and nothing else it names.
+		// A LEADING dot is where it shows.
+		fc("a-leading-dot-claim", "the .hidden.py file"),
 		fc("a-skip-name-stdlib", "we changed os.py and sys.py"),
 		fc("a-skip-name-readme", "we changed README.md"),
 		fc("a-skip-name-changelog", "we changed CHANGELOG.md"),
@@ -228,6 +232,18 @@ func extractionScenarios() []cvSpec {
 			"alpha_one function method beta_two"),
 		sy("three-context-matches-in-a-row",
 			"alpha_one function beta_two method gamma_three class"),
+		// Alternative TWO first, then alternative one whose symbol sits
+		// INSIDE it: the scan must resume past the whole of the first
+		// match, or it re-finds `alpha_one method` from the middle and
+		// loses `beta_two` to the boundary it then consumes.
+		sy("an-alternative-two-match-that-resumes-too-early",
+			"function alpha_one method beta_two"),
+		// One word earlier and it is a different match entirely:
+		// alternative ONE wins at position 0 with `the function`, so
+		// alternative two never runs and `beta_two` is out of reach on
+		// both engines.
+		sy("a-word-before-a-keyword-forms-alternative-one",
+			"the function alpha_one method beta_two"),
 		sy("the-context-pattern-is-case-insensitive",
 			"the alpha_one FUNCTION is fine"),
 		sy("the-context-pattern-uppercased-prefix", "the METHOD beta_two is fine"),
@@ -292,6 +308,10 @@ func extractionScenarios() []cvSpec {
 		ss("a-symbol-report-with-nothing-in-it", symRep(jl(), jl(), jl())),
 		ss("a-symbol-report-with-a-hallucination",
 			symRep(jl("alpha_one"), jl(), jl("alpha_one"))),
+		ss("a-symbol-report-with-five-not-found",
+			symRep(jl(), jl(),
+				jl("alpha_one", "beta_two", "gamma_three", "delta_four",
+					"epsilon_five"))),
 		ss("a-symbol-report-fully-verified",
 			symRep(jl("alpha_one"), jl("alpha_one"), jl())),
 	}

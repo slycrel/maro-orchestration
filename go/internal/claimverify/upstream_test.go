@@ -199,10 +199,17 @@ func TestTheFilePathPatternMatchesUpstream(t *testing.T) {
 		t.Errorf("prefix order: upstream %v, port %v",
 			prefixes, filePathDirPrefixes)
 	}
-	// The order is only load-bearing if the scanner honours it, so say so
-	// with the case that proves it: `tests` matches the first four
-	// characters of `test/` and then fails on the slash, and `re`
-	// backtracks into the singular.
+	// The EXPANSION is what a fixture can prove — `tests` matches the
+	// first four characters of `test/`, fails on the slash, and `re`
+	// backtracks into the singular, so dropping either half loses real
+	// claims. The ORDER is not: every prefix must be followed by a
+	// literal `/`, so at any position at most one of a `foo`/`foos` pair
+	// can match, and no input distinguishes the two orders. The same
+	// goes for the extension list below, where no extension is a prefix
+	// of another. That is precisely why the order is pinned HERE, by a
+	// derivation from upstream, rather than left to the differential:
+	// the battery marks both swaps `equivalent`, and this test is the
+	// only thing that still kills them.
 	if got := findFilePaths("see test/x.py"); len(got) != 1 ||
 		got[0] != "test/x.py" {
 		t.Errorf("prefix backtracking broke: %v", got)

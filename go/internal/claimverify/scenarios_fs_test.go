@@ -106,6 +106,20 @@ func filesystemScenarios() []cvSpec {
 				f("pyproject.toml", "")}},
 		// `Path.exists()` asks nothing about the TYPE, so a file named
 		// `src` and a directory named `pyproject.toml` both answer yes.
+		// The cwd is checked BEFORE its parents, so a marker in both
+		// answers with the nearer one. Without the cwd in the list the
+		// walk still terminates — on the parent — which is why the
+		// answer, not the termination, is what this pins.
+		{Name: "the-walk-prefers-the-cwd-over-its-parent", Kind: "infer_root",
+			Cwd: "a/b", LlmImportFails: true,
+			Tree: []cvEntry{d("a/b"), f("a/b/pyproject.toml", ""),
+				f("a/pyproject.toml", "")}},
+		// Either marker alone terminates the walk, so each needs an
+		// ancestor to be found IN — a marker in the cwd is
+		// indistinguishable from the `return cwd` fallback.
+		{Name: "the-walk-finds-src-in-an-ancestor", Kind: "infer_root",
+			Cwd: "a/b", LlmImportFails: true,
+			Tree: []cvEntry{d("a/b"), d("src")}},
 		ir("a-src-that-is-a-file", f("src", "not a package")),
 		ir("a-pyproject-that-is-a-directory", d("pyproject.toml")),
 		// …but it FOLLOWS symlinks, so a dangling one answers no.
@@ -205,6 +219,25 @@ func filesystemScenarios() []cvSpec {
 			f("real/inside.py", "def mu_twelve():\n"), ln("src", "real")),
 		si("a-symlinked-subdirectory-of-src", d("src"), d("other"),
 			f("other/inside.py", "def nu_thirteen():\n"), ln("src/sub", "../other")),
+		// A symlinked search dir whose target is INSIDE the root proves
+		// nothing: the root pass rglobs the target directly. These two
+		// point OUT of the project, which is the only place the follow
+		// and the no-follow disagree.
+		{Name: "a-src-symlinked-outside-the-project", Kind: "symbol_index",
+			Root: "proj", LlmImportFails: true,
+			Tree: []cvEntry{d("proj"), d("away"),
+				f("away/x.py", "def upsilon_17():\n"),
+				ln("proj/src", "../away")}},
+		{Name: "a-tests-symlinked-outside-the-project", Kind: "symbol_index",
+			Root: "proj", LlmImportFails: true,
+			Tree: []cvEntry{d("proj"), d("away"),
+				f("away/y.py", "def chi_19():\n"),
+				ln("proj/tests", "../away")}},
+		{Name: "a-symlinked-subdirectory-pointing-outside",
+			Kind: "symbol_index", Root: "proj", LlmImportFails: true,
+			Tree: []cvEntry{d("proj/src"), d("away"),
+				f("away/x.py", "def phi_18():\n"),
+				ln("proj/src/sub", "../../away")}},
 		{Name: "a-symbol-index-of-a-missing-root", Kind: "symbol_index",
 			Root: "gone", LlmImportFails: true,
 			Tree: []cvEntry{f("src/a.py", "def xi_fourteen():\n")}},

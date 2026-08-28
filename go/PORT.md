@@ -17524,8 +17524,25 @@ The directory-prefix alternation backtracks too, and in a way a naive
 port loses: `tests?` matches the first four characters of `test/` and
 then fails on the slash, and `re` retries with the shorter alternative
 before moving on. So `filePathDirPrefixes` is the `s?` alternation
-EXPANDED into the order `re` tries it — `tests`, `test`, `docs`, `doc`,
-… — and a failed tail continues the loop rather than returning.
+EXPANDED — `tests`, `test`, `docs`, `doc`, … — and dropping either half
+of a pair loses real claims.
+
+The battery then made the weaker half of that sentence retract itself.
+The expansion is load-bearing; its ORDER is not. Every prefix must be
+followed by a literal `/`, and the only pairs in the list differ by a
+trailing `s` — so at any position at most one of the two can be followed
+by that slash, and the two orders cannot disagree. The same argument
+retires the `continue`-after-a-failed-tail: the loop never reaches a
+second candidate, because a second candidate cannot match. Both are in
+the battery as documented equivalents rather than quietly deleted, and
+`filePathExts` earns a third: no extension in that list is a prefix of
+another, so unlike `_PATH_TOKEN`'s `json`/`jsonl` in Phase O, its try
+order is unobservable too.
+
+This is the Phase O extension-order retraction arriving again, one
+tranche later, in the same costume: a plausible ordering claim,
+inherited from the shape of the upstream pattern, that no input can
+actually observe. The mutation is what asks the question.
 
 The three symbol patterns have no lookbehind and stay regexes, but two of
 them have `\b`s, and pytext's `WordStart`/`WordEnd` CONSUME the boundary
@@ -17656,3 +17673,63 @@ rather than plausible:
 `Path.exists()` asks nothing about the TYPE, so a FILE named `src` and a
 DIRECTORY named `pyproject.toml` both satisfy the upward walk — and both
 are scenarios, next to the dangling symlink that does not.
+
+### The battery, and three arguments it refused
+
+123 mutations, converged at r3: 107 killed, 16 documented equivalents, no
+survivors, no build breaks. r1 was 94/13/1, r2 was 104/1. What the two
+extra rounds actually corrected was not the code — it was three claims I
+had written into the spec as equivalences.
+
+**The ordering claims were right and killed anyway, by the guard rather
+than by an input.** `filePathDirPrefixes` and `filePathExts` both LOOK
+order-sensitive and are not: every prefix is followed by a mandatory `/`,
+so at any position at most one of a `foo`/`foos` pair can match, and no
+extension in the list is a prefix of another. No fixture can tell the two
+orders apart. Both swaps are killed regardless — by
+`TestTheFilePathPatternMatchesUpstream`, which derives the port's tables
+FROM the upstream literal and compares them in order. That is the
+strongest argument yet for mechanical derivation over pinned copies: it
+holds a property that behaviour cannot observe, and it is the only thing
+in the tranche that does.
+
+This is the Phase O extension-order retraction arriving again, one tranche
+later, in the same costume — a plausible ordering claim inherited from the
+shape of the upstream pattern. The lesson that generalises: **an
+alternation-order claim is only load-bearing when one alternative is a
+PREFIX of another.** `_PATH_TOKEN`'s `json`/`jsonl` is; neither of these
+lists is.
+
+**One equivalence was simply wrong, and the fixture that refuted it had
+been written for something else.** I argued that `src` and `tests` in
+`_build_symbol_index`'s search list are redundant, because the project
+root is searched last and its `rglob` covers the whole tree. It does not:
+`rglob` will not descend into a SYMLINKED directory, so a `src` that
+links outside the project is reachable ONLY by being named in that list,
+where `is_dir()` follows the link and the glob starts inside it. The
+fixture that caught it — a symlinked `src` pointing out of the project —
+had been added a round earlier for `the-search-dir-is-not-followed`. Its
+`tests` twin is now there too, and both rows are killable.
+
+That is the same shape as the tranche's other fixture lesson, and it is
+worth stating on its own: **a symlink pointing INSIDE the project proves
+nothing**, because some other pass reaches the target directly. Four of
+r1's thirteen survivors were fixtures that had been written that way.
+
+**One survivor was a mis-designed fixture, not a wrong argument.**
+`the-context-extent-is-always-the-whole-match` needs a text where
+alternative TWO matches first. `the function alpha_one method beta_two`
+is not one: alternative ONE wins at position 0 with `the function`. Drop
+the leading word and it is — and then the mutant's one-rune resume
+re-finds `alpha_one method` from the middle and loses `beta_two` to the
+boundary it consumes. Both texts are scenarios now; the second is there
+to say why the first does not work.
+
+And one claim the battery upheld, which is worth recording because it
+retires a comment: `scanBoundaried`'s extent group is NOT load-bearing
+for these three patterns. The consumed trailing boundary is by definition
+a non-word character, and every alternative begins with a word character,
+so no match can start where the boundary sat. The group stays — it is
+what `m.end()` means in Python, and a wider trailing context would need
+it — but it is marked `equivalent` rather than defended with a claim no
+input supports.

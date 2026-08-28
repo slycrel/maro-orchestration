@@ -178,6 +178,13 @@ func ExtractFileClaims(text string) []string {
 		// `str.strip(" .,;:\"'`")` is a CHARACTER SET, not a prefix: it
 		// eats any run of those from both ends, which is how a claim
 		// picked up out of prose loses its sentence punctuation.
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): eight
+		// characters are named and only ONE of them can ever be inside a
+		// match — the two classes admit `.`, and neither admits a space,
+		// comma, semicolon, colon, quote or backtick. A match cannot END
+		// on a dot either (it ends on an extension), so only a LEADING
+		// dot is ever stripped, and Trim, TrimLeft and a set without the
+		// semicolon all agree on every claim the pattern can produce.
 		p = strings.Trim(p, " .,;:\"'`")
 		name := pypath.Name(p)
 		if skipNames[name] || skipPatterns[p] {
@@ -323,6 +330,13 @@ func matchDottedTailClass(r []rune, j int, exts []string,
 		}
 		for _, ext := range exts {
 			stop := d + 1 + len([]rune(ext))
+			// EQUIVALENT MUTANT (kept, marked `equivalent`): bounding on
+			// `end` rather than on len(r) cannot change an answer,
+			// because every extension character is a LETTER and every
+			// letter is in the class — so a match that ran past the
+			// maximal run would need r[end] to be a letter, which is
+			// exactly what stopped the run. The bound is written on the
+			// run because the run is what the Python's `+` matched.
 			if stop > end || string(r[d+1:stop]) != ext {
 				continue
 			}
@@ -504,6 +518,15 @@ func ExtractSymbolClaims(text string) []string {
 		// Alternative one consumed its trailing boundary; group 1 is its
 		// real extent. Alternative two has no trailing boundary, so the
 		// whole match is the extent.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): resuming from
+		// the END of alternative one instead — boundary included — finds
+		// the same symbols. The consumed character is by definition a
+		// NON-word character, and every alternative begins with a word
+		// character, so no match can start where the boundary sat. The
+		// group is kept because it is what `m.end()` means in Python,
+		// and because a pattern whose trailing context were WIDER than
+		// one character would need it.
 		if loc[2] >= 0 {
 			return loc[3]
 		}
@@ -637,6 +660,13 @@ func treeIndex(root string) (map[string]bool, map[string]bool) {
 	// `os.walk` is top-down and iterative over a queue it can be pruned
 	// through; the recursion here is equivalent because `dirnames[:]` is
 	// only ever narrowed, never reordered or extended.
+	//
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): dropping the
+	// upward propagation of the refusal below changes nothing. `walk`
+	// returns false ONLY when `visited >= indexMaxDirs`, and that test
+	// is at its own entry — so once one call refuses, every later call
+	// refuses immediately on its own. The propagation saves recursion,
+	// not answers.
 	var walk func(dir string) bool
 	walk = func(dir string) bool {
 		if visited >= indexMaxDirs {
@@ -652,6 +682,12 @@ func treeIndex(root string) (map[string]bool, map[string]bool) {
 		// skips the RELPATHS for that directory while KEEPING the
 		// basenames it just added. The order of those two statements is
 		// the behaviour.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): the ValueError
+		// arm cannot fire under this walk, because every directory
+		// reached it by descending FROM the root. It is spelled out
+		// because the arm exists upstream and a reader is entitled to
+		// see it answered.
 		if rel, ok := relativeTo(dir, root); ok {
 			prefix := ""
 			if rel != "." {
@@ -734,6 +770,11 @@ func relativeTo(p, root string) (string, bool) {
 		// `relative_to` is PURELY LEXICAL and refuses to walk upward; Go's
 		// Rel is happy to answer with `..`, which would silently invent a
 		// relpath outside the tree.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): no caller can
+		// reach the upward case today, for the same reason the
+		// ValueError arm above cannot. The two tests are the whole
+		// reason the two engines agree if one ever does.
 		return "", false
 	}
 	return filepath.ToSlash(rel), true
@@ -751,6 +792,20 @@ func buildSymbolIndex(root string) map[string]bool {
 	// `project_root` is searched LAST and covers `src` and `tests` again.
 	// The dedup is on the SEARCH DIR, not on the files, so those two are
 	// scanned twice — harmless into a set, and faithfully so.
+	//
+	// The first two entries look redundant — the root pass rglobs the
+	// whole tree — and they are not. `rglob` does not descend into a
+	// SYMLINKED directory, so a `src` or `tests` that is a link to
+	// somewhere outside the project is reached ONLY by being named here,
+	// where `is_dir()` follows the link and the glob starts inside it.
+	// The battery found this by killing a row that had been reasoned
+	// into an equivalence.
+	//
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): the seen-set is a
+	// different matter. It dedups on the SEARCH DIR, and the result is a
+	// SET, so a second scan of the same directory adds the same symbols
+	// again. It is faithful to the Python, which also keeps it, but no
+	// answer depends on it.
 	searchDirs := []string{pypath.Join(root, "src"),
 		pypath.Join(root, "tests"), root}
 	seen := map[string]bool{}
@@ -765,6 +820,13 @@ func buildSymbolIndex(root string) map[string]bool {
 			if rerr != nil {
 				// `except OSError: continue` — a directory named `*.py`
 				// is yielded by rglob and lands here.
+				//
+				// EQUIVALENT MUTANT (kept, marked `equivalent`): falling
+				// through does the same thing, because os.ReadFile
+				// returns NO data alongside its error and decoding
+				// nothing yields no lines. The branch is spelled because
+				// the Python spells it, and because a reader needs to
+				// see the directory case answered.
 				continue
 			}
 			// `errors="ignore"` drops undecodable bytes rather than
@@ -865,6 +927,10 @@ func VerifySymbolClaims(text string, projectRoot *string, d Deps) SymbolReport {
 		// The early return is not an optimisation: it means an empty
 		// claim list never builds the index, so a text with no symbol
 		// claims costs nothing even under a huge tree.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): the report it
+		// returns is the same one the loop below would build from no
+		// claims, so only the COST differs — and cost is the reason.
 		return SymbolReport{RawClaims: []string{}, Verified: []string{},
 			NotFound: []string{}}
 	}
@@ -923,8 +989,15 @@ func VerifyFileClaims(text string, projectRoot *string, d Deps) ClaimReport {
 				names, relpaths = treeIndex(root)
 				indexed = true
 			}
+			// EQUIVALENT MUTANT (kept, marked `equivalent`): this arm
+			// runs only when the claim has NO directory component, and
+			// `pypath.Name` is the identity on such a claim. The call is
+			// here because the Python says `claim_path.name`.
 			found = names[pypath.Name(claim)]
 		} else if !strings.HasPrefix(claim, "/") {
+			// EQUIVALENT MUTANT (kept, marked `equivalent`): see
+			// claimHasNoDirectory — no claim is absolute, so this test
+			// admits every claim that reaches it.
 			// A relative claim WITH a directory component: the goal may
 			// have pointed the worker into a subdirectory, so
 			// `tests/test_ledger.py` is real even though the root only
@@ -932,6 +1005,12 @@ func VerifyFileClaims(text string, projectRoot *string, d Deps) ClaimReport {
 			// must be a suffix — `wrong_dir/module.py` still cannot match
 			// `src/module.py`.
 			norm := normpath(claim)
+			// EQUIVALENT MUTANT (kept, marked `equivalent`): a claim
+			// normalising to `..` or `/` is searched for among relative
+			// paths a walk built from the root, none of which can begin
+			// with either — so dropping the guard finds nothing and
+			// lands the claim in not_found exactly where the guard
+			// leaves it. Upstream refuses explicitly, and so does this.
 			if !strings.HasPrefix(norm, "..") &&
 				!strings.HasPrefix(norm, "/") {
 				if !indexed {
@@ -985,10 +1064,22 @@ func VerifyFileClaims(text string, projectRoot *string, d Deps) ClaimReport {
 func claimHasNoDirectory(claim string) bool {
 	if strings.HasPrefix(claim, "/") {
 		// An absolute claim's parent is the root, never `.`.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): no claim the
+		// pattern produces is absolute. The lookbehind does not block a
+		// leading `/`, but no alternative can MATCH one — the bare
+		// classes exclude it and the prefixed branch opens on a known
+		// directory name.
 		return false
 	}
 	n := 0
 	for _, p := range strings.Split(claim, "/") {
+		// EQUIVALENT MUTANT (kept, marked `equivalent`) on the `.` half:
+		// no producible claim has a `.` component that moves the count
+		// across the `<= 1` threshold — a bare name has no slash at all,
+		// and anything with a slash already has two real components.
+		// `./x.py` is not extractable, because the bare alternative's
+		// class has no `/`.
 		if p == "" || p == "." {
 			continue
 		}

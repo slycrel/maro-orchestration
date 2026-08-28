@@ -111,8 +111,7 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-prefix-pair-is-tried-the-other-way-round",
       "old": "\t\"src\", \"tests\", \"test\", \"docs\", \"doc\", \"lat.md\",",
-      "new": "\t\"src\", \"test\", \"tests\", \"docs\", \"doc\", \"lat.md\",",
-      "equivalent": "Every prefix must be followed by a literal `/`, and the only pairs here differ by a trailing `s` \u2014 so at any position at most ONE of them can be followed by the slash, and the two orders cannot disagree. The EXPANSION is load-bearing (see `the-singular-prefix-is-gone`); its order is not."
+      "new": "\t\"src\", \"test\", \"tests\", \"docs\", \"doc\", \"lat.md\","
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -136,8 +135,7 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-extension-pair-is-tried-the-other-way-round",
       "old": "\t\"py\", \"md\", \"json\", \"yaml\", \"yml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\",",
-      "new": "\t\"py\", \"md\", \"json\", \"yml\", \"yaml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\",",
-      "equivalent": "No extension in this list is a PREFIX of another, so at a given dot position at most one can match and the try order cannot be observed. (`_PATH_TOKEN` in the receipts tranche has `json`/`jsonl` and IS order-sensitive; this list is not.)"
+      "new": "\t\"py\", \"md\", \"json\", \"yml\", \"yaml\", \"sh\", \"txt\", \"toml\", \"cfg\", \"ini\","
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -155,19 +153,33 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-strip-set-loses-the-semicolon",
       "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
-      "new": "\t\tp = strings.Trim(p, \" .,:\\\"'`\")"
+      "new": "\t\tp = strings.Trim(p, \" .,:\\\"'`\")",
+      "equivalent": "Only ONE of the eight named characters can be inside a match: the two classes admit `.`, and neither admits a space, comma, semicolon, colon, quote or backtick. Every other member of the set is unreachable, so removing one of them cannot change a claim."
     },
     {
       "file": "internal/claimverify/claimverify.go",
       "name": "the-strip-is-a-prefix-cut",
       "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
-      "new": "\t\tp = strings.TrimLeft(p, \" .,;:\\\"'`\")"
+      "new": "\t\tp = strings.TrimLeft(p, \" .,;:\\\"'`\")",
+      "equivalent": "A match cannot END on a stripped character: it ends on an extension. Only a LEADING dot is ever removed, so trimming both ends and trimming the left agree on every producible claim."
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-strip-is-a-suffix-cut",
+      "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
+      "new": "\t\tp = strings.TrimRight(p, \" .,;:\\\"'`\")"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
+      "name": "the-strip-loses-the-dot",
+      "old": "\t\tp = strings.Trim(p, \" .,;:\\\"'`\")",
+      "new": "\t\tp = strings.Trim(p, \" ,;:\\\"'`\")"
     },
     {
       "file": "internal/claimverify/claimverify.go",
       "name": "the-skip-name-is-the-whole-claim",
       "old": "\t\tif skipNames[name] || skipPatterns[p] {",
-      "new": "\t\tif skipNames[p] || skipPatterns[p] {"
+      "new": "\t\t_ = name\n\t\tif skipNames[p] || skipPatterns[p] {"
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -233,7 +245,7 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "a-failed-prefix-tail-abandons-the-alternation",
       "old": "\t\tif n := matchDottedTail(r, j+1, filePathExts); n > 0 {\n\t\t\treturn j + 1 + n - i\n\t\t}\n\t}\n\treturn 0",
-      "new": "\t\treturn matchDottedTail(r, j+1, filePathExts) + j + 1 - i\n\t}\n\treturn 0",
+      "new": "\t\tif n := matchDottedTail(r, j+1, filePathExts); n > 0 {\n\t\t\treturn j + 1 + n - i\n\t\t}\n\t\treturn 0\n\t}\n\treturn 0",
       "equivalent": "At most one prefix can match at a given position: the pairs differ by a trailing `s`, and both spellings cannot be followed by the same `/`. So the loop never reaches a second candidate after a tail failure, and continuing is indistinguishable from returning."
     },
     {
@@ -252,7 +264,8 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-extension-may-run-past-the-class",
       "old": "\t\t\tif stop > end || string(r[d+1:stop]) != ext {",
-      "new": "\t\t\tif stop > len(r) || string(r[d+1:stop]) != ext {"
+      "new": "\t\t\tif stop > len(r) || string(r[d+1:stop]) != ext {",
+      "equivalent": "Every extension character is a LETTER and every letter is in the class, so a match running past the maximal run would need r[end] to be a letter \u2014 which is exactly what would have kept the run going. The bound is written on the run because the run is what the Python's `+` matched."
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -318,7 +331,8 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-context-extent-includes-the-consumed-boundary",
       "old": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[3]\n\t\t}\n\t\treturn loc[1]",
-      "new": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[1]\n\t\t}\n\t\treturn loc[1]"
+      "new": "\t\tif loc[2] >= 0 {\n\t\t\treturn loc[1]\n\t\t}\n\t\treturn loc[1]",
+      "equivalent": "The consumed character is by definition a NON-word character, and every alternative begins with a word character \u2014 so no match can start where the boundary sat, and resuming from the boundary or from just past it finds the same set. The group is kept because it is what `m.end()` means in Python, and because a wider trailing context would need it."
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -500,6 +514,12 @@
     },
     {
       "file": "internal/claimverify/claimverify.go",
+      "name": "the-src-directory-is-not-searched",
+      "old": "\tsearchDirs := []string{pypath.Join(root, \"src\"),\n\t\tpypath.Join(root, \"tests\"), root}",
+      "new": "\tsearchDirs := []string{pypath.Join(root, \"tests\"), root}"
+    },
+    {
+      "file": "internal/claimverify/claimverify.go",
       "name": "the-search-dir-dedup-is-gone",
       "old": "\t\tif err != nil || !st.IsDir() || seen[dir] {\n\t\t\tcontinue\n\t\t}\n\t\tseen[dir] = true",
       "new": "\t\tif err != nil || !st.IsDir() {\n\t\t\tcontinue\n\t\t}\n\t\tseen[dir] = true",
@@ -515,7 +535,8 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-read-failure-is-not-tolerated",
       "old": "\t\t\tdata, rerr := os.ReadFile(py)\n\t\t\tif rerr != nil {",
-      "new": "\t\t\tdata, rerr := os.ReadFile(py)\n\t\t\tif rerr == nil && false {"
+      "new": "\t\t\tdata, rerr := os.ReadFile(py)\n\t\t\tif rerr == nil && false {",
+      "equivalent": "os.ReadFile returns NO data alongside its error, and decoding nothing yields no lines \u2014 so falling through does exactly what `continue` does. The branch is spelled because the Python spells an `except OSError`, and a reader needs the directory-named-`*.py` case answered where it happens."
     },
     {
       "file": "internal/claimverify/claimverify.go",
@@ -657,7 +678,8 @@
       "file": "internal/claimverify/claimverify.go",
       "name": "the-empty-claim-list-still-builds-the-index",
       "old": "\tif len(claims) == 0 {",
-      "new": "\tif len(claims) < 0 {"
+      "new": "\tif len(claims) < 0 {",
+      "equivalent": "The report the early return hands back is the same one the loop below would build from no claims, so only the COST differs \u2014 and the cost is the whole point: an empty claim list never walks the tree, however large it is."
     },
     {
       "file": "internal/claimverify/claimverify.go",
