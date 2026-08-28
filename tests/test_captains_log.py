@@ -1107,6 +1107,64 @@ class TestRotation:
         # 50 fill + 2 triggers + 2 LOG_ROTATED entries, nothing lost
         assert total == 54
 
+    def test_archive_published_atomically(self, _tmp_log, tmp_path,
+                                          monkeypatch):
+        """R2-6 must-detect: the ARCHIVE was written with truncating
+        write_text at its final glob-visible name — _all_log_paths() globs
+        captains_log.*.jsonl without the writer lock, so historical readers
+        (query_log/timeline) could see a partial archive. The archive's
+        final name may only ever appear via os.replace of a complete temp
+        (whose mkstemp name can never match the glob)."""
+        import fnmatch
+        import pathlib
+
+        import file_lock
+
+        self._fill(50)
+        live = _tmp_log.resolve()
+
+        def _is_glob_visible(p):
+            return fnmatch.fnmatch(Path(p).name, "captains_log.*.jsonl") \
+                and Path(p).resolve() != live
+
+        archive_write_texts = []
+        real_write_text = pathlib.Path.write_text
+
+        def _wt_spy(self_path, *args, **kwargs):
+            if _is_glob_visible(self_path):
+                archive_write_texts.append(self_path)
+            return real_write_text(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "write_text", _wt_spy)
+
+        replaces = []
+        real_replace = file_lock.os.replace
+
+        def _rp_spy(src, dst, *a, **k):
+            # The temp being promoted must never itself match the glob
+            # (a reader could have globbed it mid-write).
+            assert not _is_glob_visible(src)
+            replaces.append(Path(dst))
+            return real_replace(src, dst, *a, **k)
+
+        monkeypatch.setattr(file_lock.os, "replace", _rp_spy)
+
+        with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger",
+                      summary="tips over")
+
+        archives = list(tmp_path.glob("captains_log.*.jsonl"))
+        assert len(archives) == 1
+        # The final glob-visible archive name was never write_text'd...
+        assert not archive_write_texts
+        # ...it was the target of an os.replace (complete content promoted).
+        assert any(d.resolve() == archives[0].resolve() for d in replaces)
+        # And the published archive is complete valid JSONL.
+        lines = [l for l in archives[0].read_text().splitlines() if l.strip()]
+        assert len(lines) == 41  # (50 fill + trigger) - 10 retained
+        for l in lines:
+            json.loads(l)
+
 
 # ---------------------------------------------------------------------------
 # Audience lanes (2026-07-29 dual-contract decree)

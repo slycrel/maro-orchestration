@@ -680,7 +680,19 @@ def _maybe_rotate() -> None:
             while archive.exists():  # same-second rotation must not overwrite
                 n += 1
                 archive = path.with_name(f"captains_log.{stamp}-{n}.jsonl")
-            archive.write_text("\n".join(head) + "\n", encoding="utf-8")
+            # atomic_write for the ARCHIVE too (R2-6): _all_log_paths()
+            # globs captains_log.*.jsonl without the writer lock, so a
+            # truncating write_text at the final glob-visible name let
+            # historical readers see a partial archive. atomic_write's temp
+            # (mkstemp, prefix "<name>.tmp" + random [A-Za-z0-9_] suffix)
+            # can never end in ".jsonl", so it can never match the glob.
+            # Known quirk, accepted: a crash BETWEEN this archive publish
+            # and the live-file swap below leaves the head rows both in the
+            # archive and in the live file, so the next rotation duplicates
+            # them into a second archive. Readers already dedupe nothing —
+            # it is honest duplication, not loss; a transaction marker is
+            # out of scope.
+            atomic_write(archive, "\n".join(head) + "\n")
             # atomic_write, not write_text (C0.5): readers don't take the
             # writer lock, so a truncate-in-place rewrite exposed an
             # empty/partial live log mid-rotation. os.replace swaps in the
