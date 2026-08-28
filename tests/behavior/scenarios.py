@@ -8,6 +8,15 @@ ingress, rotation, ...) live as plain tests in their subsystem modules —
 they pin writer APIs a goal cannot cheaply reach.
 
 Contract citations refer to docs/CONTRACTS.md entries (B1-B12).
+
+The scripted-adapter protocol is PART of each row's meaning (a non-Python
+harness must reproduce it, not just the rows): responses are consumed in
+order; when the table is exhausted, tool-bearing requests replay the last
+tool-bearing response and plain requests replay the last plain response;
+a "steps" row renders as a JSON array string; a "tool" row is honored only
+when the request offers tools; the plain-call default body is
+'{"passed": true}'. See ScriptedAdapter in harness.py — the one normative
+implementation until the protocol is extracted to neutral data (Phase 2).
 """
 
 from harness import GoalScenario
@@ -29,19 +38,28 @@ GOAL_SCENARIOS = [
         expect_status="done",
         expect_outcome={"task_type": "now", "status": "done"},
         expect_outcome_unjudged=True,
+        expect_success_class="done-unverified",
         contracts="B11, B3, B5, B6, B8, B9",
     ),
 
-    # (2) AGENDA happy path: plan → steps → done. Run dir skeleton
-    # source/build/artifact, metadata lifecycle fields incl. the loops
-    # lineage list (B3), status from the registered vocabulary, run card
-    # curated (B5), outcome row recorded (B6).
+    # (2) AGENDA happy path: clarity → plan → steps → done. Run dir
+    # skeleton source/build/artifact, metadata lifecycle fields incl. the
+    # loops lineage list (B3), status from the registered vocabulary, run
+    # card curated (B5), outcome row recorded (B6).
+    #
+    # The FIRST agenda call is the goal-clarity assessor (it runs unless
+    # yolo is configured) — the original table omitted it, every later row
+    # shifted one call, the scripted plan never reached decompose, and the
+    # engine silently fell back to a single-step plan. Found when
+    # test_agenda_flow_reaches_durable_evidence started asserting the FLOW
+    # (scripted results must reach durable evidence), not just the object.
     GoalScenario(
         id="agenda-happy-path",
         goal="Summarize the quarterly numbers into a short report",
         lane="agenda",
         project="behavior-happy",
         responses=[
+            {"content": '{"clear": true}'},
             {"steps": ["Collect the numbers", "Write the summary"]},
             {"tool": "complete_step", "result": "Collected 12 rows of numbers"},
             {"tool": "complete_step", "result": "Summary written: revenue flat"},
@@ -50,6 +68,7 @@ GOAL_SCENARIOS = [
         expect_status="done",
         expect_meta_keys=["loops"],
         expect_outcome={"status": "done"},
+        expect_success_class="done-unverified",
         contracts="B3, B5, B6",
     ),
 
@@ -104,11 +123,13 @@ GOAL_SCENARIOS = [
         lane="agenda",
         project="behavior-stuck",
         responses=[
+            {"content": '{"clear": true}'},
             {"steps": ["Attempt the impossible fetch"]},
             {"tool": "flag_stuck", "reason": "resource is permanently unavailable"},
         ],
         expect_status="stuck",
         expect_outcome={"status": "stuck"},
+        expect_success_class="failed",
         contracts="B3, B5, B6",
     ),
 ]

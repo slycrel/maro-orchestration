@@ -28,7 +28,10 @@ def test_outcome_row_tristate_and_omit_when_empty():
     for key in ("outcome_id", "goal", "summary", "status", "recorded_at",
                 "task_type"):
         assert key in row, f"required key {key} missing (B6)"
-    assert len(row["outcome_id"]) == 8, "outcome_id is an 8-hex uuid (B6)"
+    import re
+    assert re.fullmatch(r"[0-9a-f]{8}", row["outcome_id"]), (
+        "outcome_id is an 8-hex uuid (B6)"
+    )
     assert row["status"] == "done"
     assert "goal_achieved" not in row, "unjudged row must omit goal_achieved (A6)"
     # Omit-when-empty: empty join keys stay off the row entirely.

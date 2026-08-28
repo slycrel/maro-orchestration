@@ -45,13 +45,14 @@ def test_card_identity_echo_and_curation_namespace():
     assert card["goal_achieved"] is True
 
     # Writer-private namespace: the curator records its own execution
-    # provenance under `_curation` (underscore keys are writer-private —
-    # readers may not depend on their contents, but the namespace itself
-    # is a registered card fact) (B5).
+    # provenance under `_curation`. B5 registers the NAMESPACE as a card
+    # fact but declares underscore-prefixed keys writer-private — no reader
+    # (this suite included) may depend on their contents, so the only
+    # cross-engine assertion is that the namespace, when present, is an
+    # object. (An earlier draft pinned `completed`/`failed` inside it —
+    # exactly the doc/code mismatch B5 forbids; review round 1 caught it.)
     cur = card.get("_curation")
     assert isinstance(cur, dict)
-    assert isinstance(cur.get("completed"), list)
-    assert isinstance(cur.get("failed"), list)
 
 
 def test_success_class_grid():

@@ -12,11 +12,24 @@ ledgers, the playbook, the logs — against the shapes registered in
 - (c) the Go successor's acceptance tests: a second engine passes this
   suite by producing the same files, not by sharing any code.
 
-**Hard rule:** no assertion may touch Python internals, module state, or
-return objects. The only engine-specific code is the driver layer in
-`harness.py` (`drive()` + the store-ingress calls inside individual
-tests); a Go conformance harness replaces that layer and keeps everything
-else, including the data-first scenario table.
+**Hard rule:** no assertion may depend on Python internals or module
+state, and no return object may be the sole oracle for a contract fact —
+disk decides. The engine-specific DRIVER LAYER is bigger than one
+function and is named honestly: `drive()` + `ScriptedAdapter` in
+`harness.py`, plus every registered ingress/reader call inside individual
+tests (`record_outcome`, `stamp_outcome_verdict`, `record_tiered_lesson`,
+`append_to_playbook`, `log_event`, `write_event`, `open_run`/`close_run`,
+`create_run_dir`, `stamp_run_verdict`, `refresh_run_card_classification`,
+`prior_attempts`/`brief_for_goal`, `config.get`). A Go conformance
+harness maps EACH of those seams to its own equivalent (they are the
+registered APIs of CONTRACTS.md entries, so every engine has one); the
+assertions and the scenario table carry over. Where a driver return value
+is asserted (`res.status == "invalid"`), the on-disk consequence is
+asserted beside it — the return is corroborating, not load-bearing.
+The scenario table is plain data, but its scripted-adapter protocol
+(consumption order, exhaustion policy — see `scenarios.py` docstring) is
+part of the spec a replacement driver must honor; extracting the table +
+protocol to language-neutral form is Phase-2 work.
 
 ## Layout
 
@@ -24,7 +37,7 @@ else, including the data-first scenario table.
 |---|---|
 | `harness.py` | Driver (handle() + ScriptedAdapter) and artifact readers; the cross-cutting `assert_common_contracts` every goal scenario must pass |
 | `scenarios.py` | Data-first table: goal text + scripted adapter responses + expected workspace artifacts (plain dataclass rows a Go harness can consume) |
-| `test_behavior_run_lifecycle.py` | Table runner + call records (B4), stuck path, metadata merge-on-write + corrupt-park (B3) |
+| `test_behavior_run_lifecycle.py` | Table runner + call records (B4), stuck path (exact unjudged posture), agenda flow-to-durable-evidence, metadata merge-on-write + corrupt-park (B3) |
 | `test_behavior_now_lane.py` | NOW answer artifact (B3), re-run identity (B11) |
 | `test_behavior_memory.py` | Outcomes tri-state + closed vocabularies (B6), post-hoc verdict stamping + unknown-key round-trip, lesson stores (B7), paused-family vocabularies |
 | `test_behavior_logs.py` | Playbook grammar (B10), captains-log rotation + run slice (B8), events line discipline (B9) |
@@ -32,11 +45,22 @@ else, including the data-first scenario table.
 | `test_behavior_curation.py` | Run-card shape, success_class grid, `_curation` namespace, derived-view refresh (B5) |
 
 A scenario = goal + scripted adapter responses + expected workspace
-artifacts. All scenarios run on scripted adapters (no network, no LLM
-spend, no sleeps); the whole suite runs in a few seconds and is part of
-the normal suite (no `@slow`). Workspace isolation comes from
+artifacts. All scenarios run on scripted adapters (no sleeps, no LLM
+spend); network isolation is CONFTEST-enforced, not suite-enforced — the
+autouse fixture hides every API key and redirects credential paths, so
+components that would try a real call (e.g. pre-flight plan review)
+fail to build an adapter and skip. Run outside pytest and those calls
+can go out. The whole suite runs in a few seconds and is part of the
+normal suite (no `@slow`). Workspace isolation comes from
 `tests/conftest.py` (per-test tmp `MARO_WORKSPACE`); the harness
 additionally asserts the resolved workspace is never the live one.
+
+**Must-detect evidence (2026-08-28):** the suite is an instrument, so it
+carries kill proof, re-runnable by hand: (M1) `write_event` early-return
+→ 8 tests red; (M2) stuck runs classified `success` → 2 red; (M3)
+`handle_inputs.jsonl` intake write dropped → 7 red. Before the round-1
+review fixes, M1 and M3 passed clean — the B9/B11 blocks were vacuous
+(missing-file readers returned `[]`, counts went unasserted).
 
 ## Scenario coverage (the ~15)
 
@@ -101,9 +125,10 @@ seams, that's a finding, not a blocker — and these are the findings.
    model behavior, not a workspace contract, and stays unpinned here.
 3. **B9's `event_truncated` fallback row is unreachable through the
    public `write_event` kwargs.** The per-field caps + shed ladder keep
-   every reachable line under the 4096-byte budget (worst hostile-battery
-   line observed: 3908 bytes), so the fallback can only be provoked by
-   internals-level injection; it stays pinned by the unit battery in
+   every reachable line under the 4096-byte budget (an authoring-time
+   observation, not an asserted bound: the worst hostile-battery line
+   measured 3908 bytes on one run), so the fallback can only be provoked
+   by internals-level injection; it stays pinned by the unit battery in
    `tests/test_observe.py`. Readers must still tolerate the row.
 4. **The async-tail `verdict_pending` lifecycle (and the
    `done-verdict-pending` success class) is not drivable here.** The
@@ -116,23 +141,52 @@ seams, that's a finding, not a blocker — and these are the findings.
    `now_self_verdict_free` sources need a live judge.
 6. **The B4 recording seam is per-adapter-wrapper, not per-run.** An
    injected adapter produces NO call records unless the caller wraps it in
-   `FailoverAdapter` (the suite does, mirroring `build_adapter`). B4
-   documents exactly this — no doc mismatch — but it means "record mode
-   ON" alone does not guarantee records exist. *Design input: in the Go
-   engine, put recording on the one call path construction guarantees,
-   not on a wrapper a caller can omit.*
+   `FailoverAdapter` (the suite does for its `record_calls` scenario).
+   Review round 1 (2026-08-28) found this was ALSO true in production:
+   `build_adapter`'s explicit-backend branches returned bare adapters, so
+   pre-flight plan-review calls (`backend="openrouter"/"anthropic"`) ran
+   unrecorded, unmetered, and outside the cap warning. Fixed in this
+   commit — every `build_adapter` branch now wraps (pinned by
+   `tests/test_llm.py::TestExplicitBackendAlwaysWrapped`, red-verified).
+   The residual truth: only ADAPTER INJECTION (a test-only seam) bypasses
+   recording. *Design input stands: in the Go engine, put recording on
+   the one call path construction guarantees, not on a wrapper.*
 7. **Cross-process call-seq collision behavior is not drivable
    in-process.** B4's two-writers-one-run-dir discipline (temp+link,
    loser-bumps-seq) is pinned by its own unit tests; this suite pins the
    observable single-process facts (unique monotonic seqs,
    complete-on-appearance names).
+8. **The five-round contract-fix ROOT failure modes stay unit-pinned,
+   outside this acceptance gate.** Park/fsync failure (R3-7), short
+   `os.write` (R3-2), concurrent B4 publication, concurrent B8
+   rotate+append, and the durable `finalize_failed` card flag (R4-2/R5-2)
+   all need fault injection or process interleaving below the workspace
+   boundary (e.g. the finalize-failure card flag cannot be provoked by a
+   read-only run dir — that kills the card write too). They are pinned by
+   the red-verified unit tests in `tests/test_runs.py`,
+   `tests/test_observe.py`, `tests/test_orch_core.py`. *Design input: the
+   Go engine must port those batteries (or the conformance harness grows
+   subprocess fault injection in Phase 2) — passing THIS suite alone does
+   not certify the concurrency/durability half of the contract.*
 
 ## Doc/code mismatches found
 
-None. Every B-entry this suite exercises (B1, B3–B11) matched the code's
-observable behavior on first contact; the only test rewrites during
-authoring were suite-side misreadings (a line-anchored grammar asserted as
-a substring; a result object with a deliberate no-truth-value guard).
+Authoring pass: every B-entry exercised (B1, B3–B11) matched the code's
+observable behavior on first contact; the only rewrites were suite-side
+misreadings. The 2026-08-28 review round then falsified the original
+"none" claim in both directions:
+
+- **The suite itself violated B5** by pinning `_curation.completed` /
+  `_curation.failed` — underscore keys are writer-private. Fixed: only
+  the namespace-is-an-object fact is asserted.
+- **The agenda scenario tables were misaligned at birth**: the
+  goal-clarity assessor consumes the first agenda call, so the scripted
+  plan never reached decompose and the engine silently ran a one-step
+  fallback plan — invisible while the suite asserted objects, caught the
+  moment `test_agenda_flow_reaches_durable_evidence` asserted flow.
+- **A real production gap** (flaw-finder role working): explicit-backend
+  `build_adapter` calls bypassed the FailoverAdapter record/meter/cap
+  seam — see FINDINGS #6.
 
 ## Running
 

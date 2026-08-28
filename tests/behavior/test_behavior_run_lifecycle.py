@@ -68,8 +68,10 @@ def test_call_records_shape():
     seqs = []
     for f in files:
         rec = json.loads(f.read_text(encoding="utf-8"))
-        # B4 shape, field by field.
-        assert isinstance(rec["seq"], int)
+        # B4 shape, field by field. `type(...) is int` throughout: in
+        # CPython bool IS an int, so isinstance would accept `"seq": true`
+        # — a wire value no other engine should be told to accept.
+        assert type(rec["seq"]) is int
         assert f.name == f"call-{rec['seq']:05d}.json", (
             "filename number must match the record's seq (B4)"
         )
@@ -81,11 +83,13 @@ def test_call_records_shape():
         assert isinstance(rec.get("backend", ""), str)
         assert isinstance(rec.get("model", ""), str)
         for tok_key in ("tokens_in", "tokens_out", "max_tokens_requested"):
-            assert rec[tok_key] is None or isinstance(rec[tok_key], int), (
-                f"{tok_key} is int|null (B4)"
+            assert rec[tok_key] is None or type(rec[tok_key]) is int, (
+                f"{tok_key} is int|null, never bool (B4)"
             )
         assert isinstance(rec.get("purpose", ""), str)
-        assert isinstance(rec.get("cost_usd", 0.0), (int, float))
+        assert type(rec.get("cost_usd", 0.0)) in (int, float), (
+            "cost_usd is a JSON number, never bool (B4)"
+        )
         assert rec.get("error", "") == "", "scripted success calls carry empty error"
         assert rec.get("ts")
         seqs.append(rec["seq"])
@@ -109,24 +113,26 @@ def test_call_records_shape():
 # ---------------------------------------------------------------------------
 
 def test_stuck_run_not_fabricated():
+    """Exact posture, not a conditional one: for this scenario no judge ever
+    runs, so a stuck run is UNJUDGED — `goal_achieved` must be ABSENT from
+    metadata and the outcomes row (rule A6; a fabricated `true` with a
+    plausible source must FAIL here, not slip through an if-guard), the
+    stop_verdict rides the closed vocabulary, and the card classifies
+    exactly `failed`."""
     sc = by_id("agenda-stuck")
     result, rd = drive(sc)
     meta = read_meta(rd)
 
     assert meta["status"] == "stuck"
     assert meta["status"] in TERMINAL_STATUSES
-
-    # A stuck run must not conjure success: goal_achieved may be absent
-    # (unjudged) or a judged bool carrying its source — never a bare True.
-    if "goal_achieved" in meta:
-        assert type(meta["goal_achieved"]) is bool
-        assert meta.get("goal_verdict_source"), (
-            "a judged verdict must name its source (B3 verdict block)"
-        )
-    if meta.get("stop_verdict"):
-        assert meta["stop_verdict"] in STOP_VERDICTS, (
-            f"stop_verdict {meta['stop_verdict']!r} outside the closed vocabulary (B6)"
-        )
+    assert "goal_achieved" not in meta, (
+        "no judge ran — a stuck run must stay unjudged; a goal_achieved "
+        "key here is fabricated (A6/B3)"
+    )
+    assert meta.get("stop_verdict") in STOP_VERDICTS, (
+        f"stuck termination must carry a closed-vocabulary stop_verdict, "
+        f"got {meta.get('stop_verdict')!r} (B6)"
+    )
 
     # Same discipline on the outcomes row (B6).
     rows = [
@@ -136,15 +142,58 @@ def test_stuck_run_not_fabricated():
     assert rows
     row = rows[-1]
     assert row["status"] == "stuck"
-    if "goal_achieved" in row:
-        assert type(row["goal_achieved"]) is bool
-        assert row.get("goal_verdict_source")
-    if row.get("stop_verdict"):
-        assert row["stop_verdict"] in STOP_VERDICTS
+    assert "goal_achieved" not in row, (
+        "the outcomes row for an unjudged stuck run must omit goal_achieved"
+    )
+    assert row.get("stop_verdict") in STOP_VERDICTS
 
-    # And the curated view must not classify it as clean success (B5).
+    # And the curated view classifies stuck-unjudged as exactly `failed`
+    # (B5 grid) — `!= "success"` alone would accept `achieved-not-done`,
+    # the class a fabricated verdict produces.
     card = json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
-    assert card["success_class"] != "success"
+    assert card["success_class"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# (2b) The flow, not just the object — B3/B9: scripted step results must
+# reach durable evidence, and events join the run via its loops lineage
+# ---------------------------------------------------------------------------
+
+def test_agenda_flow_reaches_durable_evidence():
+    """A `done` agenda run whose declared work leaves no durable trace of
+    the actual step results is lying. The scripted outputs must appear in
+    the run dir's build/ evidence, and the events feed must carry rows
+    joined to the run's loop_id (B9 rows join by loop_id, not handle_id)."""
+    sc = by_id("agenda-happy-path")
+    result, rd = drive(sc)
+    meta = read_meta(rd)
+
+    # Loops lineage is real: at least one loop with a non-empty loop_id (B3).
+    loops = meta.get("loops")
+    assert isinstance(loops, list) and loops, "loops lineage must be non-empty"
+    loop_ids = {l.get("loop_id") for l in loops}
+    assert all(loop_ids), "every lineage entry carries a loop_id (B3)"
+
+    # Every scripted step result reaches SOME durable build/ artifact.
+    build_text = "".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in (rd / "build").rglob("*")
+        if p.is_file() and p.suffix in (".md", ".json", ".jsonl", ".html")
+    )
+    for scripted in ("Collected 12 rows of numbers", "Summary written: revenue flat"):
+        assert scripted in build_text, (
+            f"scripted step result {scripted!r} reached no durable build/ "
+            f"artifact — the run's evidence dropped the work (B3)"
+        )
+
+    # Events join the run through its loop lineage (B9).
+    ev_rows = read_jsonl(workspace() / "memory" / "events.jsonl")
+    mine = [r for r in ev_rows if r.get("loop_id") in loop_ids]
+    assert mine, "no events.jsonl row joins the run's loop_id (B9)"
+    types = {r["event_type"] for r in mine}
+    assert "loop_start" in types and "loop_done" in types, (
+        f"loop lifecycle events missing for the run's loop: {sorted(types)}"
+    )
 
 
 # ---------------------------------------------------------------------------

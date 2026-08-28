@@ -125,19 +125,37 @@ def workspace() -> Path:
     return ws
 
 
+def _reject_constant(name: str):
+    raise AssertionError(f"bare {name} on the wire — forbidden by B2")
+
+
 def read_jsonl(path: Path) -> List[dict]:
-    """Tolerant JSONL reader per CONTRACTS.md B2: skip malformed lines."""
+    """STRICT acceptance reader: every non-empty line must be one valid JSON
+    object with no NaN/Infinity tokens. Production readers are tolerant per
+    CONTRACTS.md B2, but this suite is the acceptance oracle — a malformed
+    line IS an engine defect (B2 forbids writers from emitting one), so
+    tolerance here would hide exactly what the suite exists to catch."""
     rows: List[dict] = []
     if not path.exists():
         return rows
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if not line:
             continue
         try:
-            rows.append(json.loads(line))
-        except Exception:
-            continue
+            row = json.loads(line, parse_constant=_reject_constant)
+        except AssertionError:
+            raise
+        except Exception as exc:
+            raise AssertionError(
+                f"{path.name} line {i} is malformed — writers must never "
+                f"emit a broken line (B2): {exc}"
+            ) from exc
+        assert isinstance(row, dict), (
+            f"{path.name} line {i} is a JSON {type(row).__name__}, not an "
+            f"object (B2)"
+        )
+        rows.append(row)
     return rows
 
 
@@ -175,6 +193,10 @@ def newest_outcome(ws: Optional[Path] = None) -> dict:
 
 
 # CONTRACTS.md B5: the success_class vocabulary as registered today.
+# VERSION-PINNED: B5 says the enum is expected to grow — this set is the
+# vocabulary of THIS registry revision and moves with it (readers of the
+# store must fail closed on unknown values; this suite is the spec pin,
+# not a reader, so exact membership is the point).
 SUCCESS_CLASSES = {
     "success", "done-not-achieved", "done-unverified", "done-verdict-pending",
     "achieved-not-done", "partial", "failed", "interrupted", "unknown",
@@ -317,13 +339,25 @@ def assert_common_contracts(sc: GoalScenario, result, rd: Path) -> None:
     for key, val in sc.expect_outcome.items():
         assert row.get(key) == val, f"outcome[{key}]={row.get(key)!r} != {val!r}"
 
-    # B8 captains-log: append-only event bus saw this run (rows carry the
-    # required timestamp/event_type; audience is the derived stamp).
+    # B8 captains-log: append-only event bus saw THIS run — at least one
+    # row joined by handle_id (rows carry the required timestamp/event_type;
+    # audience is the derived stamp). A global-traffic-only log fails.
     log_rows = read_jsonl(ws / "memory" / "captains_log.jsonl")
     assert log_rows, "captains_log.jsonl has no rows"
     for entry in log_rows:
         assert "timestamp" in entry and "event_type" in entry
         assert entry.get("audience") in ("user", "system")
+    joined = [r for r in log_rows if r.get("handle_id") == result.handle_id]
+    assert joined, (
+        "captains_log.jsonl has no row joined to this run's handle_id — "
+        "the run left no operator-visible trace (B8)"
+    )
 
-    # B9 events feed: whatever the run emitted obeys the line discipline.
-    assert_events_line_discipline(ws / "memory" / "events.jsonl")
+    # B9 events feed: the run must EMIT events, and every line obeys the
+    # discipline. (Rows join by loop_id, not handle_id — asserted for the
+    # agenda lane in test_agenda_flow_reaches_durable_evidence; here the
+    # non-vacuous floor is existence + at least one row.)
+    events_path = ws / "memory" / "events.jsonl"
+    assert events_path.exists(), "run emitted no memory/events.jsonl (B9)"
+    n_events = assert_events_line_discipline(events_path)
+    assert n_events >= 1, "events.jsonl exists but holds no rows (B9)"
