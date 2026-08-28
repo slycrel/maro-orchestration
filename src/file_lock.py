@@ -27,8 +27,9 @@ the deliberate default until 2026-07; reversed in the concurrency-
 hardening arc because contention is exactly when unlocked writes corrupt.)
 
 A lock file that cannot even be *created* (read-only fs, permissions)
-still falls through unlocked with a WARNING — that's an environment
-problem, not contention, and blocking the write wouldn't protect anything.
+follows the same posture as a timeout (C0.6): require=True and the
+fail-closed default both raise; only explicit fail-open proceeds
+unlocked, with the same loud warning + events-feed report.
 
 Usage:
     from file_lock import locked_write, locked_append, locked_rmw, atomic_write
@@ -87,9 +88,27 @@ def _fail_open() -> bool:
         return env.strip().lower() in ("1", "true", "yes", "on")
     try:
         from config import get as _get
-        return bool(_get("file_lock.fail_open", False))
+        raw = _get("file_lock.fail_open", False)
     except Exception:
         return False
+    # Strict parse (C0.6): bool(config string "false") is True, which
+    # silently enabled fail-open — the exact degraded mode this setting
+    # gates. Unrecognized values default CLOSED, loudly.
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)) and raw in (0, 1):
+        return bool(raw)
+    if isinstance(raw, str):
+        val = raw.strip().lower()
+        if val in ("1", "true", "yes", "on"):
+            return True
+        if val in ("", "0", "false", "no", "off"):
+            return False
+    logger.warning(
+        "file_lock: unrecognized file_lock.fail_open value %r — "
+        "treating as false (fail-closed)", raw,
+    )
+    return False
 
 
 # Track which lock files this thread already holds to avoid self-deadlock.
@@ -120,12 +139,14 @@ def locked_write(path: Path, *, timeout_s: float | None = None,
     acquisition to avoid deadlock.
 
     require=True makes acquisition mandatory for THIS call: the
-    environment-failure fallback (lock file uncreatable -> proceed unlocked)
-    and the fail-open timeout override both raise instead of yielding
-    unlocked. Default False keeps the long-standing contract for every
-    existing caller. Added for tail_jobs._transact (adversarial r2, Expert
-    QA): a read-decide-append transaction that silently runs unlocked is the
-    round-1 race wearing the fix's clothes.
+    environment-failure path (lock file uncreatable) and the fail-open
+    timeout override both raise instead of yielding unlocked. Default
+    False keeps the long-standing contract for every existing caller.
+    Added for tail_jobs._transact (adversarial r2, Expert QA): a
+    read-decide-append transaction that silently runs unlocked is the
+    round-1 race wearing the fix's clothes. Since C0.6, require=False +
+    fail_open=False also raises on an uncreatable lock file — only
+    explicit fail-open proceeds unlocked there, loudly.
     """
     lock_path = path.parent / (path.name + ".lock")
     lock_key = str(lock_path.resolve())
@@ -180,22 +201,26 @@ def locked_write(path: Path, *, timeout_s: float | None = None,
         raise
     except Exception as exc:
         # Lock file can't be created/locked at all (RO fs, permissions):
-        # environment problem, not contention — blocking wouldn't protect
-        # anything, so fall through unlocked with a warning. Unless the
-        # caller REQUIRES exclusivity: a transaction that must not run
-        # unlocked propagates the environment failure instead.
-        if require:
-            raise
-        logger.warning(
-            "file_lock: failed to acquire lock on %s: %s — proceeding unlocked",
-            lock_path, exc,
-        )
+        # environment problem, not contention. This branch honors the SAME
+        # posture as the timeout branch (C0.6) — it used to proceed
+        # unlocked unconditionally for require=False callers, which made
+        # every write on a broken-lock-dir box silently unlocked while the
+        # fail-closed default claimed otherwise. require=True propagates;
+        # otherwise fail_open decides, loudly either way.
         if lock_fd is not None:
             try:
                 lock_fd.close()
             except Exception:
                 pass
             lock_fd = None
+        _report_create_failure(lock_path, exc)
+        if require or not _fail_open():
+            raise
+        logger.warning(
+            "file_lock: fail-open enabled — proceeding with UNLOCKED "
+            "write to %s after lock-create failure (%s). Data corruption "
+            "is possible if concurrent writes overlap.", lock_path, exc,
+        )
 
     if acquired:
         held.add(lock_key)
@@ -222,6 +247,18 @@ def _report_timeout(lock_path: Path, waited: float) -> None:
     try:
         from observe import write_event
         write_event("file_lock_timeout", detail=f"{lock_path} waited={waited:.1f}s")
+    except Exception:
+        pass
+
+
+def _report_create_failure(lock_path: Path, exc: Exception) -> None:
+    """Same observability shape as _report_timeout, for the create path."""
+    logger.error(
+        "file_lock: cannot create/acquire lock file %s: %s", lock_path, exc,
+    )
+    try:
+        from observe import write_event
+        write_event("file_lock_create_failed", detail=f"{lock_path}: {exc}")
     except Exception:
         pass
 

@@ -1042,6 +1042,57 @@ class TestRotation:
         dates = [row["date"] for row in timeline()]
         assert "2026-01-01" in dates
 
+    def test_rotation_replaces_live_file_atomically(self, _tmp_log, tmp_path,
+                                                    monkeypatch):
+        """C0.5 must-detect: readers don't take the writer lock, so the live
+        log must be swapped in via atomic replace (temp file + os.replace),
+        never truncate-rewritten in place with write_text — the pre-fix
+        path.write_text exposed an empty/partial live log mid-rotation."""
+        import pathlib
+
+        import file_lock
+
+        self._fill(50)
+        live = _tmp_log.resolve()
+
+        truncating_writes = []
+        real_write_text = pathlib.Path.write_text
+
+        def _wt_spy(self_path, *args, **kwargs):
+            try:
+                if self_path.resolve() == live:
+                    truncating_writes.append(self_path)
+            except OSError:
+                pass
+            return real_write_text(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "write_text", _wt_spy)
+
+        replaces = []
+        real_replace = file_lock.os.replace
+
+        def _rp_spy(src, dst, *a, **k):
+            replaces.append(Path(dst))
+            return real_replace(src, dst, *a, **k)
+
+        monkeypatch.setattr(file_lock.os, "replace", _rp_spy)
+
+        with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger",
+                      summary="tips over")
+
+        # Rotation actually happened...
+        assert list(tmp_path.glob("captains_log.*.jsonl"))
+        # ...the live file was never truncate-rewritten in place...
+        assert not truncating_writes
+        # ...it was atomically replaced...
+        assert any(d.resolve() == live for d in replaces)
+        # ...and the post-rotation live file is complete valid JSONL.
+        lines = [l for l in _tmp_log.read_text().splitlines() if l.strip()]
+        assert lines
+        for l in lines:
+            json.loads(l)
+
     def test_same_second_rotations_do_not_overwrite(self, _tmp_log, tmp_path):
         self._fill(50)
         with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):

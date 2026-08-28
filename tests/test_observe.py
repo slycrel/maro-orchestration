@@ -303,6 +303,69 @@ def test_write_event_appends_multiple(monkeypatch, tmp_path):
     assert types == ["loop_start", "step_done", "loop_done"]
 
 
+def _read_event_lines(tmp_path):
+    events_path = _ws(tmp_path) / "events.jsonl"
+    return [l for l in events_path.read_text().splitlines() if l.strip()]
+
+
+def test_write_event_caps_huge_ascii_field(monkeypatch, tmp_path):
+    """C0.3 must-detect: a 10KB project name previously rode uncapped into
+    the line, breaking the <PIPE_BUF single-write atomicity the unlocked
+    append depends on. Every emitted line must stay under 4096 bytes and
+    remain valid JSON with the required keys."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", project="p" * 10240, goal="g", status="done")
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert len(line.encode("utf-8")) + 1 <= 4096
+    entry = json.loads(line)
+    assert entry["event_type"] == "step_done"
+    assert entry["status"] == "done"
+    assert "ts" in entry
+    assert entry["project"].startswith("p")
+
+
+def test_write_event_caps_multibyte_escape_blowup(monkeypatch, tmp_path):
+    """C0.3 must-detect: caps were CHARACTER caps but the obligation is
+    BYTES — json.dumps ASCII-escapes, so a multibyte char costs up to 12
+    bytes. A model string of astral-plane chars must still produce a
+    <4096-byte valid JSON line."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    # Each char json-encodes as \udNNN\udNNN (12 bytes).
+    ok = write_event("step_done", model="\U0001d54f" * 2000,
+                     goal="\U0001d54f" * 500, detail="\U0001d54f" * 500,
+                     status="done")
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    assert len(line.encode("utf-8")) + 1 <= 4096
+    entry = json.loads(line)
+    assert entry["event_type"] == "step_done"
+    assert "ts" in entry
+
+
+def test_write_event_negative_control_passes_unmodified(monkeypatch, tmp_path):
+    """Negative control: a normal event's fields ride through untouched."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event("step_done", goal="a normal goal",
+                     project="proj", loop_id="abc123", step="step one",
+                     status="done", model="claude", detail="all fine",
+                     tokens_in=10, tokens_out=5, elapsed_ms=100)
+    assert ok is True
+    (line,) = _read_event_lines(tmp_path)
+    entry = json.loads(line)
+    assert entry["goal"] == "a normal goal"
+    assert entry["project"] == "proj"
+    assert entry["loop_id"] == "abc123"
+    assert entry["step"] == "step one"
+    assert entry["status"] == "done"
+    assert entry["model"] == "claude"
+    assert entry["detail"] == "all fine"
+    assert entry["tokens_in"] == 10
+
+
 def test_print_events_tail_no_file(monkeypatch, tmp_path, capsys):
     """print_events_tail says 'No events recorded' when file missing."""
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))

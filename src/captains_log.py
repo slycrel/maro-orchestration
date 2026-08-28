@@ -662,7 +662,7 @@ def _maybe_rotate() -> None:
         if path.stat().st_size < max_bytes:
             return
 
-        from file_lock import locked_write
+        from file_lock import atomic_write, locked_write
         rotated_to = None
         _rotation_in_progress = True
         with locked_write(path):
@@ -681,8 +681,11 @@ def _maybe_rotate() -> None:
                 n += 1
                 archive = path.with_name(f"captains_log.{stamp}-{n}.jsonl")
             archive.write_text("\n".join(head) + "\n", encoding="utf-8")
-            path.write_text(
-                "\n".join(tail) + ("\n" if tail else ""), encoding="utf-8")
+            # atomic_write, not write_text (C0.5): readers don't take the
+            # writer lock, so a truncate-in-place rewrite exposed an
+            # empty/partial live log mid-rotation. os.replace swaps in the
+            # complete retained tail in one step.
+            atomic_write(path, "\n".join(tail) + ("\n" if tail else ""))
             rotated_to = archive
 
         if rotated_to is not None:

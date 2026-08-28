@@ -494,6 +494,33 @@ def print_snapshot(outcomes_limit: int = 10) -> None:
 # Phase 36: Event stream — write_event + print_events_tail
 # ---------------------------------------------------------------------------
 
+# PIPE_BUF: the unlocked single O_APPEND write below is only atomic while
+# line + "\n" stays at or under this many BYTES. json.dumps ASCII-escapes,
+# so characters are not bytes — a non-ASCII char can encode as up to 12
+# bytes (\uXXXX\uXXXX) — which is why enforcement measures the ENCODED
+# line, not field character counts (CONTRACTS C0.3).
+_EVENT_LINE_MAX_BYTES = 4096
+
+
+def _truncate_encoded(value: str, max_bytes: int) -> str:
+    """Longest prefix of value whose json.dumps encoding fits max_bytes.
+
+    Byte-aware where character slicing is not: json.dumps(s) is pure ASCII
+    (default ensure_ascii), so len() of the dump IS its byte length, and a
+    multibyte char can cost up to 12 of them.
+    """
+    if len(json.dumps(value)) <= max_bytes:
+        return value
+    lo, hi = 0, len(value)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(json.dumps(value[:mid])) <= max_bytes:
+            lo = mid
+        else:
+            hi = mid - 1
+    return value[:lo]
+
+
 def write_event(
     event_type: str,
     *,
@@ -524,25 +551,28 @@ def write_event(
         path = _events_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
-            "event_type": event_type,
+            # C0.3: EVERY string field is capped — the previously-uncapped
+            # ones (event_type/project/loop_id/status/model) let one long
+            # value blow the PIPE_BUF atomicity budget for the whole line.
+            "event_type": str(event_type)[:64],
             "ts": datetime.now(timezone.utc).isoformat(),
-            "goal": goal[:80],
-            "project": project,
-            "loop_id": loop_id,
-            "step": step[:120],
+            "goal": str(goal)[:80],
+            "project": str(project)[:120],
+            "loop_id": str(loop_id)[:64],
+            "step": str(step)[:120],
             "step_idx": step_idx,
-            "status": status,
+            "status": str(status)[:64],
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "cache_read_tokens": cache_read_tokens,
-            "model": model,
+            "model": str(model)[:120],
             "elapsed_ms": elapsed_ms,
             # 200 is load-bearing (PIPE_BUF row atomicity) — kept, but the
             # cut announces itself now.
             "detail": _cb_clip(detail, 200),
         }
         if tool_pathologies:
-            # Capped like every other field (PIPE_BUF atomicity): at most 3
+            # Bounded like every other field (PIPE_BUF atomicity): at most 3
             # entries, evidence trimmed — the full text lives on the step
             # outcome / transcript artifact.
             entry["tool_pathologies"] = [
@@ -550,12 +580,32 @@ def write_event(
                  "evidence": str(p.get("evidence", ""))[:160]}
                 for p in tool_pathologies[:3]
             ]
-        # Deliberately UNLOCKED: every field is length-capped so the line is
-        # well under PIPE_BUF (single O_APPEND write, atomic on Linux), and
+        # Character caps alone don't bound BYTES (json.dumps ASCII-escapes:
+        # a multibyte char can encode 12 bytes) — measure the encoded line
+        # and shed weight until line+"\n" fits PIPE_BUF. Never block, never
+        # lock: drop optional payload first, then byte-budget every string
+        # field so the sum provably fits.
+        line = json.dumps(entry)
+        if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
+            entry.pop("tool_pathologies", None)
+            line = json.dumps(entry)
+        if len(line) + 1 > _EVENT_LINE_MAX_BYTES:
+            # Encoded-representation budgets (quotes included); they sum to
+            # ~2000 bytes, leaving ample room for keys, numerics and ts.
+            for key, budget in (("event_type", 128), ("goal", 256),
+                                ("project", 256), ("loop_id", 128),
+                                ("step", 384), ("status", 128),
+                                ("model", 256), ("detail", 512)):
+                val = entry.get(key)
+                if isinstance(val, str):
+                    entry[key] = _truncate_encoded(val, budget)
+            line = json.dumps(entry)
+        # Deliberately UNLOCKED: the enforcement above keeps the line under
+        # PIPE_BUF (single O_APPEND write, atomic on Linux), and
         # file_lock._report_timeout calls this — locking here would recurse
         # into the lock machinery while it's reporting a timeout.
         with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+            f.write(line + "\n")
         return True
     except Exception:
         return False

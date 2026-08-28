@@ -323,3 +323,79 @@ class TestAnUninspectableTailRefusesTheAppend:
         t.write_bytes(b'{"old": 1}\n')
         locked_append(t, '{"new": 2}')
         assert t.read_bytes() == b'{"old": 1}\n{"new": 2}\n'
+
+
+class TestFailOpenStrictParse:
+    """C0.6 must-detect: `bool(_get(...))` made the config STRING "false"
+    truthy, silently enabling fail-open — the exact degraded mode the
+    setting gates. Only explicit true-shaped values may enable it."""
+
+    def _cfg(self, monkeypatch, value):
+        import config
+        monkeypatch.delenv("MARO_FILELOCK_FAIL_OPEN", raising=False)
+        monkeypatch.setattr(
+            config, "get",
+            lambda key, default=None: (value if key == "file_lock.fail_open"
+                                       else default))
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "", False, 0])
+    def test_false_shaped_values_stay_fail_closed(self, monkeypatch, value):
+        import file_lock
+        self._cfg(monkeypatch, value)
+        assert file_lock._fail_open() is False
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", "on",
+                                       True, 1])
+    def test_true_shaped_values_enable_fail_open(self, monkeypatch, value):
+        import file_lock
+        self._cfg(monkeypatch, value)
+        assert file_lock._fail_open() is True
+
+    def test_unrecognized_value_defaults_closed_with_warning(
+            self, monkeypatch, caplog):
+        import logging
+
+        import file_lock
+        self._cfg(monkeypatch, "banana")
+        with caplog.at_level(logging.WARNING, logger="file_lock"):
+            assert file_lock._fail_open() is False
+        assert "unrecognized" in caplog.text
+
+
+class TestCreateFailurePosture:
+    """C0.6: a lock file that cannot be CREATED follows the same posture
+    as a timeout — require=True and the fail-closed default raise; only
+    explicit fail-open proceeds unlocked. Pre-fix, require=False callers
+    silently proceeded unlocked regardless of fail_open."""
+
+    def _block_lock_creation(self, path):
+        # A DIRECTORY at the .lock path makes open(lock_path, "w") fail
+        # with IsADirectoryError — the create-failure branch, not timeout.
+        (path.parent / (path.name + ".lock")).mkdir()
+
+    def test_fail_closed_default_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MARO_FILELOCK_FAIL_OPEN", raising=False)
+        p = tmp_path / "d.jsonl"
+        self._block_lock_creation(p)
+        with pytest.raises(IsADirectoryError):
+            with locked_write(p):
+                p.write_text("x\n")
+        assert not p.exists()
+
+    def test_fail_open_proceeds_unlocked(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        p = tmp_path / "d.jsonl"
+        self._block_lock_creation(p)
+        with locked_write(p):
+            p.write_text("x\n")
+        assert p.read_text() == "x\n"
+
+    def test_require_true_raises_even_with_fail_open(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        p = tmp_path / "d.jsonl"
+        self._block_lock_creation(p)
+        with pytest.raises(IsADirectoryError):
+            with locked_write(p, require=True):
+                p.write_text("x\n")
+        assert not p.exists()
