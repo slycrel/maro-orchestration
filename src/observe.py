@@ -674,12 +674,24 @@ def write_event(
         # the fully encoded bytes on an O_APPEND fd — a buffered file
         # object could legally split the flush and void the atomicity the
         # contract claims.
-        fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-                     0o666)
         try:
-            n = os.write(fd, encoded)
-        finally:
-            os.close(fd)
+            fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+                         0o666)
+            try:
+                n = os.write(fd, encoded)
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            # Round 4: an open/write failure (EACCES, ENOSPC, ...) was
+            # swallowed by the blanket handler below with zero diagnostics —
+            # and most callers ignore the bool, so the feed could vanish
+            # silently. Stdlib logging only (never write_event, never a
+            # lock — same recursion rule as the short-write branch).
+            import logging
+            logging.getLogger("maro.observe").warning(
+                "write_event: append to %s failed (%s) — event %r lost",
+                path, exc, entry.get("event_type", ""))
+            return False
         if n != len(encoded):
             # R3-2: a short write(2) left a TORN row while this returned
             # True. True now means the full buffer was accepted by one

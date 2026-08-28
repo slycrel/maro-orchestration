@@ -954,3 +954,22 @@ def test_write_event_full_write_still_true(monkeypatch, tmp_path):
     assert write_event("step_done", status="done", detail="payload") is True
     line = (mem / "events.jsonl").read_text().strip().splitlines()[-1]
     assert json.loads(line)["event_type"] == "step_done"
+
+
+def test_write_event_open_failure_returns_false_and_logs(
+        monkeypatch, caplog):
+    """Round-4 must-detect: an os.open/os.write OSError (EACCES, ENOSPC)
+    fell into the blanket handler with zero diagnostics — and most callers
+    ignore the bool, so the feed vanished silently."""
+    import logging
+    import observe
+
+    def _denied(*a, **k):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(observe.os, "open", _denied)
+    with caplog.at_level(logging.WARNING, logger="maro.observe"):
+        ok = observe.write_event("step_done", goal="g")
+    assert ok is False
+    assert any("append" in r.getMessage() and "failed" in r.getMessage()
+               for r in caplog.records)

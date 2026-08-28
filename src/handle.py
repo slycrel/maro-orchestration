@@ -2220,8 +2220,8 @@ def _handle_impl(
         # in handle_task (autonomous requeue path only). Read-only and local;
         # any failure degrades to "knows nothing".
         try:
-            from config import get as _recall_cfg_get
-            _recall_inject_on = bool(_recall_cfg_get("recall.dispatch_inject", True))
+            from config import get_bool as _recall_cfg_get
+            _recall_inject_on = _recall_cfg_get("recall.dispatch_inject", True)
         except Exception:
             _recall_inject_on = True
         if _recall_inject_on:
@@ -2547,8 +2547,8 @@ def _handle_impl(
         # keep the old ordering — their tail IS the story, not bookkeeping
         # after an answer. Killswitch: notify.verdict_followup (DEFAULTS).
         try:
-            from config import get as _vf_cfg_get
-            _verdict_followup = bool(_vf_cfg_get("notify.verdict_followup", True))
+            from config import get_bool as _vf_cfg_get
+            _verdict_followup = _vf_cfg_get("notify.verdict_followup", True)
         except Exception:
             _verdict_followup = True
         if (not dry_run and _verdict_followup

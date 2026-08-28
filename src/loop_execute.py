@@ -264,7 +264,8 @@ def _execute_main_loop(
     # clean step so a process crash between steps can recover it.
     try:
         from config import get as _session_cfg_get
-        _session_reuse_on = bool(_session_cfg_get("executor.session_reuse", False))
+        from config import get_bool as _session_cfg_get_bool
+        _session_reuse_on = _session_cfg_get_bool("executor.session_reuse", False)
     except Exception:
         _session_reuse_on = False
     _executor_session: Optional[Dict[str, Any]] = None
@@ -396,8 +397,8 @@ def _execute_main_loop(
     _orig_token_budget = token_budget
     _orig_cost_budget = cost_budget
     try:
-        from config import get as _bl_cfg_get
-        _ladder_on = bool(_bl_cfg_get("budget.extension_ladder", True))
+        from config import get_bool as _bl_cfg_get
+        _ladder_on = _bl_cfg_get("budget.extension_ladder", True)
     except Exception:
         _ladder_on = True
 
@@ -695,14 +696,14 @@ def _execute_main_loop(
             # every verdict to build/reanchor.jsonl for later adjudication.
             _ra_note = ""
             try:
-                from config import get as _ra_cfg_get
+                from config import get_bool as _ra_cfg_get
                 # `not dry_run` is defense-in-depth, unreachable today:
                 # loop_planning gates review_plan on the same flag, so
                 # pf_review is None in every dry run and this block is never
                 # entered. Kept because the reanchor call is real LLM spend
                 # and this line is the last gate if pf_review ever gains
                 # another source (checkpoint resume, injected review).
-                if bool(_ra_cfg_get("reanchor.enabled", False)) and not dry_run:
+                if _ra_cfg_get("reanchor.enabled", False) and not dry_run:
                     from reanchor import run_milestone_reanchor as _ra_run
                     _ra_note = _ra_run(
                         goal=goal,
@@ -1018,8 +1019,8 @@ def _execute_main_loop(
         # caught after. The cwd fix (#1) makes project_dir a reliable diff target.
         _artifact_check_on = True
         try:
-            from config import get as _ac_cfg_get
-            _artifact_check_on = bool(_ac_cfg_get("validate.artifact_check", True))
+            from config import get_bool as _ac_cfg_get
+            _artifact_check_on = _ac_cfg_get("validate.artifact_check", True)
         except Exception:
             pass
         _artifact_snapshot = {}
@@ -1104,8 +1105,8 @@ def _execute_main_loop(
         # the same blocked archives across ~6 steps (~$15 of a $25 run).
         # Deterministic, observation-only, never touches step status.
         try:
-            from config import get as _tr_cfg_get
-            if (bool(_tr_cfg_get("terrain.enabled", True))
+            from config import get_bool as _tr_cfg_get
+            if (_tr_cfg_get("terrain.enabled", True)
                     and outcome.get("tool_events")):
                 from terrain import scan_tool_events as _tr_scan
                 _tr_new = _tr_scan(outcome.get("tool_events"), step_idx,
@@ -1118,8 +1119,8 @@ def _execute_main_loop(
 
         _sc_report = None
         try:
-            from config import get as _sc_cfg_get
-            if bool(_sc_cfg_get("validate.scavenge_detect", True)) and outcome.get("tool_events"):
+            from config import get_bool as _sc_cfg_get
+            if _sc_cfg_get("validate.scavenge_detect", True) and outcome.get("tool_events"):
                 from artifact_check import (
                     detect_out_of_fence_access as _sc_detect,
                     fence_allow_roots as _sc_allow_roots,
@@ -1389,8 +1390,8 @@ def _execute_main_loop(
         # validate.write_fence: false. Detection above stays always-on.
         if _sc_report is not None and _sc_report.writes and step_status == "done":
             try:
-                from config import get as _wf_cfg_get
-                if bool(_wf_cfg_get("validate.write_fence", True)):
+                from config import get_bool as _wf_cfg_get
+                if _wf_cfg_get("validate.write_fence", True):
                     _wf_paths = [w.get("path", "?") for w in _sc_report.writes]
                     log.warning("WRITE FENCE step=%d blocked: %s", step_idx, _wf_paths)
                     _trace_exec_edge("exec.step", "exec.write_fence", loop_id,
@@ -1579,8 +1580,8 @@ def _execute_main_loop(
 
             # Phase 64 Phase A: adaptive execution — director evaluates before stuck advisor
             try:
-                from config import get as _ae_cfg_get
-                _ae_on = bool(_ae_cfg_get("adaptive_execution", False))
+                from config import get_bool as _ae_cfg_get
+                _ae_on = _ae_cfg_get("adaptive_execution", False)
             except Exception:
                 _ae_on = False
             if _ae_on:
@@ -1767,8 +1768,8 @@ def _execute_main_loop(
             # ACTIVATES a paid LLM call on every terminal-stuck path, hence
             # the gate (Jeremy 2026-07-16: fix + gate, on for this box).
             try:
-                from config import get as _adv_cfg_get
-                _advisor_on = bool(_adv_cfg_get("advisor.stuck_step", False))
+                from config import get_bool as _adv_cfg_get
+                _advisor_on = _adv_cfg_get("advisor.stuck_step", False)
             except Exception:
                 _advisor_on = False
             if _advisor_on:
@@ -1996,8 +1997,8 @@ def _execute_main_loop(
         # fall-through path — fixed 2026-07-15) no longer exists: the only
         # consumption is the merge-point drain above.
         try:
-            from config import get as _ae2_cfg_get
-            _ae2_on = bool(_ae2_cfg_get("adaptive_execution", False))
+            from config import get_bool as _ae2_cfg_get
+            _ae2_on = _ae2_cfg_get("adaptive_execution", False)
         except Exception:
             _ae2_on = False
         if _ae2_on:
@@ -2213,8 +2214,8 @@ def _execute_main_loop(
         # block below; gated separately (spend) via director.evaluate_on_injection.
         if interrupts_applied != _interrupts_before:
             try:
-                from config import get as _inj_cfg_get
-                _inj_on = bool(_inj_cfg_get("director.evaluate_on_injection", False))
+                from config import get_bool as _inj_cfg_get
+                _inj_on = _inj_cfg_get("director.evaluate_on_injection", False)
             except Exception:
                 _inj_on = False
             if _inj_on:

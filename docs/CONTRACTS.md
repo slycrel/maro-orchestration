@@ -844,6 +844,39 @@ red-verified must-detect test):**
   class per process instead of silently disabling call recording; still
   never block the call (B4).
 
+**Round-4 amendments (adversarial round 4, 2026-08-28 — the convergence
+check over the round-3 fixes; verified findings, ALL SHIPPED same day,
+each red-verified):**
+
+- **R4-1** (amends R3-1): the census tripwire's fixed getter-name list was
+  itself evadable — `from config import get as _bl_cfg_get` (and 13 more
+  aliased gates in `loop_execute.py`/`planner.py`, including
+  `budget.extension_ladder`, `validate.write_fence`, `reanchor.enabled`,
+  `advisor.stuck_step`, `adaptive_execution`,
+  `director.evaluate_on_injection`) was invisible to it. The census now
+  resolves every local alias the import establishes (any name) and the
+  hardened instrument immediately caught two further live gates
+  (`handle.py`: `recall.dispatch_inject`, `notify.verdict_followup`).
+  All 16 migrated to `config.get_bool`; the instrument carries its own
+  must-detect (`test_census_catches_arbitrary_getter_aliases`).
+- **R4-2** (amends R3-5): `finalize_failed` reached only the RETURNED
+  card dict — `curate_run` had already persisted `run_card.json`, so
+  durable readers still saw a normal card. `close_run` now republishes
+  the flagged card through the locked `_write_run_card` path; the
+  must-detect reopens the card from disk.
+- **R4-3** (amends R3-6): two `mutate_run_record` closures applied
+  PRE-lock state over the fresh record — `run_tick`'s note-set assigned a
+  stale precomputed merge (fixed: merge from `rec.note` inside the
+  closure) and `_mark_stale_running_attempts` flipped a freshly-read
+  record to "blocked" without rechecking `status == "running"` under the
+  lock (fixed: precondition inside the closure). The must-detect exposed
+  a THIRD member: `finalize_run`'s closure REPLACED the note
+  (`note or rec.note`) — now merges; `_merge_notes` gained exact-fragment
+  dedup so legitimate re-merges don't double fragments.
+- **R4-4** (amends R3-2): `write_event`'s open/write OSError path
+  (EACCES/ENOSPC) was still silent under the blanket handler — now warns
+  non-recursively and returns False (B9).
+
 1. **Lesson-store RMW raw round-tripping** (tiered + flat — C2.1/C2.2
    promoted). — **SHIPPED `010d3d11`**: unknown keys ride rehydrated rows
    as an `_extras` attribute and every rewrite/promotion/archive/

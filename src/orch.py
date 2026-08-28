@@ -137,7 +137,12 @@ def _mark_stale_running_attempts(project: str, item_index: int) -> None:
     for record in _load_run_records():
         if record.project == project and record.index == item_index and record.status == "running":
             # Locked RMW (R3-6): same stale-object class as finalize_run.
+            # Round 4: re-check the precondition on the FRESH record — the
+            # scan above read pre-lock state, and a concurrent finalizer
+            # may have moved this record past "running" in the window.
             def _mark_stale(rec: RunRecord) -> None:
+                if rec.status != "running":
+                    return
                 rec.status = "blocked"
                 rec.updated_at = now_utc_iso()
                 rec.finished_at = rec.updated_at
@@ -353,7 +358,11 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
         rec.status = status
         rec.updated_at = now
         rec.finished_at = now
-        rec.note = note or rec.note
+        # Round 4: MERGE, never replace — `note or rec.note` clobbered the
+        # freshly merged note (run_tick's _set_note fragments, a concurrent
+        # writer's addition) with the caller's single fragment. _merge_notes
+        # dedups, so a fragment already present doesn't double.
+        rec.note = _merge_notes(rec.note, note)
 
     run = mutate_run_record(run_id, _finalize_fields)
     if status == "done":
@@ -515,8 +524,13 @@ def run_tick(
     update_note = _merge_notes(run.note, outcome.note, result.note, f"validation_summary={summary_path}" if summary_path else None)
     if update_note and update_note != run.note:
         # Locked RMW (R3-6), same shape as the artifact patch above.
+        # Round 4: merge from the FRESH record's note inside the closure —
+        # assigning the pre-lock merge would overwrite a note another
+        # writer landed between our load and the lock.
         def _set_note(rec: RunRecord) -> None:
-            rec.note = update_note
+            rec.note = _merge_notes(
+                rec.note, outcome.note, result.note,
+                f"validation_summary={summary_path}" if summary_path else None)
             rec.updated_at = now_utc_iso()
 
         run = mutate_run_record(run.run_id, _set_note)

@@ -1433,3 +1433,68 @@ def test_run_record_additive_field_still_loads(monkeypatch, tmp_path):
     out = orch_items.write_run_record(records[0])
     assert json.loads(out.read_text(encoding="utf-8"))["future_field"] == \
         {"nested": True}
+
+
+# ---------------------------------------------------------------------------
+# Round 4 — the locked-RMW primitive is only as good as its closures: a
+# mutator that applies PRE-lock state over the fresh record re-creates the
+# lost-update race one layer up.
+# ---------------------------------------------------------------------------
+
+def test_run_tick_note_merge_uses_fresh_record(monkeypatch, tmp_path):
+    """Round-4 must-detect: run_tick computed the merged note from its
+    pre-lock snapshot and assigned it verbatim inside the closure — a note
+    another writer landed mid-tick was overwritten. The merge must read
+    rec.note FRESH under the lock so both fragments survive."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+    import orch_items
+
+    def executor(run):
+        # Concurrent writer (a second engine) lands a note while this
+        # tick is executing — after run_tick's load, before its note set.
+        def _other(rec):
+            rec.note = "go-engine-note"
+        orch_items.mutate_run_record(run.run_id, _other)
+        return orch.ExecutionResult(status="done", note="executed-fragment")
+
+    def validator(run, execution):
+        return orch.ValidationResult(
+            status="done", passed=True, note=execution.note)
+
+    tick = orch.run_tick(
+        "demo", execution=executor, validation=validator, worker="tester")
+    assert tick is not None
+    path = orch_items.runs_root() / f"{tick.run.run_id}.json"
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert "executed-fragment" in (after.get("note") or "")
+    assert "go-engine-note" in (after.get("note") or "")
+
+
+def test_mark_stale_rechecks_status_under_lock(monkeypatch, tmp_path):
+    """Round-4 must-detect: _mark_stale_running_attempts decided
+    status=="running" from its pre-lock scan and the closure flipped the
+    fresh record to "blocked" unconditionally — un-finishing a record a
+    concurrent finalizer had just completed."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+    run = orch.run_once("demo", worker="tester", source="unit")
+    assert run is not None and run.status == "running"
+    import orch_items
+    real_mutate = orch.mutate_run_record
+
+    def mutate_with_race(run_id, mutator):
+        # Concurrent finalizer wins the window between the scan and the
+        # lock: the record is already done when the closure runs.
+        def _finish(rec):
+            rec.status = "done"
+        real_mutate(run_id, _finish)
+        return real_mutate(run_id, mutator)
+
+    monkeypatch.setattr(orch, "mutate_run_record", mutate_with_race)
+    orch._mark_stale_running_attempts("demo", run.index)
+    path = orch_items.runs_root() / f"{run.run_id}.json"
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["status"] == "done", (
+        "a completed record was un-finished back to blocked by a stale "
+        "precondition")

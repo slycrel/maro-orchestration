@@ -1516,7 +1516,18 @@ def _default_validation_bridge(run: RunRecord, execution: ExecutionResult) -> Va
 
 
 def _merge_notes(*notes: Optional[str]) -> Optional[str]:
-    chunks = [n.strip() for n in notes if n and n.strip()]
-    if not chunks:
+    # Round 4: dedup exact fragments — merge-not-replace callers (run_tick's
+    # note set, finalize) legitimately re-merge fragments the note already
+    # carries; without dedup every re-merge doubled them. Inputs that are
+    # themselves prior merges are split on the join delimiter first, so a
+    # fragment inside an accumulated note also counts as seen.
+    seen = []
+    for n in notes:
+        if not n or not n.strip():
+            continue
+        for chunk in (c.strip() for c in n.split("; ")):
+            if chunk and chunk not in seen:
+                seen.append(chunk)
+    if not seen:
         return None
-    return "; ".join(chunks)
+    return "; ".join(seen)

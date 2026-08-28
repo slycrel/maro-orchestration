@@ -970,8 +970,8 @@ def decompose(
     # adversarial review: wide/deep goals were never taught the tag).
     _recon_emission_on = False
     try:
-        from config import get as _cfg_get_recon
-        _recon_emission_on = bool(_cfg_get_recon("planner.recon_flavor", True))
+        from config import get_bool as _cfg_get_recon
+        _recon_emission_on = _cfg_get_recon("planner.recon_flavor", True)
     except Exception:
         pass
     if _recon_emission_on:
@@ -983,9 +983,9 @@ def decompose(
     # surface too (a disabled ledger must not be fed from the planner side).
     _fact_emission_on = False
     try:
-        from config import get as _cfg_get_wf
+        from config import get_bool as _cfg_get_wf
         from world_facts import world_facts_enabled as _wf_enabled
-        _fact_emission_on = (bool(_cfg_get_wf("planner.world_facts", True))
+        _fact_emission_on = (_cfg_get_wf("planner.world_facts", True)
                              and _wf_enabled())
     except Exception:
         pass
@@ -1136,8 +1136,8 @@ def decompose(
     if allow_cuts and _goal_scope in ("narrow", "medium"):
         _cuts_on = False
         try:
-            from config import get as _cfg_get_cuts
-            _cuts_on = bool(_cfg_get_cuts("planner.cuts_first", False))
+            from config import get_bool as _cfg_get_cuts
+            _cuts_on = _cfg_get_cuts("planner.cuts_first", False)
         except Exception:
             _cuts_on = False
         if _cuts_on:

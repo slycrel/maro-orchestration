@@ -1409,6 +1409,17 @@ def close_run(
         # Additive, writer-private: downstream consumers CAN distinguish a
         # card whose run-dir metadata never reached its terminal state.
         card["finalize_failed"] = True
+        # Round 4: the flag must reach the DURABLE card, not just this
+        # return value — curate_run persisted run_card.json before we knew
+        # finalize failed, and on-disk readers are the consumers the
+        # contract exists for. Republish through the same locked writer.
+        try:
+            from run_curation import _write_run_card
+            _write_run_card(run_dir(handle_id), card)
+        except Exception as exc:
+            log.warning(
+                "close_run(%s): could not persist finalize_failed flag "
+                "to run_card.json (%s)", handle_id, exc)
     try:
         from loop_report import write_reports_for_run_dir
         write_reports_for_run_dir(run_dir(handle_id))

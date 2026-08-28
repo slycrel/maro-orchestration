@@ -675,6 +675,14 @@ def test_close_run_finalize_failure_is_loud(workspace, monkeypatch, caplog):
             if l.strip()]
     assert any(r.get("event_type") == "run_finalize_failed"
                and "closerun3" in r.get("detail", "") for r in rows)
+    # Round-4 must-detect: the flag must reach the DURABLE card, not just
+    # the returned dict — curate_run persisted run_card.json before the
+    # failure was known, and on-disk readers (later processes) are the
+    # consumers the contract exists for.
+    from runs import run_dir
+    persisted = json.loads(
+        (run_dir("closerun3") / "run_card.json").read_text())
+    assert persisted.get("finalize_failed") is True
 
 
 def test_close_run_stamps_backend_error(workspace):
