@@ -1581,6 +1581,12 @@ def _bump_call_seq(rd: Path) -> int:
         return n
 
 
+# R3-8: errno classes whose link-publication failure was already warned this
+# process — one warning per class, not one per call (capture is per-LLM-call
+# hot path and a full disk would otherwise spam every request).
+_LINK_FAILURE_WARNED: set = set()
+
+
 def record_llm_call(prompt, response_text, *, backend="", model="",
                     tool_events=None, tokens_in=None, tokens_out=None,
                     max_tokens_requested=None,
@@ -1662,6 +1668,21 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
                     rec["seq"] = seq
                     payload = json.dumps(rec, default=str)
                     continue
+                except OSError as exc:
+                    # R3-8: a NON-collision link failure (EPERM, EXDEV,
+                    # ENOSPC, ...) previously fell to the blanket except —
+                    # call recording silently OFF, indistinguishable from
+                    # "recording disabled". Warn once per errno class per
+                    # process (never block the call), still return None;
+                    # the finally-unlink below leaves no temp debris.
+                    if exc.errno not in _LINK_FAILURE_WARNED:
+                        _LINK_FAILURE_WARNED.add(exc.errno)
+                        log.warning(
+                            "record_llm_call: publish link failed "
+                            "(errno %s) for %s: %s — call recording "
+                            "degraded for this errno class",
+                            exc.errno, out, exc)
+                    return None
                 return out
             return None
         finally:

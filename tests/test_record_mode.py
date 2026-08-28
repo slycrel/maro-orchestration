@@ -467,3 +467,32 @@ def test_recording_config_strict_bool_forms(workspace, monkeypatch, val,
         lambda key, default=None: (val if key == "record.enabled"
                                    else default))
     assert recording_enabled() is expected
+
+
+def test_record_link_failure_warns_once_returns_none(workspace, monkeypatch,
+                                                     caplog):
+    """R3-8 must-detect: a NON-collision link failure (EPERM/EXDEV/ENOSPC)
+    hit the blanket `except: return None` with zero diagnostics — an
+    operator could not tell "recording off" from "broken". Now: OSError on
+    the publication logs a warning ONCE per errno class per process, still
+    returns None (never blocks the call), and leaves no temp debris."""
+    import errno
+    import logging
+    import os as _os
+    rd = create_run_dir("hid0lnk1", prompt="p")
+    set_current_run_dir(rd)
+    getattr(runs, "_LINK_FAILURE_WARNED", set()).clear()
+
+    def deny_link(src, dst, *a, **k):
+        raise PermissionError(errno.EPERM, "operation not permitted", dst)
+    monkeypatch.setattr(_os, "link", deny_link)
+
+    with caplog.at_level(logging.WARNING, logger="maro.runs"):
+        assert record_llm_call("p1", "r1") is None
+        assert record_llm_call("p2", "r2") is None
+    warned = [r for r in caplog.records
+              if "publish link failed" in r.getMessage()]
+    assert len(warned) == 1  # once per errno class, across both calls
+    # No published records, no temp debris.
+    assert list(_calls_dir(rd).glob("call-*.json")) == []
+    assert list(_calls_dir(rd).glob(".call-tmp-*")) == []
