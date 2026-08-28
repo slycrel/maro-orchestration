@@ -17493,3 +17493,166 @@ cannot report a modification inside a directory it has never seen. Every
 previous battery ran against a tracked file where a leftover mutant shows
 up as an `M`. **Land the package before running its battery**, or the one
 safety net that has caught this before is not there.
+
+## Phase P: the third hand-written matcher, and two bugs only a differential finds (2026-08-27)
+
+`src/claim_verifier.py` — 477 lines, stdlib only — is the zero-LLM check
+that a synthesis step's file and symbol citations are real. It extracts
+path claims and symbol claims from prose, checks them against the
+filesystem and a scanned symbol index, and annotates the text with what
+it could not find. Ported to `go/internal/claimverify`.
+
+### Four patterns, and only one of them survives as a regex
+
+`_FILE_PATH_RE` opens with `(?<![\w`'"(])`. RE2 has no lookbehind, so
+this is the third module in the port to need a hand-written scanner
+(after pathrewrite's and receipts'), and the third time the SAFETY of the
+scan has had to be argued rather than assumed.
+
+The argument here is about where backtracking can go. The pattern is a
+greedy class run followed by a literal dot and one of a fixed extension
+list, and *every extension character is itself in the class* — so the
+whole match lies inside the maximal run, which is what makes the
+backtracking finite. `re` releases characters from the right, so the
+scanner walks candidate dot positions from the right too, and the first
+one carrying a valid extension that also clears the right-hand lookahead
+wins. That is why `notes.py.md` matches `notes.py` (the `.md` tail fails
+the extension list for the *bare* alternative, which only admits `py`)
+while `src/a.py.rs` matches `src/a.py`.
+
+The directory-prefix alternation backtracks too, and in a way a naive
+port loses: `tests?` matches the first four characters of `test/` and
+then fails on the slash, and `re` retries with the shorter alternative
+before moving on. So `filePathDirPrefixes` is the `s?` alternation
+EXPANDED into the order `re` tries it — `tests`, `test`, `docs`, `doc`,
+… — and a failed tail continues the loop rather than returning.
+
+The three symbol patterns have no lookbehind and stay regexes, but two of
+them have `\b`s, and pytext's `WordStart`/`WordEnd` CONSUME the boundary
+character. Consumption is free when the caller wants a boolean. It is not
+free here, and the two boundaries need opposite treatments:
+
+- A consumed LEADING boundary shifts the match start, which costs
+  nothing on its own — so that one is lifted out of the pattern
+  entirely, the pattern is `\A`-anchored, and `scanBoundaried` answers
+  the boundary itself by walking candidate start positions.
+- A consumed TRAILING boundary shortens the remaining text, so a second
+  match beginning at the very next character is silently lost. That one
+  stays in the pattern, consuming, and the alternative's REAL extent is
+  captured in a group the scan resumes from.
+
+`alpha_one function method beta_two` is the live shape: alternative one
+ends on the space that alternative two needs for its own boundary. It is
+in the corpus.
+
+### The mechanical derivation, applied to a restructured pattern
+
+Phase O established that the strongest form of a table guard is not a
+pinned copy but a MECHANICAL derivation — apply the port's forced
+substitutions to the upstream literal and demand character equality.
+`_SYMBOL_CONTEXT_RE` is the first case where the restructuring is
+substantial, and the derivation still holds: the test splits the upstream
+literal at its `\b|\b` seam, substitutes `\w`/`\s`, wraps each
+alternative in the extent group, spells the trailing boundary as
+`(?:\W|$)`, runs the result through `PyFoldI`, and compares against
+`symbolContextRe.String()`. It matches exactly. An upstream edit to
+either alternative now fails here with the diff rather than leaving the
+port quietly narrower.
+
+`_FILE_PATH_RE` gets the same treatment through a different door, because
+the port has no regex to compare against at all. The test reassembles the
+`re.VERBOSE` literal into the compact pattern it compiles to, pins that,
+and then derives the two tables OUT of it: the prefix alternation
+(expanding `s?` in try order) must equal `filePathDirPrefixes`, and the
+extension alternation must equal `filePathExts` — in order, not as sets.
+The two lookaround classes become predicate assertions, character by
+character, including the one character they disagree on: an open paren
+blocks on the left and a close paren on the right.
+
+### Two bugs, and neither was reachable by reading
+
+The differential found exactly two divergences across 244 scenarios, and
+both were places where a Go standard-library function is *almost* its
+Python counterpart.
+
+**`path.Dir` cleans; `PurePath.parent` does not.** `verify_file_claims`
+branches on `claim_path.parent == Path(".")` — does the claim carry a
+directory component? The port asked `path.Dir(claim) == "."`, and Go's
+`Dir` runs `Clean` on its answer. For `src/../a.py` that folds to `.`,
+sending the claim down the bare-name fallback (which verifies on
+basename alone and records nothing) instead of the unique-suffix one
+(which verifies on the whole relative path and records the match in
+`suffix_matched`). Both said "verified"; only one of them said WHY. The
+replacement counts parsed components the way pathlib does — dropping
+empty and `.`, keeping `..`.
+
+**`os.walk` does not follow symlinked directories, and the port did.**
+`scandirSplit` already had the harder half right: `entry.is_dir()`
+FOLLOWS a symlink, so a link to a directory belongs in `dirnames`, not
+`filenames` — classifying on Go's `DirEntry.IsDir()` would have invented
+a basename CPython never yields. But `os.walk`'s top-down branch then
+descends only when `followlinks or not islink(new_path)`, and
+`followlinks` defaults to False. So a symlinked directory contributes
+*nothing at all*: not its own name, not its target's contents, and not a
+slot against the directory cap. The port walked into it. The fixture is
+three lines.
+
+Both are the same species as Phase O's `_clip` clamp: a private helper
+whose behaviour is only observable through a caller that the module's own
+call sites never quite reach, found because the probe drives the
+functions directly and the fixtures were written from the FILE rather
+than from the diff.
+
+### A cap that cannot be built, and a hook that is not a cheat
+
+`_INDEX_MAX_DIRS = 2000` bounds the tree walk, and the cap is the ONE
+place the walk ORDER is observable — which 2000 directories are seen
+decides what lands in the two sets. Proving it needs a fixture whose
+order is forced, and only a chain is: `os.walk` yields siblings in
+scandir order, which is the filesystem's business and not the same twice.
+A 2001-link chain has a path over four thousand characters long, past
+what the kernel will accept.
+
+A fixture of 2001 *siblings* would have built and passed, and proved
+nothing — the answer is identical whether the cap fires or not. That is
+Phase O's "fails for the wrong reason" lesson arriving one tranche later
+in a new costume, and it is why `indexMaxDirs` became a var: the
+differential drives the cap DOWN to 3, 1 and 0 over a six-link chain, and
+the value 2000 is pinned against upstream in `upstream_test.go`. The
+logic and the constant are each checked by the thing that can actually
+check them.
+
+The zero case is worth its row: Python evaluates `i >= _INDEX_MAX_DIRS`
+before doing anything with the yielded directory, so a cap of zero
+indexes nothing at all, not even the root.
+
+### The differential
+
+244 scenarios across twelve kinds — `file_path_re`, `file_claims`,
+`symbol_claims`, `synthesis`, `claim_summary`, `symbol_summary`,
+`infer_root`, `tree_index`, `symbol_index`, `verify_files`,
+`verify_symbols`, `annotate`. The filesystem kinds build a fixture tree
+per scenario and `chdir` into it, so the probe restores the previous
+directory in a `finally` and the Go side in a `defer`.
+
+Two shapes are worth naming because they were written to be reachable
+rather than plausible:
+
+- `rp == norm` in the suffix fallback looks unreachable — if the exact
+  relative path is in the index, `candidate.exists()` already verified
+  it. A DANGLING SYMLINK is the door: `os.walk` lists the name,
+  `Path.exists()` refuses to follow it. The claim is verified by the
+  suffix arm, recorded in `suffix_matched`, and points at a file that
+  does not exist. That is the module's honest answer, and it is pinned.
+- `_infer_project_root` prefers the run-scoped subprocess cwd, and the
+  seam is `from llm import get_default_subprocess_cwd` INSIDE a `try`.
+  Both halves of the failure are reachable and both are in the corpus:
+  the import not resolving (the probe blocks the module; the port passes
+  a nil `Deps` field) and the call raising. Every scenario that does not
+  exercise the seam blocks the import, because the real adapter suite is
+  on the probe's `sys.path` and importing it would be a side effect no
+  differential wants.
+
+`Path.exists()` asks nothing about the TYPE, so a FILE named `src` and a
+DIRECTORY named `pyproject.toml` both satisfy the upward walk — and both
+are scenarios, next to the dangling symlink that does not.

@@ -77,6 +77,10 @@ var fsSortAllowlist = map[string]struct {
 		"reproducing Python's sorted(self.skipped.items()) over a dict " +
 		"whose keys this module writes as Go/Python literals. The values " +
 		"beside them are filenames; the keys never are"},
+	"internal/claimverify/claimverify.go": {1, "the SYMBOL names a text " +
+		"claimed, reproducing Python's sorted(candidates) over a set of " +
+		"`[A-Za-z_]\\w+` matches. The module reads directories all over, " +
+		"but nothing it sorts came off one"},
 	"internal/loopfinalize/loopfinalize.go": {1, "pre-flight flag KINDS, " +
 		"reproducing Python's sorted({f.kind for f in flags}); the kinds " +
 		"are Go/Python constants, never a path"},
