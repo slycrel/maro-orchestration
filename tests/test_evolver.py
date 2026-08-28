@@ -3607,6 +3607,69 @@ class TestVerdictTrust:
                            goal_verdict_source="closure_unverifiable")
         assert verdict_trust(unverifiable) == VERDICT_TRUST_EXCLUDED
 
+    # -- R2-2: malformed hard values must never reach FULL trust ---------
+
+    def test_null_source_behaves_as_absent(self):
+        """R2-2a posture (stated choice): explicit None source == absent ==
+        legacy "" — the codebase's omit-when-None discipline means a
+        well-formed row never writes null, so a null follows the same
+        absent-not-null intent. It does NOT exclude an otherwise-good row."""
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": None,
+             "goal_verdict_confidence": 0.9}) == VERDICT_TRUST_FULL
+        assert verdict_trust(
+            {"goal_verdict_source": None}) == VERDICT_TRUST_NEUTRAL
+
+    @pytest.mark.parametrize("source", [{"a": 1}, 7, ["closure"], 0.5, True])
+    def test_non_string_source_is_excluded(self, source):
+        """R2-2a must-detect: str(dict) / str(int) coined a novel 'source'
+        that str()-stringified past the legacy-"" match — a non-string
+        source is forged/drifted and lands least-privileged."""
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": source,
+             "goal_verdict_confidence": 0.9}) == VERDICT_TRUST_EXCLUDED
+
+    @pytest.mark.parametrize("achieved", ["false", "true", 1, 0.0,
+                                          {"judged": True}, ["yes"]])
+    def test_non_bool_achieved_is_excluded(self, achieved):
+        """R2-2b must-detect: any non-None goal_achieved counted as judged —
+        a string "false" (truthy!) or a container must not be a verdict.
+        Exactly bool or nothing."""
+        assert verdict_trust(
+            {"goal_achieved": achieved, "goal_verdict_source": "closure",
+             "goal_verdict_confidence": 0.9}) == VERDICT_TRUST_EXCLUDED
+
+    @pytest.mark.parametrize("conf", ["garbage", float("nan"),
+                                      float("inf"), {"c": 1}])
+    def test_malformed_confidence_errs_down(self, conf):
+        """R2-2c must-detect: an unparseable confidence fell through
+        `except: pass` to FULL, and NaN < floor is False so NaN also
+        reached FULL. Malformed confidence errs DOWN to excluded."""
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": "closure",
+             "goal_verdict_confidence": conf}) == VERDICT_TRUST_EXCLUDED
+
+    def test_string_false_excluded_flag_does_not_exclude(self):
+        """R2-2d must-detect: bool("false") is True, so a drifted string
+        flag excluded a good row (conservative, but the parse was wrong).
+        False-shaped strings do not exclude; the row grades normally."""
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": "closure",
+             "goal_verdict_confidence": 0.9,
+             "verdict_excluded": "false"}) == VERDICT_TRUST_FULL
+
+    def test_true_shaped_and_truthy_container_flags_exclude(self):
+        """True-shaped strings and truthy non-bool non-string flags stay
+        conservative: excluded."""
+        base = {"goal_achieved": True, "goal_verdict_source": "closure",
+                "goal_verdict_confidence": 0.9}
+        assert verdict_trust({**base, "verdict_excluded": "true"}) \
+            == VERDICT_TRUST_EXCLUDED
+        assert verdict_trust({**base, "verdict_excluded": {"why": "x"}}) \
+            == VERDICT_TRUST_EXCLUDED
+        assert verdict_trust({**base, "verdict_excluded": 1}) \
+            == VERDICT_TRUST_EXCLUDED
+
 
 class TestVerifyCounts:
     def test_directional_and_excluded_dropped_from_denominator(self):

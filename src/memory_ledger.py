@@ -128,6 +128,13 @@ _KNOWN_VERDICT_SOURCES = frozenset({
     "verdict_pending_orphaned",    # stop_verdicts.VERDICT_SOURCE_PENDING_ORPHANED
 })
 
+# Sources whose verdicts are the JUDGE's own failure, not evidence about the
+# run (C1.2/R2-8). Every stamp choke point sets verdict_excluded by CLASS:
+# an exclusion-class source stamps the flag True; an authoritative source
+# REMOVES it (absent-not-false discipline) — a corrected verdict must not
+# stay excluded forever because an earlier closure attempt couldn't verify.
+_EXCLUSION_CLASS_SOURCES = frozenset({"closure_unverifiable"})
+
 # The confidence floor below which a judged verdict is directional-only. This
 # is the same 0.7 the closure machinery was built around (done-vs-achieved
 # analysis, 2026-07-09); NOT a tunable — a lower bar would let the verifier's
@@ -152,9 +159,12 @@ def verdict_trust(outcome: Any) -> str:
                     Present state, keep — absence means "not judged", not "failed".
       excluded    — closure_unverifiable (verifier's own failure), an
                     environment-error-capped verdict, a row stamped
-                    verdict_excluded, or an UNKNOWN source. Excluded from ALL
-                    learning consumers: a verifier-cwd bug must not be taught
-                    as a regression.
+                    verdict_excluded, an UNKNOWN source, or a MALFORMED hard
+                    value (non-string source, non-bool goal_achieved,
+                    unparseable/non-finite confidence — R2-2). Excluded from
+                    ALL learning consumers: a verifier-cwd bug must not be
+                    taught as a regression, and a forged/drifted gate value
+                    must never grade UP.
     """
     def _get(key, default=None):
         if isinstance(outcome, dict):
@@ -164,10 +174,34 @@ def verdict_trust(outcome: Any) -> str:
     # Explicit exclusion flag (C1.2): judges stamp exclusion-class verdicts
     # additively; honoring the flag OR the legacy value below means a new
     # exclusion-class source from either engine is safe by construction.
-    if bool(_get("verdict_excluded", False)):
+    # Strict parse (R2-2d): bool("false") is True, so a drifted string flag
+    # excluded in the WRONG direction. Exactly True (or a true-shaped
+    # string) excludes; false-shaped/unrecognized strings do not; any other
+    # truthy non-bool value (dict, int) excludes — conservative.
+    flag = _get("verdict_excluded", False)
+    if isinstance(flag, bool):
+        if flag:
+            return VERDICT_TRUST_EXCLUDED
+    elif isinstance(flag, str):
+        if flag.strip().lower() in ("1", "true", "yes", "on"):
+            return VERDICT_TRUST_EXCLUDED
+    elif flag:
         return VERDICT_TRUST_EXCLUDED
 
-    source = str(_get("goal_verdict_source", "") or "")
+    # Hard-value validation (R2-2a): "" and ABSENT are the legacy-known
+    # shapes; explicit None behaves as absent too — the codebase's
+    # omit-when-None discipline (_verdict_row pops empty sources) means a
+    # well-formed row never writes null, so a null that does appear is a
+    # foreign writer following the same absent-not-null intent. Any
+    # NON-string source (dict, int, list) is forged/drifted → least
+    # privileged, never FULL.
+    raw_source = _get("goal_verdict_source", None)
+    if raw_source is None:
+        source = ""
+    elif isinstance(raw_source, str):
+        source = raw_source
+    else:
+        return VERDICT_TRUST_EXCLUDED
     # closure_unverifiable = the verifier failed to reach a verdict (its own
     # cwd/env bug, a timeout, a probe that could not run). Environment-error
     # caps fold into this source today; a future exclusion-class source
@@ -187,17 +221,29 @@ def verdict_trust(outcome: Any) -> str:
     if achieved is None:
         # Unjudged — a dict row omits the key entirely when None (never null).
         return VERDICT_TRUST_NEUTRAL
+    if not isinstance(achieved, bool):
+        # R2-2b: only an actual bool is a judged verdict. A string "false",
+        # an int, a container — any non-bool non-None — is a forged or
+        # drifted gate value and must not count as judged in EITHER
+        # direction: least privileged, excluded from learning.
+        return VERDICT_TRUST_EXCLUDED
 
     conf = _get("goal_verdict_confidence", None)
     # A judged verdict with no confidence attached (deterministic provenance
     # guard, NOW self-verdict) is authoritative — only an *explicit* low
     # confidence downgrades to directional.
     if conf is not None:
+        # R2-2c: the parse must err DOWN. 'garbage' or NaN previously fell
+        # through to FULL — an unparseable or non-finite confidence is a
+        # malformed gate value, not an authoritative one.
         try:
-            if float(conf) < VERDICT_CONFIDENCE_FLOOR:
-                return VERDICT_TRUST_DIRECTIONAL
+            conf_f = float(conf)
         except (TypeError, ValueError):
-            pass
+            return VERDICT_TRUST_EXCLUDED
+        if not math.isfinite(conf_f):
+            return VERDICT_TRUST_EXCLUDED
+        if conf_f < VERDICT_CONFIDENCE_FLOOR:
+            return VERDICT_TRUST_DIRECTIONAL
     return VERDICT_TRUST_FULL
 
 
@@ -645,8 +691,9 @@ def record_outcome(
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
         # C1.2: exclusion is a stamped flag, not just a value match — the
-        # judge lane that writes closure_unverifiable marks the class here.
-        verdict_excluded=(goal_verdict_source == "closure_unverifiable"),
+        # judge lane that writes closure_unverifiable marks the class here
+        # (by CLASS, mirroring stamp_outcome_verdict — R2-8).
+        verdict_excluded=(goal_verdict_source in _EXCLUSION_CLASS_SOURCES),
         loop_id=loop_id,
         dry_run=bool(dry_run),
         lesson_extraction_status=lesson_extraction_status,
@@ -886,10 +933,17 @@ def stamp_outcome_verdict(
             if goal_achieved is not None:
                 row["goal_achieved"] = bool(goal_achieved)
             row["goal_verdict_source"] = goal_verdict_source
-            if goal_verdict_source == "closure_unverifiable":
+            if goal_verdict_source in _EXCLUSION_CLASS_SOURCES:
                 # C1.2: stamp the exclusion CLASS alongside the value so
                 # verdict_trust can honor the flag on future sources too.
                 row["verdict_excluded"] = True
+            else:
+                # R2-8: the flag follows the CURRENT stamp's class. A later
+                # authoritative re-stamp (closure, provenance,
+                # deterministic_tests) clears the exclusion — the superseded
+                # excluded verdict is already preserved in verdict_history.
+                # Absent-not-false: remove the key, never write False.
+                row.pop("verdict_excluded", None)
             # When the verdict landed (chunk B, 2026-07-31): the row's own ts
             # is record time; without this stamp the framing→verdict delay —
             # the flow number the whole learning pipeline divides by — is

@@ -129,6 +129,42 @@ def test_stamp_outcome_verdict_stamps_verdict_excluded_flag(monkeypatch, tmp_pat
     assert rows[-1].get("verdict_excluded") is True
 
 
+def test_authoritative_restamp_clears_verdict_excluded(monkeypatch, tmp_path):
+    """R2-8 must-detect: verdict_excluded was stamped for
+    closure_unverifiable but NEVER cleared when a later authoritative
+    source re-stamped the row — a corrected verdict stayed excluded
+    forever. The flag now follows the CURRENT stamp's class; the
+    superseded verdict is preserved in verdict_history."""
+    from memory import _outcomes_path, stamp_outcome_verdict
+    from memory_ledger import verdict_trust, VERDICT_TRUST_EXCLUDED
+    _setup(monkeypatch, tmp_path)
+    # Seed a judged row so the correcting re-stamp writes history.
+    record_outcome("g", "done", "s", loop_id="loop-r28",
+                   goal_achieved=False, goal_verdict_source="provenance")
+    # Judge failure: exclusion-class stamp.
+    r1 = stamp_outcome_verdict(
+        "loop-r28", goal_achieved=None,
+        goal_verdict_source="closure_unverifiable")
+    assert r1.status == "updated"
+    rows = [json.loads(l) for l in
+            _outcomes_path().read_text().splitlines() if l.strip()]
+    assert rows[-1].get("verdict_excluded") is True
+    assert verdict_trust(rows[-1]) == VERDICT_TRUST_EXCLUDED
+    # Corrected authoritative verdict: exclusion must clear.
+    r2 = stamp_outcome_verdict(
+        "loop-r28", goal_achieved=True, goal_verdict_source="closure",
+        goal_verdict_confidence=1.0)
+    assert r2.status == "updated"
+    rows = [json.loads(l) for l in
+            _outcomes_path().read_text().splitlines() if l.strip()]
+    row = rows[-1]
+    assert "verdict_excluded" not in row  # absent-not-false
+    assert verdict_trust(row) != VERDICT_TRUST_EXCLUDED
+    # The superseded verdict survives in history.
+    history = row.get("verdict_history", [])
+    assert any(h.get("goal_achieved") is False for h in history)
+
+
 # ---------------------------------------------------------------------------
 # load_outcomes
 # ---------------------------------------------------------------------------
