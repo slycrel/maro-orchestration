@@ -25,7 +25,7 @@ import math
 import re
 import logging
 from collections import Counter
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -264,6 +264,49 @@ class TieredLesson:
     # through); the row itself is untouched otherwise. Old rows
     # deserialize to {}.
     canon: Dict[str, Any] = field(default_factory=dict)
+
+
+def _tiered_lesson_from_dict(d: Dict[str, Any]) -> TieredLesson:
+    """Rehydrate a store row WITHOUT stripping unknown keys (CONTRACTS C0.1).
+
+    The filtered constructor is required (an unknown kwarg raises TypeError),
+    but on its own it made every read-modify-write path a silent field
+    stripper: any key a newer writer legally added was deleted store-wide by
+    the next reinforcement/promotion/GC rebuild. Unknown keys ride on the
+    instance as ``_extras`` and ``_tiered_lesson_row`` merges them back at
+    serialization, so raw round-trips preserve them byte-for-byte in intent
+    (declared fields still win on any name collision).
+    """
+    tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__
+                         if k in d})
+    extras = {k: v for k, v in d.items()
+              if k not in TieredLesson.__dataclass_fields__}
+    if extras:
+        tl._extras = extras
+    return tl
+
+
+def _tiered_lesson_row(tl: TieredLesson) -> Dict[str, Any]:
+    """Serialize for the store, restoring any unknown keys the row carried.
+
+    Declared fields win over extras on collision — the typed value is the
+    one this engine actually maintained.
+    """
+    return {**getattr(tl, "_extras", {}), **asdict(tl)}
+
+
+def _clone_tiered_lesson(tl: TieredLesson) -> TieredLesson:
+    """dataclasses.replace + the ``_extras`` rider (C0.1).
+
+    ``replace()`` builds a fresh instance from declared fields only, so a
+    bare clone of a LOADED row (tier promotion, refight archive copy) would
+    strip a newer writer's unknown keys.
+    """
+    clone = replace(tl)
+    extras = getattr(tl, "_extras", None)
+    if extras:
+        clone._extras = dict(extras)
+    return clone
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +747,10 @@ def record_tiered_lesson(
 
 def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
     from file_lock import locked_append
-    locked_append(_tiered_lessons_path(tier), json.dumps(asdict(tl)))
+    # _tiered_lesson_row, not bare asdict: callers append LOADED rows too
+    # (tier promotion), and a loaded row may carry a newer writer's unknown
+    # keys in _extras (C0.1).
+    locked_append(_tiered_lessons_path(tier), json.dumps(_tiered_lesson_row(tl)))
 
 
 _REINFORCE_EVIDENCE_CAP = 8  # distinct evidence refs kept per row (first N sightings)
@@ -1007,7 +1053,10 @@ def load_tiered_lessons(
             # re-serialize the surrogates as clean escapes — laundering
             # the corruption signal (see jsonl_utils.loads_clean).
             d = _loads_clean(line)
-            tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
+            # Unknown-key-preserving rehydration (C0.1): rewrites rebuild the
+            # store from this list, so a filtering constructor here silently
+            # stripped any field a newer writer added — store-wide.
+            tl = _tiered_lesson_from_dict(d)
             # Coerce the numeric fields HERE, inside the per-row guard.
             # The sort at the bottom of this function is OUTSIDE it, so a
             # single row with `"score": "high"` raised
@@ -1116,8 +1165,7 @@ def _quarantine_unparseable(path) -> List[str]:
             continue
         try:
             d = _loads_clean(line)
-            tl = TieredLesson(**{k: d[k] for k in
-                                 TieredLesson.__dataclass_fields__ if k in d})
+            tl = _tiered_lesson_from_dict(d)
             float(tl.score)
             float(tl.confidence)
             _coerce_int_fields(tl)
@@ -1236,7 +1284,8 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
             lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,
                                           raw=True, for_rewrite=True)
         atomic_write(path,
-                     "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     "".join(json.dumps(_tiered_lesson_row(tl)) + "\n"
+                             for tl in lessons)
                      + "".join(stranded),
                      errors="surrogateescape")
 
@@ -1261,7 +1310,8 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
                                       raw=True, for_rewrite=True)
         lessons = mutate(lessons)
         atomic_write(path,
-                     "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     "".join(json.dumps(_tiered_lesson_row(tl)) + "\n"
+                             for tl in lessons)
                      + "".join(stranded),
                      errors="surrogateescape")
 
@@ -1289,7 +1339,7 @@ def _archive_lessons(lessons: List[TieredLesson], *, reason: str) -> None:
     path = _lessons_archive_path()
     now = datetime.now(timezone.utc).isoformat()
     for tl in lessons:
-        rec = asdict(tl)
+        rec = _tiered_lesson_row(tl)
         rec["archived_at"] = now
         rec["archived_reason"] = reason
         locked_append(path, json.dumps(rec))
@@ -1305,7 +1355,6 @@ def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLess
     path = _lessons_archive_path()
     if not path.exists():
         return []
-    field_names = {f.name for f in fields(TieredLesson)}
     by_id: Dict[str, TieredLesson] = {}
     drifted = 0
     for rec in _read_store(path, "_load_archived_lessons"):
@@ -1314,7 +1363,14 @@ def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLess
             by_id.pop(rec.get("lesson_id", ""), None)
             continue
         try:
-            tl = TieredLesson(**{k: v for k, v in rec.items() if k in field_names})
+            # Preserving rehydration (C0.1): resurrection re-appends this row
+            # to the live store, so filtering here would strip a newer
+            # writer's fields from the restored copy. The archive-only keys
+            # (archived_at/archived_reason) are deliberately NOT extras on
+            # the live row: strip them before the preserving load.
+            live_rec = {k: v for k, v in rec.items()
+                        if k not in ("archived_at", "archived_reason")}
+            tl = _tiered_lesson_from_dict(live_rec)
         except Exception:
             drifted += 1
             continue
@@ -1527,7 +1583,7 @@ def resurrect_archived_lesson(lesson_id: str) -> Optional[TieredLesson]:
     match.last_reinforced = _current_date()
     match.times_reinforced += 1
     from file_lock import locked_append
-    locked_append(_tiered_lessons_path(tier), json.dumps(asdict(match)))
+    locked_append(_tiered_lessons_path(tier), json.dumps(_tiered_lesson_row(match)))
     return match
 
 
@@ -2036,7 +2092,7 @@ Output ONLY valid JSON:
             # Data retention: the refuted original is archived before the
             # overwrite — for a tiered-only row this copy is the ONLY full
             # text that survives the revision (2026-08-09 review, 3/3).
-            _archive_lessons([replace(row)], reason="refight_revise")
+            _archive_lessons([_clone_tiered_lesson(row)], reason="refight_revise")
             row.lesson = new_text
             # A retained variant may BE the corrected text — it is canonical
             # now, not a variant (adversarial review 2026-08-11: revision
@@ -2147,7 +2203,7 @@ def _move_medium_to_long(lesson_id: str, *, in_lock_guards,
     def _stage(lessons: List[TieredLesson]) -> List[TieredLesson]:
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
         if t is not None and in_lock_guards(t):
-            staged["t"] = replace(t)
+            staged["t"] = _clone_tiered_lesson(t)
         return lessons
 
     _mutate_tiered_lessons(MemoryTier.MEDIUM, _stage)

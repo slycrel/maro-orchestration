@@ -491,6 +491,13 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("grounding")
     if "merged_variants" in row and not row["merged_variants"]:
         row.pop("merged_variants")
+    # Unknown-key restoration (C0.1): rows rehydrated by _lesson_from_row
+    # carry any keys a newer writer added in `_extras`; merge them back so
+    # a rewrite round-trips them. Declared fields win on collision, and the
+    # tri-state pops above cannot resurrect — extras are unknown keys only.
+    extras = getattr(obj, "_extras", None)
+    if extras:
+        row = {**extras, **row}
     return row
 
 
@@ -1756,7 +1763,16 @@ def _lesson_from_row(d: dict) -> Lesson:
     kwargs = {k: d[k] for k in Lesson.__dataclass_fields__ if k in d}
     if "recorded_at" not in d:
         kwargs["recorded_at"] = ""
-    return Lesson(**kwargs)
+    lesson = Lesson(**kwargs)
+    # Unknown-key preservation (CONTRACTS C0.1, flat half): the rewrite
+    # paths persist whatever was loaded, so filtering to known fields made
+    # every rewrite strip any field a newer writer legally added. Unknown
+    # keys ride on the instance and _verdict_row merges them back.
+    extras = {k: v for k, v in d.items()
+              if k not in Lesson.__dataclass_fields__}
+    if extras:
+        lesson._extras = extras
+    return lesson
 
 
 def load_lessons(
