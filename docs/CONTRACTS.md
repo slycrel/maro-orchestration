@@ -716,6 +716,22 @@ registry's coverage boundary explicit instead of implied. Promotion path:
 a store becomes writable-by-both by getting its own B-entry, grounded in
 its writer/reader code the way B1-B11 are.
 
+**Orchestrator run records** (round 3, R3-6 — named here so the
+"coexistence prerequisite" claim has a registered store behind it):
+`<output_root()>/runs/<run_id>.json` (`orch_items.runs_root()`), one JSON
+object per orchestration run. Single-orchestrator-writer today
+(`orch.py`/`orch_items.py`); every mutation of an EXISTING record goes
+through `orch_items.mutate_run_record` — a locked RMW under the record
+file's `.lock` (`file_lock.locked_rmw`) that re-reads the current raw
+dict, retains unknown keys as `_extras`, applies the mutation to the
+fresh record, and publishes with declared-fields-win merge —
+`write_run_record` (atomic_write, same merge) remains the create-new
+path only. atomic_write alone prevented torn files, not lost updates;
+before R3-6, `orch.finalize_run` and `run_tick`'s artifact/note rewrites
+were unlocked stale-object RMWs that destroyed concurrent updates. A
+second engine writing this store must use the same lock name (the
+record path + `.lock` via file_lock) and the same extras discipline.
+
 ---
 
 ## C. Findings: the upgrade queue

@@ -56,6 +56,7 @@ from orch_items import (
     _run_record_path,
     write_run_record,
     load_run_record,
+    mutate_run_record,
     validation_summary_path,
     load_validation_summary,
     _load_run_records,
@@ -135,11 +136,14 @@ def _mark_stale_running_attempts(project: str, item_index: int) -> None:
     stale_note = "superseded by a new attempt"
     for record in _load_run_records():
         if record.project == project and record.index == item_index and record.status == "running":
-            record.status = "blocked"
-            record.updated_at = now_utc_iso()
-            record.finished_at = record.updated_at
-            record.note = _merge_notes(record.note, stale_note)
-            write_run_record(record)
+            # Locked RMW (R3-6): same stale-object class as finalize_run.
+            def _mark_stale(rec: RunRecord) -> None:
+                rec.status = "blocked"
+                rec.updated_at = now_utc_iso()
+                rec.finished_at = rec.updated_at
+                rec.note = _merge_notes(rec.note, stale_note)
+
+            mutate_run_record(record.run_id, _mark_stale)
 
 
 def select_global_running_next() -> Optional[Tuple[str, NextItem]]:
@@ -341,11 +345,17 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
         raise ValueError(f"cannot finalize {run_id}: item is not in progress")
     mark_item(run.project, run.index, state)
     now = now_utc_iso()
-    run.status = status
-    run.updated_at = now
-    run.finished_at = now
-    run.note = note or run.note
-    write_run_record(run)
+
+    # Locked RMW (R3-6): the load above is for validation/mark_item; the
+    # WRITE re-reads the current record under its lock so a concurrent
+    # writer's update between our load and this publish is not destroyed.
+    def _finalize_fields(rec: RunRecord) -> None:
+        rec.status = status
+        rec.updated_at = now
+        rec.finished_at = now
+        rec.note = note or rec.note
+
+    run = mutate_run_record(run_id, _finalize_fields)
     if status == "done":
         append_decision(run.project, [f"Completed `{run.text}` ({run.run_id}).", *([run.note] if run.note else [])])
     else:
@@ -489,9 +499,13 @@ def run_tick(
             )
 
     if outcome.artifact_path:
-        run.artifact_path = outcome.artifact_path
-        run.updated_at = now_utc_iso()
-        write_run_record(run)
+        # Locked RMW (R3-6): patch onto the CURRENT record, not the object
+        # loaded at tick start.
+        def _set_artifact(rec: RunRecord) -> None:
+            rec.artifact_path = outcome.artifact_path
+            rec.updated_at = now_utc_iso()
+
+        run = mutate_run_record(run.run_id, _set_artifact)
 
     validation_trace = getattr(validate, "_last_trace", None)
     if not isinstance(validation_trace, list):
@@ -500,9 +514,12 @@ def run_tick(
 
     update_note = _merge_notes(run.note, outcome.note, result.note, f"validation_summary={summary_path}" if summary_path else None)
     if update_note and update_note != run.note:
-        run.note = update_note
-        run.updated_at = now_utc_iso()
-        write_run_record(run)
+        # Locked RMW (R3-6), same shape as the artifact patch above.
+        def _set_note(rec: RunRecord) -> None:
+            rec.note = update_note
+            rec.updated_at = now_utc_iso()
+
+        run = mutate_run_record(run.run_id, _set_note)
 
     if result.status in {"done", "blocked"}:
         run = finalize_run(run.run_id, result.status, note=result.note)

@@ -1287,6 +1287,86 @@ def test_finalize_run_roundtrips_future_field(monkeypatch, tmp_path):
     assert after["future_field"] == "engine-b-was-here"
 
 
+# ---------------------------------------------------------------------------
+# R3-6 — run-record mutations are LOCKED RMWs: a write landing between a
+# mutator's load and its publish must survive (atomic_write prevents torn
+# files, not lost updates).
+# ---------------------------------------------------------------------------
+
+def test_finalize_run_does_not_lose_concurrent_update(monkeypatch, tmp_path):
+    """R3-6 must-detect: orch.finalize_run loaded a RunRecord, mutated the
+    stale object, and rewrote the file — a concurrent writer's update
+    landing in the window (here: injected during mark_item, i.e. after
+    finalize's load, before its write) was silently destroyed."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+    run = orch.run_once("demo", worker="tester", source="unit")
+    assert run is not None
+    import orch_items
+    path = orch_items.runs_root() / f"{run.run_id}.json"
+
+    real_mark_item = orch.mark_item
+
+    def mark_item_and_race(slug, index, state):
+        out = real_mark_item(slug, index, state)
+        # Concurrent writer (another process / a second engine) lands an
+        # update AFTER finalize_run's load, BEFORE its publish.
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["future_b"] = "landed-mid-finalize"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(orch, "mark_item", mark_item_and_race)
+    finished = orch.finalize_run(run.run_id, "done", note="unit verified")
+    assert finished.status == "done"
+
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["status"] == "done"
+    assert after.get("future_b") == "landed-mid-finalize"
+
+
+def test_mutate_run_record_interleaved_mutations_both_survive(
+        monkeypatch, tmp_path):
+    """R3-6: the primitive itself — a stale RunRecord object held across
+    another mutate_run_record does not cause a lost update, because each
+    mutation re-reads the CURRENT raw dict under the record's lock."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+    run = orch.run_once("demo", worker="tester", source="unit")
+    assert run is not None
+    import orch_items
+
+    # Writer A loads (and holds a now-soon-to-be-stale object)...
+    stale_a = orch_items.load_run_record(run.run_id)
+    assert not stale_a.note
+    # ...writer B lands its mutation...
+    def _b(rec):
+        rec.note = "note-from-b"
+    orch_items.mutate_run_record(run.run_id, _b)
+
+    # ...writer A now applies ITS mutation via the primitive. Its stale
+    # object is irrelevant: the mutator runs against the fresh record.
+    def _a(rec):
+        rec.worker = "worker-from-a"
+    final = orch_items.mutate_run_record(run.run_id, _a)
+    assert final.note == "note-from-b"
+    assert final.worker == "worker-from-a"
+
+    path = orch_items.runs_root() / f"{run.run_id}.json"
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["note"] == "note-from-b"
+    assert after["worker"] == "worker-from-a"
+
+
+def test_mutate_run_record_missing_record_raises(monkeypatch, tmp_path):
+    """R3-6: write_run_record stays the create-new path — the locked RMW
+    refuses to invent a record."""
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        orch_items.mutate_run_record("run-nonexistent", lambda rec: None)
+
+
 def test_empty_object_run_record_is_skipped_with_reason(
         monkeypatch, tmp_path, caplog):
     """R2-4 must-detect: `{}` used to default into a plausible live record

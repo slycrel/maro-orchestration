@@ -529,6 +529,49 @@ def load_run_record(run_id: str) -> RunRecord:
     return record
 
 
+def mutate_run_record(run_id: str,
+                      mutator: Callable[[RunRecord], None]) -> RunRecord:
+    """Locked read-modify-write of one run record (R3-6).
+
+    atomic_write prevents TORN files, not LOST updates: every
+    load → mutate-object → write_run_record path (orch.finalize_run,
+    run_tick's artifact/note rewrites) held a stale RunRecord across the
+    window, so a concurrent writer's fields — including a second engine's
+    legal additions — were silently destroyed. Same locked_rmw discipline
+    as the runs.py stamp family: under the record file's `.lock`, re-read
+    the CURRENT raw dict, rehydrate (retaining unknown keys as ``_extras``),
+    apply ``mutator`` to that FRESH record, and publish with the
+    declared-fields-win-over-raw merge write_run_record uses.
+
+    ``mutator`` mutates the record in place and runs inside the critical
+    section — keep it cheap, never an LLM/subprocess. Raises
+    FileNotFoundError when no record exists (``write_run_record`` stays
+    the create-new path) and ValueError on an unparseable/invalid record,
+    exactly like load_run_record. Returns the post-mutation record.
+    """
+    path = _run_record_path(run_id)
+    result: dict = {}
+
+    def _rmw(old: str) -> str:
+        if not old.strip():
+            raise FileNotFoundError(f"run record missing: {path}")
+        data = json.loads(old)
+        if not isinstance(data, dict):
+            raise ValueError(f"run record {run_id} is not a JSON object")
+        record = _run_record_from_dict(data)
+        if record.run_id != run_id:
+            raise ValueError(f"run record file {run_id}.json holds run_id "
+                             f"{record.run_id!r}")
+        mutator(record)
+        row = {**getattr(record, "_extras", {}), **asdict(record)}
+        result["record"] = record
+        return json.dumps(row, indent=2) + "\n"
+
+    from file_lock import locked_rmw
+    locked_rmw(path, _rmw)
+    return result["record"]
+
+
 def validation_summary_path(run: RunRecord) -> Optional[Path]:
     if not run.artifact_path:
         return None
