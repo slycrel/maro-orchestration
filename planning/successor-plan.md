@@ -180,9 +180,20 @@ boundary. Then decide what the successor becomes.
 2. [done] go-tree-triage.md
 3. [ ] Iterate this plan with Jeremy → v1 (open questions above)
 4. [in flight 2026-08-28] Phase 1a EARLY-STARTED by Jeremy's sanction
-   ("python prep work... upgrade our on-disk contracts"): contract
-   registry extraction (subagent, in maro-wt-contracts worktree) →
-   review → codex design pass → land; then additive contract
-   sharpenings + tolerant-reader fixes from its findings, tested +
-   codex-reviewed + landed. Phase 2 remains gated on plan v1.
+   ("python prep work... upgrade our on-disk contracts"). Progress:
+   registry (docs/CONTRACTS.md, 11 backbone entries) extracted and
+   adversarially reviewed — round-1 verdict REJECT with an 8/8-VERIFIED
+   ledger (headline: the doc guaranteed things the Python engine doesn't
+   do). That flipped the doc's job: the five code defects it exposed are
+   now the top of the prep queue. Registry REVISED per verdict +
+   Jeremy's enforcement taxonomy (hard/soft element axis, readers-only-
+   loosen, seam rule, least-privileged unknowns) — commit b93ba84e in
+   maro-wt-contracts: honest scope (B12 census of ~44 unregistered
+   stores), DEFECT-tagged reality in B2/B3/B4/B8/B9, new C0 tier of 8
+   verified coexistence prerequisites. C0 implementation subagent in
+   flight (lesson-store RMW round-tripping, finalize_run locking,
+   events.jsonl byte-caps, call-record O_EXCL, atomic log rotation,
+   file_lock strict parse, least-privileged verdict trust, tolerant
+   RunRecord). Next: codex round 2 on the whole chunk, verify-before-
+   fix, land via land.sh. Phase 2 remains gated on plan v1.
 5. [ ] Behavior suite (1b) — after the registry lands
