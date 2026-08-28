@@ -1188,3 +1188,72 @@ def test_worker_session_bridge_supports_cwd_alias(monkeypatch, tmp_path):
     artifact_root = orch.resolve_artifact_path(tick.run.artifact_path)
     expected = str(worker_dir)
     assert (artifact_root / "cwd.txt").read_text(encoding="utf-8") == expected
+
+
+# ---------------------------------------------------------------------------
+# C0.8 — tolerant RunRecord loader (docs/CONTRACTS.md)
+# ---------------------------------------------------------------------------
+
+def _write_raw_run_record(run_id: str, data: dict) -> Path:
+    import orch_items
+    path = orch_items.runs_root() / f"{run_id}.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _minimal_record_dict(run_id: str) -> dict:
+    return {
+        "run_id": run_id,
+        "project": "demo",
+        "index": 0,
+        "text": "first",
+        "status": "done",
+        "source": "unit",
+        "worker": "tester",
+        "started_at": "2026-08-28T00:00:00+00:00",
+        "updated_at": "2026-08-28T00:00:00+00:00",
+    }
+
+
+def test_load_run_record_tolerates_additive_field(monkeypatch, tmp_path):
+    """C0.8 must-detect: RunRecord(**data) raised TypeError on any field a
+    newer writer legally added; the loader must filter, not crash."""
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    data = _minimal_record_dict("run-add")
+    data["future_field"] = "x"
+    _write_raw_run_record("run-add", data)
+    rec = orch_items.load_run_record("run-add")
+    assert rec.run_id == "run-add"
+    assert rec.project == "demo"
+    assert rec.attempt == 1
+
+
+def test_load_run_records_keeps_additive_field_rows(monkeypatch, tmp_path):
+    """C0.8 must-detect: one legal additive field silently vanished EVERY
+    such record from listings (except Exception: continue)."""
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    data = _minimal_record_dict("run-list")
+    data["future_field"] = "x"
+    _write_raw_run_record("run-list", data)
+    records = orch_items._load_run_records()
+    assert [r.run_id for r in records] == ["run-list"]
+
+
+def test_load_run_records_skips_corrupt_file_with_logged_reason(
+        monkeypatch, tmp_path, caplog):
+    """C0.8 must-detect: a genuinely corrupt file is skipped WITH a logged
+    reason — the pre-fix blanket except was intolerant AND invisible."""
+    import logging
+
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _write_raw_run_record("run-good", _minimal_record_dict("run-good"))
+    bad = orch_items.runs_root() / "run-bad.json"
+    bad.write_text("not json{{{", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="maro.orch_items"):
+        records = orch_items._load_run_records()
+    assert [r.run_id for r in records] == ["run-good"]
+    assert "run-bad.json" in caplog.text
+    assert "skipped" in caplog.text

@@ -3564,6 +3564,49 @@ class TestVerdictTrust:
             {"goal_achieved": False, "goal_verdict_source": "closure_unverifiable"}
         ) == VERDICT_TRUST_EXCLUDED
 
+    def test_unknown_source_routes_to_least_privileged(self):
+        """C0.7 must-detect: an unrecognized goal_verdict_source used to
+        fall through to FULL — the most-privileged bucket. It gates
+        learning, so unknown must land in the LEAST-privileged one."""
+        o = _FO(goal_achieved=True, goal_verdict_source="future_judge_v2",
+                goal_verdict_confidence=0.95)
+        assert verdict_trust(o) == VERDICT_TRUST_EXCLUDED
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": "future_judge_v2"}
+        ) == VERDICT_TRUST_EXCLUDED
+
+    def test_verdict_excluded_flag_is_honored(self):
+        """C1.2: exclusion is a stamped flag, not only a value match."""
+        o = _FO(goal_achieved=True, goal_verdict_source="closure",
+                goal_verdict_confidence=0.95)
+        o.verdict_excluded = True
+        assert verdict_trust(o) == VERDICT_TRUST_EXCLUDED
+        assert verdict_trust(
+            {"goal_achieved": True, "goal_verdict_source": "closure",
+             "verdict_excluded": True}) == VERDICT_TRUST_EXCLUDED
+
+    def test_every_known_source_keeps_its_mapping(self):
+        """Regression fence for C0.7: the known-source census (enumerated
+        here literally, independent of the implementation's set) keeps
+        today's mapping exactly — judged+confident → FULL, unjudged →
+        NEUTRAL; only closure_unverifiable is excluded by value."""
+        known = [
+            "", "closure", "closure_error", "closure_never_stamped",
+            "closure_skipped_no_steps", "closure_stamp_failed",
+            "deterministic_tests", "now_self_verdict",
+            "now_self_verdict_free", "now_self_verdict_error",
+            "provenance", "run_errored", "verdict_pending_orphaned",
+        ]
+        for source in known:
+            judged = _FO(goal_achieved=True, goal_verdict_source=source,
+                         goal_verdict_confidence=0.9)
+            assert verdict_trust(judged) == VERDICT_TRUST_FULL, source
+            unjudged = _FO(goal_achieved=None, goal_verdict_source=source)
+            assert verdict_trust(unjudged) == VERDICT_TRUST_NEUTRAL, source
+        unverifiable = _FO(goal_achieved=None,
+                           goal_verdict_source="closure_unverifiable")
+        assert verdict_trust(unverifiable) == VERDICT_TRUST_EXCLUDED
+
 
 class TestVerifyCounts:
     def test_directional_and_excluded_dropped_from_denominator(self):

@@ -95,6 +95,40 @@ def test_record_outcome_stores_task_type(monkeypatch, tmp_path):
     assert outcomes[0].task_type == "research"
 
 
+def test_record_outcome_stamps_verdict_excluded_flag(monkeypatch, tmp_path):
+    """C1.2 (shipped with C0.7): the judge lane that writes
+    closure_unverifiable now stamps the exclusion CLASS as a flag on the
+    row, so future exclusion-class sources are safe by construction."""
+    from memory import _outcomes_path
+    _setup(monkeypatch, tmp_path)
+    record_outcome("g", "done", "s",
+                   goal_verdict_source="closure_unverifiable")
+    record_outcome("g2", "done", "s2", goal_achieved=True,
+                   goal_verdict_source="closure")
+    rows = [json.loads(l) for l in
+            _outcomes_path().read_text().splitlines() if l.strip()]
+    unverifiable = next(r for r in rows
+                        if r.get("goal_verdict_source") == "closure_unverifiable")
+    assert unverifiable.get("verdict_excluded") is True
+    judged = next(r for r in rows
+                  if r.get("goal_verdict_source") == "closure")
+    # Absent-key discipline: non-excluded rows don't carry the flag at all.
+    assert "verdict_excluded" not in judged
+
+
+def test_stamp_outcome_verdict_stamps_verdict_excluded_flag(monkeypatch, tmp_path):
+    from memory import _outcomes_path, stamp_outcome_verdict
+    _setup(monkeypatch, tmp_path)
+    record_outcome("g", "done", "s", loop_id="loop-1")
+    result = stamp_outcome_verdict(
+        "loop-1", goal_achieved=None,
+        goal_verdict_source="closure_unverifiable")
+    assert result.status == "updated"
+    rows = [json.loads(l) for l in
+            _outcomes_path().read_text().splitlines() if l.strip()]
+    assert rows[-1].get("verdict_excluded") is True
+
+
 # ---------------------------------------------------------------------------
 # load_outcomes
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ Extracted from orch.py — no dependency on orch.py (safe to import from orch_br
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -14,6 +15,8 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Generator, Iterable, List, Optional, Tuple
+
+log = logging.getLogger("maro.orch_items")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -455,9 +458,35 @@ def write_run_record(record: RunRecord) -> Path:
     return path
 
 
+def _run_record_from_dict(data: dict) -> RunRecord:
+    """Tolerant rehydration (CONTRACTS C0.8, the tail_jobs._steps_from_rows
+    shape): filtered kwargs + defaulted required fields, so a legal additive
+    field from a newer writer is ignored instead of TypeError-ing the record
+    away, and a schema-drifted row degrades to a weaker record instead of
+    vanishing from every listing."""
+    kwargs = {k: v for k, v in data.items()
+              if k in RunRecord.__dataclass_fields__}
+    kwargs.setdefault("run_id", "")
+    kwargs.setdefault("project", "")
+    kwargs.setdefault("index", 0)
+    kwargs.setdefault("text", "")
+    kwargs.setdefault("status", "")
+    kwargs.setdefault("source", "")
+    kwargs.setdefault("worker", "")
+    kwargs.setdefault("started_at", "")
+    kwargs.setdefault("updated_at", "")
+    try:
+        kwargs["attempt"] = int(kwargs.get("attempt", 1))
+    except (TypeError, ValueError):
+        kwargs["attempt"] = 1
+    return RunRecord(**kwargs)
+
+
 def load_run_record(run_id: str) -> RunRecord:
     data = json.loads(_run_record_path(run_id).read_text(encoding="utf-8"))
-    return RunRecord(**data)
+    if not isinstance(data, dict):
+        raise ValueError(f"run record {run_id} is not a JSON object")
+    return _run_record_from_dict(data)
 
 
 def validation_summary_path(run: RunRecord) -> Optional[Path]:
@@ -481,20 +510,20 @@ def _load_run_records() -> List[RunRecord]:
     if not root.exists():
         return out
     for path in root.glob("*.json"):
+        # Narrow + LOGGED skips (C0.8): the old blanket `except Exception:
+        # continue` on top of unfiltered RunRecord(**data) meant one legal
+        # additive field silently vanished EVERY record from listings —
+        # intolerant AND invisible.
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                continue
-            if "attempt" not in data:
-                data["attempt"] = 1
-            data.setdefault("artifact_path", None)
-            try:
-                data["attempt"] = int(data["attempt"])
-            except (TypeError, ValueError):
-                data["attempt"] = 1
-            out.append(RunRecord(**data))
-        except Exception:
+        except (OSError, ValueError) as exc:
+            log.warning("run record %s skipped: unreadable/unparseable (%s)",
+                        path, exc)
             continue
+        if not isinstance(data, dict):
+            log.warning("run record %s skipped: not a JSON object", path)
+            continue
+        out.append(_run_record_from_dict(data))
     return out
 
 

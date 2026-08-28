@@ -65,6 +65,12 @@ class Outcome:
     goal_achieved: Optional[bool] = None
     goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | "now_self_verdict_free" | "now_self_verdict_error" | "deterministic_tests" | ""
     goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
+    # Explicit exclusion stamp (CONTRACTS C1.2): True marks an
+    # exclusion-class verdict (verifier's-own-failure family) so
+    # verdict_trust can honor a FLAG instead of matching source values —
+    # a new exclusion-class source from any engine is then safe by
+    # construction. Absent key stays off the row (_verdict_row discipline).
+    verdict_excluded: bool = False
     # Typed stop verdict (stop_verdicts.py vocabulary; "" = none recorded).
     # Sibling to goal_verdict_source: WHY the run stopped, machine-readable —
     # so learning consumers can tell "cap too low" from "goal impossible"
@@ -98,6 +104,30 @@ VERDICT_TRUST_DIRECTIONAL = "directional"  # judged but low-confidence — may f
 VERDICT_TRUST_NEUTRAL = "neutral"          # verdict absent (done-unverified) — present state, keep
 VERDICT_TRUST_EXCLUDED = "excluded"        # verifier's-own-failure / env-capped — trust nothing
 
+# Every goal_verdict_source the Python engine writes today (grep census,
+# C0.7 2026-08-28): record_outcome + stamp_outcome_verdict call sites in
+# handle.py / cli.py / evolver.py / runs.py / audit_repair.py, plus the
+# stop_verdicts.py VERDICT_SOURCE_* constants and the run-metadata verdict
+# lane. "" is the legacy/never-stamped row. A source outside this set gets
+# VERDICT_TRUST_EXCLUDED (the least-privileged bucket) in verdict_trust —
+# never FULL. When a new source ships, add it here in the same commit.
+_KNOWN_VERDICT_SOURCES = frozenset({
+    "",
+    "closure",
+    "closure_error",
+    "closure_never_stamped",       # stop_verdicts.VERDICT_SOURCE_NEVER_STAMPED
+    "closure_skipped_no_steps",    # stop_verdicts.VERDICT_SOURCE_NO_STEPS_COMPLETED
+    "closure_stamp_failed",
+    "closure_unverifiable",
+    "deterministic_tests",
+    "now_self_verdict",
+    "now_self_verdict_free",
+    "now_self_verdict_error",
+    "provenance",
+    "run_errored",                 # stop_verdicts.VERDICT_SOURCE_RUN_ERRORED
+    "verdict_pending_orphaned",    # stop_verdicts.VERDICT_SOURCE_PENDING_ORPHANED
+})
+
 # The confidence floor below which a judged verdict is directional-only. This
 # is the same 0.7 the closure machinery was built around (done-vs-achieved
 # analysis, 2026-07-09); NOT a tunable — a lower bar would let the verifier's
@@ -120,21 +150,37 @@ def verdict_trust(outcome: Any) -> str:
                     never gates crystallization or counts in a V2 window.
       neutral     — verdict absent (goal_achieved None / done-unverified).
                     Present state, keep — absence means "not judged", not "failed".
-      excluded    — closure_unverifiable (verifier's own failure) or an
-                    environment-error-capped verdict. Excluded from ALL learning
-                    consumers: a verifier-cwd bug must not be taught as a regression.
+      excluded    — closure_unverifiable (verifier's own failure), an
+                    environment-error-capped verdict, a row stamped
+                    verdict_excluded, or an UNKNOWN source. Excluded from ALL
+                    learning consumers: a verifier-cwd bug must not be taught
+                    as a regression.
     """
     def _get(key, default=None):
         if isinstance(outcome, dict):
             return outcome.get(key, default)
         return getattr(outcome, key, default)
 
+    # Explicit exclusion flag (C1.2): judges stamp exclusion-class verdicts
+    # additively; honoring the flag OR the legacy value below means a new
+    # exclusion-class source from either engine is safe by construction.
+    if bool(_get("verdict_excluded", False)):
+        return VERDICT_TRUST_EXCLUDED
+
     source = str(_get("goal_verdict_source", "") or "")
     # closure_unverifiable = the verifier failed to reach a verdict (its own
     # cwd/env bug, a timeout, a probe that could not run). Environment-error
-    # caps fold into this source today; if a distinct source value is ever
-    # introduced it should be excluded here too.
+    # caps fold into this source today; a future exclusion-class source
+    # should stamp verdict_excluded instead of extending this match.
     if source == "closure_unverifiable":
+        return VERDICT_TRUST_EXCLUDED
+
+    if source not in _KNOWN_VERDICT_SOURCES:
+        # Unknown-enum default points at the LEAST-privileged bucket
+        # (CONTRACTS C0.7, rule A9's gates-behavior arm): this function
+        # gates learning, so an unrecognized source — a newer writer's
+        # exclusion-class value, either engine — must never fall through
+        # to FULL trust.
         return VERDICT_TRUST_EXCLUDED
 
     achieved = _get("goal_achieved", None)
@@ -485,6 +531,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("pause_reason")
     if "minted_from" in row and not row["minted_from"]:
         row.pop("minted_from")
+    if "verdict_excluded" in row and not row["verdict_excluded"]:
+        row.pop("verdict_excluded")
     if "contested" in row and not row["contested"]:
         row.pop("contested")
     if "grounding" in row and not row["grounding"]:
@@ -596,6 +644,9 @@ def record_outcome(
         recovery_steps=recovery_steps,
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
+        # C1.2: exclusion is a stamped flag, not just a value match — the
+        # judge lane that writes closure_unverifiable marks the class here.
+        verdict_excluded=(goal_verdict_source == "closure_unverifiable"),
         loop_id=loop_id,
         dry_run=bool(dry_run),
         lesson_extraction_status=lesson_extraction_status,
@@ -835,6 +886,10 @@ def stamp_outcome_verdict(
             if goal_achieved is not None:
                 row["goal_achieved"] = bool(goal_achieved)
             row["goal_verdict_source"] = goal_verdict_source
+            if goal_verdict_source == "closure_unverifiable":
+                # C1.2: stamp the exclusion CLASS alongside the value so
+                # verdict_trust can honor the flag on future sources too.
+                row["verdict_excluded"] = True
             # When the verdict landed (chunk B, 2026-07-31): the row's own ts
             # is record time; without this stamp the framing→verdict delay —
             # the flow number the whole learning pipeline divides by — is

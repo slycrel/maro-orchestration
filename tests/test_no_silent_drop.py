@@ -253,7 +253,8 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("orch_bridges.py", "_extract_session_result_from_text"): 1,
     ("orch_bridges.py", "_read_jsonl_records"): 1,
 
-    ("orch_items.py", "_load_run_records"): 1,
+    # orch_items._load_run_records closed 2026-08-28 (C0.8): narrow excepts
+    # with logged reasons replaced the blanket `except Exception: continue`.
 
     ("pack.py", "_import_hypotheses"): 1,
     ("pack.py", "_import_lessons"): 1,
