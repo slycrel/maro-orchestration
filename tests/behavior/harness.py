@@ -143,11 +143,19 @@ def read_json(path: Path) -> dict:
     """STRICT single-object reader for registered JSON files (metadata.json,
     run_card.json, call records, NOW artifacts): same B2 wire discipline as
     read_jsonl — no NaN/Infinity, no duplicate keys, object at top level."""
-    obj = json.loads(path.read_text(encoding="utf-8"),
-                     parse_constant=_reject_constant,
-                     object_pairs_hook=_reject_duplicate_keys)
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"),
+                         parse_constant=_reject_constant,
+                         object_pairs_hook=_reject_duplicate_keys)
+    except AssertionError as exc:
+        raise AssertionError(f"{path}: {exc}") from exc
+    except Exception as exc:
+        raise AssertionError(
+            f"{path} is malformed — writers must never emit a broken "
+            f"registered JSON file (B2): {exc}"
+        ) from exc
     assert isinstance(obj, dict), (
-        f"{path.name} is a JSON {type(obj).__name__}, not an object (B2)"
+        f"{path} is a JSON {type(obj).__name__}, not an object (B2)"
     )
     return obj
 

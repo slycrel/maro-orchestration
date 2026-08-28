@@ -185,6 +185,13 @@ def test_agenda_flow_reaches_durable_evidence():
     # lifecycle pair. Loop-agnostic globs let a replanned/abandoned loop
     # supply step 1 while another supplied step 2 and a third the
     # lifecycle — no completed loop need have done the declared work.
+    # SCOPE (round 4): single-loop ownership is THIS scenario's
+    # expectation, not a general B3 rule — the scripted responses drive a
+    # deterministic one-loop run, so a multi-loop history here IS a
+    # defect. Replanning engines produce legitimate multi-loop histories
+    # (B3 registers loops as append-only lineage); pinning that shape
+    # needs its own scenario. The artifact names are registered in B3
+    # ("Loop evidence artifacts").
     scripted_results = [
         "Collected 12 rows of numbers", "Summary written: revenue flat",
     ]

@@ -279,6 +279,24 @@ follow. Cross-process, therefore cross-engine.
   captains_log_slice.jsonl → B8); `artifact/` = deliverables. The
   `.run-ref-index-v2/` lookup index is derived and disposable — never a
   source of truth.
+- **Loop evidence artifacts** (in `build/`, registered 2026-08-28 — the
+  names were already a cross-component contract that this entry had not
+  recorded): `loop-<loop_id>-step-NN.md` — one per COMPLETED step,
+  `# Step N: <step text>` heading + the step result (writer
+  `loop_artifacts._write_step_artifact`, `src/loop_artifacts.py:21`;
+  readers: report compile, and `loop_finalize`'s maintenance GC deletes
+  aged copies by exactly this glob, `src/loop_finalize.py:103`).
+  `loop-<loop_id>-RESULT.md` — the completed loop's transcript/final
+  result (writer `src/loop_finalize.py:290`; reader `notify_telegram`,
+  which also DERIVES the sibling report name by string-replacing the
+  `-RESULT.md` suffix, `src/notify_telegram.py:140-147` — so the suffix
+  is load-bearing, not cosmetic). A second engine must produce these
+  names for its completed steps/loops or those readers go dark. Loop
+  ownership: each evidence file is attributed to the loop that did the
+  work via its embedded `<loop_id>`; multi-loop histories (replanning,
+  retry) are legitimate — `metadata.loops` stays the authoritative
+  attempt order, and nothing requires prior-attempt evidence to be
+  rewritten under the terminal loop.
 - **Status:** published.
 - **Quirks:** metadata is merge-on-write: existing keys survive rewrites,
   and caller extras never override the core set (`src/runs.py:446-453`) — a
