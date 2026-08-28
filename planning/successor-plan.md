@@ -179,7 +179,27 @@ boundary. Then decide what the successor becomes.
 1. [done] python-arch-map.md
 2. [done] go-tree-triage.md
 3. [ ] Iterate this plan with Jeremy → v1 (open questions above)
-4. [in flight 2026-08-28] Phase 1a EARLY-STARTED by Jeremy's sanction
+4. [DONE 2026-08-28 — LANDED fb67b77c..90f9f601] Phase 1a shipped and
+   landed to main. docs/CONTRACTS.md (11 backbone entries + B12 census of
+   ~44 unregistered stores + §A rule 9 hard/soft taxonomy) taken through
+   FIVE adversarial rounds to convergence: r1 REJECT (doc promised what
+   the engine doesn't do) → r2 REJECT (6 verified HIGHs, fixes-of-
+   instances) → r3 REJECT (6 more, the class one layer up each time) →
+   r4 (2 HIGHs: census-instrument evasion + durable-card gap) → r5 NO
+   HIGHs, converged. ~40 code fixes with red-verified must-detect tests:
+   lesson/run-record extras round-tripping, locked RMWs everywhere
+   (finalize_run, run-records via mutate_run_record, card republish),
+   call-record temp+os.link publication, events.jsonl byte authority +
+   single os.write + short-write honesty, one shared corrupt-metadata
+   park (unique fsynced sidecars), verdict-trust hard-value validation at
+   both stamp and read, strict-bool config class closed (~50 gates incl.
+   workers.allow_main_push; alias-resolving census tripwire). Suite:
+   10416 green. Side lesson for the Go build: every round's HIGHs were
+   the COMPOSITION layer above the previous round's fixes — the successor
+   should design those seams (commit points, locked RMW primitives,
+   single-writer stores) rather than inherit them.
+   Original sanction text follows for the record:
+   Phase 1a EARLY-STARTED by Jeremy's sanction
    ("python prep work... upgrade our on-disk contracts"). Progress:
    registry (docs/CONTRACTS.md, 11 backbone entries) extracted and
    adversarially reviewed — round-1 verdict REJECT with an 8/8-VERIFIED
