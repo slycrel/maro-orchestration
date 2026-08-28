@@ -17733,3 +17733,185 @@ so no match can start where the boundary sat. The group stays — it is
 what `m.end()` means in Python, and a wider trailing context would need
 it — but it is marked `equivalent` rather than defended with a claim no
 input supports.
+
+## Phase Q: seven `\b`s, and the guard that reads the Python back (2026-08-27)
+
+`src/mint_grounding.py` — 608 lines, stdlib only — is the mint lane of
+the grounding arc: it reads a lesson's prose for past-tense METHOD
+claims ("fetched via the CDN", "verified this session"), joins each
+against the minting run's own tool-event log, and stamps a receipt on
+it. Three statuses, honest by construction — supported, unsupported,
+unprobed — and fail-open, because a stamp must never block a mint.
+Ported to `go/internal/mintground`.
+
+It is the most regex-dense module the port has taken so far: fifteen
+compiled patterns, nine word tables, and a two-stage claim-shape gate
+that is a mood test rather than a grammar parse. Almost all of the port
+work was in two places — deciding what each `\b` was allowed to become,
+and proving the tables are complete.
+
+### The `\b` question has two answers, and the CALLER picks
+
+pytext's `WordStart`/`WordEnd` CONSUME the boundary character; RE2 has no
+zero-width `\b`. Phase P established that a consumed leading boundary is
+harmless and a consumed trailing one is not. This module needed the
+question asked one level up, because the two kinds of caller are both
+here in quantity:
+
+- **Boolean patterns** (`_RE_PREFIXED`, `_MODAL_GOVERNS`,
+  `_NEGATOR_BEFORE`, `_HYPOTHETICAL`, `_NET_CMD`, `_AUTH_MARK`,
+  `_TEST_CMD`) are only ever asked *does this match at all*. Consuming
+  is free at both ends, so both boundaries stay in the pattern as
+  pytext's helpers, and consecutive alternatives with the same boundary
+  pair factor into one group.
+- **Scanned patterns** (the five `_CLAIM_FAMILIES`, `_RETRO_AUX`,
+  `_RETRO_FINITE`) hand `m.start()` and `m.end()` to a second predicate.
+  Those get Phase P's treatment, generalised: `wordBounded` compiles
+  `\A(…)` plus a consuming `WordEnd`, and `findBounded` walks candidate
+  start positions, refusing any whose preceding character is a word
+  character, and reads the alternation's real extent out of group 1.
+
+Because every alternative of every scanned pattern here begins AND ends
+on a word character, `findBounded` needs no per-alternative extent
+callback — one capture group serves them all. That is the difference
+from claimverify's `scanBoundaried`, which is why the two are not yet
+one function; the extraction is BACKLOG'd rather than done mid-tranche.
+
+### Two `\b`s are dropped, and the drop is derived rather than asserted
+
+`_RETRO_FINITE` has a third boundary, between `\w{3,}ed` and the `\s+`
+that follows it. `_NEGATOR_BEFORE` has one after its negator alternation,
+followed by `(?:\s+…){0,4}\s*$`. Both are unobservable: every path out of
+the rest of the pattern requires whitespace or the end of the string at
+exactly the position the boundary was asking about, and a word character
+there fails the rest of the pattern anyway.
+
+That argument is only as good as its premise, so the premise is what the
+guard checks. `TestTheRetrospectiveMarkersMatchUpstream` refuses to
+approve the drop unless the boundary it is removing is still followed by
+`\s+` in the Python; `negatorClasses` does the same for the other. If
+upstream ever moves that `\b` somewhere `\s` does not follow, the test
+fails and names it, instead of quietly re-deriving a pattern that is now
+wrong.
+
+### `[A-Za-z]` is not the same class in the two engines
+
+`pytext.PyFoldI` exists because Python's `re.IGNORECASE` folds `i` to
+`ı` (U+0131) and `İ` (U+0130) and Go's does not. Until now that has
+always shown up on a LITERAL `i`, which PyFoldI rewrites. `_AUTH_MARK`
+is the first pattern in the port where it shows up inside a CHARACTER
+CLASS:
+
+```
+re.fullmatch(r'[A-Za-z]', 'ı', re.I)   -> a match
+Go: (?i)[A-Za-z] against "ı"          -> no match
+```
+
+`K` (Kelvin) and `ſ` fold in both, so the class is right about everything
+except the Turkish pair. PyFoldI cannot fix it — a character class cannot
+hold a group, which is exactly the case it PANICS on — so
+`[A-Za-z0-9_\-]` is spliced with `pytext.IClassBody` by hand at both
+sites, and the upstream guard re-splices it from the Python rather than
+comparing against a typed copy. An eight-character run of dotless i is a
+silly credential; it is also the shape of the divergence, and the port
+has now filed this class as "no remedy" twice before, on a reading.
+
+### A content key a differential can only sample
+
+Fifteen patterns and nine word tables are content keys, and the
+differential exercises whatever a fixture happens to spell. That
+limitation stopped being theoretical inside an hour: `\bmake test\b` was
+missing from the port's `_TEST_CMD`, and the two hundred scenarios
+already written all agreed with CPython.
+
+What caught it was L9 — the fixtures were derived from the FILE, one per
+alternative, so `make-test-is-a-test` existed before anyone suspected
+anything. What KEEPS it caught is `upstream_test.go`, which reads every
+literal back out of `mint_grounding.py` and rebuilds the port's spelling
+from it: the five family patterns and their order out of the
+`_CLAIM_FAMILIES` tuple, the nine frozensets in both of the spellings
+this module uses, `_FAMILY_RULES`'s untied statuses joined to the Go
+predicate each rule actually holds, and the twelve slice literals
+(`[:160]`, `[-48:]`, `[:120]`, `[:2]`, `words[1:4]`, `words[-2:]` …) that
+no table names and that are each one character from a different answer.
+
+The two spellings of `frozenset` need two readers and cannot share one:
+adjacent Python string literals concatenate with NO separator, so
+`frozenset("a b " "c".split())` must be joined that way and only then
+split on whitespace — while doing the same to `frozenset({"bash",
+"shell"})` welds two tool names into one.
+
+### An exception is part of the signature
+
+`collect_run_tool_events` wraps only `json.loads` in its try. A call
+record whose top level is a list, a string, a number or `null` reaches
+`record.get(...)` and raises `AttributeError`; a `tool_events` that is a
+number or `True` reaches `enumerate` and raises `TypeError`. Neither is
+caught there. `ground_lessons_for_run`'s own try is what makes the whole
+thing fail-open, and a direct caller sees the raise.
+
+So the Go signature is `([]Event, bool, error)` — three returns for what
+Python spells as an `Optional[List]` plus a raise. The bool is the
+None/`[]` distinction the docstring is explicit about and that a nil
+slice cannot carry: FALSE means there is no readable `build/calls/` and
+nothing may be stamped; TRUE with nothing in it means the run
+affirmatively logged no tool events, which IS ground truth.
+
+The iterables that do NOT raise are part of the contract too, and the
+scenarios say so: a dict `tool_events` enumerates its keys and a string
+enumerates its characters, so both produce zero events and no error,
+while `enumerate(5)` raises. The `is_error` flag is an identity test
+(`ev.get("is_error") is True`) and not a truthiness one, so a record
+carrying `"is_error": 1` is not an error — `1 is True` is False in
+Python, and `str(1)` is not `"true"` either.
+
+### `decodeReplace`, third copy, gets a home
+
+`read_text(errors="replace")` needs CPython's maximal-subpart rule, not
+`strings.ToValidUTF8`: the COUNT of U+FFFDs differs, and the port has
+already been burned once by assuming a torn record's length does not
+matter (metrics, where it moved a `line[:60]` window and ended a day's
+scan early).
+
+`internal/metrics` and `internal/artifactcheck` each carry their own
+copy. This would have been the third, so instead the function moved to
+`pytext.DecodeReplace` with the sweep it never had: every one- and
+two-byte sequence — 65,792 inputs, every lead byte against every possible
+second byte — plus the three- and four-byte shapes a two-byte sweep
+cannot reach, all measured against the interpreter. The four cases a
+casual check would try (`b"\xc3"`, `b"\xed\xa0\x80"`, `b"\xc0\x80"`,
+`b"\xff\xfe"`) all agree whether the table knows about the surrogate
+range or not, which is precisely how a wrong table survives a review.
+Migrating the two existing copies is BACKLOG'd, not done here: both are
+covered by batteries that would have to move with them.
+
+### The rest of the port's small answers
+
+- `re.split(r"(?<=[.;!?])\s+|\n+", …)` has a lookbehind, so
+  `splitSentences` writes out what `re.split` does: try the first
+  alternative at each position, then the second, then advance one
+  character. One consequence the rest of the module leans on — every
+  newline is consumed by one alternative or the other, so no sentence
+  can contain one, which is why the `$`-anchored vetoes may treat their
+  input as newline-free.
+- `_QUOTED_SPAN`'s mask is `" " * len(span)` in CODE POINTS, and the
+  index it produces is used to slice the original. Masking byte-for-byte
+  in Go keeps the same invariant in Go's units, so `clauseComma` returns
+  a byte offset that slices at the same character.
+- Every window Python counts in code points is spelled with
+  `pytext.Head` or a local `lastRunes`: 160-character claim excerpt,
+  2000-character event text, 40-character marker head, 120-character
+  instruction window, 60-character clause window, 48-character modal
+  window. The MATCH offsets are the exception, and deliberately so —
+  they only ever slice the string they came from.
+- `_MAX_EVENTS` is a `var`, for the same reason claimverify's
+  `indexMaxDirs` is: the honest fixture for a 4000-event cap is 4001
+  events, a quarter-megabyte of JSON travelling through a scenario file
+  for one boolean. The probe drives the same knob, and the shipped value
+  is pinned by the scalar guard.
+- `scored.sort(key=lambda se: -se[0])` is STABLE, so equal-scoring
+  events keep call-record order and that order is what the top-three
+  receipts are cut from. `sort.SliceStable`.
+- The "note" key is ABSENT on a tied-supported stamp, not empty. `Stamp`
+  carries `HasNote` for that, and the differential reports the key's
+  absence rather than normalising it away.
