@@ -17227,6 +17227,13 @@ strict screen, and `the-source-root-is-screened-loosely` came back to
 life. That is the fixture set behaving like a fixture set — a row that
 was being killed incidentally, by a scenario written for something else.
 
+The differential is 170 scenarios over six kinds — validate, build,
+substitute, substitute_text, skip, rewrite_file, rewrite_tree — with the
+fixture filesystem described once in the spec and built by each side in
+its own temp directory. Nothing in a record names an absolute path, so
+there is nothing to canonicalise: a record that differs, differs about
+behaviour.
+
 `fileState` in the differential grew a directory arm for this tranche,
 and the mode/mtime columns earn their place: an atomic swap through a
 fresh temp file silently gets the umask's mode and today's mtime unless
