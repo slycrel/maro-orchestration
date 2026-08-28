@@ -225,13 +225,13 @@ follow. Cross-process, therefore cross-engine.
   nickname is a deterministic function of handle_id (`src/runs.py:61`).
 - **Writer:** `runs.create_run_dir` (`src/runs.py:310-407`) seeds the
   skeleton `source/ build/ artifact/` + `source/prompt.txt` (verbatim goal,
-  first writer wins); `runs.write_metadata` (`src/runs.py:458-505`) and the
-  `stamp_run_*` family (`src/runs.py:507-1107`) maintain `metadata.json`
-  under `locked_rmw`; `runs.finalize_run` (`src/runs.py:1109`) stamps
+  first writer wins); `runs.write_metadata` (`src/runs.py:473-520`) and the
+  `stamp_run_*` family (`src/runs.py:522-1122`) maintain `metadata.json`
+  under `locked_rmw`; `runs.finalize_run` (`src/runs.py:1124`) stamps
   `status`/`ended_at` under the same `locked_rmw`, preserving unknown
   keys. EVERY metadata mutator — write_metadata, all stamp/clear owners,
   finalize — shares ONE corrupt posture, `_parse_meta_or_park`
-  (`src/runs.py:410-456`): unparseable bytes are parked verbatim to a
+  (`src/runs.py:410-471`): unparseable bytes are parked verbatim to a
   UNIQUE sidecar (`metadata.json.corrupt.<utcstamp>-<pid>[-<n>]`, created
   O_EXCL so repeat incidents never overwrite earlier evidence) and only a
   SUCCESSFUL park licenses proceeding on a fresh object; a failed park
@@ -266,15 +266,15 @@ follow. Cross-process, therefore cross-engine.
     `goal_verdict_summary` str, `verdict_history` list (superseded verdicts,
     append-only), `stop_verdict`/`stop_evidence`, `verdict_pending` dict
     (async closure marker; `resolved_at` set when done). Writers:
-    `stamp_run_verdict` (`src/runs.py:696`), `stamp_run_stop_verdict`
-    (`src/runs.py:767`).
+    `stamp_run_verdict` (`src/runs.py:739`), `stamp_run_stop_verdict`
+    (`src/runs.py:805`).
   - `loops` list of dicts, optional, append-only — loop lineage
-    (`stamp_run_loop_lineage`, `src/runs.py:514`); authoritative attempt
+    (`stamp_run_loop_lineage`, `src/runs.py:567`); authoritative attempt
     order for reports.
   - Anything else (`project`, `origin`, experiment arms, audit flags) is
     caller-stamped extra: readers must ignore unknown keys.
 - **Other run-dir files:** `source/` = compile inputs (prompt.txt,
-  environment.json `src/runs.py:1595`, skills manifest, goal_brain.md);
+  environment.json `src/runs.py:1721`, skills manifest, goal_brain.md);
   `build/` = process byproducts (calls/ → B4, trace.jsonl, reports,
   captains_log_slice.jsonl → B8); `artifact/` = deliverables. The
   `.run-ref-index-v2/` lookup index is derived and disposable — never a
@@ -302,7 +302,7 @@ follow. Cross-process, therefore cross-engine.
 
 - **Path:** `<run-dir>/build/calls/call-%05d.json`, one file per LLM call,
   sequence rebuilt from directory contents after crash. Publication is
-  temp-then-link (`src/runs.py:1584-1620`): the payload is written
+  temp-then-link (`src/runs.py:1655-1694`): the payload is written
   flushed+fsynced to a dot-prefixed temp in the same calls/ dir
   (`.call-tmp-<pid>-<nonce>` — invisible to `_scan_highest_seq` and every
   reader, whose globs require `call-*.json`), then `os.link` publishes it
@@ -321,8 +321,10 @@ follow. Cross-process, therefore cross-engine.
   file at the final name and could strand a seq as zero bytes forever.
   The second-engine prohibition stays lifted — a cross-engine writer must
   use the same temp+link discipline, with a temp name that no call-record
-  glob can match.)
-- **Writer:** `runs.record_llm_call` (`src/runs.py:1532-1621`), invoked from
+  glob can match. Round 3 `819e744d` (R3-8): a NON-collision link failure
+  — EPERM/EXDEV/ENOSPC — is no longer silent: it warns once per errno
+  class per process, still returns None, never blocks the call.)
+- **Writer:** `runs.record_llm_call` (`src/runs.py:1590-1695`), invoked from
   the single FailoverAdapter seam on every success (`src/llm.py:800-810`)
   and on failed/killed attempts (`src/llm.py:868-877`). Secret-scrubbed via
   `secret_scrub.scrub` before write. Record-mode default ON; `MARO_RECORD=0`
@@ -344,7 +346,7 @@ follow. Cross-process, therefore cross-engine.
     open vocabulary, empty on legacy rows.
   - `cost_usd` float — provider-billed; `0.0` means "not reported", NOT free.
   - `error` str — empty on success; non-empty marks an ATTEMPT record whose
-    `response` is salvage, not a result (`src/runs.py:1554-1561`).
+    `response` is salvage, not a result (`src/runs.py:1633-1640`).
   - `ts` — write time.
 - **Status:** published (the replay corpus and grounding receipts depend on
   it).
@@ -363,7 +365,7 @@ follow. Cross-process, therefore cross-engine.
   twice: pure curation first, then maintenance annotations).
   `refresh_run_card_classification` (`src/run_curation.py:1753`) rebuilds
   pure fields post-hoc. Called from `runs.close_run`
-  (`src/runs.py:1207,1355-1356`).
+  (`src/runs.py:1223,1408-1412`).
 - **Readers:** `loop_report` (`src/loop_report.py:936,1136,1838-1843`),
   `decision_prior.load_decision_prior` (`src/decision_prior.py:100-124`),
   `metrics` (`src/metrics.py:283`), `evolver` (`src/evolver.py:460`),
@@ -403,21 +405,21 @@ follow. Cross-process, therefore cross-engine.
 
 - **Path:** `memory/outcomes.jsonl`, append-mostly JSONL; overflow
   compressed to `memory/compressed_outcomes.jsonl`.
-- **Writer:** `memory_ledger.record_outcome` (`src/memory_ledger.py:497-642`,
+- **Writer:** `memory_ledger.record_outcome` (`src/memory_ledger.py:609-770`,
   `locked_append`), called from `loop_finalize` via `reflect_and_record`
   (`src/loop_finalize.py:768`) and the NOW lane (`src/handle.py:1532`).
   Post-hoc mutators, all raw-row-preserving locked RMW:
-  `stamp_outcome_verdict` (`src/memory_ledger.py:760-859`; caller
+  `stamp_outcome_verdict` (`src/memory_ledger.py:884-1040`; caller
   `src/handle.py:3222`), `annotate_outcome_lessons`
-  (`src/memory_ledger.py:1255`), `mark_outcomes_superseded`
-  (`src/memory_ledger.py:694-757`), `compress_old_outcomes` (drops exact
-  raw lines only — keyed merge, `src/memory_ledger.py:2233-2246`).
+  (`src/memory_ledger.py:1420`), `mark_outcomes_superseded`
+  (`src/memory_ledger.py:818-882`), `compress_old_outcomes` (drops exact
+  raw lines only — keyed merge, `src/memory_ledger.py:2266-2280`).
 - **Readers:** `evolver` (`src/evolver.py:7,37`), `outcome_policy`
   (`src/outcome_policy.py:38-70`), `verdict_flow`, deferred learning via
-  `load_outcome_by_loop_id` (`src/memory_ledger.py:1230-1251`), recall's
-  repeat-guard, `verdict_trust` policy (`src/memory_ledger.py:138-201`).
+  `load_outcome_by_loop_id` (`src/memory_ledger.py:1396-1418`), recall's
+  repeat-guard, `verdict_trust` policy (`src/memory_ledger.py:145-257`).
 - **Shape** (dataclass `Outcome`, `src/memory_ledger.py:44-87`; serialization
-  discipline `_verdict_row`, `:462-494`):
+  discipline `_verdict_row`, `:565-607`):
   - `outcome_id` str, required — 8-hex uuid.
   - `goal` str / `summary` str, required — what was asked / what happened.
   - `task_type` str — open-ish vocabulary ("research"/"build"/"ops"/
@@ -433,14 +435,14 @@ follow. Cross-process, therefore cross-engine.
     `src/memory_ledger.py:66` + `src/stop_verdicts.py:125-152`, open — see
     C2.4); `goal_verdict_confidence` float; `goal_verdict_at` (stamped when
     the verdict lands post-hoc); `verdict_history` list — prior verdicts a
-    re-stamp superseded, append-only (`src/memory_ledger.py:819-827`).
+    re-stamp superseded, append-only (`src/memory_ledger.py:952-960`).
   - `stop_verdict` / `stop_evidence` / `pause_reason` — CLOSED vocabularies
     owned by `src/stop_verdicts.py:58-74,156-169`; ingress drops
-    off-vocabulary values (`src/memory_ledger.py:556-573` — see C1.3).
+    off-vocabulary values (`src/memory_ledger.py:668-685` — see C1.3).
     Empty values are omitted from the row.
   - `loop_id` / `handle_id` — join keys to the run dir; omitted when empty.
     `loop_id` is how the post-closure verdict finds this row (newest match
-    wins, `src/memory_ledger.py:796-808`).
+    wins, `src/memory_ledger.py:929-941`).
   - `dry_run` bool, `lesson_extraction_status` ("deferred"/"completed"/
     "failed"/""), `lesson_extraction_count` int, `measurement_class`
     ("organic"/"smoke"/"control"/"benchmark"/""; omitted when empty —
@@ -454,7 +456,7 @@ follow. Cross-process, therefore cross-engine.
   drop raw lines) — the store that got RMW right first; the lesson stores
   now match via `_extras` round-tripping (C0.1). A Go engine must match.
   (3) An unverifiable closure must never erase an existing judged verdict
-  (`src/memory_ledger.py:881-882,933`). (4) Judged rows may carry
+  (`src/memory_ledger.py:1005-1006,1066`). (4) Judged rows may carry
   `verdict_excluded: true` (additive, C1.2/C0.7): the exclusion-class
   stamp `verdict_trust` honors before any source-value match; absent on
   non-excluded rows. The flag follows the CURRENT stamp's class (round 2
@@ -789,6 +791,58 @@ each with a red-verified must-detect test):**
 - **R2-8** (`91a4e1fb`, amends C1.2/C0.7): `verdict_excluded` follows the
   CURRENT stamp's class — an authoritative re-stamp clears it; a
   corrected verdict no longer stays excluded forever (B6 quirk 4).
+
+**Round-3 amendments (adversarial round 3, 2026-08-28 — verified
+findings against the round-1/2 fixes; ALL SHIPPED same day, each with a
+red-verified must-detect test):**
+
+- **R3-1** (`4da15a43`, amends C0.6/R2-7): the `bool(config)` CLASS was
+  never migrated — R2-7's census pattern missed the `_cfg_get` alias and
+  ~35 bare sites remained, several authority gates
+  (`workers.allow_main_push`: a quoted "false" EXPORTED the push-guard
+  bypass; `constraints.allow_persistence_install`, `evolver.auto_apply`/
+  `auto_enqueue_signals`, `closure.pass_audit`/`verdict_audit`,
+  `heartbeat.autonomy`, the navigator act/shadow gates, and every other
+  spend/persistence/autonomy gate). 28 sites migrated to
+  `config.get_bool`; 7 cosmetic display/report toggles deliberately
+  allowlisted; the class is closed structurally by a census tripwire
+  (`tests/test_config_bool_gates.py` — fails on any new bare site not in
+  its justified allowlist, and on stale allowlist rows) (B2).
+- **R3-2** (`30721bd0`, amends C0.3/R2-3): `write_event` honors
+  `os.write`'s return count — a short write returns False and logs
+  non-recursively instead of reporting a torn row as success; the
+  remainder is deliberately not retried (B9).
+- **R3-3** (`b6ef1a25`, amends C0.7/R2-2): `stamp_outcome_verdict`
+  laundered malformed verdicts at ingress (`bool("false")` stored True →
+  graded FULL). The stamp boundary now accepts `goal_achieved` only as
+  None/exactly-bool (refusal = distinct result status `invalid`, row
+  untouched); confidence stamps only when finite-parseable, else
+  omitted; `record_outcome` mirrors the validation (B6 quirk 6).
+- **R3-4** (`b6ef1a25`, amends R2-2d): `verdict_excluded` classification
+  completed to a strict tri-state — unknown strings and falsy non-bools
+  (0, 0.0, []) no longer fall through to normal grading; every present
+  value that is not bool/known-shaped-string EXCLUDES, per rule A9
+  (B6 quirk 5).
+- **R3-5** (`2cdef3ea`, amends C0.2/R2-5): `close_run` no longer swallows
+  `finalize_run`'s raise into a normal-looking card — logged, evented
+  (`run_finalize_failed` + captain's-log `RUN_FINALIZE_FAILED`), and the
+  card carries `finalize_failed: true`; the close still completes. Full
+  commit-point semantics deferred to the Go-successor backbone (B3).
+- **R3-6** (`4703d733`, extends C0.8/R2-4): orchestrator run-record
+  mutations (`orch.finalize_run`, `run_tick`'s artifact/note rewrites,
+  `_mark_stale_running_attempts`) were unlocked stale-object RMWs —
+  atomic_write prevents torn files, not lost updates. All routed through
+  the new locked-RMW primitive `orch_items.mutate_run_record` (re-read
+  under the record's `.lock`, `_extras` preserved, declared-fields-win
+  merge); the store is registered in B12.
+- **R3-7** (`006db6bd`, amends C0.2/R2-5): the corrupt-metadata sidecar
+  park is fsynced — file and directory entry — BEFORE `{}` licenses the
+  destructive replacement; a failed fsync raises, original untouched
+  (B3).
+- **R3-8** (`819e744d`, amends C0.4/R2-1): non-collision `os.link`
+  failures in `record_llm_call` (EPERM/EXDEV/ENOSPC) warn once per errno
+  class per process instead of silently disabling call recording; still
+  never block the call (B4).
 
 1. **Lesson-store RMW raw round-tripping** (tiered + flat — C2.1/C2.2
    promoted). — **SHIPPED `010d3d11`**: unknown keys ride rehydrated rows
