@@ -162,6 +162,22 @@ rounds each.
 
 ## Decisions (system-maintained, append-only)
 
+**2026-08-28 — PIVOT: spiritual successor, not faithful port (Jeremy).**
+*"I don't want 'A faithful port' if that means 'line-by-line
+reimplementation of CPython semantics'... What I want is for us to look
+at what our python project does, and implement that in go — the
+reasoning, the pattern, the modules (and even then, that's not strictly
+necessary)."* The differential machinery was meant to VERIFY, and became
+the spec ("contortions to get byte parity"). Decisions: same
+`~/.maro/workspace/` formats as the compatibility contract, with
+deliberate versioned upgrades allowed on BOTH sides ("engineer to that
+contract", never lift-and-translate); NEW branch — `go-port` is frozen
+as a stale reference to be mined, never continued; reference-allowed
+clean-room (pure-leaning for self-improvement + director). Plan-first
+mode declared: the plan is the deliverable until Jeremy calls phase 2.
+Plan + inputs live in `planning/` (successor-plan.md, python-arch-map.md,
+go-tree-triage.md). *Reversal condition: none stated.*
+
 **2026-08-21 — the port is a parallel spine, not a replacement.** Python
 stays production. Learned outputs are shared workspace DATA so both
 runtimes read one store. *Reversal condition: none stated.*
