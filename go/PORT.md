@@ -16846,3 +16846,239 @@ Converting ninety-seven sites is a sweep and it is filed, not done.
 `internal/pyprobe/harness_guard_test.go` pins the number in the meantime,
 in the same idiom as this tree's other counting guards: a new direct site
 fails, and the fix is to use the harness rather than to bump the constant.
+
+## Phase M: the plan critic, and a parameter that was never read (2026-08-27)
+
+`src/pre_flight.py` is the last declared module of the core loop, and the
+spine calls it. 463 lines, two independent halves — a reviewer that runs
+between decomposition and execution, and a calibration reader that grades
+its predictions after the fact — and one property that runs through both:
+**almost every line in it is about degrading well.** The review is
+advisory. Nothing it does may fail the loop. So the interesting question
+in this file is never "what does it compute", it is "what does it answer
+when the answer is unavailable", and the port is judged on that.
+
+`go/internal/preflight/` is three files: `preflight.go` (the dataclasses,
+the heuristic, the parser), `review.go` (the transplanted critic prompt
+and `review_plan`), `stats.go` (`preflight_calibration_stats`).
+
+### Two halves left behind, named rather than discovered
+
+`_build_reviewers` constructs adapters in cost order and resolves keys.
+That is the boundary every tranche in this port has left to the caller,
+so `ReviewPlan` takes an iterator of candidates instead — and takes it as
+an ITERATOR, not a slice, because the generator's laziness is load-bearing
+and observable: the paid adapter is never built when the free one answers,
+and a generator that raises on its third yield raises only after two calls
+have already been made. The fixtures pin both.
+
+`_preflight_stats_main` is the argparse entry point. `CalibrationStats` —
+the half that computes anything — is here.
+
+### The parameter that is dead
+
+`review_plan(goal, steps, adapter, *, verbose=False)` names `adapter`
+zero times in its body. `_build_reviewers` resolves its own candidates;
+the parameter is a leftover. Carrying it into Go would have been the port
+inventing a dependency the original does not have, so it is gone — and
+`TestTheDeadAdapterParameterIsNotResurrected` reads the Python back and
+fails if the body ever starts using it. The differential passes `None`
+for it on the CPython side, which is exactly why the differential alone
+could never have told me it was dead.
+
+### The prompt is a content key
+
+`_REVIEW_SYSTEM` is 2280 characters of critic instructions, and a critic
+prompt that has quietly lost its fifth dimension still returns
+valid-looking JSON forever. This is the recurring bug family of the whole
+port — PROSE that diverges by a character nobody reads — so the constant
+was extracted from the Python programmatically and written into
+`review.go` as a raw string literal, never retyped. The differential
+compares the two constants directly, and a Go-only test asserts the five
+dimension headings, the four response keys and the newline count, because
+a mutation that edits BOTH engines the same way compares equal.
+
+### `_heuristic_scope` matches substrings
+
+`any(kw in text_lower for kw in _WIDE_KEYWORDS)` is a SUBSTRING test.
+`"all"` therefore fires on `"install"`, and a three-step plan that says
+"install the package" comes back **wide**. `"get"` fires on `"budget"`,
+`"target"` and `"forget"`. This is a property of the original, not a bug
+in the port, and the fixtures pin it rather than fix it.
+
+The branch ORDER is the specification and is easy to get subtly wrong: a
+three-step plan holding a wide keyword falls past the first arm and comes
+out wide; eight steps of nothing but narrow keywords come out wide too,
+because `n >= 8` is tested before the narrow arm. Both are fixtures.
+
+The fold is `pytext.Lower`, not `strings.ToLower`, and this is the first
+site in the port where the difference reaches an ANSWER rather than an
+intermediate string. `"LİST"` folds to `li̇st` in CPython — with a
+combining dot between the i and the s — and to `list` in Go's simple case
+mapping. The narrow keyword fires on one side only, and the scope
+changes. `the-case-fold-is-gos-simple-one` is a battery row now.
+
+### `_parse_review`: four lists, three ways to fail
+
+The parser reads four arrays out of the reviewer's JSON, and Python's
+`for x in d.get(key, [])` over a value that is not a list has three
+different endings, all reachable from an LLM's output:
+
+  - an OBJECT iterates its KEYS, so every item is a string and the first
+    `.get` on one is an AttributeError;
+  - a STRING iterates its characters, same ending;
+  - a number, a bool or null is not iterable at all, and the `for`
+    statement itself raises TypeError.
+
+`unknown_unknowns` has no `.get` in its body — the item IS the message —
+so it accepts all three happily and turns a two-character string into two
+flags. That asymmetry is the original's, and it is a fixture.
+
+`int(m.get("step", 0))` is two exceptions in one expression: AttributeError
+for an item that is not a mapping, ValueError for a string that is not a
+number, TypeError for None. `pyval.Int` already knows CPython's exact
+domain and its exact messages, so the port asks it rather than guessing.
+
+### Every exception message, spelled out
+
+The parser's `except Exception as exc` logs `%s` of the exception — the
+SENTENCE, not the class. A port that raised the right class with the
+wrong sentence would look correct in every test that only compared
+classes, so the messages are reproduced exactly:
+`'list' object has no attribute 'get'`, `'int' object is not iterable`,
+`[Errno 21] Is a directory: '.'`,
+`'utf-8' codec can't decode byte 0xff in position 3: invalid start byte`.
+`pyval.PyErr` already carried the class-plus-message shape; `pyval.TypeName`
+already knew `type(v).__name__` for decoded JSON. Both were reused rather
+than re-founded.
+
+One message is NOT reproduced and is named at its site:
+json.JSONDecodeError's `Expecting value: line 1 column 4 (char 3)` is a
+scanner position this port's decoder does not carry, and reproducing it
+means reimplementing CPython's error positions. The class is right; the
+differential canonicalises that one sentence on both sides and compares
+every other message exactly. If a second site ever needs the position,
+that is the moment to build it in `pyval` rather than here.
+
+CPython 3.14 also rewords the unhashable-key TypeError — `cannot use
+'list' as a dict key (unhashable type: 'list')` — which the port matches,
+with a note that older interpreters say only the parenthesised half.
+
+### `read_text()` decodes, and Go reads bytes
+
+`preflight_calibration_stats` reads the calibration file with
+`Path.read_text()`. Go's `os.ReadFile` hands back bytes and is happy with
+anything; CPython decodes as UTF-8 and raises. A calibration file with one
+stray byte is therefore processed on one side and fatal on the other — a
+divergence with no symptom until the day it matters. `decodeError` is the
+check, and it reports what CPython reports, which is the START of a bad
+sequence rather than the byte that actually failed: `b"\xe2("` names
+`0xe2` at position 0, not the parenthesis.
+
+Kept local, not shared. This is the FIRST site in the port that decodes a
+whole file's bytes as text; the second one is where it moves to `pytext`,
+per the lens-closing rule.
+
+### The two failure modes of the stats reader are different
+
+A file that cannot be LOCATED answers with a dict — `{"error": "cannot
+locate memory_dir"}`. A file that cannot be READ raises. The function
+guards its `json.loads` per line and nothing else, so a record that is
+valid JSON but is not an object reaches `e.get` and raises AttributeError
+from inside the `sum(...)` — and that exception leaves the function
+entirely, taking the caller with it.
+
+Precision and recall are `None`, not `0`, when their denominators are
+empty: "no data" and "never right" are different answers and the CLI
+prints `n/a` for one of them.
+
+`scope_breakdown` is keyed by a VALUE read out of a record, not by a JSON
+object key, so the key need not be a string. `1`, `1.0` and `True` are one
+Python dict key — they compare equal and hash equal — so three records
+spelling the scope three ways land in ONE bucket, under whichever spelling
+arrived first. `dictKey` models that, and a list scope is unhashable and
+raises. Both are fixtures.
+
+### What the differential covers
+
+`preflight_probe.py.tpl` drives the real CPython functions with `pf.log`
+replaced by a recorder that keeps the LEVEL and the message logging would
+have built. Sixty-three scenarios across six kinds: the prompt constant,
+`_heuristic_scope`, `PlanReview` rendering, `_parse_review`, `review_plan`
+with injected reviewers and captured stderr, and
+`preflight_calibration_stats` over real files on disk.
+
+Each stats scenario gets its OWN directory, named by the spec, because the
+probe runs every scenario before the Go side runs any and a shared
+filename would leave only the last fixture on disk.
+
+Three things the differential structurally cannot see got Go-only tests
+instead: that `Flags` and `MilestoneStepIndices` are empty slices and never
+nil (Python's `default_factory=list` has no nil, and the probe's renderer
+normalises both to `[]`); that the critic prompt still names all five
+dimensions; and that the dead `adapter` parameter is still dead upstream.
+
+### The battery
+
+`go/tools/batteries/preflight.json` — 193 rows derived from the FILE, not
+from the diff. **188 killed, five documented equivalents, no survivors**
+across three rounds (r1: 17 survivors and 6 build breaks; r2: 2 and 1;
+r3: clean).
+
+Round 1's survivors are the useful part of the record, because they sort
+into three different answers and only one of them is "add a fixture":
+
+**Fixtures that were missing (11).** A keyword split across two steps
+(`"dep"`, `"loy the app"`) — which is the only input that can tell
+`Join(steps, " ")` from `Join(steps, "")`. A six-step plan holding a
+narrow keyword, for the `n <= 5` boundary. Four fence shapes: two
+backticks that are not a fence, pretty-printed JSON inside a fence (whose
+rejoin is visible only through `Raw`), a closing fence on the same line as
+the JSON, and a fenced answer with a trailing newline — that last one is
+what distinguishes "strip the first line, then look for the closing fence"
+from the other order, because the join normalises the trailing newline
+away before the suffix test. A non-string item in `unknown_unknowns`. A
+multi-byte character in a string that is being iterated as characters. A
+lone `0x80`. A calibration line indented with a non-breaking space, which
+`str.strip()` removes and `strings.Trim(" \t\n")` does not. A precision
+that repeats, since the existing fixture only had a repeating recall.
+
+**Equivalences, documented at the site (5).** The `review = nil` after a
+failed reviewer can never have work to do — the loop breaks the moment
+`review` is non-nil, so it is nil at the top of every iteration. The
+milestone index recorded before rather than after the message read: a read
+that raises discards the whole Review two lines later. `jsonDecodeErr`'s
+CLASS is unobservable, because the only caller logs `str(exc)` and
+JSONDecodeError is a ValueError subclass in CPython. `countTruthy`'s
+raise on a scalar entry, because the breakdown loop is a second identical
+guard over the same entries. And the `!isStr ||` in the vocabulary gate,
+because `scopeStr` is the zero string whenever `isStr` is false and the
+empty string is already off-vocabulary.
+
+Each of those five is kept in the code and marked `"equivalent"` in the
+spec. Four of them are written the way they are because the ORIGINAL
+writes them that way, and the fifth — the type test — is written that way
+because Python's `scope not in (...)` is a membership test over values and
+spelling it as a string comparison alone would be a coincidence that
+happens to hold.
+
+**A dead arm (1).** `dictKey` had `case int:` and `case float64:` arms
+that no input can reach: every value arriving there came out of
+`pyval.LoadsOrdered`, which types every JSON number as a `json.Number`.
+The mutation that separated the int and float buckets survived because the
+code it mutated was unreachable. The arms are gone — unreachable code is
+where a wrong answer hides, and a battery row that cannot fail is worse
+than no row.
+
+Six of r1's rows did not COMPILE rather than dying, all for the same
+reason and all in one direction: deleting a use orphans an identifier or
+an import. `a-read-failure-is-swallowed` orphaned the whole `pyos` import,
+which is a fair summary of how narrowly that error path is used. A build
+break is not a kill; each was re-spelled to keep the orphan alive and let
+a test do the killing.
+
+Two rows became SPEC BUGs in r2 — pattern matched zero sites — because the
+equivalence comments I had just written sat inside their `old` text. That
+is the third time this session; the fix each time is to include the new
+comment in the pattern, and the lesson is that a battery row anchored on
+code ADJACENT to a comment is anchored on the comment too.

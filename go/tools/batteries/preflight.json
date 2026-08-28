@@ -1,0 +1,1172 @@
+{
+ "packages": {
+  "default": [
+   "./internal/preflight/"
+  ]
+ },
+ "mutations": [
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-summary-drops-the-scope",
+   "old": "\tparts := []string{\"scope=\" + r.Scope}\n",
+   "new": "\tparts := []string{\"scope=\"}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-summary-renames-the-scope-key",
+   "old": "\tparts := []string{\"scope=\" + r.Scope}\n",
+   "new": "\tparts := []string{\"scope_=\" + r.Scope}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-empty-milestone-list-still-renders",
+   "old": "\tif len(r.MilestoneStepIndices) > 0 {\n",
+   "new": "\tif len(r.MilestoneStepIndices) >= 0 {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-milestone-list-loses-its-space",
+   "old": "\t\tparts = append(parts, \"milestone_candidates=[\"+\n\t\t\tstrings.Join(nums, \", \")+\"]\")\n",
+   "new": "\t\tparts = append(parts, \"milestone_candidates=[\"+\n\t\t\tstrings.Join(nums, \",\")+\"]\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-milestone-list-loses-its-brackets",
+   "old": "\t\tparts = append(parts, \"milestone_candidates=[\"+\n\t\t\tstrings.Join(nums, \", \")+\"]\")\n",
+   "new": "\t\tparts = append(parts, \"milestone_candidates=\"+\n\t\t\tstrings.Join(nums, \", \")+\"\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-summary-renames-the-milestone-key",
+   "old": "\"milestone_candidates=[\"+",
+   "new": "\"milestone_candidate=[\"+"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "info-flags-are-counted-as-warnings",
+   "old": "\twarn := 0\n\tfor _, f := range r.Flags {\n\t\tif f.Severity == \"warn\" {\n\t\t\twarn++\n\t\t}\n\t}\n",
+   "new": "\twarn := 0\n\tfor _, f := range r.Flags {\n\t\tif f.Severity != \"\" {\n\t\t\twarn++\n\t\t}\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-zero-warning-count-is-rendered",
+   "old": "\tif warn != 0 {\n\t\tparts = append(parts, fmt.Sprintf(\"warnings=%d\", warn))\n",
+   "new": "\tif warn >= 0 {\n\t\tparts = append(parts, fmt.Sprintf(\"warnings=%d\", warn))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-summary-renames-the-warning-key",
+   "old": "fmt.Sprintf(\"warnings=%d\", warn)",
+   "new": "fmt.Sprintf(\"warning=%d\", warn)"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-summary-parts-are-joined-with-a-comma",
+   "old": "\treturn strings.Join(parts, \" \")\n}\n",
+   "new": "\treturn strings.Join(parts, \",\")\n}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-log-header-is-reworded",
+   "old": "\tlines := []string{\"Pre-flight review: \" + r.Summary()}\n",
+   "new": "\tlines := []string{\"Pre-flight review \" + r.Summary()}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-scope-note-test-becomes-a-nil-check",
+   "old": "\tif pyval.Truthy(r.ScopeNote) {\n\t\tlines = append(lines, \"  Scope: \"+pyval.Str(r.ScopeNote))\n",
+   "new": "\tif r.ScopeNote != nil {\n\t\tlines = append(lines, \"  Scope: \"+pyval.Str(r.ScopeNote))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-scope-line-loses-its-indent",
+   "old": "\t\tlines = append(lines, \"  Scope: \"+pyval.Str(r.ScopeNote))\n",
+   "new": "\t\tlines = append(lines, \"Scope: \"+pyval.Str(r.ScopeNote))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-whole-plan-flag-still-names-a-step",
+   "old": "\t\tstepStr := \"plan\"\n\t\tif f.Step != 0 {\n",
+   "new": "\t\tstepStr := \"plan\"\n\t\tif f.Step >= 0 {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-whole-plan-flag-is-labelled-differently",
+   "old": "\t\tstepStr := \"plan\"\n\t\tif f.Step != 0 {\n\t\t\tstepStr = fmt.Sprintf(\"step %d\", f.Step)\n",
+   "new": "\t\tstepStr := \"whole plan\"\n\t\tif f.Step != 0 {\n\t\t\tstepStr = fmt.Sprintf(\"step %d\", f.Step)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-flag-line-swaps-kind-and-step",
+   "old": "\t\tlines = append(lines, fmt.Sprintf(\"  [%s] %s: %s\",\n\t\t\tf.Kind, stepStr, pyval.Str(f.Message)))\n",
+   "new": "\t\tlines = append(lines, fmt.Sprintf(\"  [%s] %s: %s\",\n\t\t\tstepStr, f.Kind, pyval.Str(f.Message)))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-log-lines-are-joined-with-a-space",
+   "old": "\treturn strings.Join(lines, \"\\n\")\n}\n",
+   "new": "\treturn strings.Join(lines, \" \")\n}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-all-keyword-is-dropped",
+   "old": "\t\"redesign\", \"overhaul\", \"all\"}\n",
+   "new": "\t\"redesign\", \"overhaul\"}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-deploy-keyword-is-dropped",
+   "old": "var wideKeywords = []string{\"deploy\", \"refactor\", \"migrate\", \"rewrite\",\n",
+   "new": "var wideKeywords = []string{\"refactor\", \"migrate\", \"rewrite\",\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-get-keyword-is-dropped",
+   "old": "var narrowKeywords = []string{\"fetch\", \"check\", \"read\", \"list\", \"get\",\n\t\"show\", \"status\"}\n",
+   "new": "var narrowKeywords = []string{\"fetch\", \"check\", \"read\", \"list\",\n\t\"show\", \"status\"}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-check-keyword-is-dropped",
+   "old": "var narrowKeywords = []string{\"fetch\", \"check\", \"read\", \"list\", \"get\",\n",
+   "new": "var narrowKeywords = []string{\"fetch\", \"read\", \"list\", \"get\",\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-keyword-match-becomes-word-equality",
+   "old": "\t\tif strings.Contains(s, kw) {\n",
+   "new": "\t\tif s == kw {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-keyword-match-becomes-a-prefix",
+   "old": "\t\tif strings.Contains(s, kw) {\n",
+   "new": "\t\tif strings.HasPrefix(s, kw) {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-case-fold-is-gos-simple-one",
+   "old": "\ttextLower := pytext.Lower(strings.Join(steps, \" \"))\n",
+   "new": "\ttextLower := strings.ToLower(strings.Join(steps, \" \"))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-steps-are-joined-without-a-separator",
+   "old": "\ttextLower := pytext.Lower(strings.Join(steps, \" \"))\n",
+   "new": "\ttextLower := pytext.Lower(strings.Join(steps, \"\"))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-narrow-arm-loses-its-wide-guard",
+   "old": "\tif n <= 3 && !hasWide {\n",
+   "new": "\tif n <= 3 {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-narrow-arm-shrinks-by-one",
+   "old": "\tif n <= 3 && !hasWide {\n",
+   "new": "\tif n < 3 && !hasWide {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-wide-arm-shrinks-by-one",
+   "old": "\tif n >= 8 || hasWide {\n",
+   "new": "\tif n > 8 || hasWide {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-wide-arm-needs-both-reasons",
+   "old": "\tif n >= 8 || hasWide {\n",
+   "new": "\tif n >= 8 && hasWide {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-wide-arm-forgets-the-keyword",
+   "old": "\tif n >= 8 || hasWide {\n",
+   "new": "\tif n >= 8 {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-second-narrow-arm-loses-its-keyword-guard",
+   "old": "\tif hasNarrow && n <= 5 {\n",
+   "new": "\tif n <= 5 || hasNarrow && false {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-second-narrow-arm-grows-by-one",
+   "old": "\tif hasNarrow && n <= 5 {\n",
+   "new": "\tif hasNarrow && n <= 6 {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-fallthrough-is-narrow-not-medium",
+   "old": "\t\treturn \"narrow\"\n\t}\n\treturn \"medium\"\n}\n",
+   "new": "\t\treturn \"narrow\"\n\t}\n\treturn \"narrow\"\n}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-narrow-arm-is-tested-before-the-wide-one",
+   "old": "\tif n >= 8 || hasWide {\n\t\treturn \"wide\"\n\t}\n\tif hasNarrow && n <= 5 {\n\t\treturn \"narrow\"\n\t}\n",
+   "new": "\tif hasNarrow && n <= 5 {\n\t\treturn \"narrow\"\n\t}\n\tif n >= 8 || hasWide {\n\t\treturn \"wide\"\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-empty-answer-is-parsed-anyway",
+   "old": "\tif raw == \"\" {\n\t\treturn nil, nil\n\t}\n",
+   "new": "\tif raw == \"\\x00\" {\n\t\treturn nil, nil\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-fence-is-detected-by-two-backticks",
+   "old": "\tif strings.HasPrefix(raw, \"```\") {\n",
+   "new": "\tif strings.HasPrefix(raw, \"``\") {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-fence-strip-keeps-the-first-line",
+   "old": "\t\tif len(lines) > 0 {\n\t\t\tlines = lines[1:]\n\t\t}\n",
+   "new": "\t\tif len(lines) > 0 {\n\t\t\tlines = lines[0:]\n\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-fence-strip-rejoins-with-a-space",
+   "old": "\t\traw = strings.Join(lines, \"\\n\")\n\t\tif strings.HasSuffix(raw, \"```\") {\n",
+   "new": "\t\traw = strings.Join(lines, \" \")\n\t\tif strings.HasSuffix(raw, \"```\") {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-closing-fence-is-looked-for-at-the-front",
+   "old": "\t\tif strings.HasSuffix(raw, \"```\") {\n",
+   "new": "\t\tif strings.HasPrefix(raw, \"```\") {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-closing-fence-strip-eats-one-byte-too-many",
+   "old": "\t\t\traw = pytext.Strip(raw[:len(raw)-3])\n",
+   "new": "\t\t\traw = pytext.Strip(raw[:len(raw)-4])\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-closing-fence-strip-forgets-to-strip",
+   "old": "\t\t\traw = pytext.Strip(raw[:len(raw)-3])\n",
+   "new": "\t\t\traw = raw[:len(raw)-3]\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-closing-fence-check-runs-before-the-first-line-is-dropped",
+   "old": "\t\tlines := pytext.SplitLines(raw)\n\t\tif len(lines) > 0 {\n\t\t\tlines = lines[1:]\n\t\t}\n\t\traw = strings.Join(lines, \"\\n\")\n\t\tif strings.HasSuffix(raw, \"```\") {\n\t\t\traw = pytext.Strip(raw[:len(raw)-3])\n\t\t}\n",
+   "new": "\t\tif strings.HasSuffix(raw, \"```\") {\n\t\t\traw = pytext.Strip(raw[:len(raw)-3])\n\t\t}\n\t\tlines := pytext.SplitLines(raw)\n\t\tif len(lines) > 0 {\n\t\t\tlines = lines[1:]\n\t\t}\n\t\traw = strings.Join(lines, \"\\n\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-decode-failure-is-reported-as-the-wrong-class",
+   "old": "\t\treturn nil, jsonDecodeErr()\n",
+   "new": "\t\treturn nil, attrErr(nil, \"get\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-unparseable-line-is-not-logged",
+   "old": "\t\tlog.Info(\"pre_flight: reviewer response unparseable (%s)\",\n\t\t\terr.Error())\n",
+   "new": "\t\t_ = err\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-unparseable-line-is-reworded",
+   "old": "\t\tlog.Info(\"pre_flight: reviewer response unparseable (%s)\",\n",
+   "new": "\t\tlog.Info(\"pre_flight: reviewer response unparsable (%s)\",\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-non-object-answer-is-reported-as-not-iterable",
+   "old": "\t\treturn nil, attrErr(decoded, \"get\")\n",
+   "new": "\t\treturn nil, notIterable(decoded)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-off-vocabulary-line-is-not-logged",
+   "old": "\t\tlog.Info(\"pre_flight: reviewer scope %s off-vocabulary \u2014 \"+\n\t\t\t\"treating as failed\", pyval.Repr(scope))\n",
+   "new": "\t\t_ = scope\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-off-vocabulary-line-prints-the-value-not-its-repr",
+   "old": "\"treating as failed\", pyval.Repr(scope))\n",
+   "new": "\"treating as failed\", pyval.Str(scope))\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-off-vocabulary-line-is-reworded",
+   "old": "\t\tlog.Info(\"pre_flight: reviewer scope %s off-vocabulary \u2014 \"+\n",
+   "new": "\t\tlog.Info(\"pre_flight: reviewer scope %s off vocabulary \u2014 \"+\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-medium-scope-is-off-vocabulary",
+   "old": "\tif !isStr || (scopeStr != \"narrow\" && scopeStr != \"medium\" &&\n\t\tscopeStr != \"wide\") {\n",
+   "new": "\tif !isStr || (scopeStr != \"narrow\" &&\n\t\tscopeStr != \"wide\") {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-vocabulary-gate-accepts-anything",
+   "old": "\tif !isStr || (scopeStr != \"narrow\" && scopeStr != \"medium\" &&\n\t\tscopeStr != \"wide\") {\n",
+   "new": "\tif !isStr && scopeStr == \"\\x00\" {\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-non-string-scope-passes-the-gate",
+   "old": "\tif !isStr || (scopeStr != \"narrow\" && scopeStr != \"medium\" &&\n",
+   "new": "\tif (isStr && false) || (scopeStr != \"narrow\" && scopeStr != \"medium\" &&\n",
+   "equivalent": "scopeStr is the zero string whenever isStr is false, and the empty string is off-vocabulary, so the type test can never be the reason the gate fires."
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-missing-scope-defaults-to-narrow",
+   "old": "\tscope, _ := objGet(data, \"scope\", \"\")\n",
+   "new": "\tscope, _ := objGet(data, \"scope\", \"narrow\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-missing-scope-note-defaults-to-none",
+   "old": "\tscopeNote, _ := objGet(data, \"scope_note\", \"\")\n",
+   "new": "\tscopeNote, _ := objGet(data, \"scope_note\", nil)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-scope-note-is-read-from-the-wrong-key",
+   "old": "\tscopeNote, _ := objGet(data, \"scope_note\", \"\")\n",
+   "new": "\tscopeNote, _ := objGet(data, \"scope_note_\", \"\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-flag-list-starts-as-nil",
+   "old": "\tflags := []Flag{}\n\tmilestone := []int{}\n",
+   "new": "\tvar flags []Flag\n\tmilestone := []int{}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-milestone-list-starts-as-nil",
+   "old": "\tflags := []Flag{}\n\tmilestone := []int{}\n",
+   "new": "\tflags := []Flag{}\n\tvar milestone []int\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "assumptions-are-read-from-the-wrong-key",
+   "old": "\titems, err := iterate(data, \"assumptions\")\n",
+   "new": "\titems, err := iterate(data, \"assumption\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-assumption-flag-is-informational",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"assumption\", Step: step,\n\t\t\tMessage: msg, Severity: \"warn\"})\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"assumption\", Step: step,\n\t\t\tMessage: msg, Severity: \"info\"})\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-assumption-flag-is-renamed",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"assumption\", Step: step,\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"assumptions\", Step: step,\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-assumption-reads-its-message-from-reason",
+   "old": "\t\tmsg, err := getFrom(a, \"issue\", \"\")\n",
+   "new": "\t\tmsg, err := getFrom(a, \"reason\", \"\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-assumption-step-defaults-to-one",
+   "old": "\t\tstep, err := getStep(a, \"step\")\n",
+   "new": "\t\tstep, err := getStep(a, \"step_\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "milestones-are-read-from-the-wrong-key",
+   "old": "\titems, err = iterate(data, \"milestone_candidates\")\n",
+   "new": "\titems, err = iterate(data, \"milestone_candidate\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-milestone-index-is-not-recorded",
+   "old": "\t\tmilestone = append(milestone, idx)\n",
+   "new": "\t\t_ = idx\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-milestone-flag-loses-its-step",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"milestone\", Step: idx,\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"milestone\", Step: 0,\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-milestone-reads-its-message-from-issue",
+   "old": "\t\tmsg, err := getFrom(m, \"reason\", \"\")\n",
+   "new": "\t\tmsg, err := getFrom(m, \"issue\", \"\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-milestone-flag-is-informational",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"milestone\", Step: idx,\n\t\t\tMessage: msg, Severity: \"warn\"})\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"milestone\", Step: idx,\n\t\t\tMessage: msg, Severity: \"info\"})\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-milestone-index-is-recorded-after-the-message-is-read",
+   "old": "\t\tmilestone = append(milestone, idx)\n\t\tmsg, err := getFrom(m, \"reason\", \"\")\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n",
+   "new": "\t\tmsg, err := getFrom(m, \"reason\", \"\")\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tmilestone = append(milestone, idx)\n",
+   "equivalent": "parseBody discards the whole Review when the message read raises, so the index appended a statement earlier reaches nothing."
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "unknowns-are-read-from-the-wrong-key",
+   "old": "\titems, err = iterate(data, \"unknown_unknowns\")\n",
+   "new": "\titems, err = iterate(data, \"unknown_unknown\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-unknown-flag-is-a-warning",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: u,\n\t\t\tSeverity: \"info\"})\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: u,\n\t\t\tSeverity: \"warn\"})\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-unknown-reads-a-key-off-its-item",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: u,\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: pyval.Str(u),\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "class-gaps-are-read-from-the-wrong-key",
+   "old": "\titems, err = iterate(data, \"class_gaps\")\n",
+   "new": "\titems, err = iterate(data, \"class_gap\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-class-flag-is-renamed",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"class\", Step: step,\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"class_gap\", Step: step,\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-class-flag-is-informational",
+   "old": "\t\tflags = append(flags, Flag{Kind: \"class\", Step: step,\n\t\t\tMessage: msg, Severity: \"warn\"})\n",
+   "new": "\t\tflags = append(flags, Flag{Kind: \"class\", Step: step,\n\t\t\tMessage: msg, Severity: \"info\"})\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "class-gaps-are-read-before-the-unknowns",
+   "old": "\titems, err = iterate(data, \"unknown_unknowns\")\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tfor _, u := range items {\n\t\t// No `.get` here: the item itself is the message, whatever it is.\n\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: u,\n\t\t\tSeverity: \"info\"})\n\t}\n\n\titems, err = iterate(data, \"class_gaps\")\n",
+   "new": "\titems, err = iterate(data, \"class_gaps\")\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tfor _, u := range items {\n\t\tflags = append(flags, Flag{Kind: \"unknown\", Step: 0, Message: u,\n\t\t\tSeverity: \"info\"})\n\t}\n\n\titems, err = iterate(data, \"unknown_unknowns\")\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-raw-text-is-not-kept",
+   "old": "\t\tMilestoneStepIndices: milestone, Raw: raw}, nil\n",
+   "new": "\t\tMilestoneStepIndices: milestone, Raw: \"\"}, nil\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-missing-list-defaults-to-nil-not-an-empty-list",
+   "old": "\tv, _ := objGet(o, key, pyval.List{})\n",
+   "new": "\tv, _ := objGet(o, key, nil)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-object-iterates-its-values-not-its-keys",
+   "old": "\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Key)\n\t\t}\n",
+   "new": "\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Val)\n\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-string-iterates-as-bytes-not-characters",
+   "old": "\t\tfor _, r := range t {\n\t\t\tout = append(out, string(r))\n\t\t}\n",
+   "new": "\t\tfor i := 0; i < len(t); i++ {\n\t\t\tout = append(out, string(t[i]))\n\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-string-is-not-iterable",
+   "old": "\tcase string:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, r := range t {\n\t\t\tout = append(out, string(r))\n\t\t}\n\t\treturn out, nil\n\t}\n",
+   "new": "\tcase string:\n\t\treturn nil, notIterable(t)\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "an-object-is-not-iterable",
+   "old": "\tcase pyval.Obj:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, f := range t {\n\t\t\tout = append(out, f.Key)\n\t\t}\n\t\treturn out, nil\n",
+   "new": "\tcase pyval.Obj:\n\t\treturn nil, notIterable(t)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-non-mapping-item-is-skipped-instead-of-raising",
+   "old": "\t\treturn nil, attrErr(item, \"get\")\n",
+   "new": "\t\treturn nil, nil\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-item-default-is-dropped",
+   "old": "\tv, _ := objGet(o, key, def)\n\treturn v, nil\n",
+   "new": "\tv, _ := objGet(o, key, nil)\n\treturn v, nil\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-missing-step-defaults-to-one",
+   "old": "\tv, err := getFrom(item, key, 0)\n",
+   "new": "\tv, err := getFrom(item, key, 1)\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "a-bad-step-is-swallowed",
+   "old": "\tn, err := pyval.Int(v)\n\tif err != nil {\n\t\treturn 0, err\n\t}\n\treturn n, nil\n",
+   "new": "\tn, _ := pyval.Int(v)\n\treturn n, nil\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-attribute-error-names-the-wrong-type",
+   "old": "\t\tMsg: fmt.Sprintf(\"'%s' object has no attribute '%s'\",\n\t\t\tpyval.TypeName(v), name)}\n",
+   "new": "\t\tMsg: fmt.Sprintf(\"'%s' object has no attribute '%s'\",\n\t\t\t\"object\", name)}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-attribute-error-is-a-type-error",
+   "old": "\treturn &pyval.PyErr{Class: \"AttributeError\",\n",
+   "new": "\treturn &pyval.PyErr{Class: \"TypeError\",\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-not-iterable-message-is-reworded",
+   "old": "\t\tMsg: fmt.Sprintf(\"'%s' object is not iterable\", pyval.TypeName(v))}\n",
+   "new": "\t\tMsg: fmt.Sprintf(\"'%s' object is not iterable \", pyval.TypeName(v))}\n"
+  },
+  {
+   "file": "internal/preflight/preflight.go",
+   "name": "the-decode-error-is-a-value-error",
+   "old": "\treturn &pyval.PyErr{Class: \"JSONDecodeError\", Msg: \"<JSONDecodeError>\"}\n",
+   "new": "\treturn &pyval.PyErr{Class: \"ValueError\", Msg: \"<JSONDecodeError>\"}\n",
+   "equivalent": "nothing branches on this class: the caller logs str(exc), and CPython's JSONDecodeError IS a ValueError subclass."
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-critic-prompt-loses-a-dimension",
+   "old": "5. CLASS COVERAGE: When the goal names a CLASS of targets",
+   "new": "6. CLASS COVERAGE: When the goal names a CLASS of targets"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-critic-prompt-loses-a-response-key",
+   "old": "  \"class_gaps\": [{\"step\"",
+   "new": "  \"class_gap\": [{\"step\""
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-critic-prompt-changes-a-scope-band",
+   "old": "- \"medium\": goal is moderate, plan looks roughly right (6-12 steps)",
+   "new": "- \"medium\": goal is moderate, plan looks roughly right (6-11 steps)"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "an-empty-plan-is-reviewed-anyway",
+   "old": "\tif len(steps) == 0 {\n",
+   "new": "\tif len(steps) < 0 {\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-empty-plan-note-is-reworded",
+   "old": "\t\treturn Review{Scope: \"unknown\", ScopeNote: \"no steps to review\",\n",
+   "new": "\t\treturn Review{Scope: \"unknown\", ScopeNote: \"no steps to review.\",\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-empty-plan-scope-is-narrow",
+   "old": "\t\treturn Review{Scope: \"unknown\", ScopeNote: \"no steps to review\",\n",
+   "new": "\t\treturn Review{Scope: \"narrow\", ScopeNote: \"no steps to review\",\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-outer-handler-logs-at-info",
+   "old": "\td.Log.Debug(\"pre_flight review failed (non-blocking): %s\", err.Error())\n",
+   "new": "\td.Log.Info(\"pre_flight review failed (non-blocking): %s\", err.Error())\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-outer-handler-says-nothing",
+   "old": "\td.Log.Debug(\"pre_flight review failed (non-blocking): %s\", err.Error())\n",
+   "new": "\t_ = err\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-outer-handler-answers-unknown",
+   "old": "\treturn Review{\n\t\tScope:     HeuristicScope(steps),\n\t\tScopeNote: fmt.Sprintf(\"heuristic estimate (review failed: %s)\", err.Error()),\n",
+   "new": "\treturn Review{\n\t\tScope:     \"unknown\",\n\t\tScopeNote: fmt.Sprintf(\"heuristic estimate (review failed: %s)\", err.Error()),\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-outer-handler-drops-the-exception-from-its-note",
+   "old": "\t\tScopeNote: fmt.Sprintf(\"heuristic estimate (review failed: %s)\", err.Error()),\n",
+   "new": "\t\tScopeNote: \"heuristic estimate (review failed)\",\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-outer-handler-names-the-class-not-the-message",
+   "old": "\t\tScopeNote: fmt.Sprintf(\"heuristic estimate (review failed: %s)\", err.Error()),\n",
+   "new": "\t\tScopeNote: fmt.Sprintf(\"heuristic estimate (review failed: %s)\", pyval.ClassOf(err)),\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "an-import-failure-is-caught-by-the-inner-handler",
+   "old": "\tif err := d.ImportLLMMessage(); err != nil {\n\t\treturn nil, err\n\t}\n",
+   "new": "\tif err := d.ImportLLMMessage(); err != nil {\n\t\t_ = err\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-step-list-is-zero-based",
+   "old": "\t\tnumbered[i] = fmt.Sprintf(\"%d. %s\", i+1, s)\n",
+   "new": "\t\tnumbered[i] = fmt.Sprintf(\"%d. %s\", i, s)\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-step-number-loses-its-dot",
+   "old": "\t\tnumbered[i] = fmt.Sprintf(\"%d. %s\", i+1, s)\n",
+   "new": "\t\tnumbered[i] = fmt.Sprintf(\"%d %s\", i+1, s)\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-steps-are-joined-on-one-line",
+   "old": "\tstepsText := strings.Join(numbered, \"\\n\")\n",
+   "new": "\tstepsText := strings.Join(numbered, \" \")\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-user-message-loses-its-blank-line",
+   "old": "\tuserMsg := \"Goal: \" + goal + \"\\n\\nProposed plan:\\n\" + stepsText\n",
+   "new": "\tuserMsg := \"Goal: \" + goal + \"\\nProposed plan:\\n\" + stepsText\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-user-message-relabels-the-goal",
+   "old": "\tuserMsg := \"Goal: \" + goal + \"\\n\\nProposed plan:\\n\" + stepsText\n",
+   "new": "\tuserMsg := \"goal: \" + goal + \"\\n\\nProposed plan:\\n\" + stepsText\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-user-message-relabels-the-plan",
+   "old": "\tuserMsg := \"Goal: \" + goal + \"\\n\\nProposed plan:\\n\" + stepsText\n",
+   "new": "\tuserMsg := \"Goal: \" + goal + \"\\n\\nProposed steps:\\n\" + stepsText\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-system-and-user-messages-are-swapped",
+   "old": "\t\t{Role: \"system\", Content: reviewSystem},\n\t\t{Role: \"user\", Content: userMsg},\n",
+   "new": "\t\t{Role: \"user\", Content: userMsg},\n\t\t{Role: \"system\", Content: reviewSystem},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-critic-prompt-is-sent-as-a-user-turn",
+   "old": "\t\t{Role: \"system\", Content: reviewSystem},\n",
+   "new": "\t\t{Role: \"user\", Content: reviewSystem},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "a-generator-failure-is-caught-by-the-inner-handler",
+   "old": "\t\tr, ok, err := d.NextReviewer()\n\t\tif err != nil {\n",
+   "new": "\t\tr, ok, err := d.NextReviewer()\n\t\tif false {\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-reviewer-loop-stops-after-the-first-candidate",
+   "old": "\t\tif !ok {\n\t\t\tbreak\n\t\t}\n",
+   "new": "\t\tif !ok || true {\n\t\t\tbreak\n\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-max-tokens-keyword-is-renamed",
+   "old": "{Key: \"max_tokens\", Val: 512},\n",
+   "new": "{Key: \"max_tokens_\", Val: 512},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-max-tokens-keyword-carries-another-value",
+   "old": "{Key: \"max_tokens\", Val: 512},\n",
+   "new": "{Key: \"max_tokens\", Val: 1024},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-temperature-keyword-is-renamed",
+   "old": "{Key: \"temperature\", Val: 0.1},\n",
+   "new": "{Key: \"temperature_\", Val: 0.1},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-temperature-keyword-carries-another-value",
+   "old": "{Key: \"temperature\", Val: 0.1},\n",
+   "new": "{Key: \"temperature\", Val: 0.2},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-timeout-keyword-is-renamed",
+   "old": "{Key: \"timeout\", Val: 30},\n",
+   "new": "{Key: \"timeout_\", Val: 30},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-timeout-keyword-carries-another-value",
+   "old": "{Key: \"timeout\", Val: 30},\n",
+   "new": "{Key: \"timeout\", Val: 60},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-no-tools-keyword-is-renamed",
+   "old": "{Key: \"no_tools\", Val: true},\n",
+   "new": "{Key: \"no_tools_\", Val: true},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-no-tools-keyword-carries-another-value",
+   "old": "{Key: \"no_tools\", Val: true},\n",
+   "new": "{Key: \"no_tools\", Val: false},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-purpose-keyword-is-renamed",
+   "old": "{Key: \"purpose\", Val: \"plan review\"},\n",
+   "new": "{Key: \"purpose_\", Val: \"plan review\"},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-purpose-keyword-carries-another-value",
+   "old": "{Key: \"purpose\", Val: \"plan review\"},\n",
+   "new": "{Key: \"purpose\", Val: \"plan-review\"},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-call-keywords-are-reordered",
+   "old": "\t\t\t{Key: \"max_tokens\", Val: 512},\n\t\t\t{Key: \"temperature\", Val: 0.1},\n",
+   "new": "\t\t\t{Key: \"temperature\", Val: 0.1},\n\t\t\t{Key: \"max_tokens\", Val: 512},\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-content-access-is-outside-the-inner-handler",
+   "old": "\t\t\ttext, cerr = contentText(content)\n\t\t\tif cerr == nil {\n\t\t\t\treview, _ = ParseReview(text, d.Log)\n\t\t\t}\n",
+   "new": "\t\t\ttext, _ = contentText(content)\n\t\t\treview, _ = ParseReview(text, d.Log)\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "a-failed-reviewer-leaves-the-previous-answer-in-place",
+   "old": "\t\t\t// depends on is one `break` away from being false.\n\t\t\treview = nil\n",
+   "new": "\t\t\t// depends on is one `break` away from being false.\n\t\t\t_ = review\n",
+   "equivalent": "the loop breaks the moment review is non-nil, so review is nil at the top of every iteration and the reset can never have work to do."
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-call-time-failure-is-not-logged",
+   "old": "\t\t\td.Log.Info(\"pre_flight: reviewer %s failed at call time (%s); \"+\n\t\t\t\t\"trying next\", r.Name, cerr.Error())\n",
+   "new": "\t\t\t_ = cerr\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-call-time-failure-names-the-class-not-the-message",
+   "old": "\"trying next\", r.Name, cerr.Error())\n",
+   "new": "\"trying next\", r.Name, pyval.ClassOf(cerr))\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-call-time-failure-omits-the-reviewer-name",
+   "old": "\t\t\td.Log.Info(\"pre_flight: reviewer %s failed at call time (%s); \"+\n\t\t\t\t\"trying next\", r.Name, cerr.Error())\n",
+   "new": "\t\t\td.Log.Info(\"pre_flight: reviewer failed at call time (%s); \"+\n\t\t\t\t\"trying next\", cerr.Error())\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-call-time-failure-is-a-debug-line",
+   "old": "\t\t\td.Log.Info(\"pre_flight: reviewer %s failed at call time (%s); \"+\n",
+   "new": "\t\t\td.Log.Debug(\"pre_flight: reviewer %s failed at call time (%s); \"+\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "a-nil-review-still-ends-the-loop",
+   "old": "\t\tif review != nil {\n\t\t\tbreak\n\t\t}\n",
+   "new": "\t\tbreak\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-no-reviewer-note-is-reworded",
+   "old": "\t\t\tScopeNote: \"heuristic estimate (no working reviewer for LLM review)\",\n",
+   "new": "\t\t\tScopeNote: \"heuristic estimate (no working reviewer for LLM review.)\",\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-no-reviewer-answer-is-unknown",
+   "old": "\t\tscope := HeuristicScope(steps)\n\t\td.Log.Info(\"pre_flight: no working reviewer, heuristic scope \"+\n",
+   "new": "\t\tscope := \"unknown\"\n\t\td.Log.Info(\"pre_flight: no working reviewer, heuristic scope \"+\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-no-reviewer-line-is-not-logged",
+   "old": "\t\td.Log.Info(\"pre_flight: no working reviewer, heuristic scope \"+\n\t\t\t\"estimate: %s\", scope)\n",
+   "new": "\t\t_ = scope\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "a-review-with-concerns-is-logged-at-info",
+   "old": "\tlevel := \"INFO\"\n\tif review.HasConcerns() {\n\t\tlevel = \"WARNING\"\n\t}\n",
+   "new": "\tlevel := \"INFO\"\n\tif false {\n\t\tlevel = \"WARNING\"\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-two-log-levels-are-swapped",
+   "old": "\tlevel := \"INFO\"\n\tif review.HasConcerns() {\n\t\tlevel = \"WARNING\"\n\t}\n",
+   "new": "\tlevel := \"WARNING\"\n\tif review.HasConcerns() {\n\t\tlevel = \"INFO\"\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-review-is-logged-as-a-summary-not-a-full-report",
+   "old": "\td.Log.Log(level, \"%s\", review.FormatForLog())\n",
+   "new": "\td.Log.Log(level, \"%s\", review.Summary())\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-block-runs-unconditionally",
+   "old": "\tif verbose {\n\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight: %s\\n\", review.Summary())\n",
+   "new": "\tif true {\n\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight: %s\\n\", review.Summary())\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-summary-line-is-relabelled",
+   "old": "\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight: %s\\n\", review.Summary())\n",
+   "new": "\t\tfmt.Fprintf(d.Stderr, \"[maro] preflight: %s\\n\", review.Summary())\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-scope-warning-fires-on-every-scope",
+   "old": "\t\tif review.Scope == \"wide\" {\n",
+   "new": "\t\tif review.Scope != \"\" {\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-scope-warning-fires-on-the-wrong-scope",
+   "old": "\t\tif review.Scope == \"wide\" {\n",
+   "new": "\t\tif review.Scope == \"narrow\" {\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-scope-warning-loses-its-em-dash",
+   "old": "\t\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight: scope WARNING \u2014 %s\\n\",\n",
+   "new": "\t\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight: scope WARNING - %s\\n\",\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-block-prints-info-flags-too",
+   "old": "\t\t\tif f.Severity != \"warn\" {\n\t\t\t\tcontinue\n\t\t\t}\n",
+   "new": "\t\t\tif f.Severity == \"\" {\n\t\t\t\tcontinue\n\t\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-block-prints-only-info-flags",
+   "old": "\t\t\tif f.Severity != \"warn\" {\n\t\t\t\tcontinue\n\t\t\t}\n",
+   "new": "\t\t\tif f.Severity == \"warn\" {\n\t\t\t\tcontinue\n\t\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-flag-line-labels-the-whole-plan-as-a-step",
+   "old": "\t\t\tstepStr := \"plan\"\n\t\t\tif f.Step != 0 {\n",
+   "new": "\t\t\tstepStr := \"plan\"\n\t\t\tif f.Step >= 0 {\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-verbose-flag-line-swaps-kind-and-step",
+   "old": "\t\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight [%s] %s: %s\\n\",\n\t\t\t\tf.Kind, stepStr, pyval.Str(f.Message))\n",
+   "new": "\t\t\tfmt.Fprintf(d.Stderr, \"[maro] pre-flight [%s] %s: %s\\n\",\n\t\t\t\tstepStr, f.Kind, pyval.Str(f.Message))\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-falsy-content-guard-becomes-a-nil-check",
+   "old": "\tif !pyval.Truthy(content) {\n\t\treturn \"\", nil\n\t}\n",
+   "new": "\tif content == nil {\n\t\treturn \"\", nil\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "a-non-string-content-is-coerced-instead-of-raising",
+   "old": "\ts, ok := content.(string)\n\tif !ok {\n\t\treturn \"\", attrErr(content, \"strip\")\n\t}\n\treturn pytext.Strip(s), nil\n",
+   "new": "\ts, ok := content.(string)\n\tif !ok {\n\t\ts = pyval.Str(content)\n\t}\n\treturn pytext.Strip(s), nil\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-content-is-not-stripped",
+   "old": "\treturn pytext.Strip(s), nil\n}\n",
+   "new": "\t_ = pytext.Strip(s)\n\treturn s, nil\n}\n"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-content-is-stripped-of-ascii-space-only",
+   "old": "\treturn pytext.Strip(s), nil\n}\n",
+   "new": "\t_ = pytext.Strip(s)\n\treturn strings.Trim(s, \" \\t\\n\"), nil\n}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-memory-dir-failure-is-an-exception-not-a-dict",
+   "old": "\t\t\treturn pyval.Obj{{Key: \"error\", Val: errNoMemoryDir.Error()}}, nil\n",
+   "new": "\t\t\treturn nil, &pyval.PyErr{Class: \"Exception\", Msg: errNoMemoryDir.Error()}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-memory-dir-failure-key-is-renamed",
+   "old": "{{Key: \"error\", Val: errNoMemoryDir.Error()}}",
+   "new": "{{Key: \"err\", Val: errNoMemoryDir.Error()}}"
+  },
+  {
+   "file": "internal/preflight/review.go",
+   "name": "the-memory-dir-failure-note-is-reworded",
+   "old": "var errNoMemoryDir = errors.New(\"cannot locate memory_dir\")\n",
+   "new": "var errNoMemoryDir = errors.New(\"cannot locate memory dir\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-calibration-file-is-renamed",
+   "old": "\t\tpath = strings.TrimSuffix(dir, \"/\") + \"/preflight_calibration.jsonl\"\n",
+   "new": "\t\tpath = strings.TrimSuffix(dir, \"/\") + \"/preflight-calibration.jsonl\"\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "an-empty-cal-path-is-treated-as-no-path",
+   "old": "\t\tpath = t\n\t\tif path == \"\" {\n\t\t\tpath = \".\"\n\t\t}\n",
+   "new": "\t\tpath = t\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-non-path-cal-path-is-not-a-type-error",
+   "old": "\t\treturn nil, &pyval.PyErr{Class: \"TypeError\", Msg: fmt.Sprintf(\n",
+   "new": "\t\treturn nil, &pyval.PyErr{Class: \"ValueError\", Msg: fmt.Sprintf(\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-missing-file-is-an-error",
+   "old": "\tif _, err := os.Stat(path); err != nil {\n",
+   "new": "\tif _, err := os.Stat(path); err == nil && false {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-missing-file-note-is-reworded",
+   "old": "\t\t\t{Key: \"note\", Val: \"no calibration data yet\"}}, nil\n",
+   "new": "\t\t\t{Key: \"note\", Val: \"no calibration data yet.\"}}, nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-missing-file-answer-loses-its-total",
+   "old": "\t\treturn pyval.Obj{{Key: \"total\", Val: 0},\n\t\t\t{Key: \"note\", Val: \"no calibration data yet\"}}, nil\n",
+   "new": "\t\treturn pyval.Obj{{Key: \"note\", Val: \"no calibration data yet\"}}, nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-missing-file-answer-reorders-its-keys",
+   "old": "\t\treturn pyval.Obj{{Key: \"total\", Val: 0},\n\t\t\t{Key: \"note\", Val: \"no calibration data yet\"}}, nil\n",
+   "new": "\t\treturn pyval.Obj{{Key: \"note\", Val: \"no calibration data yet\"},\n\t\t\t{Key: \"total\", Val: 0}}, nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-read-failure-is-swallowed",
+   "old": "\t\treturn nil, &pyval.PyErr{Class: pyos.ErrorClass(err),\n\t\t\tMsg: pyos.ErrorText(path, err)}\n",
+   "new": "\t\t_ = pyos.ErrorClass(err)\n\t\traw = nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-read-failure-keeps-gos-own-message",
+   "old": "\t\t\tMsg: pyos.ErrorText(path, err)}\n",
+   "new": "\t\t\tMsg: err.Error()}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "undecodable-bytes-are-processed-anyway",
+   "old": "\tif err := decodeError(raw); err != nil {\n",
+   "new": "\tif err := decodeError(raw); false {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-decode-error-reports-the-byte-after-the-bad-one",
+   "old": "\t\t\t\t\t\"invalid start byte\", b, i)}\n",
+   "new": "\t\t\t\t\t\"invalid start byte\", b, i+1)}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-lone-continuation-byte-is-a-valid-start",
+   "old": "\tcase b >= 0xC2 && b <= 0xDF:\n\t\treturn 2\n",
+   "new": "\tcase b >= 0x80 && b <= 0xDF:\n\t\treturn 2\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-truncated-sequence-is-reported-as-a-bad-continuation",
+   "old": "\t\t\tif allContinuation(raw[i+1:]) {\n",
+   "new": "\t\t\tif false {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-truncated-sequence-range-is-off-by-one",
+   "old": "\t\t\t\t\t\t\"unexpected end of data\", i, len(raw)-1)}\n",
+   "new": "\t\t\t\t\t\t\"unexpected end of data\", i, len(raw))}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-bad-continuation-names-the-offending-byte-not-the-start",
+   "old": "\t\t\t\t\t\"invalid continuation byte\", b, i)}\n",
+   "new": "\t\t\t\t\t\"invalid continuation byte\", raw[i+1], i+1)}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-lines-are-not-stripped",
+   "old": "\t\tline = pytext.Strip(line)\n\t\tif line == \"\" {\n",
+   "new": "\t\tif line == \"\" {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-garbled-line-aborts-the-read",
+   "old": "\t\tv, err := pyval.LoadsOrdered(line)\n\t\tif err != nil {\n",
+   "new": "\t\tv, err := pyval.LoadsOrdered(line)\n\t\tif err != nil && false {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-empty-file-note-is-reworded",
+   "old": "\t\t\t{Key: \"note\", Val: \"file exists but no valid entries\"}}, nil\n",
+   "new": "\t\t\t{Key: \"note\", Val: \"file exists but has no valid entries\"}}, nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "an-empty-file-is-reported-as-missing",
+   "old": "\t\t\t{Key: \"note\", Val: \"file exists but no valid entries\"}}, nil\n",
+   "new": "\t\t\t{Key: \"note\", Val: \"no calibration data yet\"}}, nil\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-true-positive-counter-reads-the-wrong-key",
+   "old": "countTruthy(entries, \"true_positive\")\n",
+   "new": "countTruthy(entries, \"false_positive\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-false-positive-counter-reads-the-wrong-key",
+   "old": "countTruthy(entries, \"false_positive\")\n",
+   "new": "countTruthy(entries, \"true_positive\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-false-negative-counter-reads-the-wrong-key",
+   "old": "countTruthy(entries, \"false_negative\")\n",
+   "new": "countTruthy(entries, \"true_negative\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-true-negative-counter-reads-the-wrong-key",
+   "old": "countTruthy(entries, \"true_negative\")\n",
+   "new": "countTruthy(entries, \"false_negative\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-counters-test-presence-not-truth",
+   "old": "\t\tv, _ := o.Get(key)\n\t\tif pyval.Truthy(v) {\n",
+   "new": "\t\t_, present := o.Get(key)\n\t\tif present {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-scalar-entry-is-skipped-instead-of-raising",
+   "old": "\t\t\t// is, and the second guard is not guaranteed to stay.\n\t\t\treturn 0, attrErr(e, \"get\")\n\t\t}\n",
+   "new": "\t\t\t// is, and the second guard is not guaranteed to stay.\n\t\t\tcontinue\n\t\t}\n",
+   "equivalent": "the breakdown loop is a second, identical guard on the same entries and raises the same AttributeError."
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "precision-is-computed-from-the-recall-denominator",
+   "old": "\tif tp+fp > 0 {\n\t\tprecision = pyval.Round(float64(tp)/float64(tp+fp), 3)\n\t}\n",
+   "new": "\tif tp+fn > 0 {\n\t\tprecision = pyval.Round(float64(tp)/float64(tp+fn), 3)\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "recall-is-computed-from-the-precision-denominator",
+   "old": "\tif tp+fn > 0 {\n\t\trecall = pyval.Round(float64(tp)/float64(tp+fn), 3)\n\t}\n",
+   "new": "\tif tp+fp > 0 {\n\t\trecall = pyval.Round(float64(tp)/float64(tp+fp), 3)\n\t}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "an-empty-denominator-answers-zero-not-none",
+   "old": "\tvar precision, recall any\n\tif tp+fp > 0 {\n",
+   "new": "\tvar precision, recall any = 0, 0\n\tif tp+fp > 0 {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "precision-is-rounded-to-two-places",
+   "old": "\t\tprecision = pyval.Round(float64(tp)/float64(tp+fp), 3)\n",
+   "new": "\t\tprecision = pyval.Round(float64(tp)/float64(tp+fp), 2)\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "recall-is-not-rounded",
+   "old": "\t\trecall = pyval.Round(float64(tp)/float64(tp+fn), 3)\n",
+   "new": "\t\trecall = float64(tp) / float64(tp+fn)\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-missing-scope-defaults-to-the-empty-string",
+   "old": "\t\tsc, found := o.Get(\"scope_predicted\")\n\t\tif !found {\n\t\t\tsc = \"unknown\"\n\t\t}\n",
+   "new": "\t\tsc, found := o.Get(\"scope_predicted\")\n\t\tif !found {\n\t\t\tsc = \"\"\n\t\t}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-scope-is-read-from-the-wrong-key",
+   "old": "\t\tsc, found := o.Get(\"scope_predicted\")\n",
+   "new": "\t\tsc, found := o.Get(\"scope\")\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-boolean-scope-gets-its-own-bucket",
+   "old": "\tcase bool:\n\t\tif t {\n\t\t\treturn \"f:1\", true\n\t\t}\n\t\treturn \"f:0\", true\n",
+   "new": "\tcase bool:\n\t\tif t {\n\t\t\treturn \"b:1\", true\n\t\t}\n\t\treturn \"b:0\", true\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-string-scope-collides-with-a-numeric-one",
+   "old": "\tcase string:\n\t\treturn \"s:\" + t, true\n",
+   "new": "\tcase string:\n\t\treturn t, true\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-list-scope-is-hashable",
+   "old": "\treturn \"\", false\n}\n",
+   "new": "\treturn \"l:\" + pyval.Repr(v), true\n}\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-breakdown-key-is-the-last-arrival-not-the-first",
+   "old": "\t\tpos, seen := index[key]\n\t\tif !seen {\n\t\t\tbreakdown = append(breakdown, ScopeBucket{Scope: sc})\n\t\t\tpos = len(breakdown) - 1\n\t\t\tindex[key] = pos\n\t\t}\n",
+   "new": "\t\tpos, seen := index[key]\n\t\tif !seen {\n\t\t\tbreakdown = append(breakdown, ScopeBucket{Scope: sc})\n\t\t\tpos = len(breakdown) - 1\n\t\t\tindex[key] = pos\n\t\t}\n\t\tbreakdown[pos].Scope = sc\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "a-running-loop-counts-as-stuck",
+   "old": "\t\tif pyval.Eq(status, \"stuck\") {\n",
+   "new": "\t\tif !pyval.Eq(status, \"done\") {\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "stuck-and-done-are-swapped",
+   "old": "\t\tif pyval.Eq(status, \"stuck\") {\n\t\t\tbreakdown[pos].Stuck++\n",
+   "new": "\t\tif pyval.Eq(status, \"stuck\") {\n\t\t\tbreakdown[pos].Done++\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-bucket-total-is-not-counted",
+   "old": "\t\tbreakdown[pos].Count++\n",
+   "new": "\t\t_ = pos\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-stats-dict-reorders-precision-and-recall",
+   "old": "\t\t{Key: \"precision\", Val: precision},\n\t\t{Key: \"recall\", Val: recall},\n",
+   "new": "\t\t{Key: \"recall\", Val: recall},\n\t\t{Key: \"precision\", Val: precision},\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-stats-dict-renames-the-breakdown",
+   "old": "\t\t{Key: \"scope_breakdown\", Val: breakdown},\n",
+   "new": "\t\t{Key: \"scope_breakdown_\", Val: breakdown},\n"
+  },
+  {
+   "file": "internal/preflight/stats.go",
+   "name": "the-stats-total-counts-the-lines-not-the-entries",
+   "old": "\t\t{Key: \"total\", Val: len(entries)},\n",
+   "new": "\t\t{Key: \"total\", Val: len(pytext.SplitLines(string(raw)))},\n"
+  }
+ ]
+}
