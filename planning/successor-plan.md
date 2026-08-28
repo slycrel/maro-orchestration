@@ -216,4 +216,29 @@ boundary. Then decide what the successor becomes.
    file_lock strict parse, least-privileged verdict trust, tolerant
    RunRecord). Next: codex round 2 on the whole chunk, verify-before-
    fix, land via land.sh. Phase 2 remains gated on plan v1.
-5. [ ] Behavior suite (1b) — after the registry lands
+5. [DONE 2026-08-28 — LANDED 90f9f601..c7e673ba] Behavior suite (1b)
+   shipped: tests/behavior/ (harness + data-first scenario table + 6
+   subsystem modules, 29 tests, seconds-fast, zero LLM/network under
+   conftest isolation). Taken through SIX review rounds to fixpoint
+   (r1 skeptic+qa: vacuous B9/B8, stuck-fabrication hole, _curation
+   private-key pins, misaligned agenda tables — the clarity assessor
+   consumes the first agenda call; r2: log-slice-as-evidence, lifecycle
+   splicing, duplicate-key tolerance; r3: loop-agnostic evidence globs;
+   r4: counter-swing — unregistered artifact names, answered by
+   registering B3 "Loop evidence artifacts"; r5: the new registry block
+   itself misdescribed the code (L28 — wrong at birth); r6: one prose
+   scope-word, rest confirmed clean). Suite carries kill proof: 4
+   engine mutations red (M1 events 8, M2 stuck→success 2, M3 intake 7,
+   M4 step-artifacts 1). Flaw-finder role paid immediately: explicit-
+   backend build_adapter calls (pre-flight plan review) ran OUTSIDE the
+   FailoverAdapter record/meter/cap seam — fixed in llm.py, every
+   branch wraps, 7-way parameterized pin. Nine unpinnable-behavior
+   FINDINGS recorded in tests/behavior/README.md as PHASE-2 DESIGN
+   INPUT — headline items for the Go engine: registered interrupt
+   intake (F1), recording on the construction-guaranteed call path
+   (F6), events carry handle_id + per-lane lifecycle bus events (F9),
+   port the concurrency/durability unit batteries or grow subprocess
+   fault injection (F8). Suite: 10453 green. Convergence lesson
+   repeated from 1a: rounds alternated between "pin too loose" and
+   "pin too tight" — the fixpoint is where the registry says exactly
+   what the code does, no more.
