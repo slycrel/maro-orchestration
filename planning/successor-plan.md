@@ -57,7 +57,12 @@ why it has that shape.
 ## Phases
 
 ### Phase 1 — Contracts + behavior suite (the spec, extracted)
-1a. **Contract registry.** One doc (or `contracts/` dir) naming each
+1a. **Contract registry.** Structured by Jeremy's forwards-compatibility
+    standard (machine-local at `~/claude/fromWork/` — distill the rules,
+    never commit those files: work-internal). The four rules adapted to
+    workspace files: contracts owned by the writing repo; writers only
+    add; readers tolerate growth; removal only via deprecate→measure→
+    migrate→remove. One doc (or `contracts/` dir) naming each
     workspace artifact the backbone touches: run dir layout,
     `build/calls/*.json`, outcomes/verdicts, memory + lesson writes,
     playbook, config resolution. Each contract: shape, writer, readers,
@@ -174,4 +179,10 @@ boundary. Then decide what the successor becomes.
 1. [done] python-arch-map.md
 2. [done] go-tree-triage.md
 3. [ ] Iterate this plan with Jeremy → v1 (open questions above)
-4. [ ] (phase 1 gated on plan v1)
+4. [in flight 2026-08-28] Phase 1a EARLY-STARTED by Jeremy's sanction
+   ("python prep work... upgrade our on-disk contracts"): contract
+   registry extraction (subagent, in maro-wt-contracts worktree) →
+   review → codex design pass → land; then additive contract
+   sharpenings + tolerant-reader fixes from its findings, tested +
+   codex-reviewed + landed. Phase 2 remains gated on plan v1.
+5. [ ] Behavior suite (1b) — after the registry lands
