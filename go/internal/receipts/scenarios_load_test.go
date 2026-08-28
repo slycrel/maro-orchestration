@@ -49,10 +49,13 @@ func rcLoadScenarios() []rcSpec {
 
 	// A directory of 1001 junk files: the islice bound stops DISCOVERY,
 	// not just collection, and the overflow sets `truncated`.
+	// The records are EMPTY on purpose: with rows in them the row cap
+	// fires first and `truncated` is true for the wrong reason, which is
+	// exactly how a scan-bound bug hides.
 	var many []rcEntry
 	for i := 0; i < 1001; i++ {
 		many = append(many, call(fmt.Sprintf("call-%04d.json", i),
-			rec("subprocess", ev("Bash", "pytest -q", "ok", false))))
+			rec("subprocess")))
 	}
 
 	var noSlots []rcEntry
@@ -133,9 +136,43 @@ func rcLoadScenarios() []rcSpec {
 		ld("a-call-file-over-the-size-bound", "400",
 			rcEntry{Path: "build/calls/call-1.json", Kind: "sparse",
 				Size: MaxFileBytes + 1}),
-		ld("a-call-file-exactly-at-the-size-bound", "400",
-			rcEntry{Path: "build/calls/call-1.json", Kind: "sparse",
-				Size: MaxFileBytes}),
+		// One byte over the bound and otherwise PERFECT. The sparse
+		// fixture above cannot tell a size screen from a parse failure —
+		// a hole reads as NUL bytes, which are valid UTF-8 and invalid
+		// JSON, so it comes back unreadable either way. This one costs
+		// eight megabytes on each side and is the only shape that proves
+		// the screen runs at all.
+		{Name: "a-valid-record-one-byte-over-the-size-bound", Kind: "load",
+			Cap: "400", RunDirIsPath: true, Tree: []rcEntry{{
+				Path: "build/calls/call-1.json", Kind: "pad",
+				Size: MaxFileBytes + 1,
+				Data: bs(rec("subprocess",
+					ev("Bash", "pytest -q", "ok", false)))}}},
+		// Exactly at the bound and still VALID: the record is padded with
+		// spaces, which json tolerates and st_size counts. A sparse file
+		// here would be unreadable for the wrong reason and could not
+		// tell an inclusive screen from an exclusive one.
+		{Name: "a-call-file-exactly-at-the-size-bound", Kind: "load",
+			Cap: "400", RunDirIsPath: true, Tree: []rcEntry{{
+				Path: "build/calls/call-1.json", Kind: "pad",
+				Size: MaxFileBytes,
+				Data: bs(rec("subprocess",
+					ev("Bash", "pytest -q", "ok", false)))}}},
+		// An unreadable file fails ALONE: the record after it still
+		// counts.
+		ld("an-unreadable-file-followed-by-a-good-one", "400",
+			call("call-1.json", "{not json"),
+			call("call-2.json", rec("subprocess",
+				ev("Bash", "pytest -q", "ok", false)))),
+		// `x in frozenset(...)` with an unhashable value RAISES, and the
+		// exception escapes load_receipts entirely.
+		ld("a-backend-that-is-a-list", "400",
+			call("call-1.json", `{"backend": ["subprocess"],`+
+				` "tool_events": []}`)),
+		// Under the head in CODE POINTS and over it in bytes.
+		ld("an-output-under-the-head-in-runes", "400",
+			call("call-1.json", rec("subprocess",
+				ev("Bash", "pytest", strings.Repeat("é", 200), false)))),
 
 		// Valid JSON, wrong shape. The recorder always writes a
 		// tool_events LIST, so each of these is a corrupt or foreign

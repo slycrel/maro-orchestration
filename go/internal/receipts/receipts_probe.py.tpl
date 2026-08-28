@@ -23,6 +23,13 @@ def make_tree(base, entries):
         os.makedirs(os.path.dirname(p), exist_ok=True)
         if e["kind"] == "dir":
             os.makedirs(p, exist_ok=True)
+        elif e["kind"] == "pad":
+            # A file of an EXACT size that is still valid JSON: the body,
+            # then spaces, which json.loads tolerates and the size screen
+            # counts.
+            with io.open(p, "wb") as fh:
+                body = b64d(e["data"])
+                fh.write(body + b" " * (e["size"] - len(body)))
         elif e["kind"] == "sparse":
             # A file over MAX_FILE_BYTES without writing eight megabytes:
             # the size screen reads st_size, and a hole has one.

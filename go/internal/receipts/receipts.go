@@ -75,10 +75,15 @@ var processMarkers = regexp.MustCompile(
 		`|gradlew? (?:test|build|check))` +
 		pytext.WordEnd)
 
-// pathTokenExts are `_PATH_TOKEN`'s extension alternatives IN PYTHON'S
-// ORDER, which is load-bearing: `re` tries them left to right and takes
-// the first that also clears the trailing `\b`, so `x.jsonl` matches
-// `json` first, fails the boundary, and backtracks into `jsonl`.
+// pathTokenExts are `_PATH_TOKEN`'s extension alternatives in PYTHON'S
+// ORDER. `re` tries them left to right and takes the first that also
+// clears the trailing `\b`, so `x.jsonl` matches `json`, fails the
+// boundary against the `l`, and backtracks into `jsonl`.
+//
+// The order is provenance, not semantics — see matchDottedName for why no
+// ordering of this list can change an answer. It is kept as a SLICE
+// rather than a set so the guard test can compare it to upstream's
+// literal in order, and so the backtracking above stays legible.
 var pathTokenExts = []string{"py", "md", "txt", "json", "jsonl", "sh",
 	"yml", "yaml", "html"}
 
@@ -166,6 +171,13 @@ func LoadReceipts(runDir any, capArg any) (pyval.Obj, error) {
 	// `not isinstance(cap, int) or cap <= 0`. A bool IS an int in Python
 	// and True is 1, so `cap=True` collects exactly one row; that is not
 	// a quirk to round off, it is what the interpreter does.
+	//
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): dropping `!ok` is
+	// unobservable, because pyIntArg's failure value is 0 and the `<= 0`
+	// screen already rejects that. The two halves are Python's two
+	// halves — a type test and a range test — and leaning on the coupling
+	// between them would make a later change to pyIntArg's zero value
+	// silently widen this screen.
 	capN, ok := pyIntArg(capArg)
 	if !ok || capN <= 0 {
 		capN = MaxReceipts
@@ -192,6 +204,14 @@ func LoadReceipts(runDir any, capArg any) (pyval.Obj, error) {
 		//lint:ignore ST1005 mirrors the Python control flow
 		// `Path(run_dir)` raises TypeError for anything that is not a
 		// str/PathLike, inside the same try as the glob.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): dropping this
+		// screen is unobservable to the differential, and only to it. A
+		// non-string run dir would then join to the RELATIVE path
+		// `build/calls`, so telling the two apart takes a `build/calls`
+		// directory in the test process's own working directory — a
+		// global a fixture must not create, and one whose presence would
+		// silently change every other scenario in the file.
 		return empty()
 	}
 	// islice bounds DISCOVERY too: a junk-spammed calls dir must not force
@@ -301,6 +321,13 @@ func LoadReceipts(runDir any, capArg any) (pyval.Obj, error) {
 			}
 			inp, _ := ev.Get("input")
 			inpObj, inpIsObj := inp.(pyval.Obj)
+			// EQUIVALENT MUTANT (kept, marked `equivalent`): counting a
+			// NULL input malformed here reaches the same tally by a
+			// shorter route. A null input yields no command, and a
+			// missing command is itself shape corruption — so both
+			// spellings land on `malformed++` with no row. Python's
+			// wording is the one that says why: a null input is not
+			// wrong, it is simply not a mapping to read a command out of.
 			if inp != nil && !inpIsObj {
 				malformed++
 				continue
@@ -379,6 +406,11 @@ func globCalls(dir string, limit int) ([]string, error) {
 		// A missing `build/calls` is not an error to the caller: pathlib's
 		// selector swallows it and yields nothing. The error return here
 		// is for the shapes that raise BEFORE the generator runs.
+		//
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): raising instead
+		// lands on the caller's early return, and the early return builds
+		// the same all-zero record the empty scan loop would have. The
+		// distinction is real to a reader and invisible to a caller.
 		return nil, nil
 	}
 	defer fh.Close()
@@ -387,6 +419,13 @@ func globCalls(dir string, limit int) ([]string, error) {
 		return nil, nil
 	}
 	out := []string{}
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): removing this bound
+	// changes cost, not answers. `islice` stops the generator early, but
+	// consuming the whole directory and slicing afterwards yields the
+	// same first N in the same iteration order — the caller sorts and
+	// trims either way. The bound exists so a junk-spammed calls dir
+	// cannot force an unbounded scan, which is a promise about work done,
+	// not about the record produced.
 	for _, n := range names {
 		if len(out) >= limit {
 			break
@@ -446,6 +485,12 @@ func pyIntArg(v any) (int, bool) {
 	case int64:
 		return int(t), true
 	case json.Number:
+		// EQUIVALENT MUTANT (kept, marked `equivalent`): Atoi already
+		// refuses every spelling this screen catches — it accepts an
+		// optional sign and digits and nothing else, so `2.0` and `2e0`
+		// fail there too. The screen states the RULE (a float is not an
+		// int, whatever it is worth) rather than leaving it to be
+		// inferred from a parser's tolerances.
 		if strings.ContainsAny(string(t), ".eE") {
 			return 0, false
 		}
@@ -510,6 +555,10 @@ func matchSlashRun(r []rune, i int) int {
 	for j < len(r) && isPathRune(r[j]) {
 		j++
 	}
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): with j == i the
+	// backward scan below starts at i-2 and never executes, so the
+	// function returns 0 either way. The guard says the thing the loop
+	// bounds only imply.
 	if j == i {
 		return 0
 	}
@@ -538,6 +587,16 @@ func matchDottedName(r []rune, i int) int {
 	if j == i || j >= len(r) || r[j] != '.' {
 		return 0
 	}
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): the ORDER of this
+	// list cannot change the answer, and the reason is worth stating
+	// because it is easy to believe the opposite. Two extensions can only
+	// both match at the same position if one is a prefix of the other —
+	// `json` and `jsonl` are the only such pair — and then at most one
+	// can clear the trailing boundary: if `json` clears it the next
+	// character is a non-word one, which is exactly what `jsonl` needs to
+	// be an `l`. So the first match that clears the boundary is the ONLY
+	// match that clears it. The list stays in Python's order for
+	// provenance, and the guard test pins it there.
 	for _, ext := range pathTokenExts {
 		end := j + 1 + len([]rune(ext))
 		if end > len(r) || string(r[j+1:end]) != ext {
@@ -650,6 +709,12 @@ func pyLen(v any) (int, error) {
 		return len(t), nil
 	case pyval.Obj:
 		return len(t), nil
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): the width of this
+	// arm is unobservable. A string `rows` survives the len() and dies
+	// one line later, because iterating it yields characters and a
+	// character has no `.get` — so the only thing a caller can learn from
+	// the string case is that it did not raise. The arm has to exist for
+	// that, and cannot be wrong in any finer way.
 	case string:
 		return utf8.RuneCountInString(t), nil
 	}
@@ -659,6 +724,14 @@ func pyLen(v any) (int, error) {
 }
 
 func getOrEmpty(o pyval.Obj, key string) string {
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): rendering a present
+	// None as "" instead of "None" is invisible HERE, though not in
+	// general. The blob is `command + " " + description`, so the four
+	// characters always arrive space-separated, and a path token needs a
+	// `/` or a `.` — neither of which "None" has. Any other non-string
+	// value still has to render (a list arrives as its repr, brackets,
+	// quotes, slashes and all), which is why the coercion itself has
+	// fixtures even though this one arm does not.
 	v, found := o.Get(key)
 	if !found {
 		return ""
@@ -976,6 +1049,12 @@ func rowGet(r any, key string) (any, error) {
 // rowItem is `r[key]` — a SUBSCRIPT, which raises rather than defaulting.
 func rowItem(r any, key string) (any, error) {
 	o, isObj := r.(pyval.Obj)
+	// EQUIVALENT MUTANT (kept, marked `equivalent`): this arm is
+	// unreachable. Every row that reaches a subscript has already been
+	// through `r.get("is_error")` in the error aggregate, which refuses a
+	// non-mapping with AttributeError before any subscript runs. It is
+	// spelled correctly anyway, because the reason it is unreachable is a
+	// property of a CALLER, and callers move.
 	if !isObj {
 		return nil, &pyval.PyErr{Class: "TypeError",
 			Msg: fmt.Sprintf("'%s' object is not subscriptable",

@@ -74,8 +74,8 @@
     {
       "file": "internal/receipts/receipts.go",
       "name": "only-the-first-fence-run-is-mangled",
-      "old": "\treturn strings.ReplaceAll(text, ",
-      "new": "\treturn strings.Replace(text, "
+      "old": "\treturn strings.ReplaceAll(text, \"<<<\", \"<< <\")",
+      "new": "\treturn strings.Replace(text, \"<<<\", \"<< <\", 1)"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -110,8 +110,9 @@
     {
       "file": "internal/receipts/receipts.go",
       "name": "the-cap-screen-accepts-any-type",
-      "old": "\tif !ok || capN <= 0 {",
-      "new": "\tif capN <= 0 {"
+      "old": "\tcapN, ok := pyIntArg(capArg)\n\tif !ok || capN <= 0 {",
+      "new": "\tcapN, ok := pyIntArg(capArg)\n\t_ = ok\n\tif capN <= 0 {",
+      "equivalent": "pyIntArg's failure value is 0, which the `<= 0` screen already rejects. The two halves are Python's two halves \u2014 a type test and a range test \u2014 and leaning on the coupling between them would let a later change to pyIntArg silently widen this screen."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -129,13 +130,15 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-float-cap-is-accepted",
       "old": "\t\tif strings.ContainsAny(string(t), \".eE\") {\n\t\t\treturn 0, false\n\t\t}",
-      "new": "\t\tif false {\n\t\t\treturn 0, false\n\t\t}"
+      "new": "\t\tif false {\n\t\t\treturn 0, false\n\t\t}",
+      "equivalent": "Atoi already refuses every spelling the `.eE` screen catches: it accepts a sign and digits and nothing else, so `2.0` and `2e0` fail there too. The screen states the rule rather than inheriting it from a parser's tolerances."
     },
     {
       "file": "internal/receipts/receipts.go",
       "name": "the-run-dir-type-screen-is-gone",
       "old": "\tdir, isStr := runDir.(string)\n\tif !isStr {",
-      "new": "\tdir, isStr := runDir.(string)\n\tif false && !isStr {"
+      "new": "\tdir, isStr := runDir.(string)\n\tif false && !isStr {",
+      "equivalent": "Dropping the screen sends a non-string run dir to the RELATIVE path `build/calls`. Distinguishing that from the early return takes a `build/calls` directory in the test process's own working directory \u2014 a global a fixture must not create."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -189,7 +192,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-discovery-limit-is-not-enforced",
       "old": "\t\tif len(out) >= limit {\n\t\t\tbreak\n\t\t}",
-      "new": "\t\tif false {\n\t\t\tbreak\n\t\t}"
+      "new": "\t\tif false {\n\t\t\tbreak\n\t\t}",
+      "equivalent": "islice bounds COST, not answers. Consuming the whole directory and slicing afterwards yields the same first N in the same iteration order, and the caller sorts and trims either way."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -209,7 +213,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-missing-calls-directory-is-an-error",
       "old": "\t\treturn nil, nil\n\t}\n\tdefer fh.Close()",
-      "new": "\t\treturn nil, &pyval.PyErr{Class: \"OSError\", Msg: \"no dir\"}\n\t}\n\tdefer fh.Close()"
+      "new": "\t\treturn nil, &pyval.PyErr{Class: \"OSError\", Msg: \"no dir\"}\n\t}\n\tdefer fh.Close()",
+      "equivalent": "Raising here lands on the caller's early return, which builds the same all-zero record the empty scan loop would have produced."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -220,8 +225,8 @@
     {
       "file": "internal/receipts/receipts.go",
       "name": "the-size-screen-never-runs",
-      "old": "\tif err != nil || fi.Size() > MaxFileBytes {",
-      "new": "\tif err != nil {"
+      "old": "\tfi, err := os.Stat(path)\n\tif err != nil || fi.Size() > MaxFileBytes {",
+      "new": "\tfi, err := os.Stat(path)\n\t_ = fi\n\tif err != nil {"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -269,13 +274,13 @@
       "file": "internal/receipts/receipts.go",
       "name": "an-error-stamped-record-counts-as-capturing",
       "old": "\t\tif inCapture && !pyval.Truthy(errFlag) {",
-      "new": "\t\tif inCapture {"
+      "new": "\t\t_ = errFlag\n\t\tif inCapture {"
     },
     {
       "file": "internal/receipts/receipts.go",
       "name": "every-record-counts-as-capturing",
       "old": "\t\tif inCapture && !pyval.Truthy(errFlag) {",
-      "new": "\t\tif !pyval.Truthy(errFlag) {"
+      "new": "\t\t_ = inCapture\n\t\tif !pyval.Truthy(errFlag) {"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -335,7 +340,7 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-non-shell-tool-still-makes-a-row",
       "old": "\t\t\tif !isShell {",
-      "new": "\t\t\tif false {"
+      "new": "\t\t\t_ = isShell\n\t\t\tif false {"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -353,7 +358,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-null-input-is-counted-malformed",
       "old": "\t\t\tif inp != nil && !inpIsObj {",
-      "new": "\t\t\tif !inpIsObj {"
+      "new": "\t\t\tif !inpIsObj {",
+      "equivalent": "Both routes end at `malformed++` with no row: a null input yields no command, and a missing command is itself shape corruption."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -504,7 +510,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-empty-slash-run-is-a-match",
       "old": "\tif j == i {\n\t\treturn 0\n\t}",
-      "new": "\tif false {\n\t\treturn 0\n\t}"
+      "new": "\tif false {\n\t\treturn 0\n\t}",
+      "equivalent": "With j == i the backward scan starts at i-2 and never executes, so the function returns 0 either way."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -552,7 +559,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-extension-alternatives-are-tried-longest-first",
       "old": "\tfor _, ext := range pathTokenExts {",
-      "new": "\tfor _, ext := range []string{\"jsonl\", \"json\", \"py\", \"md\", \"txt\", \"sh\", \"yml\", \"yaml\", \"html\"} {"
+      "new": "\tfor _, ext := range []string{\"jsonl\", \"json\", \"py\", \"md\", \"txt\", \"sh\", \"yml\", \"yaml\", \"html\"} {",
+      "equivalent": "Two extensions can both match at one position only if one is a prefix of the other, and then at most one can clear the trailing boundary \u2014 `json` clearing it means the next character is a non-word one, which is exactly what `jsonl` needs to be an `l`. No ordering changes an answer."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -631,7 +639,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-present-none-renders-as-empty",
       "old": "\tv, found := o.Get(key)\n\tif !found {\n\t\treturn \"\"\n\t}\n\treturn pyval.Str(v)",
-      "new": "\tv, found := o.Get(key)\n\tif !found || v == nil {\n\t\treturn \"\"\n\t}\n\treturn pyval.Str(v)"
+      "new": "\tv, found := o.Get(key)\n\tif !found || v == nil {\n\t\treturn \"\"\n\t}\n\treturn pyval.Str(v)",
+      "equivalent": "The blob is `command + \" \" + description`, so the four characters \"None\" always arrive space-separated, and a path token needs a `/` or a `.` \u2014 neither of which \"None\" has."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -661,7 +670,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-length-of-a-string-is-in-bytes",
       "old": "\tcase string:\n\t\treturn utf8.RuneCountInString(t), nil",
-      "new": "\tcase string:\n\t\treturn len(t), nil"
+      "new": "\tcase string:\n\t\treturn len(t), nil",
+      "equivalent": "A string `rows` survives the len() and dies one line later, because iterating it yields characters and a character has no `.get`. The only thing observable about the string arm is that it did not raise."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -721,7 +731,7 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-blind-line-prints-the-coerced-count",
       "old": "\t\t\tpyval.Str(rawReadable)+\" call(s) rode non-capturing backends \"+",
-      "new": "\t\t\tstrconv.Itoa(readable)+\" call(s) rode non-capturing backends \"+"
+      "new": "\t\t\tpyval.Str(rawReadable)[:0]+strconv.Itoa(readable)+\" call(s) rode non-capturing backends \"+"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -817,7 +827,7 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-output-continuation-is-never-marked",
       "old": "\t\t\t\tif pyval.Truthy(clipped) {\n\t\t\t\t\tmore = \" \u2026[output continues]\"\n\t\t\t\t}",
-      "new": "\t\t\t\tif false {\n\t\t\t\t\tmore = \" \u2026[output continues]\"\n\t\t\t\t}"
+      "new": "\t\t\t\t_ = clipped\n\t\t\t\tif false {\n\t\t\t\t\tmore = \" \u2026[output continues]\"\n\t\t\t\t}"
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -937,7 +947,8 @@
       "file": "internal/receipts/receipts.go",
       "name": "a-subscript-of-a-non-mapping-is-an-attribute-error",
       "old": "\t\treturn nil, &pyval.PyErr{Class: \"TypeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object is not subscriptable\",\n\t\t\t\tpyval.TypeName(r))}",
-      "new": "\t\treturn nil, &pyval.PyErr{Class: \"AttributeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object is not subscriptable\",\n\t\t\t\tpyval.TypeName(r))}"
+      "new": "\t\treturn nil, &pyval.PyErr{Class: \"AttributeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object is not subscriptable\",\n\t\t\t\tpyval.TypeName(r))}",
+      "equivalent": "Unreachable: every row that reaches a subscript has already been through `r.get(\"is_error\")` in the error aggregate, which refuses a non-mapping before any subscript runs."
     },
     {
       "file": "internal/receipts/receipts.go",
@@ -967,13 +978,13 @@
       "file": "internal/receipts/receipts.go",
       "name": "the-partial-record-branch-checks-only-unreadable",
       "old": "\t\tif pyval.Truthy(unreadable) || pyval.Truthy(malformed) ||\n\t\t\tpyval.Truthy(truncated) {",
-      "new": "\t\tif pyval.Truthy(unreadable) {"
+      "new": "\t\t_, _ = malformed, truncated\n\t\tif pyval.Truthy(unreadable) {"
     },
     {
       "file": "internal/receipts/receipts.go",
       "name": "the-partial-record-branch-never-fires",
       "old": "\t\tif pyval.Truthy(unreadable) || pyval.Truthy(malformed) ||\n\t\t\tpyval.Truthy(truncated) {",
-      "new": "\t\tif false {"
+      "new": "\t\t_, _, _ = unreadable, malformed, truncated\n\t\tif false {"
     },
     {
       "file": "internal/receipts/receipts.go",

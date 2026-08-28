@@ -116,6 +116,18 @@ func rcMakeTree(t *testing.T, base string, entries []rcEntry) {
 			if err := os.MkdirAll(p, 0o755); err != nil {
 				t.Fatal(err)
 			}
+		case "pad":
+			raw, err := base64.StdEncoding.DecodeString(e.Data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pad := make([]byte, e.Size-int64(len(raw)))
+			for i := range pad {
+				pad[i] = ' '
+			}
+			if err := os.WriteFile(p, append(raw, pad...), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		case "sparse":
 			fh, err := os.Create(p)
 			if err != nil {

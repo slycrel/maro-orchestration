@@ -17316,14 +17316,28 @@ at a position that is by construction inside the run — impossible. So the
 name is the maximal `[\w-]` run and nothing else, and the only thing left
 to try is the extension list.
 
-That last part is where the ORDER of the extension list becomes
-load-bearing. `re` tries the alternatives left to right and takes the
-first that also clears the trailing `\b`, so `x.jsonl` matches `json`,
-fails the boundary against the `l`, and backtracks into `jsonl`. Sort
-that list and the port silently returns `x.json` for a `.jsonl` file.
-`pathTokenExts` is therefore a slice, not a set, with the reason at the
-declaration, a fixture on both sides of the prefix pair, and a guard test
-that derives the list FROM the upstream literal and compares it in order.
+That last part is where the extension list comes in. `re` tries the
+alternatives left to right and takes the first that also clears the
+trailing `\b`, so `x.jsonl` matches `json`, fails the boundary against
+the `l`, and backtracks into `jsonl`.
+
+I first wrote that the ORDER of the list was load-bearing, and it is not.
+The battery said so: `the-extension-alternatives-are-tried-longest-first`
+survived, and the reason it survives is a small proof rather than a
+missing fixture. Two extensions can both match at one position only if
+one is a prefix of the other — `json`/`jsonl` is the only such pair here
+— and then at most one of them can clear the trailing boundary, because
+`json` clearing it means the next character is a NON-word one and `jsonl`
+needs that same character to be an `l`. So the first match that clears
+the boundary is the only match that clears it, and no ordering changes an
+answer.
+
+The list stays a slice in Python's order anyway, for provenance, with a
+guard test that derives it FROM the upstream literal and compares in
+order — and there are fixtures on both sides of the prefix pair, because
+the BACKTRACKING is real even though the order is not. The correction is
+the point: the claim was plausible, I wrote it at the site and in this
+file, and the only thing that caught it was a mutation nothing killed.
 
 ### The dead-code question, answered the other way
 
@@ -17394,7 +17408,7 @@ honest when the number moves.
 
 ### The differential
 
-170 scenarios over nine kinds: `clip`, `neutralize`, `display`,
+221 scenarios over nine kinds: `clip`, `neutralize`, `display`,
 `path_token`, `process_markers`, `check_tokens`, `load`, `render`,
 `audit`. The four private helpers are driven directly, because they are
 where the port's own decisions live.
@@ -17414,6 +17428,54 @@ because the key ORDER is part of the answer: `load_receipts` writes its
 six keys in a fixed order and a consumer reading them back is entitled to
 it. A row that survives the loader and a row order that does not are
 different bugs.
+
+### The battery, and a claim that only a mutation could catch
+
+171 rows, converged at r3: 156 killed, 15 documented equivalents, no
+survivors and no build breaks. r1 was 28 survivors and 10 mutants that
+did not compile; r2 was 4 and 0.
+
+The r1 list split the usual three ways — ten new fixtures, ten
+equivalences with the reason written at the site, and ten build breaks
+re-spelled so a test does the killing rather than the compiler. Two of
+those thirty are worth more than a line.
+
+**`the-extension-alternatives-are-tried-longest-first` survived, and it
+was right to.** I had written — at the declaration, in the commit
+message, and three paragraphs up in this file — that the extension list's
+ORDER is load-bearing, and that sorting it would make the port return
+`x.json` for a `.jsonl` file. That is false, and the proof is three
+lines: two extensions can both match at one position only if one is a
+prefix of the other, and then at most one can clear the trailing `\b`.
+The claim was plausible, it was stated in three places, it survived my
+own review, and the only thing that asked it directly was a mutation
+nothing killed. It is the same shape as the metrics round the day
+before — a fix without a fixture is how a wrong fix survives; a CLAIM
+without a fixture is how a wrong claim does.
+
+**`the-dotted-name-may-be-empty` looked equivalent under the same style
+of argument, and is not.** The reasoning runs: to reach a position whose
+`[\w-]` run is empty you need a `.` with a word character before it, and
+the identical extension scan already ran from the start of that word run
+and failed. True — unless the scanner reaches the dot because a PREVIOUS
+match ended on it. `doc a.py.md` does exactly that: `a.py` matches, the
+scan resumes at the second dot, and the mutant emits a spurious `.md`.
+Real fixture, real kill, and a reminder that "unreachable" arguments
+about a scanner have to account for where the scanner has been.
+
+Three survivors needed a fixture that cost something rather than a
+comment. `the-size-screen-never-runs` survived because the over-bound
+fixture was SPARSE: a hole reads as NUL bytes, which are valid UTF-8 and
+invalid JSON, so the file came back unreadable whether or not the size
+screen ran. It now has a sibling — a genuinely valid record padded to
+`MAX_FILE_BYTES + 1`, eight megabytes on each side, and the only shape
+that proves the screen fires at all. `the-scan-bound-has-no-overflow-slot`
+survived for the mirror reason: the thousand-file fixture had a row in
+every record, so the ROW cap fired first and `truncated` was true for the
+wrong reason. The records are empty now. And `the-partial-record-branch-
+checks-only-unreadable` needed an audit whose record is incomplete for a
+reason other than an unreadable file — a malformed event alone. A branch
+with three inputs needs each of them to be able to fire it by itself.
 
 ### An ops lesson, paid for in confusion
 

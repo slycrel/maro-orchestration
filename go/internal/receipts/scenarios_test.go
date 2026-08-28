@@ -86,6 +86,10 @@ func rcPureScenarios() []rcSpec {
 		clip("a-negative-limit", "abcdefgh", -10),
 		clip("a-limit-just-above-the-floor-arithmetic",
 			strings.Repeat("x", 100), 84),
+		// Under the limit in CODE POINTS and over it in bytes: the whole
+		// line must come back untouched.
+		clip("a-multibyte-line-under-the-limit-in-runes",
+			strings.Repeat("é", 100), 160),
 
 		// neutralize_fence_text.
 		neutral("text-with-no-fence-run", "pytest -q"),
@@ -144,6 +148,18 @@ func rcPureScenarios() []rcSpec {
 		tok("an-extension-followed-by-a-word-character", "b.htmlx"),
 		tok("empty-text-has-no-tokens", ""),
 		tok("a-slash-run-that-ends-at-a-space", "a/b c/d"),
+		// Both alternatives match at position 0 and they disagree, so
+		// this pins which one `re` tries first.
+		tok("a-position-where-both-alternatives-match", "a.py/b"),
+		// `-` and non-ASCII word characters are both inside `[\w./-]`,
+		// and a path token that stops early at either is a different
+		// token, not a missing one.
+		tok("a-path-with-a-dash-in-it", "run a-b/c.py"),
+		tok("a-path-with-a-unicode-component", "open src/café.md"),
+		// The first match ends ON a dot, and the scan resumes there: the
+		// remaining `.md` is not a token, because the name before the dot
+		// is empty.
+		tok("an-extension-followed-by-another-extension", "doc a.py.md"),
 
 		// _PROCESS_MARKERS. A match means the command TEXT looks like a
 		// runner invocation — never proof the work happened, which is why

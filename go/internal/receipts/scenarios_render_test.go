@@ -70,6 +70,13 @@ func rcRenderScenarios() []rcSpec {
 			strings.Repeat("o", 300), true, i%2 == 0,
 			fmt.Sprintf("call-%d.json", i)))
 	}
+	// Under the evidence cap in CODE POINTS and well over it in bytes.
+	var wide []string
+	for i := 0; i < 8; i++ {
+		wide = append(wide, row(
+			fmt.Sprintf("ls %s%d", strings.Repeat("é", 147), i),
+			"", false, false, fmt.Sprintf("call-%d.json", i)))
+	}
 
 	out := []rcSpec{
 		// The empty answer. This function only speaks when there IS a
@@ -205,6 +212,30 @@ func rcRenderScenarios() []rcSpec {
 		// The whole digest is capped, and the cut says so.
 		rn("a-digest-over-the-evidence-cap",
 			clean(rowList(bulk...)), `[]`),
+		rn("a-digest-under-the-cap-in-runes-and-over-it-in-bytes",
+			clean(rowList(wide...)), `[]`),
+		// The blind count is computed with int() but PRINTED raw, so a
+		// missing readable count has to render as the 0 the `.get`
+		// default supplies — which needs a negative capture count to
+		// reach at all.
+		rn("a-blind-count-with-no-readable-count",
+			`{"rows": `+rowList(row("ls", "", false, false, "c.json"))+
+				`, "capture_calls": -2}`, `[]`),
+		// Untrusted text reaches the digest through the COUNTS too, not
+		// only through the command lines: an incomplete-record line
+		// renders whatever truthy value it is handed.
+		rn("an-unreadable-count-carrying-a-fence-run",
+			loadedOf(rowList(row("ls", "", false, false, "c.json")),
+				`"<<<3"`, "0", "false", "1", "1"), `[]`),
+		// Two rows mention the same artifact and the SECOND is the
+		// error-flagged one. The provenance example must be the first
+		// RECORDED command, which also means the error-first sort must
+		// not have reordered the row list itself.
+		rn("two-commands-mentioning-one-checked-artifact",
+			clean(rowList(
+				row("ruff a.py", "", false, false, "call-1.json"),
+				row("black a.py", "", false, true, "call-2.json"))),
+			`[{"command": "check a.py", "description": ""}]`),
 	}
 
 	// audit_receipt_block: the three-valued block the auditor actually
@@ -224,6 +255,16 @@ func rcRenderScenarios() []rcSpec {
 			rcEntry{Path: "build/calls", Kind: "dir"}),
 		ad("an-audit-of-a-record-that-cannot-be-read", `[]`,
 			call("call-1.json", "{not json")),
+		// Rows are empty and the record is INCOMPLETE for a reason other
+		// than an unreadable file: the partial-record branch has three
+		// inputs and each of them has to be able to fire it alone.
+		ad("an-audit-of-a-record-with-only-malformed-events", `[]`,
+			call("call-1.json", `{"backend": "subprocess",`+
+				` "tool_events": [1]}`)),
+		ad("an-audit-where-only-a-non-shell-tool-ran", `[]`,
+			call("call-1.json", `{"backend": "subprocess",`+
+				` "tool_events": [{"name": "Read"}]}`),
+			call("call-2.json", rec("subprocess"))),
 		ad("an-audit-of-a-record-on-a-blind-backend", `[]`,
 			call("call-1.json", rec("anthropic"))),
 		ad("an-audit-of-a-mixed-record-with-no-executions", `[]`,
@@ -242,6 +283,20 @@ func rcRenderScenarios() []rcSpec {
 		ad("an-audit-whose-check-results-are-not-iterable", `5`,
 			call("call-1.json", rec("subprocess",
 				ev("Bash", "pytest -q", "ok", false)))),
+		// Nine executions in one record: the audit loads with the module
+		// default, so a narrower cap would report the record as capped.
+		ad("an-audit-of-a-record-with-more-executions-than-the-listing-cap",
+			`[]`,
+			call("call-1.json", rec("subprocess",
+				ev("Bash", "pytest -q t0", "", false),
+				ev("Bash", "pytest -q t1", "", false),
+				ev("Bash", "pytest -q t2", "", false),
+				ev("Bash", "pytest -q t3", "", false),
+				ev("Bash", "pytest -q t4", "", false),
+				ev("Bash", "pytest -q t5", "", false),
+				ev("Bash", "pytest -q t6", "", false),
+				ev("Bash", "pytest -q t7", "", false),
+				ev("Bash", "pytest -q t8", "", false)))),
 		ad("an-audit-with-provenance-to-report",
 			`[{"command": "ruff src/handle.py", "description": ""}]`,
 			call("call-1.json", rec("subprocess",
