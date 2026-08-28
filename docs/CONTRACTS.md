@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Workspace Artifact Contracts — the registry (v1)
 
 *First written 2026-08-28 (Go-successor Phase 1a). This document names every
@@ -103,8 +107,8 @@ boundary the moment a second process can read it. Both engines are writers
    narrow it outside the deprecation lifecycle; (b) a reader meeting an
    unknown hard value picks by consequence: value merely displayed → a
    harmless default; value GATES behavior (trust, learning eligibility,
-   access) → the LEAST-privileged bucket, never the most (see C0.7 for
-   where Python gets this backwards today); no safe reading exists →
+   access) → the LEAST-privileged bucket, never the most (C0.7 fixed the
+   one place Python had this backwards); no safe reading exists →
    reject/quarantine explicitly, which is a legitimate modeled outcome,
    not intolerance. (c) Wherever a soft element flows into a hard one — a
    free-string wire value into a typed field, an open vocabulary into a
@@ -153,18 +157,19 @@ follow. Cross-process, therefore cross-engine.
 - **Definition:** `src/file_lock.py`. Exclusive lock = `flock(LOCK_EX)` on a
   sidecar file named `<data-file>.lock` in the same directory
   (`src/file_lock.py:130`). Deadline: config `file_lock.timeout_s` /
-  `$MARO_FILELOCK_TIMEOUT_S`, default 30s. The failure posture is SPLIT,
-  and only half of it is fail-closed: on TIMEOUT writers raise unless the
-  operator opts into fail-open (`src/file_lock.py:70-90,166-179`) — but if
-  the `.lock` sidecar cannot be CREATED at all (read-only fs, permissions),
-  every `require=False` caller proceeds UNLOCKED regardless of the
-  fail-open setting (`src/file_lock.py:140-192`). **DEFECT → C0.6**, two
-  parts: the create-failure hole, and `_fail_open` reading config with
-  `bool(...)` so the string `"false"` enables fail-open
-  (`src/file_lock.py:84-90`). Until fixed, "fail closed" is a default
-  posture, not a guarantee, and a second engine must not assume the lock
-  was actually held by a Python writer on a degraded filesystem. Full-file
-  rewrites go through
+  `$MARO_FILELOCK_TIMEOUT_S`, default 30s. The failure posture is
+  fail-closed on BOTH halves: on TIMEOUT writers raise unless the
+  operator opts into fail-open, and a `.lock` sidecar that cannot be
+  CREATED at all (read-only fs, permissions) now follows the same posture
+  — `require=True` and the fail-closed default raise; only explicit
+  fail-open proceeds unlocked, with the timeout branch's log + events-feed
+  observability. (Was **DEFECT C0.6**, two parts — the create-failure
+  hole let every `require=False` caller proceed unlocked regardless of
+  posture, and `_fail_open` read config with `bool(...)` so the string
+  `"false"` enabled fail-open. Both FIXED 2026-08-28, `1e5c77fe`:
+  create-failure mirrors the timeout branch, and the config parse is
+  strict — bools, 0/1, and true/false-shaped strings only; anything else
+  is fail-closed with a warning.) Full-file rewrites go through
   `atomic_write` — temp file in the same dir, fsync, `os.replace`, target's
   permission bits preserved (`src/file_lock.py:229-281`). JSONL appends go
   through `locked_append` — one JSON object per line, writer adds the
@@ -188,11 +193,11 @@ follow. Cross-process, therefore cross-engine.
   stated per field (e.g. `tokens_in` int|null is key-required,
   value-nullable).
 - **Quirks:** (a) One deliberate exception: `memory/events.jsonl` is
-  appended UNLOCKED. The design intent is that every field is capped so a
-  line stays under PIPE_BUF=4096 bytes (single O_APPEND write is atomic on
-  Linux) — but the intent is not currently met; see B9's defect note
-  (**C0.3**). Any writer of that file inherits the <4096-byte line
-  obligation. (b) Byte-safety: ledger rewrites read with
+  appended UNLOCKED. Every field is capped AND the encoded line is
+  measured before write, so a line stays under PIPE_BUF=4096 bytes
+  (single O_APPEND write is atomic on Linux) — enforced since C0.3
+  (2026-08-28, `1e5c77fe`; see B9). Any writer of that file inherits the
+  <4096-byte line obligation. (b) Byte-safety: ledger rewrites read with
   `surrogateescape` and write it back, so one torn byte can ride through a
   rewrite verbatim instead of voiding the file (`src/file_lock.py:237-247`,
   history in `src/knowledge_web.py:976-982`). (c) Additional process-level
@@ -210,11 +215,13 @@ follow. Cross-process, therefore cross-engine.
   first writer wins); `runs.write_metadata` (`src/runs.py:410-461`) and the
   `stamp_run_*` family (`src/runs.py:464-1114`) maintain `metadata.json`
   under `locked_rmw`; `runs.finalize_run` (`src/runs.py:1116`) stamps
-  `status`/`ended_at` — but does it as a bare read→mutate→`atomic_write`
-  with NO lock, and on a parse failure replaces the whole file with `{}`
-  plus its two keys (`src/runs.py:1135-1143`). A concurrent stamp (or a
-  second engine's write) racing finalize can be silently lost.
-  **DEFECT → C0.2.**
+  `status`/`ended_at` under the same `locked_rmw`, preserving unknown
+  keys; an unparseable metadata.json is parked verbatim in a
+  `metadata.json.corrupt` sidecar (with a warning) before finalize stamps
+  a fresh object. (Was **DEFECT C0.2** — a bare read→mutate→
+  `atomic_write` with no lock that could silently lose a concurrent
+  stamp, and a parse failure wholesale-replaced the file with `{}` plus
+  two keys. FIXED 2026-08-28, `9807fe6f`.)
 - **Readers:** `runs.resolve_run_dir` + the `.run-ref-index-v2` derived
   index (`src/runs.py:100-308`); `run_curation._read_meta`
   (`src/run_curation.py:126`); `loop_report` (`src/loop_report.py:1728-1733`);
@@ -262,17 +269,17 @@ follow. Cross-process, therefore cross-engine.
 ### B4. call-records v1 (`build/calls/call-NNNNN.json`)
 
 - **Path:** `<run-dir>/build/calls/call-%05d.json`, one file per LLM call,
-  sequence rebuilt from directory contents after crash
-  (`src/runs.py:1489-1504`). **DEFECT → C0.4:** the sequence counter is
-  process-local (`_CALL_COUNTERS` dict guarded by a `threading.Lock`,
-  `src/runs.py:1489+`) and publication is a non-exclusive `write_text`
-  (`src/runs.py:1565`), so two processes — same engine or not — writing
-  calls into one run dir allocate the same seq and the second OVERWRITES
-  the first's record. The admission gate makes this rare in practice, but
-  in-run tools and any cross-engine writer are outside it. Interim rule: a
-  second engine MUST NOT write call records into a run dir it does not
-  exclusively own until allocation moves to exclusive-create (`O_EXCL` +
-  retry).
+  sequence rebuilt from directory contents after crash. Publication is
+  exclusive-create (`os.open(O_CREAT|O_EXCL|O_WRONLY)`): on collision the
+  loser rescans the directory and retries on the next free number
+  (bounded), so write-once is ENFORCED, not conventional. The in-process
+  counter (`_CALL_COUNTERS` + `threading.Lock`) remains the fast path.
+  (Was **DEFECT C0.4** — the counter is process-local and publication was
+  a non-exclusive `write_text`, so two processes sharing a run dir could
+  allocate the same seq and the second overwrote the first's record.
+  FIXED 2026-08-28, `9807fe6f`; the interim second-engine prohibition is
+  lifted — a cross-engine writer using the same O_EXCL discipline is
+  safe.)
 - **Writer:** `runs.record_llm_call` (`src/runs.py:1510-1568`), invoked from
   the single FailoverAdapter seam on every success (`src/llm.py:800-810`)
   and on failed/killed attempts (`src/llm.py:868-877`). Secret-scrubbed via
@@ -299,10 +306,9 @@ follow. Cross-process, therefore cross-engine.
   - `ts` — write time.
 - **Status:** published (the replay corpus and grounding receipts depend on
   it).
-- **Quirks:** written WITHOUT lock (one writer per run dir by the
-  admission gate; files are intended write-once, though C0.4 means that is
-  today a convention, not an enforced property). Capture is fail-open:
-  absence of a record proves nothing.
+- **Quirks:** written WITHOUT lock — safe because publication is
+  exclusive-create (C0.4): files are write-once as an enforced property.
+  Capture is fail-open: absence of a record proves nothing.
 
 ### B5. run-card v1 (`run_card.json`)
 
@@ -364,7 +370,7 @@ follow. Cross-process, therefore cross-engine.
 - **Readers:** `evolver` (`src/evolver.py:7,37`), `outcome_policy`
   (`src/outcome_policy.py:38-70`), `verdict_flow`, deferred learning via
   `load_outcome_by_loop_id` (`src/memory_ledger.py:1230-1251`), recall's
-  repeat-guard, `verdict_trust` policy (`src/memory_ledger.py:108-155`).
+  repeat-guard, `verdict_trust` policy (`src/memory_ledger.py:138-201`).
 - **Shape** (dataclass `Outcome`, `src/memory_ledger.py:44-87`; serialization
   discipline `_verdict_row`, `:462-494`):
   - `outcome_id` str, required — 8-hex uuid.
@@ -400,9 +406,13 @@ follow. Cross-process, therefore cross-engine.
 - **Quirks:** (1) The absent-key discipline is load-bearing: ~1400 legacy
   rows established "missing key = not judged" and every consumer relies on
   it. (2) All mutators preserve unknown keys (they patch raw dicts /
-  drop raw lines) — the one store where Python already does RMW right; a Go
-  engine must match. (3) An unverifiable closure must never erase an
-  existing judged verdict (`src/memory_ledger.py:775-777`).
+  drop raw lines) — the store that got RMW right first; the lesson stores
+  now match via `_extras` round-tripping (C0.1). A Go engine must match.
+  (3) An unverifiable closure must never erase an existing judged verdict
+  (`src/memory_ledger.py:775-777`). (4) Judged rows may carry
+  `verdict_excluded: true` (additive, C1.2/C0.7): the exclusion-class
+  stamp `verdict_trust` honors before any source-value match; absent on
+  non-excluded rows.
 
 ### B7. lesson-stores v1 (`memory/lessons.jsonl` + `memory/{medium,long}/lessons.jsonl`)
 
@@ -451,7 +461,11 @@ follow. Cross-process, therefore cross-engine.
   - Old rows deserialize missing fields to dataclass defaults — every field
     added since Phase 16 followed writers-only-add.
 - **Status:** published. Field-level churn is the highest of any store —
-  which is exactly why rule A4 matters here; see C2.1/C2.2.
+  which is exactly why rule A4 matters here. The C2.1/C2.2 RMW trap
+  (filtered-constructor round-trips stripping unknown keys store-wide) is
+  FIXED (C0.1, 2026-08-28, `010d3d11`): both stores rehydrate with an
+  `_extras` rider and every rewrite/promotion/archive/resurrection path
+  merges it back, declared fields winning on collision.
 - **Quirks:** (1) Unparseable rows are QUARANTINED to a sidecar before any
   rewrite, never deleted (`src/knowledge_web.py:1256-1263`). (2) Rewrites
   must reload raw+unlimited inside the lock — a limited or decayed load
@@ -464,11 +478,13 @@ follow. Cross-process, therefore cross-engine.
 
 - **Path:** `memory/captains_log.jsonl`; size-gated rotation to
   `captains_log.<stamp>.jsonl` siblings (never deleted,
-  `src/captains_log.py:632,466-476`). **DEFECT → C0.5:** rotation is
-  `archive.write_text` + `path.write_text` inside the WRITER lock
-  (`src/captains_log.py:683-685`) — readers do not take the lock, so a
-  reader can observe the live log empty or partially written mid-rotation.
-  The atomicity guarantee in B2 does not currently cover this path. Per-run slice copied to
+  `src/captains_log.py:632,466-476`). Rotation writes the archive, then
+  atomically REPLACES the live file (`atomic_write`: temp file +
+  `os.replace`) — lock-free readers see the old complete log or the new
+  retained tail, never an empty/partial file. (Was **DEFECT C0.5** — the
+  live file was truncate-rewritten in place with `write_text` inside the
+  writer lock, which readers don't take. FIXED 2026-08-28, `1e5c77fe`;
+  B2's atomicity guarantee now covers this path.) Per-run slice copied to
   `<run-dir>/build/captains_log_slice.jsonl` at finalize
   (`src/runs.py:1785`).
 - **Writer:** `captains_log.log_event` (`src/captains_log.py:560-626`,
@@ -499,21 +515,20 @@ follow. Cross-process, therefore cross-engine.
 - **Path:** `memory/events.jsonl` (mixed machine feed); escalation-class
   events additionally write one durable file each under
   `output/escalations/` (`src/notify.py:94-127,183-187`).
-- **Writers:** `observe.write_event` (`src/observe.py:497-561`) — called
-  per step/loop AND by every `notify.emit` (`src/notify.py:142-174`).
-  Deliberately unlocked; the DESIGN is that every field is capped so the
-  line stays <PIPE_BUF (see B2 quirk a). **DEFECT → C0.3: the design is
-  not met.** In the entry dict (`src/observe.py:527-541`) `event_type`,
-  `project`, `loop_id`, `status`, and `model` are UNCAPPED (only
-  `goal`/`step`/`detail` and pathologies are), the caps that exist are
-  CHARACTER caps while the obligation is BYTES (`json.dumps` ASCII-escapes,
-  so 200 chars can be far more than 200 bytes), and nothing measures the
-  encoded line before write. A long project name or model id can push a
-  line past 4096 bytes and interleave with a concurrent writer. Until
-  C0.3 lands, <PIPE_BUF is an intent, not a guarantee, and the site
-  comment claiming every field is capped is wrong. Cross-cutting: `file_lock` itself reports lock
-  timeouts here (`src/file_lock.py:216-224`) — so this writer must never
-  take a lock.
+- **Writers:** `observe.write_event` — called per step/loop AND by every
+  `notify.emit` (`src/notify.py:142-174`). Deliberately unlocked; every
+  string field is capped (including `event_type`/`project`/`loop_id`/
+  `status`/`model`) AND the ENCODED line is measured before write — on
+  overflow the writer sheds `tool_pathologies`, then byte-budgets each
+  field (`_truncate_encoded`, binary search on the json-encoded prefix)
+  so line+LF provably fits <PIPE_BUF. (Was **DEFECT C0.3** — five fields
+  uncapped, caps were CHARACTER caps while the obligation is BYTES
+  (`json.dumps` ASCII-escapes, so 200 chars can be far more than 200
+  bytes), and nothing measured the encoded line. FIXED 2026-08-28,
+  `1e5c77fe`; <PIPE_BUF is now enforced, with a must-detect pin test —
+  the C1.6 line-size pin ships with it.) Cross-cutting: `file_lock`
+  itself reports lock timeouts and lock-create failures here
+  (`src/file_lock.py:216-238`) — so this writer must never take a lock.
 - **Readers:** polling substrates (official poll surface per
   `src/notify.py:20-29`), `maro-observe events` tail
   (`src/observe.py:565`), heartbeat health probes.
@@ -532,9 +547,8 @@ follow. Cross-process, therefore cross-engine.
   JSON serialization is NOT required (key order and whitespace may
   differ); hooks must parse, not string-match.
 - **Status:** published. The projection caps are contractual (they are
-  what makes the unlocked write safe), not style — which is exactly why
-  their current partial enforcement is a C0 defect rather than a style
-  nit.
+  what makes the unlocked write safe), not style — fully enforced since
+  C0.3, with the encoded-line measurement as the backstop.
 
 ### B10. playbook v1 (`playbook.md` + `playbook_history/`)
 
@@ -612,38 +626,58 @@ Items marked *(judgment)* are my call, not a measured fact.
 ### C0. Coexistence prerequisites — verified defects (adversarial round 1, 2026-08-28)
 
 Every item here was VERIFIED against the code by the 2026-08-28 codex
-review round (2 reviewers, 8/8 ledger entries verified). These are not
-sharpenings — they are places where the Python engine does not honor the
+review round (2 reviewers, 8/8 ledger entries verified). These were not
+sharpenings — they were places where the Python engine did not honor the
 contract this doc states, and each one is a precondition for a second
-engine sharing the workspace. Fix order:
+engine sharing the workspace. **ALL EIGHT SHIPPED 2026-08-28** (commits
+`010d3d11`, `9807fe6f`, `1e5c77fe`, `061fc10e`), each with a must-detect
+test that fails on the pre-fix code. The corresponding B-section defect
+notes are updated in place.
 
 1. **Lesson-store RMW raw round-tripping** (tiered + flat — C2.1/C2.2
-   promoted). Rewrite paths must patch raw dicts (the outcomes.jsonl
-   pattern, `src/memory_ledger.py` mutators) instead of round-tripping
-   through filtered dataclasses. Prerequisite for C1.1's writer stamp —
-   a stamp the next reinforcement strips is worse than none.
+   promoted). — **SHIPPED `010d3d11`**: unknown keys ride rehydrated rows
+   as an `_extras` attribute and every rewrite/promotion/archive/
+   resurrection/clone path merges them back (declared fields win on
+   collision). Chosen over raw-dict-patching rewrites as the smaller
+   honest diff; applied identically to both stores. Unblocks C1.1's
+   writer stamp — a stamp the next reinforcement strips is worse than
+   none.
 2. **`finalize_run` under `locked_rmw`** — preserve unknown keys, never
-   replace the file with `{}` on parse failure (B3 defect note).
+   replace the file with `{}` on parse failure (B3 defect note). —
+   **SHIPPED `9807fe6f`**: same locked_rmw shape as the stamp_run_*
+   family; unparseable bytes parked in a `metadata.json.corrupt` sidecar.
 3. **events.jsonl line-size enforcement** — byte-cap every field
    (including `event_type`/`project`/`loop_id`/`status`/`model`), measure
    the ENCODED line, single `O_APPEND` write; pin test with must-detect
    fixtures (a field built to blow the cap) + negative control (B9
-   defect note; extends C1.6).
+   defect note; extends C1.6). — **SHIPPED `1e5c77fe`** (C1.6's pin test
+   included).
 4. **Call-record seq allocation via exclusive create** (`O_EXCL` + retry
    on collision) so write-once becomes enforced, not conventional (B4
-   defect note).
+   defect note). — **SHIPPED `9807fe6f`**.
 5. **Atomic captains-log rotation** — archive copy then `os.replace` of
    a fresh truncated file (or equivalent), so readers never see a
-   half-rotated live log (B8 defect note).
+   half-rotated live log (B8 defect note). — **SHIPPED `1e5c77fe`** (via
+   `file_lock.atomic_write`).
 6. **Strict boolean config parse at the `file_lock` boundary** — the
    string `"false"` must not enable fail-open; and decide the
    create-failure posture explicitly (respect `fail_open`/`require`
-   rather than silently proceeding unlocked) (B2 defect note).
+   rather than silently proceeding unlocked) (B2 defect note). —
+   **SHIPPED `1e5c77fe`**: create-failure mirrors the timeout branch
+   (fail-closed default, loud fail-open), with its own events-feed
+   report (`file_lock_create_failed`).
 7. **Unknown `goal_verdict_source` → LEAST-privileged trust bucket**
    (rule A9's gates-behavior arm; C2.4). Ship with C1.2's
-   `verdict_excluded` flag so the fix is additive, not a re-guess.
+   `verdict_excluded` flag so the fix is additive, not a re-guess. —
+   **SHIPPED `061fc10e`**: unknown sources route to
+   `VERDICT_TRUST_EXCLUDED`; the known-source census lives in
+   `memory_ledger._KNOWN_VERDICT_SOURCES` (add new sources there in the
+   same commit that writes them); both judge choke points stamp
+   `verdict_excluded: true` beside `closure_unverifiable`.
 8. **Tolerant `RunRecord` loader** (C2.3) — filtered kwargs + defaults +
-   logged rejection, the `tail_jobs.py:570-585` shape.
+   logged rejection, the `tail_jobs.py:570-585` shape. — **SHIPPED
+   `061fc10e`** (`orch_items._run_record_from_dict`; the silent-drop
+   census row for `_load_run_records` is deleted).
 
 ### C1. Additive sharpenings
 
@@ -655,22 +689,23 @@ engine sharing the workspace. Fix order:
    (`src/runs.py:446-449` already merges extras), call records
    (`src/runs.py:1537`), outcomes rows and lesson rows. Readers need no
    change (unknown-key tolerance). Highest leverage per line of any item
-   here — but SEQUENCED AFTER C0.1/C0.2: today the lesson rewriters and
-   `finalize_run` would strip or lose the stamp (the RMW trap this stamp
-   exists to attribute). Two stamp semantics, don't conflate them:
+   here — sequenced after C0.1/C0.2, which SHIPPED 2026-08-28: the lesson
+   rewriters and `finalize_run` now round-trip unknown keys, so the stamp
+   survives every rewrite. UNBLOCKED. Two stamp semantics, don't conflate
+   them:
    `created_by` (first writer, set once) vs `last_written_by` (updated on
    every rewrite); note `metadata.json` extras merge via `setdefault`
    (`src/runs.py:446-449`), which makes a naive `writer` extra
    first-writer-wins — i.e. `created_by` semantics whether you meant it
    or not.
-2. **Verdict-trust exclusion should be a flag, not a value match.**
-   `verdict_trust` excludes only the literal source string
-   `"closure_unverifiable"` (`src/memory_ledger.py:132-138`); the code
-   comment itself says any future exclusion-class source "should be
-   excluded here too". Additive fix: judges stamp an explicit
-   `verdict_excluded: true` beside the source; `verdict_trust` honors flag
-   OR legacy value. Then a new exclusion-class source from either engine is
-   safe by construction (today it silently gets FULL trust — see C2.4).
+2. **Verdict-trust exclusion should be a flag, not a value match.** —
+   **SHIPPED with C0.7 (`061fc10e`)**: rows accept an additive
+   `verdict_excluded: true`; `verdict_trust` honors the flag before any
+   value match, and both judge choke points (`record_outcome`,
+   `stamp_outcome_verdict`) stamp it beside `closure_unverifiable`. A new
+   exclusion-class source from either engine is safe by construction —
+   and even an unstamped unknown source now lands in EXCLUDED, not FULL
+   (C0.7 closed C2.4).
 3. **Preserve off-vocabulary stop verdicts instead of erasing them.**
    `record_outcome` silently blanks an unknown `stop_verdict` /
    `pause_reason` at ingress (`src/memory_ledger.py:556-573`). Correct
@@ -695,11 +730,11 @@ engine sharing the workspace. Fix order:
    runs inside a run context or stamps "" explicitly, promote it —
    optional→guaranteed is the allowed direction (rule A5) and byte-offset
    slices stop needing timestamp guesses.
-6. **Write the PIPE_BUF line rule into the events contract.** The
-   unlocked-append safety of `events.jsonl` rests on caps enforced only by
-   the Python writer's habits (`src/observe.py:553-558`). B9 above now
-   states it; add a pin test asserting every emitted line < 4096 bytes so
-   a field added later can't silently break the atomicity assumption.
+6. **Write the PIPE_BUF line rule into the events contract.** — **SHIPPED
+   with C0.3 (`1e5c77fe`)**: B9 states the rule, the writer enforces it
+   on the ENCODED line, and the must-detect pin tests
+   (`tests/test_observe.py`) assert every emitted line < 4096 bytes so a
+   field added later can't silently break the atomicity assumption.
 7. **Declare `_`-prefix as writer-private namespace in run cards** (B5
    does now): `_curation`/`_maintenance` are the curator's own state
    (`src/run_curation.py:1711-1717`). Naming the convention keeps a second
@@ -713,38 +748,35 @@ engine sharing the workspace. Fix order:
 
 ### C2. Intolerant readers (latent breakage today, coexistence blockers tomorrow)
 
-1. **Tiered lesson store: the canonical read-modify-write trap.**
-   `_mutate_tiered_lessons` (`src/knowledge_web.py:1244-1266`) rebuilds
-   the whole tier from `asdict(TieredLesson)` after loading rows through a
-   FILTERED constructor — `TieredLesson(**{k: d[k] for k in
-   __dataclass_fields__ if k in d})` (`src/knowledge_web.py:1010`, also
-   `:1119`, `:1317`). Any field legally added by a newer writer (either
-   engine) is silently stripped from every row on the next reinforcement,
-   promotion, GC, or contest — store-wide, permanent. This is the #1
-   blocker for two-engine writes to the lesson stores. Fix shape: carry
-   unknown keys through rehydration (store the raw dict on the object, or
-   rewrite by patching raw dicts as outcomes.jsonl already does).
-2. **Flat lesson store, same class.** `_lesson_from_row`
-   (`src/memory_ledger.py:1748-1760`) filters to known fields and the
-   rewrite paths persist what was loaded — `_rewrite_lessons_file`
-   (`:1713`, via reinforcement) and `deduplicate_lessons` (`:1897`). Its
-   own docstring documents the mechanism ("the rewrite paths persist
-   whatever was loaded") for `recorded_at`; the same mechanism deletes any
-   unknown field.
-3. **`RunRecord(**data)` — unfiltered kwargs, then a silencer.**
-   `orch_items.load_run_record` (`src/orch_items.py:458-460`) raises
-   `TypeError` on any added field; `_load_run_records`
-   (`src/orch_items.py:478-497`) wraps each file in `except Exception:
-   continue` — so one legal additive field makes every run record silently
-   vanish from listings rather than crash. Worst of both worlds: intolerant
-   AND invisible. (Contrast the correct shape three lines away in
-   `tail_jobs.py:570-585`: filtered kwargs + defaults + logged rejection.)
-4. **Unknown verdict source ⇒ maximum trust.** `verdict_trust`
-   (`src/memory_ledger.py:132-155`): any `goal_verdict_source` other than
-   the one excluded literal falls through toward `FULL`. A new
-   exclusion-class value (either engine) would have its verdicts gate
-   learning at full trust — the unknown-enum default pointing at the most
-   permissive bucket instead of a sane one. Pairs with sharpening C1.2.
+Items 1-4 were promoted to C0 and are FIXED (2026-08-28); their text is
+kept as the record of the defect class.
+
+1. **Tiered lesson store: the canonical read-modify-write trap.** —
+   **FIXED (C0.1, `010d3d11`).** `_mutate_tiered_lessons` rebuilt the
+   whole tier from `asdict(TieredLesson)` after loading rows through a
+   FILTERED constructor, so any field legally added by a newer writer
+   (either engine) was silently stripped from every row on the next
+   reinforcement, promotion, GC, or contest — store-wide, permanent.
+   Fix shape chosen: carry unknown keys through rehydration
+   (`_tiered_lesson_from_dict` stores them as `_extras` on the object;
+   `_tiered_lesson_row` merges them back at every serialization site,
+   `_clone_tiered_lesson` carries them across `dataclasses.replace`).
+2. **Flat lesson store, same class.** — **FIXED (C0.1, `010d3d11`),
+   same `_extras` pattern**: `_lesson_from_row` attaches unknown keys,
+   `_verdict_row` restores them — covering `_rewrite_lessons_file`,
+   `_reinforce_flat_row`, and `deduplicate_lessons`.
+3. **`RunRecord(**data)` — unfiltered kwargs, then a silencer.** —
+   **FIXED (C0.8, `061fc10e`)**: `_run_record_from_dict` filters kwargs
+   and defaults required fields (the `tail_jobs.py:570-585` shape);
+   `_load_run_records`' blanket except is now narrow
+   (`OSError`/`ValueError`) with a logged reason per skipped file. One
+   legal additive field no longer vanishes every run record from
+   listings.
+4. **Unknown verdict source ⇒ maximum trust.** — **FIXED (C0.7,
+   `061fc10e`)**: the unknown-enum default now points at the LEAST
+   permissive bucket (`VERDICT_TRUST_EXCLUDED`); known sources are
+   enumerated in `_KNOWN_VERDICT_SOURCES` and keep their exact prior
+   mapping. Paired with C1.2's `verdict_excluded` flag as designed.
 5. **Ingress erasure of unknown enum values.**
    `src/memory_ledger.py:556-573` (detailed in C1.3): the reader half of
    `record_outcome`'s contract destroys a newer writer's legal
