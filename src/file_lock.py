@@ -87,28 +87,15 @@ def _fail_open() -> bool:
     if env is not None:
         return env.strip().lower() in ("1", "true", "yes", "on")
     try:
-        from config import get as _get
+        from config import get as _get, parse_bool as _parse_bool
         raw = _get("file_lock.fail_open", False)
     except Exception:
         return False
-    # Strict parse (C0.6): bool(config string "false") is True, which
-    # silently enabled fail-open — the exact degraded mode this setting
-    # gates. Unrecognized values default CLOSED, loudly.
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, (int, float)) and raw in (0, 1):
-        return bool(raw)
-    if isinstance(raw, str):
-        val = raw.strip().lower()
-        if val in ("1", "true", "yes", "on"):
-            return True
-        if val in ("", "0", "false", "no", "off"):
-            return False
-    logger.warning(
-        "file_lock: unrecognized file_lock.fail_open value %r — "
-        "treating as false (fail-closed)", raw,
-    )
-    return False
+    # Strict parse (C0.6, shared parser since R2-7): bool(config string
+    # "false") is True, which silently enabled fail-open — the exact
+    # degraded mode this setting gates. Unrecognized values default
+    # CLOSED, loudly (default=False IS fail-closed).
+    return _parse_bool(raw, False, context="file_lock.fail_open")
 
 
 # Track which lock files this thread already holds to avoid self-deadlock.

@@ -438,3 +438,32 @@ def test_record_collision_retry_via_link(workspace):
     assert json.loads(out.read_text())["seq"] == 3
     # No temp debris left behind.
     assert list(calls.glob(".call-tmp-*")) == []
+
+
+def test_recording_disabled_by_config_string_false(workspace, monkeypatch):
+    """R2-7 must-detect (C0.6 class): a quoted config `record.enabled:
+    "false"` arrives as a STRING, and bool("false") is True — recording
+    stayed ON against the operator's privacy-relevant intent. The shared
+    strict parser must turn it off."""
+    import config
+    monkeypatch.delenv("MARO_RECORD", raising=False)
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: ("false" if key == "record.enabled"
+                                   else default))
+    assert recording_enabled() is False
+
+
+@pytest.mark.parametrize("val,expected", [
+    ("true", True), ("1", True), (True, True),
+    ("0", False), ("no", False), (False, False),
+])
+def test_recording_config_strict_bool_forms(workspace, monkeypatch, val,
+                                            expected):
+    import config
+    monkeypatch.delenv("MARO_RECORD", raising=False)
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: (val if key == "record.enabled"
+                                   else default))
+    assert recording_enabled() is expected

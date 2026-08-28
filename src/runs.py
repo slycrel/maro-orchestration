@@ -1481,8 +1481,13 @@ def recording_enabled() -> bool:
     if env is not None:
         return env.strip().lower() not in ("0", "false", "no", "off", "")
     try:
-        from config import get as _get
-        return bool(_get("record.enabled", True))
+        # Strict parse (R2-7, the C0.6 class): bool("false") is True, so a
+        # quoted config `record.enabled: "false"` kept RECORDING ON —
+        # privacy-relevant, the operator intended to stop persisting
+        # prompts/responses.
+        from config import get as _get, parse_bool as _parse_bool
+        return _parse_bool(_get("record.enabled", True), True,
+                           context="record.enabled")
     except Exception:
         return True
 

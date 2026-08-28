@@ -315,28 +315,36 @@ _TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
 _FALSY_STRINGS = frozenset({"false", "0", "no", "off", ""})
 
 
-def get_bool(key: str, default: bool) -> bool:
-    """Boolean config read with string-form normalization.
+def parse_bool(value: Any, default: bool, *, context: str = "") -> bool:
+    """THE strict boolean parse for config-shaped values (C0.6/R2-7 class).
 
     A quoted YAML value ("false", "0") arrives as a *string*, and
-    bool("false") is True — for flags that gate behavior (revert levers
-    especially) that error direction silently defeats the operator's
-    intent. Strings normalize by content; an unrecognized value falls
-    back to the default with a warning rather than to truthiness.
+    bool("false") is True — for flags that gate behavior (security and
+    persistence levers especially) that error direction silently defeats
+    the operator's intent. Accepted: real bools; numeric 0/1 exactly;
+    true/false-shaped strings ("" counts as false). Anything else —
+    including numerics that aren't 0/1 — falls back to the default with a
+    warning naming ``context``, never to truthiness. Shared by
+    file_lock._fail_open, runs.recording_enabled, run_trace._enabled and
+    get_bool below — one table, one posture.
     """
-    val = get(key, default)
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, int) or isinstance(val, float):
-        return bool(val)
-    if isinstance(val, str):
-        s = val.strip().lower()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
         if s in _TRUTHY_STRINGS:
             return True
         if s in _FALSY_STRINGS:
             return False
     import logging
     logging.getLogger("maro.config").warning(
-        "config.get_bool: unrecognized value for %s: %r — using default %s",
-        key, val, default)
+        "config.parse_bool: unrecognized value%s: %r — using default %s",
+        f" for {context}" if context else "", value, default)
     return default
+
+
+def get_bool(key: str, default: bool) -> bool:
+    """Boolean config read: ``parse_bool(get(key, default), default)``."""
+    return parse_bool(get(key, default), default, context=key)

@@ -530,3 +530,33 @@ class TestGetBool:
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         assert config_mod.get_bool("definitely.not.a.key", True) is True
         assert config_mod.get_bool("definitely.not.a.key", False) is False
+
+
+# ---------------------------------------------------------------------------
+# parse_bool — THE shared strict parser (R2-7); get_bool delegates to it
+# ---------------------------------------------------------------------------
+
+class TestParseBool:
+    @pytest.mark.parametrize("raw,expected", [
+        (True, True), (False, False),
+        ("false", False), ("FALSE", False), ("0", False), ("no", False),
+        ("off", False), ("", False),
+        ("true", True), ("TRUE", True), ("1", True), ("yes", True),
+        ("on", True),
+        (0, False), (1, True), (0.0, False), (1.0, True),
+    ])
+    def test_strict_forms(self, raw, expected):
+        import config as config_mod
+        assert config_mod.parse_bool(raw, True) is expected
+        # default must not mask a recognized value
+        assert config_mod.parse_bool(raw, False) is expected
+
+    @pytest.mark.parametrize("raw", ["banana", 2, -1, 0.5, [], {}, None])
+    def test_unrecognized_falls_to_default_loudly(self, raw, caplog):
+        import logging
+
+        import config as config_mod
+        with caplog.at_level(logging.WARNING, logger="maro.config"):
+            assert config_mod.parse_bool(raw, True, context="x.y") is True
+            assert config_mod.parse_bool(raw, False, context="x.y") is False
+        assert "unrecognized" in caplog.text

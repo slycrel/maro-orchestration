@@ -224,3 +224,16 @@ def test_invalid_transition_still_raises_and_records_nothing(rd):
     assert [(r["from"], r["to"]) for r in _rows(rd)] == [
         ("phase.init", "phase.decompose"),
     ]
+
+
+def test_trace_disabled_by_config_string_false(rd, monkeypatch):
+    """R2-7 (C0.6 class): a quoted `trace.enabled: "false"` must actually
+    stop persisting step traces — bool("false") kept them on."""
+    import config
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: ("false" if key == "trace.enabled"
+                                   else default))
+    assert run_trace._enabled() is False
+    assert run_trace.record_edge("a", "b", loop_id="L1", run_dir=rd) is False
+    assert _rows(rd) == []

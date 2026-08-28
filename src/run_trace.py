@@ -158,8 +158,12 @@ def _resolve_run_dir(run_dir, handle_id) -> Optional[Path]:
 
 def _enabled() -> bool:
     try:
-        from config import get as _get
-        return bool(_get("trace.enabled", True))
+        # Strict parse (R2-7, same persistence-gate class as
+        # record.enabled): a quoted "false" must actually stop persisting
+        # step traces.
+        from config import get as _get, parse_bool as _parse_bool
+        return _parse_bool(_get("trace.enabled", True), True,
+                           context="trace.enabled")
     except Exception:
         # A config failure must not silence the record; recording is the
         # default and the safer direction.
