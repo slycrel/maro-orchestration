@@ -72,6 +72,11 @@ var fsSortAllowlist = map[string]struct {
 	"internal/loopfinalize/finalize.go": {1, "recovery KIND names, " +
 		"reproducing Python's sorted({...}) over a marker table whose " +
 		"kinds are Go/Python literals; never a path"},
+	"internal/pathrewrite/pathrewrite.go": {1, "the SKIP REASONS a rewrite " +
+		"pass tallied — vcs-internal, binary-suffix, oversize, … — " +
+		"reproducing Python's sorted(self.skipped.items()) over a dict " +
+		"whose keys this module writes as Go/Python literals. The values " +
+		"beside them are filenames; the keys never are"},
 	"internal/loopfinalize/loopfinalize.go": {1, "pre-flight flag KINDS, " +
 		"reproducing Python's sorted({f.kind for f in flags}); the kinds " +
 		"are Go/Python constants, never a path"},

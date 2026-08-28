@@ -1,0 +1,1085 @@
+{
+  "packages": {
+    "default": [
+      "./internal/pathrewrite/"
+    ]
+  },
+  "mutations": [
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-type-check-accepts-a-non-string",
+      "old": "\ts, ok := value.(string)\n\tif !ok {",
+      "new": "\ts, ok := value.(string)\n\tif false && !ok {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-type-name-is-not-reported",
+      "old": "\"not a string (\" + pyval.TypeName(value) + \")\"",
+      "new": "\"not a string (value)\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-value-is-not-stripped",
+      "old": "\troot := pytext.Strip(s)",
+      "new": "\troot := s"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-strip-is-ascii-only",
+      "old": "\troot := pytext.Strip(s)",
+      "new": "\troot := strings.TrimSpace(s)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-empty-root-is-accepted",
+      "old": "\tif root == \"\" {\n\t\treturn \"\", &BadRoot{\"empty\"}\n\t}",
+      "new": "\tif false {\n\t\treturn \"\", &BadRoot{\"empty\"}\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-message-changes",
+      "old": "&BadRoot{\"empty\"}",
+      "new": "&BadRoot{\"is empty\"}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-nul-byte-is-accepted",
+      "old": "\tif strings.ContainsRune(root, 0) {",
+      "new": "\tif false && strings.ContainsRune(root, 0) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-absolute-test-is-inverted",
+      "old": "\tif !strings.HasPrefix(root, \"/\") {",
+      "new": "\tif strings.HasPrefix(root, \"/\") {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-not-absolute-message-is-not-a-repr",
+      "old": "\"not absolute: \" + pytext.Repr(root)",
+      "new": "\"not absolute: \" + root"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-slashes-are-not-collapsed",
+      "old": "\troot = collapseSlashes(root)",
+      "new": "\troot = root + \"\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-trailing-slash-is-kept",
+      "old": "\troot = strings.TrimRight(root, \"/\")",
+      "new": "\troot = strings.TrimLeft(root, \"\\x00\")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-filesystem-root-passes",
+      "old": "\t\treturn \"\", &BadRoot{\"resolves to filesystem root\"}",
+      "new": "\t\treturn root, nil"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-system-denylist-is-not-consulted",
+      "old": "\tif systemRoots[root] {",
+      "new": "\tif false && systemRoots[root] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-system-message-omits-the-root",
+      "old": "&BadRoot{\"system directory: \" + root}",
+      "new": "&BadRoot{\"system directory\"}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-components-are-kept",
+      "old": "\t\tif p != \"\" {\n\t\t\tparts = append(parts, p)\n\t\t}",
+      "new": "\t\tparts = append(parts, p)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-parent-segment-is-allowed",
+      "old": "\t\tif p == \"..\" {",
+      "new": "\t\tif p == \"...\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-dot-segment-is-refused-too",
+      "old": "\t\tif p == \"..\" {",
+      "new": "\t\tif p == \"..\" || p == \".\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-relative-segment-message-changes",
+      "old": "\"contains a relative segment: \" + root",
+      "new": "\"contains a relative part: \" + root"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-component-minimum-is-off-by-one",
+      "old": "\tif len(parts) < minRootComponents {",
+      "new": "\tif len(parts) <= minRootComponents {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-component-minimum-is-one",
+      "old": "\tminRootComponents   = 2",
+      "new": "\tminRootComponents   = 1"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-too-shallow-message-changes",
+      "old": "&BadRoot{\"too shallow: \" + root}",
+      "new": "&BadRoot{\"too short: \" + root}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-strict-screen-is-inverted",
+      "old": "\tif strict {\n\t\t// EQUIVALENT MUTANTS",
+      "new": "\tif !strict {\n\t\t// EQUIVALENT MUTANTS"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-strict-screen-never-runs",
+      "old": "\tif strict {\n\t\t// EQUIVALENT MUTANTS",
+      "new": "\tif false && strict {\n\t\t// EQUIVALENT MUTANTS"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-prefix-walk-starts-at-zero",
+      "old": "\t\tfor i := 1; i < len(parts); i++ {",
+      "new": "\t\tfor i := 0; i < len(parts); i++ {",
+      "equivalent": "At i=0 the prefix is \"/\", which IS on the denylist — but the depth test is len(parts)-0, and minRootComponents has already guaranteed len(parts) >= 2 = minDepthBelowShared. The i=0 iteration can therefore never fire, for any input."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-prefix-walk-includes-the-whole-root",
+      "old": "\t\tfor i := 1; i < len(parts); i++ {",
+      "new": "\t\tfor i := 1; i <= len(parts); i++ {",
+      "equivalent": "At i=len(parts) the prefix rebuilds the root exactly, and the root was already tested against the same denylist twenty lines earlier. Reaching this loop at all means it was not on it."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-depth-below-a-shared-root-is-off-by-one",
+      "old": "(len(parts)-i) < minDepthBelowShared",
+      "new": "(len(parts)-i) <= minDepthBelowShared"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-required-depth-below-a-shared-root-is-one",
+      "old": "\tminDepthBelowShared = 2",
+      "new": "\tminDepthBelowShared = 1"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-shared-root-message-omits-the-prefix",
+      "old": "\"too shallow under the shared directory \" + prefix +\n\t\t\t\t\t\t\": \" + root",
+      "new": "\"too shallow under a shared directory: \" + root"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-prefix-is-built-without-a-leading-slash",
+      "old": "\t\t\tprefix := \"/\" + strings.Join(parts[:i], \"/\")",
+      "new": "\t\t\tprefix := strings.Join(parts[:i], \"/\")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-badroot-class-name-changes",
+      "old": "func (e *BadRoot) PyClass() string { return \"BadRoot\" }",
+      "new": "func (e *BadRoot) PyClass() string { return \"ValueError\" }"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-slash-run-is-not-collapsed",
+      "old": "\t\t\tif prevSlash {\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tif prevSlash && false {\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-slash-flag-is-never-cleared",
+      "old": "\t\t} else {\n\t\t\tprevSlash = false\n\t\t}",
+      "new": "\t\t} else {\n\t\t\t_ = prevSlash\n\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-empty-map-is-truthy",
+      "old": "func (m RewriteMap) Bool() bool { return len(m.Pairs) > 0 }",
+      "new": "func (m RewriteMap) Bool() bool { return len(m.Pairs) >= 0 }"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-describe-keys-are-swapped",
+      "old": "pyval.Obj{{Key: \"from\", Val: p.Src},\n\t\t\t{Key: \"to\", Val: p.Dst}}",
+      "new": "pyval.Obj{{Key: \"from\", Val: p.Dst},\n\t\t\t{Key: \"to\", Val: p.Src}}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-describe-key-is-renamed",
+      "old": "{Key: \"to\", Val: p.Dst}",
+      "new": "{Key: \"dest\", Val: p.Dst}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-map-early-exit-is-removed",
+      "old": "\tif len(m.Pairs) == 0 {\n\t\treturn data, 0\n\t}\n\tout := make",
+      "new": "\tout := make",
+      "equivalent": "The loop below iterates m.Pairs, so with no pairs every position falls through to the one-byte copy and the function already returns (data, 0). The early exit is an allocation saver, not a behaviour."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-scan-does-not-check-the-left-boundary",
+      "old": "\t\tif leftBoundaryOK(data, i) {",
+      "new": "\t\tif true {\n\t\t\t_ = leftBoundaryOK"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-scan-does-not-check-the-right-boundary",
+      "old": "\t\t\t\t\trightBoundaryOK(data, i+len(p.Src)) {",
+      "new": "\t\t\t\t\ttrue {\n\t\t\t\t\t_ = rightBoundaryOK"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-source-is-matched-anywhere-in-the-tail",
+      "old": "\t\t\t\tif bytes.HasPrefix(data[i:], []byte(p.Src)) &&",
+      "new": "\t\t\t\tif bytes.Contains(data[i:], []byte(p.Src)) &&"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-first-matching-source-does-not-win",
+      "old": "\t\t\t\t\thit = k\n\t\t\t\t\tbreak",
+      "new": "\t\t\t\t\thit = k"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-first-pair-can-never-match",
+      "old": "\t\tif hit < 0 {",
+      "new": "\t\tif hit <= 0 {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-failed-position-is-not-copied-through",
+      "old": "\t\t\tout = append(out, data[i])\n\t\t\ti++",
+      "new": "\t\t\ti++"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-failed-position-skips-two-bytes",
+      "old": "\t\t\tout = append(out, data[i])\n\t\t\ti++",
+      "new": "\t\t\tout = append(out, data[i])\n\t\t\ti += 2"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-source-is-emitted-instead-of-the-destination",
+      "old": "\t\tout = append(out, m.Pairs[hit].Dst...)",
+      "new": "\t\tout = append(out, m.Pairs[hit].Src...)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-scan-advances-by-the-destination-length",
+      "old": "\t\ti += len(m.Pairs[hit].Src)",
+      "new": "\t\ti += len(m.Pairs[hit].Dst)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-replacements-are-not-counted",
+      "old": "\t\ti += len(m.Pairs[hit].Src)\n\t\tcount++",
+      "new": "\t\ti += len(m.Pairs[hit].Src)\n\t\t_ = count"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-text-wrapper-drops-the-count",
+      "old": "\tout, n := m.Substitute([]byte(text))\n\treturn string(out), n",
+      "new": "\tout, n := m.Substitute([]byte(text))\n\t_ = n\n\treturn string(out), 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-start-of-the-buffer-is-not-a-boundary",
+      "old": "\tif i == 0 {\n\t\treturn true\n\t}",
+      "new": "\tif i == -1 {\n\t\treturn true\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-blocking-class-test-is-inverted",
+      "old": "\tif !isLeftBlockingByte(c) {",
+      "new": "\tif isLeftBlockingByte(c) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-escape-needs-only-one-byte-of-room",
+      "old": "\tif i >= 2 && data[i-2] == '\\\\' {",
+      "new": "\tif i >= 1 && data[i-2] == '\\\\' {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-escape-looks-at-the-wrong-byte",
+      "old": "\tif i >= 2 && data[i-2] == '\\\\' {",
+      "new": "\tif i >= 2 && data[i-1] == '\\\\' {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-escape-exemption-drops-backslash-b",
+      "old": "\t\tcase 'n', 't', 'r', 'f', 'v', 'b':",
+      "new": "\t\tcase 'n', 't', 'r', 'f', 'v':"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-escape-exemption-drops-backslash-n",
+      "old": "\t\tcase 'n', 't', 'r', 'f', 'v', 'b':",
+      "new": "\t\tcase 't', 'r', 'f', 'v', 'b':"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-escape-exemption-admits-backslash-x",
+      "old": "\t\tcase 'n', 't', 'r', 'f', 'v', 'b':",
+      "new": "\t\tcase 'n', 't', 'r', 'f', 'v', 'b', 'x':"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "every-blocked-position-becomes-a-boundary",
+      "old": "\t\t}\n\t}\n\treturn false\n}\n\n// isLeftBlockingByte",
+      "new": "\t\t}\n\t}\n\treturn true\n}\n\n// isLeftBlockingByte"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-dot",
+      "old": "\treturn c == '_' || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn c == '_' || c == '/' || c == '-'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-slash",
+      "old": "\treturn c == '_' || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn c == '_' || c == '.' || c == '-'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-hyphen",
+      "old": "\treturn c == '_' || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn c == '_' || c == '.' || c == '/'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-underscore",
+      "old": "\treturn c == '_' || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn c == '.' || c == '/' || c == '-'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-letters",
+      "old": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':\n\t\treturn true\n\t}\n\treturn c == '_'",
+      "new": "\tcase c >= '0' && c <= '9':\n\t\treturn true\n\t}\n\treturn c == '_'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-drops-the-digits",
+      "old": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':\n\t\treturn true\n\t}\n\treturn c == '_'",
+      "new": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':\n\t\treturn true\n\t}\n\treturn c == '_'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-left-class-admits-a-high-byte",
+      "old": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':\n\t\treturn true\n\t}\n\treturn c == '_'",
+      "new": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c >= 0x80:\n\t\treturn true\n\t}\n\treturn c == '_'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-end-of-the-buffer-is-not-a-boundary",
+      "old": "\tif j >= len(data) {\n\t\treturn true\n\t}",
+      "new": "\tif j > len(data) {\n\t\treturn true\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-blocks-a-dot",
+      "old": "\treturn c != '_' && c != '-'",
+      "new": "\treturn c != '_' && c != '-' && c != '.'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-blocks-a-slash",
+      "old": "\treturn c != '_' && c != '-'",
+      "new": "\treturn c != '_' && c != '-' && c != '/'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-drops-the-hyphen",
+      "old": "\treturn c != '_' && c != '-'",
+      "new": "\treturn c != '_'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-drops-the-underscore",
+      "old": "\treturn c != '_' && c != '-'",
+      "new": "\treturn c != '-'"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-drops-the-letters",
+      "old": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':\n\t\treturn false",
+      "new": "\tcase c >= '0' && c <= '9':\n\t\treturn false"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-right-class-drops-the-digits",
+      "old": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':\n\t\treturn false",
+      "new": "\tcase c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':\n\t\treturn false"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-missing-source-root-is-rejected-instead-of-skipped",
+      "old": "\t\tif isNoneOrEmpty(rawSrc) {\n\t\t\tcontinue",
+      "new": "\t\tif isNoneOrEmpty(rawSrc) {\n\t\t\trejected = append(rejected,\n\t\t\t\tRejection{role, pyval.Str(rawSrc), \"not recorded\"})\n\t\t\tcontinue"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-missing-destination-is-skipped-instead-of-recorded",
+      "old": "\t\tif isNoneOrEmpty(rawDst) {\n\t\t\trejected = append(rejected, Rejection{role, pyval.Str(rawSrc),\n\t\t\t\t\"no local counterpart\"})\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif isNoneOrEmpty(rawDst) {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-no-counterpart-value-is-the-destination",
+      "old": "Rejection{role, pyval.Str(rawSrc),\n\t\t\t\t\"no local counterpart\"}",
+      "new": "Rejection{role, pyval.Str(rawDst),\n\t\t\t\t\"no local counterpart\"}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-no-counterpart-reason-changes",
+      "old": "\"no local counterpart\"",
+      "new": "\"no counterpart\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-no-counterpart-value-is-clipped",
+      "old": "Rejection{role, pyval.Str(rawSrc),\n\t\t\t\t\"no local counterpart\"}",
+      "new": "Rejection{role, pyval.Clip(pyval.Str(rawSrc), 200),\n\t\t\t\t\"no local counterpart\"}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-source-root-is-screened-loosely",
+      "old": "\t\tsrc, err := ValidateRoot(rawSrc, true)",
+      "new": "\t\tsrc, err := ValidateRoot(rawSrc, false)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-destination-root-is-screened-strictly",
+      "old": "\t\tdst, err := ValidateRoot(rawDst, false)",
+      "new": "\t\tdst, err := ValidateRoot(rawDst, true)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rejected-source-value-is-not-clipped",
+      "old": "pyval.Clip(pyval.Str(rawSrc), 200), \"source \" + err.Error()",
+      "new": "pyval.Str(rawSrc), \"source \" + err.Error()"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rejected-source-clip-is-shorter",
+      "old": "pyval.Clip(pyval.Str(rawSrc), 200), \"source \" + err.Error()",
+      "new": "pyval.Clip(pyval.Str(rawSrc), 100), \"source \" + err.Error()"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-source-reason-loses-its-prefix",
+      "old": "\"source \" + err.Error()",
+      "new": "\"\" + err.Error()"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-destination-reason-loses-its-prefix",
+      "old": "\"destination \" + err.Error()",
+      "new": "\"\" + err.Error()"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rejected-destination-value-is-the-source",
+      "old": "\t\t\t\tpyval.Clip(pyval.Str(rawDst), 200),\n\t\t\t\t\"destination \"",
+      "new": "\t\t\t\tpyval.Clip(pyval.Str(rawSrc), 200),\n\t\t\t\t\"destination \""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-identical-pair-of-roots-is-kept",
+      "old": "\t\tif src == dst {\n\t\t\tcontinue",
+      "new": "\t\tif src != dst && false {\n\t\t\tcontinue"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-identical-pair-of-roots-is-rejected",
+      "old": "\t\tif src == dst {\n\t\t\tcontinue // same machine — a no-op, not a fault\n\t\t}",
+      "new": "\t\tif src == dst {\n\t\t\trejected = append(rejected,\n\t\t\t\tRejection{role, src, \"same machine\"})\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sort-puts-the-shortest-source-first",
+      "old": "\t\t\treturn la > lb",
+      "new": "\t\t\treturn la < lb"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sort-length-is-in-bytes",
+      "old": "\t\tla, lb := utf8.RuneCountInString(pairs[a].Src),\n\t\t\tutf8.RuneCountInString(pairs[b].Src)",
+      "new": "\t\t_ = utf8.RuneCountInString\n\t\tla, lb := len(pairs[a].Src), len(pairs[b].Src)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sort-ignores-length-entirely",
+      "old": "\t\tif la != lb {\n\t\t\treturn la > lb\n\t\t}",
+      "new": "\t\tif la != lb && false {\n\t\t\treturn la > lb\n\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sort-tie-break-is-reversed",
+      "old": "\t\treturn pairs[a].Src < pairs[b].Src",
+      "new": "\t\treturn pairs[a].Src > pairs[b].Src"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sort-is-not-stable",
+      "old": "\tsort.SliceStable(pairs, func(a, b int) bool {",
+      "new": "\tsort.Slice(pairs, func(a, b int) bool {",
+      "equivalent": "The comparator is a TOTAL order — length, then the source string — and build_map's dedup guarantees no two pairs share a source before it runs. Nothing is ever tied, so stability cannot change the result. Python's list.sort is stable, which is why the port spells it that way."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-dedup-keys-on-the-destination",
+      "old": "\t\tif seen[p.Src] {\n\t\t\tcontinue\n\t\t}\n\t\tseen[p.Src] = true",
+      "new": "\t\tif seen[p.Dst] {\n\t\t\tcontinue\n\t\t}\n\t\tseen[p.Dst] = true"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-dedup-never-fires",
+      "old": "\t\tif seen[p.Src] {\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif seen[p.Src] && false {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-dedup-keeps-the-last-source",
+      "old": "\t\tseen[p.Src] = true\n\t\tdeduped = append(deduped, p)",
+      "new": "\t\tseen[p.Src] = true\n\t\tdeduped = append([]Pair{p}, deduped...)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-nil-root-is-not-treated-as-missing",
+      "old": "\tif v == nil {\n\t\treturn true\n\t}",
+      "new": "\tif v == nil && false {\n\t\treturn true\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-empty-string-root-is-not-treated-as-missing",
+      "old": "\treturn ok && s == \"\"",
+      "new": "\treturn ok && s == \"\\x00\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "every-string-root-is-treated-as-missing",
+      "old": "\treturn ok && s == \"\"",
+      "new": "\t_ = s\n\treturn ok"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-vcs-screen-never-fires",
+      "old": "\t\tif skipDirParts[p] {",
+      "new": "\t\tif skipDirParts[p] && false {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-vcs-screen-matches-the-whole-path",
+      "old": "\tfor _, p := range pathParts(relPath) {\n\t\tif skipDirParts[p] {",
+      "new": "\tfor _, p := range []string{relPath} {\n\t\tif skipDirParts[p] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-vcs-reason-changes",
+      "old": "\t\t\treturn \"vcs-internal\"",
+      "new": "\t\t\treturn \"vcs\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-leftover-screen-matches-a-prefix",
+      "old": "\tif strings.HasSuffix(relPath, TmpSuffix) {",
+      "new": "\tif strings.HasPrefix(relPath, TmpSuffix) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-leftover-screen-never-fires",
+      "old": "\tif strings.HasSuffix(relPath, TmpSuffix) {",
+      "new": "\tif strings.HasSuffix(relPath, TmpSuffix) && false {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-leftover-reason-changes",
+      "old": "\t\treturn \"rewrite-leftover\"",
+      "new": "\t\treturn \"leftover\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-leftover-screen-runs-after-the-suffix-screen",
+      "old": "\tif strings.HasSuffix(relPath, TmpSuffix) {\n\t\t// A leftover from a process killed mid-swap. It is never deleted\n\t\t// (retention: it may hold the only copy of a partial write), so a\n\t\t// later pass must not treat it as ordinary text and rewrite it.\n\t\treturn \"rewrite-leftover\"\n\t}\n\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {\n\t\treturn \"binary-suffix\"\n\t}",
+      "new": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {\n\t\treturn \"binary-suffix\"\n\t}\n\tif strings.HasSuffix(relPath, TmpSuffix) {\n\t\treturn \"rewrite-leftover\"\n\t}",
+      "equivalent": "A leftover's name ends in \".maro-rewrite.tmp\", so its pathlib suffix is always \".tmp\" — which is not in _SKIP_SUFFIXES. No name can trip both screens, so their order is unobservable. The port keeps Python's order anyway; the constant is what makes the two disjoint, and a constant can change."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-suffix-is-lowercased-simply",
+      "old": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {",
+      "new": "\tif skipSuffixes[strings.ToLower(pypath.Suffix(pypath.Name(relPath)))] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-suffix-is-not-lowercased",
+      "old": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {",
+      "new": "\tif skipSuffixes[pypath.Suffix(pypath.Name(relPath))] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-suffix-is-taken-from-the-whole-path",
+      "old": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {",
+      "new": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(relPath))] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-suffix-screen-never-fires",
+      "old": "\tif skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {",
+      "new": "\tif false && skipSuffixes[pytext.Lower(pypath.Suffix(pypath.Name(relPath)))] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-binary-suffix-reason-changes",
+      "old": "\t\treturn \"binary-suffix\"",
+      "new": "\t\treturn \"binary\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-stat-follows-symlinks",
+      "old": "\tst, err := os.Lstat(absPath)",
+      "new": "\tst, err := os.Stat(absPath)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-missing-reason-changes",
+      "old": "\t\treturn \"missing\"",
+      "new": "\t\treturn \"not-found\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-symlink-screen-never-fires",
+      "old": "\tif st.Mode()&os.ModeSymlink != 0 {",
+      "new": "\tif st.Mode()&os.ModeSymlink != 0 && false {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-symlink-reason-changes",
+      "old": "\t\treturn \"symlink\" // never follow",
+      "new": "\t\treturn \"link\" // never follow"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-regular-file-screen-never-fires",
+      "old": "\tif fi, err := os.Stat(absPath); err != nil || !fi.Mode().IsRegular() {",
+      "new": "\tif fi, err := os.Stat(absPath); err != nil && fi != nil && !fi.Mode().IsRegular() {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-directory-is-detected-instead-of-a-non-regular-file",
+      "old": "\tif fi, err := os.Stat(absPath); err != nil || !fi.Mode().IsRegular() {",
+      "new": "\tif fi, err := os.Stat(absPath); err != nil || fi.IsDir() {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-not-a-file-reason-changes",
+      "old": "\t\treturn \"not-a-file\"",
+      "new": "\t\treturn \"notafile\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-screen-never-fires",
+      "old": "\tif st.Size() == 0 {",
+      "new": "\tif st.Size() < 0 {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-reason-changes",
+      "old": "\t\treturn \"empty\"\n\t}\n\treturn \"\"",
+      "new": "\t\treturn \"zero\"\n\t}\n\treturn \"\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-allowed-file-reports-a-reason",
+      "old": "\t\treturn \"empty\"\n\t}\n\treturn \"\"",
+      "new": "\t\treturn \"empty\"\n\t}\n\treturn \"ok\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-components-survive-the-split",
+      "old": "\t\tif p == \"\" || p == \".\" {",
+      "new": "\t\tif p == \".\" {",
+      "equivalent": "pathParts feeds ONE membership test, against {.git, .hg, .svn}. An extra \"\" component is not one of them, so it cannot change the answer. The filtering is here to mirror pathlib's .parts, not because a caller depends on it."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-dot-components-survive-the-split",
+      "old": "\t\tif p == \"\" || p == \".\" {",
+      "new": "\t\tif p == \"\" {",
+      "equivalent": "Same as the empty-component row: \".\" is not one of the three names the only membership test looks for."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-parent-components-are-dropped-too",
+      "old": "\t\tif p == \"\" || p == \".\" {",
+      "new": "\t\tif p == \"\" || p == \".\" || p == \"..\" {",
+      "equivalent": "And again: \"..\" is not .git, .hg or .svn. pathlib KEEPS \"..\" and the port says so, but no caller can tell."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-size-limit-is-inclusive",
+      "old": "\tif st.Size() > maxBytes {",
+      "new": "\tif st.Size() >= maxBytes {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-size-limit-is-not-enforced",
+      "old": "\tif st.Size() > maxBytes {",
+      "new": "\tif st.Size() > maxBytes && false {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-oversize-status-changes",
+      "old": "\t\treturn \"oversize\", 0",
+      "new": "\t\treturn \"too-big\", 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-sniff-window-is-halved",
+      "old": "\tsniffBytes          = 8192",
+      "new": "\tsniffBytes          = 4096"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-head-sniff-never-fires",
+      "old": "\tif bytes.IndexByte(head, 0) >= 0 {",
+      "new": "\tif bytes.IndexByte(head, 0) > 0 {",
+      "equivalent": "The head sniff is an EARLY EXIT and nothing else: whatever it would have caught, the whole-file check below catches, because head is a prefix of data. Weakening it changes how much gets read, never the status. The whole-file check is the one with teeth, and its own row kills."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-whole-file-sniff-is-removed",
+      "old": "\tif bytes.IndexByte(data, 0) >= 0 {\n\t\treturn \"binary\", 0\n\t}",
+      "new": "\t_ = bytes.IndexByte(data, 0)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-binary-status-changes",
+      "old": "\t\treturn \"binary\", 0 // cheap exit",
+      "new": "\t\treturn \"blob\", 0 // cheap exit"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-unchanged-file-is-reported-as-rewritten",
+      "old": "\tif count == 0 {\n\t\treturn \"unchanged\", 0\n\t}",
+      "new": "\tif count < 0 {\n\t\treturn \"unchanged\", 0\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-unchanged-status-changes",
+      "old": "\t\treturn \"unchanged\", 0",
+      "new": "\t\treturn \"same\", 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-times-come-from-the-first-stat",
+      "old": "\t_ = chtimes(absPath, st2)",
+      "new": "\t_ = st2\n\t_ = chtimes(absPath, st)",
+      "equivalent": "st is taken before the read and st2 after it, and nothing between them writes to the file. The two stats report the same mtime for every input this module can produce; the second one exists because Python re-stats at that point."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-modification-time-is-not-restored",
+      "old": "\t_ = chtimes(absPath, st2)",
+      "new": "\t_ = st2"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-temp-file-suffix-changes",
+      "old": "\ttmp := pypath.Str(absPath) + TmpSuffix",
+      "new": "\ttmp := pypath.Str(absPath) + \".tmp\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-failed-swap-leaves-its-temp-file",
+      "old": "\t\t_ = syscall.Unlink(tmp)",
+      "new": "\t\t_ = tmp",
+      "equivalent": "The only failure a fixture can provoke inside writeSwap is os.Create refusing the temp PATH (a directory sits on it), and in that case no temp file was created for the unlink to remove. The reachable failures that WOULD leave one — a full disk, a write error mid-file — cannot be built here. The unlink stays because the branch is a real recovery path, and its unlink-not-remove spelling IS covered, by the directory-on-the-temp-path fixture."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-failed-swap-status-changes",
+      "old": "\t\t_ = syscall.Unlink(tmp)\n\t\treturn \"unreadable\", 0",
+      "new": "\t\t_ = syscall.Unlink(tmp)\n\t\treturn \"failed\", 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-temp-path-is-removed-with-os-remove",
+      "old": "\t\t_ = syscall.Unlink(tmp)",
+      "new": "\t\t_ = os.Remove(tmp)"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rewritten-status-changes",
+      "old": "\treturn \"rewritten\", count",
+      "new": "\treturn \"changed\", count"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-replacement-count-is-dropped",
+      "old": "\treturn \"rewritten\", count",
+      "new": "\treturn \"rewritten\", 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-mode-is-not-copied-onto-the-temp-file",
+      "old": "\tif err := syscall.Chmod(tmp, sys.Mode&07777); err != nil {\n\t\treturn err\n\t}",
+      "new": "\t_ = sys"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-mode-copy-drops-the-high-bits",
+      "old": "\tif err := syscall.Chmod(tmp, sys.Mode&07777); err != nil {",
+      "new": "\tif err := syscall.Chmod(tmp, sys.Mode&0777); err != nil {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-mode-is-forced-to-a-default",
+      "old": "\tif err := syscall.Chmod(tmp, sys.Mode&07777); err != nil {\n\t\treturn err\n\t}",
+      "new": "\t_ = sys\n\tif err := syscall.Chmod(tmp, 0o644); err != nil {\n\t\treturn err\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-swap-never-commits",
+      "old": "\treturn os.Rename(tmp, absPath)",
+      "new": "\t_ = os.Rename\n\treturn nil"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-skip-counter-does-not-accumulate",
+      "old": "\tr.Skipped[reason]++",
+      "new": "\tr.Skipped[reason] = 1"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "every-screen-names-its-file",
+      "old": "\tif reason == \"unreadable\" && rel != \"\" {",
+      "new": "\tif reason != \"\" && rel != \"\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "no-screen-names-its-file",
+      "old": "\tif reason == \"unreadable\" && rel != \"\" {",
+      "new": "\tif reason == \"unreadable\" && rel == \"\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-empty-name-guard-is-removed",
+      "old": "\tif reason == \"unreadable\" && rel != \"\" {",
+      "new": "\tif reason == \"unreadable\" {",
+      "equivalent": "skip() has two call sites. The screen site passes \"\" but never the reason \"unreadable\" (SkipReason cannot return it); the status site passes \"unreadable\" but always with a real name. The two conditions are never both interesting at once. Python carries the same dead guard and the port carries it for the same reason: the next caller."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-record-key-for-rejected-roots-changes",
+      "old": "{Key: \"rejected_roots\", Val: objList(r.Rejected)}",
+      "new": "{Key: \"rejected\", Val: objList(r.Rejected)}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-record-keys-are-reordered",
+      "old": "\t\t{Key: \"files_scanned\", Val: r.FilesScanned},\n\t\t{Key: \"files_rewritten\", Val: r.FilesRewritten},",
+      "new": "\t\t{Key: \"files_rewritten\", Val: r.FilesRewritten},\n\t\t{Key: \"files_scanned\", Val: r.FilesScanned},"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-record-counts-are-swapped",
+      "old": "\t\t{Key: \"files_scanned\", Val: r.FilesScanned},\n\t\t{Key: \"files_rewritten\", Val: r.FilesRewritten},",
+      "new": "\t\t{Key: \"files_scanned\", Val: r.FilesRewritten},\n\t\t{Key: \"files_rewritten\", Val: r.FilesScanned},"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-skip-counters-are-not-sorted",
+      "old": "\tsort.Strings(ks)",
+      "new": "\tsort.Sort(sort.Reverse(sort.StringSlice(ks)))"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-nothing-to-map-test-reads-the-wrong-field",
+      "old": "\tif len(r.Mapping) == 0 {",
+      "new": "\tif r.FilesRewritten == 0 {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-nothing-to-map-sentence-changes",
+      "old": "\"path rewrite: nothing to map (no differing roots)\"",
+      "new": "\"path rewrite: nothing to map\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-summary-counts-are-swapped",
+      "old": "\thead := \"path rewrite: \" + itoa(r.FilesRewritten) + \" file(s), \" +\n\t\titoa(r.Replacements) + \" occurrence(s)\"",
+      "new": "\thead := \"path rewrite: \" + itoa(r.Replacements) + \" file(s), \" +\n\t\titoa(r.FilesRewritten) + \" occurrence(s)\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-summary-plural-marks-change",
+      "old": "\" file(s), \"",
+      "new": "\" files, \""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-summary-separator-loses-its-space",
+      "old": "\tskips := strings.Join(parts, \", \")",
+      "new": "\tskips := strings.Join(parts, \",\")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-summary-dash-is-an-ascii-hyphen",
+      "old": "\t\thead += \" — not rewritten: \" + skips",
+      "new": "\t\thead += \" - not rewritten: \" + skips"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-empty-skip-list-still-prints-a-tail",
+      "old": "\tif skips != \"\" {",
+      "new": "\tif skips != \"\\x00\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-failed-list-is-not-clipped",
+      "old": "strings.Join(clipList(r.Failed, 10), \", \")",
+      "new": "strings.Join(r.Failed, \", \")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-failed-clip-is-shorter",
+      "old": "strings.Join(clipList(r.Failed, 10), \", \")",
+      "new": "strings.Join(clipList(r.Failed, 5), \", \")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-more-suffix-is-off-by-one",
+      "old": "\t\tif len(r.Failed) > 10 {",
+      "new": "\t\tif len(r.Failed) >= 10 {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-more-suffix-counts-everything",
+      "old": "itoa(len(r.Failed)-10) + \" more\"",
+      "new": "itoa(len(r.Failed)) + \" more\""
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-failed-block-is-never-printed",
+      "old": "\tif len(r.Failed) > 0 {",
+      "new": "\tif len(r.Failed) < 0 {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-empty-map-still-scans-the-tree",
+      "old": "\tif !mapping.Bool() {\n\t\treturn report\n\t}",
+      "new": "\tif !mapping.Bool() && false {\n\t\treturn report\n\t}"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-containment-screen-is-removed",
+      "old": "\t\tif !rok || !isUnder(resolved, rootResolved) {",
+      "new": "\t\tif !rok && !isUnder(resolved, rootResolved) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-containment-screen-is-a-string-prefix",
+      "old": "\t\tif !rok || !isUnder(resolved, rootResolved) {",
+      "new": "\t\tif !rok || !strings.HasPrefix(resolved, rootResolved) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-unresolved-path-is-tested-for-containment",
+      "old": "\t\tresolved, rok := pypath.Realpath(absPath)",
+      "new": "\t\tresolved, rok := absPath, true"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-outside-root-reason-changes",
+      "old": "\t\t\treport.skip(\"outside-root\", \"\")",
+      "new": "\t\t\treport.skip(\"outside\", \"\")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-name-is-joined-by-concatenation",
+      "old": "\t\tabsPath := pypath.Join(root, rel)",
+      "new": "\t\tabsPath := root + \"/\" + rel"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-screened-file-is-named-in-the-record",
+      "old": "\t\tif reason != \"\" {\n\t\t\treport.skip(reason, \"\")",
+      "new": "\t\tif reason != \"\" {\n\t\t\treport.skip(reason, rel)",
+      "equivalent": "skip() only records a NAME for the reason \"unreadable\", and SkipReason never returns that — its vocabulary is vcs-internal / rewrite-leftover / binary-suffix / missing / symlink / not-a-file / empty. Passing the name through changes nothing any consumer can see. Python passes nothing here, and the port says the same."
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-scan-counter-skips-screened-files-too",
+      "old": "\t\treport.FilesScanned++",
+      "new": "\t\t_ = report.FilesScanned"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "an-unchanged-file-is-recorded-as-a-skip",
+      "old": "\t\t} else if status != \"unchanged\" {",
+      "new": "\t\t} else if status != \"rewritten\" {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-failed-file-is-not-named",
+      "old": "\t\t\treport.skip(status, rel)",
+      "new": "\t\t\treport.skip(status, \"\")"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-record-names-the-absolute-path",
+      "old": "\t\t\t\t{Key: \"path\", Val: rel},",
+      "new": "\t\t\t\t{Key: \"path\", Val: absPath},"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-replacements-are-not-totalled",
+      "old": "\t\t\treport.Replacements += count",
+      "new": "\t\t\treport.Replacements += 0"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rewritten-files-are-not-counted",
+      "old": "\t\t\treport.FilesRewritten++",
+      "new": "\t\t\t_ = report.FilesRewritten"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-rejection-record-keys-change",
+      "old": "{Key: \"reason\", Val: rj.Reason},",
+      "new": "{Key: \"why\", Val: rj.Reason},"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "a-path-is-not-under-itself",
+      "old": "\tif len(c) < len(p) {",
+      "new": "\tif len(c) <= len(p) {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-containment-compare-is-inverted",
+      "old": "\t\tif c[i] != p[i] {",
+      "new": "\t\tif c[i] == p[i] {"
+    },
+    {
+      "file": "internal/pathrewrite/pathrewrite.go",
+      "name": "the-containment-parts-keep-the-empties",
+      "old": "\tfor _, p := range strings.Split(s, \"/\") {\n\t\tif p != \"\" {\n\t\t\tout = append(out, p)\n\t\t}\n\t}\n\treturn out\n}",
+      "new": "\tfor _, p := range strings.Split(s, \"/\") {\n\t\tout = append(out, p)\n\t}\n\treturn out\n}",
+      "equivalent": "Both arguments are Realpath output — absolute, with no doubled or trailing slashes — so keeping the empties adds exactly one leading \"\" to each side. The prefix compare is unchanged."
+    }
+  ]
+}

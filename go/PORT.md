@@ -17082,3 +17082,173 @@ equivalence comments I had just written sat inside their `old` text. That
 is the third time this session; the fix each time is to include the new
 comment in the pattern, and the lesson is that a battery row anchored on
 code ADJACENT to a comment is anchored on the comment too.
+
+## Phase N: the rewrite that must under-rewrite (2026-08-27)
+
+`src/path_rewrite.py` is 477 lines that exist because a workspace is full
+of paths naming the machine that produced it — 44,941 occurrences of one
+root across 5,841 text files in the 2026-08-13 box copy. Copy the
+workspace elsewhere and every one of them is a lie. This module rewrites
+them at IMPORT time, over the extracted copy only, with every transformed
+file named in a durable record.
+
+`go/internal/pathrewrite/` is one file, because the module is one
+argument made seven times: **under-rewriting is the safe direction.** A
+stale absolute path is visible and inert. A confidently-wrong one
+resolves to a real local directory that is not the one meant. Every
+screen in the file — the content-addressed skip, the binary sniff, the
+root validation, the two match boundaries, the containment check — is
+there because the other direction is silent corruption, and the port's
+only job is to keep each screen exactly as wide as it is.
+
+Which makes this the first tranche where the differential is not enough
+on its own, twice over.
+
+### The matcher could not be copied
+
+Python builds ONE compiled pattern over all sources:
+
+```python
+_BOUNDARY = rb"(?![A-Za-z0-9_-])"
+_LEFT_BOUNDARY = (rb"(?:(?<![A-Za-z0-9_./-])"
+                  rb"|(?<=\\n)|(?<=\\t)|(?<=\\r)|(?<=\\f)|(?<=\\v)|(?<=\\b))")
+```
+
+Go's `regexp` has no lookbehind and no lookahead, so there is no
+translation of that pattern — only a reimplementation. `Substitute` is
+therefore a hand-written byte scan, and the three things it has to get
+right are the three things a backtracking engine does for free:
+
+* **A failed match advances ONE byte.** Not the candidate's length. The
+  overlapping-prefix case (`//aa` against source `/aa`) is where a
+  length-skip is wrong, and it has a row.
+* **A failed RIGHT boundary falls through to the next alternative at the
+  SAME position.** `re` backtracks into the shorter branch when the
+  trailing lookahead fails, so `/srv/ab/cx` matches `/srv/ab` even though
+  `/srv/ab/c` was tried first and blocked. Sources are tried longest-first
+  and the loop `break`s on the first that clears both edges.
+* **The scan emits into a separate buffer and never re-reads it,** which
+  is how the one-pass property survives: a destination containing a later
+  source is not rewritten a second time.
+
+The escape exemption is the part that only real data could have taught
+anyone. A path inside a JSON string is usually preceded by `\n` — and at
+the BYTE level the character before the root is then the letter `n`,
+which the plain lookbehind reads as an identifier character and blocks.
+The first live box→Mac import left 5,543 occurrences unrewritten for
+exactly that reason. Six two-byte sequences (`\n \t \r \f \v \b`, literal
+backslash plus letter) are boundaries; `\x` is not; a bare `n` is not.
+All eight cases are fixtures.
+
+### Some things a differential structurally cannot check
+
+Two tables in this module are long — fifty binary suffixes,
+twenty-eight system roots — and a differential can only ever sample them.
+A fixture per entry would be a hundred scenarios proving one thing each,
+and it still would not fail when upstream ADDS an entry. So five Go-only
+tests read the literals back out of `path_rewrite.py` and compare whole
+sets: `_SKIP_SUFFIXES`, `_SYSTEM_ROOTS`, `_SKIP_DIR_PARTS`, the ORDER of
+`ROLES`, and the five scalar constants.
+
+The sixth is the one that matters most. `TestTheBoundaryPatternsMatch-
+Upstream` pins both regex literals verbatim, because nothing structural
+ties the hand-written scan to the pattern it implements: if upstream
+widens a character class, the differential notices only if some fixture
+happens to contain the newly-admitted character — and a class's edges are
+exactly what nobody thinks to write a fixture for. This is the same shape
+as Phase M's prompt guard, and the same reasoning: a table is a content
+key.
+
+### Two divergences the fixtures found
+
+**`os.unlink` is not `os.Remove`.** The failed-swap recovery path is a
+bare `except OSError: pass` around `os.unlink(tmp)`. Go's `os.Remove`
+also removes an empty DIRECTORY — and a directory sitting on the temp
+path is precisely how that branch is reached, since it is what makes
+`open(tmp, "wb")` fail. CPython leaves it alone; the first cut of the
+port deleted it. `syscall.Unlink` now, with the fixture that found it
+(`a-directory-on-the-temp-path-survives-the-failure`) and a battery row
+that pins the spelling.
+
+**`pathlib.suffix` reads a NAME, not a path.** `Path("sub/.png").suffix`
+is `""` — the name is `.png`, and pathlib lstrips leading dots before
+looking for the last one — while running the same rule over the whole
+string yields `.png`, which IS in the binary set. A dotfile named after
+an extension is therefore rewritable, and a port that skipped
+`pypath.Name` would silently refuse to fix it.
+
+Three further CPython facts got pinned on the way past: `str.strip()`
+removes the four INFORMATION SEPARATORS (U+001C–U+001F), which Go's
+`unicode.IsSpace` does not consider space at all — the NBSP that usually
+separates `pytext.Strip` from `strings.TrimSpace` does NOT, because Go
+agrees about that one; `str.lower()`'s full case mapping means `.İCO`
+does not fold to `.ico` and is not screened; and `len()` counts CODE
+POINTS, so the longest-source-first sort needs `utf8.RuneCountInString`
+and `/data/abcde` sorts ahead of `/data/ééé` even though it is shorter in
+bytes.
+
+### The battery
+
+`tools/batteries/pathrewrite.json` — 177 rows, three rounds:
+
+| round | killed | survived | !BUILD | spec bugs |
+|---|---|---|---|---|
+| r1 | 151 | 22 | 3 | 0 |
+| r2 | 162 | 3 | 0 | 0 |
+| r3 | 163 | 0 | 0 | 0 |
+
+Fourteen rows are marked `equivalent`, each with a comment at the site,
+and the interesting thing is the SHAPE of them: eleven of the fourteen
+are places where the port carries a distinction the code cannot observe.
+`pathParts` drops `""` and `"."` and keeps `".."` — but its only consumer
+asks whether a component is `.git`, `.hg` or `.svn`, and none of the
+three is any of those, so all three decisions are inert. The
+leftover screen runs before the suffix screen — but no name can trip both,
+because a leftover ends in `.tmp` and `.tmp` is not in the binary set.
+The strict prefix walk starts at 1 and stops before `len(parts)` — but
+i=0 and i=len are both provably unreachable given the two minimums above
+it.
+
+None of those got "fixed". They are Python's spelling, and the reason
+each is inert is a property of a CONSTANT that can change — which is the
+whole argument for writing the reason at the site rather than deleting
+the line. The three genuinely-unfixturable rows say so plainly: the head
+sniff is an early exit whose answer the whole-file check reproduces, the
+second `stat` observes nothing the first does not, and the only failure a
+fixture can provoke inside the swap is one where the cleanup has nothing
+to clean.
+
+The r1 survivor list was 22 long and split three ways — eleven missing
+fixtures, eight equivalences, and three that were both (the fixture I
+had written could not distinguish the mutant, and the reason was worth
+a comment either way). One regression appeared in r2: strengthening the
+code-point-sort fixture removed the only source root that failed the
+strict screen, and `the-source-root-is-screened-loosely` came back to
+life. That is the fixture set behaving like a fixture set — a row that
+was being killed incidentally, by a scenario written for something else.
+
+`fileState` in the differential grew a directory arm for this tranche,
+and the mode/mtime columns earn their place: an atomic swap through a
+fresh temp file silently gets the umask's mode and today's mtime unless
+it is asked not to, and `shutil.copymode` carries all twelve bits, not
+Go's nine — there is a sticky-bit fixture.
+
+### Two standing guards fired, which is the point of them
+
+`TestProbeReadsCannotMaskAnOmittedField` (L6) caught four `omitempty`
+fields the probe subscripts: an omitted field is a `KeyError` on the
+CPython side, not a zero value, and a probe that fills its own default
+cannot tell "the scenario said empty" from "the scenario forgot". The
+spec struct now carries no `omitempty` at all, and the probe reads
+`e["mode"]` and treats EMPTINESS — not absence — as "leave it alone".
+
+`TestNoNewByteWiseFilenameSortAppears` caught the `sort.Strings` in
+`sortedKeys`. It is the right kind: the strings are skip REASONS
+(`vcs-internal`, `binary-suffix`, `oversize`), Go and Python literals
+both, reproducing `sorted(self.skipped.items())`. The values beside them
+are filenames; the keys never are. Allowlisted with that sentence.
+
+Neither guard was written for this tranche. Both are lenses that got
+CLOSED after firing twice, and this is what closed lenses are supposed to
+feel like — a failing test naming the rule, in the round where the
+mistake was made, instead of a reviewer noticing it three tranches later.
