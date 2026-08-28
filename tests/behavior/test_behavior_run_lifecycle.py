@@ -169,9 +169,15 @@ def test_agenda_flow_reaches_durable_evidence():
     result, rd = drive(sc)
     meta = read_meta(rd)
 
-    # Loops lineage is real: at least one loop with a non-empty loop_id (B3).
+    # Loops lineage is real, and for THIS deterministic scripted scenario
+    # it is exactly ONE loop (a second lineage entry would mean the engine
+    # replanned a run whose scripted responses complete cleanly — round-5
+    # review: the comment claimed this and the assertion didn't).
     loops = meta.get("loops")
-    assert isinstance(loops, list) and loops, "loops lineage must be non-empty"
+    assert isinstance(loops, list) and len(loops) == 1, (
+        f"this scripted scenario is single-loop by construction; lineage "
+        f"was {loops!r}"
+    )
     loop_ids = {l.get("loop_id") for l in loops}
     assert all(loop_ids), "every lineage entry carries a loop_id (B3)"
 

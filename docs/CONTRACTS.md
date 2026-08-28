@@ -281,22 +281,30 @@ follow. Cross-process, therefore cross-engine.
   source of truth.
 - **Loop evidence artifacts** (in `build/`, registered 2026-08-28 — the
   names were already a cross-component contract that this entry had not
-  recorded): `loop-<loop_id>-step-NN.md` — one per COMPLETED step,
-  `# Step N: <step text>` heading + the step result (writer
-  `loop_artifacts._write_step_artifact`, `src/loop_artifacts.py:21`;
-  readers: report compile, and `loop_finalize`'s maintenance GC deletes
-  aged copies by exactly this glob, `src/loop_finalize.py:103`).
-  `loop-<loop_id>-RESULT.md` — the completed loop's transcript/final
-  result (writer `src/loop_finalize.py:290`; reader `notify_telegram`,
-  which also DERIVES the sibling report name by string-replacing the
-  `-RESULT.md` suffix, `src/notify_telegram.py:140-147` — so the suffix
-  is load-bearing, not cosmetic). A second engine must produce these
-  names for its completed steps/loops or those readers go dark. Loop
-  ownership: each evidence file is attributed to the loop that did the
-  work via its embedded `<loop_id>`; multi-loop histories (replanning,
-  retry) are legitimate — `metadata.loops` stays the authoritative
-  attempt order, and nothing requires prior-attempt evidence to be
-  rewritten under the terminal loop.
+  recorded): `loop-<loop_id>-step-NN.md` — BEST-EFFORT, one per executed
+  step attempt: written after step execution and BEFORE the done/blocked
+  status branch (`src/loop_execute.py:1841`, so a non-done step that
+  wasn't flagged stuck also gets one; the flagged-stuck path `break`s
+  out before the write), `# Step N: <step text>` heading + the step
+  result. Writer `loop_artifacts._write_step_artifact`
+  (`src/loop_artifacts.py:21`) swallows write failures and returns None
+  — presence is evidence, absence proves nothing. Reader:
+  `loop_finalize`'s maintenance GC deletes aged copies via the BROADER
+  glob `loop-*-step-*.md` (`src/loop_finalize.py:103` — any name
+  matching that pattern is GC-eligible, not just `step-NN`). Report
+  compilation does NOT read these files (it receives step outcomes
+  in-memory; deliverable attribution reads call-record tool events,
+  `src/loop_report.py:825`). `loop-<loop_id>-RESULT.md` — the completed
+  loop's transcript/final result (writer `src/loop_finalize.py:290`;
+  reader `notify_telegram`, which also DERIVES the sibling report name
+  by string-replacing the `-RESULT.md` suffix,
+  `src/notify_telegram.py:140-147` — so THAT suffix is load-bearing: an
+  engine that names its result file differently leaves delivery
+  notifications dark). Loop ownership: each evidence file is attributed
+  to the loop that did the work via its embedded `<loop_id>`; multi-loop
+  histories (replanning, retry) are legitimate — `metadata.loops` stays
+  the authoritative attempt order, and nothing requires prior-attempt
+  evidence to be rewritten under the terminal loop.
 - **Status:** published.
 - **Quirks:** metadata is merge-on-write: existing keys survive rewrites,
   and caller extras never override the core set (`src/runs.py:446-453`) — a
