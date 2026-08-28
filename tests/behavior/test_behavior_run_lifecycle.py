@@ -13,6 +13,7 @@ from harness import (
     GoalScenario,
     assert_common_contracts,
     drive,
+    read_json,
     read_jsonl,
     read_meta,
     workspace,
@@ -67,7 +68,7 @@ def test_call_records_shape():
 
     seqs = []
     for f in files:
-        rec = json.loads(f.read_text(encoding="utf-8"))
+        rec = read_json(f)
         # B4 shape, field by field. `type(...) is int` throughout: in
         # CPython bool IS an int, so isinstance would accept `"seq": true`
         # — a wire value no other engine should be told to accept.
@@ -150,7 +151,7 @@ def test_stuck_run_not_fabricated():
     # And the curated view classifies stuck-unjudged as exactly `failed`
     # (B5 grid) — `!= "success"` alone would accept `achieved-not-done`,
     # the class a fabricated verdict produces.
-    card = json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
+    card = read_json(rd / "run_card.json")
     assert card["success_class"] == "failed"
 
 
@@ -178,41 +179,39 @@ def test_agenda_flow_reaches_durable_evidence():
     # contractual evidence writer's files, NOT the captains-log slice
     # (build/captains_log_slice.jsonl is a byte-copy of the global bus;
     # counting it as evidence let a logging-only engine pass — round-2
-    # review catch). Step N's artifact carries step N's result, and the
-    # final result also lands in the loop RESULT.md.
+    # review catch). Round-3 hardening: ONE lineage loop must own the
+    # whole story — both step artifacts with their respective results,
+    # the RESULT.md with the final result, AND the loop_start+loop_done
+    # lifecycle pair. Loop-agnostic globs let a replanned/abandoned loop
+    # supply step 1 while another supplied step 2 and a third the
+    # lifecycle — no completed loop need have done the declared work.
     scripted_results = [
         "Collected 12 rows of numbers", "Summary written: revenue flat",
     ]
-    for n, scripted in enumerate(scripted_results, 1):
-        step_files = list((rd / "build").glob(f"loop-*-step-{n:02d}.md"))
-        assert step_files, f"no step-{n:02d} artifact under build/ (B3)"
-        step_text = "".join(
-            p.read_text(encoding="utf-8") for p in step_files
-        )
-        assert scripted in step_text, (
-            f"step {n} artifact does not carry its scripted result "
-            f"{scripted!r} — the evidence dropped the work (B3)"
-        )
-    result_files = list((rd / "build").glob("loop-*-RESULT.md"))
-    assert result_files, "no loop RESULT.md under build/ (B3)"
-    assert any(scripted_results[-1] in p.read_text(encoding="utf-8")
-               for p in result_files), (
-        "the final step result must reach the loop RESULT.md (B3)"
-    )
-
-    # Events join the run through its loop lineage (B9): ONE loop must own
-    # a complete lifecycle pair — aggregating types across loops would
-    # accept a loop_start from loop A spliced with a loop_done from loop B.
     ev_rows = read_jsonl(workspace() / "memory" / "events.jsonl")
-    mine = [r for r in ev_rows if r.get("loop_id") in loop_ids]
-    assert mine, "no events.jsonl row joins the run's loop_id (B9)"
-    by_loop = {}
-    for r in mine:
-        by_loop.setdefault(r["loop_id"], set()).add(r["event_type"])
-    assert any({"loop_start", "loop_done"} <= types
-               for types in by_loop.values()), (
-        f"no single loop carries a complete loop_start+loop_done "
-        f"lifecycle: {by_loop}"
+    ev_types_by_loop = {}
+    for r in ev_rows:
+        if r.get("loop_id") in loop_ids:
+            ev_types_by_loop.setdefault(r["loop_id"], set()).add(
+                r["event_type"])
+    assert ev_types_by_loop, "no events.jsonl row joins the run's loops (B9)"
+
+    def _loop_owns_whole_story(lid: str) -> bool:
+        for n, scripted in enumerate(scripted_results, 1):
+            f = rd / "build" / f"loop-{lid}-step-{n:02d}.md"
+            if not (f.exists() and scripted in f.read_text(encoding="utf-8")):
+                return False
+        res = rd / "build" / f"loop-{lid}-RESULT.md"
+        if not (res.exists()
+                and scripted_results[-1] in res.read_text(encoding="utf-8")):
+            return False
+        return {"loop_start", "loop_done"} <= ev_types_by_loop.get(lid, set())
+
+    assert any(_loop_owns_whole_story(lid) for lid in loop_ids), (
+        f"no single lineage loop owns step artifacts + RESULT.md + the "
+        f"loop_start/loop_done pair — the flow evidence is assembled from "
+        f"fragments (B3/B9); loops={sorted(loop_ids)} "
+        f"events={ev_types_by_loop}"
     )
 
 

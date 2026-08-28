@@ -8,7 +8,7 @@ B7 (lesson stores), B3 (run-metadata verdict block).
 
 import json
 
-from harness import read_jsonl, read_meta, workspace
+from harness import read_json, read_jsonl, read_meta, workspace
 
 
 def _outcomes_path():
@@ -291,7 +291,7 @@ def test_paused_family_vocabulary_on_ledger_and_card():
     hid = "feedf00d"
     rd = create_run_dir(hid, prompt="interrupted run probe", lane="agenda")
     close_run(hid, status="interrupted")
-    card = json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
+    card = read_json(rd / "run_card.json")
     assert card["success_class"] == "interrupted", (
         "interrupt-family status must classify as 'interrupted' (B5)"
     )

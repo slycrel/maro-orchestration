@@ -67,8 +67,9 @@ review fixes, M1 and M3 passed clean — the B9/B11 blocks were vacuous
 ## Scenario coverage (the ~15)
 
 1. **NOW one-shot** (`now-one-shot`) — intake row B11, run dir + verbatim
-   prompt B3, answer artifact, unjudged outcome row B6, card B5, logs
-   B8/B9.
+   prompt B3, answer artifact, unjudged outcome row B6, card B5;
+   captains-log attribution + events feed activity B8/B9 (per-run event
+   attribution is not pinnable for NOW — FINDINGS #9).
 2. **AGENDA happy path** (`agenda-happy-path`) — plan → steps → done;
    skeleton + lifecycle fields + loops lineage B3.
 3. **Call records** (`now-call-records` + `test_call_records_shape`) —

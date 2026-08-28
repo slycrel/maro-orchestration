@@ -7,7 +7,7 @@ core status x verdict grid, and the writer-private `_curation` namespace.
 
 import json
 
-from harness import SUCCESS_CLASSES, read_meta
+from harness import SUCCESS_CLASSES, read_json, read_meta
 
 
 def _close(hid: str, *, prompt: str, status: str, achieved=None) -> dict:
@@ -21,7 +21,7 @@ def _close(hid: str, *, prompt: str, status: str, achieved=None) -> dict:
                 summary="probe verdict", gaps=None,
             )
     close_run(hid, status=status)
-    card = json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
+    card = read_json(rd / "run_card.json")
     return {"rd": rd, "card": card}
 
 
@@ -90,7 +90,7 @@ def test_card_is_derived_metadata_stays_authoritative():
             summary="post-hoc verdict", gaps=None,
         )
     refresh_run_card_classification("cab00006")
-    card2 = json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
+    card2 = read_json(rd / "run_card.json")
     assert card2["success_class"] == "success", (
         "regenerated card must follow metadata — metadata wins (B5)"
     )

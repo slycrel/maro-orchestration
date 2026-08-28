@@ -8,7 +8,7 @@ to the second (B11's registered reader).
 
 import json
 
-from harness import assert_common_contracts, drive, read_jsonl, workspace
+from harness import assert_common_contracts, drive, read_json, read_jsonl, workspace
 from scenarios import RERUN_GOAL, by_id
 
 
@@ -25,7 +25,7 @@ def test_now_answer_artifact_shape():
 
     art = rd / "artifact" / f"now-{result.handle_id}.json"
     assert art.exists(), "NOW answer artifact missing from artifact/ (B3)"
-    payload = json.loads(art.read_text(encoding="utf-8"))
+    payload = read_json(art)
     assert payload["handle_id"] == result.handle_id
     assert payload["lane"] == "now"
     assert payload["message"] == sc.goal

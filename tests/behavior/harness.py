@@ -139,6 +139,19 @@ def _reject_duplicate_keys(pairs):
     return obj
 
 
+def read_json(path: Path) -> dict:
+    """STRICT single-object reader for registered JSON files (metadata.json,
+    run_card.json, call records, NOW artifacts): same B2 wire discipline as
+    read_jsonl — no NaN/Infinity, no duplicate keys, object at top level."""
+    obj = json.loads(path.read_text(encoding="utf-8"),
+                     parse_constant=_reject_constant,
+                     object_pairs_hook=_reject_duplicate_keys)
+    assert isinstance(obj, dict), (
+        f"{path.name} is a JSON {type(obj).__name__}, not an object (B2)"
+    )
+    return obj
+
+
 def read_jsonl(path: Path) -> List[dict]:
     """STRICT acceptance reader: every non-empty line must be one valid JSON
     object with no NaN/Infinity tokens. Production readers are tolerant per
@@ -190,11 +203,11 @@ def run_dir_for(handle_id: str, ws: Optional[Path] = None) -> Path:
 
 
 def read_meta(rd: Path) -> dict:
-    return json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    return read_json(rd / "metadata.json")
 
 
 def read_card(rd: Path) -> dict:
-    return json.loads((rd / "run_card.json").read_text(encoding="utf-8"))
+    return read_json(rd / "run_card.json")
 
 
 def newest_outcome(ws: Optional[Path] = None) -> dict:
@@ -371,10 +384,13 @@ def assert_common_contracts(sc: GoalScenario, result, rd: Path) -> None:
         "(B8)"
     )
 
-    # B9 events feed: the run must EMIT events, and every line obeys the
-    # discipline. (Rows join by loop_id, not handle_id — asserted for the
-    # agenda lane in test_agenda_flow_reaches_durable_evidence; here the
-    # non-vacuous floor is existence + at least one row.)
+    # B9 events feed: THIS dispatch must have emitted events (the
+    # workspace is per-test isolated, so every row here is this
+    # dispatch's traffic — though not necessarily this RUN's: rows join
+    # by loop_id only, so NOW-lane rows are unattributable, see README
+    # FINDINGS #9; the agenda lane gets the real per-loop join in
+    # test_agenda_flow_reaches_durable_evidence). Every line obeys the
+    # discipline; the non-vacuous floor is existence + at least one row.
     events_path = ws / "memory" / "events.jsonl"
     assert events_path.exists(), "run emitted no memory/events.jsonl (B9)"
     n_events = assert_events_line_discipline(events_path)
