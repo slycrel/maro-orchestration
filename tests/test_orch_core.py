@@ -1257,3 +1257,99 @@ def test_load_run_records_skips_corrupt_file_with_logged_reason(
     assert [r.run_id for r in records] == ["run-good"]
     assert "run-bad.json" in caplog.text
     assert "skipped" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# R2-4 — run-record store: extras round-trip through production RMW,
+# atomic writes, validated hard core (docs/CONTRACTS.md round 2)
+# ---------------------------------------------------------------------------
+
+def test_finalize_run_roundtrips_future_field(monkeypatch, tmp_path):
+    """R2-4 must-detect: the tolerant loader FILTERED unknown keys without
+    retaining them, so the literal production RMW (load -> mutate ->
+    write_run_record in orch.finalize_run) deleted a newer engine's fields
+    on the next update — the C0.1 trap re-created one store over."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+    run = orch.run_once("demo", worker="tester", source="unit")
+    assert run is not None
+    # A newer engine legally adds a field to the record on disk.
+    import orch_items
+    path = orch_items.runs_root() / f"{run.run_id}.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["future_field"] = "engine-b-was-here"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    orch.finalize_run(run.run_id, "done", note="unit verified")
+
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["status"] == "done"
+    assert after["future_field"] == "engine-b-was-here"
+
+
+def test_empty_object_run_record_is_skipped_with_reason(
+        monkeypatch, tmp_path, caplog):
+    """R2-4 must-detect: `{}` used to default into a plausible live record
+    ('' run_id, index 0) feeding attempt arithmetic. It must be logged and
+    skipped, and load_run_record must raise a clear error."""
+    import logging
+
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _write_raw_run_record("run-empty", {})
+    with caplog.at_level(logging.WARNING, logger="maro.orch_items"):
+        records = orch_items._load_run_records()
+    assert records == []
+    assert "run-empty.json" in caplog.text and "skipped" in caplog.text
+    with pytest.raises(ValueError):
+        orch_items.load_run_record("run-empty")
+
+
+def test_non_coercible_index_run_record_is_skipped(
+        monkeypatch, tmp_path, caplog):
+    """R2-4 must-detect: a wrong-typed index ("NaN") became int() fodder for
+    attempt arithmetic downstream. Logged rejection, not a default."""
+    import logging
+
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    data = _minimal_record_dict("run-nanidx")
+    data["index"] = "NaN"
+    _write_raw_run_record("run-nanidx", data)
+    with caplog.at_level(logging.WARNING, logger="maro.orch_items"):
+        records = orch_items._load_run_records()
+    assert records == []
+    assert "run-nanidx" in caplog.text and "index" in caplog.text
+
+
+def test_run_record_filename_mismatch_is_rejected(monkeypatch, tmp_path, caplog):
+    """The filename is the store's key: a body claiming another run_id would
+    impersonate that record on the next rewrite."""
+    import logging
+
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _write_raw_run_record("run-alias", _minimal_record_dict("run-other"))
+    with caplog.at_level(logging.WARNING, logger="maro.orch_items"):
+        records = orch_items._load_run_records()
+    assert records == []
+    assert "does not match" in caplog.text
+    with pytest.raises(ValueError):
+        orch_items.load_run_record("run-alias")
+
+
+def test_run_record_additive_field_still_loads(monkeypatch, tmp_path):
+    """Negative control (rule A3): an additive unknown field neither crashes
+    nor rejects — it loads AND rides the record as extras."""
+    import orch_items
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    data = _minimal_record_dict("run-extra")
+    data["future_field"] = {"nested": True}
+    _write_raw_run_record("run-extra", data)
+    records = orch_items._load_run_records()
+    assert [r.run_id for r in records] == ["run-extra"]
+    assert records[0]._extras == {"future_field": {"nested": True}}
+    # And write_run_record restores it, declared fields winning.
+    out = orch_items.write_run_record(records[0])
+    assert json.loads(out.read_text(encoding="utf-8"))["future_field"] == \
+        {"nested": True}

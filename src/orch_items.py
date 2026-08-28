@@ -454,23 +454,51 @@ def _run_record_path(run_id: str) -> Path:
 
 def write_run_record(record: RunRecord) -> Path:
     path = _run_record_path(record.run_id)
-    path.write_text(json.dumps(asdict(record), indent=2) + "\n", encoding="utf-8")
+    # Extras merged back, declared fields winning (R2-4a, the lesson-store
+    # _extras pattern): this store's RMW paths (orch.finalize_run, run_tick's
+    # artifact/note rewrites) load -> mutate -> rewrite, which without the
+    # merge deleted every field a newer engine legally added. atomic_write
+    # (R2-4b): run records are per-run files with a single orchestrator
+    # writer today, so atomic replace is the honest minimum — a reader (the
+    # operator-status builder, listings) never sees a torn document.
+    row = {**getattr(record, "_extras", {}), **asdict(record)}
+    from file_lock import atomic_write
+    atomic_write(path, json.dumps(row, indent=2) + "\n")
     return path
 
 
 def _run_record_from_dict(data: dict) -> RunRecord:
-    """Tolerant rehydration (CONTRACTS C0.8, the tail_jobs._steps_from_rows
-    shape): filtered kwargs + defaulted required fields, so a legal additive
-    field from a newer writer is ignored instead of TypeError-ing the record
-    away, and a schema-drifted row degrades to a weaker record instead of
-    vanishing from every listing."""
+    """Tolerant-but-honest rehydration (CONTRACTS C0.8 + R2-4).
+
+    Unknown keys are RETAINED on the instance as ``_extras`` (the lesson
+    stores' C0.1 pattern) so write_run_record round-trips them — the
+    filtered constructor alone re-created the C0.1 RMW trap one store over.
+
+    The hard core is VALIDATED, not defaulted: ``run_id`` nonempty str,
+    ``project``/``status`` str, ``index`` int-coercible. Defaulting those
+    turned ``{}`` or a wrong-typed row into a plausible live record (''
+    run_id, string index) feeding attempt arithmetic. A row failing the
+    core raises ValueError — ``_load_run_records`` logs and skips it,
+    ``load_run_record`` surfaces it. Only genuinely optional/descriptive
+    fields get defaults."""
+    run_id = data.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("missing/invalid run_id (nonempty str required)")
+    project = data.get("project")
+    if not isinstance(project, str):
+        raise ValueError(f"run {run_id}: project must be a string")
+    try:
+        index = int(data.get("index"))
+    except (TypeError, ValueError):
+        raise ValueError(f"run {run_id}: index not int-coercible "
+                         f"({data.get('index')!r})")
+    status = data.get("status")
+    if not isinstance(status, str):
+        raise ValueError(f"run {run_id}: status must be a string")
     kwargs = {k: v for k, v in data.items()
               if k in RunRecord.__dataclass_fields__}
-    kwargs.setdefault("run_id", "")
-    kwargs.setdefault("project", "")
-    kwargs.setdefault("index", 0)
+    kwargs.update(run_id=run_id, project=project, index=index, status=status)
     kwargs.setdefault("text", "")
-    kwargs.setdefault("status", "")
     kwargs.setdefault("source", "")
     kwargs.setdefault("worker", "")
     kwargs.setdefault("started_at", "")
@@ -479,14 +507,26 @@ def _run_record_from_dict(data: dict) -> RunRecord:
         kwargs["attempt"] = int(kwargs.get("attempt", 1))
     except (TypeError, ValueError):
         kwargs["attempt"] = 1
-    return RunRecord(**kwargs)
+    record = RunRecord(**kwargs)
+    extras = {k: v for k, v in data.items()
+              if k not in RunRecord.__dataclass_fields__}
+    if extras:
+        record._extras = extras
+    return record
 
 
 def load_run_record(run_id: str) -> RunRecord:
-    data = json.loads(_run_record_path(run_id).read_text(encoding="utf-8"))
+    path = _run_record_path(run_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"run record {run_id} is not a JSON object")
-    return _run_record_from_dict(data)
+    record = _run_record_from_dict(data)
+    if record.run_id != run_id:
+        # Filename is the store's key; a mismatched body would let one
+        # record silently impersonate another on the next rewrite.
+        raise ValueError(f"run record file {run_id}.json holds run_id "
+                         f"{record.run_id!r}")
+    return record
 
 
 def validation_summary_path(run: RunRecord) -> Optional[Path]:
@@ -523,7 +563,18 @@ def _load_run_records() -> List[RunRecord]:
         if not isinstance(data, dict):
             log.warning("run record %s skipped: not a JSON object", path)
             continue
-        out.append(_run_record_from_dict(data))
+        try:
+            record = _run_record_from_dict(data)
+        except ValueError as exc:
+            # R2-4c: a row failing the hard core is LOGGED and skipped —
+            # never defaulted into a plausible live record.
+            log.warning("run record %s skipped: %s", path, exc)
+            continue
+        if record.run_id != path.stem:
+            log.warning("run record %s skipped: run_id %r does not match "
+                        "filename", path, record.run_id)
+            continue
+        out.append(record)
     return out
 
 
