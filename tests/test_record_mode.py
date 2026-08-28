@@ -103,6 +103,31 @@ def test_record_sequence_increments(workspace):
     assert len(list(_calls_dir(rd).glob("call-*.json"))) == 2
 
 
+def test_record_seq_collision_does_not_overwrite(workspace):
+    """C0.4 must-detect: the seq counter is process-local, so two processes
+    sharing a run dir can allocate the same seq. Publication must be
+    exclusive-create — the loser lands on the next free number and the
+    winner's record survives byte-for-byte."""
+    rd = create_run_dir("hid00008", prompt="g")
+    set_current_run_dir(rd)
+    calls = _calls_dir(rd)
+    calls.mkdir(parents=True, exist_ok=True)
+    # Another process published seq 1 AFTER this process's counter was
+    # primed at 0 — the in-memory counter can't see it.
+    winner = calls / "call-00001.json"
+    winner.write_text('{"seq": 1, "prompt": "the other process"}')
+    runs._CALL_COUNTERS[str(rd)] = 0
+
+    out = record_llm_call("p", "r")
+
+    assert out is not None
+    assert out.name == "call-00002.json"
+    # The existing record was NOT overwritten.
+    assert json.loads(winner.read_text())["prompt"] == "the other process"
+    # The new record carries its actual published seq.
+    assert json.loads(out.read_text())["seq"] == 2
+
+
 def test_record_noop_when_disabled(workspace, monkeypatch):
     rd = create_run_dir("hid00003", prompt="g")
     set_current_run_dir(rd)

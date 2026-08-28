@@ -120,6 +120,68 @@ def test_finalize_run_returns_none_for_missing_run(workspace):
     assert finalize_run("nonexist", status="x") is None
 
 
+def test_finalize_run_preserves_unknown_keys(workspace):
+    """C0.2 contract pin: keys finalize doesn't know about (another writer's
+    legal additions) ride through the merge untouched."""
+    rd = create_run_dir("abcd1234", prompt="p")
+    meta_path = rd / "metadata.json"
+    meta = json.loads(meta_path.read_text())
+    meta["future_field"] = "x"
+    meta_path.write_text(json.dumps(meta))
+
+    finalize_run("abcd1234", status="completed", extra={"note": "n"})
+
+    out = json.loads(meta_path.read_text())
+    assert out["future_field"] == "x"
+    assert out["status"] == "completed"
+    assert out["note"] == "n"
+    assert out["prompt"] == "p"
+
+
+def test_finalize_run_takes_the_metadata_lock(workspace, monkeypatch):
+    """C0.2 must-detect: finalize is a locked RMW like the stamp_run_*
+    family. With the metadata lock held by another writer, finalize must
+    refuse (FileLockTimeout) instead of silently racing it — the pre-fix
+    bare read→mutate→atomic_write wrote anyway."""
+    import fcntl
+
+    from file_lock import FileLockTimeout
+
+    rd = create_run_dir("abcd1234", prompt="p")
+    lock_path = rd / "metadata.json.lock"
+    fd = open(lock_path, "w")
+    fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+    monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+    try:
+        with pytest.raises(FileLockTimeout):
+            finalize_run("abcd1234", status="completed")
+        # The held lock means the file was never touched.
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["status"] is None
+    finally:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+        fd.close()
+
+
+def test_finalize_run_parse_failure_keeps_original_bytes(workspace):
+    """C0.2 must-detect: an unparseable metadata.json must not be silently
+    replaced with just {status, ended_at} — the original bytes are parked
+    in a sidecar before finalize stamps a fresh object."""
+    rd = create_run_dir("abcd1234", prompt="p")
+    meta_path = rd / "metadata.json"
+    corrupt = '{"handle_id": "abcd1234", "torn'
+    meta_path.write_text(corrupt)
+
+    finalize_run("abcd1234", status="completed")
+
+    out = json.loads(meta_path.read_text())
+    assert out["status"] == "completed"
+    assert out["ended_at"]
+    side = rd / "metadata.json.corrupt"
+    assert side.exists()
+    assert side.read_text() == corrupt
+
+
 def test_create_run_dir_extra_metadata(workspace):
     rd = create_run_dir(
         "abcd1234",

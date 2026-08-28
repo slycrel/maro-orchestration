@@ -1131,16 +1131,42 @@ def finalize_run(
     meta_path = rd / "metadata.json"
     if not meta_path.exists():
         return rd
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        meta = {}
-    meta["status"] = status
-    meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
-    if extra:
-        meta.update(extra)
-    from file_lock import atomic_write
-    atomic_write(meta_path, json.dumps(meta, indent=2))
+
+    def _merge(old: str) -> str:
+        # Same locked-RMW shape as the stamp_run_* family (C0.2): the old
+        # bare read→mutate→atomic_write raced every concurrent stamper and
+        # dropped whichever keys the loser had written.
+        try:
+            meta = json.loads(old) if old.strip() else {}
+            if not isinstance(meta, dict):
+                raise ValueError(
+                    f"metadata.json holds {type(meta).__name__}, not an object")
+        except Exception as exc:
+            # Never silently destroy another writer's keys: the old path
+            # replaced an unparseable file with {} + two keys. Park the
+            # bytes in a sidecar so nothing is lost, then finalize onto a
+            # fresh object — the run must still reach a terminal status.
+            meta = {}
+            side = meta_path.with_name(meta_path.name + ".corrupt")
+            try:
+                side.write_text(old, encoding="utf-8",
+                                errors="surrogateescape")
+                log.warning(
+                    "finalize_run(%s): metadata.json unparseable (%s) — "
+                    "original preserved at %s", handle_id, exc, side.name)
+            except OSError as werr:
+                log.warning(
+                    "finalize_run(%s): metadata.json unparseable (%s) and "
+                    "sidecar write failed (%s) — finalizing fresh",
+                    handle_id, exc, werr)
+        meta["status"] = status
+        meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
+        if extra:
+            meta.update(extra)
+        return json.dumps(meta, indent=2, default=str)
+
+    from file_lock import locked_rmw
+    locked_rmw(meta_path, _merge)
     try:
         import thread_brain
         thread_brain.record_close(rd, status=status)
@@ -1486,23 +1512,39 @@ def recording_enabled() -> bool:
         return True
 
 
+def _scan_highest_seq(rd: Path) -> int:
+    highest = 0
+    try:
+        for p in (rd / "build" / "calls").glob("call-*.json"):
+            try:
+                highest = max(highest, int(p.stem.split("-")[1]))
+            except (IndexError, ValueError):
+                continue
+    except OSError:
+        pass
+    return highest
+
+
 def _next_call_seq(rd: Path) -> int:
     key = str(rd)
     with _CALL_LOCK:
         if key not in _CALL_COUNTERS:
             # Rebuild from disk: after a crash+resume the in-memory counter
             # is gone, and starting at 1 would overwrite call-00001.json.
-            highest = 0
-            try:
-                for p in (rd / "build" / "calls").glob("call-*.json"):
-                    try:
-                        highest = max(highest, int(p.stem.split("-")[1]))
-                    except (IndexError, ValueError):
-                        continue
-            except OSError:
-                pass
-            _CALL_COUNTERS[key] = highest
+            _CALL_COUNTERS[key] = _scan_highest_seq(rd)
         n = _CALL_COUNTERS[key] + 1
+        _CALL_COUNTERS[key] = n
+        return n
+
+
+def _bump_call_seq(rd: Path) -> int:
+    """Collision recovery (C0.4): another PROCESS published the seq this
+    process's counter allocated — the threading.Lock can't see it. Resync
+    from disk under the counter lock and claim the number after both views.
+    """
+    key = str(rd)
+    with _CALL_LOCK:
+        n = max(_scan_highest_seq(rd), _CALL_COUNTERS.get(key, 0)) + 1
         _CALL_COUNTERS[key] = n
         return n
 
@@ -1561,9 +1603,25 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             "error": str(error)[:500] if error else "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })
-        out = calls / f"call-{seq:05d}.json"
-        out.write_text(json.dumps(rec, default=str))
-        return out
+        # Exclusive-create publication (C0.4): write-once is enforced, not
+        # conventional. Two processes sharing a run dir can allocate the
+        # same seq (the counter is process-local); O_EXCL makes the loser
+        # land on the next free number instead of overwriting the winner.
+        payload = json.dumps(rec, default=str)
+        for _ in range(10):  # bounded — capture must never block the call
+            out = calls / f"call-{seq:05d}.json"
+            try:
+                fd = os.open(str(out), os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                             0o666)
+            except FileExistsError:
+                seq = _bump_call_seq(Path(rd))
+                rec["seq"] = seq
+                payload = json.dumps(rec, default=str)
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            return out
+        return None
     except Exception:
         return None
 
