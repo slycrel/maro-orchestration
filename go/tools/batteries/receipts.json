@@ -1,0 +1,1039 @@
+{
+  "packages": {
+    "default": [
+      "./internal/receipts/"
+    ]
+  },
+  "mutations": [
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-threshold-is-exclusive",
+      "old": "\tif len(r) <= limit {",
+      "new": "\tif len(r) < limit {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-tail-is-a-different-width",
+      "old": "\ttail := 40",
+      "new": "\ttail := 39"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-head-reserve-changes",
+      "old": "\thead := limit - tail - 24",
+      "new": "\thead := limit - tail - 23"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-head-floor-is-gone",
+      "old": "\tif head < 20 {\n\t\thead = 20\n\t}",
+      "new": "\tif head < 0 {\n\t\thead = 0\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-cut-is-unmarked",
+      "old": "\treturn string(r[:hi]) + \" \u2026[+\" + strconv.Itoa(len(r)-head-tail) +\n\t\t\" chars]\u2026 \" + string(r[lo:])",
+      "new": "\treturn string(r[:hi]) + string(r[lo:])"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-count-uses-the-clamped-head",
+      "old": "strconv.Itoa(len(r)-head-tail)",
+      "new": "strconv.Itoa(len(r)-hi-tail)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-head-clamp-is-gone",
+      "old": "\tif hi > len(r) {\n\t\thi = len(r)\n\t}",
+      "new": "\tif false {\n\t\thi = len(r)\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-tail-clamp-is-gone",
+      "old": "\tif lo < 0 {\n\t\tlo = 0\n\t}",
+      "new": "\tif false {\n\t\tlo = 0\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clip-counts-bytes-not-runes",
+      "old": "\tr := []rune(text)\n\tif len(r) <= limit {",
+      "new": "\tr := []rune(string([]byte(text)))\n\tif len(text) <= limit {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-fence-run-is-not-mangled",
+      "old": "\treturn strings.ReplaceAll(text, \"<<<\", \"<< <\")",
+      "new": "\treturn text"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-fence-replacement-still-closes",
+      "old": "\"<<<\", \"<< <\")",
+      "new": "\"<<<\", \"<<<\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "only-the-first-fence-run-is-mangled",
+      "old": "\treturn strings.ReplaceAll(text, ",
+      "new": "\treturn strings.Replace(text, "
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-display-does-not-flatten-newlines",
+      "old": "\t\tstrings.ReplaceAll(strings.ReplaceAll(s, \"\\r\", \" \"), \"\\n\", \" \"))",
+      "new": "\t\tstrings.ReplaceAll(s, \"\\r\", \" \"))"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-display-does-not-flatten-returns",
+      "old": "strings.ReplaceAll(strings.ReplaceAll(s, \"\\r\", \" \"), \"\\n\", \" \")",
+      "new": "strings.ReplaceAll(s, \"\\n\", \" \")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-display-does-not-neutralize",
+      "old": "\ts := pyval.Str(text)\n\treturn NeutralizeFenceText(",
+      "new": "\ts := pyval.Str(text)\n\treturn ("
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-display-drops-the-str-coercion",
+      "old": "\ts := pyval.Str(text)",
+      "new": "\ts, _ := text.(string)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-cap-screen-accepts-zero",
+      "old": "\tif !ok || capN <= 0 {",
+      "new": "\tif !ok || capN < 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-cap-screen-accepts-any-type",
+      "old": "\tif !ok || capN <= 0 {",
+      "new": "\tif capN <= 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-bool-cap-is-refused",
+      "old": "\tcase bool:\n\t\tif t {\n\t\t\treturn 1, true\n\t\t}\n\t\treturn 0, true",
+      "new": "\tcase bool:\n\t\tif t {\n\t\t\treturn 1, false\n\t\t}\n\t\treturn 0, false"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-true-cap-collects-two",
+      "old": "\t\tif t {\n\t\t\treturn 1, true\n\t\t}",
+      "new": "\t\tif t {\n\t\t\treturn 2, true\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-float-cap-is-accepted",
+      "old": "\t\tif strings.ContainsAny(string(t), \".eE\") {\n\t\t\treturn 0, false\n\t\t}",
+      "new": "\t\tif false {\n\t\t\treturn 0, false\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-run-dir-type-screen-is-gone",
+      "old": "\tdir, isStr := runDir.(string)\n\tif !isStr {",
+      "new": "\tdir, isStr := runDir.(string)\n\tif false && !isStr {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-glob-looks-in-the-run-dir-itself",
+      "old": "\tcalls, err := globCalls(filepath.Join(pypath.Str(dir), \"build\", \"calls\"),",
+      "new": "\tcalls, err := globCalls(filepath.Join(pypath.Str(dir)),"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-scan-bound-has-no-overflow-slot",
+      "old": "\t\tMaxScannedFiles+1)",
+      "new": "\t\tMaxScannedFiles)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-scan-overflow-is-not-flagged",
+      "old": "\tif len(calls) > MaxScannedFiles {\n\t\tcalls = calls[:MaxScannedFiles]\n\t\ttruncated = true",
+      "new": "\tif len(calls) > MaxScannedFiles {\n\t\tcalls = calls[:MaxScannedFiles]\n\t\ttruncated = false"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-scan-overflow-is-not-trimmed",
+      "old": "\t\tcalls = calls[:MaxScannedFiles]\n\t\ttruncated = true",
+      "new": "\t\ttruncated = true"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-discovered-files-are-not-sorted",
+      "old": "\tsort.SliceStable(calls, func(i, j int) bool {\n\t\treturn pypath.FSLess(calls[i], calls[j])\n\t})",
+      "new": "\tsort.SliceStable(calls, func(i, j int) bool {\n\t\treturn false\n\t})"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-file-sort-is-reversed",
+      "old": "\t\treturn pypath.FSLess(calls[i], calls[j])",
+      "new": "\t\treturn pypath.FSLess(calls[j], calls[i])"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-glob-pattern-matches-everything",
+      "old": "\t\tif pytext.FnMatch(n, \"call-*.json\") {",
+      "new": "\t\tif true {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-glob-pattern-is-anchored-loosely",
+      "old": "\"call-*.json\"",
+      "new": "\"call-*\""
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-discovery-limit-is-not-enforced",
+      "old": "\t\tif len(out) >= limit {\n\t\t\tbreak\n\t\t}",
+      "new": "\t\tif false {\n\t\t\tbreak\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-discovery-limit-counts-scanned-not-kept",
+      "old": "\t\tif len(out) >= limit {\n\t\t\tbreak\n\t\t}\n\t\tif pytext.FnMatch(n, \"call-*.json\") {\n\t\t\tout = append(out, n)\n\t\t}",
+      "new": "\t\tif pytext.FnMatch(n, \"call-*.json\") {\n\t\t\tout = append(out, n)\n\t\t}\n\t\tif len(out) >= limit {\n\t\t\tbreak\n\t\t}",
+      "equivalent": "The two orderings differ only when the last name kept is also the limit-th kept, and both then stop with the same `out`. Discovery order is the directory's, so a fixture cannot pin which entry that is."
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-directory-listing-is-sorted",
+      "old": "\tnames, err := fh.Readdirnames(-1)",
+      "new": "\tnames, err := fh.Readdirnames(0)",
+      "equivalent": "Readdirnames(-1) and Readdirnames(0) both mean \"everything\"; only a positive n bounds the read. The order is the directory's either way."
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-calls-directory-is-an-error",
+      "old": "\t\treturn nil, nil\n\t}\n\tdefer fh.Close()",
+      "new": "\t\treturn nil, &pyval.PyErr{Class: \"OSError\", Msg: \"no dir\"}\n\t}\n\tdefer fh.Close()"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-size-screen-is-inclusive",
+      "old": "\tif err != nil || fi.Size() > MaxFileBytes {",
+      "new": "\tif err != nil || fi.Size() >= MaxFileBytes {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-size-screen-never-runs",
+      "old": "\tif err != nil || fi.Size() > MaxFileBytes {",
+      "new": "\tif err != nil {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-utf8-decode-is-skipped",
+      "old": "\tif !utf8.Valid(raw) {\n\t\treturn nil, false\n\t}",
+      "new": "\tif false {\n\t\treturn nil, false\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-unreadable-file-is-not-counted",
+      "old": "\t\tdata, ok := readCall(full)\n\t\tif !ok {\n\t\t\tunreadable++",
+      "new": "\t\tdata, ok := readCall(full)\n\t\tif !ok {\n\t\t\tunreadable += 0"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-unreadable-file-does-not-stop-the-record",
+      "old": "\t\tif !ok {\n\t\t\tunreadable++\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif !ok {\n\t\t\tunreadable++\n\t\t\tbreak\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-list-tool-events-is-silently-skipped",
+      "old": "\t\t\t\t\tunreadable++\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t} else {\n\t\t\t\tunreadable++\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t} else {\n\t\t\t\tunreadable++\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-tool-events-key-is-not-counted",
+      "old": "\t\t\t} else {\n\t\t\t\tunreadable++\n\t\t\t\tcontinue\n\t\t\t}\n\t\t} else {",
+      "new": "\t\t\t} else {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t} else {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-mapping-record-is-not-counted",
+      "old": "\t\t\t// = None, which is not a list either.\n\t\t\tunreadable++\n\t\t\tcontinue",
+      "new": "\t\t\t// = None, which is not a list either.\n\t\t\tcontinue"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-corrupt-record-still-counts-as-readable",
+      "old": "\t\treadableCalls++",
+      "new": "\t\treadableCalls += 0"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-error-stamped-record-counts-as-capturing",
+      "old": "\t\tif inCapture && !pyval.Truthy(errFlag) {",
+      "new": "\t\tif inCapture {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "every-record-counts-as-capturing",
+      "old": "\t\tif inCapture && !pyval.Truthy(errFlag) {",
+      "new": "\t\tif !pyval.Truthy(errFlag) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-flag-is-read-by-presence",
+      "old": "\t\terrFlag, _ := obj.Get(\"error\")",
+      "new": "\t\t_, errFlag := obj.Get(\"error\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-backend-key-is-misspelled",
+      "old": "\t\tbackend, _ := obj.Get(\"backend\")",
+      "new": "\t\tbackend, _ := obj.Get(\"Backend\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-unhashable-backend-answers-false-instead-of-raising",
+      "old": "\t\tinCapture, herr := inFrozenSet(backend, captureBackends)\n\t\tif herr != nil {\n\t\t\treturn nil, herr\n\t\t}",
+      "new": "\t\tinCapture, herr := inFrozenSet(backend, captureBackends)\n\t\tif false && herr != nil {\n\t\t\treturn nil, herr\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-unhashable-tool-name-answers-false-instead-of-raising",
+      "old": "\t\t\tisShell, herr := inFrozenSet(evName, shellToolNames)\n\t\t\tif herr != nil {\n\t\t\t\treturn nil, herr\n\t\t\t}",
+      "new": "\t\t\tisShell, herr := inFrozenSet(evName, shellToolNames)\n\t\t\tif false && herr != nil {\n\t\t\t\treturn nil, herr\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-set-membership-accepts-unhashable-values",
+      "old": "\tcase nil, bool, string, json.Number, int, int64, float64:",
+      "new": "\tcase nil, bool, string, json.Number, int, int64, float64, []any, pyval.List, pyval.Obj:"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-unhashable-message-names-only-the-type",
+      "old": "\t\tMsg: fmt.Sprintf(\"cannot use '%s' as a set element \"+\n\t\t\t\"(unhashable type: '%s')\",\n\t\t\tpyval.TypeName(v), pyval.TypeName(v))}",
+      "new": "\t\tMsg: fmt.Sprintf(\"unhashable type: '%s'\", pyval.TypeName(v))}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-mapping-event-is-silently-dropped",
+      "old": "\t\t\t\tmalformed++\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tevName, _ := ev.Get(\"name\")",
+      "new": "\t\t\t\tcontinue\n\t\t\t}\n\t\t\tevName, _ := ev.Get(\"name\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-nameless-event-is-not-counted",
+      "old": "\t\t\t\tif evName == nil {\n\t\t\t\t\tmalformed++\n\t\t\t\t}",
+      "new": "\t\t\t\tif false {\n\t\t\t\t\tmalformed++\n\t\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "every-non-shell-event-is-counted-malformed",
+      "old": "\t\t\t\tif evName == nil {\n\t\t\t\t\tmalformed++\n\t\t\t\t}",
+      "new": "\t\t\t\tmalformed++"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-shell-tool-still-makes-a-row",
+      "old": "\t\t\tif !isShell {",
+      "new": "\t\t\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-shell-name-check-is-case-folded",
+      "old": "\t\t\tisShell, herr := inFrozenSet(evName, shellToolNames)",
+      "new": "\t\t\tisShell, herr := inFrozenSet(pytext.Lower(pyval.StrOrEmpty(evName)), shellToolNames)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-mapping-input-is-silently-skipped",
+      "old": "\t\t\tif inp != nil && !inpIsObj {\n\t\t\t\tmalformed++\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tif inp != nil && !inpIsObj {\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-null-input-is-counted-malformed",
+      "old": "\t\t\tif inp != nil && !inpIsObj {",
+      "new": "\t\t\tif !inpIsObj {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-string-command-is-silently-skipped",
+      "old": "\t\t\tif !cmdIsStr || pytext.Strip(cs) == \"\" {\n\t\t\t\tmalformed++\n\t\t\t\tcontinue\n\t\t\t}",
+      "new": "\t\t\tif !cmdIsStr || pytext.Strip(cs) == \"\" {\n\t\t\t\tcontinue\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-blank-command-still-makes-a-row",
+      "old": "\t\t\tif !cmdIsStr || pytext.Strip(cs) == \"\" {",
+      "new": "\t\t\tif !cmdIsStr {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-command-blankness-test-does-not-strip",
+      "old": "\t\t\tif !cmdIsStr || pytext.Strip(cs) == \"\" {",
+      "new": "\t\t\tif !cmdIsStr || cs == \"\" {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-stored-command-is-not-stripped",
+      "old": "\t\t\t\t{Key: \"command\", Val: pytext.Strip(cs)},",
+      "new": "\t\t\t\t{Key: \"command\", Val: cs},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-string-output-is-refused",
+      "old": "\t\t\toutStr, _ := out.(string)",
+      "new": "\t\t\toutStr := pyval.Str(out)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-output-head-is-not-clipped",
+      "old": "{Key: \"output_head\", Val: pyval.Clip(outStr, OutputHeadChars)},",
+      "new": "{Key: \"output_head\", Val: outStr},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-output-head-is-one-shorter",
+      "old": "pyval.Clip(outStr, OutputHeadChars)",
+      "new": "pyval.Clip(outStr, OutputHeadChars-1)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clipped-flag-is-inclusive",
+      "old": "\t\t\t\t\tVal: utf8.RuneCountInString(outStr) > OutputHeadChars},",
+      "new": "\t\t\t\t\tVal: utf8.RuneCountInString(outStr) >= OutputHeadChars},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-clipped-flag-counts-bytes",
+      "old": "\t\t\t\t\tVal: utf8.RuneCountInString(outStr) > OutputHeadChars},",
+      "new": "\t\t\t\t\tVal: len(outStr) > OutputHeadChars},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-is-error-defaults-true",
+      "old": "\t\t\tisErr, found := ev.Get(\"is_error\")\n\t\t\tif !found {\n\t\t\t\tisErr = false\n\t\t\t}",
+      "new": "\t\t\tisErr, found := ev.Get(\"is_error\")\n\t\t\tif !found {\n\t\t\t\tisErr = true\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-is-error-flag-is-not-coerced",
+      "old": "{Key: \"is_error\", Val: pyval.Truthy(isErr)},",
+      "new": "{Key: \"is_error\", Val: isErr},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-source-call-name-is-dropped",
+      "old": "\t\t\t\t{Key: \"call\", Val: name},",
+      "new": "\t\t\t\t{Key: \"call\", Val: \"\"},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-file-level-cap-never-fires",
+      "old": "\t\tif len(rows) >= capN {\n\t\t\ttruncated = true\n\t\t\tbreak\n\t\t}\n\t\tfull := filepath.Join",
+      "new": "\t\tif false {\n\t\t\ttruncated = true\n\t\t\tbreak\n\t\t}\n\t\tfull := filepath.Join"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-file-level-cap-is-not-flagged",
+      "old": "\t\tif len(rows) >= capN {\n\t\t\ttruncated = true\n\t\t\tbreak\n\t\t}\n\t\tfull := filepath.Join",
+      "new": "\t\tif len(rows) >= capN {\n\t\t\tbreak\n\t\t}\n\t\tfull := filepath.Join"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-event-level-cap-never-fires",
+      "old": "\t\t\tif len(rows) >= capN {\n\t\t\t\ttruncated = true\n\t\t\t\tbreak\n\t\t\t}",
+      "new": "\t\t\tif false {\n\t\t\t\ttruncated = true\n\t\t\t\tbreak\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-event-level-cap-is-not-flagged",
+      "old": "\t\t\tif len(rows) >= capN {\n\t\t\t\ttruncated = true\n\t\t\t\tbreak\n\t\t\t}",
+      "new": "\t\t\tif len(rows) >= capN {\n\t\t\t\tbreak\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-event-cap-is-exclusive",
+      "old": "\t\t\tif len(rows) >= capN {",
+      "new": "\t\t\tif len(rows) > capN {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-early-return-reports-live-counts",
+      "old": "\t\t\t{Key: \"unreadable_files\", Val: 0},\n\t\t\t{Key: \"malformed_events\", Val: 0},\n\t\t\t{Key: \"truncated\", Val: false},\n\t\t\t{Key: \"readable_calls\", Val: 0},\n\t\t\t{Key: \"capture_calls\", Val: 0},",
+      "new": "\t\t\t{Key: \"unreadable_files\", Val: unreadable},\n\t\t\t{Key: \"malformed_events\", Val: malformed},\n\t\t\t{Key: \"truncated\", Val: truncated},\n\t\t\t{Key: \"readable_calls\", Val: readableCalls},\n\t\t\t{Key: \"capture_calls\", Val: captureCalls},",
+      "equivalent": "The empty() closure is only ever called before the scan loop, so every counter it could read is still zero. The literals and the variables name the same six values at every call site."
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-result-key-order-changes",
+      "old": "\t\t{Key: \"rows\", Val: rows},\n\t\t{Key: \"unreadable_files\", Val: unreadable},",
+      "new": "\t\t{Key: \"unreadable_files\", Val: unreadable},\n\t\t{Key: \"rows\", Val: rows},"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-result-key-is-misspelled",
+      "old": "\t\t{Key: \"capture_calls\", Val: captureCalls},\n\t}, nil\n}",
+      "new": "\t\t{Key: \"captured_calls\", Val: captureCalls},\n\t}, nil\n}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-slash-alternative-is-tried-second",
+      "old": "\t\tif n := matchSlashRun(r, i); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti += n\n\t\t\tcontinue\n\t\t}\n\t\tif n := matchDottedName(r, i); n > 0 {",
+      "new": "\t\tif n := matchDottedName(r, i); n > 0 {\n\t\t\tout = append(out, string(r[i:i+n]))\n\t\t\ti += n\n\t\t\tcontinue\n\t\t}\n\t\tif n := matchSlashRun(r, i); n > 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-failed-position-skips-the-run",
+      "old": "\t\ti++\n\t}\n\treturn out\n}",
+      "new": "\t\ti += 2\n\t}\n\treturn out\n}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-slash-run-needs-no-trailing-character",
+      "old": "\tfor k := j - 2; k >= i; k-- {",
+      "new": "\tfor k := j - 1; k >= i; k-- {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-slash-run-may-start-at-the-slash",
+      "old": "\tfor k := j - 2; k >= i; k-- {\n\t\tif r[k] == '/' {\n\t\t\treturn j - i\n\t\t}\n\t}\n\treturn 0",
+      "new": "\tfor k := j - 2; k > i; k-- {\n\t\tif r[k] == '/' {\n\t\t\treturn j - i\n\t\t}\n\t}\n\treturn 0"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-empty-slash-run-is-a-match",
+      "old": "\tif j == i {\n\t\treturn 0\n\t}",
+      "new": "\tif false {\n\t\treturn 0\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-path-class-excludes-the-dash",
+      "old": "\treturn pytext.IsWordChar(c) || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn pytext.IsWordChar(c) || c == '.' || c == '/'"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-path-class-excludes-the-dot",
+      "old": "\treturn pytext.IsWordChar(c) || c == '.' || c == '/' || c == '-'",
+      "new": "\treturn pytext.IsWordChar(c) || c == '/' || c == '-'"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-word-class-is-ascii-only",
+      "old": "\treturn pytext.IsWordChar(c) || c == '.'",
+      "new": "\treturn (c < 128 && pytext.IsWordChar(c)) || c == '.'"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-dotted-name-needs-no-leading-boundary",
+      "old": "\tif !wordBoundaryAt(r, i) {\n\t\treturn 0\n\t}",
+      "new": "\tif false {\n\t\treturn 0\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-dotted-name-needs-no-trailing-boundary",
+      "old": "\t\tif wordBoundaryAt(r, end) {\n\t\t\treturn end - i\n\t\t}",
+      "new": "\t\treturn end - i"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-dotted-name-class-excludes-the-dash",
+      "old": "\tfor j < len(r) && (pytext.IsWordChar(r[j]) || r[j] == '-') {",
+      "new": "\tfor j < len(r) && pytext.IsWordChar(r[j]) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-dotted-name-may-be-empty",
+      "old": "\tif j == i || j >= len(r) || r[j] != '.' {",
+      "new": "\tif j >= len(r) || r[j] != '.' {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-extension-alternatives-are-tried-longest-first",
+      "old": "\tfor _, ext := range pathTokenExts {",
+      "new": "\tfor _, ext := range []string{\"jsonl\", \"json\", \"py\", \"md\", \"txt\", \"sh\", \"yml\", \"yaml\", \"html\"} {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-extension-match-is-a-prefix-test",
+      "old": "\t\tif end > len(r) || string(r[j+1:end]) != ext {\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tif end > len(r) {\n\t\t\tcontinue\n\t\t}\n\t\tif !strings.HasPrefix(string(r[j+1:]), ext) {\n\t\t\tcontinue\n\t\t}",
+      "equivalent": "`string(r[j+1:end]) != ext` with end = j+1+len(ext) IS a prefix test at j+1, spelled with the bound checked first. The rewrite reorders the same two conditions."
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-boundary-treats-the-ends-as-word-characters",
+      "old": "\tbefore := i > 0 && pytext.IsWordChar(r[i-1])\n\tafter := i < len(r) && pytext.IsWordChar(r[i])",
+      "new": "\tbefore := i <= 0 || pytext.IsWordChar(r[i-1])\n\tafter := i >= len(r) || pytext.IsWordChar(r[i])"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-boundary-is-a-conjunction",
+      "old": "\treturn before != after",
+      "new": "\treturn before || after"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-basename-split-keeps-the-path",
+      "old": "\t\t\tif k := strings.LastIndex(tok, \"/\"); k >= 0 {\n\t\t\t\tbase = tok[k+1:]\n\t\t\t}",
+      "new": "\t\t\tif false {\n\t\t\t\tbase = tok\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-basename-split-takes-the-first-segment",
+      "old": "\t\t\tif k := strings.LastIndex(tok, \"/\"); k >= 0 {",
+      "new": "\t\t\tif k := strings.Index(tok, \"/\"); k >= 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-empty-basename-is-recorded",
+      "old": "\t\t\tif base != \"\" && !containsStr(seen, base) {",
+      "new": "\t\t\tif !containsStr(seen, base) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "basenames-are-not-deduped",
+      "old": "\t\t\tif base != \"\" && !containsStr(seen, base) {",
+      "new": "\t\t\tif base != \"\" {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-basename-cap-is-off-by-one",
+      "old": "\tif len(seen) > 12 {\n\t\treturn seen[:12], nil\n\t}",
+      "new": "\tif len(seen) > 12 {\n\t\treturn seen[:11], nil\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-basename-cap-is-gone",
+      "old": "\tif len(seen) > 12 {\n\t\treturn seen[:12], nil\n\t}",
+      "new": "\tif false {\n\t\treturn seen[:12], nil\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-description-is-not-scanned",
+      "old": "\t\tblob := getOrEmpty(r, \"command\") + \" \" + getOrEmpty(r, \"description\")",
+      "new": "\t\tblob := getOrEmpty(r, \"command\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-command-is-not-scanned",
+      "old": "\t\tblob := getOrEmpty(r, \"command\") + \" \" + getOrEmpty(r, \"description\")",
+      "new": "\t\tblob := getOrEmpty(r, \"description\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-two-fields-are-joined-without-a-gap",
+      "old": "\"command\") + \" \" + getOrEmpty(r, \"description\")",
+      "new": "\"command\") + getOrEmpty(r, \"description\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-present-none-renders-as-empty",
+      "old": "\tv, found := o.Get(key)\n\tif !found {\n\t\treturn \"\"\n\t}\n\treturn pyval.Str(v)",
+      "new": "\tv, found := o.Get(key)\n\tif !found || v == nil {\n\t\treturn \"\"\n\t}\n\treturn pyval.Str(v)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-mapping-check-result-raises",
+      "old": "\t\tr, isObj := rAny.(pyval.Obj)\n\t\tif !isObj {\n\t\t\tcontinue\n\t\t}",
+      "new": "\t\tr, isObj := rAny.(pyval.Obj)\n\t\tif !isObj {\n\t\t\treturn nil, notIterable(rAny)\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-falsy-argument-is-still-iterated",
+      "old": "\tif !pyval.Truthy(v) {\n\t\treturn nil, nil\n\t}\n\tswitch t := v.(type) {\n\tcase []any:",
+      "new": "\tif v == nil {\n\t\treturn nil, nil\n\t}\n\tswitch t := v.(type) {\n\tcase []any:"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "iterating-a-mapping-yields-values",
+      "old": "\t\t\tout = append(out, f.Key)",
+      "new": "\t\t\tout = append(out, f.Val)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "iterating-a-string-is-refused",
+      "old": "\tcase string:\n\t\tout := make([]any, 0, len(t))\n\t\tfor _, c := range t {\n\t\t\tout = append(out, string(c))\n\t\t}\n\t\treturn out, nil\n\t}",
+      "new": "\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-length-of-a-string-is-in-bytes",
+      "old": "\tcase string:\n\t\treturn utf8.RuneCountInString(t), nil",
+      "new": "\tcase string:\n\t\treturn len(t), nil"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-length-of-a-non-sized-value-is-zero",
+      "old": "\treturn 0, &pyval.PyErr{Class: \"TypeError\",\n\t\tMsg: fmt.Sprintf(\"object of type %s has no len()\",\n\t\t\tpyval.Repr(pyval.TypeName(v)))}",
+      "new": "\treturn 0, nil"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "an-empty-record-still-renders",
+      "old": "\tif !pyval.Truthy(rowsAny) {\n\t\treturn \"\", nil\n\t}",
+      "new": "\tif rowsAny == nil {\n\t\treturn \"\", nil\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-length-is-taken-after-the-iteration",
+      "old": "\tnRows, err := pyLen(rowsAny)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\trows, err := pyIter(rowsAny)\n\tif err != nil {\n\t\treturn \"\", err\n\t}",
+      "new": "\trows, err := pyIter(rowsAny)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\tnRows, err := pyLen(rowsAny)\n\tif err != nil {\n\t\treturn \"\", err\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-unreadable-count-is-not-reported",
+      "old": "\tif v, _ := loaded.Get(\"unreadable_files\"); pyval.Truthy(v) {\n\t\tincomplete = append(incomplete,\n\t\t\tpyval.Str(v)+\" call file(s) unreadable\")\n\t}",
+      "new": "\tif v, _ := loaded.Get(\"unreadable_files\"); false && pyval.Truthy(v) {\n\t\tincomplete = append(incomplete,\n\t\t\tpyval.Str(v)+\" call file(s) unreadable\")\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-malformed-count-is-not-reported",
+      "old": "\tif v, _ := loaded.Get(\"malformed_events\"); pyval.Truthy(v) {",
+      "new": "\tif v, _ := loaded.Get(\"malformed_events\"); false && pyval.Truthy(v) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-cap-is-not-reported",
+      "old": "\tif v, _ := loaded.Get(\"truncated\"); pyval.Truthy(v) {",
+      "new": "\tif v, _ := loaded.Get(\"truncated\"); false && pyval.Truthy(v) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "blind-backends-are-not-reported",
+      "old": "\tblind := readable - capture\n\tif blind > 0 {",
+      "new": "\tblind := readable - capture\n\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-blind-count-is-inclusive-of-zero",
+      "old": "\tblind := readable - capture\n\tif blind > 0 {",
+      "new": "\tblind := readable - capture\n\tif blind >= 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-blind-count-is-reversed",
+      "old": "\tblind := readable - capture",
+      "new": "\tblind := capture - readable"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-blind-line-prints-the-coerced-count",
+      "old": "\t\t\tpyval.Str(rawReadable)+\" call(s) rode non-capturing backends \"+",
+      "new": "\t\t\tstrconv.Itoa(readable)+\" call(s) rode non-capturing backends \"+"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-readable-count-is-not-defaulted",
+      "old": "\t\trawReadable, found := loaded.Get(\"readable_calls\")\n\t\tif !found {\n\t\t\trawReadable = 0\n\t\t}",
+      "new": "\t\trawReadable, _ := loaded.Get(\"readable_calls\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-aggregate-is-not-reported",
+      "old": "\tif errTotal != 0 {",
+      "new": "\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-aggregate-counts-the-listing",
+      "old": "\t\t\tstrconv.Itoa(len(rows))+\" recorded command(s): \"+",
+      "new": "\t\t\tstrconv.Itoa(MaxListedReceipts)+\" recorded command(s): \"+"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-runner-listing-cap-is-off-by-one",
+      "old": "\t\tif len(shown) > MaxListedReceipts {\n\t\t\tshown = shown[:MaxListedReceipts]\n\t\t}",
+      "new": "\t\tif len(shown) > MaxListedReceipts {\n\t\t\tshown = shown[:MaxListedReceipts-1]\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-runner-listing-is-not-capped",
+      "old": "\t\tif len(shown) > MaxListedReceipts {\n\t\t\tshown = shown[:MaxListedReceipts]\n\t\t}",
+      "new": "\t\tif false {\n\t\t\tshown = shown[:MaxListedReceipts]\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-runner-listing-is-not-error-first",
+      "old": "\t\tshown := errorsFirst(process)",
+      "new": "\t\tshown := process"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-showing-suffix-is-always-added",
+      "old": "\t\tif len(process) > len(shown) {",
+      "new": "\t\tif true {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-sample-listing-is-not-error-first",
+      "old": "\t\tsample := errorsFirst(rows)",
+      "new": "\t\tsample := rows"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-sample-listing-is-not-capped",
+      "old": "\t\tif len(sample) > MaxListedReceipts {\n\t\t\tsample = sample[:MaxListedReceipts]\n\t\t}",
+      "new": "\t\tif false {\n\t\t\tsample = sample[:MaxListedReceipts]\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-no-match-wording-ignores-incompleteness",
+      "old": "\t\tif len(incomplete) > 0 {\n\t\t\tlines = append(lines, \"Commands matching KNOWN test/build \"+\n\t\t\t\t\"runner patterns: none among the READABLE records (record \"+",
+      "new": "\t\tif false {\n\t\t\tlines = append(lines, \"Commands matching KNOWN test/build \"+\n\t\t\t\t\"runner patterns: none among the READABLE records (record \"+"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-no-match-wording-is-always-hedged",
+      "old": "\t\tif len(incomplete) > 0 {\n\t\t\tlines = append(lines, \"Commands matching KNOWN test/build \"+\n\t\t\t\t\"runner patterns: none among the READABLE records (record \"+",
+      "new": "\t\tif true {\n\t\t\tlines = append(lines, \"Commands matching KNOWN test/build \"+\n\t\t\t\t\"runner patterns: none among the READABLE records (record \"+"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-flag-is-not-shown-on-a-runner-line",
+      "old": "\t\t\tflag := \"\"\n\t\t\tif pyval.Truthy(flagV) {\n\t\t\t\tflag = \" [HARNESS FLAGGED ERROR]\"\n\t\t\t}\n\t\t\tcmd, err := rowItem(rAny, \"command\")\n\t\t\tif err != nil {\n\t\t\t\treturn \"\", err\n\t\t\t}\n\t\t\tlines = append(lines, \"  $ \"+clip(display(cmd), 160)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")",
+      "new": "\t\t\tflag := \"\"\n\t\t\tif false && pyval.Truthy(flagV) {\n\t\t\t\tflag = \" [HARNESS FLAGGED ERROR]\"\n\t\t\t}\n\t\t\tcmd, err := rowItem(rAny, \"command\")\n\t\t\tif err != nil {\n\t\t\t\treturn \"\", err\n\t\t\t}\n\t\t\tlines = append(lines, \"  $ \"+clip(display(cmd), 160)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-command-line-is-not-clipped",
+      "old": "\t\t\tlines = append(lines, \"  $ \"+clip(display(cmd), 160)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")",
+      "new": "\t\t\tlines = append(lines, \"  $ \"+display(cmd)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-command-line-is-clipped-at-the-provenance-width",
+      "old": "\t\t\tlines = append(lines, \"  $ \"+clip(display(cmd), 160)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")",
+      "new": "\t\t\tlines = append(lines, \"  $ \"+clip(display(cmd), 120)+flag)\n\t\t\thead, err := rowItem(rAny, \"output_head\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-output-line-is-always-shown",
+      "old": "\t\t\tif pyval.Truthy(head) {",
+      "new": "\t\t\tif true {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-output-continuation-is-never-marked",
+      "old": "\t\t\t\tif pyval.Truthy(clipped) {\n\t\t\t\t\tmore = \" \u2026[output continues]\"\n\t\t\t\t}",
+      "new": "\t\t\t\tif false {\n\t\t\t\t\tmore = \" \u2026[output continues]\"\n\t\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-output-head-is-read-with-a-default",
+      "old": "\t\t\thead, err := rowItem(rAny, \"output_head\")",
+      "new": "\t\t\thead, err := rowGet(rAny, \"output_head\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-command-is-read-with-a-default",
+      "old": "\t\tcmd, err := rowItem(rAny, \"command\")\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\tcs, isStr := cmd.(string)",
+      "new": "\t\tcmd, err := rowGet(rAny, \"command\")\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\tcs, isStr := cmd.(string)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-string-command-does-not-raise",
+      "old": "\t\tif !isStr {\n\t\t\treturn \"\", expectedString(cmd)\n\t\t}",
+      "new": "\t\tif !isStr {\n\t\t\tcontinue\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-aggregate-uses-a-subscript",
+      "old": "\t\tv, err := rowGet(rAny, \"is_error\")\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\tif pyval.Truthy(v) {\n\t\t\terrTotal++",
+      "new": "\t\tv, err := rowItem(rAny, \"is_error\")\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\tif pyval.Truthy(v) {\n\t\t\terrTotal++"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "provenance-is-not-reported",
+      "old": "\tif len(bases) > 0 {",
+      "new": "\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "provenance-lists-untouched-artifacts",
+      "old": "\t\t\tif len(hits) > 0 {",
+      "new": "\t\t\tif true {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-provenance-example-is-the-last-hit",
+      "old": "\t\t\t\tfirst, err := rowItem(hits[0], \"command\")",
+      "new": "\t\t\t\tfirst, err := rowItem(hits[len(hits)-1], \"command\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-provenance-listing-is-not-capped",
+      "old": "\t\t\tif len(touched) > MaxListedReceipts {\n\t\t\t\ttouched = touched[:MaxListedReceipts]\n\t\t\t}",
+      "new": "\t\t\tif false {\n\t\t\t\ttouched = touched[:MaxListedReceipts]\n\t\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-provenance-header-is-emitted-when-empty",
+      "old": "\t\tif len(touched) > 0 {\n\t\t\tlines = append(lines, \"Checked-artifact provenance (commands \"+",
+      "new": "\t\tif true {\n\t\t\tlines = append(lines, \"Checked-artifact provenance (commands \"+"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-is-not-neutralized",
+      "old": "\ttext := NeutralizeFenceText(strings.Join(lines, \"\\n\"))",
+      "new": "\ttext := strings.Join(lines, \"\\n\")"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-is-joined-without-newlines",
+      "old": "strings.Join(lines, \"\\n\"))",
+      "new": "strings.Join(lines, \" \"))"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-cap-is-not-enforced",
+      "old": "\tif utf8.RuneCountInString(text) > MaxEvidenceChars {",
+      "new": "\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-cap-does-not-reserve-the-marker",
+      "old": "\t\ttext = pyval.Clip(text,\n\t\t\tMaxEvidenceChars-utf8.RuneCountInString(marker)) + marker",
+      "new": "\t\ttext = pyval.Clip(text, MaxEvidenceChars) + marker"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-cap-counts-bytes",
+      "old": "\tif utf8.RuneCountInString(text) > MaxEvidenceChars {",
+      "new": "\tif len(text) > MaxEvidenceChars {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-partition-is-not-stable",
+      "old": "\tsort.SliceStable(out, func(i, j int) bool {",
+      "new": "\tsort.Slice(out, func(i, j int) bool {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-partition-is-inverted",
+      "old": "\t\treturn !key(out[i]) && key(out[j])",
+      "new": "\t\treturn key(out[i]) && !key(out[j])"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-error-partition-sorts-in-place",
+      "old": "\tout := make([]any, len(rows))\n\tcopy(out, rows)",
+      "new": "\tout := rows"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-non-mapping-row-answers-none",
+      "old": "\t\treturn nil, &pyval.PyErr{Class: \"AttributeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object has no attribute 'get'\",\n\t\t\t\tpyval.TypeName(r))}",
+      "new": "\t\treturn nil, nil"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-missing-attribute-names-the-wrong-method",
+      "old": "\"'%s' object has no attribute 'get'\"",
+      "new": "\"'%s' object has no attribute '__getitem__'\""
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-subscript-of-a-non-mapping-is-an-attribute-error",
+      "old": "\t\treturn nil, &pyval.PyErr{Class: \"TypeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object is not subscriptable\",\n\t\t\t\tpyval.TypeName(r))}",
+      "new": "\t\treturn nil, &pyval.PyErr{Class: \"AttributeError\",\n\t\t\tMsg: fmt.Sprintf(\"'%s' object is not subscriptable\",\n\t\t\t\tpyval.TypeName(r))}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-key-answers-none",
+      "old": "\tv, found := o.Get(key)\n\tif !found {\n\t\treturn nil, &pyval.PyErr{Class: \"KeyError\",\n\t\t\tMsg: pytext.Repr(key)}\n\t}",
+      "new": "\tv, _ := o.Get(key)\n\tif false {\n\t\treturn nil, &pyval.PyErr{Class: \"KeyError\",\n\t\t\tMsg: pytext.Repr(key)}\n\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-key-error-is-not-repred",
+      "old": "\t\t\tMsg: pytext.Repr(key)}",
+      "new": "\t\t\tMsg: key}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-run-dir-error-is-propagated",
+      "old": "\t\tif v, err := d.CurrentRunDir(); err == nil {\n\t\t\trunDir = v\n\t\t}",
+      "new": "\t\tv, err := d.CurrentRunDir()\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\trunDir = v"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "a-missing-runs-module-is-not-handled",
+      "old": "\tif d.CurrentRunDir != nil {",
+      "new": "\tif true {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-partial-record-branch-checks-only-unreadable",
+      "old": "\t\tif pyval.Truthy(unreadable) || pyval.Truthy(malformed) ||\n\t\t\tpyval.Truthy(truncated) {",
+      "new": "\t\tif pyval.Truthy(unreadable) {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-partial-record-branch-never-fires",
+      "old": "\t\tif pyval.Truthy(unreadable) || pyval.Truthy(malformed) ||\n\t\t\tpyval.Truthy(truncated) {",
+      "new": "\t\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-record-mode-branch-never-fires",
+      "old": "\t\tif !pyval.Truthy(readable) {",
+      "new": "\t\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-capture-branch-never-fires",
+      "old": "\t\tif !pyval.Truthy(capture) {",
+      "new": "\t\tif false {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-partial-coverage-branch-never-fires",
+      "old": "\t\tblind := readable.(int) - capture.(int)\n\t\tif blind > 0 {",
+      "new": "\t\tblind := readable.(int) - capture.(int)\n\t\tif false && blind > 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-audit-partial-coverage-is-inclusive-of-zero",
+      "old": "\t\tblind := readable.(int) - capture.(int)\n\t\tif blind > 0 {",
+      "new": "\t\tblind := readable.(int) - capture.(int)\n\t\tif blind >= 0 {"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-audit-blind-count-is-reversed",
+      "old": "\t\tblind := readable.(int) - capture.(int)",
+      "new": "\t\tblind := capture.(int) - readable.(int)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-zero-execution-record-reads-as-missing-signal",
+      "old": "\t\treturn \"Harness execution receipts: RECORD PRESENT, ZERO \" +",
+      "new": "\t\treturn \"Harness execution receipts: UNAVAILABLE, ZERO \" +"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-digest-is-not-fenced",
+      "old": "\t\t\"<<<BEGIN HARNESS RECEIPTS>>>\\n\" +\n\t\tdigest +\n\t\t\"\\n<<<END HARNESS RECEIPTS>>>\", nil",
+      "new": "\t\tdigest, nil"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-audit-does-not-log-its-failure",
+      "old": "\t\tif d.Debug != nil {\n\t\t\td.Debug(\"receipt block failed (non-blocking): %s\", err.Error())\n\t\t}",
+      "new": "\t\tif false && d.Debug != nil {\n\t\t\td.Debug(\"receipt block failed (non-blocking): %s\", err.Error())\n\t\t}"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-audit-raises-instead-of-degrading",
+      "old": "\t\treturn \"Harness execution receipts: UNAVAILABLE (receipt read \" +\n\t\t\t\"failed) \u2014 treat as no signal, not as evidence of absence.\"",
+      "new": "\t\tpanic(err)"
+    },
+    {
+      "file": "internal/receipts/receipts.go",
+      "name": "the-audit-uses-the-default-cap",
+      "old": "\tloaded, err := LoadReceipts(runDir, MaxReceipts)",
+      "new": "\tloaded, err := LoadReceipts(runDir, 8)"
+    }
+  ]
+}

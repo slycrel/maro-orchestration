@@ -17259,3 +17259,175 @@ Neither guard was written for this tranche. Both are lenses that got
 CLOSED after firing twice, and this is what closed lenses are supposed to
 feel like — a failing test naming the rule, in the round where the
 mistake was made, instead of a reviewer noticing it three tranches later.
+
+## Phase O: three-valued honesty, and a matcher with no backtracker (2026-08-27)
+
+`src/execution_receipts.py` → `internal/receipts`. 487 lines of Python,
+stdlib only (`json`, `logging`, `re`, `pathlib`), four public surfaces:
+`load_receipts`, `render_receipt_evidence`, `audit_receipt_block`,
+`neutralize_fence_text`.
+
+The module turns a run's call-record files into evidence for the closure
+audit, and it is an argument about THREE-VALUED honesty. "The record
+shows process work", "the record shows NO process work", and "there is no
+record" are different answers, and a PARTIAL record — unreadable files, a
+capped collection, calls that rode a backend which relays no tool events —
+is a fourth that must never collapse into the second. Almost every count
+the loader keeps exists to stop that collapse: `unreadable_files`,
+`malformed_events`, `truncated`, `readable_calls`, `capture_calls`. None
+of them is decoration, and a screen that silently skips something is a
+defect here even when the visible digest is identical.
+
+Two consequences for the port. Everything degrades to empty output rather
+than raising, so the error paths ARE the behaviour rather than the edge
+case. And the counts are the contract, so most of the differential is
+about failure shapes: a file that will not parse, a record of the wrong
+shape, an event of the wrong type, a command that is not a string, a
+backend that relays nothing.
+
+### `_PATH_TOKEN` is the second hand-written matcher, and the proof is different
+
+Phase N's matcher was hand-written because Python's pattern had
+lookbehind. This one is hand-written for a different reason: the pattern
+has two `\b`, Python's `\b` is Unicode-aware where Go's is ASCII, and
+`pytext.WordStart`/`WordEnd` CONSUME the boundary character — which a
+`findall` over the matched TEXT cannot afford. So the boundaries have to
+be zero-width, and RE2 will not give me that.
+
+```
+[\w./-]*/[\w./-]+|\b[\w-]+\.(?:py|md|txt|json|jsonl|sh|yml|yaml|html)\b
+```
+
+Both alternatives happen to be decidable without a general backtracker,
+and the argument is worth writing down because it is what makes the
+hand-scan safe rather than merely convincing.
+
+ALTERNATIVE ONE has no boundary at all, and all three of its pieces draw
+from the SAME class. At a position `i` the reachable text is exactly the
+maximal run `R` of `[\w./-]` starting there: the greedy `*` takes all of
+`R`, backtracks to the last `/` leaving something for the `+`, and the
+`+` takes the remainder. So the match either IS `R` or does not exist,
+and it exists exactly when `R` contains a `/` with at least one character
+after it. One forward scan, one backward scan, no choice point.
+
+ALTERNATIVE TWO's only choice point is the extension, because `[\w-]`
+excludes `.`. Backtracking the `+` to a shorter run would require a `.`
+at a position that is by construction inside the run — impossible. So the
+name is the maximal `[\w-]` run and nothing else, and the only thing left
+to try is the extension list.
+
+That last part is where the ORDER of the extension list becomes
+load-bearing. `re` tries the alternatives left to right and takes the
+first that also clears the trailing `\b`, so `x.jsonl` matches `json`,
+fails the boundary against the `l`, and backtracks into `jsonl`. Sort
+that list and the port silently returns `x.json` for a `.jsonl` file.
+`pathTokenExts` is therefore a slice, not a set, with the reason at the
+declaration, a fixture on both sides of the prefix pair, and a guard test
+that derives the list FROM the upstream literal and compares it in order.
+
+### The dead-code question, answered the other way
+
+`audit_receipt_block` promises never to raise, and the handler that keeps
+that promise logs one `log.debug` line — the only place the reason
+survives. Writing the port with `checkResults []any` would have made that
+handler unreachable: `load_receipts` is the only producer of `loaded`, it
+writes all six keys on every path, and the row list it builds is all
+mappings. With a narrowed signature nothing can fail, the handler is dead
+code, and the Debug seam is decoration.
+
+That is a real temptation and it is the wrong call. The argument sounds
+like type safety and is actually the port quietly changing what the
+function is FOR. The contract is "never raises" precisely because the
+caller is quality-gate code handing over whatever it has; a signature
+that makes a bad argument unrepresentable does not make the caller
+correct, it just moves where the crash lands. `checkResults` is `any`,
+`pyIter` reproduces `for r in (X or [])` including the falsy shortcut
+(`0` is not a `TypeError` here but `5` is), and there is a scenario that
+drives an audit all the way into the handler and asserts the logged line.
+
+The same reasoning produced `pyLen`. `rows` is read in two steps and the
+FIRST is `len()`, not iteration — so `rows = 5` dies with "object of type
+'int' has no len()" while `rows = "ab"` gets past the length and dies one
+line later on `.get`. Collapsing the two into a single iterability check
+reports the wrong error for both. The order is the answer, and there is a
+fixture for each of the three shapes.
+
+### Two things the differential could not have found
+
+`_clip` slices: `text[:head]` with a floor of 20, `text[-40:]` with a
+fixed tail. Python slices CLAMP where an index would raise. Production
+only ever calls `_clip` with limit 120 or 160 — always larger than 60 —
+so the clamp is unreachable through the module's own callers, and the Go
+port panicked on `_clip("abc", 0)`. Nothing in the module could reach it;
+the probe calls the private function directly, which is the only reason
+it showed up. Fixed at the site with the reason, and there are three
+fixtures below the floor.
+
+`read_text(encoding="utf-8")` DECODES before `json.loads` ever runs, so a
+call record with one bad byte is UNREADABLE and counts. Go's
+`json.Unmarshal` substitutes U+FFFD and reads it happily — which would
+turn an unreadable file into a clean record, and a clean record is
+exactly what must not be manufactured here. `readCall` runs `utf8.Valid`
+first, and the fixture is an otherwise-perfect record with a lone `\xff`
+in the command.
+
+### The tables, closed the same way as Phase N's
+
+Five content keys a differential can only sample: `_SHELL_TOOL_NAMES`,
+`_CAPTURE_BACKENDS`, the six scalar bounds, and the two regexes. The
+guards read the literals back out of the Python.
+
+`_PROCESS_MARKERS` gets the strongest form. The port differs from
+upstream in exactly two ways and both are forced — Unicode boundaries
+through `pytext`, and non-capturing groups because RE2 has no reason to
+pay for capture — so the guard applies those two substitutions to the
+upstream literal and demands the result equal `processMarkers.String()`
+character for character. Adding a runner upstream fails HERE with the
+diff, instead of leaving the port silently narrower until someone writes
+a fixture that happens to name `deno test`.
+
+The scalar bounds matter for the usual reason: `MAX_SCANNED_FILES` costs
+a thousand files to exercise and `MAX_FILE_BYTES` an eight-megabyte one.
+Both have fixtures anyway — the thousand files are cheap and the eight
+megabytes is a sparse `truncate` — but the guard is what keeps them
+honest when the number moves.
+
+### The differential
+
+170 scenarios over nine kinds: `clip`, `neutralize`, `display`,
+`path_token`, `process_markers`, `check_tokens`, `load`, `render`,
+`audit`. The four private helpers are driven directly, because they are
+where the port's own decisions live.
+
+`load` and `audit` build a call-record filesystem per scenario from a
+spec the probe and the test both read, each under its own temp directory.
+`render` takes its `loaded` mapping as JSON SOURCE, decoded on both
+sides, which is how a scenario carries a value whose TYPE is the point: a
+count recorded as a string, a row that is not a mapping, a `rows` value
+that is an int. `audit` installs a fake `runs` module — or blocks the
+import outright with `_pyprobe_block(["runs"])` for the case where the
+module is missing — and captures `log.debug` so the failure branch can be
+asserted rather than assumed.
+
+The `loaded` mapping is compared as a LIST OF PAIRS on both sides,
+because the key ORDER is part of the answer: `load_receipts` writes its
+six keys in a fixed order and a consumer reading them back is entitled to
+it. A row that survives the loader and a row order that does not are
+different bugs.
+
+### An ops lesson, paid for in confusion
+
+`setsid nohup … &` was the fix for a background child dying with its
+parent Bash task. It is also how you lose track of one: `setsid` forks
+when it is not already a process-group leader, so `$!` is the pid of
+`setsid`, which exits immediately. `kill -0 $!` then reports DONE while
+the real runner is still working. A second battery started on top of the
+first, the first had a mutation applied at that moment, and the second
+correctly refused with "the tree is ALREADY red".
+
+The part worth keeping is the second half. `git status` showed the tree
+CLEAN throughout, because `internal/receipts/` was still untracked — git
+cannot report a modification inside a directory it has never seen. Every
+previous battery ran against a tracked file where a leftover mutant shows
+up as an `M`. **Land the package before running its battery**, or the one
+safety net that has caught this before is not there.

@@ -124,6 +124,7 @@ reading like one.
 | `handle_queue.py` | 562 | `internal/handlequeue` |
 | `router.py` | 521 | `internal/skills` |
 | `jsonl_utils.py` | 519 | `internal/metrics` |
+| `execution_receipts.py` | 487 | `internal/receipts` |
 | `path_rewrite.py` | 477 | `internal/pathrewrite` |
 | `pre_flight.py` | 463 | `internal/preflight` |
 | `world_facts.py` | 457 | `internal/worldfacts` |
@@ -153,9 +154,9 @@ reading like one.
 | `secret_scrub.py` | 108 | `internal/scrub` |
 | `outcome_policy.py` | 72 | `internal/outcomepolicy` |
 
-**80 modules / 81614 lines** carry a declaration. **103 modules / 51116 lines** do not.
+**81 modules / 82101 lines** carry a declaration. **102 modules / 50629 lines** do not.
 
-### The undeclared queue — 103 modules, 51116 lines, UNJUDGED
+### The undeclared queue — 102 modules, 50629 lines, UNJUDGED
 
 A `+` marks a module some production COMMENT names as `<module>.<attr>` without ever naming its `.py` file. That is neither a declaration nor an absence: the same spelling is used to say "ported" and to say "deliberately not ported". Each one is one reading by whoever owns that tranche; until then it stays in this queue, because the optimistic direction is the one a denominator must never guess in.
 
@@ -192,7 +193,6 @@ A `+` marks a module some production COMMENT names as `<module>.<attr>` without 
 | `convo_miner.py` | 570 |  |
 | `mcp_client.py` | 525 |  |
 | `codebase_graph.py` | 492 |  |
-| `execution_receipts.py` | 487 |  |
 | `strategy_evaluator.py` | 485 |  |
 | `claim_verifier.py` | 477 |  |
 | `packaging_readout.py` | 476 |  |
@@ -265,7 +265,7 @@ A `+` marks a module some production COMMENT names as `<module>.<attr>` without 
 | `age_stamp.py` | 89 |  |
 | `listener_core.py` | 55 |  |
 
-**9 of the 103 undeclared modules are mentioned** by attribute somewhere in production comments.
+**9 of the 102 undeclared modules are mentioned** by attribute somewhere in production comments.
 
 Undeclared is not the same as untouched — this list is UNJUDGED, and
 judging it is the work this file makes possible rather than the work it
@@ -274,9 +274,9 @@ are pure LLM/network surfaces whose port is an adapter call, and some are
 simply not started. Until each row carries a declared status, the honest
 statement about the port's completeness is:
 
-> **80 of 183 modules (81,614 of 132,730
-> lines, 61%) are named by a Go production package. The other
-> 103 have no declaration either way.**
+> **81 of 183 modules (82,101 of 132,730
+> lines, 62%) are named by a Go production package. The other
+> 102 have no declaration either way.**
 
 That is a lower bound on progress with a known gap above it, which is
 strictly better than the single number it replaces.
