@@ -11,6 +11,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/pyprobe"
 	"github.com/slycrel/maro-orchestration/go/internal/pyval"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
 // pyVariantSrc seeds a skills store and runs retire_losing_variants, then
@@ -77,7 +78,7 @@ print(json.dumps(out, sort_keys=True))
 // a differential of its own: the self-referential refusal, and the exact
 // ValueError sentence a caller's `except ValueError as e` prints.
 const pyVariantCreateSrc = `
-import json, sys
+import json, os, sys
 import skills
 from skill_types import dict_to_skill
 
@@ -91,6 +92,18 @@ try:
            "variant_losses": out.variant_losses}
 except BaseException as e:
     res = {"ok": False, "cls": type(e).__name__, "msg": str(e)}
+# The captain's-log row this call wrote, read back through the SAME
+# resolution the write used rather than a path Go guessed.
+import captains_log as _cl
+_p = _cl._log_path() if hasattr(_cl, "_log_path") else os.path.join(
+    os.environ["MARO_WORKSPACE"], "memory", "captains_log.jsonl")
+res["events"] = []
+if os.path.exists(_p):
+    with open(_p, encoding="utf-8") as fh:
+        for _line in fh:
+            _line = _line.strip()
+            if _line:
+                res["events"].append(json.loads(_line))
 print(json.dumps(res, sort_keys=True))
 `
 
@@ -112,6 +125,12 @@ func TestCreateSkillVariantMatchesCPython(t *testing.T) {
 		// The refusal, and its exact sentence.
 		{"a self-referential challenger is refused", "same", "same", 0, 0, false},
 		{"a short id in the message", "ab", "ab", 0, 0, false},
+		// The `[:8]` clip in the summary was unreachable until this row:
+		// every other succeeding case has ids longer than eight characters,
+		// and the two short-id cases are refusals that never reach the
+		// write. The event comparison below is what makes it visible at all
+		// — the summary is not in create_skill_variant's return value.
+		{"short distinct ids reach the summary unclipped", "ab", "cd", 0, 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			orig := map[string]any{"id": c.origID, "name": "parent skill",
@@ -123,20 +142,29 @@ func TestCreateSkillVariantMatchesCPython(t *testing.T) {
 				rew["variant_of"] = "someone-else"
 			}
 			var want struct {
-				OK        bool    `json:"ok"`
-				VariantOf *string `json:"variant_of"`
-				Wins      int     `json:"variant_wins"`
-				Losses    int     `json:"variant_losses"`
-				Cls       string  `json:"cls"`
-				Msg       string  `json:"msg"`
+				OK        bool             `json:"ok"`
+				VariantOf *string          `json:"variant_of"`
+				Wins      int              `json:"variant_wins"`
+				Losses    int              `json:"variant_losses"`
+				Cls       string           `json:"cls"`
+				Msg       string           `json:"msg"`
+				Events    []map[string]any `json:"events"`
 			}
-			pyprobe.Probe{Marker: "skills.py"}.RunJSON(t, pyVariantCreateSrc,
-				&want, pyprobe.Arg(t, map[string]any{
+			// This probe WRITES. It did not look like it — create_skill_variant
+			// returns a mutated object and reads like a pure transform — and
+			// the captain's-log write is wrapped in a bare except, so the only
+			// evidence it happened was 648 synthetic rows in the operator's
+			// live log (2026-08-27). Naming the tree is what makes the write
+			// assertable instead of merely survivable.
+			pyWS := t.TempDir()
+			pyprobe.Probe{Marker: "skills.py", Workspace: pyWS}.RunJSON(t,
+				pyVariantCreateSrc, &want, pyprobe.Arg(t, map[string]any{
 					"original": orig, "rewritten": rew}))
 
 			goOrig := skillOf(t, orig)
 			goRew := skillOf(t, rew)
-			got, gotErr := CreateSkillVariant(goOrig, &goRew, nil)
+			goWS := t.TempDir()
+			got, gotErr := CreateSkillVariant(goOrig, &goRew, record.New(goWS))
 
 			// Python MUTATES the argument and returns that same object, so
 			// the caller's own copy must carry the markers too — checked
@@ -161,6 +189,19 @@ func TestCreateSkillVariantMatchesCPython(t *testing.T) {
 				t.Fatalf("ok=%v; CPython ok=%v (%s: %s)",
 					gotErr == nil, want.OK, want.Cls, want.Msg)
 			}
+			// The write, on both sides. A refusal writes NOTHING, and that
+			// is half of what this compares: the raise happens before the
+			// log call, so an event here would mean the port logged a
+			// variant it then refused to create.
+			// A successful create writes exactly one row and a refusal
+			// writes none. Pinning the COUNT first is what keeps the
+			// comparison below from passing on two empty lists (L1) — the
+			// shape this whole surface arrived in.
+			wantRows := 0
+			if want.OK {
+				wantRows = 1
+			}
+			compareVariantEvents(t, want.Events, goWS, wantRows)
 			if !want.OK {
 				if cls := pyval.ClassOf(gotErr); cls != want.Cls {
 					t.Errorf("raises %s, CPython raises %s", cls, want.Cls)
@@ -186,6 +227,54 @@ func TestCreateSkillVariantMatchesCPython(t *testing.T) {
 					got.VariantWins, got.VariantLosses, want.Wins, want.Losses)
 			}
 		})
+	}
+}
+
+// compareVariantEvents holds the port's captain's-log row against CPython's.
+//
+// The summary is the reason this exists: `rewritten.id[:8]` is a SLICE, so a
+// short id appears whole rather than padded, and nothing in
+// create_skill_variant's return value carries the sentence. Comparing the
+// rows is the only way that clip is observable at all — and the row is also
+// the thing that was landing in the live workspace.
+func compareVariantEvents(t *testing.T, py []map[string]any, goWS string,
+	wantRows int) {
+	t.Helper()
+	if len(py) != wantRows {
+		t.Fatalf("CPython wrote %d captain's-log row(s), this case expects "+
+			"%d — the comparison below would be measuring nothing",
+			len(py), wantRows)
+	}
+	raw, err := os.ReadFile(filepath.Join(goWS, "memory", "captains_log.jsonl"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("the port wrote a line that is not JSON: %v\n%s", err, line)
+		}
+		got = append(got, m)
+	}
+	if len(got) != len(py) {
+		t.Fatalf("the port wrote %d captain's-log row(s), CPython wrote %d",
+			len(got), len(py))
+	}
+	for i := range py {
+		// The timestamp is the one field that cannot agree.
+		delete(py[i], "timestamp")
+		delete(got[i], "timestamp")
+		// encoding/json sorts a map's keys, so this compares CONTENT and
+		// not either runtime's insertion order.
+		a, _ := json.Marshal(got[i])
+		b, _ := json.Marshal(py[i])
+		if string(a) != string(b) {
+			t.Errorf("captain's-log row %d\n go: %s\n py: %s", i, a, b)
+		}
 	}
 }
 

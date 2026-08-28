@@ -16629,3 +16629,78 @@ Both checks stay in the code, because Python's `set_phase` raises there
 too and `pop` is what Python calls. The difference is only that no input
 can make either matter — which is a statement about the ORIGINAL, not
 about the port.
+
+## The probes were writing to the live workspace (2026-08-27)
+
+Not a port chunk. A closure, and the only finding in this arc so far that
+did damage outside the repo.
+
+`review-ledger.py closable` put P17 at two instances on the spine probe
+and two on the loop_finalize probe — the decree's threshold, so the
+question stopped being "what is this lens" and became "can this shape be
+made impossible". Measuring the surface first:
+
+    go test files spawning python3     : 66
+    ...of those setting HOME           :  0
+    ...of those setting MARO_WORKSPACE :  5
+
+Sixty-one differential probes ran with the operator's live `~/.maro`
+reachable. The whole suite passes with `HOME` sandboxed — so no fixture
+depended on the live config — but the sandbox run created
+`$HOME/.maro/workspace/memory/captains_log.jsonl`, which meant something
+had been writing to the real one.
+
+It had. `internal/skills`' `create_skill_variant` probe declared no
+workspace, because `create_skill_variant` returns a mutated object and
+reads like a pure transform. It also writes a `SKILL_VARIANT_CREATED`
+row, wrapped in a bare `except`. Counting the live log:
+
+| | |
+|---|---|
+| rows in the live captain's log | 7871 |
+| synthetic `parent1`/`child1` rows | **648** |
+| rows the log received 2026-08-25 → 08-27 | 649 |
+| ...of those that were real | **1** |
+
+Three days in which the operator's captain's log was 99.8% this test.
+Nothing failed; the bare `except` guarantees nothing ever would.
+
+### What changed
+
+`internal/pyprobe` gained a sandbox nobody has to ask for — `HOME` and
+`MARO_WORKSPACE` both point at temp dirs the test owns — and, the part
+that matters, **an assertion that an undeclared probe wrote nothing to
+either**. A mitigation alone would have moved the damage somewhere quiet.
+The assertion names the caller, and it fired on the first run, on all
+three writing cases.
+
+Two details the sandbox forced:
+
+- The live-workspace refusal expands `~` in the child, which is now the
+  sandbox — so it would have waved through the very path it exists to
+  refuse. It reads `MARO_PYPROBE_LIVE_HOME` now, set from the operator
+  home captured at package init, before any `t.Setenv` can move it.
+- `internal/pypath`'s probe *is* about tilde expansion and repoints
+  `HOME` on purpose, asserting that both sides expand to the same
+  fixture. A probe whose `HOME` already differs from the operator's keeps
+  it.
+
+### The gap underneath
+
+The probe's write was never compared, so the row's SHAPE was unpinned —
+including `rewritten.id[:8]`, a slice rather than a fixed width, whose
+only appearance is in a summary sentence the return value does not carry.
+The differential now compares the captain's-log row on both sides and
+pins the COUNT first (one for a create, zero for a refusal), because two
+empty lists agree about nothing. It needed a new case to be reachable at
+all: every succeeding fixture had ids longer than eight characters, and
+both short-id fixtures were refusals that return before the write.
+
+### The 648 rows
+
+Backed up whole to `~/claude/captains_log-backup-20260827-before-testjunk-purge.jsonl`,
+then removed by exact signature (`SKILL_VARIANT_CREATED` with
+`parent_id=parent1` and `challenger_id=child1`) — 7871 rows in, 7223 out,
+648 dropped, zero unparseable. The eight genuine `SKILL_VARIANT_CREATED`
+rows from real runs are still there. Verified afterwards that
+`go test ./internal/skills/` moves the live log by zero rows.

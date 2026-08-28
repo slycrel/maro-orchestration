@@ -264,6 +264,12 @@ var readDirOrderAllowlist = map[string]string{
 	"internal/loop/finalize_helpers.go:pruneStepArtifacts": "the entries are " +
 		"filtered and DELETED; nothing is returned, appended or rendered, so " +
 		"the order cannot reach an observer",
+	"internal/pyprobe/pyprobe.go:assertUndeclaredProbeWroteNothing": "a TEST " +
+		"HARNESS assertion with no Python twin: it asks whether a probe's " +
+		"sandbox is empty and, when it is not, names what it found in the " +
+		"failure message. Nothing here is ported, serialised or returned, " +
+		"and the only reader is a developer looking at a test that already " +
+		"failed",
 	"internal/recall/recall.go:FindPriorAttempts": "recall.py:407-410 sorts a " +
 		"generator over an UNSORTED root.iterdir() by mtime, so CPython's " +
 		"tie-break is raw readdir order and there is no Python order to " +

@@ -2577,8 +2577,7 @@ rather than stubbed.
 
 ### P17 — The probe's own machinery fails the way the code under test would
 
-*instances: 4 (2026-08-27, two in the loop_finalize probe; 2026-08-27,
-two in the spine probe)*
+*instances: 5 — and the fifth CLOSED it, see "The close" below*
 
 **Instances 3 and 4 (the spine probe).** Both are about a probe that
 drives the REAL function and therefore shares its namespace.
@@ -2634,6 +2633,43 @@ before any scenario runs; give every recorder positional-only parameters;
 and clear every module-level registry the subject writes to at the top of
 each scenario, because the Go side gets a fresh one per record and the
 Python side does not.
+
+**The close (2026-08-27).** The fifth instance is the one that showed
+what the lens was actually about, and it is not monkey-patching.
+
+`internal/pyprobe` already carried three hard-won answers — a probe that
+RAN and failed is fatal, a writing probe asserts its resolved path, every
+probe gets a throwaway `MARO_USER_DIR`. All three depend on the caller
+declaring what kind of probe it is, and the field doc said so out loud:
+*"Leave it empty for a read-only probe."*
+
+`create_skill_variant` returns a mutated object and reads like a pure
+transform. It also writes the captain's log, inside a bare `except`. Its
+probe declared nothing, so `MARO_WORKSPACE` was unset, so `captains_log`
+resolved its default — `~/.maro/workspace` — and the test suite put **648
+synthetic rows into the operator's live captain's log between 2026-08-25
+and 2026-08-27. 648 of the 649 rows the log received in those three days
+were this one test.** Nothing failed. The bare `except` guarantees
+nothing ever would.
+
+So the shape is: **a probe declares its own blast radius, and nothing
+checks the declaration.** That is not a judgement call — it is a
+property, and it can be checked:
+
+- Every probe now gets `MARO_WORKSPACE` and `HOME` pointed at temp dirs
+  it owns, declared or not. `HOME` because `MARO_WORKSPACE` only covers
+  the modules that read it, and anything expanding `~` itself walks
+  straight back out. A test that has deliberately repointed `HOME` —
+  `internal/pypath`, whose SUBJECT is tilde expansion — keeps its own,
+  detected by comparing against the operator home captured at package
+  init.
+- An undeclared probe that WROTE to either sandbox is a **failure naming
+  the caller**. The mitigation alone would have moved the damage
+  somewhere quiet; the assertion is what makes the misdeclaration
+  visible. It fired on the first run, on all three writing cases.
+
+The lens stays here as history. The check is
+`internal/pyprobe/pyprobe.go:assertUndeclaredProbeWroteNothing`.
 
 ---
 

@@ -31,6 +31,20 @@
 // every probe gets it, read-only ones included: an operator's config is not
 // an input any comparison here wants.
 //
+// A fourth thing, found 2026-08-27 and the reason the sandbox is no longer
+// optional: "this probe is read-only" was a CALLER'S JUDGEMENT and nothing
+// checked it. `create_skill_variant` returns a mutated object and looks like
+// a pure transform; it also writes the captain's log, inside a bare except.
+// Its probe named no Workspace, so MARO_WORKSPACE was unset, so the write
+// resolved captains_log's default — ~/.maro/workspace — and 648 synthetic
+// rows went into the operator's live log over three days. 648 of the 649
+// rows the log received in that window were this test.
+//
+// So every probe now gets MARO_WORKSPACE and HOME pointed at temp dirs, and
+// an undeclared probe that WROTE to either is a FAILURE naming the caller.
+// The mitigation alone would only have moved the damage somewhere quiet;
+// the assertion is what makes the misdeclaration visible.
+//
 // One helper, one answer to each. Callers that write pass Workspace, and the
 // ones that write through a specific Python resolver pass Guard so the
 // resolver's own answer is asserted rather than assumed.
@@ -44,6 +58,32 @@ import (
 	"strings"
 	"testing"
 )
+
+// operatorHome is the real home directory, captured at package
+// initialisation — before any test's t.Setenv can move it. Two things need
+// it: the live-workspace refusal, which must keep meaning the OPERATOR'S
+// ~/.maro rather than the sandbox's, and the decision below about whether a
+// test has deliberately repointed HOME.
+var operatorHome = func() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	return "/root"
+}()
+
+// childHome decides what HOME the probe runs with.
+//
+// A test that has already repointed HOME with t.Setenv did so on purpose:
+// its SUBJECT is `~` expansion, and both sides are meant to expand to the
+// same fixture root — internal/pypath asserts exactly that. Overriding it
+// here would compare two different homes and call the difference a port bug.
+// Every other probe gets a sandbox it cannot damage.
+func childHome(t *testing.T) (home string, sandboxed bool) {
+	if h := os.Getenv("HOME"); h != "" && h != operatorHome {
+		return h, false
+	}
+	return t.TempDir(), true
+}
 
 // SrcDir is the repo's Python tree, located relative to a package's own
 // directory. marker is a file that must exist in it — a package naming the
@@ -88,7 +128,7 @@ import os as _os, sys as _sys
 _ws = _os.environ.get("MARO_WORKSPACE", "")
 if not _ws:
     raise SystemExit("pyprobe: refusing to run a writing probe with MARO_WORKSPACE unset")
-_live = _os.path.realpath(_os.path.expanduser("~/.maro"))
+_live = _os.path.realpath(_os.environ.get("MARO_PYPROBE_LIVE_HOME") or _os.path.expanduser("~") + "/.maro")
 _real = _os.path.realpath(_ws)
 if _real == _live or _os.path.commonpath([_real, _live]) == _live:
     raise SystemExit(
@@ -114,7 +154,7 @@ def _pyprobe_use(_ws):
     """Point MARO_WORKSPACE at _ws, refusing anything inside ~/.maro."""
     if not _ws:
         raise SystemExit("pyprobe: refusing an empty workspace")
-    _live = _os.path.realpath(_os.path.expanduser("~/.maro"))
+    _live = _os.path.realpath(_os.environ.get("MARO_PYPROBE_LIVE_HOME") or _os.path.expanduser("~") + "/.maro")
     _real = _os.path.realpath(_ws)
     if _real == _live or _os.path.commonpath([_real, _live]) == _live:
         raise SystemExit(
@@ -137,7 +177,20 @@ type Probe struct {
 	// it. Set this and leave Marker empty.
 	Stdlib bool
 	// Workspace, when set, is exported as MARO_WORKSPACE and turns on the
-	// live-workspace refusal. Leave it empty for a read-only probe.
+	// live-workspace refusal. It says "this is the tree I will assert
+	// against" — NOT "this probe writes".
+	//
+	// A probe that leaves it empty still gets a sandbox: MARO_WORKSPACE and
+	// HOME both point at temp dirs the test owns, and Run FAILS if the
+	// probe wrote to either. "Read-only" was the caller's own judgement and
+	// nothing checked it, which is how `create_skill_variant` — a function
+	// that returns a mutated object and looks like a pure transform — put
+	// 648 synthetic SKILL_VARIANT_CREATED rows into the operator's live
+	// captain's log between 2026-08-25 and 2026-08-27, 648 of the 649 rows
+	// the log received in those three days. Its probe declared nothing, so
+	// MARO_WORKSPACE was unset, so captains_log resolved its default:
+	// ~/.maro/workspace. The write is wrapped in a bare except, so it could
+	// never fail loudly enough to be noticed.
 	Workspace string
 	// Workspaces is Workspace for a probe that writes to several trees in
 	// one invocation. Every path is checked here the way Workspace is, and
@@ -211,17 +264,35 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	if userDir == "" {
 		userDir = t.TempDir()
 	}
+	// The sandbox every probe gets, declared or not. A probe that names no
+	// workspace is still pointed at one it cannot damage, and HOME goes
+	// with it because MARO_WORKSPACE only covers the modules that read it —
+	// anything expanding `~` itself would walk straight back out.
+	sandbox := ""
+	if p.Workspace == "" && len(p.Workspaces) == 0 {
+		sandbox = t.TempDir()
+	}
+	home, homeSandboxed := childHome(t)
 	if (p.Marker == "") != p.Stdlib {
 		t.Fatalf("pyprobe: a probe needs either a Marker or Stdlib, not "+
 			"both and not neither (Marker=%q Stdlib=%v)", p.Marker, p.Stdlib)
 	}
 	cmd := exec.Command("python3", append([]string{"-c", src}, args...)...)
-	env := append(cmd.Environ(), "MARO_USER_DIR="+userDir)
+	// The refusal must keep meaning the OPERATOR'S workspace, not the
+	// sandbox's — expanding `~` in the child would now resolve to the temp
+	// HOME and the guard would wave through the very path it exists to
+	// refuse.
+	liveHome := filepath.Join(operatorHome, ".maro")
+	env := append(cmd.Environ(), "MARO_USER_DIR="+userDir, "HOME="+home,
+		"MARO_PYPROBE_LIVE_HOME="+liveHome)
 	if !p.Stdlib {
 		env = append(env, "PYTHONPATH="+SrcDir(t, p.Marker))
 	}
 	if p.Workspace != "" {
 		env = append(env, "MARO_WORKSPACE="+p.Workspace)
+	}
+	if sandbox != "" {
+		env = append(env, "MARO_WORKSPACE="+sandbox)
 	}
 	for _, kv := range p.Env {
 		name, _, ok := strings.Cut(kv, "=")
@@ -229,7 +300,8 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 			t.Fatalf("pyprobe: Env entry %q is not K=V", kv)
 		}
 		switch name {
-		case "MARO_WORKSPACE", "MARO_USER_DIR", "PYTHONPATH":
+		case "MARO_WORKSPACE", "MARO_USER_DIR", "PYTHONPATH", "HOME",
+			"MARO_PYPROBE_LIVE_HOME":
 			t.Fatalf("pyprobe: Env must not set %s — it is what a guard reads. "+
 				"Use the Workspace or UserDir field.", name)
 		}
@@ -238,6 +310,12 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	cmd.Env = env
 	out, err := cmd.Output()
 	if err == nil {
+		checkHome := home
+		if !homeSandboxed {
+			// The test owns this HOME and put fixtures in it.
+			checkHome = ""
+		}
+		assertUndeclaredProbeWroteNothing(t, sandbox, checkHome)
 		return string(out)
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -250,6 +328,35 @@ func (p Probe) Run(t *testing.T, src string, args ...string) string {
 	}
 	t.Fatalf("python3 is present but the probe could not run: %v", err)
 	return ""
+}
+
+// assertUndeclaredProbeWroteNothing turns "this probe is read-only" from a
+// caller's claim into a checked one. sandbox is empty for a probe that DID
+// declare a workspace — those assert their own tree — so only the
+// undeclared ones are held to it. HOME is checked for every probe: nothing
+// here should be reaching the operator's home directory at all.
+func assertUndeclaredProbeWroteNothing(t *testing.T, sandbox, home string) {
+	t.Helper()
+	check := func(dir, what string) {
+		if dir == "" {
+			return
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil || len(ents) == 0 {
+			return
+		}
+		names := make([]string, 0, len(ents))
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("pyprobe: this probe declared no Workspace but WROTE to "+
+			"its %s (%v). It is not read-only. Give it Workspace: "+
+			"t.TempDir() and assert what it produces — a probe whose writes "+
+			"nobody names is a probe that writes wherever the environment "+
+			"sends it.", what, names)
+	}
+	check(sandbox, "sandbox workspace")
+	check(home, "sandboxed HOME")
 }
 
 // RunJSON runs the probe and decodes its stdout into out.
