@@ -2,16 +2,16 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.4
+# Successor v1 — design note (Phase 2, the whole system) — v1.5
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
 §8 (`docs/history/2026-09-04-holistic-drift-review.md`, main) as amended by
 D7–D17 in `successor-plan.md`; contract practice =
 `contract-testing-input.md`; boundary spec = `docs/CONTRACTS.md` + the Phase 1
-behavior suite. v1.4 = v1.3 amended against r4 (codex, Architect + Skeptic; ledgers
-`verdict-r1..4.md` in the review dir — r4 confirmed 14 of 18 r3 items
-resolved and left 8, two of them new). §18 lists what changed by round. Inherited shapes
+behavior suite. v1.5 = v1.4 amended against r5 (codex, Architect + Skeptic; ledgers
+`verdict-r1..5.md` in the review dir — r5 left four items, both lenses
+agreeing everything else is resolved). §18 lists what changed by round. Inherited shapes
 carry their justifying sentence beside them (anti-lift).*
 
 ## 0. What v1 is
@@ -203,10 +203,24 @@ get **exclusive path leases** recorded on the Fork; children that need the
 same repository get **per-attempt working copies** (worktree / copy-on-
 write snapshot) and the parent performs an explicit, recorded **merge/apply
 step** after `JoinSettled` — a merge conflict is a step outcome, not a
-race. Siblings' **outward effects are held** (recorded as `prepared`, not
-dispatched) until `JoinDecision` selects them; a cancelled sibling's held
-effects are never issued. This is what makes a fork replayable from the
-journal instead of from scheduler timing.
+race. **Outward effects in a fork, two classes, confined structurally.**
+*Queries and reversible effects* (reads, idempotent lookups, effects with a
+declared compensator) may run during a child attempt under per-effect
+reconciliation (§4). *Irreversible effects* are never issued by a child:
+the child produces a **prepared intent** (the exact action, key, and expected
+postcondition) that is judged as part of its proposal; after `JoinDecision`,
+the **parent** runs an explicit commit step — its own Invocation, Receipt,
+and postcondition verification — for the selected child's intents only.
+Confinement is at the OS/tool boundary, not by convention: fork children
+execute with outward authority **removed** (no network credentials, no
+send-capable tools; every outward-capable tool is brokered through the
+shell, which refuses irreversible classes during a fork). A backend that
+cannot be confined this way is **ineligible for speculative parallel
+execution** and runs sequentially or only after selection. A live,
+no-restart test has a losing child attempt an unannounced irreversible
+action and asserts it was structurally impossible, not merely recorded.
+This is what makes a fork replayable from the journal instead of from
+scheduler timing.
 
 ## 4. Backends — effectful boundary components, one invocation state machine
 
@@ -351,10 +365,26 @@ type PolicySelection struct { RecordHeader; Run AttemptRef; Considered []ItemRev
 type ItemRev struct { Item LearnedID; Revision RecordID }   // the ONLY way an item is named where content matters
 ```
 
-Stage is a fold over `LifecycleTransition`s for the `LearnedID` (a revision
-never carries a stage); attribution names both the item and the exact
-revision applied. Stages: `candidate | observed | provisional |
-effective | canon | contested | tombstone`.
+**Two folds, kept apart.** *Efficacy standing* is a fold over
+`LifecycleTransition`s keyed by `ItemRev` — evidence is always about one
+exact revision and never moves another revision's stage. *Current revision*
+is a separate fold over `LearnedRevision.Predecessor` for the `LearnedID`.
+**Selection** picks the item's current revision *only if that revision's own
+standing is selectable*; a new revision starts at `candidate` and must earn
+its standing (it may cite its predecessor's attestation as grounds for
+re-measurement, never as its own evidence). Evidence arriving for a
+superseded revision is retained on that revision and may trigger
+re-measurement of the current one; it cannot change the current one's
+stage. The sequencer enforces per-`ItemRev` transition preconditions. Stages (the single authoritative vocabulary, in the answer key with wire
+values and unknown-value handling): `candidate | observed | provisional |
+effective | canon | contested | quarantined | tombstone`. Legal transitions:
+`candidate→observed` (tenure), `candidate|observed→provisional|effective`
+(measured), `provisional→effective→canon` (measured), any selectable→
+`contested` (conflicting evidence), any→`quarantined` (item_harmful at
+threshold; exits only to `tombstone` or, after a new experiment on the same
+revision, back to `provisional`), `quarantined|contested|observed→tombstone`
+(redundancy at the stopping rule, expiry, or removal). Older readers treat
+`quarantined` as unknown-value → not selectable (declared).
 
 **Two apply surfaces in v1**, because D17 needs the second: (1) **recall
 injection** — a `lesson` reaches a backend request, proven by an
@@ -416,16 +446,21 @@ type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool 
 type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Hash /* provably exclude the hypothesis revision */; Scores OutcomeVec; OracleResult OracleVerdict; Missingness Decision }
 type EffectMeasurement struct { RecordHeader; Attestation RecordID; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* treatment_helpful | treatment_harmful | equivalent | insufficient */; ItemEffect ItemEffect /* normalized by Relation: item_helpful | item_harmful | item_redundant | insufficient */ }  // a DETERMINISTIC fold over its Attestation; a test recomputes it from the attestation alone
 
-// The ONE evaluator→production write. Self-contained: a production fold verifies a transition from this record and nothing else.
+// Written by the SEQUENCER (not the evaluator) into production when an experiment's assignment window closes:
+// the authenticated denominator. Production-readable; the evaluator cannot alter it.
+type CohortCommitment struct { RecordHeader; Experiment ExperimentID; Protocol ProtocolProjection; Units []AssignedUnit /* GoalID, arm, probability */; Root Hash /* Merkle root over Units */; Count int }
+
+// The ONE evaluator→production write. Self-contained together with its CohortCommitment.
 type EffectAttestation struct {
     RecordHeader                     // ProductionRecord
-    ProtocolHash  Hash               // hash of the immutable Experiment (protocol version, Hypothesis ItemRev, Relation, arms, outcome spec, analysis spec, oracle class, exclusions)
-    Units         []UnitRow          // EVERY eligible unit: GoalID, arm, assignment probability, exposed?, missing reason, assessment id + scores (or absent)
+    Cohort        RecordID           // the CohortCommitment this attests over
+    Protocol      ProtocolProjection // the CANONICAL production-safe projection of the immutable Experiment, embedded, not hashed: id/version, Hypothesis ItemRev, Relation, arm definitions (as []ItemRev), outcome spec (dimensions, direction, margin), analysis spec (ITT/per-protocol, estimator, uncertainty threshold, stopping rule), exclusions, oracle class
+    Units         []UnitRow          // one per AssignedUnit in the cohort, in cohort order: exposed?, missing reason, assessment id + scores (or absent) — each row carries its assignment proof (Merkle path to Cohort.Root)
     StopBoundary  StopRef            // which stopping rule fired, at which unit count
     Estimator     EstimatorRef       // the estimator + its inputs as used
     Evaluator     EvaluatorRef       // identity + version; Inputs hashes provably exclude the hypothesis revision
 }
-// Verifier: recomputes AssignedN/ExposedN, ITT and per-protocol deltas, and the verdict from Units + Estimator; refuses a transition whose measurement does not recompute. Mutation tests: drop a unit, change an arm, move the stop boundary, swap the estimator — each must fail verification.
+// Verifier (production, no control/experimental access): (1) Protocol equals the projection in the CohortCommitment; (2) every cohort unit appears exactly once with a valid Merkle path — completeness AND membership; (3) the transition's ItemRev equals Protocol.Hypothesis and the sign is normalized by Protocol.Relation; (4) the stop boundary is legal for Count and the stopping rule; (5) recomputes AssignedN/ExposedN, ITT and per-protocol deltas, uncertainty, and the verdict from Units + Estimator. Any failure refuses the transition. Mutation tests: drop a unit, add a unit, change an arm, alter a probability, substitute the transition's item/revision, flip Relation, move the stop boundary, swap the estimator — each must fail verification.
 ```
 
 Counts are **derived from Assignment records**, never stored on the
@@ -479,11 +514,14 @@ of the registry and is checked at compile time by the typed APIs:
   by the evaluator.
 
 Every production reader is contract-tested with poisonous control and
-experimental rows before the first replay runs. The evaluator writes into
-production exactly one thing: the `EffectAttestation` (§8a), from which the
-`EffectMeasurement` is a recomputable fold; a production verifier recomputes
-it without reading any control or experimental record, and an auditor with
-the evaluator capability can trace every unit back to its arm artifacts.
+experimental rows before the first replay runs. Two things cross into production, from two different writers: the
+**sequencer** commits the `CohortCommitment` (the authenticated denominator
+and the canonical protocol projection) when the assignment window closes;
+the **evaluator** commits the `EffectAttestation` over it. The
+`EffectMeasurement` is a recomputable fold over the pair; a production
+verifier recomputes it without reading any control or experimental record,
+and an auditor with the evaluator capability can trace every unit back to
+its arm artifacts.
 
 **Attribution (D17).** `plain` and `star` shadow arms compare the *whole
 harness* to a 1-shot; a match updates a `HarnessChallenger` record only. An
@@ -673,6 +711,18 @@ edges.
 | §8.9 edges + removal | honored in design | subtraction artifact per step; one removal with absence proof | every step, 13 |
 
 ## 18. What changed by round
+
+**v1.5 (r5):** `CohortCommitment` written by the sequencer as the
+authenticated denominator, with the canonical protocol projection embedded
+in the attestation and Merkle-bound unit rows, and a verifier that checks
+protocol, membership, completeness, subject, sign, stop legality, and
+recomputation; efficacy standing keyed by `ItemRev` with a separate
+current-revision fold and selection over the current revision's own
+standing; `quarantined` in the authoritative Stage vocabulary with its
+transitions; fork outward effects split into in-attempt reversible/query
+effects and parent-committed irreversible intents, with children's outward
+authority removed at the OS/tool boundary and unconfinable backends
+ineligible for speculative parallelism.
 
 **v1.4 (r4):** `ItemRev` everywhere content matters (Hypothesis, arms,
 applications, selection); `TreatmentRelation` and a normalized `ItemEffect`
