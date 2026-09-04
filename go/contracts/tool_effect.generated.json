@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "tool_effect",
+  "envelope": "production",
+  "schema": "tool_effect/1",
+  "go_type": "invoke.ToolEffect",
   "fields": [
     {
       "name": "header.ID",
@@ -77,25 +77,60 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Ordinal",
+      "wire": "ordinal",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "Op",
+      "wire": "op",
+      "go_type": "string",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Host",
-      "wire": "host",
+      "name": "Class",
+      "wire": "class",
+      "go_type": "invoke.OperationClass",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Key",
+      "wire": "key",
       "go_type": "string",
       "omittable": false,
       "is_thought": false
+    },
+    {
+      "name": "Announced",
+      "wire": "announced",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "IsError",
+      "wire": "is_error",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Evidence",
+      "wire": "evidence",
+      "go_type": "thought.Ref",
+      "omittable": false,
+      "is_thought": true
     }
   ],
   "source_ref": "7d403ea4",

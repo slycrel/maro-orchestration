@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "terminal_observed",
+  "envelope": "production",
+  "schema": "terminal_observed/1",
+  "go_type": "invoke.TerminalObserved",
   "fields": [
     {
       "name": "header.ID",
@@ -77,25 +77,39 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Attempt",
+      "wire": "attempt",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "State",
+      "wire": "state",
+      "go_type": "invoke.TerminalState",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Host",
-      "wire": "host",
+      "name": "Reason",
+      "wire": "reason",
       "go_type": "string",
-      "omittable": false,
+      "omittable": true,
       "is_thought": false
+    },
+    {
+      "name": "Transcript",
+      "wire": "transcript",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
     }
   ],
   "source_ref": "7d403ea4",

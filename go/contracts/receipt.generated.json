@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "receipt",
+  "envelope": "production",
+  "schema": "receipt/1",
+  "go_type": "invoke.Receipt",
   "fields": [
     {
       "name": "header.ID",
@@ -77,23 +77,30 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Attempt",
+      "wire": "attempt",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "Response",
+      "wire": "response",
+      "go_type": "thought.Ref",
       "omittable": false,
-      "is_thought": false
+      "is_thought": true
     },
     {
-      "name": "Host",
-      "wire": "host",
-      "go_type": "string",
+      "name": "Usage",
+      "wire": "usage",
+      "go_type": "invoke.Usage",
       "omittable": false,
       "is_thought": false
     }

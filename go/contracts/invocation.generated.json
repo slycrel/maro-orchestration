@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "invocation",
+  "envelope": "production",
+  "schema": "invocation/1",
+  "go_type": "invoke.Invocation",
   "fields": [
     {
       "name": "header.ID",
@@ -77,24 +77,52 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
+      "name": "Purpose",
+      "wire": "purpose",
+      "go_type": "invoke.Purpose",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "Request",
+      "wire": "request",
+      "go_type": "thought.Ref",
+      "omittable": false,
+      "is_thought": true
+    },
+    {
+      "name": "Backend",
+      "wire": "backend",
+      "go_type": "invoke.Capabilities",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Host",
-      "wire": "host",
+      "name": "EffectToken",
+      "wire": "effect_token",
       "go_type": "string",
       "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "TargetName",
+      "wire": "target_name",
+      "go_type": "string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "TargetLimit",
+      "wire": "target_limit",
+      "go_type": "int64",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "TargetWhy",
+      "wire": "target_why",
+      "go_type": "string",
+      "omittable": true,
       "is_thought": false
     }
   ],

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
+	_ "github.com/slycrel/maro-orchestration/go/internal/invoke" // registers the invocation kinds
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"

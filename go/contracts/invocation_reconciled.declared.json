@@ -1,0 +1,35 @@
+{
+  "kind": "invocation_reconciled",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/invoke:TestReconcileDispositions",
+  "fields": {
+    "invocation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "rejects": "not-a-ulid",
+      "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
+    },
+    "disposition": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(abandoned|indeterminate_external_effect)$",
+      "rejects": "replay",
+      "measured_by": "internal/invoke:TestReconcileDispositions"
+    },
+    "evidence": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "unknown_value": "accepted-unchanged",
+      "constraint": "unconstrained"
+    }
+  }
+}

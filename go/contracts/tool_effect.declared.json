@@ -1,0 +1,74 @@
+{
+  "kind": "tool_effect",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition",
+  "fields": {
+    "invocation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "rejects": "not-a-ulid",
+      "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
+    },
+    "ordinal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1"
+    },
+    "op": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "accepted-unchanged",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestKeysAndClasses"
+    },
+    "class": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(query|write_local|reversible|irreversible)$",
+      "rejects": "harmless",
+      "measured_by": "internal/invoke:TestKeysAndClasses"
+    },
+    "key": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9a-f]{64}$",
+      "rejects": "nope",
+      "measured_by": "internal/invoke:TestKeysAndClasses"
+    },
+    "announced": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestSubprocessWithFakeCLI"
+    },
+    "is_error": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained"
+    },
+    "evidence": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
+    }
+  }
+}

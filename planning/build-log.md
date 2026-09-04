@@ -199,3 +199,46 @@ is only the error the caller gets (step 9's supervisor/health line is where
 that surfaces); power-loss durability of directory entries is tested by
 inspection, not by fault injection; a lease's `Live()` is "we still hold the
 fd", not a re-probe of the kernel lock.
+
+## Step 3 — invocation boundary: state machine, scripted + subprocess backends, restart reconciliation (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| Invocation state machine as records: prepared → dispatched → tool effects → terminal_observed → receipt; `Reconciled` on restart | §4 (r2-I, r3-1, r4-5) | kept |
+| Effect token committed before dispatch; per-effect key `derive(token, ordinal)` | §4 | kept |
+| Key HANDSHAKE (backend asks for a key before acting) | §4 | **not implementable for the claude CLI** — it performs its own tool calls. The backend declares `OutwardReconcilable=false`; its effects are post-hoc evidence (`Announced=false`); a dispatched call without a terminal reconciles to `indeterminate_external_effect`. The handshake seam exists (`Sink.Effect` returns the key) for a backend that can. |
+| Registered operation table (tool name → class), unknown ⇒ irreversible | §4 (r6-3), broker | kept — the broker's enforcement (refusing non-query ops during a fork) is step 8 |
+| `scripted` backend | §4, §15 | kept |
+| `subprocess` (claude CLI, stream-json) | §4 | kept; flag set taken from the CLI's contract, prompt on stdin, merged capture kept as a transcript thought |
+| codex CLI backend | design "claude / codex" | **deferred** — one real backend is enough for every step-4..13 scenario; codex attaches through the same seam when a reviewer or a second executor needs it |
+| Retries inside the shell | §4 `Attempt` | **not in v1** — `Attempt` is carried on terminal/receipt; the driver decides retries (step 5) with the reconciliation facts |
+| B4 `build/calls/call-NNNNN.json` projection | shared spec | **deferred to step 5** (needs run dirs); the records carry everything B4 needs |
+| Metering targets on invocations | D13 | kept as optional `{name, limit, why}` (why required) |
+| Purpose vocabulary | §4 | five values; extend with a Finding |
+
+**Built.** `internal/invoke`: six registered kinds with `ValidateWire`,
+`Backend` interface + `Sink`, `Scripted`, `Subprocess` (claude) with a
+stream-json parser that reconstructs tool events from `assistant.tool_use` /
+`user.tool_result` pairs and treats frames after the result that do not
+parse as `partial`, the `Shell` (Invoke, Fold, Reconcile), the operation
+table. Declared contracts for all six kinds; registry now 8 kinds.
+
+**Edge tests.** Every transition committed and folded, effect classes/keys/
+order, request and response stored whole, target why required, bad purpose
+refused with nothing written; before-dispatch failure leaves a terminal,
+failed stream leaves no receipt, partial stream leaves a receipt;
+reconciliation: tool-less ⇒ abandoned, outward ⇒ indeterminate even with zero
+effects, prepared-only is not an orphan, idempotent; a hung backend cut by
+the context still records its terminal (bookkeeping is detached from the
+caller's deadline — found by the test); parser against the CLI's event
+shapes incl. error-result and unanswered tool_use; CLI args per request
+shape; a fake `claude` script exercises the real subprocess path end to end
+(effects, transcript kept, mid-stream death ⇒ failed with error evidence);
+live smoke gated behind `MARO_GO_LIVE=1`.
+
+**Live smoke (run once, 2026-09-05):** real claude CLI, tool-less judge
+call, `PONG` back whole; receipt usage `{"input_tokens":10,"output_tokens":49,
+"cost_usd":0.032923,"wall_ms":2702}` — the first real receipt in the
+successor's journal.

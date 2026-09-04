@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "invocation_reconciled",
+  "envelope": "production",
+  "schema": "invocation_reconciled/1",
+  "go_type": "invoke.Reconciled",
   "fields": [
     {
       "name": "header.ID",
@@ -77,22 +77,22 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "Disposition",
+      "wire": "disposition",
+      "go_type": "invoke.Disposition",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Host",
-      "wire": "host",
+      "name": "Evidence",
+      "wire": "evidence",
       "go_type": "string",
       "omittable": false,
       "is_thought": false

@@ -1,8 +1,8 @@
 {
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "invocation_dispatched",
+  "envelope": "production",
+  "schema": "invocation_dispatched/1",
+  "go_type": "invoke.Dispatched",
   "fields": [
     {
       "name": "header.ID",
@@ -77,23 +77,9 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Host",
-      "wire": "host",
-      "go_type": "string",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     }
