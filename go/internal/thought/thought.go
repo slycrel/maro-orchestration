@@ -30,10 +30,11 @@ const (
 	StepResult  Kind = "step_result"
 	Deliverable Kind = "deliverable"
 	LessonText  Kind = "lesson_text"
-	Step        Kind = "step" // one planned step's text (AGENDA)
+	Step        Kind = "step"    // one planned step's text (AGENDA)
+	Fixture     Kind = "fixture" // an experiment unit's expected answer (deterministic oracle)
 )
 
-var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true}
+var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true, Fixture: true}
 
 // Encoding says what a text backend may be handed (utf8) versus what only a
 // file transport may carry (bytes). Derived at store time, never declared by

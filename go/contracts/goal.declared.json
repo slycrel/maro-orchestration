@@ -31,7 +31,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(cli|socket|fork)$",
+      "pattern": "^(cli|socket|fork|replay)$",
       "rejects": "telegram",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
     },
@@ -54,6 +54,13 @@
       "pattern": "^(now|agenda)$",
       "rejects": "later",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "replay": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestBlindedDiscrimination"
     }
   }
 }

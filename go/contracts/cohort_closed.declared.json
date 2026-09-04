@@ -1,0 +1,33 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "cohort_closed",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/experiment:TestBlindedDiscrimination",
+  "fields": {
+    "experiment": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "commitment": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "count": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[1-9][0-9]*$",
+      "rejects": "0",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    }
+  }
+}

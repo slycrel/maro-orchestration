@@ -45,7 +45,7 @@
       "used_for": "authorization",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(operator|tenure)$",
+      "pattern": "^(operator|tenure|measurement)$",
       "rejects": "oracle",
       "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
     },

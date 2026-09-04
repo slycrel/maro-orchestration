@@ -151,8 +151,8 @@ func (r *TailDone) ValidateWire() error {
 	if r.Unreadable != nil && r.Unreadable.Hash == "" {
 		return errors.New("tail_done: unreadable names a thought")
 	}
-	if r.Skipped != "" && r.Skipped != skipReason("cancelled") && r.Skipped != skipReason("completed_late") {
-		return fmt.Errorf("tail_done: skip reason %q out of vocabulary (a fork member's terminal)", r.Skipped)
+	if r.Skipped != "" && r.Skipped != skipReason("cancelled") && r.Skipped != skipReason("completed_late") && r.Skipped != SkipReplay {
+		return fmt.Errorf("tail_done: skip reason %q out of vocabulary (a fork member's terminal, or a replay arm)", r.Skipped)
 	}
 	if r.Diagnosis != "" {
 		if err := record.ValidateID(r.Diagnosis); err != nil {

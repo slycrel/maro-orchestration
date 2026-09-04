@@ -85,6 +85,7 @@ type PolicySelection struct {
 	Enabled       []ItemRev          `json:"enabled,omitempty"`    // the selectable subset, same order
 	Basis         []record.RecordID  `json:"basis,omitempty"`      // per enabled revision, the transition that made it selectable
 	Snapshot      map[Mechanism]bool `json:"snapshot"`             // defaults, then each enabled rule in order
+	Arm           *ArmRef            `json:"arm,omitempty"`        // an experiment arm's forced sets (goal origin replay only)
 }
 
 func (r *PolicySelection) Head() *record.Header { return &r.Header }
@@ -132,6 +133,9 @@ func (r *PolicySelection) ValidateWire() error {
 		}
 	}
 	if err := validSnapshot(r.Snapshot); err != nil {
+		return fmt.Errorf("policy_selection: %w", err)
+	}
+	if err := r.Arm.validate(); err != nil {
 		return fmt.Errorf("policy_selection: %w", err)
 	}
 	return nil
@@ -214,24 +218,56 @@ func SelectPolicy(led *Ledger, q Query) *PolicySelection {
 		standing = append(standing, s)
 	}
 	sort.Slice(standing, func(i, j int) bool { return standing[i] < standing[j] })
-	sel := &PolicySelection{Scope: q.Scope, Family: q.Family, Standing: standing, Snapshot: Defaults()}
+	sel := &PolicySelection{Scope: q.Scope, Family: q.Family, Standing: standing, Snapshot: Defaults(), Arm: q.Arm}
 	for _, id := range ids {
 		it := led.Items[id]
 		cur := it.Current
-		if cur.LearnedKind != Policy || !inScope[cur.Scope] || (cur.Family != "" && cur.Family != q.Family) {
-			continue
-		}
 		ir := ItemRev{Item: id, Revision: cur.ID}
-		sel.Considered = append(sel.Considered, ir)
-		if !q.Standing[it.StageOf(cur.ID)] {
+		if cur.LearnedKind != Policy {
 			continue
 		}
-		trs := it.Transitions[cur.ID]
+		forced := q.forced(ir)
+		if forced == "" && (!inScope[cur.Scope] || (cur.Family != "" && cur.Family != q.Family)) {
+			continue
+		}
+		sel.Considered = append(sel.Considered, ir)
+		switch {
+		case forced == "withhold":
+			continue
+		case forced == "apply":
+			// the arm decided it: its assignment is the basis
+			sel.Basis = append(sel.Basis, q.Arm.Assignment)
+		case !q.Standing[it.StageOf(cur.ID)]:
+			continue
+		default:
+			trs := it.Transitions[cur.ID]
+			sel.Basis = append(sel.Basis, trs[len(trs)-1].ID) // selectable ⇒ at least one transition (candidate never is)
+		}
 		sel.Enabled = append(sel.Enabled, ir)
-		sel.Basis = append(sel.Basis, trs[len(trs)-1].ID) // selectable ⇒ at least one transition (candidate never is)
 		sel.Snapshot[cur.Policy.Mechanism] = cur.Policy.Enabled
 	}
 	return sel
+}
+
+// forced says what the arm forces on an item at its current revision:
+// "apply", "withhold", or "" — a forced revision that is no longer the
+// item's current one forces nothing (the experiment is stale; the
+// verifier will say so).
+func (q Query) forced(ir ItemRev) string {
+	if q.Arm == nil {
+		return ""
+	}
+	for _, a := range q.Arm.Apply {
+		if a == ir {
+			return "apply"
+		}
+	}
+	for _, w := range q.Arm.Withhold {
+		if w == ir {
+			return "withhold"
+		}
+	}
+	return ""
 }
 
 // Applications derives the policy applications a selection owes: one per
@@ -266,7 +302,7 @@ func (led *Ledger) checkPolicy(x *PolicySelection) error {
 	if !sameStages(standing, Selectable) {
 		return fmt.Errorf("learn: policy selection %s used standing %v, not the selectable set", x.ID, x.Standing)
 	}
-	want := SelectPolicy(led, Query{Scope: x.Scope, Family: x.Family, Standing: standing})
+	want := SelectPolicy(led, Query{Scope: x.Scope, Family: x.Family, Standing: standing, Arm: x.Arm})
 	if !samePolicy(want, x) {
 		return fmt.Errorf("learn: policy selection %s does not re-derive from the ledger (enabled %v vs %v; snapshot %v vs %v)", x.ID, x.Enabled, want.Enabled, x.Snapshot, want.Snapshot)
 	}

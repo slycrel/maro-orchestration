@@ -1183,3 +1183,97 @@ provisional; `now --model haiku` on a factual question answered normally;
 the journal holds one `policy_selection` with `{"model_judge":true,
 "recall":false}`, the recall selection with `"policy:recall_off":2`, and
 zero applications.
+
+## Step 10b — the experiment protocol: paired replay, attestation → measurement → lifecycle (2026-09-05)
+
+The measured loop's unit (§8a, §9, §19): an immutable protocol, arms
+that differ by exactly the hypothesis, a blinded oracle, an estimator
+that is a fold, and a lifecycle transition that is DERIVED from the
+measurement rather than asserted by anyone.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| Experiment as immutable protocol in the control envelope: hypothesis (`ItemRev`), relation, population (a family), assignment kind, arms, predeclared outcome + analysis, `n`, oracle | §8a, §9, §19 | kept: `experiment` (control); nothing on it accrues — counts are folds over assignments, closure is its own record. `Version` + `Prior` (the prior attestation) carry the fishing guard (§19.4): one open experiment per hypothesis and population; a re-open is Version+1 |
+| Assignment kinds | §8a "paired replay for deterministic units; randomized live assignment otherwise" | **cut to paired replay, fixed-n**: every unit is a past terminal production goal of the population family, re-run in both arms. Randomized live assignment and shadow arms (the experimental envelope, still unused) are step 11 |
+| Oracle classes | §8a "deterministic fixtures, held-out blinded judge; the historical closure verdict is NOT an oracle" | **cut to `deterministic_fixture`**: score 1 when the deliverable contains the fixture text. The evaluator sees deliverable + fixture and nothing else — the hypothesis text is not an input, so the blinding is by construction and the verifier recomputes every score. The blinded model judge is step 11 |
+| Outcome dimensions and estimators | §8a | one dimension (`fixture_match`, higher), one estimator (`paired_diff/1`: ITT over pairs with both outcomes, per-protocol over pairs whose exposure held as intended, discordance count; verdict by margin + `min_discordant` / `min_equivalent`). Missing outcomes: excluded (declared) |
+| Unit evidence derived over the run fold: exposure, deliverable, artifact root, missingness — no scores | §19.1 | kept: `unit_evidence` (production), committed by the runner when the arm run is terminal; the fold recomputes all four from the run fold (derived only over stable inputs, pattern 46) |
+| Cohort commitment: authenticated denominator + canonical protocol projection | §19.2 | kept: `cohort_commitment` (production) in ONE command with `cohort_closed` (control); the protocol is embedded so a production-only verifier never reads control. **Merkle paths cut**: the root is recomputed from the full unit list (fixed-n makes the list small) |
+| Attestation: one row per cohort unit with evidence ids + scores | §19.3 | kept: `effect_attestation`; the fold recomputes every row (evidence ids, missingness, per-protocol exposure, both scores) from the evidence and the fixtures |
+| Measurement as a deterministic fold; the ONE thing a measurement transition may cite | §8a, §7 | kept: `effect_measurement` implements `learn.EffectEvidence`; `learn.Fold` checks a measurement transition's item and edge (`StageFor`) against it without importing this package; `experiment.Fold` recomputes the measurement from the attestation |
+| `item_redundant` → tombstone | §7 | kept: `provisional|effective|canon → tombstone` added to the legal table (design §7 amended); `equivalent` normalizes to `item_redundant`; a measured-equivalent selectable revision leaves the population |
+| The tail never learns from an arm | §9 | kept: `tail_done{skipped: "replay arm: not learned from"}`; the fold refuses that skip on a non-replay run |
+| Production-only verifier mode | §19.5 | **cut**: `experiment.Fold` reads both envelopes (control for the protocol and denominator). The production records carry everything a production-only verifier would need (embedded protocol, opaque control ids); the mode itself waits for a second reader |
+| Exclusions / stopping rules beyond fixed-n | §8a | cut: v1 closes at `n`; a unit with a missing outcome is excluded from analysis, never from the cohort |
+
+**Built.** `internal/experiment` — 7 kinds (registry at 47; contracts
+0/0, three new field lines on `goal.replay`, `recall_selection.arm`,
+`policy_selection.arm`; `learned_transition.actor` gains `measurement`;
+`goal.origin` gains `replay`). `Open` (checks units against the run fold
+and the hypothesis against the learned fold, applies the fishing guard as
+the fold does); `Runner.Run` (sequential, D6: assign → treatment →
+control per unit; every commit keyed; resumes a killed arm via
+`ResumeRun`, an unstarted arm goal via `StartGoal`, a terminal arm by
+deriving its evidence); `Close` (closure+commitment → attestation →
+measurement → the transition `StageFor` derives; idempotent);
+`Measure` (pure); `Score` (pure). `run`: `Driver.Replay` +
+`ReplayOrigin` (presents to no one); a replay goal's parent is the unit
+(fold: an earlier non-replay non-fork goal of the same root); recall and
+policy selections carry the `ArmRef` (fold: exactly the goal's);
+`Ledger.Replays` (one run per assignment and arm); `Resume` leaves
+arm goals and runs to the runner. `learn`: `ArmRef` forced sets (apply
+regardless of standing → `arm:withheld` / included), `EffectEvidence`,
+`StageFor`, `ActorMeasurement`. `maro-go experiment open|run|close|list|show`.
+
+**Edge tests.** `TestBlindedDiscrimination` — the design's end-to-end
+(§8a): a keyed executor whose answer depends on exactly which lesson
+text reached the request; a candidate "Answer in meters." applied over
+three Everest units (fixture `8,849 meters`) measures treatment 3/3 vs
+control 0/3 → `item_helpful` → effective; a candidate "Answer in feet."
+over three K2 units measures `item_harmful` → quarantined; the next
+production Everest request carries the effective lesson and not the
+quarantined one and the delivered answer changed; every arm attempt's
+tail is `skipped: replay arm`; a second open on the same hypothesis is
+refused; re-close is idempotent (one transition). `TestEstimatorAndOracle`
+— the seven verdict cases (one discordant pair is insufficient;
+equivalence needs exposure; missing pairs excluded; unexposed pairs
+count for ITT only), ablation sign flip, oracle edge cases.
+`TestFoldRefusesForgedExperiments` — 13 must-detect fixtures over
+snapshots of one honest history (re-open without the version bump /
+with the wrong prior, a unit not in the protocol, a unit assigned twice,
+an assignment after closure, evidence for the wrong arm run, a
+commitment before the evidence is complete / with a foreign protocol,
+a second attestation with an altered score, a second measurement with
+the wrong verdict, a measurement transition moving another item / to
+the wrong stage). `TestRunnerResumesAfterKill` — killed after
+`recorded` (arm run non-terminal, no evidence) and after `intake` (arm
+goal with no run): a plain `Resume` touches neither; the next `Run`
+finishes with exactly six arm runs and Close measures. `TestOpenRefusesBadUnits`
+— mixed families, unknown hypothesis, no units, not a goal, an arm as a
+unit; a re-open is v2 citing the prior attestation.
+
+**Live.** Scratch workspace, haiku. Two production NOW runs ("height of
+Everest", "how tall is K2") both answered with feet AND meters; `learn
+add "Give every height in feet only, never in meters."` (candidate);
+`experiment open --relation apply --unit <goal>=meters --unit
+<goal>=meters` over both (population `answer`, n=2); `experiment run
+--model haiku`: four arm runs, treatment `exposed=true` answering in
+feet only, control `exposed=false` answering with both units;
+`experiment close`: `treatment_harmful → item_harmful (assigned 2,
+analyzed 2, exposed 2, discordant 2, delta_pp -1.000)`, the revision
+`now quarantined` by a `learned_transition{actor: measurement}` citing
+the measurement. The next production run's recall excluded it
+(`stage:quarantined: 1`, 0 included). Tail passes closed all four arm
+attempts `skipped: replay arm: not learned from` (4 of 6 tail_done);
+the arms produced no proposals. Journal census: 8 `experiment`-kind
+records across the seven kinds, 35 goals, 7 attempts.
+
+Residuals stated: `learn.Fold` verifies a measurement transition only
+through the `EffectEvidence` interface, so a consistently forged
+attestation+measurement pair passes `learn.Fold` alone
+(`experiment.Fold` recomputes both; the production-only verifier mode
+that would make this one reader is the §19.5 cut); the experimental
+envelope stays unused until shadow arms (step 11); the runner is
+sequential and one experiment at a time (D6).

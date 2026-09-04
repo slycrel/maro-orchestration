@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -84,6 +85,7 @@ func samples() map[record.Kind]any {
 	lesson := thought.Ref{Hash: "s256v1:" + strings.Repeat("ef", 32), Kind: thought.LessonText, Bytes: 9, Encoding: thought.UTF8}
 	step := thought.Ref{Hash: "s256v1:" + strings.Repeat("12", 32), Kind: thought.Step, Bytes: 5, Encoding: thought.UTF8}
 	resp := thought.Ref{Hash: "s256v1:" + strings.Repeat("34", 32), Kind: thought.Response, Bytes: 5, Encoding: thought.UTF8}
+	fixture := thought.Ref{Hash: "s256v1:" + strings.Repeat("56", 32), Kind: thought.Fixture, Bytes: 5, Encoding: thought.UTF8}
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
@@ -97,7 +99,7 @@ func samples() map[record.Kind]any {
 		verdict.KindVerdict:         &verdict.Verdict{Header: withSchema(h, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Confidence: 0.7, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: inv}, Basis: []record.Ref{{Kind: "receipt", ID: "r"}}, Falsifiers: []thought.Ref{ref}, Direction: verdict.Both},
 		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
-		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginCLI, Lane: run.LaneNow, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}},
+		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginReplay, Lane: run.LaneNow, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}, Replay: &run.ReplayRef{Assignment: inv, Arm: "treatment"}},
 		run.KindFamilyAssessment:    &run.FamilyAssessment{Header: withSubject(withSchema(h, "family_assessment/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Family: run.FamilyAnswer, Rule: run.FamilyRule, Reason: "question shape"},
 		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneAgenda, Backend: caps, Judge: run.JudgeModel, JudgeBackend: caps, PlanCardinality: 0, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer, Confined: true, Policy: inv, Mechanisms: learn.Defaults()}, RecoversFrom: 1},
 		run.KindTransition:          &run.Transition{Header: withSchema(h, "run_transition/1"), From: run.Recorded, To: run.Delivered, Reason: "transport took it", Delivery: run.TransportAccepted, Evidence: []record.Ref{{Kind: "delivery_attempted", ID: "x"}}},
@@ -107,8 +109,8 @@ func samples() map[record.Kind]any {
 		learn.KindRevision:          &learn.LearnedRevision{Header: withSubject(withSchema(h, "learned_revision/1"), record.Ref{Kind: "learned", ID: string(inv)}), Item: learn.LearnedID(inv), Predecessor: inv, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Family: "answer", Policy: &learn.PolicyRule{Mechanism: learn.MechRecall, Enabled: false}, Provenance: learn.Provenance{Source: "operator", Ref: inv, Why: "seen twice"}},
 		learn.KindTransition:        &learn.LifecycleTransition{Header: withSubject(withSchema(h, "learned_transition/1"), record.Ref{Kind: "learned", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, From: learn.Candidate, To: learn.Provisional, Actor: learn.ActorOperator, Why: "restamp"},
 		learn.KindApplication:       &learn.Application{Header: withSubject(withSchema(h, "application/1"), record.Ref{Kind: "invocation", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, Invocation: inv, Representation: lesson},
-		learn.KindRecall:            &learn.RecallSelection{Header: withSubject(withSchema(h, "recall_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Purpose: invoke.PurposeExecute, Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: 2, Included: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, ExcludedCounts: map[string]int{"stage:candidate": 1}, ExcludedSample: []learn.Excluded{{ItemRev: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Reason: "stage:candidate"}}, ProjectedBytes: 40, Policy: inv},
-		learn.KindPolicySelection:   &learn.PolicySelection{Header: withSubject(withSchema(h, "policy_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, Enabled: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, Basis: []record.RecordID{inv}, Snapshot: map[learn.Mechanism]bool{learn.MechRecall: false, learn.MechModelJudge: true}},
+		learn.KindRecall:            &learn.RecallSelection{Header: withSubject(withSchema(h, "recall_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Purpose: invoke.PurposeExecute, Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: 2, Included: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, ExcludedCounts: map[string]int{"stage:candidate": 1}, ExcludedSample: []learn.Excluded{{ItemRev: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Reason: "stage:candidate"}}, ProjectedBytes: 40, Policy: inv, Arm: &learn.ArmRef{Assignment: inv, Arm: "control"}},
+		learn.KindPolicySelection:   &learn.PolicySelection{Header: withSubject(withSchema(h, "policy_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, Enabled: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, Basis: []record.RecordID{inv}, Snapshot: map[learn.Mechanism]bool{learn.MechRecall: false, learn.MechModelJudge: true}, Arm: &learn.ArmRef{Assignment: inv, Arm: "control"}},
 		learn.KindPolicyApplication: &learn.PolicyApplication{Header: withSubject(withSchema(h, "policy_application/1"), record.Ref{Kind: "policy_selection", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, Selection: inv, Rule: learn.PolicyRule{Mechanism: learn.MechRecall, Enabled: false}},
 		supervise.KindLaneEvent:     &supervise.LaneEvent{Header: withSubject(record.Header{ID: record.NewID(), Seq: 7, Schema: "lane_event/1", Subject: record.Ref{Kind: "lane", ID: "sheriff"}, Supersedes: record.NewID(), At: time.Now().UTC()}, record.Ref{Kind: "lane", ID: "sheriff"}), Lane: "sheriff", Event: supervise.LanePanicked, Generation: 2, Reason: "panic: x"},
 		supervise.KindLaneHeartbeat: &supervise.LaneHeartbeat{Header: record.Header{ID: record.NewID(), Seq: 7, Schema: "lane_heartbeat/1", Subject: record.Ref{Kind: "lane", ID: "sheriff"}, Supersedes: record.NewID(), At: time.Now().UTC()}, Lane: "sheriff", Generation: 1, Watermark: 99},
@@ -124,8 +126,26 @@ func samples() map[record.Kind]any {
 		run.KindJoinSettled:         &run.JoinSettled{Header: withSubject(withSchema(h, "join_settled/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv},
 		tail.KindDiagnosis:          &tail.Diagnosis{Header: withSubject(withSchema(h, "diagnosis/1"), record.Ref{Kind: "run", ID: "run-1"}), Signals: []tail.Signal{tail.SignalUnjudged}, Class: tail.ClassIncompleteAnswer, Why: "missed the second question", Lens: inv, LensRule: "lens"},
 		tail.KindTailDone:           &tail.TailDone{Header: withSubject(withSchema(h, "tail_done/1"), record.Ref{Kind: "run", ID: "run-1"}), Skipped: "fork member cancelled: not learned from"},
+		experiment.KindExperiment:   &experiment.Experiment{Header: withSubject(withSchema(h, "experiment/1"), record.Ref{Kind: "experiment", ID: string(h.ID)}), Protocol: protocol(h.ID, inv, fixture), Prior: inv, Why: "measure it"},
+		experiment.KindAssignment:   &experiment.Assignment{Header: withSubject(withSchema(h, "assignment/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Unit: inv, Ordinal: 0, Seed: experiment.Seed(inv, inv)},
+		experiment.KindClosed:       &experiment.Closed{Header: withSubject(withSchema(h, "cohort_closed/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Commitment: inv, Count: 1},
+		experiment.KindEvidence:     &experiment.UnitEvidence{Header: withSubject(withSchema(h, "unit_evidence/1"), record.Ref{Kind: "run", ID: "run-1"}), Assignment: inv, Experiment: inv, Unit: inv, Arm: "treatment", Exposed: true, ArtifactRoot: strings.Repeat("ab", 32), Missing: experiment.MissingNoDeliverable},
+		experiment.KindCommitment:   &experiment.CohortCommitment{Header: withSubject(withSchema(h, "cohort_commitment/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Protocol: protocol(inv, inv, fixture), Units: cohort(inv), Root: experiment.CohortRoot(cohort(inv)), Count: 1},
+		experiment.KindAttestation:  &experiment.EffectAttestation{Header: withSubject(withSchema(h, "effect_attestation/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Cohort: inv, Closure: inv, Protocol: protocol(inv, inv, fixture), Units: []experiment.UnitRow{{Unit: inv, Assignment: inv, Treatment: inv, Control: inv, TreatmentScore: 1, Exposed: true}}, Evaluator: experiment.Evaluator, Estimator: experiment.Estimator},
+		experiment.KindMeasurement:  &experiment.EffectMeasurement{Header: withSubject(withSchema(h, "effect_measurement/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Attestation: inv, Hypothesis: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Relation: experiment.ApplyItem, Assigned: 1, Analyzed: 1, Exposed: 1, Discordant: 1, DeltaITT: 1, DeltaPP: 1, Verdict: experiment.TreatmentHelpful, ItemEffect: learn.ItemHelpful},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
+}
+
+func protocol(exp, unit record.RecordID, fixture thought.Ref) experiment.Protocol {
+	hyp := learn.ItemRev{Item: learn.LearnedID(unit), Revision: unit}
+	return experiment.Protocol{Experiment: exp, Version: 2, Hypothesis: hyp, Relation: experiment.ApplyItem, Population: "answer", Assignment: experiment.PairedReplay, Arms: experiment.Arms(hyp, experiment.ApplyItem),
+		Outcome: experiment.OutcomeSpec{Dimension: experiment.Dimension, Direction: "higher", Margin: 0}, N: 1, Analysis: experiment.AnalysisSpec{Estimator: experiment.Estimator, MinDiscordant: 1, MinEquivalent: 2, Missing: "exclude"},
+		Oracle: experiment.DeterministicFixture, Units: []experiment.UnitSpec{{Goal: unit, Fixture: fixture}}}
+}
+
+func cohort(id record.RecordID) []experiment.AssignedUnit {
+	return []experiment.AssignedUnit{{Unit: id, Assignment: id, Ordinal: 0, Seed: experiment.Seed(id, id)}}
 }
 
 func withSchema(h record.Header, s record.SchemaVer) record.Header { h.Schema = s; return h }

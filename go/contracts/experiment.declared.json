@@ -1,0 +1,33 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "experiment",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/experiment:TestBlindedDiscrimination",
+  "fields": {
+    "protocol": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "\"assignment\":\"paired_replay\",.*\"oracle\":\"deterministic_fixture\",.*\"relation\":\"(apply_item|ablate_item)\"",
+      "rejects": "{\"assignment\":\"paired_replay\",\"oracle\":\"deterministic_fixture\",\"relation\":\"teleport\"}",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "prior": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestOpenRefusesBadUnits"
+    },
+    "why": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestOpenRefusesBadUnits"
+    }
+  }
+}

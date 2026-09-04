@@ -1,0 +1,67 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "effect_attestation",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/experiment:TestBlindedDiscrimination",
+  "fields": {
+    "experiment": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "cohort": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "closure": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "protocol": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "\"assignment\":\"paired_replay\",.*\"oracle\":\"deterministic_fixture\",.*\"relation\":\"(apply_item|ablate_item)\"",
+      "rejects": "{\"assignment\":\"paired_replay\",\"oracle\":\"deterministic_fixture\",\"relation\":\"teleport\"}",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "units": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "evaluator": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^fixture/1$",
+      "rejects": "vibes/1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "estimator": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^paired_diff/1$",
+      "rejects": "eyeball/1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    }
+  }
+}

@@ -125,8 +125,15 @@
       "go_type": "map[learn.Mechanism]bool",
       "omittable": true,
       "is_thought": false
+    },
+    {
+      "name": "Arm",
+      "wire": "arm",
+      "go_type": "*learn.ArmRef",
+      "omittable": true,
+      "is_thought": false
     }
   ],
-  "source_ref": "841ac928",
+  "source_ref": "d6bf0223",
   "generator": "maro-go contracts gen v1"
 }

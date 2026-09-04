@@ -51,10 +51,11 @@ type GoalOrigin string
 
 const (
 	OriginCLI    GoalOrigin = "cli"    // an in-process verb: the payload is written to the verb's stdout
+	OriginReplay GoalOrigin = "replay" // an experiment arm re-running a unit goal (step 10): presented to no one
 	OriginSocket GoalOrigin = "socket" // a client of the always-on process: the payload goes back over its connection
 )
 
-var origins = map[GoalOrigin]bool{OriginCLI: true, OriginSocket: true}
+var origins = map[GoalOrigin]bool{OriginCLI: true, OriginSocket: true, OriginReplay: true}
 
 // DeliveryState names what a delivery step PROVED (§12). `endpoint_accepted`
 // has no v1 producer (it needs a program origin) and is not in the
@@ -90,6 +91,17 @@ type Goal struct {
 	Origin        GoalOrigin      `json:"origin"`
 	Lane          Lane            `json:"lane"` // the driver configuration this goal is routed to (explicit in v1)
 	Delivery      DeliveryPolicy  `json:"delivery"`
+	// Replay is set exactly when the origin is replay: this goal is one arm
+	// of an experiment assignment, re-running its parent (the unit).
+	Replay *ReplayRef `json:"replay,omitempty"`
+}
+
+// ReplayRef names the assignment and arm a replay goal serves. The
+// assignment is a control record: production readers carry its id as an
+// opaque reference and never read it (§9).
+type ReplayRef struct {
+	Assignment record.RecordID `json:"assignment"`
+	Arm        string          `json:"arm"` // treatment | control
 }
 
 func (r *Goal) Head() *record.Header { return &r.Header }
@@ -121,6 +133,20 @@ func (r *Goal) ValidateWire() error {
 	}
 	if !requiredStates[r.Delivery.Required] {
 		return fmt.Errorf("goal: delivery.required %q out of vocabulary", r.Delivery.Required)
+	}
+	if (r.Origin == OriginReplay) != (r.Replay != nil) {
+		return errors.New("goal: a replay goal names its assignment and arm; no other goal does")
+	}
+	if r.Replay != nil {
+		if err := record.ValidateID(r.Replay.Assignment); err != nil {
+			return fmt.Errorf("goal: replay: %w", err)
+		}
+		if !learn.Arms[r.Replay.Arm] {
+			return fmt.Errorf("goal: replay arm %q out of vocabulary", r.Replay.Arm)
+		}
+		if r.Parent == "" {
+			return errors.New("goal: a replay goal's parent is the unit it replays")
+		}
 	}
 	return nil
 }

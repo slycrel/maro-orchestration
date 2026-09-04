@@ -189,7 +189,12 @@ type Ledger struct {
 	// Forks by fork id; goals by id (a child goal may not have a run yet).
 	Forks map[record.RecordID]*ForkState
 	goals map[record.RecordID]*Goal
+	// Replays: the arm runs by assignment id, then arm (one each).
+	Replays map[record.RecordID]map[string]*RunState
 }
+
+// Goal returns a folded goal by id.
+func (led *Ledger) Goal(id record.RecordID) *Goal { return led.goals[id] }
 
 // Fold folds the production population into per-run state and REFUSES any
 // history the driver could not have written: the journal door executes each
@@ -215,6 +220,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	acks := map[record.RecordID]*InterruptAck{}
 	forks := map[record.RecordID]*ForkState{}
 	memberOf := map[record.RunID]*ForkState{}
+	replays := map[record.RecordID]map[string]*RunState{}
 	forkedGoals := map[record.RecordID]bool{}
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
@@ -249,6 +255,12 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	err = pr.Scan(0, func(r record.Record) error {
 		switch x := r.(type) {
 		case *Goal:
+			if x.Replay != nil {
+				unit := goals[x.Parent]
+				if unit == nil || unit.Origin == OriginReplay || unit.Origin == OriginFork || x.Root != unit.Root {
+					return fmt.Errorf("run: replay goal %s replays %s, which is not an earlier production unit of the same root", x.ID, x.Parent)
+				}
+			}
 			goals[x.ID] = x
 			goalOrder = append(goalOrder, x)
 		case *FamilyAssessment:
@@ -492,6 +504,26 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					return fmt.Errorf("run: %s attempt %d config says %s=%v, its policy selection says %v", x.RunID, x.Attempt, m, x.Config.Mechanisms[m], on)
 				}
 			}
+			// an arm's selections carry its assignment; a production run's carry none
+			if err := armMatches(rs.Goal, pol.Arm); err != nil {
+				return fmt.Errorf("run: %s attempt %d policy selection: %w", x.RunID, x.Attempt, err)
+			}
+			if rec := learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]; rec != nil {
+				if err := armMatches(rs.Goal, rec.Arm); err != nil {
+					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
+				}
+			}
+			if x.Attempt == 1 && rs.Goal.Replay != nil {
+				arms := replays[rs.Goal.Replay.Assignment]
+				if arms == nil {
+					arms = map[string]*RunState{}
+					replays[rs.Goal.Replay.Assignment] = arms
+				}
+				if arms[rs.Goal.Replay.Arm] != nil {
+					return fmt.Errorf("run: %s is a second run of assignment %s arm %s", x.RunID, rs.Goal.Replay.Assignment, rs.Goal.Replay.Arm)
+				}
+				arms[rs.Goal.Replay.Arm] = rs
+			}
 			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)], Policy: pol}
 			if x.Attempt > 1 {
 				// a recovered attempt starts from the last committed idempotent
@@ -715,7 +747,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals}
+	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Replays: replays}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)
@@ -1230,6 +1262,21 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// armMatches: a selection's arm is exactly the goal's replay reference
+// (assignment and arm), and absent for a goal that is no arm. The forced
+// sets are the experiment verifier's to check against the protocol.
+func armMatches(g *Goal, arm *learn.ArmRef) error {
+	switch {
+	case g.Replay == nil && arm != nil:
+		return fmt.Errorf("carries arm %s/%s but the goal is not a replay", arm.Assignment, arm.Arm)
+	case g.Replay != nil && arm == nil:
+		return fmt.Errorf("carries no arm but the goal replays assignment %s", g.Replay.Assignment)
+	case g.Replay != nil && (arm.Assignment != g.Replay.Assignment || arm.Arm != g.Replay.Arm):
+		return fmt.Errorf("carries arm %s/%s but the goal is arm %s/%s", arm.Assignment, arm.Arm, g.Replay.Assignment, g.Replay.Arm)
+	}
+	return nil
 }
 
 // checkExposure re-derives the request from committed evidence: the goal

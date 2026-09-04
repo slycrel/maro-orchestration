@@ -25,7 +25,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^fork member (cancelled|completed_late): not learned from$",
+      "pattern": "^(fork member (cancelled|completed_late)|replay arm): not learned from$",
       "rejects": "handled",
       "measured_by": "internal/tail:TestTailSkipsCancelledArms"
     },

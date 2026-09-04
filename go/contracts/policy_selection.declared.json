@@ -60,6 +60,13 @@
       "pattern": "^\\{(\"(recall|model_judge)\":(true|false),?)*\\}$",
       "rejects": "{\"teleport\":true}",
       "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
+    },
+    "arm": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestBlindedDiscrimination"
     }
   }
 }

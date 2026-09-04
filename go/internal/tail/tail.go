@@ -319,6 +319,11 @@ func skipReason(state run.ChildState) string {
 	return ""
 }
 
+// SkipReplay: an experiment arm is measured by the evaluator, never
+// diagnosed or learned from — a lesson proposed from an arm would carry
+// the hypothesis into production by the back door (§9).
+const SkipReplay = "replay arm: not learned from"
+
 // attempt is one attempt's tail, committed as one command (diagnosis,
 // proposals, tail_done) after the lens call, if any. A failed or unusable
 // lens call leaves the attempt open for the next pass until LensTries.
@@ -327,6 +332,9 @@ func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a
 	k := fmt.Sprintf("tail/%s/%d", rs.Run, n)
 	hd := func(schema record.SchemaVer) record.Header {
 		return record.Header{ID: record.NewID(), Schema: schema, RunID: rs.Run, Attempt: n, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: now()}
+	}
+	if rs.Goal.Origin == run.OriginReplay {
+		return t.commit(ctx, k, &TailDone{Header: hd("tail_done/1"), Skipped: SkipReplay})
 	}
 	// a cancelled or late fork member is not learned from (§3)
 	if rs.Goal.Origin == run.OriginFork {
@@ -596,6 +604,10 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 						return fmt.Errorf("tail: tail_done %s proposal %s is not the lens response's proposal %d as a workspace lesson of the run's family", x.ID, p, i+1)
 					}
 					claimed[p] = true
+				}
+			case x.Skipped == SkipReplay:
+				if rs.Goal.Origin != run.OriginReplay {
+					return fmt.Errorf("tail: tail_done %s skips an attempt as a replay arm, which it is not", x.ID)
 				}
 			case x.Skipped != "":
 				if rs.Goal.Origin != run.OriginFork {

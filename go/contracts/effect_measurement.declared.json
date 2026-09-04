@@ -1,0 +1,114 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "effect_measurement",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/experiment:TestBlindedDiscrimination",
+  "fields": {
+    "experiment": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "attestation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "hypothesis": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "relation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(apply_item|ablate_item)$",
+      "rejects": "teleport",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "assigned": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "analyzed": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "exposed": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "discordant": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "delta_itt": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "delta_pp": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "verdict": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(treatment_helpful|treatment_harmful|equivalent|insufficient)$",
+      "rejects": "miracle",
+      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+    },
+    "item_effect": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(item_helpful|item_harmful|item_redundant|insufficient)$",
+      "rejects": "blessed",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    }
+  }
+}

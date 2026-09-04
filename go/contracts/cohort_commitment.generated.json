@@ -1,0 +1,118 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "cohort_commitment",
+  "envelope": "production",
+  "schema": "cohort_commitment/1",
+  "go_type": "experiment.CohortCommitment",
+  "fields": [
+    {
+      "name": "header.ID",
+      "wire": "header.id",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.Schema",
+      "wire": "header.schema",
+      "go_type": "record.SchemaVer",
+      "omittable": false,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.Seq",
+      "wire": "header.seq",
+      "go_type": "uint64",
+      "omittable": false,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.RunID",
+      "wire": "header.run_id",
+      "go_type": "record.RunID",
+      "omittable": true,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.Attempt",
+      "wire": "header.attempt",
+      "go_type": "uint32",
+      "omittable": true,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.Subject",
+      "wire": "header.subject",
+      "go_type": "record.Ref",
+      "omittable": false,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.Supersedes",
+      "wire": "header.supersedes",
+      "go_type": "record.RecordID",
+      "omittable": true,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "header.At",
+      "wire": "header.at",
+      "go_type": "time.Time",
+      "omittable": false,
+      "is_thought": false,
+      "embedded": true,
+      "from_header": true
+    },
+    {
+      "name": "Experiment",
+      "wire": "experiment",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Protocol",
+      "wire": "protocol",
+      "go_type": "experiment.Protocol",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Units",
+      "wire": "units",
+      "go_type": "[]experiment.AssignedUnit",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Root",
+      "wire": "root",
+      "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Count",
+      "wire": "count",
+      "go_type": "int",
+      "omittable": false,
+      "is_thought": false
+    }
+  ],
+  "source_ref": "d6bf0223",
+  "generator": "maro-go contracts gen v1"
+}

@@ -1,0 +1,43 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "assignment",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/experiment:TestBlindedDiscrimination",
+  "fields": {
+    "experiment": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "unit": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "ordinal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
+    },
+    "seed": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^[0-9a-f]{64}$",
+      "rejects": "abc",
+      "measured_by": "internal/experiment:TestRunnerResumesAfterKill"
+    }
+  }
+}

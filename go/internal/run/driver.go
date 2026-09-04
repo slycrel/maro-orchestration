@@ -103,12 +103,44 @@ type Driver struct {
 	// cannot record) never repairs itself; past the bound the next attempt
 	// records an honest failure naming the loop instead of starting a fourth.
 	MaxAttempts int
+	// Replay makes this drive one arm of an experiment assignment: the goal
+	// is a replay of the unit, the recall and policy selections carry the
+	// arm's forced sets, and the origin presents to no one. Set by the
+	// experiment package only.
+	Replay *ReplayContext
 	// CrashAt stops the driver dead (as if the process died) immediately
 	// AFTER the named stage commits; "invoke:<stage>" is forwarded to the
 	// invocation shell's seam. Test seam for the kill matrix; production
 	// never sets it.
 	CrashAt string
 }
+
+// ReplayContext is what an arm forces on its run (§8a): the assignment,
+// the arm, the unit goal it replays (parent; root = the unit's root), and
+// the forced sets — apply for the treatment of apply_item, withhold for
+// the treatment of ablate_item; the control arm forces nothing.
+type ReplayContext struct {
+	Assignment record.RecordID
+	Arm        string
+	Unit       record.RecordID
+	Root       record.RecordID
+	Apply      []learn.ItemRev
+	Withhold   []learn.ItemRev
+}
+
+func (rc *ReplayContext) arm() *learn.ArmRef {
+	if rc == nil {
+		return nil
+	}
+	return &learn.ArmRef{Assignment: rc.Assignment, Arm: rc.Arm, Apply: rc.Apply, Withhold: rc.Withhold}
+}
+
+// ReplayOrigin is the replay arm's origin: nothing is presented; the arm's
+// deliverable is read by the evaluator from the journal.
+type ReplayOrigin struct{}
+
+func (ReplayOrigin) Name() GoalOrigin                            { return OriginReplay }
+func (ReplayOrigin) Present(context.Context, Presentation) error { return nil }
 
 // Report is what a completed (or crashed) drive hands back.
 type Report struct {
@@ -132,6 +164,9 @@ func (d *Driver) validate() error {
 		return fmt.Errorf("%w: origin is required and must be registered", ErrConfig)
 	case d.Backend.Capabilities().Name == "":
 		return fmt.Errorf("%w: backend declares no name", ErrConfig)
+	}
+	if d.Replay != nil && (d.Replay.Unit == "" || d.Replay.Root == "" || !learn.Arms[d.Replay.Arm]) {
+		return fmt.Errorf("%w: replay context needs unit, root, and an arm", ErrConfig)
 	}
 	if d.Lane == "" {
 		d.Lane = LaneNow
@@ -195,7 +230,7 @@ func (d *Driver) policy(rs *RunState, n uint32) (*learn.PolicySelection, []recor
 	if rs.Family.Family != FamilyNone {
 		family = string(rs.Family.Family)
 	}
-	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
+	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Arm: d.Replay.arm()})
 	pol.Header = header(runRef(rs.Run), rs.Run, n, "policy_selection/1")
 	recs := []record.Record{pol}
 	for i, rule := range led.PolicyRules(pol) {
@@ -251,6 +286,13 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		return nil, err
 	}
 	goal, fam := Intake(goalText, ref, d.Origin.Name(), d.Lane, policy)
+	if (d.Origin.Name() == OriginReplay) != (d.Replay != nil) {
+		return nil, fmt.Errorf("%w: a replay origin needs a replay context, and only it", ErrConfig)
+	}
+	if d.Replay != nil {
+		goal.Replay = &ReplayRef{Assignment: d.Replay.Assignment, Arm: d.Replay.Arm}
+		goal.Parent, goal.Root = d.Replay.Unit, d.Replay.Root
+	}
 	if err := d.commit(ctx, "goal/"+string(goal.ID), goal, fam); err != nil {
 		return nil, err
 	}
@@ -724,7 +766,7 @@ func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *
 		}
 		// the policy boundary's second consumer: MechRecall off = every
 		// item excluded, the request is the goal alone
-		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall]})
+		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall], Arm: d.Replay.arm()})
 	}
 	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
 	sel.Purpose = invoke.PurposeExecute
@@ -962,14 +1004,9 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	// assessment are the committed intake; nothing outcome-bearing ran)
 	for _, g := range led.Unstarted {
 		if g.Parent != "" {
-			continue // a fork's child goal is started by the parent
+			continue // a fork's child goal is started by the parent; a replay arm by the experiment runner
 		}
-		fam := led.Families[g.ID]
-		if fam == nil {
-			return reports, fmt.Errorf("run: goal %s has no family assessment", g.ID)
-		}
-		rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam}
-		rep, err := d.drive(ctx, rs, nil, nil)
+		rep, err := d.StartGoal(ctx, led, g)
 		if err != nil {
 			return reports, err
 		}
@@ -983,24 +1020,9 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	for _, id := range ids {
 		rs := led.Runs[record.RunID(id)]
 		if rs.Terminal() || rs.Goal.Parent != "" {
-			continue // a child run is driven by its parent's fork step
+			continue // a child run is driven by its parent's fork step; a replay arm by the experiment runner
 		}
-		a := rs.Latest()
-		var rep *Report
-		if a.Has(Recorded) != nil {
-			rep, err = d.deliver(ctx, rs, a)
-		} else {
-			if a.Current() != Recoverable {
-				if err := d.transition(ctx, rs, a, Recoverable, "process restarted before recorded (was "+string(a.Current())+")", nil); err != nil {
-					return reports, err
-				}
-			}
-			var forced *Outcome
-			if len(rs.Attempts) >= d.MaxAttempts {
-				forced = &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("attempt bound %d reached: %d attempts died before recorded", d.MaxAttempts, len(rs.Attempts))}
-			}
-			rep, err = d.drive(ctx, rs, a, forced)
-		}
+		rep, err := d.ResumeRun(ctx, rs)
 		if err != nil {
 			return reports, err
 		}
@@ -1008,3 +1030,40 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	}
 	return reports, nil
 }
+
+// StartGoal starts the run of a goal taken in whose run never started (the
+// goal and its assessment are the committed intake; nothing outcome-bearing
+// ran). Validate first.
+func (d *Driver) StartGoal(ctx context.Context, led *Ledger, g *Goal) (*Report, error) {
+	fam := led.Families[g.ID]
+	if fam == nil {
+		return nil, fmt.Errorf("run: goal %s has no family assessment", g.ID)
+	}
+	rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam}
+	return d.drive(ctx, rs, nil, nil)
+}
+
+// ResumeRun drives one non-terminal run from its last committed stage: a
+// recorded attempt is delivered; anything earlier is marked recoverable and
+// a new attempt starts (or, past MaxAttempts, records the loop as its
+// honest failure). Validate first.
+func (d *Driver) ResumeRun(ctx context.Context, rs *RunState) (*Report, error) {
+	a := rs.Latest()
+	if a.Has(Recorded) != nil {
+		return d.deliver(ctx, rs, a)
+	}
+	if a.Current() != Recoverable {
+		if err := d.transition(ctx, rs, a, Recoverable, "process restarted before recorded (was "+string(a.Current())+")", nil); err != nil {
+			return nil, err
+		}
+	}
+	var forced *Outcome
+	if len(rs.Attempts) >= d.MaxAttempts {
+		forced = &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("attempt bound %d reached: %d attempts died before recorded", d.MaxAttempts, len(rs.Attempts))}
+	}
+	return d.drive(ctx, rs, a, forced)
+}
+
+// Validate checks the driver's configuration (the verbs call it before
+// StartGoal/ResumeRun; Run and Resume call it themselves).
+func (d *Driver) Validate() error { return d.validate() }

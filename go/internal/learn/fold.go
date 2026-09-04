@@ -74,7 +74,7 @@ func (led *Ledger) checkRecall(x *RecallSelection) error {
 	if x.Purpose == "execute" && !sameStages(standing, Selectable) {
 		return fmt.Errorf("learn: recall %s for execute used standing %v, not the selectable set", x.ID, x.Standing)
 	}
-	want := Recall(led, Query{Purpose: string(x.Purpose), Scope: x.Scope, Family: x.Family, Standing: standing, Off: off})
+	want := Recall(led, Query{Purpose: string(x.Purpose), Scope: x.Scope, Family: x.Family, Standing: standing, Off: off, Arm: x.Arm})
 	if !sameSelection(want, x) {
 		return fmt.Errorf("learn: recall %s does not re-derive from the ledger (included %v vs %v; considered %d vs %d; excluded %v vs %v)", x.ID, x.Included, want.Included, x.Considered, want.Considered, x.ExcludedCounts, want.ExcludedCounts)
 	}
@@ -130,6 +130,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, Policies: map[string]*PolicySelection{}, PolicyApps: map[record.RecordID][]*PolicyApplication{}, Exposures: map[record.RecordID][]Exposure{}, byID: map[record.RecordID]*RecallSelection{}, policyByID: map[record.RecordID]*PolicySelection{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}
+	evidence := map[record.RecordID]EffectEvidence{}
 	expose := func(h record.Header, rev record.RecordID) {
 		led.Exposures[rev] = append(led.Exposures[rev], Exposure{ID: h.ID, Revision: rev, Seq: h.Seq, At: h.At})
 	}
@@ -138,6 +139,9 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 		defer func() { seen[r.Head().ID] = true }()
 		if r.Kind() == "goal" {
 			goals[r.Head().ID] = true
+		}
+		if ev, ok := r.(EffectEvidence); ok {
+			evidence[r.Head().ID] = ev
 		}
 		switch x := r.(type) {
 		case *LearnedRevision:
@@ -171,6 +175,21 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			}
 			if x.Evidence != "" && !seen[x.Evidence] {
 				return fmt.Errorf("learn: transition %s cites evidence %s that is not an earlier record", x.ID, x.Evidence)
+			}
+			if x.Actor == ActorMeasurement {
+				// a measurement transition is DERIVED from its evidence: the
+				// evidence names THIS revision, and the edge is StageFor's
+				ev := evidence[x.Evidence]
+				if ev == nil {
+					return fmt.Errorf("learn: measurement transition %s cites %s, which is not effect evidence", x.ID, x.Evidence)
+				}
+				ir, eff := ev.Effect()
+				if ir != (ItemRev{Item: x.Item, Revision: x.Revision}) {
+					return fmt.Errorf("learn: measurement transition %s moves %s/%s on evidence about %s/%s", x.ID, x.Item, x.Revision, ir.Item, ir.Revision)
+				}
+				if want, ok := StageFor(x.From, eff); !ok || want != x.To {
+					return fmt.Errorf("learn: measurement transition %s says %s→%s but %s from %s derives %q", x.ID, x.From, x.To, eff, x.From, want)
+				}
 			}
 			if x.Actor == ActorTenure {
 				// a tenure transition is DERIVED: it must equal the timers'
@@ -278,6 +297,8 @@ type Query struct {
 	// considered and excluded (reason policy:recall_off), so the selection
 	// still says what WOULD have been recalled and why it was not.
 	Off bool
+	// Arm is an experiment arm's forced sets (nil for a production run).
+	Arm *ArmRef
 }
 
 // Recall is pure over the ledger. Every item is considered; each is either
@@ -299,17 +320,22 @@ func Recall(led *Ledger, q Query) *RecallSelection {
 		standing = append(standing, s)
 	}
 	sort.Slice(standing, func(i, j int) bool { return standing[i] < standing[j] })
-	sel := &RecallSelection{Scope: q.Scope, Family: q.Family, Standing: standing, ExcludedCounts: map[string]int{}}
+	sel := &RecallSelection{Scope: q.Scope, Family: q.Family, Standing: standing, ExcludedCounts: map[string]int{}, Arm: q.Arm}
 	for _, id := range ids {
 		it := led.Items[id]
 		cur := it.Current
 		sel.Considered++
 		reason := ""
+		forced := q.forced(ItemRev{Item: id, Revision: cur.ID})
 		switch {
 		case q.Off:
 			reason = "policy:recall_off"
 		case cur.LearnedKind != Lesson:
 			reason = "kind:" + string(cur.LearnedKind)
+		case forced == "withhold":
+			reason = "arm:withheld"
+		case forced == "apply":
+			// the arm applies it regardless of standing, scope, or family
 		case !q.Standing[it.StageOf(cur.ID)]:
 			reason = "stage:" + string(it.StageOf(cur.ID))
 		case !inScope[cur.Scope]:

@@ -76,11 +76,67 @@ var Selectable = map[Stage]bool{Provisional: true, Effective: true, Canon: true,
 var legal = map[Stage]map[Stage]bool{
 	Candidate:   {Observed: true, Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
 	Observed:    {Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
-	Provisional: {Effective: true, Contested: true, Quarantined: true},
-	Effective:   {Canon: true, Contested: true, Quarantined: true},
-	Canon:       {Contested: true, Quarantined: true},
+	Provisional: {Effective: true, Contested: true, Quarantined: true, Tombstone: true},
+	Effective:   {Canon: true, Contested: true, Quarantined: true, Tombstone: true},
+	Canon:       {Contested: true, Quarantined: true, Tombstone: true},
 	Contested:   {Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
 	Quarantined: {Tombstone: true, Provisional: true},
+}
+
+// ItemEffect is a measurement's verdict normalized to the item (§8a): the
+// sign is fixed by the experiment's relation, so `item_helpful` means the
+// same thing whether the item was applied or ablated.
+type ItemEffect string
+
+const (
+	ItemHelpful      ItemEffect = "item_helpful"
+	ItemHarmful      ItemEffect = "item_harmful"
+	ItemRedundant    ItemEffect = "item_redundant"
+	ItemInsufficient ItemEffect = "insufficient"
+)
+
+var effects = map[ItemEffect]bool{ItemHelpful: true, ItemHarmful: true, ItemRedundant: true, ItemInsufficient: true}
+
+// ValidEffect reports whether e is in the vocabulary.
+func ValidEffect(e ItemEffect) bool { return effects[e] }
+
+// EffectEvidence is what a measurement transition cites: a production
+// record that names ONE ItemRev and its normalized effect. The experiment
+// package implements it; the learned fold checks a measurement transition
+// against it without knowing the record's shape (no import cycle, and a
+// measurement of one revision can never move another).
+type EffectEvidence interface {
+	record.Record
+	Effect() (ItemRev, ItemEffect)
+}
+
+// StageFor is the policy-selection fold as versioned data over the item
+// effect (§7): helpful → effective (a quarantined revision re-measured
+// helpful returns to provisional first); harmful → quarantined; redundant
+// → tombstone; insufficient moves nothing. The second value is false when
+// the effect changes nothing from this stage (already there, or tombstone).
+func StageFor(from Stage, eff ItemEffect) (Stage, bool) {
+	if from == Tombstone {
+		return "", false
+	}
+	switch eff {
+	case ItemHelpful:
+		switch from {
+		case Quarantined:
+			return Provisional, true
+		case Effective, Canon:
+			return "", false
+		}
+		return Effective, true
+	case ItemHarmful:
+		if from == Quarantined {
+			return "", false
+		}
+		return Quarantined, true
+	case ItemRedundant:
+		return Tombstone, true
+	}
+	return "", false
 }
 
 // Legal reports whether from→to is in the table.
@@ -92,11 +148,12 @@ func Legal(from, to Stage) bool { return legal[from][to] }
 type Actor string
 
 const (
-	ActorOperator Actor = "operator"
-	ActorTenure   Actor = "tenure"
+	ActorOperator    Actor = "operator"
+	ActorTenure      Actor = "tenure"
+	ActorMeasurement Actor = "measurement" // evidence = an EffectEvidence record (step 10)
 )
 
-var actors = map[Actor]bool{ActorOperator: true, ActorTenure: true}
+var actors = map[Actor]bool{ActorOperator: true, ActorTenure: true, ActorMeasurement: true}
 
 // ScopePath is where an item applies: the workspace, or one goal's subtree.
 // Recall walks a run's goal ancestry (own → parents → root → workspace).
@@ -250,6 +307,9 @@ func (r *LifecycleTransition) ValidateWire() error {
 	if r.From == Candidate && r.To == Observed && r.Actor != ActorTenure {
 		return errors.New("learned_transition: candidate → observed is tenure's alone")
 	}
+	if r.Actor == ActorMeasurement && r.To != Effective && r.To != Provisional && r.To != Quarantined && r.To != Tombstone {
+		return fmt.Errorf("learned_transition: measurement may not move to %s (effective, provisional, quarantined, or tombstone)", r.To)
+	}
 	if r.Evidence != "" {
 		if err := record.ValidateID(r.Evidence); err != nil {
 			return fmt.Errorf("learned_transition: evidence: %w", err)
@@ -369,6 +429,45 @@ type RecallSelection struct {
 	// MechRecall off every item is excluded (reason policy:recall_off) and
 	// the request is the goal alone.
 	Policy record.RecordID `json:"policy"`
+	// Arm is set only for an experiment arm's run (goal origin replay): the
+	// assignment and the forced sets the arm ran with. The run fold ties it
+	// to the goal; the experiment verifier ties the sets to the protocol.
+	Arm *ArmRef `json:"arm,omitempty"`
+}
+
+// ArmRef is what an arm forces on a selection: apply these revisions
+// regardless of standing (the treatment of apply_item), withhold these
+// (the treatment of ablate_item). The two arms of one experiment differ
+// by exactly the hypothesis.
+type ArmRef struct {
+	Assignment record.RecordID `json:"assignment"`
+	Arm        string          `json:"arm"` // treatment | control
+	Apply      []ItemRev       `json:"apply,omitempty"`
+	Withhold   []ItemRev       `json:"withhold,omitempty"`
+}
+
+// Arms is the arm vocabulary.
+var Arms = map[string]bool{"treatment": true, "control": true}
+
+func (a *ArmRef) validate() error {
+	if a == nil {
+		return nil
+	}
+	if err := record.ValidateID(a.Assignment); err != nil {
+		return fmt.Errorf("arm: assignment: %w", err)
+	}
+	if !Arms[a.Arm] {
+		return fmt.Errorf("arm %q out of vocabulary", a.Arm)
+	}
+	for _, ir := range append(append([]ItemRev{}, a.Apply...), a.Withhold...) {
+		if err := record.ValidateID(record.RecordID(ir.Item)); err != nil {
+			return fmt.Errorf("arm: %w", err)
+		}
+		if err := record.ValidateID(ir.Revision); err != nil {
+			return fmt.Errorf("arm: %w", err)
+		}
+	}
+	return nil
 }
 
 // SampleK bounds the exclusion projection (§14: counts by reason + a
@@ -434,6 +533,9 @@ func (r *RecallSelection) ValidateWire() error {
 	}
 	if err := record.ValidateID(r.Policy); err != nil {
 		return fmt.Errorf("recall_selection: policy: %w", err)
+	}
+	if err := r.Arm.validate(); err != nil {
+		return fmt.Errorf("recall_selection: %w", err)
 	}
 	for i := 1; i < len(r.Included); i++ {
 		if r.Included[i-1].Item >= r.Included[i].Item {

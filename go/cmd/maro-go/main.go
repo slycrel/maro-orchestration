@@ -58,6 +58,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdRuns(args[1:], stdout, stderr)
 	case "learn":
 		err = cmdLearn(args[1:], stdout)
+	case "experiment":
+		err = cmdExperiment(args[1:], stdout, stderr)
 	case "serve":
 		err = cmdServe(args[1:], stdout, stderr)
 	case "submit":
@@ -78,7 +80,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | experiment open|run|close|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {

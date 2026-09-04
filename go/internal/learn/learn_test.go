@@ -303,7 +303,10 @@ func TestLegalEdgesMatchTheDesign(t *testing.T) {
 	edge(Quarantined, Provisional)
 	edge(Contested, Tombstone) // quarantined|contested|observed|candidate → tombstone
 	edge(Observed, Tombstone)
-	edge(Candidate, Tombstone)   // expiry of an idle candidate (step 9)
+	edge(Candidate, Tombstone)                                    // expiry of an idle candidate (step 9)
+	for _, from := range []Stage{Provisional, Effective, Canon} { // item_redundant at the stopping rule (step 10)
+		edge(from, Tombstone)
+	}
 	edge(Contested, Provisional) // contested is re-measured
 	edge(Contested, Effective)
 	for _, from := range all {
