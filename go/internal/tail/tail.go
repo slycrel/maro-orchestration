@@ -27,15 +27,32 @@ type Tail struct {
 	Lens invoke.Backend
 	// Every is the pass interval. Why 20s: a run's tail is not urgent; the
 	// executor wakes nothing here, and a pass over a quiet journal is cheap.
-	Every time.Duration
-	// MaxProposals bounds proposals per attempt. Why 3: a run rarely
-	// teaches more than a few things; past that the lens is padding.
-	MaxProposals int
-	Timeout      time.Duration
-	Tick         <-chan struct{}
+	Every   time.Duration
+	Timeout time.Duration
+	Tick    <-chan struct{}
 	// Events, when set, receives one line per attempt processed.
 	Events func(string)
+	// backlog is set by a pass that hit MaxPerPass: the next pass runs at once.
+	backlog bool
 }
+
+const (
+	// MaxProposals bounds proposals per attempt. Why 3: a run rarely
+	// teaches more than a few things; past that the lens is padding. A
+	// constant, not a field: the fold re-renders the lens prompt with it.
+	MaxProposals = 3
+	// LensTries bounds the diagnose calls for one attempt before the tail
+	// closes it signals-only. Why 3: one failure is a blip (a rate limit,
+	// a truncated stream) and costs a 20s wait to retry; three in a row is
+	// the backend's answer, and a diagnosis with the signals alone is still
+	// a diagnosis.
+	LensTries = 3
+	// MaxPerPass bounds the attempts one pass diagnoses. Why 5: at the 20s
+	// cadence that is 15 a minute, more than any real run rate; a backlog
+	// (a workspace with many recorded attempts and no tail yet) drains in
+	// minutes while the heartbeat moves every pass.
+	MaxPerPass = 5
+)
 
 func (t *Tail) Name() string          { return "tail" }
 func (t *Tail) Stage() int            { return 2 }
@@ -62,18 +79,23 @@ func (t *Tail) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 		case <-ticks:
 		case <-t.Tick:
 		}
-		head, err := t.Pass(ctx)
-		if err != nil {
-			return err
+		for {
+			head, err := t.Pass(ctx)
+			if err != nil {
+				return err
+			}
+			hb.Progress(ctx, head)
+			if !t.backlog || ctx.Err() != nil {
+				break
+			}
 		}
-		hb.Progress(ctx, head)
 	}
 }
 
 // Pass observes → diagnoses → proposes for every recorded attempt without
 // a TailDone. Idempotent per (run, attempt). Returns the head processed.
 func (t *Tail) Pass(ctx context.Context) (uint64, error) {
-	pr := t.J.Production()
+	pr := t.J.Production().Pin() // the run fold and the tail fold read ONE prefix
 	head := pr.Head()
 	led, err := run.Fold(pr, t.Store)
 	if err != nil {
@@ -87,13 +109,20 @@ func (t *Tail) Pass(ctx context.Context) (uint64, error) {
 	for id := range led.Runs {
 		ids = append(ids, string(id))
 	}
-	sort.Strings(ids)
+	sort.Strings(ids) // run ids are time-ordered: oldest first
+	t.backlog = false
+	n := 0
 	for _, id := range ids {
 		rs := led.Runs[record.RunID(id)]
 		for _, a := range rs.Attempts {
-			if a.Has(run.Recorded) == nil || tl.Done[key(rs.Run, a.Attempt.Attempt)] != nil {
+			if terminalOf(a) == nil || tl.Done[key(rs.Run, a.Attempt.Attempt)] != nil {
 				continue
 			}
+			if n == MaxPerPass {
+				t.backlog = true
+				return head, nil
+			}
+			n++
 			if err := t.attempt(ctx, led, rs, a); err != nil {
 				return 0, err
 			}
@@ -103,6 +132,22 @@ func (t *Tail) Pass(ctx context.Context) (uint64, error) {
 }
 
 func key(r record.RunID, n uint32) string { return fmt.Sprintf("%s/%d", r, n) }
+
+// terminalOf is the attempt's terminal transition (delivered or
+// delivery_failed), nil while the attempt is still open. The tail reads
+// only terminal attempts: the signals (delivery_failed, recovered) and
+// the deliverable the lens is shown are not stable before it, and a
+// diagnosis over inputs that then move cannot be re-derived from the
+// journal (the review round's process test caught exactly that: a
+// diagnosis between `recorded` and the prepared delivery).
+func terminalOf(a *run.AttemptState) *run.Transition {
+	for _, t := range a.Transitions {
+		if t.To == run.Delivered || t.To == run.DeliveryFailedS {
+			return t
+		}
+	}
+	return nil
+}
 
 // Signals is the deterministic classifier: pure over the folded run.
 func Signals(led *run.Ledger, rs *run.RunState, a *run.AttemptState) []Signal {
@@ -230,6 +275,9 @@ func ParseLens(response []byte, allowed []string, max int) (LensResult, error) {
 	if len(kept) > max {
 		return r, fmt.Errorf("%w: %d proposals, at most %d", run.ErrBoundary, len(kept), max)
 	}
+	if r.Class == string(ClassNone) && len(kept) > 0 {
+		return r, fmt.Errorf("%w: class none (nothing failed) proposes nothing", run.ErrBoundary)
+	}
 	r.Proposals = kept
 	return r, nil
 }
@@ -262,20 +310,39 @@ func LensPrompt(goal, deliverable []byte, rec *run.Outcome, sig []Signal, allowe
 	return []byte(b.String())
 }
 
+// skipReason is the derived reason a fork member is not learned from; ""
+// for a member that is.
+func skipReason(state run.ChildState) string {
+	if state == run.ChildCancelled || state == run.ChildCompletedLate {
+		return "fork member " + string(state) + ": not learned from"
+	}
+	return ""
+}
+
 // attempt is one attempt's tail, committed as one command (diagnosis,
-// proposals, tail_done) after the lens call, if any.
+// proposals, tail_done) after the lens call, if any. A failed or unusable
+// lens call leaves the attempt open for the next pass until LensTries.
 func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a *run.AttemptState) error {
 	n := a.Attempt.Attempt
+	k := fmt.Sprintf("tail/%s/%d", rs.Run, n)
 	hd := func(schema record.SchemaVer) record.Header {
 		return record.Header{ID: record.NewID(), Schema: schema, RunID: rs.Run, Attempt: n, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: now()}
 	}
-	// a cancelled or late fork member is not learned from (§3): no learning from a cancelled arm
+	// a cancelled or late fork member is not learned from (§3)
 	if rs.Goal.Origin == run.OriginFork {
 		for _, fs := range led.Forks {
-			if ct := fs.Terminals[rs.Run]; ct != nil && (ct.State == run.ChildCancelled || ct.State == run.ChildCompletedLate) {
-				return t.commit(ctx, fmt.Sprintf("tail/%s/%d", rs.Run, n), &TailDone{Header: hd("tail_done/1"), Skipped: "fork member " + string(ct.State) + ": not learned from"})
+			if ct := fs.Terminals[rs.Run]; ct != nil && skipReason(ct.State) != "" {
+				return t.commit(ctx, k, &TailDone{Header: hd("tail_done/1"), Skipped: skipReason(ct.State)})
 			}
 		}
+	}
+	unreadable := func(ref thought.Ref, err error) error {
+		// the tail cannot judge what it cannot read: the attempt is closed
+		// naming the thought, so one unreadable blob starves nothing else
+		if t.Events != nil {
+			t.Events(fmt.Sprintf("tail %s attempt %d: evidence %s unreadable: %v", run.HandleOf(rs.Run), n, ref.Hash, err))
+		}
+		return t.commit(ctx, k, &TailDone{Header: hd("tail_done/1"), Unreadable: &ref})
 	}
 	rec := a.Has(run.Recorded).Outcome
 	sig := Signals(led, rs, a)
@@ -286,69 +353,96 @@ func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a
 	if t.Lens != nil {
 		goal, err := t.Store.Get(rs.Goal.Text)
 		if err != nil {
-			return err
+			return unreadable(rs.Goal.Text, err)
 		}
 		var deliverable []byte
 		if a.Delivery != nil {
 			deliverable, err = t.Store.Get(a.Delivery.Prepared.Payload)
 			if err != nil {
-				return err
+				return unreadable(a.Delivery.Prepared.Payload, err)
 			}
 		}
 		allowed := lensAllowed(sig)
-		max := t.MaxProposals
-		if max == 0 {
-			max = 3
-		}
-		// reuse a diagnose call the previous pass left with a receipt
-		var o *invoke.Outcome
+		prompt := LensPrompt(goal, deliverable, rec, sig, allowed, MaxProposals)
+		want := thought.Address(thought.Prompt, prompt)
+		// the diagnose calls so far: one with a receipt that parses and that
+		// asked exactly this prompt is reused; every other counts as a try
+		var lr *LensResult
+		var lensID record.RecordID
+		tries, lastWhy := 0, ""
 		for _, st := range a.Invocations {
-			if st.Invocation.Purpose == invoke.PurposeDiagnose && st.Receipt != nil {
+			if st.Invocation.Purpose != invoke.PurposeDiagnose {
+				continue
+			}
+			tries++
+			switch {
+			case st.Receipt == nil:
+				lastWhy = "no receipt"
+				if st.Terminal != nil {
+					lastWhy = firstLine(st.Terminal.Reason)
+				}
+			case st.Invocation.Request != want:
+				lastWhy = "asked with different evidence"
+			default:
 				b, err := t.Store.Get(st.Receipt.Response)
 				if err != nil {
-					return err
+					return unreadable(st.Receipt.Response, err)
 				}
-				o = &invoke.Outcome{Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Terminal: st.Terminal.State, Response: b}
+				if r, perr := ParseLens(b, allowed, MaxProposals); perr != nil {
+					lastWhy = firstLine(perr.Error())
+				} else {
+					lr, lensID = &r, st.Invocation.ID
+				}
 			}
 		}
-		if o == nil {
+		if lr == nil && tries < LensTries {
 			sh := &invoke.Shell{J: t.J, Store: t.Store, Run: rs.Run, Attempt: n}
-			var err error
-			o, err = sh.Invoke(ctx, t.Lens, invoke.Request{Purpose: invoke.PurposeDiagnose, Prompt: LensPrompt(goal, deliverable, rec, sig, allowed, max), Tools: false, Timeout: t.Timeout}, nil)
+			o, err := sh.Invoke(ctx, t.Lens, invoke.Request{Purpose: invoke.PurposeDiagnose, Prompt: prompt, Tools: false, Timeout: t.Timeout}, nil)
 			if err != nil && !(o != nil && o.Terminal == invoke.TerminalFailed && o.Err == nil) {
 				return err
 			}
-		}
-		if o.Terminal == invoke.TerminalFailed {
-			diag.LensRule = "no_lens:" + firstLine(o.Reason)
-		} else {
-			lr, perr := ParseLens(o.Response, allowed, max)
-			if perr != nil {
-				diag.LensRule = "no_lens:" + firstLine(perr.Error())
+			tries++
+			if o.Terminal == invoke.TerminalFailed {
+				lastWhy = firstLine(o.Reason)
+			} else if r, perr := ParseLens(o.Response, allowed, MaxProposals); perr != nil {
+				lastWhy = firstLine(perr.Error())
 			} else {
-				diag.Lens, diag.LensRule, diag.Class, diag.Why = o.Invocation, "lens", FailureClass(lr.Class), lr.Why
-				family := ""
-				if rs.Family.Family != run.FamilyNone {
-					family = string(rs.Family.Family)
-				}
-				for _, text := range lr.Proposals {
-					ref, err := t.Store.Put(thought.LessonText, []byte(text))
-					if err != nil {
-						return err
-					}
-					item := learn.LearnedID(record.NewID())
-					rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()},
-						Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
-					proposals = append(proposals, rev)
-					proposalIDs = append(proposalIDs, rev.ID)
-				}
+				lr, lensID = &r, o.Invocation
 			}
+		}
+		switch {
+		case lr != nil:
+			diag.Lens, diag.LensRule, diag.Class, diag.Why = lensID, "lens", FailureClass(lr.Class), lr.Why
+			family := ""
+			if rs.Family.Family != run.FamilyNone {
+				family = string(rs.Family.Family)
+			}
+			for _, text := range lr.Proposals {
+				ref, err := t.Store.Put(thought.LessonText, []byte(text))
+				if err != nil {
+					return err
+				}
+				item := learn.LearnedID(record.NewID())
+				rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()},
+					Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
+				proposals = append(proposals, rev)
+				proposalIDs = append(proposalIDs, rev.ID)
+			}
+		case tries < LensTries:
+			// a blip is not the run's fault: leave the attempt open and try
+			// again next pass (the failed call stays as evidence)
+			if t.Events != nil {
+				t.Events(fmt.Sprintf("tail %s attempt %d: lens try %d of %d unusable (%s); again next pass", run.HandleOf(rs.Run), n, tries, LensTries, lastWhy))
+			}
+			return nil
+		default:
+			diag.LensRule = "no_lens:" + lastWhy + fmt.Sprintf(" (after %d tries)", tries)
 		}
 	}
 	done := &TailDone{Header: hd("tail_done/1"), Diagnosis: diag.ID, Proposals: proposalIDs}
 	recs := append([]record.Record{diag}, proposals...)
 	recs = append(recs, done)
-	if err := t.commit(ctx, fmt.Sprintf("tail/%s/%d", rs.Run, n), recs...); err != nil {
+	if err := t.commit(ctx, k, recs...); err != nil {
 		return err
 	}
 	if t.Events != nil {
@@ -374,8 +468,12 @@ func firstLine(s string) string {
 
 // Ledger is the fold of the tail's records, re-derived: a diagnosis must
 // carry exactly the signals the run shows and a class its lens (or the
-// signals alone) establishes; a tail_done names its diagnosis and
-// proposals that are tail-provenance revisions citing it.
+// signals alone) establishes, the lens must have been asked THIS
+// attempt's diagnose prompt; a tail_done names its diagnosis and the lens
+// response's proposals, complete and in order, as tail-provenance
+// revisions citing it — or a skip that the fork's terminal for the run
+// derives, or an unreadable thought the attempt's evidence names; every
+// tail-provenance revision is claimed by a tail_done.
 type Ledger struct {
 	Done      map[string]*TailDone
 	Diagnoses map[record.RecordID]*Diagnosis
@@ -390,18 +488,34 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	}
 	tl := &Ledger{Done: map[string]*TailDone{}, Diagnoses: map[record.RecordID]*Diagnosis{}}
 	revs := map[record.RecordID]*learn.LearnedRevision{}
+	var tailRevs []*learn.LearnedRevision
+	claimed := map[record.RecordID]bool{}
+	lensProposals := map[record.RecordID][]string{}
+	attemptOf := func(kind string, h record.Header, r record.RunID, n uint32) (*run.RunState, *run.AttemptState, error) {
+		rs := led.Runs[r]
+		if rs == nil || n == 0 || int(n) > len(rs.Attempts) {
+			return nil, nil, fmt.Errorf("tail: %s %s for an unknown attempt", kind, h.ID)
+		}
+		a := rs.Attempts[n-1]
+		// a tail record is legal only after the attempt's terminal
+		// transition: that is when its inputs stopped moving, so a
+		// re-derivation reads what the tail read
+		if term := terminalOf(a); term == nil || h.Seq <= term.Seq {
+			return nil, nil, fmt.Errorf("tail: %s %s before the attempt was terminal", kind, h.ID)
+		}
+		return rs, a, nil
+	}
 	err = pr.Scan(0, func(r record.Record) error {
 		switch x := r.(type) {
 		case *learn.LearnedRevision:
 			revs[x.ID] = x
-		case *Diagnosis:
-			rs := led.Runs[x.RunID]
-			if rs == nil || int(x.Attempt) > len(rs.Attempts) {
-				return fmt.Errorf("tail: diagnosis %s for an unknown attempt", x.ID)
+			if x.Provenance.Source == "tail" {
+				tailRevs = append(tailRevs, x)
 			}
-			a := rs.Attempts[x.Attempt-1]
-			if a.Has(run.Recorded) == nil {
-				return fmt.Errorf("tail: diagnosis %s before the attempt was recorded", x.ID)
+		case *Diagnosis:
+			rs, a, err := attemptOf("diagnosis", x.Header, x.RunID, x.Attempt)
+			if err != nil {
+				return err
 			}
 			want := Signals(led, rs, a)
 			if !sameSignals(want, x.Signals) {
@@ -418,14 +532,31 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if st == nil || st.Invocation.Purpose != invoke.PurposeDiagnose || st.Receipt == nil || st.Invocation.Tools {
 					return fmt.Errorf("tail: diagnosis %s cites lens %s that is not a tool-less diagnose call of the attempt with a receipt", x.ID, x.Lens)
 				}
+				// the lens was asked exactly this attempt's diagnose prompt
+				goal, err := store.Get(rs.Goal.Text)
+				if err != nil {
+					return err
+				}
+				var deliverable []byte
+				if a.Delivery != nil {
+					if deliverable, err = store.Get(a.Delivery.Prepared.Payload); err != nil {
+						return err
+					}
+				}
+				rec := a.Has(run.Recorded).Outcome
+				prompt := LensPrompt(goal, deliverable, rec, want, lensAllowed(want), MaxProposals)
+				if st.Invocation.Request != thought.Address(thought.Prompt, prompt) {
+					return fmt.Errorf("tail: diagnosis %s cites lens %s that was not asked this attempt's diagnose prompt", x.ID, x.Lens)
+				}
 				resp, err := store.Get(st.Receipt.Response)
 				if err != nil {
 					return err
 				}
-				lr, perr := ParseLens(resp, lensAllowed(want), 1000)
+				lr, perr := ParseLens(resp, lensAllowed(want), MaxProposals)
 				if perr != nil || lr.Class != string(x.Class) || lr.Why != x.Why {
 					return fmt.Errorf("tail: diagnosis %s does not re-derive from its lens response (%v)", x.ID, perr)
 				}
+				lensProposals[x.ID] = lr.Proposals
 			default:
 				if x.Class != classFromSignals(want) {
 					return fmt.Errorf("tail: diagnosis %s class %s is not the signals' class %s", x.ID, x.Class, classFromSignals(want))
@@ -437,16 +568,57 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if tl.Done[k] != nil {
 				return fmt.Errorf("tail: attempt %s done twice", k)
 			}
-			if x.Diagnosis != "" {
+			rs, a, err := attemptOf("tail_done", x.Header, x.RunID, x.Attempt)
+			if err != nil {
+				return err
+			}
+			switch {
+			case x.Diagnosis != "":
 				d := tl.Diagnoses[x.Diagnosis]
 				if d == nil || d.RunID != x.RunID || d.Attempt != x.Attempt {
 					return fmt.Errorf("tail: tail_done %s names diagnosis %s that is not this attempt's", x.ID, x.Diagnosis)
 				}
-				for _, p := range x.Proposals {
+				// the proposals are the lens response's: complete, in order, as lessons
+				want := lensProposals[d.ID]
+				if len(x.Proposals) != len(want) {
+					return fmt.Errorf("tail: tail_done %s names %d proposals; the lens response has %d", x.ID, len(x.Proposals), len(want))
+				}
+				family := ""
+				if rs.Family.Family != run.FamilyNone {
+					family = string(rs.Family.Family)
+				}
+				for i, p := range x.Proposals {
 					rev := revs[p]
-					if rev == nil || rev.Provenance.Source != "tail" || rev.Provenance.Ref != x.Diagnosis {
+					if rev == nil || rev.Provenance.Source != "tail" || rev.Provenance.Ref != x.Diagnosis || claimed[p] {
 						return fmt.Errorf("tail: tail_done %s proposal %s is not a tail revision citing its diagnosis", x.ID, p)
 					}
+					if rev.LearnedKind != learn.Lesson || rev.Scope != learn.ScopeWorkspace || rev.Family != family || rev.Text != thought.Address(thought.LessonText, []byte(want[i])) {
+						return fmt.Errorf("tail: tail_done %s proposal %s is not the lens response's proposal %d as a workspace lesson of the run's family", x.ID, p, i+1)
+					}
+					claimed[p] = true
+				}
+			case x.Skipped != "":
+				if rs.Goal.Origin != run.OriginFork {
+					return fmt.Errorf("tail: tail_done %s skips an attempt that is not a fork member's", x.ID)
+				}
+				ok := false
+				for _, fs := range led.Forks {
+					if ct := fs.Terminals[rs.Run]; ct != nil && skipReason(ct.State) == x.Skipped {
+						ok = true
+					}
+				}
+				if !ok {
+					return fmt.Errorf("tail: tail_done %s skip %q does not derive from the fork's terminal for the run", x.ID, x.Skipped)
+				}
+			case x.Unreadable != nil:
+				ok := *x.Unreadable == rs.Goal.Text || (a.Delivery != nil && *x.Unreadable == a.Delivery.Prepared.Payload)
+				for _, is := range a.Invocations {
+					if is.Invocation.Purpose == invoke.PurposeDiagnose && is.Receipt != nil && is.Receipt.Response == *x.Unreadable {
+						ok = true
+					}
+				}
+				if !ok {
+					return fmt.Errorf("tail: tail_done %s names an unreadable thought that is not the attempt's evidence", x.ID)
 				}
 			}
 			tl.Done[k] = x
@@ -455,6 +627,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	for _, rev := range tailRevs {
+		if !claimed[rev.ID] {
+			return nil, fmt.Errorf("tail: revision %s claims tail provenance but no tail_done proposes it", rev.ID)
+		}
 	}
 	return tl, nil
 }

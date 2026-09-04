@@ -20,19 +20,11 @@ type Timers struct {
 	// Every is the sweep interval. Why 1m: tenure and expiry are measured in
 	// applications and days; a minute is already generous.
 	Every time.Duration
-	// TenureApplications is how many applications move candidate → observed.
-	// Why 3: one application proves the item was recalled once; three prove
-	// it keeps being selected — and observed is still not selectable, so the
-	// cost of being wrong here is nil.
-	TenureApplications int
-	// ExpireAfter tombstones a candidate|observed item with no application
-	// for this long. Why 30 days: an item nobody recalled in a month of runs
-	// is noise in the recall projection; tombstone is reversible by a new
-	// revision.
-	ExpireAfter time.Duration
-	Clock       func() time.Time
-	Tick        <-chan struct{}
-	Events      func(string)
+	// The bounds are learn.TenureBound and learn.ExpiryIdle: constants, so
+	// the learned fold re-derives every tenure transition.
+	Clock  func() time.Time
+	Tick   <-chan struct{}
+	Events func(string)
 }
 
 func (t *Timers) Name() string          { return "timers" }
@@ -84,14 +76,7 @@ func (t *Timers) Sweep(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	tenure := t.TenureApplications
-	if tenure == 0 {
-		tenure = 3
-	}
-	expire := t.ExpireAfter
-	if expire == 0 {
-		expire = 30 * 24 * time.Hour
-	}
+	tenure, expire := learn.TenureBound, learn.ExpiryIdle
 	// applications per revision, newest first
 	byRev := map[record.RecordID][]*learn.Application{}
 	for _, apps := range led.Applications {
@@ -116,23 +101,13 @@ func (t *Timers) Sweep(ctx context.Context) (uint64, error) {
 			if err := t.transition(ctx, it, cur, learn.Observed, ev.ID, fmt.Sprintf("tenure: %d applications (bound %d)", len(apps), tenure)); err != nil {
 				return 0, err
 			}
-		case (stage == learn.Candidate || stage == learn.Observed) && t.now().Sub(lastActivity(cur, apps)) > expire:
+		case (stage == learn.Candidate || stage == learn.Observed) && t.now().Sub(learn.LastActivity(cur, apps)) > expire:
 			if err := t.transition(ctx, it, cur, learn.Tombstone, cur.ID, fmt.Sprintf("expiry: no application in %s", expire)); err != nil {
 				return 0, err
 			}
 		}
 	}
 	return head, nil
-}
-
-func lastActivity(rev *learn.LearnedRevision, apps []*learn.Application) time.Time {
-	last := rev.At
-	for _, a := range apps {
-		if a.At.After(last) {
-			last = a.At
-		}
-	}
-	return last
 }
 
 func (t *Timers) transition(ctx context.Context, it *learn.Item, rev *learn.LearnedRevision, to learn.Stage, evidence record.RecordID, why string) error {

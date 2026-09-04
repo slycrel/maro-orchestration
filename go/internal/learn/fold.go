@@ -114,6 +114,8 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, byID: map[record.RecordID]*RecallSelection{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}
+	appByID := map[record.RecordID]*Application{}
+	appsOf := map[record.RecordID][]*Application{} // by revision, in Seq order
 	err := pr.Scan(0, func(r record.Record) error {
 		// a record is "seen" only AFTER its own checks: nothing may cite itself
 		defer func() { seen[r.Head().ID] = true }()
@@ -153,6 +155,28 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			if x.Evidence != "" && !seen[x.Evidence] {
 				return fmt.Errorf("learn: transition %s cites evidence %s that is not an earlier record", x.ID, x.Evidence)
 			}
+			if x.Actor == ActorTenure {
+				// a tenure transition is DERIVED: it must equal the timers'
+				// rule over the applications as they stood
+				apps := appsOf[x.Revision]
+				switch x.To {
+				case Observed:
+					ev := appByID[x.Evidence]
+					if ev == nil || ev.Revision != x.Revision || len(apps) < TenureBound || apps[TenureBound-1].ID != x.Evidence {
+						return fmt.Errorf("learn: tenure transition %s does not re-derive: evidence must be application %d of revision %s (has %d)", x.ID, TenureBound, x.Revision, len(apps))
+					}
+				case Tombstone:
+					var rev *LearnedRevision
+					for _, r := range it.Revisions {
+						if r.ID == x.Revision {
+							rev = r
+						}
+					}
+					if x.Evidence != x.Revision || !x.At.After(LastActivity(rev, apps).Add(ExpiryIdle)) {
+						return fmt.Errorf("learn: expiry transition %s does not re-derive: revision %s was active within %s of it", x.ID, x.Revision, ExpiryIdle)
+					}
+				}
+			}
 			it.Stage[x.Revision] = x.To
 			it.Transitions[x.Revision] = append(it.Transitions[x.Revision], x)
 		case *Application:
@@ -166,6 +190,8 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 				}
 			}
 			led.Applications[x.Invocation] = append(led.Applications[x.Invocation], x)
+			appByID[x.ID] = x
+			appsOf[x.Revision] = append(appsOf[x.Revision], x)
 		case *RecallSelection:
 			k := RecallKey(x.RunID, x.Attempt)
 			if led.Recalls[k] != nil {

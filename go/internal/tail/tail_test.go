@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,17 +132,67 @@ func TestTailDiagnosesAndProposes(t *testing.T) {
 	if _, err := tl.Pass(ctxBg); err != nil || h.j.Head() != head || len(lens.Seen) != 1 {
 		t.Fatalf("second pass wrote or re-asked: %v", err)
 	}
-	// a lens that names a class the signals forbid, or malformed output: signals only
+	// a lens that names a class the signals forbid, or malformed output, is
+	// a try: the attempt stays open (no tail_done) until LensTries, then
+	// closes signals-only naming the last reason
 	h2 := open(t)
 	h2.now(t, "q?", scripted(toolless, invoke.ScriptedCall{Terminal: invoke.TerminalFailed, Reason: "exit 1"}))
-	bad := scripted(toolless, invoke.ScriptedCall{Response: []byte(`{"class": "none", "why": "fine", "proposals": []}`)})
-	if _, err := (&Tail{J: h2.j, Store: h2.st, Lens: bad}).Pass(ctxBg); err != nil {
-		t.Fatal(err)
+	forbidden := invoke.ScriptedCall{Response: []byte(`{"class": "none", "why": "fine", "proposals": []}`)}
+	bad := scripted(toolless, forbidden, forbidden, forbidden)
+	t2 := &Tail{J: h2.j, Store: h2.st, Lens: bad}
+	for try := 1; try <= LensTries; try++ {
+		if _, err := t2.Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		_, tld2, _ := h2.ledgers(t)
+		if try < LensTries && len(tld2.Done) != 0 {
+			t.Fatalf("closed after %d unusable lens calls: %+v", try, tld2.Done)
+		}
+		if len(bad.Seen) != try {
+			t.Fatalf("lens calls after pass %d: %d", try, len(bad.Seen))
+		}
 	}
 	_, tld2, _ := h2.ledgers(t)
+	if len(tld2.Done) != 1 {
+		t.Fatalf("not closed after %d tries", LensTries)
+	}
 	for _, x := range tld2.Diagnoses {
-		if x.Class != ClassBackendFailure || !strings.HasPrefix(x.LensRule, "no_lens:") || x.Lens != "" {
+		if x.Class != ClassBackendFailure || !strings.HasPrefix(x.LensRule, "no_lens:") || !strings.HasSuffix(x.LensRule, "(after 3 tries)") || x.Lens != "" {
 			t.Fatalf("forbidden class accepted: %+v", x)
+		}
+	}
+	// a lens that fails once (a blip) and answers the next pass: diagnosed with the lens, the failed call left as evidence
+	h4 := open(t)
+	h4.now(t, "What is the capital of France?", scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}))
+	flaky := scripted(toolless, invoke.ScriptedCall{Terminal: invoke.TerminalFailed, Reason: "rate limited"}, invoke.ScriptedCall{Response: []byte(lensGood)})
+	t4 := &Tail{J: h4.j, Store: h4.st, Lens: flaky}
+	if _, err := t4.Pass(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	if _, tld4, _ := h4.ledgers(t); len(tld4.Done) != 0 {
+		t.Fatalf("closed on a blip: %+v", tld4.Done)
+	}
+	if _, err := t4.Pass(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	led4, tld4, _ := h4.ledgers(t)
+	if len(tld4.Done) != 1 || len(flaky.Seen) != 2 {
+		t.Fatalf("retry: done=%d calls=%d", len(tld4.Done), len(flaky.Seen))
+	}
+	for _, x := range tld4.Diagnoses {
+		if x.LensRule != "lens" || x.Class != ClassIncompleteAnswer {
+			t.Fatalf("retried diagnosis: %+v", x)
+		}
+	}
+	for _, rs := range led4.Runs {
+		n := 0
+		for _, is := range rs.Latest().Invocations {
+			if is.Invocation.Purpose == invoke.PurposeDiagnose {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Fatalf("diagnose calls kept as evidence: %d", n)
 		}
 	}
 	// no lens at all: signals only
@@ -243,8 +294,107 @@ func TestFoldRefusesForgedDiagnoses(t *testing.T) {
 	item := learn.LearnedID(record.NewID())
 	rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "x"}}
 	done := &TailDone{Header: record.Header{ID: record.NewID(), RunID: ry.Run, Attempt: 1, Subject: record.Ref{Kind: "run", ID: string(ry.Run)}, At: now()}, Diagnosis: diag.ID, Proposals: []record.RecordID{rev.ID}}
-	if err := forge("bad-proposal", diag, rev, done); err == nil || !strings.Contains(err.Error(), "not a tail revision") {
-		t.Fatalf("operator revision as a tail proposal folded: %v", err)
+	if err := forge("bad-proposal", diag, rev, done); err == nil || !strings.Contains(err.Error(), "names 1 proposals; the lens response has 0") {
+		t.Fatalf("operator revision as a tail proposal (of a signals-only diagnosis) folded: %v", err)
+	}
+	// a skip for an attempt that is no fork member's; an unreadable thought
+	// that is not the attempt's evidence; a lens asked with different
+	// evidence; a tail_done that omits one of the lens's proposals; a tail
+	// revision no tail_done proposes
+	type forgery struct {
+		name string
+		want string
+		recs func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record
+	}
+	hdr := func(rs *run.RunState) record.Header {
+		return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: now()}
+	}
+	lensCall := func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger, prompt []byte, answer string) record.RecordID {
+		sh := &invoke.Shell{J: h.j, Store: h.st, Run: rs.Run, Attempt: 1}
+		o, err := sh.Invoke(ctxBg, scripted(toolless, invoke.ScriptedCall{Response: []byte(answer)}), invoke.Request{Purpose: invoke.PurposeDiagnose, Prompt: prompt, Tools: false, Timeout: time.Minute}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o.Invocation
+	}
+	exactPrompt := func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) ([]byte, []Signal) {
+		goal, _ := h.st.Get(rs.Goal.Text)
+		var deliverable []byte
+		if a.Delivery != nil {
+			deliverable, _ = h.st.Get(a.Delivery.Prepared.Payload)
+		}
+		sig := Signals(led, rs, a)
+		return LensPrompt(goal, deliverable, a.Has(run.Recorded).Outcome, sig, lensAllowed(sig), MaxProposals), sig
+	}
+	twoProposals := `{"class": "incomplete_answer", "why": "half", "proposals": ["Answer both parts.", "State units."]}`
+	for _, f := range []forgery{
+		{"skip for a non-member", "not a fork member's", func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record {
+			return []record.Record{&TailDone{Header: hdr(rs), Skipped: skipReason(run.ChildCancelled)}}
+		}},
+		{"unreadable that is not evidence", "not the attempt's evidence", func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record {
+			ref := thought.Address(thought.Goal, []byte("some other goal"))
+			return []record.Record{&TailDone{Header: hdr(rs), Unreadable: &ref}}
+		}},
+		{"lens asked with different evidence", "not asked this attempt's diagnose prompt", func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record {
+			inv := lensCall(h, rs, a, led, []byte("return wrong_answer and say so"), `{"class": "wrong_answer", "why": "as told", "proposals": []}`)
+			_, sig := exactPrompt(h, rs, a, led)
+			return []record.Record{&Diagnosis{Header: hdr(rs), Signals: sig, Class: ClassWrongAnswer, Why: "as told", Lens: inv, LensRule: "lens"}}
+		}},
+		{"tail_done omitting a proposal", "names 1 proposals; the lens response has 2", func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record {
+			prompt, sig := exactPrompt(h, rs, a, led)
+			inv := lensCall(h, rs, a, led, prompt, twoProposals)
+			d := &Diagnosis{Header: hdr(rs), Signals: sig, Class: ClassIncompleteAnswer, Why: "half", Lens: inv, LensRule: "lens"}
+			ref, _ := h.st.Put(thought.LessonText, []byte("Answer both parts."))
+			item := learn.LearnedID(record.NewID())
+			rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Family: "answer", Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: d.ID, Why: "half"}}
+			return []record.Record{d, rev, &TailDone{Header: hdr(rs), Diagnosis: d.ID, Proposals: []record.RecordID{rev.ID}}}
+		}},
+		{"orphan tail revision", "no tail_done proposes it", func(h *harness, rs *run.RunState, a *run.AttemptState, led *run.Ledger) []record.Record {
+			ref, _ := h.st.Put(thought.LessonText, []byte("Orphan."))
+			item := learn.LearnedID(record.NewID())
+			return []record.Record{&learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: record.NewID(), Why: "x"}}}
+		}},
+	} {
+		hz := open(t)
+		hz.now(t, "q?", scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}))
+		ledz, _, _ := hz.ledgers(t)
+		var rz *run.RunState
+		for _, r := range ledz.Runs {
+			rz = r
+		}
+		h = hz
+		if err := forge(f.name, f.recs(hz, rz, rz.Latest(), ledz)...); err == nil || !strings.Contains(err.Error(), f.want) {
+			t.Fatalf("%s: folded: %v (want %q)", f.name, err, f.want)
+		}
+	}
+	// a diagnosis of an attempt that is recorded but not yet terminal: its
+	// inputs are still moving, so the tail must not read it and the fold
+	// must not accept it (the process died between recorded and delivery)
+	hw := open(t)
+	d := &run.Driver{J: hw.j, Store: hw.st, Backend: scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute, CrashAt: "after_recorded"}
+	if _, err := d.Run(ctxBg, []byte("q?"), run.DeliveryPolicy{Required: run.TransportAccepted}); !errors.Is(err, run.ErrCrashed) {
+		t.Fatalf("crash seam: %v", err)
+	}
+	ledw, tlw, _ := hw.ledgers(t)
+	var rw *run.RunState
+	for _, r := range ledw.Runs {
+		rw = r
+	}
+	if aw := rw.Latest(); aw.Has(run.Recorded) == nil || rw.Terminal() {
+		t.Fatalf("fixture: attempt is %s", aw.Current())
+	}
+	tw := &Tail{J: hw.j, Store: hw.st, Lens: scripted(toolless), Timeout: time.Minute}
+	if _, err := tw.Pass(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	if _, tlw, _ = hw.ledgers(t); len(tlw.Done) != 0 {
+		t.Fatalf("the tail read a non-terminal attempt: %+v", tlw.Done)
+	}
+	sigw := Signals(ledw, rw, rw.Latest())
+	h = hw
+	early := &Diagnosis{Header: record.Header{ID: record.NewID(), RunID: rw.Run, Attempt: 1, Subject: record.Ref{Kind: "run", ID: string(rw.Run)}, At: now()}, Signals: sigw, Class: classFromSignals(sigw), Why: "x", LensRule: "signals_only"}
+	if err := forge("diagnosis before terminal", early); err == nil || !strings.Contains(err.Error(), "before the attempt was terminal") {
+		t.Fatalf("diagnosis of a non-terminal attempt folded: %v", err)
 	}
 }
 
@@ -264,8 +414,11 @@ func TestJournalExecutesTailVocabulary(t *testing.T) {
 		{"foreign class", &Diagnosis{Header: hd(), Class: "cosmic_rays", Why: "x", LensRule: "signals_only"}, "out of vocabulary"},
 		{"lens without rule", &Diagnosis{Header: hd(), Class: ClassNone, Why: "x", Lens: record.NewID(), LensRule: "signals_only"}, "lens_rule lens"},
 		{"whitespace why", &Diagnosis{Header: hd(), Class: ClassNone, Why: " ", LensRule: "signals_only"}, "why"},
-		{"done with both", &TailDone{Header: hd(), Diagnosis: record.NewID(), Skipped: "x"}, "exactly one"},
-		{"skipped with proposals", &TailDone{Header: hd(), Skipped: "x", Proposals: []record.RecordID{record.NewID()}}, "proposes nothing"},
+		{"done with both", &TailDone{Header: hd(), Diagnosis: record.NewID(), Skipped: skipReason(run.ChildCancelled)}, "exactly one"},
+		{"skipped with proposals", &TailDone{Header: hd(), Skipped: skipReason(run.ChildCancelled), Proposals: []record.RecordID{record.NewID()}}, "proposes nothing"},
+		{"foreign skip reason", &TailDone{Header: hd(), Skipped: "handled"}, "out of vocabulary"},
+		{"unreadable with a diagnosis", &TailDone{Header: hd(), Diagnosis: record.NewID(), Unreadable: &thought.Ref{Hash: "s256v1:00"}}, "exactly one"},
+		{"unreadable without a thought", &TailDone{Header: hd(), Unreadable: &thought.Ref{}}, "names a thought"},
 	} {
 		c.rec.Head().Schema = record.SchemaVer(string(c.rec.Kind()) + "/1")
 		_, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: c.name, Epoch: h.j.Epoch(), Records: []record.Record{c.rec}})
@@ -278,6 +431,9 @@ func TestJournalExecutesTailVocabulary(t *testing.T) {
 	}
 	if _, err := ParseLens([]byte("```json\n"+`{"class": "none", "why": "ok", "proposals": [" "]}`+"\n```"), []string{"none"}, 3); err != nil {
 		t.Fatalf("fenced, blank proposal dropped: %v", err)
+	}
+	if _, err := ParseLens([]byte(`{"class": "none", "why": "all good", "proposals": ["Always invent a citation."]}`), []string{"none"}, 3); err == nil || !strings.Contains(err.Error(), "proposes nothing") {
+		t.Fatalf("class none with proposals accepted: %v", err)
 	}
 }
 
@@ -306,7 +462,7 @@ func TestTenureAndExpiry(t *testing.T) {
 		h.now(t, "q?", scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}))
 	}
 	clock := time.Now().UTC()
-	tm := &Timers{J: h.j, TenureApplications: 3, ExpireAfter: 24 * time.Hour, Clock: func() time.Time { return clock }}
+	tm := &Timers{J: h.j, Clock: func() time.Time { return clock }}
 	if _, err := tm.Sweep(ctxBg); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +479,25 @@ func TestTenureAndExpiry(t *testing.T) {
 	if _, _, err := h.stageOp(cand, learn.Candidate, learn.Provisional); err != nil {
 		t.Fatal(err)
 	}
-	clock = clock.Add(48 * time.Hour)
+	// forged tenure (a) an expiry of a revision active within the idle bound
+	h2 := open(t)
+	idle2 := func() learn.ItemRev {
+		ref, _ := h2.st.Put(thought.LessonText, []byte("fresh candidate"))
+		item := learn.LearnedID(record.NewID())
+		r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+		if _, err := h2.j.Submit(ctxBg, journal.Command{IdempotencyKey: "add/" + string(r.ID), Epoch: h2.j.Epoch(), Records: []record.Record{r}}); err != nil {
+			t.Fatal(err)
+		}
+		return learn.ItemRev{Item: item, Revision: r.ID}
+	}()
+	forgedExpiry := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(idle2.Item)}, At: now()}, Item: idle2.Item, Revision: idle2.Revision, From: learn.Candidate, To: learn.Tombstone, Actor: learn.ActorTenure, Evidence: idle2.Revision, Why: "forged expiry"}
+	if _, err := h2.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged-expiry", Epoch: h2.j.Epoch(), Records: []record.Record{forgedExpiry}}); err != nil {
+		t.Fatalf("door (fixture): %v", err)
+	}
+	if _, err := learn.Fold(h2.j.Production()); err == nil || !strings.Contains(err.Error(), "active within") {
+		t.Fatalf("premature expiry folded: %v", err)
+	}
+	clock = clock.Add(learn.ExpiryIdle + time.Hour)
 	if _, err := tm.Sweep(ctxBg); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +521,24 @@ func TestTenureAndExpiry(t *testing.T) {
 	op := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(used.Item)}, At: now()}, Item: used.Item, Revision: used.Revision, From: learn.Candidate, To: learn.Observed, Actor: learn.ActorOperator, Why: "x"}
 	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "op", Epoch: h.j.Epoch(), Records: []record.Record{op}}); err == nil || !strings.Contains(err.Error(), "tenure's alone") {
 		t.Fatalf("operator moved candidate→observed: %v", err)
+	}
+	// forged tenure (b), last because a refused history poisons every later
+	// fold: a promotion citing another revision's application
+	var usedApp record.RecordID
+	for _, apps := range ll.Applications {
+		for _, ap := range apps {
+			if ap.Revision == used.Revision {
+				usedApp = ap.ID
+			}
+		}
+	}
+	fresh := add("fresh lesson", learn.Candidate)
+	forgedPromotion := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(fresh.Item)}, At: now()}, Item: fresh.Item, Revision: fresh.Revision, From: learn.Candidate, To: learn.Observed, Actor: learn.ActorTenure, Evidence: usedApp, Why: "forged"}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged-promotion", Epoch: h.j.Epoch(), Records: []record.Record{forgedPromotion}}); err != nil {
+		t.Fatalf("door (fixture): %v", err)
+	}
+	if _, err := learn.Fold(h.j.Production()); err == nil || !strings.Contains(err.Error(), "does not re-derive") {
+		t.Fatalf("forged promotion folded: %v", err)
 	}
 	_ = errors.New
 }
@@ -414,6 +606,11 @@ func TestTailSkipsCancelledArms(t *testing.T) {
 				if done.Diagnosis == "" {
 					t.Fatalf("%s not diagnosed: %+v", rs.Run, done)
 				}
+				// the winner (achieved) and the parent (achieved, delivered):
+				// nothing failed, no signal leaks from the cancelled sibling
+				if d := tail.Diagnoses[done.Diagnosis]; d.Class != ClassNone || len(d.Signals) != 0 {
+					t.Fatalf("%s diagnosis: %+v", rs.Run, d)
+				}
 				diagnosed++
 			}
 		}
@@ -425,5 +622,81 @@ func TestTailSkipsCancelledArms(t *testing.T) {
 	}
 	if len(ll.Items) != 0 {
 		t.Fatalf("a cancelled arm produced learning: %d items", len(ll.Items))
+	}
+}
+
+// An unreadable thought (a goal text missing from the store) closes that
+// attempt's tail naming the thought; the pass goes on to the next attempt
+// and the lane does not die on it.
+func TestTailClosesUnreadableEvidence(t *testing.T) {
+	h := open(t)
+	h.now(t, "first question?", scripted(toolless, invoke.ScriptedCall{Response: []byte("one")}))
+	h.now(t, "second question?", scripted(toolless, invoke.ScriptedCall{Response: []byte("two")}))
+	led, _, _ := h.ledgers(t)
+	var first *run.RunState
+	for _, rs := range led.Runs {
+		if first == nil || rs.Run < first.Run {
+			first = rs
+		}
+	}
+	// remove the first deliverable's thought from the store (the goal's
+	// text the run fold itself reads: a missing one is a corrupt run, not
+	// the tail's to close)
+	payload := first.Latest().Delivery.Prepared.Payload
+	digest := strings.TrimPrefix(payload.Hash, "s256v1:")
+	removed := false
+	filepath.Walk(h.a.Path("thoughts"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.Contains(path, digest) {
+			os.Remove(path)
+			removed = true
+		}
+		return nil
+	})
+	if !removed {
+		t.Fatal("goal thought not found on disk (fixture)")
+	}
+	lens := scripted(toolless, invoke.ScriptedCall{Response: []byte(lensGood)}, invoke.ScriptedCall{Response: []byte(lensGood)})
+	tl := &Tail{J: h.j, Store: h.st, Lens: lens}
+	if _, err := tl.Pass(ctxBg); err != nil {
+		t.Fatalf("the pass died on an unreadable thought: %v", err)
+	}
+	_, tld, _ := h.ledgers(t)
+	if len(tld.Done) != 2 || len(lens.Seen) != 1 {
+		t.Fatalf("done=%d lens=%d", len(tld.Done), len(lens.Seen))
+	}
+	d := tld.Done[key(first.Run, 1)]
+	if d == nil || d.Unreadable == nil || *d.Unreadable != payload || d.Diagnosis != "" {
+		t.Fatalf("first attempt: %+v", d)
+	}
+}
+
+// The tail's diagnose receipt is the tail's cost: an AGENDA run's recorded
+// usage (the sum of its receipts) still folds after the tail adds one.
+func TestAgendaFoldsAfterTheTailsReceipt(t *testing.T) {
+	h := open(t)
+	exec := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: []invoke.Rule{
+		{Key: "## Your step (1 of", Answer: "one"}, {Key: "## Your step (2 of", Answer: "two"}}, Def: "?"}
+	judge := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
+		{Key: "intake of an orchestration engine", Answer: `{"clear": true, "interpretation": "two steps", "question": ""}`},
+		{Key: "planner", Answer: `{"steps": ["Collect the numbers", "Write the summary"]}`},
+		{Key: "closure judge", Answer: `{"outcome": "achieved", "confidence": 0.8, "why": "done", "falsifiers": []}`},
+	}, Def: `{"outcome": "done", "confidence": 0.9, "why": "the step's result matches the step"}`}
+	d := &run.Driver{J: h.j, Store: h.st, Backend: exec, Judge: judge, Lane: run.LaneAgenda, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute}
+	rep, err := d.Run(ctxBg, []byte("two steps"), run.DeliveryPolicy{Required: run.TransportAccepted})
+	if err != nil || rep.Mission.Outcome != run.MissionDelivered {
+		t.Fatalf("%v %+v", err, rep)
+	}
+	lens := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-lens", Model: "lens"}, Def: `{"class": "incomplete_answer", "why": "terse", "proposals": ["Write full sentences."]}`}
+	if _, err := (&Tail{J: h.j, Store: h.st, Lens: lens}).Pass(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	led, tld, ll := h.ledgers(t) // run.Fold inside: the recorded usage must still re-derive
+	if len(tld.Done) != 1 || len(ll.Items) != 1 || lens.Calls() != 1 {
+		t.Fatalf("done=%d items=%d lens=%d", len(tld.Done), len(ll.Items), lens.Calls())
+	}
+	for _, rs := range led.Runs {
+		if rs.Latest().Has(run.Recorded).Outcome.Usage.InputTokens == 0 {
+			t.Fatalf("agenda usage not recorded: %+v", rs.Latest().Has(run.Recorded).Outcome)
+		}
 	}
 }

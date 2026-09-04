@@ -121,7 +121,7 @@ func samples() map[record.Kind]any {
 		run.KindChildTerminal:       &run.ChildTerminal{Header: withSubject(withSchema(h, "child_terminal/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv, Child: record.AttemptRef{Run: "run-1", Attempt: 2}, State: run.ChildCompletedLate},
 		run.KindJoinSettled:         &run.JoinSettled{Header: withSubject(withSchema(h, "join_settled/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv},
 		tail.KindDiagnosis:          &tail.Diagnosis{Header: withSubject(withSchema(h, "diagnosis/1"), record.Ref{Kind: "run", ID: "run-1"}), Signals: []tail.Signal{tail.SignalUnjudged}, Class: tail.ClassIncompleteAnswer, Why: "missed the second question", Lens: inv, LensRule: "lens"},
-		tail.KindTailDone:           &tail.TailDone{Header: withSubject(withSchema(h, "tail_done/1"), record.Ref{Kind: "run", ID: "run-1"}), Diagnosis: inv, Proposals: []record.RecordID{inv}, Skipped: ""},
+		tail.KindTailDone:           &tail.TailDone{Header: withSubject(withSchema(h, "tail_done/1"), record.Ref{Kind: "run", ID: "run-1"}), Skipped: "fork member cancelled: not learned from"},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

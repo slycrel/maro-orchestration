@@ -522,3 +522,27 @@ func TestJournalExecutesDeclaredVocabulary(t *testing.T) {
 		t.Fatal("refusal modified the log")
 	}
 }
+
+// A pinned reader is fixed at its head: Scan and ScanEpochs read through
+// the pin whatever lands after it, and an explicit range past the pin is
+// refused rather than quietly read.
+func TestPinnedReaderIsFixedAtItsHead(t *testing.T) {
+	j, _, _ := openJournal(t)
+	submit(t, j, "a", thoughtRec(1))
+	pinned := j.Production().Pin()
+	submit(t, j, "b", thoughtRec(2))
+	if pinned.Head() != 1 || j.Production().Head() != 2 || pinned.Pin() != pinned {
+		t.Fatalf("pin: %d live: %d", pinned.Head(), j.Production().Head())
+	}
+	n := 0
+	if err := pinned.Scan(0, func(record.Record) error { n++; return nil }); err != nil || n != 1 {
+		t.Fatalf("pinned scan saw %d (%v)", n, err)
+	}
+	n = 0
+	if err := pinned.ScanEpochs(0, func(uint64, record.Record) error { n++; return nil }); err != nil || n != 1 {
+		t.Fatalf("pinned epoch scan saw %d (%v)", n, err)
+	}
+	if err := pinned.ScanThrough(0, 2, func(record.Record) error { return nil }); !errors.Is(err, ErrBeyondPin) {
+		t.Fatalf("scan past the pin: %v", err)
+	}
+}

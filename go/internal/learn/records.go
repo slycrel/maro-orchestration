@@ -290,6 +290,29 @@ type Excluded struct {
 	Reason string `json:"reason"`
 }
 
+// TenureBound is how many applications move candidate → observed. Why 3:
+// one application proves the item was recalled once; three prove it keeps
+// being selected — and observed is still not selectable, so the cost of
+// being wrong here is nil. A constant so the fold re-derives the edge.
+const TenureBound = 3
+
+// ExpiryIdle tombstones a candidate|observed revision with no application
+// for this long. Why 30 days: an item nobody recalled in a month of runs is
+// noise in the recall projection; tombstone is reversible by a new
+// revision. A constant so the fold re-derives the edge.
+const ExpiryIdle = 30 * 24 * time.Hour
+
+// LastActivity is a revision's last application, else its own birth.
+func LastActivity(rev *LearnedRevision, apps []*Application) time.Time {
+	last := rev.At
+	for _, a := range apps {
+		if a.At.After(last) {
+			last = a.At
+		}
+	}
+	return last
+}
+
 // tenureLegal are the edges tenure may take: candidate→observed, and
 // observed|candidate→tombstone (expiry).
 var tenureLegal = map[Stage]map[Stage]bool{Candidate: {Observed: true, Tombstone: true}, Observed: {Tombstone: true}}

@@ -1,6 +1,6 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "5a91a50d",
+  "source_ref": "251bb731",
   "kinds": {
     "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
     "cancellation_issued": "5d28c0a99bcf294d00ff8d5b0764b0e42fded6cec4bf677197bd9de16f16f1d3",
@@ -34,7 +34,7 @@
     "run_attempt": "23db6be1847e26e78389831bd047b35941c096663a79559394d0a273a8c9025a",
     "run_transition": "eb352c87b9a8393adc3b4ed0d9a83308071a1a09f9981e2aa9bec028897c99f9",
     "step_done": "5af089656935b23c0344a6f77549a9240ae9f8912dbd55ca67816ecc4dbf2565",
-    "tail_done": "f2a2b5d26c9b1c71f9a40462d3ab0b854cb7a6b27a22d4de6f088a1fb2fa9451",
+    "tail_done": "79349ea3fe77cd5767d77355f58b0d231dd2e52b930754e808dc45406188007b",
     "terminal_observed": "075264189503e3b028a9e6e2b1eb79e9f0fe6b0fca5fc5419e8e44a3b3977d1d",
     "thought_stored": "8b946bbe24976cde610f332abff58feeac59eb19699cbb12d08e761f0b16c7cd",
     "tool_effect": "9770d622a2a06492016d4a3a23e6efc7dffce1a120b7fcb7c7782f038887ec2a",

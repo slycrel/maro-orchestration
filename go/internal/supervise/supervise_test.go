@@ -174,17 +174,22 @@ func TestStallIsReportedNotEnforced(t *testing.T) {
 	waitFor(t, "recovery", func() bool { return len(s.Health()) == 0 })
 	mark.Store(43)
 	waitFor(t, "watermark", func() bool { return s.Lanes()[0].Watermark == 43 })
-	hbs := 0
-	j.Control().Scan(0, func(r record.Record) error {
-		if h, ok := r.(*LaneHeartbeat); ok && h.Lane == "slow" {
-			hbs++
-			if h.Watermark != 42 && h.Watermark != 43 {
-				t.Fatalf("heartbeat watermark %d", h.Watermark)
+	// the in-memory watermark moves before its record is committed: wait
+	// on the journal, not the gauge (a load flake, 2026-09-05)
+	beats := func() (n int) {
+		j.Control().Scan(0, func(r record.Record) error {
+			if h, ok := r.(*LaneHeartbeat); ok && h.Lane == "slow" {
+				n++
+				if h.Watermark != 42 && h.Watermark != 43 {
+					t.Fatalf("heartbeat watermark %d", h.Watermark)
+				}
 			}
-		}
-		return nil
-	})
-	if hbs != 2 {
+			return nil
+		})
+		return n
+	}
+	waitFor(t, "heartbeat records", func() bool { return beats() == 2 })
+	if hbs := beats(); hbs != 2 {
 		t.Fatalf("heartbeat records: %d (one per watermark move)", hbs)
 	}
 	s.Stop(context.Background())

@@ -97,8 +97,15 @@
       "go_type": "string",
       "omittable": true,
       "is_thought": false
+    },
+    {
+      "name": "Unreadable",
+      "wire": "unreadable",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
     }
   ],
-  "source_ref": "5a91a50d",
+  "source_ref": "251bb731",
   "generator": "maro-go contracts gen v1"
 }

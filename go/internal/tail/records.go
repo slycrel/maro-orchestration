@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
 
 const (
@@ -124,8 +125,9 @@ type TailDone struct {
 	record.ProductionRecord
 	record.Header `json:"header"`
 	Diagnosis     record.RecordID   `json:"diagnosis,omitempty"`
-	Proposals     []record.RecordID `json:"proposals,omitempty"` // learned revisions at candidate, provenance tail
-	Skipped       string            `json:"skipped,omitempty"`   // why nothing was learned (a cancelled arm, a child of a fork)
+	Proposals     []record.RecordID `json:"proposals,omitempty"`  // learned revisions at candidate, provenance tail
+	Skipped       string            `json:"skipped,omitempty"`    // why nothing was learned: a fork member's terminal (derived by the fold)
+	Unreadable    *thought.Ref      `json:"unreadable,omitempty"` // a thought the attempt's evidence names that the store could not read: closed without a diagnosis, once
 }
 
 func (r *TailDone) Head() *record.Header { return &r.Header }
@@ -137,16 +139,28 @@ func (r *TailDone) ValidateWire() error {
 	if r.RunID == "" || r.Attempt == 0 || r.Subject.Kind != "run" || r.Subject.ID != string(r.RunID) {
 		return errors.New("tail_done: subject must be the run, attempt-scoped")
 	}
-	if (r.Diagnosis == "") != (r.Skipped != "") {
-		return errors.New("tail_done: exactly one of a diagnosis or a skip reason")
+	set := 0
+	for _, has := range []bool{r.Diagnosis != "", r.Skipped != "", r.Unreadable != nil} {
+		if has {
+			set++
+		}
+	}
+	if set != 1 {
+		return errors.New("tail_done: exactly one of a diagnosis, a skip reason, or an unreadable thought")
+	}
+	if r.Unreadable != nil && r.Unreadable.Hash == "" {
+		return errors.New("tail_done: unreadable names a thought")
+	}
+	if r.Skipped != "" && r.Skipped != skipReason("cancelled") && r.Skipped != skipReason("completed_late") {
+		return fmt.Errorf("tail_done: skip reason %q out of vocabulary (a fork member's terminal)", r.Skipped)
 	}
 	if r.Diagnosis != "" {
 		if err := record.ValidateID(r.Diagnosis); err != nil {
 			return fmt.Errorf("tail_done: diagnosis: %w", err)
 		}
 	}
-	if r.Skipped != "" && len(r.Proposals) > 0 {
-		return errors.New("tail_done: a skipped tail proposes nothing")
+	if r.Diagnosis == "" && len(r.Proposals) > 0 {
+		return errors.New("tail_done: a skipped or unreadable tail proposes nothing")
 	}
 	for _, p := range r.Proposals {
 		if err := record.ValidateID(p); err != nil {

@@ -996,11 +996,14 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			}
 			agenda := a.Attempt.Config.Lane == LaneAgenda
 			if agenda {
-				// usage is what the goal cost so far: every receipt of every attempt
+				// usage is what the goal cost so far: every receipt of every
+				// attempt — except the tail's diagnose calls, which are the
+				// tail's cost, land after the outcome is recorded, and must
+				// not change it
 				var sum invoke.Usage
 				for _, p := range rs.Attempts {
 					for _, is := range p.Invocations {
-						if is.Receipt != nil {
+						if is.Receipt != nil && is.Invocation.Purpose != invoke.PurposeDiagnose {
 							sum = add(sum, is.Receipt.Usage)
 						}
 					}

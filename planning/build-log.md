@@ -1043,3 +1043,88 @@ tests, the seam looped six times.
 
 Tests: tail 6, invoke +1, process +1; 14 packages green under `-race`;
 contracts 38 kinds, 0 errors / 0 warnings.
+
+**Review round (Skeptic + Expert QA, codex; 24 findings, deduplicated to
+12, each verified in the tree before fixing).** The HIGHs:
+
+- *A diagnose receipt retroactively broke every recorded AGENDA outcome*
+  (both, HIGH): the fold's usage rule summed EVERY receipt of the run's
+  attempts, and the tail's diagnose receipt lands on the attempt after it
+  is recorded. `now` compares only the producing receipt, so the live
+  check missed it; `agenda` + tail would have poisoned the run fold. The
+  tail's calls are the tail's cost: excluded from the goal's usage in the
+  fold and the driver. Test: an AGENDA run diagnosed by a metered lens
+  still folds.
+- *`Tail.Pass` folded twice from an unpinned reader* (Skeptic, HIGH):
+  the run fold and the tail fold pinned separately, so the diagnosis's
+  signals could be over one prefix and the tail's done-set over another.
+  The pass pins once.
+- *Tenure transitions were wire-legal assertions* (both, HIGH): the learn
+  fold checked only that the evidence was an earlier record. The bounds
+  are now constants of the learn package (`TenureBound` 3, `ExpiryIdle`
+  30d) so the fold re-derives both edges: a promotion's evidence must be
+  the third application of that revision; an expiry must sit past the
+  idle bound of the revision's last activity. Forged promotions (another
+  revision's application) and premature expiries are refused.
+- *`tail_done{skipped}` was free text* (both, HIGH): any attempt could be
+  closed unlearned. The skip reason is derived from the fork's terminal
+  for the run (a closed vocabulary at the door; the fold requires the
+  terminal that derives it). A skip for a non-member is refused.
+- *A transient lens failure closed the attempt signals-only forever*
+  (both, HIGH/MED): a failed or unusable diagnose call now leaves the
+  attempt open for the next pass, the failed call kept as evidence, up to
+  `LensTries` (3); only then does it close as `no_lens:<why> (after 3
+  tries)`. Tests: a blip then an answer; three forbidden answers.
+- *The lens request was never re-derived* (both, MED): a forged diagnose
+  call with an attacker's prompt could authorise a diagnosis. The fold
+  re-renders `LensPrompt` from the attempt's evidence and requires the
+  cited invocation's request address to equal it (`MaxProposals` became a
+  constant so the render is exact); the producer reuses a call only under
+  the same rule.
+- *"One command" was the writer's claim only* (both, MED): the fold now
+  requires a tail_done's proposals to be the lens response's, complete
+  and in order, as workspace lessons of the run's family; a tail-provenance
+  revision no tail_done proposes is refused at the end of the fold
+  (commands are atomic frames, so a prefix never splits them).
+- *A missing thought was a poison pill for the lane* (both, MED): a pass
+  died on the first unreadable blob, restarting on it forever. An
+  unreadable deliverable or lens response now closes THAT attempt with
+  `tail_done{unreadable: <ref>}` (the fold requires the ref to be the
+  attempt's evidence) and the pass goes on. A missing GOAL text is the
+  run fold's own failure — corrupt run, not the tail's to close; stated.
+- *`class: none` with proposals* (both, MED): refused at parse and so in
+  the fold.
+- *No bound on a pass* (Skeptic, MED): `MaxPerPass` 5; a pass that hits
+  it runs again at once; the heartbeat moves every pass.
+- *`ScanThrough` past a pin* (both, LOW): refused (`ErrBeyondPin`), with
+  a reader test.
+- *Same-epoch orphans* (both, LOW, SPECULATIVE): a dispatch of this epoch
+  whose goroutine died without the process is never reconciled — stated
+  in the code as the chosen direction (a live call is never corrupted; a
+  stuck run waits for the next lease). Not fixed; an ownership registry is
+  a later lift if a real path to it appears.
+- Tests: the fork tail test now pins the winner's and parent's diagnoses
+  (class none, no signals) so a leaked `interrupted` fails it.
+
+**One the stricter fold found on its own.** With the prompt re-rendered
+at fold time, the process test (tail lane vs executor resume) failed:
+the tail had diagnosed an attempt between `recorded` and its prepared
+delivery, so the producer's prompt had no deliverable and the fold's
+did. That is not a prompt bug — a diagnosis over inputs that then move
+can never be re-derived. The tail now reads only TERMINAL attempts
+(`delivered` / `delivery_failed`: the point after which the signals and
+the deliverable stop moving), and the fold refuses any diagnosis or
+tail_done whose `Seq` is not past the attempt's terminal transition
+(forgery: a driver crashed `after_recorded`, a pass that must not touch
+it, a signals-correct diagnosis refused "before the attempt was
+terminal"). Pattern, stated: a derived record is committed only once
+the records it derives from are stable — same reason the fork serializes
+its decision after its members' terminals.
+
+Side-find: `supervise`'s stall test flaked once under the full `-race`
+suite — it polled the in-memory watermark, which moves before the
+heartbeat record is committed. Test now waits on the journal.
+
+Tests: tail +2 (unreadable evidence; agenda after the tail's receipt),
+forgeries +8, journal +1; 15 packages green under `-race`; contracts 38
+kinds, 0 errors / 0 warnings.

@@ -41,7 +41,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			continue
 		}
 		for _, st := range p.Invocations {
-			if st.Receipt != nil {
+			if st.Receipt != nil && st.Invocation.Purpose != invoke.PurposeDiagnose { // the tail's calls are the tail's cost
 				usage = add(usage, st.Receipt.Usage)
 			}
 		}

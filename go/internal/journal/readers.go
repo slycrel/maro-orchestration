@@ -1,6 +1,9 @@
 package journal
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
@@ -22,6 +25,10 @@ type ProductionReader struct {
 }
 type ControlReader struct{ j *Journal }
 type ExperimentalReader struct{ j *Journal }
+
+// ErrBeyondPin is a scan past a pinned reader's head: the caller mixed a
+// pinned reader with an explicit range, the split-prefix bug by another door.
+var ErrBeyondPin = errors.New("journal: scan beyond the reader's pin")
 
 // Pin returns a reader fixed at the current head; pinning a pinned reader
 // is the identity, so every fold may pin without re-pinning its callers'.
@@ -64,6 +71,9 @@ func (r *ProductionReader) ScanEpochs(after uint64, fn func(epoch uint64, rec re
 // ScanThrough yields committed records of this population with Seq in
 // (after, through], proving coverage through `through` or failing.
 func (r *ProductionReader) ScanThrough(after, through uint64, fn func(record.Record) error) error {
+	if r.pinned && through > r.pin {
+		return fmt.Errorf("%w: through %d exceeds the reader's pin %d", ErrBeyondPin, through, r.pin)
+	}
 	return scanEnvelope(r.j, record.Production, after, through, dropEpoch(fn))
 }
 func (r *ControlReader) ScanThrough(after, through uint64, fn func(record.Record) error) error {
