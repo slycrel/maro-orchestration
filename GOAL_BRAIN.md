@@ -4211,3 +4211,25 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   the behavior suite as the check, not the brief. Three decisions queued for
   Jeremy in §9 (learn-to-get-cheaper as v1 bar; always-on inside the app; the
   Manti envelope as a v1 gate) — none block the design note.
+
+- **2026-09-04 (D11–D13 — the drift review's three questions answered —
+  Jeremy):** **D11 learning bar:** *"learning changes behavior is before
+  'cheaper', though learning to be cheaper is probably a kind of learning,
+  one of many."* **D12 always-on shape:** *"not an OS wins; I'm cool with a
+  daemon or something, maybe... but no crons for timers and such; this is
+  designed as a process on a machine, even though we have given maro a
+  machine of it's own. (dockerized or other people's machines are not the
+  same context as what we have)."* **D13 envelope + the principle:** *"That
+  is one of many possible goals for testing... I'm fine with that being a
+  target, not fine with it being a hard constraint. Similar to our magic
+  numbers -- we measure overages, we don't chop and break due to them. LLMs
+  want math complete problems, not probabilities and fuzzy logic, and that's
+  where we need to live to be different/do different (and thus be better
+  than a 1-shot LLM call)."* Read: v1 self-improvement hooks are judged on
+  measured behavior change, cost one axis among many; the successor is one
+  process whose background lanes live and die with it, no cron/systemd
+  timers, process-on-a-machine is the design context; the Manti envelope is
+  a measured target, overages surfaced never enforced by breaking; and the
+  harness's reason to exist is living in probability and fuzzy judgement —
+  graded, recoverable verdicts by construction. Recorded D11–D13 in
+  `planning/successor-plan.md` (successor). READING_QUEUE row moved to Done.
