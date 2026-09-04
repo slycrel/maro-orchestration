@@ -131,25 +131,35 @@ type AdmitFunc func(ctx context.Context, g *Goal, fam *FamilyAssessment) (recs [
 // is refused by the sequencer and decided again (bounded: a third refusal
 // is the caller's error to see).
 func IntakeCommand(ctx context.Context, j *journal.Journal, admit AdmitFunc, g *Goal, fam *FamilyAssessment) error {
-	var err error
-	for try := 0; try < 3; try++ {
+	for try := 0; try < IntakeTries; try++ {
 		recs := []record.Record{g, fam}
 		var head *uint64
-		if admit != nil {
+		if admit != nil && try < IntakeTries-1 {
 			g.Arm = nil
-			var extra []record.Record
-			extra, head, err = admit(ctx, g, fam)
+			extra, h, err := admit(ctx, g, fam)
 			if err != nil {
 				return err
 			}
-			recs = append(recs, extra...)
+			recs, head = append(recs, extra...), h
+		} else {
+			// the last try commits the goal plain: an admission that lost
+			// the head twice is dropped, never the user's goal
+			g.Arm = nil
 		}
-		if _, err = j.Submit(ctx, journal.Command{IdempotencyKey: "goal/" + string(g.ID), Epoch: j.Epoch(), ExpectHead: head, Records: recs}); !errors.Is(err, journal.ErrPrecondition) {
+		_, err := j.Submit(ctx, journal.Command{IdempotencyKey: "goal/" + string(g.ID), Epoch: j.Epoch(), ExpectHead: head, Records: recs})
+		if err == nil || !errors.Is(err, journal.ErrPrecondition) {
 			return err
 		}
 	}
-	return err
+	return nil
 }
+
+// IntakeTries bounds the admission decision: two decisions under a
+// precondition, then a plain commit. Why 3: a lost head is unrelated
+// traffic landing between fold and commit; two losses in a row are
+// rare, and a third decision would only delay the goal for an
+// experiment's benefit.
+const IntakeTries = 3
 
 // ReplayContext is what an arm forces on its run (§8a): the assignment,
 // the arm, the unit goal it replays (parent; root = the unit's root), and

@@ -193,6 +193,14 @@ func (p *Protocol) validate() error {
 		if p.N < 2 || len(p.Units) != 0 {
 			return errors.New("randomized live: n ≥ 2 and the units arrive at intake")
 		}
+		// permuted blocks of two fill both arms exactly n/2 each; every
+		// declared verdict must be reachable from that split
+		if p.N%2 != 0 {
+			return fmt.Errorf("randomized live: n is %d; blocks of two need an even n", p.N)
+		}
+		if p.N/2 < p.Analysis.MinPerArm || p.N/2 < p.Analysis.MinEquivalent {
+			return fmt.Errorf("randomized live: n %d gives %d per arm, below min_per_arm %d / min_equivalent %d: no verdict could be reached", p.N, p.N/2, p.Analysis.MinPerArm, p.Analysis.MinEquivalent)
+		}
 	}
 	seen := map[record.RecordID]bool{}
 	for _, u := range p.Units {
@@ -622,8 +630,16 @@ func (r *EffectAttestation) ValidateWire() error {
 			}
 			switch u.Missing {
 			case "":
-				if err := record.ValidateID(u.Evaluation); err != nil {
-					return fmt.Errorf("effect_attestation: row %d: a scored row cites its evaluation: %w", i, err)
+				// a scored row cites its evaluation; the one exception is
+				// the zero of a run that did not complete (the fold checks
+				// that against the evidence)
+				if u.Evaluation == "" && u.Score != 0 {
+					return fmt.Errorf("effect_attestation: row %d scores %v without an evaluation", i, u.Score)
+				}
+				if u.Evaluation != "" {
+					if err := record.ValidateID(u.Evaluation); err != nil {
+						return fmt.Errorf("effect_attestation: row %d evaluation: %w", i, err)
+					}
 				}
 			case MissingNoDeliverable, MissingNotComplete, MissingUnevaluated:
 				if u.Score != 0 || u.Evaluation != "" {

@@ -151,7 +151,9 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 // admitted once, and the fold refuses a second claim on it.
 func Admit(j *journal.Journal, store *thought.Store) run.AdmitFunc {
 	return func(ctx context.Context, g *run.Goal, fam *run.FamilyAssessment) ([]record.Record, *uint64, error) {
-		if !run.KnownFamily(fam.Family) || g.Parent != "" || g.Origin == run.OriginReplay || g.Origin == run.OriginFork {
+		// NOW-lane roots only: an AGENDA deliverable is a closure rendering,
+		// not the answer shape the evaluator scores against the goal
+		if !run.KnownFamily(fam.Family) || g.Parent != "" || g.Origin == run.OriginReplay || g.Origin == run.OriginFork || g.Lane != run.LaneNow {
 			return nil, nil, nil
 		}
 		st, err := Fold(j, store)
@@ -178,7 +180,9 @@ func Admit(j *journal.Journal, store *thought.Store) run.AdmitFunc {
 			g.Arm = x.armRef(as.ID, as.Arm)
 			return []record.Record{as}, &head, nil
 		}
-		return nil, &head, nil
+		// nothing admits: no precondition — a plain goal never waits on
+		// unrelated journal traffic
+		return nil, nil, nil
 	}
 }
 
@@ -870,6 +874,13 @@ func (c *Closer) liveRow(ctx context.Context, st *State, p Protocol, i int, u As
 		return UnitRow{}, fmt.Errorf("%w: unit %d has no evidence", ErrRefused, i)
 	}
 	row := UnitRow{Unit: u.Unit, Assignment: u.Assignment, Arm: as.Arm, Evidence: ev.ID, Missing: ev.Missing, Exposed: ev.Exposed == intended(p.Relation, as.Arm)}
+	if ev.Missing == MissingNotComplete {
+		// the run did not complete: the goal was not achieved. An outcome,
+		// not a gap — a treatment that makes runs fail is harmful, and a
+		// row that vanished would hide it (post-treatment selection)
+		row.Missing = ""
+		return row, nil
+	}
 	if ev.Missing != "" {
 		return row, nil
 	}

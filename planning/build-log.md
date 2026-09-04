@@ -1437,3 +1437,82 @@ shows it, and a `stale` closure is a small later record. Admission
 considers experiments in journal order, so two open live experiments on
 one family serialize by age — mutual exclusion is per goal, not
 fairness. Shadow arms and `ablate(m)` as above.
+
+**Review round (Skeptic + Expert QA, codex; 14 findings, deduplicated to
+11, each verified in the tree before fixing).** Three HIGHs were real,
+one was out of scope:
+
+- **A — a plain goal could fail intake because unrelated traffic moved
+  the head** (both, HIGH). `Admit` returned the folded head even when
+  it admitted nothing, so every production goal carried `ExpectHead`,
+  and three busy commits between fold and commit failed the user's goal
+  with no experiment involved. Now: no admission ⇒ no precondition; and
+  `IntakeCommand` (`IntakeTries` 3, why in the code) decides twice
+  under a precondition and then commits the goal PLAIN — a lost
+  admission is dropped, never the goal. Tests: a goal that loses the
+  head every time runs unadmitted; a goal of another family under
+  constant traffic commits first time; two racing intakes on one
+  cohort take ordinals 0 and 1 in opposite arms.
+- **B — `serve` without `--judge-model` started an evaluator lane with
+  no judge**, which died with `ErrConfig` on the first scoreable row
+  (Skeptic, HIGH). `Options` already said "nil ⇒ Backend": the process
+  now does that for the lane, and `Lane.Pass` logs "waits" and keeps
+  the lane on a cohort it cannot score instead of returning the error.
+- **C — protocols that could never reach a verdict were accepted**
+  (both). `--n 2` under the default per-arm floor of 2, any odd n
+  (blocks of two leave a 2/1 split). The protocol door now requires an
+  even n with n/2 ≥ `min_per_arm` and ≥ `min_equivalent`, with the
+  message naming the numbers. The old "judge never answers" test had
+  opened n=2 and expected `insufficient` — it was passing on the
+  degenerate protocol; it now runs n=4.
+- **D — the tail learned from live arms** (Skeptic, MEDIUM; the live
+  check showed it: 8 candidates minted from the four arm runs). The
+  step-10b rule was keyed on `OriginReplay`; a live arm is a production
+  run with `Goal.Arm != nil`. The tail now skips every arm and the fold
+  refuses that skip on a run without one; the live test drains the tail
+  over the arms (skipped, no proposals) and checks a plain run is not
+  skipped.
+- **I — the fold trusted the family assessment** (QA, HIGH). A forged
+  intake command could carry a write_local goal with an `answer`
+  assessment. `run.Classify` is deterministic over the goal text, so the
+  experiment fold re-classifies the unit's text and refuses a
+  population it does not classify as. Fixture: forged assessment.
+- **K — AGENDA roots were admitted** (QA, MEDIUM): an AGENDA
+  deliverable is a closure rendering, not the answer shape the judge
+  scores. Live cohorts are NOW-lane goals, in `Admit` and in the fold
+  (fixture: an agenda-lane goal).
+- **L — a treatment that breaks execution vanished from the effect**
+  (QA, MEDIUM). `not_complete` rows were excluded, so a candidate that
+  made runs fail could measure helpful over the survivors or exhaust
+  the cohort as `insufficient`. A run that did not complete did not
+  achieve the goal: its row scores 0 with no judge call (door: a scored
+  row without an evaluation may only be that zero; fold: only over
+  `not_complete` evidence). Test: a treatment that fails every run →
+  `treatment_harmful`, delta −1, quarantined; a completed run scored 0
+  without an evaluation is refused.
+- **F — `SameCommand` scanned every ack under the sequencer mutex**
+  (Skeptic, MEDIUM). The journal now keeps each command's last seq in
+  commit order (recovery and append) and answers by binary search.
+- **J — the flagship test's judge keyed on the treatment's string**
+  (QA, MEDIUM): with goals that named no unit, "helpful" was
+  form-transport. The goals now ask in meters, so the keyed judge is a
+  correctness judge; a new subtest asks without a unit and a judge that
+  accepts either form measures the same lesson `equivalent`; a mixed
+  cohort (treatment [1,1], control [1,0], built by choosing each
+  block's second goal from the first's arm) measures delta 0.5.
+- **G — one discordant unit decides at margin 0, n=4** (Skeptic, LOW).
+  Deliberate for v1 and now stated here and in the mixed-cohort test:
+  `arm_diff/1` at the per-arm floor is a sample-count gate, not a
+  confidence bound; an interval or permutation rule is the upgrade
+  edge when cohorts are larger than four.
+- **Out of scope — `verdict.Check` proves a resolution over the
+  candidates it NAMES, not over every candidate committed before it**
+  (QA, HIGH; `internal/verdict/resolver.go` has no commits in this
+  range). A forged closure resolution naming one `achieved` judge
+  verdict and omitting an earlier `not_achieved` one re-derives. Real;
+  queued: `run.Fold` should hand `Check` the full (subject, kind)
+  candidate set with `Seq` below the resolution's and require set
+  equality. Not fixed this round.
+
+Refuted: none. What the stricter fold found in the existing scenarios:
+nothing.

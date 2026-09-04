@@ -149,12 +149,16 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	s.sup.Events = func(e supervise.LaneEvent) {
 		fmt.Fprintf(opts.Log, "lane %s %s gen=%d %s\n", e.Lane, e.Event, e.Generation, e.Reason)
 	}
+	judge := opts.Judge // nil ⇒ Backend, as Options says: the evaluator is held out in inputs, not in weights
+	if judge == nil {
+		judge = opts.Backend
+	}
 	lanes := []supervise.Lane{
 		&intake{s: s},
 		&tail.Timers{J: j, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&sheriff.Sheriff{J: j, Store: store, StallAfter: opts.StallAfter},
 		&tail.Tail{J: j, Store: store, Lens: opts.Judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
-		&experiment.Lane{J: j, Store: store, Judge: opts.Judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
+		&experiment.Lane{J: j, Store: store, Judge: judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&executor{s: s},
 		&publisher{s: s},
 	}

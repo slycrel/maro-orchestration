@@ -12,6 +12,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
+	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
 
@@ -26,11 +27,15 @@ func judgeFor(key string) *invoke.Keyed {
 // live drives one production goal through an intake that admits (the CLI
 // and the process both wire Admit) and returns its run.
 func (h *harness) live(text string, admit run.AdmitFunc) *run.RunState {
+	return h.liveOn(h.exec, text, admit)
+}
+
+func (h *harness) liveOn(b invoke.Backend, text string, admit run.AdmitFunc) *run.RunState {
 	h.t.Helper()
 	if admit == nil {
 		admit = Admit(h.j, h.st)
 	}
-	d := &run.Driver{J: h.j, Store: h.st, Backend: h.exec, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute, Admit: admit}
+	d := &run.Driver{J: h.j, Store: h.st, Backend: b, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute, Admit: admit}
 	rep, err := d.Run(ctxBg, []byte(text), run.DeliveryPolicy{Required: run.TransportAccepted})
 	if err != nil {
 		h.t.Fatalf("live run: %v", err)
@@ -47,7 +52,24 @@ func (h *harness) openLive(hyp learn.ItemRev, n int) *Experiment {
 	return x
 }
 
-var everestGoals = []string{"What is the height of Mount Everest?", "How high is Everest above sea level?", "What elevation does Everest reach?", "How tall is Mount Everest, in its own units?"}
+// Every goal asks for meters: a judge keyed on "8,849 meters" scores
+// achievement, and the control's feet answer genuinely misses.
+var everestGoals = []string{"What is the height of Mount Everest in meters?", "How high is Everest above sea level, in meters?", "What elevation in meters does Everest reach?", "How many meters tall is Mount Everest?"}
+
+// failOn fails the run when the request carries the key: a treatment that
+// breaks execution.
+type failOn struct {
+	inner invoke.Backend
+	key   string
+}
+
+func (f *failOn) Capabilities() invoke.Capabilities { return f.inner.Capabilities() }
+func (f *failOn) Complete(ctx context.Context, req invoke.Request, sink invoke.Sink) (*invoke.Result, error) {
+	if strings.Contains(string(req.Prompt), f.key) {
+		return &invoke.Result{Response: []byte("boom"), Terminal: invoke.TerminalFailed, Reason: "keyed failure"}, nil
+	}
+	return f.inner.Complete(ctx, req, sink)
+}
 
 // The live loop (§8a "randomized live is where D11 is established"): a
 // candidate lesson is measured over four production goals admitted at
@@ -147,6 +169,28 @@ func TestLiveRandomizedAssignment(t *testing.T) {
 	if _, err := l.Pass(ctxBg); err != nil || h.j.Head() != before {
 		t.Fatalf("second pass: %v, head %d → %d", err, before, h.j.Head())
 	}
+	// the tail never learns from a live arm: the treatment request carried
+	// the hypothesis, and a lesson minted from it would be the hypothesis
+	// by the back door
+	tl := &tail.Tail{J: h.j, Store: h.st}
+	for i := 0; i < 8; i++ {
+		if _, err := tl.Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tled, err := tail.Fold(h.j.Production(), h.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rs := range runs {
+		done := tled.Done[string(rs.Run)+"/1"]
+		if done == nil || done.Skipped != tail.SkipReplay || len(done.Proposals) != 0 {
+			t.Fatalf("arm %s tail: %+v", rs.Run, done)
+		}
+	}
+	if plain := h.state().RunOf(s.everest[0]); tled.Done[string(plain.Run)+"/1"] == nil || tled.Done[string(plain.Run)+"/1"].Skipped != "" {
+		t.Fatalf("a plain production run was skipped by the tail: %+v", tled.Done[string(plain.Run)+"/1"])
+	}
 }
 
 // The same machinery measures a harmful lesson harmful (quarantined), a
@@ -192,15 +236,108 @@ func TestLiveVerdicts(t *testing.T) {
 			t.Fatal("not tombstoned")
 		}
 	})
+	t.Run("form only is equivalent", func(t *testing.T) {
+		// meters and feet both achieve a goal that names no unit: the
+		// helpful lesson changes the form, the blinded judge says so
+		s := build(t)
+		h := s.h
+		x := h.openLive(s.helpful, 4)
+		for _, q := range []string{"What is the height of Mount Everest?", "How high is Everest?", "What elevation does Everest reach?", "How tall is Mount Everest?"} {
+			h.live(q, nil)
+		}
+		either := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
+			{Key: "meters", Answer: `{"outcome":"achieved","confidence":0.9,"why":"a height"}`},
+			{Key: "feet", Answer: `{"outcome":"achieved","confidence":0.9,"why":"a height"}`},
+		}, Def: `{"outcome":"not_achieved","confidence":0.9,"why":"no height"}`}
+		if _, err := (&Lane{J: h.j, Store: h.st, Judge: either, Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Verdict != Equivalent || m.TreatmentN != 2 || m.ControlN != 2 || m.DeltaPP != 0 {
+			t.Fatalf("measurement %+v", m)
+		}
+		if st.Runs.Learned.Items[s.helpful.Item].StageOf(s.helpful.Revision) != learn.Tombstone {
+			t.Fatal("not tombstoned")
+		}
+	})
+	t.Run("a treatment that breaks execution is harmful", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		x := h.openLive(s.helpful, 4)
+		broken := &failOn{inner: h.exec, key: "Answer in meters."}
+		for _, q := range everestGoals {
+			h.liveOn(broken, q, nil)
+		}
+		if _, err := (&Lane{J: h.j, Store: h.st, Judge: judgeFor("feet"), Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Verdict != TreatmentHarmful || m.Analyzed != 4 || m.TreatmentN != 2 || m.ControlN != 2 || m.DeltaPP != -1 {
+			t.Fatalf("measurement %+v", m)
+		}
+		for i, row := range st.Attestations[x.ID].Units {
+			ev := st.Evidence[row.Assignment][row.Arm]
+			if row.Arm == Treatment && (ev.Missing != MissingNotComplete || row.Missing != "" || row.Score != 0 || row.Evaluation != "" || !row.Exposed) {
+				t.Fatalf("failed treatment row %d %+v evidence %+v", i, row, ev)
+			}
+			if row.Arm == Control && (row.Score != 1 || row.Evaluation == "") {
+				t.Fatalf("control row %d %+v", i, row)
+			}
+		}
+		if st.Runs.Learned.Items[s.helpful.Item].StageOf(s.helpful.Revision) != learn.Quarantined {
+			t.Fatal("not quarantined")
+		}
+	})
+	t.Run("a mixed cohort", func(t *testing.T) {
+		// treatment [1,1], control [1,0]: one discordant unit decides at
+		// margin 0 — the stated sensitivity of arm_diff/1 at n=4
+		s := build(t)
+		h := s.h
+		x := h.openLive(s.helpful, 4)
+		armOf := func(rs *run.RunState) string { return rs.Goal.Arm.Arm }
+		// K2 is answered in meters in either arm (the executor's K2 rule
+		// precedes the lesson); Everest only under the lesson. Block one:
+		// Everest then K2. Block two is chosen so that exactly one Everest
+		// lands in control.
+		a1 := armOf(h.live("What is the height of Mount Everest in meters?", nil))
+		h.live("How tall is K2 in meters?", nil)
+		if a1 == Control {
+			h.live("What is the height of K2 in meters?", nil)
+			h.live("How many meters tall is K2?", nil)
+		} else {
+			a2 := armOf(h.live("How high is Everest in meters?", nil))
+			if a2 == Control {
+				h.live("How many meters tall is K2?", nil)
+			} else {
+				h.live("How many meters tall is Mount Everest?", nil)
+			}
+		}
+		// the goals name meters themselves, so the judge keys on the two
+		// correct answers, not on the word
+		correct := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
+			{Key: "8,849 meters", Answer: `{"outcome":"achieved","confidence":0.9,"why":"correct"}`},
+			{Key: "8,611 meters", Answer: `{"outcome":"achieved","confidence":0.9,"why":"correct"}`},
+		}, Def: `{"outcome":"not_achieved","confidence":0.9,"why":"not in meters"}`}
+		if _, err := (&Lane{J: h.j, Store: h.st, Judge: correct, Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Verdict != TreatmentHelpful || m.TreatmentN != 2 || m.ControlN != 2 || m.DeltaPP != 0.5 || m.DeltaITT != 0.5 {
+			t.Fatalf("measurement %+v", m)
+		}
+	})
 	t.Run("judge never answers", func(t *testing.T) {
 		s := build(t)
 		h := s.h
-		x := h.openLive(s.helpful, 2)
-		for _, q := range everestGoals[:2] {
+		x := h.openLive(s.helpful, 4)
+		for _, q := range everestGoals {
 			h.live(q, nil)
 		}
 		dead := &invoke.Scripted{Caps: invoke.Capabilities{Name: "dead-judge", Model: "none"}}
-		for i := 0; i < 2*EvaluatorTries; i++ {
+		for i := 0; i < 4*EvaluatorTries; i++ {
 			dead.Calls = append(dead.Calls, invoke.ScriptedCall{FailBefore: true})
 		}
 		l := &Lane{J: h.j, Store: h.st, Judge: dead, Timeout: time.Minute}
@@ -245,30 +382,74 @@ func TestLiveAdmissionIsAtomicAndResumes(t *testing.T) {
 	bumped := 0
 	racing := func(ctx context.Context, g *run.Goal, fam *run.FamilyAssessment) ([]record.Record, *uint64, error) {
 		recs, head, err := inner(ctx, g, fam)
-		if bumped < 2 { // the head moves under the first two decisions
+		if bumped < 1 { // the head moves under the first decision
 			bumped++
 			h.lesson("bump "+string(record.NewID()), learn.Candidate)
 		}
 		return recs, head, err
 	}
 	rs := h.live(everestGoals[0], racing)
-	if bumped != 2 || rs.Goal.Arm == nil {
+	if bumped != 1 || rs.Goal.Arm == nil {
 		t.Fatalf("bumped %d, arm %v", bumped, rs.Goal.Arm)
 	}
-	// a third refusal is the caller's error
+	// an admission that loses the head every time is dropped, never the
+	// user's goal: the last try commits the goal plain
 	always := func(ctx context.Context, g *run.Goal, fam *run.FamilyAssessment) ([]record.Record, *uint64, error) {
 		recs, head, err := inner(ctx, g, fam)
 		h.lesson("bump "+string(record.NewID()), learn.Candidate)
 		return recs, head, err
 	}
-	d := &run.Driver{J: h.j, Store: h.st, Backend: h.exec, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute, Admit: always}
-	if _, err := d.Run(ctxBg, []byte(everestGoals[1]), run.DeliveryPolicy{Required: run.TransportAccepted}); err == nil {
-		t.Fatal("an admission refused three times succeeded")
+	if rs := h.live(everestGoals[1], always); rs.Goal.Arm != nil || h.deliverable(rs) != "29,032 feet" {
+		t.Fatalf("a goal that lost the head every time: arm %v, %q", rs.Goal.Arm, h.deliverable(rs))
 	}
-	if _, err := Fold(h.j, h.st); err != nil {
-		t.Fatal(err)
+	if len(h.state().byUnit[x.ID]) != 1 {
+		t.Fatal("the dropped admission was recorded")
 	}
 	h.live(everestGoals[1], nil)
+	// when nothing admits, nothing waits on the head: a goal of another
+	// family commits first time under any traffic
+	calls := 0
+	noisy := func(ctx context.Context, g *run.Goal, fam *run.FamilyAssessment) ([]record.Record, *uint64, error) {
+		calls++
+		recs, head, err := inner(ctx, g, fam)
+		h.lesson("bump "+string(record.NewID()), learn.Candidate)
+		return recs, head, err
+	}
+	if rs := h.live("Write a script file named tally.sh that counts lines.", noisy); calls != 1 || rs.Goal.Arm != nil {
+		t.Fatalf("plain goal: %d admission calls, arm %v", calls, rs.Goal.Arm)
+	}
+	// two intakes racing for the same ordinal: the sequencer refuses one,
+	// which decides again and takes the next
+	{
+		s2 := build(t)
+		h2 := s2.h
+		x2, err := Open(ctxBg, h2.j, h2.st, Spec{Hypothesis: s2.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 2, MinPerArm: 1, MinEquivalent: 1, Why: "race"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		errs := make(chan error, 2)
+		for i := 0; i < 2; i++ {
+			go func(i int) {
+				text := []byte(everestGoals[i])
+				ref, err := h2.st.Put(thought.Goal, text)
+				if err != nil {
+					errs <- err
+					return
+				}
+				goal, fam := run.Intake(text, ref, run.OriginCLI, run.LaneNow, run.DeliveryPolicy{Required: run.TransportAccepted})
+				errs <- run.IntakeCommand(ctxBg, h2.j, Admit(h2.j, h2.st), goal, fam)
+			}(i)
+		}
+		for i := 0; i < 2; i++ {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+		st2 := h2.state()
+		if len(st2.byOrdinal[x2.ID]) != 2 || st2.byOrdinal[x2.ID][0].Ordinal != 0 || st2.byOrdinal[x2.ID][1].Ordinal != 1 || st2.byOrdinal[x2.ID][0].Arm == st2.byOrdinal[x2.ID][1].Arm {
+			t.Fatalf("racing intakes: %+v", st2.byOrdinal[x2.ID])
+		}
+	}
 	// the hypothesis is superseded: production goes on, unadmitted
 	h.revise(s.helpful, "Answer in metres.")
 	if rs := h.live(everestGoals[2], nil); rs.Goal.Arm != nil {
@@ -336,21 +517,15 @@ func TestLiveFoldRefusesForgeries(t *testing.T) {
 		return record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: sub, At: time.Now().UTC()}
 	}
 	// intake writes a goal, its assessment, and an assignment in one command
-	intake := func(g *harness, text string, arm string, ordinal int, mutate func(goal *run.Goal, as *Assignment) []record.Record) {
+	intake := func(g *harness, text string, lane run.Lane, mutate func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record) {
 		ref, _ := g.st.Put(thought.Goal, []byte(text))
-		goal, fam := run.Intake([]byte(text), ref, run.OriginCLI, run.LaneNow, run.DeliveryPolicy{Required: run.TransportAccepted})
+		goal, fam := run.Intake([]byte(text), ref, run.OriginCLI, lane, run.DeliveryPolicy{Required: run.TransportAccepted})
 		seed := Seed(x.ID, goal.ID)
-		as := &Assignment{Header: hd(), Experiment: x.ID, Unit: goal.ID, Ordinal: ordinal, Seed: seed, Arm: arm}
-		goal.Arm = x.armRef(as.ID, arm)
-		extra := mutate(goal, as)
+		as := &Assignment{Header: hd(), Experiment: x.ID, Unit: goal.ID, Ordinal: 1, Seed: seed, Arm: ArmFor(seed, 1, as0.Arm)}
+		goal.Arm = x.armRef(as.ID, as.Arm)
+		extra := mutate(goal, fam, as)
 		g.submit("goal/"+string(goal.ID), append([]record.Record{goal, fam, as}, extra...)...)
 	}
-	honestArm := func(g *harness, ordinal int) string {
-		// the arm the randomization names for the NEXT unit is only known
-		// once the goal id is: the mutate hook fixes it
-		return ""
-	}
-	_ = honestArm
 	cases := []struct {
 		name string
 		do   func(g *harness)
@@ -361,9 +536,9 @@ func TestLiveFoldRefusesForgeries(t *testing.T) {
 			g.submit("forge/late", &Assignment{Header: hd(), Experiment: x.ID, Unit: rs.Goal.ID, Ordinal: 1, Seed: Seed(x.ID, rs.Goal.ID), Arm: Control})
 		}, "not the goal's intake command"},
 		{"the wrong arm", func(g *harness) {
-			intake(g, everestGoals[1], "", 1, func(goal *run.Goal, as *Assignment) []record.Record {
+			intake(g, everestGoals[1], run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record {
 				wrong := Treatment
-				if ArmFor(as.Seed, 1, as0.Arm) == Treatment {
+				if as.Arm == Treatment {
 					wrong = Control
 				}
 				as.Arm, goal.Arm = wrong, x.armRef(as.ID, wrong)
@@ -371,34 +546,37 @@ func TestLiveFoldRefusesForgeries(t *testing.T) {
 			})
 		}, "the randomization names"},
 		{"an ordinal out of order", func(g *harness) {
-			intake(g, everestGoals[1], "", 2, func(goal *run.Goal, as *Assignment) []record.Record {
+			intake(g, everestGoals[1], run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record {
+				as.Ordinal = 2
 				as.Arm, goal.Arm = ArmFor(as.Seed, 2, ""), x.armRef(as.ID, ArmFor(as.Seed, 2, ""))
 				return nil
 			})
 		}, "takes ordinal"},
 		{"a goal whose arm forces more than the protocol", func(g *harness) {
-			intake(g, everestGoals[1], "", 1, func(goal *run.Goal, as *Assignment) []record.Record {
-				as.Arm = ArmFor(as.Seed, 1, as0.Arm)
-				goal.Arm = x.armRef(as.ID, as.Arm)
+			intake(g, everestGoals[1], run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record {
 				goal.Arm.Apply = append(goal.Arm.Apply, other)
 				return nil
 			})
 		}, "does not carry the"},
 		{"a goal of another family", func(g *harness) {
-			intake(g, "Write a file named notes.txt with the height of Everest.", "", 1, func(goal *run.Goal, as *Assignment) []record.Record {
-				as.Arm = ArmFor(as.Seed, 1, as0.Arm)
-				goal.Arm = x.armRef(as.ID, as.Arm)
+			intake(g, "Write a file named notes.txt with the height of Everest.", run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record { return nil })
+		}, "admits a write_local goal"},
+		{"a forged assessment", func(g *harness) {
+			// the assessment says answer; the goal's text does not
+			intake(g, "Write a file named notes.txt with the height of Everest.", run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record {
+				fam.Family, fam.Reason = run.FamilyAnswer, "question shape"
 				return nil
 			})
-		}, "admits a write_local goal"},
+		}, "classifies as write_local"},
+		{"an AGENDA-lane goal", func(g *harness) {
+			intake(g, everestGoals[1], run.LaneAgenda, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record { return nil })
+		}, "agenda-lane goal"},
 		{"a goal admitted to two experiments", func(g *harness) {
-			y, err := Open(ctxBg, g.j, g.st, Spec{Hypothesis: other, Relation: ApplyItem, Live: true, Population: "answer", N: 2, Why: "second"})
+			y, err := Open(ctxBg, g.j, g.st, Spec{Hypothesis: other, Relation: ApplyItem, Live: true, Population: "answer", N: 2, MinPerArm: 1, MinEquivalent: 1, Why: "second"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			intake(g, everestGoals[1], "", 1, func(goal *run.Goal, as *Assignment) []record.Record {
-				as.Arm = ArmFor(as.Seed, 1, as0.Arm)
-				goal.Arm = x.armRef(as.ID, as.Arm)
+			intake(g, everestGoals[1], run.LaneNow, func(goal *run.Goal, fam *run.FamilyAssessment, as *Assignment) []record.Record {
 				seed := Seed(y.ID, goal.ID)
 				return []record.Record{&Assignment{Header: record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: record.Ref{Kind: "experiment", ID: string(y.ID)}, At: time.Now().UTC()}, Experiment: y.ID, Unit: goal.ID, Ordinal: 0, Seed: seed, Arm: ArmFor(seed, 0, "")}}
 			})
@@ -467,6 +645,9 @@ func TestLiveFoldRefusesForgeries(t *testing.T) {
 			att.Units[0].Evaluation, att.Units[0].Score = att.Units[1].Evaluation, att.Units[1].Score
 		}, "not an invocation of the unit's run"},
 		{"exposure flipped", func(att *EffectAttestation) { att.Units[0].Exposed = !att.Units[0].Exposed }, "does not match its evidence"},
+		{"a completed run scored zero without an evaluation", func(att *EffectAttestation) {
+			att.Units[0].Score, att.Units[0].Evaluation = 0, ""
+		}, "not an invocation of the unit's run"},
 		{"the pair fields under a live protocol", func(att *EffectAttestation) { att.Units[0].Treatment = att.Units[0].Evidence }, "carries pair fields"},
 	}
 	for _, f := range forged {
@@ -500,6 +681,10 @@ func TestOpenRefusesBadLiveProtocols(t *testing.T) {
 		{"population none", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "none", N: 2, Why: "w"}},
 		{"unknown population", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "poetry", N: 2, Why: "w"}},
 		{"n of one", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 1, Why: "w"}},
+		{"odd n", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 3, MinPerArm: 1, MinEquivalent: 1, Why: "w"}},
+		{"n of two under the default floors", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 2, Why: "w"}},
+		{"min_per_arm above n/2", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, MinPerArm: 3, Why: "w"}},
+		{"min_equivalent above n/2", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, MinEquivalent: 3, Why: "w"}},
 		{"no why", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 2}},
 	} {
 		if _, err := Open(ctxBg, h.j, h.st, c.spec); !errors.Is(err, ErrConfig) {
@@ -507,7 +692,7 @@ func TestOpenRefusesBadLiveProtocols(t *testing.T) {
 		}
 	}
 	// a live-admitted goal is never a paired unit
-	x := h.openLive(s.helpful, 2)
+	x := h.openLive(s.helpful, 4)
 	rs := h.live(everestGoals[0], nil)
 	if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.harmful, Relation: ApplyItem, Units: []UnitSpec{{Goal: rs.Goal.ID, Fixture: h.fixture("8,849 meters")}}, Why: "w"}); !errors.Is(err, ErrConfig) {
 		t.Fatalf("an arm as a paired unit: %v", err)

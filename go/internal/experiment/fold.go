@@ -133,7 +133,7 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 		case *Experiment:
 			err = st.experiment(x, store)
 		case *Assignment:
-			err = st.assign(x, j)
+			err = st.assign(x, j, store)
 		case *Closed:
 			err = st.closed(x)
 		case *UnitEvidence:
@@ -294,7 +294,7 @@ func (st *State) experiment(x *Experiment, store *thought.Store) error {
 	return nil
 }
 
-func (st *State) assign(x *Assignment, j *journal.Journal) error {
+func (st *State) assign(x *Assignment, j *journal.Journal, store *thought.Store) error {
 	x0 := st.Experiments[x.Experiment]
 	if x0 == nil {
 		return fmt.Errorf("experiment: assignment %s names experiment %s, which is not an earlier record", x.ID, x.Experiment)
@@ -325,6 +325,18 @@ func (st *State) assign(x *Assignment, j *journal.Journal) error {
 		}
 		if string(fam.Family) != x0.Population {
 			return fmt.Errorf("experiment: live assignment %s admits a %s goal to a %s experiment", x.ID, fam.Family, x0.Population)
+		}
+		// the assessment is an assertion in the goal's command; the
+		// population is what the goal's text classifies as
+		text, err := store.Get(g.Text)
+		if err != nil {
+			return err
+		}
+		if fk, _ := run.Classify(string(text)); string(fk) != x0.Population {
+			return fmt.Errorf("experiment: live assignment %s admits goal %s, whose text classifies as %s, not %s", x.ID, g.ID, fk, x0.Population)
+		}
+		if g.Lane != run.LaneNow {
+			return fmt.Errorf("experiment: live assignment %s admits a %s-lane goal; live cohorts are NOW-lane goals (one deliverable shape)", x.ID, g.Lane)
 		}
 		if prior := st.claimed[x.Unit]; prior != nil {
 			return fmt.Errorf("experiment: goal %s admitted to %s and to %s", x.Unit, prior.Experiment, x.Experiment)
@@ -450,6 +462,13 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 	as := st.Assignments[u.Assignment]
 	ev := st.Evidence[u.Assignment][as.Arm]
 	want := UnitRow{Unit: u.Unit, Assignment: u.Assignment, Arm: as.Arm, Evidence: ev.ID, Missing: ev.Missing, Exposed: ev.Exposed == intended(p.Relation, as.Arm)}
+	if ev.Missing == MissingNotComplete {
+		want.Missing = "" // scored 0 without an evaluation: not achieved
+		if row != want {
+			return fmt.Errorf("a unit whose run did not complete scores 0 unevaluated (%+v vs %+v)", row, want)
+		}
+		return nil
+	}
 	if ev.Missing != "" {
 		if row != want {
 			return fmt.Errorf("does not carry the evidence's missingness (%+v vs %+v)", row, want)

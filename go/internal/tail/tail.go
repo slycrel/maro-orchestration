@@ -319,9 +319,9 @@ func skipReason(state run.ChildState) string {
 	return ""
 }
 
-// SkipReplay: an experiment arm is measured by the evaluator, never
-// diagnosed or learned from — a lesson proposed from an arm would carry
-// the hypothesis into production by the back door (§9).
+// SkipReplay: an experiment arm (replay or live) is measured by the
+// evaluator, never diagnosed or learned from — a lesson proposed from an
+// arm would carry the hypothesis into production by the back door (§9).
 const SkipReplay = "replay arm: not learned from"
 
 // attempt is one attempt's tail, committed as one command (diagnosis,
@@ -333,7 +333,10 @@ func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a
 	hd := func(schema record.SchemaVer) record.Header {
 		return record.Header{ID: record.NewID(), Schema: schema, RunID: rs.Run, Attempt: n, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: now()}
 	}
-	if rs.Goal.Origin == run.OriginReplay {
+	if rs.Goal.Arm != nil || rs.Goal.Origin == run.OriginReplay {
+		// a live arm is production for the user and an arm for the
+		// evaluator: its treatment carried the hypothesis, so a lesson
+		// minted from it would be the hypothesis by the back door
 		return t.commit(ctx, k, &TailDone{Header: hd("tail_done/1"), Skipped: SkipReplay})
 	}
 	// a cancelled or late fork member is not learned from (§3)
@@ -606,8 +609,8 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					claimed[p] = true
 				}
 			case x.Skipped == SkipReplay:
-				if rs.Goal.Origin != run.OriginReplay {
-					return fmt.Errorf("tail: tail_done %s skips an attempt as a replay arm, which it is not", x.ID)
+				if rs.Goal.Origin != run.OriginReplay && rs.Goal.Arm == nil {
+					return fmt.Errorf("tail: tail_done %s skips an attempt as an experiment arm, which it is not", x.ID)
 				}
 			case x.Skipped != "":
 				if rs.Goal.Origin != run.OriginFork {

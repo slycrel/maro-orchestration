@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"sync"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -63,6 +64,7 @@ type Journal struct {
 	head     uint64
 	offset   int64 // known-good end of the last committed frame
 	acks     map[string]Ack
+	frames   []uint64 // each command's last seq, in commit order (SameCommand)
 	closed   bool
 	poisoned error
 	rec      Recovery
@@ -139,6 +141,7 @@ func (j *Journal) recover() error {
 		}
 		j.head = e.LastSeq
 		j.acks[e.TxID] = Ack{TxID: e.TxID, FirstSeq: e.FirstSeq, LastSeq: e.LastSeq, Replayed: true}
+		j.frames = append(j.frames, e.LastSeq)
 		j.rec.Frames++
 		good += int64(frameHeader + len(payload))
 	}
@@ -179,14 +182,18 @@ func (j *Journal) Epoch() uint64 { return j.lease.Epoch }
 // been written atomically asks this rather than testing Seq adjacency: two
 // back-to-back commands also produce adjacent seqs.
 func (j *Journal) SameCommand(a, b uint64) bool {
+	if a == 0 || b == 0 {
+		return false
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	for _, ack := range j.acks {
-		if a >= ack.FirstSeq && a <= ack.LastSeq {
-			return b >= ack.FirstSeq && b <= ack.LastSeq
-		}
-	}
-	return false
+	// frames holds every command's last seq in order: the command that
+	// stamped a seq is the first frame ending at or after it
+	return frameOf(j.frames, a) == frameOf(j.frames, b)
+}
+
+func frameOf(frames []uint64, seq uint64) int {
+	return sort.Search(len(frames), func(i int) bool { return frames[i] >= seq })
 }
 
 // Root is the journal's workspace root (from the lease).
@@ -286,6 +293,7 @@ func (j *Journal) Submit(ctx context.Context, c Command) (Ack, error) {
 	j.offset += int64(frameHeader + len(payload))
 	a := Ack{TxID: c.IdempotencyKey, FirstSeq: env.FirstSeq, LastSeq: env.LastSeq}
 	j.acks[c.IdempotencyKey] = a
+	j.frames = append(j.frames, env.LastSeq)
 	return a, nil
 }
 

@@ -2,6 +2,7 @@ package experiment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -88,6 +89,14 @@ func (l *Lane) Pass(ctx context.Context) (uint64, error) {
 			}
 		}
 		m, err := c.Close(ctx, id)
+		if errors.Is(err, ErrConfig) {
+			// a cohort this process cannot score (no judge): say so and
+			// keep the lane; the cohort waits for a process that can
+			if l.Events != nil {
+				l.Events(fmt.Sprintf("evaluator: %s waits: %v", id, err))
+			}
+			continue
+		}
 		if err != nil {
 			return 0, err
 		}
