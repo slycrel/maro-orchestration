@@ -1,0 +1,46 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "delivery_prepared",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestAckProtocol",
+  "fields": {
+    "payload": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "origin": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(cli)$",
+      "rejects": "telegram",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "required": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(transport_accepted|user_acknowledged)$",
+      "rejects": "endpoint_accepted",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "nonce": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "defined",
+      "pattern": "^[0-9a-f]{32}$",
+      "rejects": "ab",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary",
+      "unknown_value": "rejected"
+    }
+  }
+}

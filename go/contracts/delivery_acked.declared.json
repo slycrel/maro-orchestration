@@ -1,0 +1,36 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "delivery_acked",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestAckProtocol",
+  "fields": {
+    "delivery": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "token": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "constraint": "defined",
+      "pattern": "^[0-9a-f]{32}$",
+      "rejects": "abc",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary",
+      "unknown_value": "rejected"
+    },
+    "payload_hash": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "defined",
+      "pattern": "^s256v1:[0-9a-f]{64}$",
+      "rejects": "sha1:00",
+      "measured_by": "internal/run:TestAckProtocol",
+      "unknown_value": "rejected"
+    }
+  }
+}

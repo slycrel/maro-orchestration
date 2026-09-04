@@ -1,0 +1,40 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "run_attempt",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestKillMatrixResumesExactlyOnce",
+  "fields": {
+    "goal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "family": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "config": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "\"lane\":\"now\"",
+      "rejects": "{\"lane\":\"agenda\"}",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "recovers_from": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestKillMatrixResumesExactlyOnce"
+    }
+  }
+}

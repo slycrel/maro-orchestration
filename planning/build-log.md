@@ -404,3 +404,58 @@ lost: combining confidences across agreeing candidates (no basis yet);
 the reviewer's "sufficient set" reading of refutation stays a set-of-
 decisive record, threshold on the max — revisit when the sheriff (step 7)
 has live numbers.
+
+## Step 5 — run state machine, driver, intake, NOW, delivery outbox (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `Goal` (text as a whole thought; origin; `DeliveryPolicy`), `FamilyAssessment` (treatment-blind, rule-versioned), `RunAttempt` (config snapshot, recovers_from) | §3, §5 intake, §8a population | kept |
+| Run state machine as `Transition` records: created → executing → judged → recorded → delivered{transport_accepted, user_acknowledged} / delivery_failed; `recoverable` on restart | §5a | kept; legal-edge table executed at the journal door |
+| Execution outcome as a fold stamped on `recorded` | §5a "both folds" | kept; a test recomputes it from receipt + resolution alone |
+| Mission outcome = execution ⊗ delivery under policy | §5a, §8 item 1 | kept as a pure fold (`MissionOf`), never a record — derivable |
+| Driver with pure stages (Intake, SelfVerdict, Render) and one shell; lifecycle event per boundary with handle/run/goal/attempt | §5, FINDINGS #9 | kept; events are a view, transitions the durable form |
+| NOW = driver configuration (plan cardinality 1, judge `self_only`) | §5 | kept; `agenda` and the model judge are ADDITIVE vocabulary arrivals in step 7, not enumerated now (L28: no wrong-at-birth enumerations) |
+| Delivery outbox: `DeliveryPrepared` (payload stored first; nonce), `DeliveryAttempted` (bounded), `DeliveryAcked` (client token bound to delivery + payload hash) | §12 | kept; bound = 3 with its why in the code |
+| `endpoint_accepted` | §12 | **not in the vocabulary** — no v1 producer (needs a program origin) |
+| `Interrupt` records | §5 | **step 7** — meaningful at stage boundaries of a multi-step plan; a NOW run is one execute call |
+| Model judge / deterministic observations in NOW | §6 | **step 7** — NOW v1 resolves the self claim honestly to `unknown` (self cannot promote); the ledger row is UNJUDGED, which is B6's tri-state exactly |
+| Always-on submission via the lease's socket | §10 | **step 7** (supervisor); v1 `maro-go now` runs the driver in-process under the lease |
+| B6 outcomes view (`outcomes.jsonl`) | §13 shared edge (owed since step 2) | kept, EXACT to B6: required keys, A6 absent-not-null verdict, `now_self_verdict`/`closure` source vocabulary; mapping row in `contracts/VIEWS.md` |
+| Stale-ack refusal | §12 acceptance list | kept as a guard but **unreachable in v1** (one delivery per run; it exists for the re-deliver verb) — named, not claimed tested |
+
+**Built.** `internal/run`: 7 kinds (registry at 19), classifier `family/1`,
+`Fold` (per-run ledger, refuses illegal histories), `Driver.Run`/`Resume`
+(reconcile → recover → deliver; every commit keyed), outbox `drain`, `Ack`,
+`CLIOrigin`, `OutcomesView`. CLI: `now [--backend] [--model] [--ack]`,
+`ack`, `runs [resume]`; `journal publish` now writes both views.
+
+**Edge tests (10, all `-race`).** Full NOW run: state trail, events, mission
+fold, exact B6 keys with `goal_achieved` ABSENT; failed execution delivered
+honestly = `mission_failed(execution)` with a judged `not_achieved` self row;
+ack protocol (wrong token, wrong-payload token, unknown delivery, replay,
+ack-before-presentation); **kill matrix** of 13 seams (intake, start,
+executing, invoke prepared/dispatched×2 caps/terminal, execute, judged,
+recorded, prepared, present, attempted) each resumed to exactly one
+delivered run, one goal, one recorded outcome, the expected dispatch count
+(indeterminate ⇒ 0 replays), the expected presentation count (crash after
+present ⇒ presented twice, honestly), and a no-op second resume; bounded
+outbox → `delivery_failed` + no retry on resume + no ack; classifier
+determinism; 21 journal-door refusals; fold refuses an orphan transition;
+recorded outcome equals its recompute.
+
+**Live.** `MARO_GO_LIVE=1` test: haiku PONG delivered, cost 0.036. CLI end to
+end on a scratch workspace: `now --ack` printed the answer and the ack
+command; `runs` showed `accepted_unacknowledged`; a wrong token was refused;
+the real token acknowledged; a repeat replayed; `runs` then showed
+`delivered` with `user_acknowledged`; `journal publish` wrote the B6 row.
+Side-find from the live row: `model` was empty — the outcome fold now
+carries it.
+
+**Residuals.** Ack token = sha256(delivery, payload hash, nonce) with the
+nonce in the journal: proof of presentation for a same-box CLI client, not a
+secret against a journal reader — a remote origin needs an HMAC secret
+outside the journal. `recorded_at` format is RFC3339 micro-Z; B6 does not
+pin one. `Outcome.ClosureSrc` is read from the single candidate (step 7 reads
+the effective verdict's standing from the resolution).

@@ -1,17 +1,24 @@
-// maro-go is the successor's binary. Step 1 exposes the workspace and the
-// contracts foundation; the run driver arrives in later steps.
+// maro-go is the successor's binary: workspace, contracts, journal, and the
+// NOW driver (one goal in, one delivered answer out).
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
-	_ "github.com/slycrel/maro-orchestration/go/internal/invoke" // registers the invocation kinds
+	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
+	"github.com/slycrel/maro-orchestration/go/internal/record"
+	spine "github.com/slycrel/maro-orchestration/go/internal/run"
+	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
@@ -35,6 +42,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdContracts(args[1:], stdout, stderr)
 	case "journal":
 		err = cmdJournal(args[1:], stdout)
+	case "now":
+		err = cmdNow(args[1:], stdout, stderr)
+	case "ack":
+		err = cmdAck(args[1:], stdout)
+	case "runs":
+		err = cmdRuns(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return 2
@@ -47,7 +60,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now [--backend b] [--model m] [--ack] <goal> | ack <delivery> <token> | runs [resume]")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -120,7 +133,11 @@ func cmdJournal(args []string, out io.Writer) error {
 	case "status":
 		return nil
 	case "publish":
-		p, err := projector.New(j, projector.ThoughtsView{})
+		st, err := thought.Open(a)
+		if err != nil {
+			return err
+		}
+		p, err := projector.New(j, projector.ThoughtsView{}, spine.OutcomesView{Store: st})
 		if err != nil {
 			return err
 		}
@@ -184,4 +201,153 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 	}
 	usage(errw)
 	return fmt.Errorf("unknown contracts subcommand %q", args[0])
+}
+
+// cmdNow takes one goal from the CLI origin through the NOW configuration
+// of the driver, in-process, holding the lease for the run. Flags:
+//
+//	--backend scripted|subprocess (default subprocess)   --model <name> (default haiku)
+//	--ack   (policy: user_acknowledged; the presentation prints the ack command)
+//
+// The always-on submission path (a Goal written into the running process
+// via the lease's socket) arrives with the supervisor (step 7).
+func cmdNow(args []string, out, errw io.Writer) error {
+	var text []string
+	backend, model, policy := "subprocess", "haiku", spine.DeliveryPolicy{Required: spine.TransportAccepted}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--backend":
+			i++
+			if i < len(args) {
+				backend = args[i]
+			}
+		case "--model":
+			i++
+			if i < len(args) {
+				model = args[i]
+			}
+		case "--ack":
+			policy.Required = spine.UserAcknowledged
+		default:
+			text = append(text, args[i])
+		}
+	}
+	goal := strings.TrimSpace(strings.Join(text, " "))
+	if goal == "" {
+		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--ack] <goal text>")
+	}
+	var b invoke.Backend
+	switch backend {
+	case "subprocess":
+		s, err := invoke.NewSubprocess(model)
+		if err != nil {
+			return err
+		}
+		b = s
+	case "scripted":
+		b = &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "scripted"}, Calls: []invoke.ScriptedCall{{Response: []byte("scripted response to: " + goal)}}}
+	default:
+		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
+	}
+	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		d := &spine.Driver{J: j, Store: st, Backend: b, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
+			Events: func(e spine.Event) {
+				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
+			}}
+		rep, err := d.Run(context.Background(), []byte(goal), policy)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(errw, "mission: %s (execution %s, closure %s, delivery %s)\n", rep.Mission.Outcome, rep.Mission.Terminal, rep.Mission.Closure, rep.Mission.Delivery)
+		return nil
+	})
+}
+
+// cmdAck records a client-generated acknowledgement: maro-go ack <delivery-id> <token>.
+func cmdAck(args []string, out io.Writer) error {
+	if len(args) != 2 {
+		return fmt.Errorf("ack needs <delivery-id> <token>")
+	}
+	return withJournal(out, func(j *journal.Journal, _ *thought.Store) error {
+		ack, replayed, err := spine.Ack(context.Background(), j, record.RecordID(args[0]), args[1])
+		if err != nil {
+			return err
+		}
+		if replayed {
+			fmt.Fprintf(out, "acknowledged (already, %s)\n", ack.ID)
+		} else {
+			fmt.Fprintf(out, "acknowledged: %s\n", ack.ID)
+		}
+		return nil
+	})
+}
+
+// cmdRuns lists every run's mission fold; `resume` first finishes what a
+// previous process left non-terminal (reconcile → recover → deliver).
+func cmdRuns(args []string, out, errw io.Writer) error {
+	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		if len(args) > 0 && args[0] == "resume" {
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}}
+			s, err := invoke.NewSubprocess("haiku")
+			if err == nil {
+				d.Backend = s
+			} else {
+				fmt.Fprintln(errw, "resume: no subprocess backend available; runs needing re-execution will fail honestly:", err)
+			}
+			reps, err := d.Resume(context.Background())
+			for _, r := range reps {
+				fmt.Fprintf(errw, "resumed %s attempt %d: %s\n", r.Handle, r.Attempt, r.Mission.Outcome)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		led, err := spine.Fold(j.Production())
+		if err != nil {
+			return err
+		}
+		for _, g := range led.Unstarted {
+			fmt.Fprintf(out, "goal %s: taken in, run not started\n", g.ID)
+		}
+		var rows []spine.Mission
+		for _, rs := range led.Runs {
+			rows = append(rows, spine.MissionOf(rs))
+		}
+		sort.Slice(rows, func(i, k int) bool { return rows[i].Run < rows[k].Run })
+		for _, m := range rows {
+			fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required)
+		}
+		return nil
+	})
+}
+
+// withJournal announces the workspace, takes the lease, opens the journal
+// and thought store, runs fn, and releases — one command, one lease hold.
+func withJournal(out io.Writer, fn func(*journal.Journal, *thought.Store) error) error {
+	r, err := workspace.Resolve()
+	if err != nil {
+		return err
+	}
+	a, err := r.Announce(out)
+	if err != nil {
+		return err
+	}
+	if err := a.Ensure(); err != nil {
+		return err
+	}
+	l, err := workspace.Acquire(a)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	j, err := journal.Open(l)
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+	st, err := thought.Open(a)
+	if err != nil {
+		return err
+	}
+	return fn(j, st)
 }

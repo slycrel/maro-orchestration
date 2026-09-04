@@ -11,6 +11,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
@@ -75,6 +76,8 @@ func samples() map[record.Kind]any {
 	ref := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Prompt, Bytes: 3, Encoding: thought.UTF8}
 	inv := record.NewID()
 	caps := invoke.Capabilities{Name: "scripted", Model: "m", ActsOutward: true}
+	goalRef := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Goal, Bytes: 3, Encoding: thought.UTF8}
+	deliverable := thought.Ref{Hash: "s256v1:" + strings.Repeat("cd", 32), Kind: thought.Deliverable, Bytes: 3, Encoding: thought.UTF8}
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
@@ -88,10 +91,18 @@ func samples() map[record.Kind]any {
 		verdict.KindVerdict:         &verdict.Verdict{Header: withSchema(h, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Confidence: 0.7, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: inv}, Basis: []record.Ref{{Kind: "receipt", ID: "r"}}, Falsifiers: []thought.Ref{ref}, Direction: verdict.Both},
 		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
+		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginCLI, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}},
+		run.KindFamilyAssessment:    &run.FamilyAssessment{Header: withSubject(withSchema(h, "family_assessment/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Family: run.FamilyAnswer, Rule: run.FamilyRule, Reason: "question shape"},
+		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneNow, Backend: caps, Judge: run.JudgeSelf, PlanCardinality: 1, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer}, RecoversFrom: 1},
+		run.KindTransition:          &run.Transition{Header: withSchema(h, "run_transition/1"), From: run.Recorded, To: run.Delivered, Reason: "transport took it", Delivery: run.TransportAccepted, Evidence: []record.Ref{{Kind: "delivery_attempted", ID: "x"}}},
+		run.KindDeliveryPrepared:    &run.DeliveryPrepared{Header: withSubject(withSchema(h, "delivery_prepared/1"), record.Ref{Kind: "delivery", ID: string(h.ID)}), Payload: deliverable, Origin: run.OriginCLI, Required: run.UserAcknowledged, Nonce: strings.Repeat("0f", 16)},
+		run.KindDeliveryAttempted:   &run.DeliveryAttempted{Header: withSubject(withSchema(h, "delivery_attempted/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1, Result: run.DeliveryFailed, Reason: "pipe closed"},
+		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }
 
 func withSchema(h record.Header, s record.SchemaVer) record.Header { h.Schema = s; return h }
+func withSubject(h record.Header, r record.Ref) record.Header      { h.Subject = r; return h }
 
 // The provider reads its own payloads as a client must, and every declared
 // rule must actually be exercised.

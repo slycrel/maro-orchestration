@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "resolution",
+  "kind": "goal",
   "envelope": "production",
-  "schema": "resolution/1",
-  "go_type": "verdict.Resolution",
+  "schema": "goal/1",
+  "go_type": "run.Goal",
   "fields": [
     {
       "name": "header.ID",
@@ -78,79 +78,37 @@
       "from_header": true
     },
     {
-      "name": "VerdictKind",
-      "wire": "verdict_kind",
-      "go_type": "verdict.VerdictKind",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Outcome",
-      "wire": "outcome",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Effective",
-      "wire": "effective",
+      "name": "Parent",
+      "wire": "parent",
       "go_type": "record.RecordID",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Decisive",
-      "wire": "decisive",
-      "go_type": "[]record.RecordID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Candidates",
-      "wire": "candidates",
-      "go_type": "[]record.RecordID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Observations",
-      "wire": "observations",
-      "go_type": "[]record.RecordID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "ResolverVer",
-      "wire": "resolver_ver",
-      "go_type": "string",
+      "name": "Root",
+      "wire": "root",
+      "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Thresholds",
-      "wire": "thresholds",
-      "go_type": "verdict.Thresholds",
+      "name": "Text",
+      "wire": "text",
+      "go_type": "thought.Ref",
+      "omittable": false,
+      "is_thought": true
+    },
+    {
+      "name": "Origin",
+      "wire": "origin",
+      "go_type": "run.GoalOrigin",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Rule",
-      "wire": "rule",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Contested",
-      "wire": "contested",
-      "go_type": "bool",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Confidence",
-      "wire": "confidence",
-      "go_type": "float64",
+      "name": "Delivery",
+      "wire": "delivery",
+      "go_type": "run.DeliveryPolicy",
       "omittable": false,
       "is_thought": false
     }

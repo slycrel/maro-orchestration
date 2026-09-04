@@ -2,6 +2,11 @@
 
 | kind | envelope | schema | writer | authoritative reader | decision it affects | retention |
 |---|---|---|---|---|---|---|
+| `delivery_acked` | production | `delivery_acked/1` | Ack (the CLI ack command, from a client-presented token) | Mission fold; the outcomes view | user_acknowledged — the only state labelled user delivery | forever |
+| `delivery_attempted` | production | `delivery_attempted/1` | the outbox | the outbox (bounded retry); Mission fold; Ack (an ack needs a presentation first) | retry, or give up with delivery_failed | forever |
+| `delivery_prepared` | production | `delivery_prepared/1` | the driver's Deliver stage | the outbox (what is owed); Ack (token derivation) | which payload is owed to which origin under which policy; the ack token | forever |
+| `family_assessment` | production | `family_assessment/1` | intake (treatment-blind classifier, rule family/1) | experiment population membership (step 10); attribution (§8) | which experiments a goal is eligible for; none = ineligible | forever |
+| `goal` | production | `goal/1` | intake (the driver's Intake stage, from the CLI origin) | the driver (attempt start, recovery); memory scope (goal ancestry, step 6); assignment (step 10) | what the run is for and what counts as delivered; the randomization unit | forever |
 | `invocation` | production | `invocation/1` | invoke.Shell.Invoke (prepared, before dispatch) | invoke.State fold; Reconcile on restart; the receipts view | what was asked of which backend under which purpose/target; the effect-token namespace | forever |
 | `invocation_dispatched` | production | `invocation_dispatched/1` | invoke.Shell.Invoke | invoke.Reconcile | an invocation without a terminal is presumed effectful | forever |
 | `invocation_reconciled` | production | `invocation_reconciled/1` | invoke.Reconcile (on restart) | the run driver (retry vs escalate); the supervisor health line | retry an abandoned call or escalate an indeterminate one — never blind replay | forever |
@@ -9,6 +14,8 @@
 | `observation` | production | `observation/1` | deterministic checks (provenance, existence, fabrication diff, receipt completeness, claim probes) | verdict.Resolve; judges (every claim is seen with its observations) | a sufficient refutation settles failure without a judge; could_not_observe settles nothing | forever |
 | `receipt` | production | `receipt/1` | invoke.Shell | the run driver (response); metering; the receipts view; experiments (replay) | the response and its cost | forever |
 | `resolution` | production | `resolution/1` | verdict.Resolve (one per (subject, kind, candidate set)) | the run state machine (execution outcome); delivery; learning (outcome oracle) | the effective verdict, with every candidate named and the rule that decided | forever |
+| `run_attempt` | production | `run_attempt/1` | the driver (attempt start, recovery) | run fold (Runs); re-run identity (step 6); the outcomes view | the config an outcome is attributed to; which attempt a restart continues | forever |
+| `run_transition` | production | `run_transition/1` | the driver at every stage boundary; Ack; the outbox | run fold (Runs, Mission); the outcomes view (B6 row from recorded); learning eligibility (recorded) | where a restart resumes; whether the mission is delivered, unacknowledged, or failed | forever |
 | `terminal_observed` | production | `terminal_observed/1` | invoke.Shell (after response + transcript are stored) | invoke.State fold; Reconcile (finalizes a missing receipt from it) | how the stream ended; the receipt is derivable from it | forever |
 | `thought_stored` | production | `thought_stored/1` | thought.Store.Put | thought.Store.Get (hash re-verified on read); receipts and edges resolve refs through it | resolve a ThoughtRef to whole bytes or refuse (tamper/absent) — never a partial body | forever |
 | `tool_effect` | production | `tool_effect/1` | invoke.Shell (the moment the backend announces a tool_use) | judges (provenance/fabrication); Reconcile; the receipts view | what the backend set out to do; per-effect keys for reconciliation | forever |

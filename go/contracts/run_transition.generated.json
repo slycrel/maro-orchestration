@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "resolution",
+  "kind": "run_transition",
   "envelope": "production",
-  "schema": "resolution/1",
-  "go_type": "verdict.Resolution",
+  "schema": "run_transition/1",
+  "go_type": "run.Transition",
   "fields": [
     {
       "name": "header.ID",
@@ -78,80 +78,45 @@
       "from_header": true
     },
     {
-      "name": "VerdictKind",
-      "wire": "verdict_kind",
-      "go_type": "verdict.VerdictKind",
+      "name": "From",
+      "wire": "from",
+      "go_type": "run.State",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "To",
+      "wire": "to",
+      "go_type": "run.State",
       "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Reason",
+      "wire": "reason",
+      "go_type": "string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Delivery",
+      "wire": "delivery",
+      "go_type": "run.DeliveryState",
+      "omittable": true,
       "is_thought": false
     },
     {
       "name": "Outcome",
       "wire": "outcome",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Effective",
-      "wire": "effective",
-      "go_type": "record.RecordID",
+      "go_type": "*run.Outcome",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Decisive",
-      "wire": "decisive",
-      "go_type": "[]record.RecordID",
+      "name": "Evidence",
+      "wire": "evidence",
+      "go_type": "[]record.Ref",
       "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Candidates",
-      "wire": "candidates",
-      "go_type": "[]record.RecordID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Observations",
-      "wire": "observations",
-      "go_type": "[]record.RecordID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "ResolverVer",
-      "wire": "resolver_ver",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Thresholds",
-      "wire": "thresholds",
-      "go_type": "verdict.Thresholds",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Rule",
-      "wire": "rule",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Contested",
-      "wire": "contested",
-      "go_type": "bool",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Confidence",
-      "wire": "confidence",
-      "go_type": "float64",
-      "omittable": false,
       "is_thought": false
     }
   ],

@@ -1,7 +1,12 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "edd74e93",
+  "source_ref": "f639ecdc",
   "kinds": {
+    "delivery_acked": "261d54b5a58c86b22bc492c977ecc0e34249b94890f2e8982e7119f6c8eb12c9",
+    "delivery_attempted": "bc3aaee593730b05360ba6e86b7b92c645f347a68ce73ac96d72f67db6689925",
+    "delivery_prepared": "1568c6f7898371acf8241845bdd9d13083823b0c4b3da150bff43e040cf5edaf",
+    "family_assessment": "58236866fac4561129151109f0cacc0d6c3371db845a746e03bc02ca794f4bd1",
+    "goal": "b2051b411286c356b3a480d0e6efa8df502ef08072607f17ed5a29e632e31398",
     "invocation": "ff3c0e41c2ddbf0c14b6fd8687d7eaf7fb0868c524ed63978b3eaac8bde7075b",
     "invocation_dispatched": "f9277d84d50aa6f4ffddc8a6b16c58a3514684adc897c77853bc90214752c5a2",
     "invocation_reconciled": "2f92a10602f8f0cc0cd963bf8ce0aff2f9f53ed9d6f435891ca3f9906bd7abb5",
@@ -9,6 +14,8 @@
     "observation": "2c6cd406a86d780b75ab1f591fca0e1dcdf42211e9e6c92c70f5262ea370aace",
     "receipt": "99af36863095c2df0b351b941eba62378a4b4b500ba19417d178fd262cf74e37",
     "resolution": "cbd87868a7a4d7a6a193fb2b67df544fe84d3bf965c74b543681d9d718456765",
+    "run_attempt": "23db6be1847e26e78389831bd047b35941c096663a79559394d0a273a8c9025a",
+    "run_transition": "eb352c87b9a8393adc3b4ed0d9a83308071a1a09f9981e2aa9bec028897c99f9",
     "terminal_observed": "075264189503e3b028a9e6e2b1eb79e9f0fe6b0fca5fc5419e8e44a3b3977d1d",
     "thought_stored": "8b946bbe24976cde610f332abff58feeac59eb19699cbb12d08e761f0b16c7cd",
     "tool_effect": "5aa913ee1555d6aea71135abc9397d308a4c4da87efc591d230f9c1f08f1a804",
