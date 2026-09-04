@@ -2,16 +2,17 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.2
+# Successor v1 — design note (Phase 2, the whole system) — v1.3
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
 §8 (`docs/history/2026-09-04-holistic-drift-review.md`, main) as amended by
 D7–D17 in `successor-plan.md`; contract practice =
 `contract-testing-input.md`; boundary spec = `docs/CONTRACTS.md` + the Phase 1
-behavior suite. v1.2 = v1.1 rewritten against the r2 design review (codex,
-Architect + Skeptic, whole document, fix layer first; ledgers `verdict-r1.md`,
-`verdict-r2.md` in the review dir). §18 lists what changed. Inherited shapes
+behavior suite. v1.3 = v1.2 amended against the r3 design review (codex, Architect +
+Skeptic, whole document; ledgers `verdict-r1..3.md` in the review dir — r3
+confirmed every r2 root cause resolved and left 18 precise items). §18 lists
+what changed. Inherited shapes
 carry their justifying sentence beside them (anti-lift).*
 
 ## 0. What v1 is
@@ -35,9 +36,10 @@ the shared `scripts/land.sh`, reviewed the house way; `go-port` is read, never
 edited (D4). **Python lift (D8):** every shared-contract change is classified
 *provider repair* (allowed; lands on main through the normal Python chunk
 discipline as its own work item) or *behavior redesign* (forbidden unless
-separately authorized). **Work posture (D6):** one heavy lane on this box at
-a time — build OR battery OR review, never two; a second worktree is for
-isolation, not for a second concurrent heavy job.
+separately authorized). **Work posture (D6, as written):** "serialize heavy work, ~1 background
+agent alongside the orchestrator" — one CPU-heavy job (build, battery,
+reviewer) at a time; the orchestrating session may run beside it doing light
+coordination; a second worktree is for isolation, never a second heavy job.
 
 ## 1. Foundations
 
@@ -82,11 +84,17 @@ artifact, validated once: `Intent`, `Claims`, `Plan`, `Judge`. A model call
 is such a boundary; so is a deterministic parser; each owns validation and
 error translation for what it produces.
 
-**Overflow.** When a thought exceeds a backend's declared `MaxInputBytes`,
-the engine does one of exactly two things: hands it **by reference** (the
-backend can read the artifact; subprocess agents can) or returns a typed
-`backend_incapable` outcome with the thought intact. There is no
-engine-generated chunking in v1. Semantic decomposition of a large artifact,
+**Overflow is a routing problem, never a run outcome by itself.** Backends
+declare capabilities (`MaxInputBytes`, `ReadsByReference`). Planning selects a
+backend/transport that can consume the thought **whole**; a backend that
+cannot returns a typed `backend_incapable` for *that attempt*, which triggers
+rerouting to any registered lossless route (by-reference handoff — subprocess
+agents read artifacts) and, only when no lossless route exists, an
+escalation naming the size and the routes tried. The thought is never
+sliced and never the reason a run silently ends. Stated honestly: a thought
+no available substrate can carry whole cannot be processed by anyone; the
+engine says so instead of pretending. There is no engine-generated chunking
+in v1. Semantic decomposition of a large artifact,
 if ever needed, is an explicit interpretation producing a new artifact with
 its own completeness verdict — a later Finding, not an overflow path.
 
@@ -97,7 +105,13 @@ refusal.
 
 ### 1c. Contracts are built first, not later (D3; contract input §1–§2, §16)
 
-Every record kind and every shared edge has, from build step 1: a
+**Contract before implementation, per edge.** For every record kind and
+shared edge, the declared semantics, answer key entry, and red reference-
+reader cases land *before* the provider implementation of that edge; the
+generated half is produced the moment the provider type exists and must
+agree before the slice lands. Step 1 builds the machinery and applies it to
+the step-1 types; every later step applies it to its own edges first. Each
+edge therefore has: a
 **generated** file derived from the Go type at a pinned ref, a **declared**
 file (absence semantics, unknown-value handling, used-for, retry guidance,
 fail-soft collapse sets, `unconstrained` on thought fields, `measured-by:` on
@@ -117,8 +131,9 @@ is durable (fsync) before acknowledgement. A torn tail on recovery is a
 partial envelope with a bad checksum and is discarded; nothing inside an
 unacknowledged envelope is ever visible. Command IDs are deduplicated on
 replay. Multi-record invariants that are genuinely simultaneous (verdict +
-supersedes; outcome + run card; join decision + cancellation issuance) are
-one envelope. Things that are *not* simultaneous (delivery) are their own
+supersedes; outcome + run card) are one envelope; a join decision and its
+cancellations are deliberately NOT (§3 — the crash between them is a tested
+state). Things that are *not* simultaneous (delivery) are their own
 transitions (§5a).
 
 **Two durable states at the edge.** *Committed* = in the journal. *Published*
@@ -131,9 +146,14 @@ recovers from its watermark.
 
 **Backpressure and shutdown.** Every lane has a bounded, durable work cursor
 over the journal (no in-memory queues of unbounded work); overload means the
-cursor lags, never memory growth. Shutdown order: intake closes → executor
-drains to its next committed transition → delivery flushes its outbox →
-projector publishes to the last commit → sequencer closes.
+cursor lags, never memory growth. Shutdown is a quiesce DAG: (1) intake and
+timers stop accepting; (2) derived-work producers (tail, evaluator, sheriff)
+quiesce — finish the command in flight, submit nothing new; (3) executor
+drains to its next committed transition; (4) delivery flushes its outbox;
+(5) the sequencer freezes the **final commit watermark** and refuses further
+commands; (6) the projector publishes through that watermark; (7) the
+sequencer closes. A lane whose cursor is behind the final watermark resumes
+from its cursor on next start; nothing is lost and nothing replays forever.
 
 **Admission:** one process per root, enforced by a lease file with PID and a
 monotonic process epoch; every command carries the epoch, and the sequencer
@@ -147,16 +167,19 @@ spec requires to be rewritten whole.
 ```go
 type Goal struct { RecordHeader; Parent GoalID; Root GoalID; Text ThoughtRef; Origin GoalOrigin; Delivery DeliveryPolicy }
 type RunAttempt struct { RecordHeader; Goal GoalID; Config ConfigSnapshot; Family *FamilyAssessment }
-type Fork struct { RecordHeader; Parent RunID; Step StepID; Children []GoalID /* fixed at creation */; Policy JoinPolicy }
-type JoinDecision          struct { RecordHeader; Fork RecordID; Winner GoalID; Losers []GoalID }
-type CancellationIssued    struct { RecordHeader; Child GoalID; Reason Ref }        // idempotent by Child+Fork
-type ChildTerminal         struct { RecordHeader; Child GoalID; State ChildState }  // written by the child's own driver
-type JoinSettled           struct { RecordHeader; Fork RecordID }                   // legal only when every child has a ChildTerminal
+type AttemptRef struct { Run RunID; Attempt uint32 }
+type Fork struct { RecordHeader; Parent AttemptRef; Step StepID; Members []AttemptRef /* fixed at creation; the barrier is over exactly this set */; Policy JoinPolicy }
+type JoinDecision          struct { RecordHeader; Fork RecordID; Selected []AttemptRef; Cancel []AttemptRef }  // all: Selected=every member, Cancel=∅; first_verdict: one selected, rest cancelled
+type CancellationIssued    struct { RecordHeader; Fork RecordID; Child AttemptRef; Reason Ref }   // idempotent by Fork+Child
+type ChildTerminal         struct { RecordHeader; Fork RecordID; Child AttemptRef; State ChildState }  // written by that attempt's own driver; a terminal from any other generation is rejected at the journal
+type JoinSettled           struct { RecordHeader; Fork RecordID }                   // legal only when every member has a ChildTerminal for this Fork
 ```
 
 The order is causal and each step survives a crash between it and the next:
-the parent commits `JoinDecision` (winner fixed); the executor issues
-cancellations idempotently *from that record*; each loser's driver commits its
+the parent commits `JoinDecision` alone (selection fixed; for `all` it is
+written when every member has a ChildTerminal and cancels nothing); the
+executor issues cancellations idempotently *from that record*, as separate
+commands; each loser's driver commits its
 own `ChildTerminal` (cancelled | completed_late | failed); `JoinSettled` is
 computed by a fold and committed only when the drain barrier is provably met;
 the parent step continues only after `JoinSettled`. A child that completes
@@ -174,7 +197,7 @@ under the parent's context; cancellation *executes* a committed decision.
 ## 4. Backends — effectful boundary components, one invocation state machine
 
 ```go
-type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef }
+type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef; EffectToken Token /* committed BEFORE dispatch; outward-capable adapters pass it to every tool that accepts an idempotency key */ }
 // states, each a record:  prepared → dispatched → terminal_observed → receipt_committed
 type Attempt   struct { RecordHeader; Invocation RecordID; N int; Terminal TerminalState }
 type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Seq int; Class EffectClass /* read | write_local | outward */; EffectID string; Evidence ThoughtRef }
@@ -190,11 +213,15 @@ malformed tool-event frame after a valid response = `terminal_observed` with
 `Terminal=partial`, receipt committed with the response, the frame recorded
 as evidence — never a silent retry, never a rejected receipt).
 
-**Restart.** An Invocation found `dispatched` without `terminal_observed`
-yields `indeterminate_external_effect` unless every committed ToolEffect is
-`read`-class; reconciliation is evidence-based per effect class (a `write_local`
-is re-checked against the filesystem; an `outward` effect with a stable
-`EffectID` is queried where the tool supports it, otherwise escalated). Blind
+**Restart.** Every dispatched invocation is presumed effectful until the
+adapter's declared capability proves it cannot act outward (a `judge`-purpose
+call on a tool-less adapter). An Invocation found `dispatched` without
+`terminal_observed` on an outward-capable adapter yields
+`indeterminate_external_effect` — absence of committed ToolEffects is not
+evidence of purity, because the frame may have died with the process; reconciliation is evidence-based per effect class (a `write_local`
+is re-checked against the filesystem; an `outward` effect is queried by the
+Invocation's `EffectToken` where the tool supports idempotency keys or lookup,
+otherwise escalated). Blind
 replay never happens. Kill tests: after dispatch, after each tool effect,
 after response, before receipt.
 
@@ -232,8 +259,13 @@ the prototype's code split.
 `FamilyAssessment` produced by a *treatment-blind, deterministic* classifier
 (registered rule version; ambiguous or unmatched goals get `family=none` and
 are ineligible for experiments). `Intent` (the model interpretation) runs
-after and may not revise the assessment for the current run. This is what
-makes randomized assignment (§8) an intake invariant.
+after and may not revise the assessment for the current run. Assignment (§8)
+is then a **sequencer-enforced command** at intake: keyed deterministic
+randomization (`hash(experiment_seed, GoalID)`), the randomization **unit is
+the GoalID**, so every attempt of the goal inherits the same arm and the
+unit enters the denominator once; at most one active experiment may claim a
+unit (mutual exclusion enforced by the same command); admit/stop is atomic
+with assignment, so a stopping rule and an intake cannot race.
 
 **Interrupts:** `Interrupt{RecordHeader; Target RunID; Attempt; Action;
 Expires}` consumed only by the driver at stage boundaries, acknowledged by a
@@ -287,14 +319,17 @@ launching edge checks the lease.
 ## 7. Memory — learned data, recall, application
 
 ```go
-type Learned    struct { RecordHeader; Kind LearnedKind /* lesson | policy */; Scope ScopePath; Family FamilyKey; Text ThoughtRef; Provenance Provenance }
-type LifecycleTransition struct { RecordHeader; Learned RecordID /* stable item id */; Revision RecordID; From, To Stage; Evidence RecordID }
-type Application struct { RecordHeader; Learned RecordID; Invocation RecordID; Representation ThoughtRef }          // recall injection
-type PolicyApplication struct { RecordHeader; Learned RecordID; RunID RunID; Snapshot PolicySnapshot }              // orchestration policy
+type LearnedID  string   // stable identity of an item across revisions; minted once, never reused
+type LearnedRevision struct { RecordHeader; Item LearnedID; Predecessor RecordID; Kind LearnedKind /* lesson | policy */; Scope ScopePath; Family FamilyKey; Text ThoughtRef; Provenance Provenance }
+type LifecycleTransition struct { RecordHeader; Item LearnedID; Revision RecordID; From, To Stage; Evidence RecordID }
+type Application struct { RecordHeader; Item LearnedID; Revision RecordID; Invocation RecordID; Representation ThoughtRef }   // recall injection
+type PolicyApplication struct { RecordHeader; Item LearnedID; Revision RecordID; Run AttemptRef; Snapshot PolicySnapshot }    // orchestration policy
+type PolicySelection struct { RecordHeader; Run AttemptRef; Considered []LearnedID; Enabled []LearnedID; Basis []RecordID /* the transitions that decided it */ }
 ```
 
-Stage is a fold over `LifecycleTransition`s for the stable item ID (a content
-revision never carries a stage). Stages: `candidate | observed | provisional |
+Stage is a fold over `LifecycleTransition`s for the `LearnedID` (a revision
+never carries a stage); attribution names both the item and the exact
+revision applied. Stages: `candidate | observed | provisional |
 effective | canon | contested | tombstone`.
 
 **Two apply surfaces in v1**, because D17 needs the second: (1) **recall
@@ -303,8 +338,14 @@ injection** — a `lesson` reaches a backend request, proven by an
 policy** — a `policy` item is versioned data (which mechanisms are enabled,
 decomposition depth, judge configuration) consumed at one policy boundary in
 the driver, proven by a `PolicyApplication` snapshot on the run. Mechanisms are
-therefore data the engine reads (D17, engine/data decree), and decaying a
-mechanism changes what the driver does.
+therefore data the engine reads (D17). **The policy-selection fold is
+versioned data**: `EffectMeasurement.Verdict → LifecycleTransition →
+Enabled`. `harmful` → `contested` (still enabled, flagged); `equivalent` at
+the stopping rule → `tombstone` for that family → **disabled** in the next
+`PolicySelection` for that family; `helpful` → `effective`; conflicting later
+evidence reopens `contested`; rollback is a new transition citing the
+contrary evidence. The end-to-end test: an `ablate(m)` equivalence changes
+the next production run's `PolicySelection` and its observable driver path.
 
 **Recall is one query**, `Recall(purpose, scope, standing) → RecallSelection`
 (candidates, deterministic order, each inclusion/exclusion with reason,
@@ -338,10 +379,10 @@ type Experiment struct {           // immutable protocol; nothing in it accrues
     Oracle       OracleClass       // deterministic_fixture | external_observed | blinded_evaluator
     Exclusions   []Rule            // fixed before observation
 }
-type Assignment        struct { RecordHeader; Experiment RecordID; Unit RunAttemptID; Arm ArmID; Probability float64 }   // committed at intake, before outcome-bearing work
-type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool /* Application/PolicyApplication present */; Outcome OutcomeVec; Missing MissingReason }
-type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Ref /* provably exclude the hypothesis */ }
-type EffectMeasurement struct { RecordHeader; Experiment RecordID; AssignedN, ExposedN int; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* helpful | harmful | equivalent | insufficient */ }
+type Assignment        struct { RecordHeader; Experiment RecordID; Unit GoalID; Arm ArmID; Seed Hash; Rule RuleVer }   // committed at intake by the sequencer command in §5; one per unit; inherited by every attempt
+type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool /* Application/PolicyApplication present */; Artifacts []Ref /* complete, raw */; Missing MissingReason }   // raw terminal evidence ONLY — no scores
+type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Hash /* provably exclude the hypothesis revision */; Scores OutcomeVec; OracleResult OracleVerdict; Missingness Decision }
+type EffectMeasurement struct { RecordHeader; Experiment RecordID; Assessments []RecordID; AssignedN, ExposedN int; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* helpful | harmful | equivalent | insufficient */ }  // a DETERMINISTIC fold over its Assessments; a test recomputes it from the journal
 ```
 
 Counts are **derived from Assignment records**, never stored on the
@@ -360,11 +401,15 @@ established.
 
 **Loop closed** = `candidate` (run A) → Assignment → Application or
 PolicyApplication (run B) → OutcomeAssessment with an independent evaluator →
-EffectMeasurement → LifecycleTransition citing it. **v1 exit:** a blinded
-scripted scenario where a planted helpful item is promoted and a planted
-harmful item is demoted by the same machinery; then one live randomized
-experiment on this box reaching its stopping rule with a **non-`insufficient`**
-verdict. Tenure may move `candidate → observed` and may trigger
+EffectMeasurement → LifecycleTransition citing it → **a later production run
+whose Application/PolicySelection reflects the transition**. **v1 exit:** a
+blinded scripted scenario where a planted helpful item is promoted and a
+planted harmful item is demoted by the same machinery; then one live
+randomized experiment on this box, through the real subprocess path,
+reaching its stopping rule with a `helpful` or `harmful` verdict (or
+`equivalent` followed by the D17 policy change), the predeclared
+LifecycleTransition committed, and its consequence observed in a subsequent
+production run. Tenure may move `candidate → observed` and may trigger
 re-measurement, expiry, or tombstoning; never `effective`.
 
 Proposals that would act outward or change authority config are held on the
@@ -372,13 +417,29 @@ escalation surface (autonomy boundary unchanged).
 
 ## 9. Experiments are a separate population (D17 without contamination)
 
-`ExperimentalRecord` envelopes share the sequencer and the physical log with
-production (one `Seq` space, one crash story) but are a distinct Go type with
-a distinct reader capability; every production reader is typed
-`ProductionRecord`-only and is contract-tested with poisonous experimental
-rows before the first replay runs. The only records the evaluator lane may
-write into production are `OutcomeAssessment` and `EffectMeasurement`, which
-carry references, never experimental artifacts.
+Three envelope types share the sequencer and the physical log (one `Seq`
+space, one crash story) and are distinct Go types with distinct reader
+capabilities — a **capability matrix** (writer × reader × envelope) is part
+of the registry and is checked at compile time by the typed APIs:
+
+- `ProductionRecord` — everything a production run writes and reads,
+  including its own `Application`/`PolicyApplication` (exposure is a
+  production fact about a production run).
+- `ControlRecord` — `Experiment`, `Assignment`, stopping state: the
+  experiment control plane, readable through a *narrow assignment
+  capability* used only by the intake command and the evaluator, never by
+  recall, diagnose, or propose.
+- `ExperimentalRecord` — shadow-arm runs and their artifacts, readable only
+  by the evaluator.
+
+Every production reader is contract-tested with poisonous control and
+experimental rows before the first replay runs. The evaluator writes into
+production exactly one thing: an **attestation** — `OutcomeAssessment` and
+`EffectMeasurement` carrying the protocol hash, the assigned/exposed unit
+IDs, per-assessment scores, estimator inputs, and evaluator identity — so a
+production fold can verify a transition's evidence without reading any
+experimental artifact, and an auditor with the evaluator capability can
+recompute it.
 
 **Attribution (D17).** `plain` and `star` shadow arms compare the *whole
 harness* to a 1-shot; a match updates a `HarnessChallenger` record only. An
@@ -386,8 +447,14 @@ individual mechanism's standing changes solely from a predeclared
 `ablate(m)` experiment (harness with everything else fixed), and
 "redundant" requires an **equivalence test** at the family's margin with the
 stopping rule met — failure to reject a difference is `insufficient`, not
-`equivalent`. Shadow arms run post-hoc, black-box, in a scratch workspace,
-only for families whose `FamilyAssessment` classifies them read-only.
+`equivalent`. Shadow arms run post-hoc, black-box. For families the
+`FamilyAssessment` classifies read-only they run in a scratch workspace. For
+effectful families (local writes) they run in an **isolated snapshot** of the
+workspace/repo (copy-on-write) with outward effects intercepted by the
+authority gate and recorded, never committed; the comparison is over
+proposed actions and judged products. Families with unavoidable outward
+effects are **ineligible**, and D17 is declared *partial by scope* for the
+mechanisms that only those families exercise (§17).
 
 ## 10. One process — supervisor, lanes, timers
 
@@ -413,25 +480,34 @@ config fails closed for outward acts only.
 ## 12. Delivery — honest at the user's edge (§8 item 1)
 
 `DeliveryPolicy` is captured at intake per origin and names the required
-state. States: `transport_accepted` (the transport confirmed it took the
-payload) and `user_acknowledged` (the origin's own ack: a message id, a read
-receipt, an explicit CLI ack protocol). CLI in v1 supports
-`transport_accepted` only and is *declared* `accepted_unacknowledged`; the
-mission outcome carries that uncertainty rather than claiming delivery. The
-v1 acceptance uses an origin with an explicit ack (a file-drop front end that
-acks, or Hermes) to prove `user_acknowledged` end to end. Bounded retry from
+state. States, named by what they prove: `transport_accepted` (the transport
+took the payload), `endpoint_accepted` (the receiving program stored or
+forwarded it — a file-drop consumer, a bot's message id), and
+`user_acknowledged` (an acknowledgement **causally generated by the
+user-facing client after presentation**, carrying an ack token bound to the
+delivery ID and the payload hash — an explicit CLI ack command, a
+read-receipt the origin itself produces). Nothing below the last is ever
+labelled user delivery. CLI in v1 supports `transport_accepted` and an
+explicit ack command; a mission whose policy requires `user_acknowledged`
+carries `accepted_unacknowledged` until the ack arrives. The v1 acceptance
+exercises the real ack protocol: crash-before-display, stale ack, duplicate
+ack, wrong-payload ack. Bounded retry from
 the outbox, then `delivery_failed` with an escalation row.
 
 ## 13. Workspace, contracts, compatibility (D10, D3)
 
 Own root (`~/.maro-go/workspace`, `MARO_GO_WORKSPACE` override, path printed
-before any write). **Compatibility is a mapping, not byte equality.** For
-every shared B-entry the projector has a mapping table: source fields,
-projection fields, intentionally lost fields, absence semantics, vocabulary
-conversions, and the promise level (`readable | meaning-preserving |
-round-trip`). Go-only causal history (revisions, transitions, applications,
-effects) travels in a **native pack envelope**; the legacy B7 lesson row is a
-readable projection. `Go → Python reader` and `Python → Go quarantine`
+before any write). **Two promises, kept apart (D2, D3).** Every edge the
+shared spec designates shared is written by the projector **exactly to its
+versioned wire contract** — required fields, vocabulary, absence behaviour —
+and the view fixtures fail on any deviation; "readable" is not a promise
+level for a shared edge. Where the Go-native record is richer, the shared
+projection is by construction a *lossy view of a richer source*, and the
+mapping table records what the view omits so nobody mistakes the view for
+the source; changing what a shared edge carries is a D3 versioned contract
+change, never a silent downgrade. Go-only causal history (revisions,
+transitions, applications, effects, attestations) travels in a **native pack
+envelope**. `Go → Python reader` and `Python → Go quarantine`
 (imports enter at `candidate`) are tested separately; no round-trip is
 claimed where only readability is proven.
 
@@ -500,10 +576,13 @@ edges.
    and FamilyAssessment; NOW configuration; lifecycle events; delivery outbox
    with an acking origin. **First real delivered answer** (subprocess live).
 6. Recall query, RecallSelection, Application; re-run identity.
-7. AGENDA configuration: plan, per-step judge, closure with restart; Sheriff
-   under the supervisor.
-8. Fork/join transitions; two-level scenario with kills.
-9. Tail lane, timers, supervisor heartbeats; observe → diagnose → propose.
+7. **Supervisor** (lane registration, heartbeats, panic capture, bounded
+   restart) and the generic lane lifecycle; then AGENDA configuration: plan,
+   per-step judge, closure with restart; Sheriff as the first supervised
+   lane.
+8. Fork/join transitions over attempt refs; two-level scenario with kills
+   between every transition, both policies.
+9. Tail lane, timers; observe → diagnose → propose.
 10. Experiment protocol records; paired replay (exposure/decision proof);
     lifecycle transitions; policy apply surface; the blinded discrimination
     scenario.
@@ -520,31 +599,51 @@ edges.
 | Item | Status now | Observable edge / failing condition | Step |
 |---|---|---|---|
 | D1 contract-not-port | honored | inherited shapes each carry a sentence (§3–§5, §7) | — |
-| D2/D10 formats shared, roots separate | partial | per-B-entry mapping table with promise level; view fixtures fail on a lost field not declared lost | 2, 12 |
+| D2/D10 formats shared, roots separate | honored in design | shared edges exact to the versioned wire contract (fixtures); native envelope for richer history | 2, 12 |
 | D3 versioned contracts | honored in design | generated/declared pair from step 1; regeneration diff fails CI unreviewed | 1 |
 | D4 go-port frozen | honored | no commits on go-port | — |
 | D5 clean-room to intent | honored | §8 from VISION intent; one recall query; one driver | — |
-| D6 serialized heavy work | honored | one heavy lane at a time (§0) | — |
+| D6 serialized heavy work | honored | one heavy job at a time, orchestrator beside it (§0, quoted) | — |
 | D8 Python lift rule | honored, plan-only | each shared-contract change classified; provider repairs are their own main-branch items | 2, 12 |
 | D9 home | honored | branch/path | — |
-| D11 measured behavior change | partial until step 11 | live experiment reaches stopping rule with non-`insufficient` verdict; fails if only `insufficient` | 10–11 |
+| D11 measured behavior change | partial until step 13 | live experiment: helpful/harmful (or equivalent + policy change), transition committed, consequence observed in a later production run | 10–13 |
 | D12 one process, no cron | honored in design | two-process admission test; no cron in tree; supervisor heartbeats | 2, 9 |
 | D13 targets not constraints | honored | overage-continues test; thresholds reported | 3, 11 |
 | D14 full loop in v1 | partial until step 11 | discrimination scenario + live loop | 10–11 |
 | D15 no cost aborts | honored | no cost-stop path; grep + test | 3 |
-| D16 thoughts unconstrained | honored in design | boundary tests assert whole-thought-or-typed-refusal; must-detect "slice" | 1, 3 |
-| D17 bitter lesson inside | partial until step 11 | ablate(m) equivalence; policy apply surface changes driver behavior | 10–11 |
-| §8.1 delivery is the product | honored in design | mission outcome folds delivery; CLI declared unacknowledged; acking origin proves `user_acknowledged` | 5 |
+| D16 thoughts unconstrained | partial (routing) | whole-thought-or-typed-refusal at every boundary; reroute on `backend_incapable`; escalation only when no lossless route; must-detect "slice" | 1, 3, 5 |
+| D17 bitter lesson inside | partial until step 11, and partial BY SCOPE after (families with unavoidable outward effects) | ablate(m) equivalence → transition → next PolicySelection changes the driver path; snapshot challenger for effectful families | 10–11 |
+| §8.1 delivery is the product | partial until the ack protocol is exercised | mission outcome folds delivery; `user_acknowledged` only from a client-generated, payload-bound ack; CLI ack command tested incl. crash-before-display | 5 |
 | §8.2 done is a claim | honored in design | order-independence tests on the resolver | 4 |
 | §8.3 learn measurably | as D11 | | |
 | §8.4 validator not counter | honored in design | Sheriff evidence tests; supervisor detects lane stall | 7, 9 |
-| §8.5 artifacts truth, re-read | partial | record census with required readers; must-detect "disable a reader" | 1, 14 |
+| §8.5 artifacts truth, re-read | partial | record census with required readers; must-detect "disable a reader" | 1, every step |
 | §8.6 recursion | honored in design | join transitions survive kills between each | 8 |
 | §8.7 always-on, not OS | honored in design | as D12; whole-process death is external, stated | 10 |
 | §8.8 swappable + lenses + action-bias | partial | lens swap test; authority-under-prompt must-detect | 5, 13 |
 | §8.9 edges + removal | honored in design | subtraction artifact per step; one removal with absence proof | every step, 13 |
 
-## 18. What v1.2 changed from v1.1 (r2 review)
+## 18. What changed by round
+
+**v1.3 (r3):** EffectToken committed before dispatch and presumed-effectful
+restart; overflow as capability-aware routing with escalation only when no
+lossless route (D16 marked partial); shared edges exact to their versioned
+wire contract with the native envelope for richer history; `LearnedID`
+distinct from revisions everywhere attribution matters; fork membership as
+attempt refs with `JoinDecision{Selected, Cancel}` covering `all`; three
+envelope types with a capability matrix and a verifiable attestation as the
+only evaluator→production write; snapshot challenger for effectful families
+and D17 partial-by-scope; supervisor before Sheriff; contract-before-
+implementation per edge; `user_acknowledged` only from a client-generated,
+payload-bound ack (§8.1 partial until exercised); join decision and
+cancellation as separate envelopes; D6 quoted; raw ArmObservation vs scored
+OutcomeAssessment vs recomputable EffectMeasurement; GoalID as the
+randomization unit with keyed seed, mutual exclusion, and atomic admit/stop;
+the policy-selection fold that actually disables a mechanism; shutdown as a
+quiesce DAG with a frozen final watermark; live exit requires the transition
+and its consequence in a later run; appendix statuses corrected.
+
+**v1.2 (r2):**
 
 Experiment split into immutable protocol + Assignment/ArmObservation/
 OutcomeAssessment with derived counts, ITT and per-protocol, typed oracles
