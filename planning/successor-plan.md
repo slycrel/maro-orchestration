@@ -76,6 +76,34 @@ Standing rules). Inputs: `python-arch-map.md` and `go-tree-triage.md`
   as a shared file tree. Jeremy is sourcing further nuance on
   contract-testing practice from his work side; slot left open for it in
   the Phase 2 design note.
+- **D11 — Learning bar (answers drift-review §9 Q1).** *"learning changes
+  behavior is before 'cheaper', though learning to be cheaper is probably a
+  kind of learning, one of many."* Read: the v1 self-improvement hooks are
+  judged on MEASURED behavior change; cost is one axis of learning among
+  several, not the gate.
+- **D12 — Always-on shape (answers §9 Q2).** *"not an OS wins; I'm cool with
+  a daemon or something, maybe... but no crons for timers and such; this is
+  designed as a process on a machine, even though we have given maro a
+  machine of it's own. (dockerized or other people's machines are not the
+  same context as what we have)."* Read: the successor is ONE process; its
+  background lanes (timers, watchers, tails) live inside that process's
+  lifecycle and die with it. A long-lived daemon-shaped process is
+  acceptable; cron/systemd timers as the scheduler are not. Design for the
+  process-on-a-machine context first; containers and other hosts are a
+  different context, not the default.
+- **D13 — Cost envelope is a target, never a constraint (answers §9 Q3),
+  and the deeper principle.** *"That is one of many possible goals for
+  testing... I'm fine with that being a target, not fine with it being a
+  hard constraint. Similar to our magic numbers -- we measure overages, we
+  don't chop and break due to them. LLMs want math complete problems, not
+  probabilities and fuzzy logic, and that's where we need to live to be
+  different/do different (and thus be better than a 1-shot LLM call)."*
+  Read: the Manti envelope is one measured target among many; overages are
+  measured and surfaced, never enforced by breaking. The vision-level half:
+  the harness earns its existence by living in probability and fuzzy
+  judgement — the space a single LLM call avoids — so the successor's
+  verdicts, budgets and gates are graded and recoverable by construction
+  (rejoins recovery-over-correctness, 08-02, and caps-as-breakers).
 
 ## The framing that generates the structure
 
