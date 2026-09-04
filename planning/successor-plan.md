@@ -13,9 +13,10 @@ Standing rules). Inputs: `python-arch-map.md` and `go-tree-triage.md`
   its Python. The reasoning, the patterns, the mesh — "partly the
   material, partly the weave, mostly the interaction" — are what carry
   over. Line-by-line CPython fidelity is explicitly renounced.
-- **D2 — Same workspace.** Both engines read/write the same
-  `~/.maro/workspace/` formats. The workspace is the compatibility
-  boundary; internals diverge freely.
+- **D2 — Same workspace formats.** *(AMENDED by D10, 2026-09-04: separate
+  workspace ROOTS; the shared thing is the contract spec, not a live
+  store.)* Both engines read/write the same workspace formats. The
+  contract is the compatibility boundary; internals diverge freely.
 - **D3 — Contracts may be upgraded, both sides.** Sharpening a contract
   or adding persistence metadata is encouraged — improve the Python
   side too, then leverage the better contract. Contracts are versioned
@@ -54,6 +55,27 @@ Standing rules). Inputs: `python-arch-map.md` and `go-tree-triage.md`
 - **D9 — Home.** Branch `successor`, Go code in this repo's `go/`,
   rebuilt fresh on the new branch. `go-port` stays frozen and reachable
   for mining (D4). Shared land.sh / test-safe / review ledger / CI.
+- **D10 — Separate workspaces; the SPEC is what's shared (AMENDS D2).**
+  Jeremy: *"Let's keep the workspaces separate. From here on out we're
+  diverged in implementation... we have a target spec, we can
+  forwards-compat move that spec when we need to (where we missed in the
+  past or need change for reasons in the future), and we know the right
+  high level contracts. input -> black box process -> output should be
+  consistent and the edges are where our success/failures lie, with
+  processing simply implementation... the woven rope is the complexity,
+  not the pattern. I suspect proper higher level contract testing will
+  serve us well."* Read: the Go engine gets its OWN workspace root; the
+  two engines never share a live store. What they share is the contract
+  registry (`docs/CONTRACTS.md`) + the behavior suite — the spec — which
+  moves forwards-compatibly when it must. Success/failure is judged at
+  the edges (workspace artifacts in, workspace artifacts out); everything
+  between is implementation and may diverge freely. Phase 4's comparison
+  therefore runs both engines on their own workspaces against the same
+  goals and compares at the artifact boundary — not on one shared store.
+  Learned outputs still travel as DATA between engines (the pack), never
+  as a shared file tree. Jeremy is sourcing further nuance on
+  contract-testing practice from his work side; slot left open for it in
+  the Phase 2 design note.
 
 ## The framing that generates the structure
 
