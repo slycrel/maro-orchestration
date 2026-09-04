@@ -78,9 +78,10 @@ func samples() map[record.Kind]any {
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
 		invoke.KindInvocation:       &invoke.Invocation{Header: withSchema(h, "invocation/1"), Purpose: invoke.PurposeExecute, Request: ref, Backend: caps, EffectToken: strings.Repeat("ab", 16), TargetName: "step", TargetLimit: 10, TargetWhy: "p90"},
 		invoke.KindDispatched:       &invoke.Dispatched{Header: withSchema(h, "invocation_dispatched/1"), Invocation: inv},
-		invoke.KindToolEffect:       &invoke.ToolEffect{Header: withSchema(h, "tool_effect/1"), Invocation: inv, Ordinal: 0, Op: "Read", Class: invoke.OpQuery, Key: strings.Repeat("cd", 32), Evidence: ref},
-		invoke.KindTerminalObserved: &invoke.TerminalObserved{Header: withSchema(h, "terminal_observed/1"), Invocation: inv, Attempt: 1, State: invoke.TerminalComplete, Reason: "ok", Transcript: &ref},
-		invoke.KindReceipt:          &invoke.Receipt{Header: withSchema(h, "receipt/1"), Invocation: inv, Attempt: 1, Response: ref, Usage: invoke.Usage{InputTokens: 1}},
+		invoke.KindToolEffect:       &invoke.ToolEffect{Header: withSchema(h, "tool_effect/1"), Invocation: inv, Ordinal: 0, Op: "Read", Class: invoke.OpQuery, Key: strings.Repeat("cd", 32), Input: ref},
+		invoke.KindToolEffectResult: &invoke.ToolEffectResult{Header: withSchema(h, "tool_effect_result/1"), Invocation: inv, Ordinal: 0, Output: ref},
+		invoke.KindTerminalObserved: &invoke.TerminalObserved{Header: withSchema(h, "terminal_observed/1"), Invocation: inv, Attempt: 1, State: invoke.TerminalComplete, Reason: "ok", Response: &ref, Transcript: &ref, Usage: invoke.Usage{InputTokens: 1}},
+		invoke.KindReceipt:          &invoke.Receipt{Header: withSchema(h, "receipt/1"), Invocation: inv, Attempt: 1, Response: ref, Usage: invoke.Usage{InputTokens: 1, CostUSD: 0.5, CostReported: true}},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
 	}
 }

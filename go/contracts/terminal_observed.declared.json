@@ -39,12 +39,28 @@
       "unknown_value": "accepted-unchanged",
       "constraint": "unconstrained"
     },
+    "response": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestReconcileFinalizesLostReceipt"
+    },
     "transcript": {
       "absence": "omitted",
       "on_absence": "tolerated",
       "used_for": "display-only",
       "constraint": "unconstrained",
       "measured_by": "internal/invoke:TestSubprocessWithFakeCLI"
+    },
+    "usage": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "money",
+      "constraint": "defined",
+      "pattern": "\"input_tokens\":[0-9]+,\"output_tokens\":[0-9]+",
+      "rejects": "{\"input_tokens\":-1}",
+      "measured_by": "internal/invoke:TestUsageIsValidated"
     }
   }
 }

@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"reflect"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -102,10 +103,11 @@ const (
 	OpIrreversible OperationClass = "irreversible"
 )
 
-// ToolEffect is one tool action the backend performed, as evidence. Key is
-// derived from the invocation's token and the ordinal. Announced says whether
-// the key was requested BEFORE the action (the handshake) or derived after
-// the fact from the stream (post-hoc evidence).
+// ToolEffect is one tool action OBSERVED as the backend announced it (a
+// tool_use frame), committed at that moment — before any result exists.
+// Key is derived from the invocation's token and the ordinal. Announced says
+// whether the key was requested BEFORE the action (the handshake) or the
+// action was merely observed on the stream (post-hoc evidence).
 type ToolEffect struct {
 	record.ProductionRecord
 	record.Header `json:"header"`
@@ -115,8 +117,7 @@ type ToolEffect struct {
 	Class         OperationClass  `json:"class"` // from the registered operation table; unknown ops are irreversible
 	Key           string          `json:"key"`   // derive(effect_token, ordinal)
 	Announced     bool            `json:"announced"`
-	IsError       bool            `json:"is_error"`
-	Evidence      thought.Ref     `json:"evidence"` // the tool's input+output as the backend reported them
+	Input         thought.Ref     `json:"input"` // the raw input bytes as the backend reported them
 }
 
 func (r *ToolEffect) Head() *record.Header { return &r.Header }
@@ -133,7 +134,34 @@ func (r *ToolEffect) ValidateWire() error {
 	if r.Ordinal < 0 || r.Op == "" || len(r.Key) != 64 {
 		return fmt.Errorf("tool_effect: ordinal/op/key malformed")
 	}
-	return r.Evidence.Validate()
+	if r.Class != ClassOf(r.Op) {
+		return fmt.Errorf("tool_effect: class %q disagrees with the operation table for %q", r.Class, r.Op)
+	}
+	return r.Input.Validate()
+}
+
+// ToolEffectResult is the tool's answer, committed when the stream reports
+// it. An observed effect with no result is exactly that: observed, outcome
+// unknown — never "error", never "done".
+type ToolEffectResult struct {
+	record.ProductionRecord
+	record.Header `json:"header"`
+	Invocation    record.RecordID `json:"invocation"`
+	Ordinal       int             `json:"ordinal"`
+	IsError       bool            `json:"is_error"`
+	Output        thought.Ref     `json:"output"` // raw output bytes; JSON when the backend gave JSON
+}
+
+func (r *ToolEffectResult) Head() *record.Header { return &r.Header }
+func (r *ToolEffectResult) Kind() record.Kind    { return KindToolEffectResult }
+func (r *ToolEffectResult) ValidateWire() error {
+	if err := validRef(r.Header, r.Invocation); err != nil {
+		return err
+	}
+	if r.Ordinal < 0 {
+		return fmt.Errorf("tool_effect_result: negative ordinal")
+	}
+	return r.Output.Validate()
 }
 
 // TerminalState is how the backend's stream ended.
@@ -146,7 +174,9 @@ const (
 )
 
 // TerminalObserved is committed the moment the shell knows how the stream
-// ended, BEFORE the receipt: a crash between the two leaves a terminal fact.
+// ended AND has the response and transcript safely in the thought store —
+// it carries their refs and the usage, so a Receipt is DERIVABLE from it: a
+// crash between terminal and receipt is finalized on restart, never lost.
 type TerminalObserved struct {
 	record.ProductionRecord
 	record.Header `json:"header"`
@@ -154,7 +184,9 @@ type TerminalObserved struct {
 	Attempt       int             `json:"attempt"`
 	State         TerminalState   `json:"state"`
 	Reason        string          `json:"reason,omitempty"`
+	Response      *thought.Ref    `json:"response,omitempty"`   // present iff state is complete|partial
 	Transcript    *thought.Ref    `json:"transcript,omitempty"` // the raw captured stream, when kept
+	Usage         Usage           `json:"usage"`
 }
 
 func (r *TerminalObserved) Head() *record.Header { return &r.Header }
@@ -164,24 +196,55 @@ func (r *TerminalObserved) ValidateWire() error {
 		return err
 	}
 	switch r.State {
-	case TerminalComplete, TerminalPartial, TerminalFailed:
+	case TerminalComplete, TerminalPartial:
+		if r.Response == nil {
+			return fmt.Errorf("terminal_observed: %s without a response ref", r.State)
+		}
+		if err := r.Response.Validate(); err != nil {
+			return err
+		}
+	case TerminalFailed:
+		if r.Response != nil {
+			return fmt.Errorf("terminal_observed: failed with a response ref")
+		}
 	default:
 		return fmt.Errorf("terminal_observed: state %q out of vocabulary", r.State)
 	}
 	if r.Attempt < 1 {
 		return fmt.Errorf("terminal_observed: attempt must be >= 1")
 	}
-	return nil
+	if r.Transcript != nil {
+		if err := r.Transcript.Validate(); err != nil {
+			return err
+		}
+	}
+	return r.Usage.Validate()
 }
 
-// Usage is what the backend reported about the call. Zero means "not
-// reported", never "free".
+// Usage is what the backend reported about the call. CostReported says
+// whether the backend reported a cost at all: an absent cost is unknown,
+// never free.
 type Usage struct {
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
 	CacheRead    int64   `json:"cache_read_tokens"`
 	CostUSD      float64 `json:"cost_usd"`
+	CostReported bool    `json:"cost_reported"`
 	WallMillis   int64   `json:"wall_ms"`
+}
+
+// Validate refuses negative or non-finite usage.
+func (u Usage) Validate() error {
+	if u.InputTokens < 0 || u.OutputTokens < 0 || u.CacheRead < 0 || u.WallMillis < 0 {
+		return fmt.Errorf("usage: negative count")
+	}
+	if u.CostUSD < 0 || math.IsNaN(u.CostUSD) || math.IsInf(u.CostUSD, 0) {
+		return fmt.Errorf("usage: cost %v is not a non-negative finite number", u.CostUSD)
+	}
+	if !u.CostReported && u.CostUSD != 0 {
+		return fmt.Errorf("usage: cost present but not marked reported")
+	}
+	return nil
 }
 
 // Receipt is the last state: the response as a thought, and usage.
@@ -202,6 +265,9 @@ func (r *Receipt) ValidateWire() error {
 	}
 	if r.Attempt < 1 {
 		return fmt.Errorf("receipt: attempt must be >= 1")
+	}
+	if err := r.Usage.Validate(); err != nil {
+		return err
 	}
 	return r.Response.Validate()
 }
@@ -247,6 +313,7 @@ const (
 	KindInvocation       record.Kind = "invocation"
 	KindDispatched       record.Kind = "invocation_dispatched"
 	KindToolEffect       record.Kind = "tool_effect"
+	KindToolEffectResult record.Kind = "tool_effect_result"
 	KindTerminalObserved record.Kind = "terminal_observed"
 	KindReceipt          record.Kind = "receipt"
 	KindReconciled       record.Kind = "invocation_reconciled"
@@ -259,10 +326,13 @@ func init() {
 	record.Register(record.Spec{Kind: KindDispatched, Envelope: record.Production, Version: 1, Type: reflect.TypeOf(Dispatched{}),
 		Writer: "invoke.Shell.Invoke", Reader: "invoke.Reconcile", Decision: "an invocation without a terminal is presumed effectful", Retention: record.Forever})
 	record.Register(record.Spec{Kind: KindToolEffect, Envelope: record.Production, Version: 1, Type: reflect.TypeOf(ToolEffect{}),
-		Writer: "invoke.Shell (as the backend stream reports)", Reader: "judges (provenance/fabrication); Reconcile; the receipts view",
-		Decision: "what the backend actually did; per-effect keys for reconciliation", Retention: record.Forever})
+		Writer: "invoke.Shell (the moment the backend announces a tool_use)", Reader: "judges (provenance/fabrication); Reconcile; the receipts view",
+		Decision: "what the backend set out to do; per-effect keys for reconciliation", Retention: record.Forever})
+	record.Register(record.Spec{Kind: KindToolEffectResult, Envelope: record.Production, Version: 1, Type: reflect.TypeOf(ToolEffectResult{}),
+		Writer: "invoke.Shell (as the backend stream reports a tool_result)", Reader: "judges; Reconcile (an observed effect without a result is outcome-unknown)",
+		Decision: "what the tool answered; is_error", Retention: record.Forever})
 	record.Register(record.Spec{Kind: KindTerminalObserved, Envelope: record.Production, Version: 1, Type: reflect.TypeOf(TerminalObserved{}),
-		Writer: "invoke.Shell", Reader: "invoke.State fold; Reconcile", Decision: "how the stream ended, before any receipt exists", Retention: record.Forever})
+		Writer: "invoke.Shell (after response + transcript are stored)", Reader: "invoke.State fold; Reconcile (finalizes a missing receipt from it)", Decision: "how the stream ended; the receipt is derivable from it", Retention: record.Forever})
 	record.Register(record.Spec{Kind: KindReceipt, Envelope: record.Production, Version: 1, Type: reflect.TypeOf(Receipt{}),
 		Writer: "invoke.Shell", Reader: "the run driver (response); metering; the receipts view; experiments (replay)",
 		Decision: "the response and its cost", Retention: record.Forever})

@@ -20,7 +20,8 @@
       "used_for": "identity",
       "constraint": "defined",
       "pattern": "^[0-9]+$",
-      "rejects": "-1"
+      "rejects": "-1",
+      "measured_by": "internal/invoke:TestFoldRefusesForgedHistories"
     },
     "op": {
       "absence": "never",
@@ -38,7 +39,7 @@
       "constraint": "defined",
       "pattern": "^(query|write_local|reversible|irreversible)$",
       "rejects": "harmless",
-      "measured_by": "internal/invoke:TestKeysAndClasses"
+      "measured_by": "internal/invoke:TestFoldRefusesForgedHistories"
     },
     "key": {
       "absence": "never",
@@ -48,7 +49,7 @@
       "constraint": "defined",
       "pattern": "^[0-9a-f]{64}$",
       "rejects": "nope",
-      "measured_by": "internal/invoke:TestKeysAndClasses"
+      "measured_by": "internal/invoke:TestFoldRefusesForgedHistories"
     },
     "announced": {
       "absence": "never",
@@ -57,18 +58,12 @@
       "constraint": "unconstrained",
       "measured_by": "internal/invoke:TestSubprocessWithFakeCLI"
     },
-    "is_error": {
-      "absence": "never",
-      "on_absence": "rejected",
-      "used_for": "display-only",
-      "constraint": "unconstrained"
-    },
-    "evidence": {
+    "input": {
       "absence": "never",
       "on_absence": "rejected",
       "used_for": "identity",
       "constraint": "unconstrained",
-      "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
+      "measured_by": "internal/invoke:TestEvidenceIsBytePreserving"
     }
   }
 }

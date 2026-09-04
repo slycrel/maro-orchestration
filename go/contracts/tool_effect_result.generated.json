@@ -1,8 +1,8 @@
 {
-  "kind": "receipt",
+  "kind": "tool_effect_result",
   "envelope": "production",
-  "schema": "receipt/1",
-  "go_type": "invoke.Receipt",
+  "schema": "tool_effect_result/1",
+  "go_type": "invoke.ToolEffectResult",
   "fields": [
     {
       "name": "header.ID",
@@ -84,25 +84,25 @@
       "is_thought": false
     },
     {
-      "name": "Attempt",
-      "wire": "attempt",
+      "name": "Ordinal",
+      "wire": "ordinal",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Response",
-      "wire": "response",
+      "name": "IsError",
+      "wire": "is_error",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Output",
+      "wire": "output",
       "go_type": "thought.Ref",
       "omittable": false,
       "is_thought": true
-    },
-    {
-      "name": "Usage",
-      "wire": "usage",
-      "go_type": "invoke.Usage",
-      "omittable": false,
-      "is_thought": false
     }
   ],
   "source_ref": "3555e7bb",

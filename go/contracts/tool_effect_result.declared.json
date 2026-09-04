@@ -1,5 +1,5 @@
 {
-  "kind": "receipt",
+  "kind": "tool_effect_result",
   "lifecycle": "stable",
   "provenance": "supplied",
   "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition",
@@ -14,29 +14,27 @@
       "rejects": "not-a-ulid",
       "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
     },
-    "attempt": {
+    "ordinal": {
       "absence": "never",
       "on_absence": "rejected",
       "used_for": "identity",
       "constraint": "defined",
-      "pattern": "^[1-9][0-9]*$",
-      "rejects": "0"
+      "pattern": "^[0-9]+$",
+      "rejects": "-1",
+      "measured_by": "internal/invoke:TestFoldRefusesForgedHistories"
     },
-    "response": {
+    "is_error": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained"
+    },
+    "output": {
       "absence": "never",
       "on_absence": "rejected",
       "used_for": "identity",
       "constraint": "unconstrained",
-      "measured_by": "internal/invoke:TestInvokeCommitsEveryTransition"
-    },
-    "usage": {
-      "absence": "never",
-      "on_absence": "rejected",
-      "used_for": "money",
-      "constraint": "defined",
-      "pattern": "\"input_tokens\":[0-9]+,\"output_tokens\":[0-9]+",
-      "rejects": "{\"input_tokens\":-1}",
-      "measured_by": "internal/invoke:TestUsageIsValidated"
+      "measured_by": "internal/invoke:TestEvidenceIsBytePreserving"
     }
   }
 }

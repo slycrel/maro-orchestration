@@ -12,7 +12,7 @@
       "constraint": "defined",
       "pattern": "^(execute|judge|plan|intent|render)$",
       "rejects": "dance",
-      "measured_by": "internal/invoke:TestInvokeRefusals"
+      "measured_by": "internal/invoke:TestInvokeRefusesBeforeWriting"
     },
     "request": {
       "absence": "never",
@@ -26,7 +26,7 @@
       "on_absence": "rejected",
       "used_for": "routing",
       "constraint": "unconstrained",
-      "measured_by": "internal/invoke:TestReconcileDispositions"
+      "measured_by": "internal/invoke:TestKillSiteMatrix"
     },
     "effect_token": {
       "absence": "never",
@@ -57,7 +57,7 @@
       "used_for": "display-only",
       "unknown_value": "accepted-unchanged",
       "constraint": "unconstrained",
-      "measured_by": "internal/invoke:TestInvokeRefusals"
+      "measured_by": "internal/invoke:TestInvokeRefusesBeforeWriting"
     }
   }
 }

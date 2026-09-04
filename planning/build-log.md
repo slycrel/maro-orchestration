@@ -242,3 +242,59 @@ live smoke gated behind `MARO_GO_LIVE=1`.
 call, `PONG` back whole; receipt usage `{"input_tokens":10,"output_tokens":49,
 "cost_usd":0.032923,"wall_ms":2702}` — the first real receipt in the
 successor's journal.
+
+**Review round (one pass, Skeptic + Expert QA; `step3-*.md`).** 13 + 13
+findings, every cited line real, all fixed in one commit:
+
+- **Backend contract at the boundary:** nil result, empty terminal, complete
+  without a response, a panic, negative/non-finite usage, cost without
+  `cost_reported` — each becomes `terminal=failed` with a contract reason
+  and `ErrBackendContract`; never a panic, never an orphan.
+- **Validation before writes:** purpose, target why, backend name, context,
+  and `MaxInputBytes` (typed `Incapable{Actual, Max}` refusal — D16 routing
+  is now enforced, not decorative) all run before the request thought is
+  stored.
+- **Effects as the stream reports them:** `tool_effect` is committed at
+  tool_use time; `tool_effect_result` (new kind) when the result arrives; an
+  unanswered use is observed-outcome-unknown, never "error". Sink
+  serialized; ordinals contiguous under 25 concurrent reporters.
+- **Response before terminal:** response and transcript are stored first and
+  the terminal carries their refs and usage, so the receipt is derivable —
+  `Reconcile` finalizes a lost receipt on restart. A response-store failure
+  makes the terminal `failed` with the reason; it can never say complete
+  without its bytes.
+- **Outcome always carries the invocation id**, with `Err` for bookkeeping
+  failures after dispatch; the "recorded terminal" claim is narrowed to
+  "attempted on a detached context" — a dead lease or poisoned journal
+  leaves an orphan Reconcile disposes of (tested: lease released from inside
+  the backend).
+- **Fold is a validating automaton:** duplicates, transitions out of order,
+  effects whose key or class do not derive, results for unobserved effects,
+  receipts without or disagreeing with terminals, reconciliation after a
+  terminal, dispositions contradicting the evidence — ten forged histories,
+  each `ErrFoldCorrupt`.
+- **Disposition is one rule:** abandoned only when the backend cannot act
+  outward AND no observed effect could have; evidence dominates the
+  capability snapshot.
+- **Parser is a protocol state machine:** result closes it; frames after
+  it, a duplicate result (⇒ failed), unmatched tool_results, empty tool
+  names, undecodable JSON-looking frames are violations (⇒ partial);
+  subtype≠success is failed regardless of is_error; cost absence is
+  `cost_reported=false`, never zero-means-free.
+- **Scanner overflow** cancels and drains the child and names the cause;
+  capture and transcript-store errors land in the terminal reason; zero
+  timeout defaults to 20 minutes.
+- **Evidence is byte-preserving** (base64 with role); invalid JSON input and
+  non-UTF-8 output round-trip exactly.
+- **Kill-site matrix through the real Invoke** via a crash seam
+  (`Shell.CrashAt`): after prepared / dispatched (tool-less and outward) /
+  effects (tool-less snapshot + Bash effect ⇒ indeterminate) / terminal
+  (⇒ finalized receipt); each reopened, folded, reconciled, and idempotent.
+- Fake-CLI battery extended: subtype error, trailing frames ⇒ partial, a
+  70 MB line ⇒ failed without deadlock, stderr-only ⇒ failed with the
+  transcript kept, a 3 MiB prompt delivered whole on stdin.
+
+**Residuals:** the crash seam stops the Go code, it does not kill the OS
+process mid-syscall (the journal's own kill tests cover torn frames);
+`Reconcile` finalizes but does not retry abandoned invocations (the driver's
+job, step 5); the broker does not yet refuse operation classes (step 8).

@@ -2,7 +2,7 @@
   "kind": "invocation_dispatched",
   "lifecycle": "stable",
   "provenance": "supplied",
-  "measured_by": "internal/invoke:TestReconcileDispositions",
+  "measured_by": "internal/invoke:TestKillSiteMatrix",
   "fields": {
     "invocation": {
       "absence": "never",

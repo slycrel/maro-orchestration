@@ -5,12 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -63,14 +61,17 @@ func (s *Subprocess) args(req Request) []string {
 	return a
 }
 
-// Complete dispatches the CLI, streams its NDJSON, reports each tool call
-// to the sink as its result arrives, and returns the terminal report. The
-// raw stream is captured whole (bounded by disk, never memory) and returned
-// as the transcript.
+// Complete dispatches the CLI, streams its NDJSON, reports each tool_use to
+// the sink the moment it appears and each tool_result as it arrives, and
+// returns the terminal report. The raw stream is captured whole to disk and
+// returned as the transcript.
 func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Result, error) {
 	timeout := req.Timeout
-	if timeout == 0 {
+	if timeout <= 0 {
 		timeout = s.DefaultTimeout
+	}
+	if timeout <= 0 {
+		timeout = 20 * time.Minute
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -98,52 +99,85 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	}
 	// From here on, the CLI is running: everything is a Result, never an error.
 	tee := io.TeeReader(stdout, capture)
-	p := newStreamParser()
+	p := newStreamParser(sink)
 	res := &Result{Terminal: TerminalFailed}
 	scanner := bufio.NewScanner(tee)
-	scanner.Buffer(make([]byte, 1<<20), 64<<20)
+	scanner.Buffer(make([]byte, 1<<20), maxLine)
+	var scanErr error
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		for _, ev := range p.feed(line) {
-			if _, err := sink.Effect(cctx, ev); err != nil {
-				res.Reason = "sink: " + err.Error()
-			}
-		}
+		p.feed(scanner.Bytes())
+	}
+	if scanErr = scanner.Err(); scanErr != nil {
+		// A line over the limit: stop the child (it may be blocked on the
+		// pipe) and drain so Wait returns; the terminal names the cause.
+		cancel()
+		io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
-	capture.Sync()
-	capture.Close()
-	res.Transcript, _ = os.ReadFile(capPath)
+	var capErr error
+	if err := capture.Sync(); err != nil {
+		capErr = err
+	}
+	if err := capture.Close(); err != nil && capErr == nil {
+		capErr = err
+	}
+	tr, rerr := os.ReadFile(capPath)
+	if rerr != nil && capErr == nil {
+		capErr = rerr
+	}
+	res.Transcript = tr
 	res.Usage.WallMillis = time.Since(start).Milliseconds()
-	// Effects whose results never arrived are still evidence (is_error).
-	for _, ev := range p.flush() {
-		_, _ = sink.Effect(cctx, ev)
+	var reasons []string
+	if scanErr != nil {
+		reasons = append(reasons, "stream: "+scanErr.Error())
+	}
+	if capErr != nil {
+		reasons = append(reasons, "capture: "+capErr.Error())
+	}
+	if p.violations > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d protocol violation(s): %s", p.violations, strings.Join(p.violationNotes, "; ")))
+	}
+	if p.rateLimited {
+		reasons = append(reasons, "rate limited")
 	}
 	switch {
+	case scanErr != nil:
+		res.Terminal = TerminalFailed
+	case p.duplicateResult:
+		res.Terminal = TerminalFailed
+		reasons = append([]string{"duplicate result event"}, reasons...)
 	case p.result != nil && p.result.Subtype == "success" && !p.result.IsError:
 		res.Response = []byte(p.result.Result)
 		res.Usage.InputTokens, res.Usage.OutputTokens = p.result.Usage.InputTokens, p.result.Usage.OutputTokens
 		res.Usage.CacheRead = p.result.Usage.CacheRead
-		res.Usage.CostUSD = p.result.CostUSD
-		if p.malformed > 0 {
-			res.Terminal, res.Reason = TerminalPartial, fmt.Sprintf("%d malformed frames after the result", p.malformed)
+		if p.result.CostUSD != nil {
+			res.Usage.CostUSD, res.Usage.CostReported = *p.result.CostUSD, true
+		}
+		if p.violations > 0 || capErr != nil {
+			res.Terminal = TerminalPartial
 		} else {
 			res.Terminal = TerminalComplete
 		}
 	case p.result != nil:
-		res.Terminal, res.Reason = TerminalFailed, fmt.Sprintf("cli result subtype=%s is_error=%v: %s", p.result.Subtype, p.result.IsError, truncate(p.result.Result, 400))
+		res.Terminal = TerminalFailed
+		reasons = append([]string{fmt.Sprintf("cli result subtype=%s is_error=%v: %s", p.result.Subtype, p.result.IsError, truncate(p.result.Result, 400))}, reasons...)
 	case cctx.Err() != nil:
-		res.Terminal, res.Reason = TerminalFailed, "timeout/cancel: "+cctx.Err().Error()
+		res.Terminal = TerminalFailed
+		reasons = append([]string{"timeout/cancel: " + cctx.Err().Error()}, reasons...)
 	case waitErr != nil:
-		res.Terminal, res.Reason = TerminalFailed, "cli exit: "+waitErr.Error()
+		res.Terminal = TerminalFailed
+		reasons = append([]string{"cli exit: " + waitErr.Error()}, reasons...)
 	default:
-		res.Terminal, res.Reason = TerminalFailed, "no result event"
+		res.Terminal = TerminalFailed
+		reasons = append([]string{"no result event"}, reasons...)
 	}
-	if p.rateLimited {
-		res.Reason = strings.TrimSpace(res.Reason + " (rate limited)")
-	}
+	res.Reason = strings.Join(reasons, "; ")
 	return res, nil
 }
+
+// maxLine bounds one NDJSON line. The CLI's frames are small (tool outputs
+// are capped by the CLI); a line past this is a protocol failure, not data.
+const maxLine = 64 << 20
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
@@ -155,11 +189,11 @@ func truncate(s string, n int) string {
 // ---- stream-json parser -----------------------------------------------------
 
 type resultEvent struct {
-	Type    string  `json:"type"`
-	Subtype string  `json:"subtype"`
-	Result  string  `json:"result"`
-	IsError bool    `json:"is_error"`
-	CostUSD float64 `json:"total_cost_usd"`
+	Type    string   `json:"type"`
+	Subtype string   `json:"subtype"`
+	Result  string   `json:"result"`
+	IsError bool     `json:"is_error"`
+	CostUSD *float64 `json:"total_cost_usd"`
 	Usage   struct {
 		InputTokens  int64 `json:"input_tokens"`
 		OutputTokens int64 `json:"output_tokens"`
@@ -167,44 +201,55 @@ type resultEvent struct {
 	} `json:"usage"`
 }
 
-type pendingUse struct {
-	id    string
-	name  string
-	input json.RawMessage
-}
-
-// streamParser reconstructs tool events from the CLI's NDJSON: an
-// `assistant` event carries tool_use blocks; a `user` event carries the
-// tool_result blocks that answer them; `result` is terminal. Non-JSON lines
-// are noise (tolerated); JSON frames after the result that do not parse are
-// counted as malformed (→ partial).
+// streamParser drives the sink from the CLI's NDJSON: an `assistant` event's
+// tool_use blocks are OBSERVED at once; a `user` event's tool_result blocks
+// are RESULTS; `result` is terminal and closes the protocol — any semantic
+// frame after it, a second result, a tool_result with no matching tool_use,
+// an empty tool name, or a JSON-looking frame that does not parse is a
+// protocol violation (→ partial, or failed for a duplicate result).
+// Non-JSON lines are noise (the CLI's own logging) and are tolerated.
 type streamParser struct {
-	uses        []pendingUse
-	byID        map[string]int
-	done        map[string]bool
-	result      *resultEvent
-	malformed   int
-	rateLimited bool
+	sink            Sink
+	byID            map[string]int // tool_use id → ordinal
+	done            map[string]bool
+	result          *resultEvent
+	closed          bool
+	duplicateResult bool
+	violations      int
+	violationNotes  []string
+	rateLimited     bool
 }
 
-func newStreamParser() *streamParser {
-	return &streamParser{byID: map[string]int{}, done: map[string]bool{}}
+func newStreamParser(sink Sink) *streamParser {
+	return &streamParser{sink: sink, byID: map[string]int{}, done: map[string]bool{}}
 }
 
-func (p *streamParser) feed(line []byte) []EffectEvent {
+func (p *streamParser) violate(note string) {
+	p.violations++
+	if len(p.violationNotes) < 5 {
+		p.violationNotes = append(p.violationNotes, note)
+	}
+}
+
+func (p *streamParser) feed(line []byte) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
-		return nil
+		return // noise
 	}
 	var ev map[string]json.RawMessage
 	if err := json.Unmarshal(line, &ev); err != nil {
-		if p.result != nil {
-			p.malformed++
-		}
-		return nil
+		p.violate("undecodable JSON frame")
+		return
 	}
 	var typ string
 	_ = json.Unmarshal(ev["type"], &typ)
+	if p.closed && (typ == "assistant" || typ == "user" || typ == "result") {
+		if typ == "result" {
+			p.duplicateResult = true
+		}
+		p.violate("frame after result: " + typ)
+		return
+	}
 	switch typ {
 	case "assistant":
 		var msg struct {
@@ -215,12 +260,24 @@ func (p *streamParser) feed(line []byte) []EffectEvent {
 				Input json.RawMessage `json:"input"`
 			} `json:"content"`
 		}
-		_ = json.Unmarshal(ev["message"], &msg)
+		if err := json.Unmarshal(ev["message"], &msg); err != nil {
+			p.violate("assistant frame shape")
+			return
+		}
 		for _, b := range msg.Content {
-			if b.Type == "tool_use" {
-				p.byID[b.ID] = len(p.uses)
-				p.uses = append(p.uses, pendingUse{id: b.ID, name: b.Name, input: b.Input})
+			if b.Type != "tool_use" {
+				continue
 			}
+			if b.Name == "" || b.ID == "" {
+				p.violate("tool_use without name/id")
+				continue
+			}
+			ord, _, err := p.sink.Observe(EffectEvent{Op: b.Name, Input: b.Input, ToolCall: b.ID})
+			if err != nil {
+				p.violate("observe: " + err.Error())
+				continue
+			}
+			p.byID[b.ID] = ord
 		}
 	case "user":
 		var msg struct {
@@ -231,26 +288,36 @@ func (p *streamParser) feed(line []byte) []EffectEvent {
 				IsError   bool            `json:"is_error"`
 			} `json:"content"`
 		}
-		_ = json.Unmarshal(ev["message"], &msg)
-		var out []EffectEvent
+		if err := json.Unmarshal(ev["message"], &msg); err != nil {
+			p.violate("user frame shape")
+			return
+		}
 		for _, b := range msg.Content {
 			if b.Type != "tool_result" {
 				continue
 			}
-			i, ok := p.byID[b.ToolUseID]
-			if !ok || p.done[b.ToolUseID] {
+			ord, ok := p.byID[b.ToolUseID]
+			if !ok {
+				p.violate("tool_result with no matching tool_use")
+				continue
+			}
+			if p.done[b.ToolUseID] {
+				p.violate("duplicate tool_result")
 				continue
 			}
 			p.done[b.ToolUseID] = true
-			u := p.uses[i]
-			out = append(out, EffectEvent{Op: u.name, Input: u.input, Output: stringify(b.Content), IsError: b.IsError, ToolCall: u.id})
+			if err := p.sink.Result(EffectResult{Ordinal: ord, Output: rawOutput(b.Content), IsError: b.IsError}); err != nil {
+				p.violate("result: " + err.Error())
+			}
 		}
-		return out
 	case "result":
 		var r resultEvent
-		if err := json.Unmarshal(line, &r); err == nil {
-			p.result = &r
+		if err := json.Unmarshal(line, &r); err != nil {
+			p.violate("result frame shape")
+			return
 		}
+		p.result = &r
+		p.closed = true
 	case "rate_limit_event":
 		var rl struct {
 			Info struct {
@@ -262,24 +329,12 @@ func (p *streamParser) feed(line []byte) []EffectEvent {
 			p.rateLimited = true
 		}
 	}
-	return nil
 }
 
-// flush returns tool uses that never received a result, as error effects.
-func (p *streamParser) flush() []EffectEvent {
-	var out []EffectEvent
-	for _, u := range p.uses {
-		if !p.done[u.id] {
-			p.done[u.id] = true
-			out = append(out, EffectEvent{Op: u.name, Input: u.input, Output: []byte("(no tool_result received)"), IsError: true, ToolCall: u.id})
-		}
-	}
-	return out
-}
-
-// stringify renders a tool_result content block: a string stays a string;
-// a list of text blocks is joined; anything else is its JSON.
-func stringify(raw json.RawMessage) []byte {
+// rawOutput keeps a tool_result's content byte-for-byte as the TOOL produced
+// it: a JSON string is unquoted; the CLI's envelope of text blocks is
+// unwrapped to the concatenated text; anything else stays as its JSON.
+func rawOutput(raw json.RawMessage) []byte {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -292,13 +347,18 @@ func stringify(raw json.RawMessage) []byte {
 		Text string `json:"text"`
 	}
 	if json.Unmarshal(raw, &blocks) == nil && len(blocks) > 0 {
+		allText := true
 		var b strings.Builder
 		for _, bl := range blocks {
-			if bl.Type == "text" {
-				b.WriteString(bl.Text)
+			if bl.Type != "text" {
+				allText = false
+				break
 			}
+			b.WriteString(bl.Text)
 		}
-		return []byte(b.String())
+		if allText {
+			return []byte(b.String())
+		}
 	}
 	return raw
 }
@@ -312,6 +372,3 @@ func LiveAvailable() bool {
 	_, err := exec.LookPath("claude")
 	return err == nil
 }
-
-var _ = errors.New
-var _ = filepath.Join

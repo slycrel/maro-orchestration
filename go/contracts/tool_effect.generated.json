@@ -119,20 +119,13 @@
       "is_thought": false
     },
     {
-      "name": "IsError",
-      "wire": "is_error",
-      "go_type": "bool",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Evidence",
-      "wire": "evidence",
+      "name": "Input",
+      "wire": "input",
       "go_type": "thought.Ref",
       "omittable": false,
       "is_thought": true
     }
   ],
-  "source_ref": "7d403ea4",
+  "source_ref": "3555e7bb",
   "generator": "maro-go contracts gen v1"
 }

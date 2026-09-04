@@ -105,13 +105,27 @@
       "is_thought": false
     },
     {
+      "name": "Response",
+      "wire": "response",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
       "name": "Transcript",
       "wire": "transcript",
       "go_type": "*thought.Ref",
       "omittable": true,
       "is_thought": true
+    },
+    {
+      "name": "Usage",
+      "wire": "usage",
+      "go_type": "invoke.Usage",
+      "omittable": false,
+      "is_thought": false
     }
   ],
-  "source_ref": "7d403ea4",
+  "source_ref": "3555e7bb",
   "generator": "maro-go contracts gen v1"
 }

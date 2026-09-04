@@ -97,7 +97,7 @@ func ForwardRead(spec record.Spec, sample any, dec *Declared) (Exercised, error)
 			if !ok {
 				return ex, fmt.Errorf("pattern %s.%s: sample has no value to test", spec.Kind, name)
 			}
-			if !re.MatchString(fmt.Sprint(cur)) {
+			if !re.MatchString(patternText(cur)) {
 				return ex, fmt.Errorf("pattern %s.%s: sample value %v does not match declared %q", spec.Kind, name, cur, d.Pattern)
 			}
 			ex.PatternRules++
@@ -257,4 +257,18 @@ func delPath(m map[string]any, path string) {
 		cur = next
 	}
 	delete(cur, parts[len(parts)-1])
+}
+
+// patternText is what a declared pattern runs against: a string as itself,
+// a number/bool as its spelling, a structured value as its canonical JSON.
+func patternText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case map[string]any, []any:
+		raw, _ := json.Marshal(t)
+		return string(raw)
+	default:
+		return fmt.Sprint(t)
+	}
 }

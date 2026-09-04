@@ -1,14 +1,15 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "7d403ea4",
+  "source_ref": "3555e7bb",
   "kinds": {
     "invocation": "c2ca995cd7af9314a893675064a5de6ac26065361a6566abbec10ca67af48fc9",
     "invocation_dispatched": "4ca133717b9d252b68f6f00b2f3e3a89ac8af95fa0dcba731fc4a6a2367ad272",
     "invocation_reconciled": "94efce77aeba6218b4c0f27d497b146f7ff45f28773095278c2350a1aebf3053",
     "lease": "e0266d5f557991e3605c6384036254f84743026e00afe1a4129cca07583df2b4",
     "receipt": "8e9aeb0cfb89d36f6fa94542ef887f740de8054fc13cf0218af39e33775cdecf",
-    "terminal_observed": "b842b4f5a0bfb1b7b3453cbabf0bf36b8383f9985f2973db3385adb512ac3d2b",
+    "terminal_observed": "49b0e09e4e7e8277a52682caf8af75df041a84e9c4248c37071421c88e03fd71",
     "thought_stored": "3bdddc92fbf3adae0637154599564d8bde4d701223d5243f81c55eae6fecde8e",
-    "tool_effect": "471eb960f2a4a4c9804ca4c1a65f25dc92f8846ccddbe6b221bbbe4aa92e0f2f"
+    "tool_effect": "7fddf625dddf41cd8d34fc368e42779bd40ac18e8e1ab4d837cb18b5ff166351",
+    "tool_effect_result": "c936c6f4429958f676040a43d8d60b1d50491caab7e543c18bcfc6db4edd9048"
   }
 }
