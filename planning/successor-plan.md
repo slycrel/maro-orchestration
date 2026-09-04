@@ -104,6 +104,68 @@ Standing rules). Inputs: `python-arch-map.md` and `go-tree-triage.md`
   judgement — the space a single LLM call avoids — so the successor's
   verdicts, budgets and gates are graded and recoverable by construction
   (rejoins recovery-over-correctness, 08-02, and caps-as-breakers).
+- **D14 — v1 carries the FULL self-improvement system, not hooks (amends
+  D7).** Jeremy, on the drift review's pushback A: *"I'm fine if we want to
+  implement these instead of do hooks; your recommendation was to wait, that
+  was my compromise. Now that you've read over everything, seems like that
+  may have changed -- I'm fine proceeding with the full system rather than
+  leaving that hanging."* Read: v1 = backbone + memory + self-improvement,
+  clean-room to intent (D5), with the measurement half (record, replay,
+  Δ-judge) so the loop is CLOSED in v1 — the thing the prototype never did.
+  Phase 3's "quality/self-improvement strand" folds into Phase 2's exit.
+- **D15 — Budget posture for the build: figure it out first, optimise
+  after.** *"until we 'know what we're doing / confident' all the things are
+  on the table; tokens, models, 'spend' is limited by what I'm throwing at
+  this; currently it's $200/mo anthropic, $100/mo openAI, and whatever's
+  left of our fireworks.ai grok tokens. We want to figure this out, then
+  make it optimal; I started out trying to do both, which is harder, and it
+  seems problematic; we're still fighting that a bit with chopped input
+  lengths and aborted runs due to 'cost'. We don't have infinite spend, but
+  we should have plenty of headroom at this point to work."* Read: the
+  successor does NOT chop inputs or abort runs on cost during the
+  figure-it-out phase; spend is metered and reported against targets
+  (D13). The subscription ceilings are the only hard limit and they are
+  external to the engine. Optimisation is a later, separate pass.
+- **D16 — Thought process vs thoughts (resolves the D10/D13 question by
+  dissolving it).** *"maro's goals are not math, and are never going to be
+  'correct'. it's processes and patterns can be; so while we might say we
+  don't want a 4MB document as output, sometimes the goal will demand that,
+  or derive that, and we don't want to mix our processing edges (which can
+  be deterministic) with our _output_. Maro is the thought process, the data
+  that flows through it the thoughts; connected, related, and inevitably
+  intertwined, but discrete and meaningfully separate."* Read: TWO kinds of
+  thing cross the workspace. **Process artifacts** (events, verdict records,
+  receipts, run cards, config, ledgers, the pack envelope) are the engine's
+  own — deterministic, contract-tested, where success/failure lives.
+  **Thoughts** (goal text, step results, deliverables, lesson content, LLM
+  payloads) flow THROUGH the engine — never "correct", never shape- or
+  size-constrained by the process, opaque to the contract beyond presence
+  and provenance. The caps fragility of the prototype was exactly process
+  constraints leaking onto thought content (600-char recall, `[:N]` on step
+  results). The contract registry pins process artifacts hard and declares
+  thought payloads UNCONSTRAINED on purpose (someone looked and decided any
+  value is legal). Verdicts are process facts ABOUT thoughts: exact in shape
+  (exists, carries confidence + source), graded in value.
+- **D17 — The bitter lesson lives inside the process; redundancy is a
+  learning, not a pre-sort.** *"the bitter lesson is within our process, not
+  part of it; There is definitely an overlap aspect, where a 1-shot can get
+  better and possibly even replace our learned subsystems; that is itself a
+  learning that should be allowed and organically improved, rather than
+  controlled up front. The irony of all this is that all this really is is
+  a multi-stage harness; the bitter lesson says that eventually an LLM will
+  be able to reason through this itself and not need maro. That's sort of
+  the star skill in action -- to see how close we can get to that directly
+  with prompt engineering."* Read: do NOT design an up-front "ages well /
+  at risk" sort into the engine (retracts the drift review's §7 sort as a
+  DESIGN input; it stands as a reading of history). Instead the engine
+  carries a standing champion–challenger against the 1-shot (the star
+  skill / shadow lane shape): when a single call matches a learned
+  subsystem, that is recorded as a learning and the subsystem's standing
+  decays organically (competence-redundancy decay already exists in the
+  prototype — carry the idea, re-derive the mechanism). D11 "learning
+  changes behavior" includes learning that a mechanism is no longer needed.
+- **D12 stands; worker isolation revisited later** (Jeremy: "we can revisit
+  later, yes").
 
 ## The framing that generates the structure
 
@@ -164,6 +226,13 @@ why it has that shape.
     ~30 mutation batteries do not — they stay behind with the branch.
 
 ### Phase 2 — Backbone slice (the weave, in Go)
+**Scope amended by D14 (2026-09-04): v1 is the full system — backbone +
+memory + self-improvement with the loop closed and measured — not backbone
+plus hooks.** The Phase 3 quality/self-improvement strand moves into this
+phase's exit criteria. Contract-testing practice for the process edges:
+`planning/contract-testing-input.md` (distilled from Jeremy's work-side
+practice, 2026-09-04).
+
 **Design note starts from the vision, not the contracts** (Jeremy
 2026-09-04: "that's still zoomed in too closely. We have the vision, laid out
 in a number of iterations within our repo, goal brain, and related
