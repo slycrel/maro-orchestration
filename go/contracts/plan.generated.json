@@ -90,8 +90,15 @@
       "go_type": "[]thought.Ref",
       "omittable": true,
       "is_thought": true
+    },
+    {
+      "name": "Parallel",
+      "wire": "parallel",
+      "go_type": "[]run.ParallelStep",
+      "omittable": true,
+      "is_thought": false
     }
   ],
-  "source_ref": "9d511bfa",
+  "source_ref": "bb72b699",
   "generator": "maro-go contracts gen v1"
 }

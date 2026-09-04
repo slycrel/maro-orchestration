@@ -81,11 +81,8 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			// over the backend's maximum): an honest failed call, recorded
 			return &invoke.Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error()}, nil, nil
 		}
-		if err != nil {
+		if err != nil && !recordedFailure(o, err) {
 			return nil, nil, err
-		}
-		if o.Err != nil {
-			return nil, nil, o.Err
 		}
 		made[o.Invocation] = b.Capabilities().Model
 		usage = add(usage, o.Usage)
@@ -180,17 +177,28 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if o.Terminal == invoke.TerminalFailed {
 			return failed("plan: "+o.Reason, o.Invocation), nil, nil
 		}
-		steps, perr := ParsePlan(resp)
+		planned, perr := ParsePlan(resp)
 		if perr != nil {
 			return failed("plan: "+perr.Error(), o.Invocation), nil, nil
 		}
 		plan = &Plan{Header: header(runRef(rs.Run), rs.Run, n, "plan/1"), Invocation: o.Invocation}
-		for _, st := range steps {
-			ref, err := d.Store.Put(thought.Step, []byte(st))
+		for i, st := range planned {
+			ref, err := d.Store.Put(thought.Step, []byte(st.Text))
 			if err != nil {
 				return nil, nil, err
 			}
 			plan.Steps = append(plan.Steps, ref)
+			if len(st.Parallel) > 0 {
+				ps := ParallelStep{Ordinal: i + 1, Policy: st.Policy}
+				for _, g := range st.Parallel {
+					gref, err := d.Store.Put(thought.Step, []byte(g))
+					if err != nil {
+						return nil, nil, err
+					}
+					ps.Goals = append(ps.Goals, gref)
+				}
+				plan.Parallel = append(plan.Parallel, ps)
+			}
 		}
 		if err := d.commit(ctx, fmt.Sprintf("plan/%s/%d", rs.Run, n), plan); err != nil {
 			return nil, nil, err
@@ -244,6 +252,53 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			}
 			return io, nil, nil
 		}
+		if ps := plan.ParallelAt(k); ps != nil {
+			// a parallel step: fork, join, compose — then judge like any step
+			var existing *ForkState
+			if led, err := Fold(d.J.Production(), d.Store); err == nil {
+				existing = led.forkAt(rs.Run, k)
+			} else {
+				return nil, nil, err
+			}
+			fs, composed, err := d.forkStep(ctx, rs, a, k, ps, existing)
+			if err != nil {
+				return nil, nil, err
+			}
+			rref, err := d.Store.Put(thought.Response, composed)
+			if err != nil {
+				return nil, nil, err
+			}
+			sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/1"), Ordinal: k, Step: plan.Steps[k-1], Fork: fs.Fork.ID, Terminal: invoke.TerminalComplete, Result: rref, Outcome: StepUnjudged}
+			jo, jresp, err := invoke_(invoke.PurposeJudge, stepJudgePrompt(goal, steps[k-1], composed, invoke.TerminalComplete, true), false, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			if jo.Terminal != invoke.TerminalFailed {
+				if jr, perr := ParseJudge(jresp, "done", "blocked", "unclear"); perr == nil {
+					v := &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+					if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/step/%d", rs.Run, n, k), v); err != nil {
+						return nil, nil, err
+					}
+					a.Verdicts = append(a.Verdicts, v)
+					sd.Verdict, sd.Outcome = v.ID, StepOutcome(jr.Outcome)
+				}
+			}
+			sd.At = now()
+			if err := d.commit(ctx, fmt.Sprintf("step/%s/%d/%d", rs.Run, n, k), sd); err != nil {
+				return nil, nil, err
+			}
+			a.Steps = append(a.Steps, sd)
+			done = append(done, sd)
+			results = append(results, composed)
+			d.emit(rs, n, "step", Executing, fmt.Sprintf("%d/%d %s (fork)", k, len(steps), sd.Outcome))
+			if err := d.crash("after_step"); err != nil {
+				return nil, nil, err
+			}
+			if sd.Outcome == StepBlocked {
+				return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+			}
+			continue
+		}
 		var o *invoke.Outcome
 		var resp []byte
 		by := n
@@ -291,7 +346,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			jby = prev.Attempt.Attempt
 		}
 		if jo == nil {
-			jo, jresp, err = invoke_(invoke.PurposeJudge, stepJudgePrompt(goal, steps[k-1], resp, o.Terminal), false, false)
+			jo, jresp, err = invoke_(invoke.PurposeJudge, stepJudgePrompt(goal, steps[k-1], resp, o.Terminal, false), false, false)
 			if err != nil {
 				return nil, nil, err
 			}

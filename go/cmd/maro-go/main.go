@@ -279,7 +279,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}

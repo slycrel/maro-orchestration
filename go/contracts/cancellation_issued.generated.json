@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lane_heartbeat",
-  "envelope": "control",
-  "schema": "lane_heartbeat/1",
-  "go_type": "supervise.LaneHeartbeat",
+  "kind": "cancellation_issued",
+  "envelope": "production",
+  "schema": "cancellation_issued/1",
+  "go_type": "run.CancellationIssued",
   "fields": [
     {
       "name": "header.ID",
@@ -78,23 +78,23 @@
       "from_header": true
     },
     {
-      "name": "Lane",
-      "wire": "lane",
+      "name": "Fork",
+      "wire": "fork",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Child",
+      "wire": "child",
+      "go_type": "record.AttemptRef",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Reason",
+      "wire": "reason",
       "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Generation",
-      "wire": "generation",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Watermark",
-      "wire": "watermark",
-      "go_type": "uint64",
       "omittable": false,
       "is_thought": false
     }

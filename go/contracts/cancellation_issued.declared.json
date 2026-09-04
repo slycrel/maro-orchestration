@@ -1,0 +1,30 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "cancellation_issued",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill",
+  "fields": {
+    "fork": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    },
+    "child": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill"
+    },
+    "reason": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    }
+  }
+}

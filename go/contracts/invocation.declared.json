@@ -59,6 +59,13 @@
       "unknown_value": "accepted-unchanged",
       "constraint": "unconstrained",
       "measured_by": "internal/invoke:TestInvokeRefusesBeforeWriting"
+    },
+    "tools": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "authorization",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestToolLessRequestsRefuseEffects"
     }
   }
 }

@@ -858,3 +858,57 @@ Tests: process 3 → 6, run +1, verdict +1 (14 packages green under
 explicit final-watermark record (a second front end); socket auth (the
 socket lives in the workspace; its mode is the boundary); a re-present
 verb that binds a new client to an orphaned run.
+
+## Step 8 — fork/join over attempt refs, confined children, both policies, kills between every transition (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `fork` (members fixed at creation; the barrier is exactly that set), `join_decision`, `cancellation_issued` (idempotent by fork+child), `child_terminal` (by the child attempt's own driver), `join_settled` (only when every member has a terminal) | §3 | kept; every transition keyed; the fold executes the causal order |
+| Join policies `all`, `first_verdict` | §3 (v1: exactly these two) | kept; first_verdict decides EARLY (while losers run), cancels them by context and by record; losers end `cancelled` at their first boundary or `completed_late` |
+| Child runs = child goals (`Parent`/`Root` set, origin `fork`, lane now) driven as goroutines under the parent's context | §3 | kept; the executor lane never drives a child directly |
+| Siblings never share a mutable tree; confinement at the tool boundary | §3 | kept STRICTER than the design's v1: children run tool-less (the shell refuses ANY reported effect, query included — `ToolEffect.Refused`, invocation fails) because the only real backend (claude CLI) reports effects post hoc and cannot be confined to a working copy; children with their own working copy arrive with a backend that can be (a Finding) |
+| Write sets, per-attempt working copies, the merge/apply step | §3 | **not in v1** (follows from the above: children produce answers, not files) |
+| `PreparedEffectIntent` and its lifecycle (§19 item 3) | §3 | **not registered** — no producer while children are tool-less (L28) |
+| Memory scope through ancestry (child → parent → root → workspace) | §3 | kept (`scope()` walks Parent/Root; children recall the parent's goal-scoped lessons) |
+| Parallel steps in the plan (`{"parallel": [...], "join": ...}`) | how a fork enters v1 | kept; the planner prompt invites them for independent tool-less sub-questions; a fork step's `StepDone` cites the fork and its result is the composition of the selected members' whole responses |
+| NOW with the model judge (`--judge-model`) | first_verdict needs a judge-standing `achieved` on a child | kept, additively (`ConfigSnapshot.Judge model` on lane now) |
+| One heavy job at a time (D6) | §0 | the fork IS the parallelism: N children run concurrently by decision, as one job of the parent |
+
+**Built.** `internal/run/fork.go` (5 kinds; registry at 36; contracts 0/0),
+`ParsePlan` with parallel steps, `Driver.Confined/ChildOf/ModelJudge`,
+`interrupted()` consuming a `CancellationIssued`, `recordedFailure()` (a
+backend failure with its terminal committed continues as a failed
+execution — this also stops a contract violation from being a lane
+failure), fold rules for every fork record, `invoke.Invocation.Tools` +
+`ToolEffect.Refused`. Step judge prompt: judges ONLY its step (the live run
+showed haiku judging the fork step against the whole goal), and explains a
+fork composition.
+
+**Edge tests.** The two-level scenario (Warm up → parallel{A, B} → Wrap
+up) under both policies with kills at 11 seams on the parent and the
+children — each resumed to one delivered run, the fork settled, children
+confined and terminal, the composition right for the policy, a second
+resume a no-op; first_verdict with a member held in flight: the decision
+lands while it runs, its invocation is cancelled and NOT re-executed, it
+ends `cancelled` at its first boundary (attempt 2), with and without a
+kill after the cancellation; a child reporting a Write is refused and
+fails, the other is selected; door + fold fork vocabulary (one member,
+foreign policy, decision selecting none, terminal from another attempt,
+`all` decided early, settled before the barrier, cancellation without a
+decision, a second fork at the step); invoke: tool-less requests refuse
+effects. The keyed test backend answers by ordered prefix/substring rules
+so concurrent children are deterministic. Two real hangs were found by the
+tests and fixed: a blocked loser held the parent's wait (the parent's
+prompts quote the plan, so a substring key matched them too); a crash
+seam inside the decision left the other children live (any child error
+now cancels every live child so the parent returns).
+
+**Live.** `agenda --model haiku` on three independent one-sentence
+questions "in parallel, then combine": the planner produced a parallel
+step of 3, three confined children completed, `all` selected all three,
+join settled, the step judged done, step 2 combined the answers, closure
+achieved; cost 0.16 for the parent + 0.02 per child. B6: one row per
+child run (task_type now, unjudged) beside the parent's — B6 has no
+parent column; the relation lives in the journal.

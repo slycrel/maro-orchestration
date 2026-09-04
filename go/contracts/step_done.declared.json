@@ -20,8 +20,8 @@
       "measured_by": "internal/run:TestJournalExecutesAgendaVocabulary"
     },
     "invocation": {
-      "absence": "never",
-      "on_absence": "rejected",
+      "absence": "omitted",
+      "on_absence": "tolerated",
       "used_for": "identity",
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestJournalExecutesAgendaVocabulary"
@@ -59,6 +59,13 @@
       "pattern": "^(complete|partial)$",
       "rejects": "failed",
       "measured_by": "internal/run:TestAgendaPartialStepIsNeverPromoted"
+    },
+    "fork": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill"
     }
   }
 }

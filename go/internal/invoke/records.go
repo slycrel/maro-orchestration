@@ -51,7 +51,8 @@ type Invocation struct {
 	Purpose       Purpose      `json:"purpose"`
 	Request       thought.Ref  `json:"request"`
 	Backend       Capabilities `json:"backend"`
-	EffectToken   string       `json:"effect_token"` // hex, the namespace per-effect keys derive from
+	Tools         bool         `json:"tools,omitempty"` // the request offered tools; false = confined: any reported effect is refused
+	EffectToken   string       `json:"effect_token"`    // hex, the namespace per-effect keys derive from
 	TargetName    string       `json:"target_name,omitempty"`
 	TargetLimit   int64        `json:"target_limit,omitempty"`
 	TargetWhy     string       `json:"target_why,omitempty"`
@@ -117,7 +118,8 @@ type ToolEffect struct {
 	Class         OperationClass  `json:"class"` // from the registered operation table; unknown ops are irreversible
 	Key           string          `json:"key"`   // derive(effect_token, ordinal)
 	Announced     bool            `json:"announced"`
-	Input         thought.Ref     `json:"input"` // the raw input bytes as the backend reported them
+	Refused       bool            `json:"refused,omitempty"` // reported on a tool-less request: recorded as evidence, and the invocation fails
+	Input         thought.Ref     `json:"input"`             // the raw input bytes as the backend reported them
 }
 
 func (r *ToolEffect) Head() *record.Header { return &r.Header }

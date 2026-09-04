@@ -1,0 +1,40 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "fork",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill",
+  "fields": {
+    "step": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    },
+    "goals": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    },
+    "members": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    },
+    "policy": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(all|first_verdict)$",
+      "rejects": "quorum",
+      "measured_by": "internal/run:TestJournalExecutesForkVocabulary"
+    }
+  }
+}

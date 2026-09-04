@@ -65,6 +65,13 @@
       "used_for": "identity",
       "constraint": "unconstrained",
       "measured_by": "internal/invoke:TestEvidenceIsBytePreserving"
+    },
+    "refused": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "authorization",
+      "constraint": "unconstrained",
+      "measured_by": "internal/invoke:TestToolLessRequestsRefuseEffects"
     }
   }
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
@@ -184,6 +185,9 @@ type Ledger struct {
 	// Interrupts by target run, with their acks; a pending one has no ack.
 	Interrupts map[record.RunID][]*Interrupt
 	Acks       map[record.RecordID]*InterruptAck
+	// Forks by fork id; goals by id (a child goal may not have a run yet).
+	Forks map[record.RecordID]*ForkState
+	goals map[record.RecordID]*Goal
 }
 
 // Fold folds the production population into per-run state and REFUSES any
@@ -207,6 +211,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	observations := map[record.RecordID]*verdict.Observation{}
 	interrupts := map[record.RunID][]*Interrupt{}
 	acks := map[record.RecordID]*InterruptAck{}
+	forks := map[record.RecordID]*ForkState{}
+	memberOf := map[record.RunID]*ForkState{}
+	forkedGoals := map[record.RecordID]bool{}
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -250,6 +257,127 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: goal %s assessed twice (%s, %s) — an assessment is never revised", x.Goal, fams[x.Goal].ID, x.ID)
 			}
 			fams[x.Goal] = x
+		case *Fork:
+			a, err := attempt(get(x.RunID), x.Attempt, "fork")
+			if err != nil {
+				return err
+			}
+			if a.Plan == nil || x.Step != len(a.Steps)+1 || a.Plan.ParallelAt(x.Step) == nil || len(a.Plan.ParallelAt(x.Step).Goals) != len(x.Members) {
+				return fmt.Errorf("run: %s attempt %d fork %s at step %d, which is not its plan's next parallel step", x.RunID, x.Attempt, x.ID, x.Step)
+			}
+			for _, f := range forks {
+				if f.Fork.RunID == x.RunID && f.Fork.Step == x.Step {
+					return fmt.Errorf("run: %s attempt %d fork %s: step %d already forked (%s)", x.RunID, x.Attempt, x.ID, x.Step, f.Fork.ID)
+				}
+			}
+			for i, gid := range x.Goals {
+				g := goals[gid]
+				if g == nil || g.Parent != get(x.RunID).Goal.ID || g.Origin != OriginFork || g.Lane != LaneNow || runs[x.Members[i].Run] != nil || memberOf[x.Members[i].Run] != nil || forkedGoals[gid] {
+					return fmt.Errorf("run: %s attempt %d fork %s member %d: not a fresh child goal of this run", x.RunID, x.Attempt, x.ID, i)
+				}
+				started[gid], forkedGoals[gid] = true, true // the fork starts it; Unstarted must not list it
+			}
+			fs := &ForkState{Fork: x, Cancelled: map[record.RunID]*CancellationIssued{}, Terminals: map[record.RunID]*ChildTerminal{}}
+			forks[x.ID] = fs
+			for _, m := range x.Members {
+				memberOf[m.Run] = fs
+			}
+			a.touch(x)
+		case *JoinDecision:
+			fs := forks[x.Fork]
+			if fs == nil || fs.Decision != nil || fs.Fork.RunID != x.RunID {
+				return fmt.Errorf("run: join decision %s for a fork that does not exist, is decided, or is not this run's", x.ID)
+			}
+			for _, m := range append(append([]record.AttemptRef{}, x.Selected...), x.Cancel...) {
+				if !fs.isMember(m.Run) {
+					return fmt.Errorf("run: join decision %s names %s, not a member", x.ID, m.Run)
+				}
+			}
+			switch fs.Fork.Policy {
+			case JoinAll:
+				if !fs.Complete() || len(x.Cancel) != 0 {
+					return fmt.Errorf("run: join decision %s: `all` decides only when every member is terminal, cancelling none", x.ID)
+				}
+			case JoinFirstVerdict:
+				if len(x.Selected) != 1 && !fs.Complete() {
+					return fmt.Errorf("run: join decision %s: first_verdict selects one member, or every completed one once all are terminal", x.ID)
+				}
+				if len(x.Selected) == 1 && !fs.Complete() {
+					// the selected member's closure must be achieved by now (its
+					// resolution precedes its recorded transition; the run's
+					// Closure field is filled after the scan, so read it here)
+					crs := runs[x.Selected[0].Run]
+					achieved := false
+					if crs != nil && crs.Latest() != nil {
+						if rec := crs.Latest().Has(Recorded); rec != nil {
+							if res := resolutions[rec.Outcome.Closure]; res != nil && res.Outcome == "achieved" {
+								achieved = true
+							}
+						}
+					}
+					if !achieved {
+						return fmt.Errorf("run: join decision %s selected %s whose closure is not achieved", x.ID, x.Selected[0].Run)
+					}
+				}
+			}
+			fs.Decision = x
+			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
+				a.touch(x)
+			}
+		case *CancellationIssued:
+			fs := forks[x.Fork]
+			if fs == nil || fs.Decision == nil || fs.Fork.RunID != x.RunID || fs.Cancelled[x.Child.Run] != nil {
+				return fmt.Errorf("run: cancellation %s without a decision, or repeated", x.ID)
+			}
+			named := false
+			for _, c := range fs.Decision.Cancel {
+				if c == x.Child {
+					named = true
+				}
+			}
+			if !named {
+				return fmt.Errorf("run: cancellation %s of %s, which the decision did not cancel", x.ID, x.Child.Run)
+			}
+			fs.Cancelled[x.Child.Run] = x
+		case *ChildTerminal:
+			fs := forks[x.Fork]
+			crs := runs[x.RunID]
+			if fs == nil || crs == nil || !fs.isMember(x.RunID) || fs.Terminals[x.RunID] != nil {
+				return fmt.Errorf("run: child terminal %s for a non-member, unknown, or already terminal child", x.ID)
+			}
+			a := crs.Latest()
+			if a == nil || a.Attempt.Attempt != x.Attempt || a.Has(Recorded) == nil {
+				return fmt.Errorf("run: child terminal %s from attempt %d, which is not the child's recorded attempt", x.ID, x.Attempt)
+			}
+			rec := a.Has(Recorded).Outcome
+			switch x.State {
+			case ChildCompleted, ChildCompletedLate:
+				if rec.Terminal == invoke.TerminalFailed {
+					return fmt.Errorf("run: child terminal %s says %s but the child's execution failed", x.ID, x.State)
+				}
+				if (x.State == ChildCompletedLate) != (fs.Decision != nil && !selected(fs.Decision, x.RunID)) {
+					return fmt.Errorf("run: child terminal %s: completed_late is exactly a completion after a decision that did not select it", x.ID)
+				}
+			case ChildCancelled:
+				if fs.Cancelled[x.RunID] == nil || !strings.Contains(rec.Reason, "cancelled by join") {
+					return fmt.Errorf("run: child terminal %s says cancelled without a cancellation the child consumed", x.ID)
+				}
+			case ChildFailed:
+				if rec.Terminal != invoke.TerminalFailed || strings.Contains(rec.Reason, "cancelled by join") {
+					return fmt.Errorf("run: child terminal %s says failed but the child did not", x.ID)
+				}
+			}
+			fs.Terminals[x.RunID] = x
+			a.touch(x)
+		case *JoinSettled:
+			fs := forks[x.Fork]
+			if fs == nil || fs.Decision == nil || fs.Settled != nil || fs.Fork.RunID != x.RunID || !fs.Complete() {
+				return fmt.Errorf("run: join settled %s before every member is terminal (or repeated)", x.ID)
+			}
+			fs.Settled = x
+			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
+				a.touch(x)
+			}
 		case *Interrupt:
 			if runs[x.Target] == nil {
 				return fmt.Errorf("run: interrupt %s targets unknown run %s", x.ID, x.Target)
@@ -297,7 +425,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			verdicts[x.ID] = x
 			if x.RunID != "" {
 				if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
-					if err := checkJudgeVerdict(runs[x.RunID], a, x, inv, learned, store); err != nil {
+					if err := checkJudgeVerdict(runs[x.RunID], a, x, inv, learned, store, forks, runs); err != nil {
 						return err
 					}
 					a.Verdicts = append(a.Verdicts, x)
@@ -347,6 +475,14 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			if x.Config.Lane != rs.Goal.Lane {
 				return fmt.Errorf("run: %s attempt %d ran lane %s but the goal is routed to %s", x.RunID, x.Attempt, x.Config.Lane, rs.Goal.Lane)
+			}
+			if rs.Goal.Origin == OriginFork {
+				fs := memberOf[x.RunID]
+				if fs == nil || !x.Config.Confined {
+					return fmt.Errorf("run: %s attempt %d: a fork child must be a fork's member and run confined", x.RunID, x.Attempt)
+				}
+			} else if x.Config.Confined {
+				return fmt.Errorf("run: %s attempt %d ran confined but is not a fork child", x.RunID, x.Attempt)
 			}
 			if x.Attempt > 1 && rs.Attempts[x.Attempt-2].Current() != Recoverable {
 				return fmt.Errorf("run: %s attempt %d started but attempt %d is at %q, not recoverable", x.RunID, x.Attempt, x.Attempt-1, rs.Attempts[x.Attempt-2].Current())
@@ -422,14 +558,33 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if err != nil {
 				return err
 			}
-			steps, perr := ParsePlan(resp)
-			if perr != nil || len(steps) != len(x.Steps) {
+			planned, perr := ParsePlan(resp)
+			if perr != nil || len(planned) != len(x.Steps) {
 				return fmt.Errorf("run: %s attempt %d plan does not re-derive from response %s (%v)", x.RunID, x.Attempt, st.Receipt.Response.Hash, perr)
 			}
-			for i, text := range steps {
-				if x.Steps[i] != thought.Address(thought.Step, []byte(text)) {
+			parallels := 0
+			for i, ps := range planned {
+				if x.Steps[i] != thought.Address(thought.Step, []byte(ps.Text)) {
 					return fmt.Errorf("run: %s attempt %d plan step %d is not the response's step", x.RunID, x.Attempt, i+1)
 				}
+				par := x.ParallelAt(i + 1)
+				if (len(ps.Parallel) > 0) != (par != nil) {
+					return fmt.Errorf("run: %s attempt %d plan step %d: parallel in one of record and response only", x.RunID, x.Attempt, i+1)
+				}
+				if par != nil {
+					parallels++
+					if par.Policy != ps.Policy || len(par.Goals) != len(ps.Parallel) {
+						return fmt.Errorf("run: %s attempt %d plan step %d: parallel spec is not the response's", x.RunID, x.Attempt, i+1)
+					}
+					for j, g := range ps.Parallel {
+						if par.Goals[j] != thought.Address(thought.Step, []byte(g)) {
+							return fmt.Errorf("run: %s attempt %d plan step %d sub-goal %d is not the response's", x.RunID, x.Attempt, i+1, j+1)
+						}
+					}
+				}
+			}
+			if parallels != len(x.Parallel) {
+				return fmt.Errorf("run: %s attempt %d plan carries parallel steps the response does not", x.RunID, x.Attempt)
 			}
 			a.Plan = x
 			a.touch(x)
@@ -444,20 +599,39 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if len(a.Steps) > 0 && a.Steps[len(a.Steps)-1].Outcome == StepBlocked {
 				return fmt.Errorf("run: %s attempt %d step %d after a blocked step", x.RunID, x.Attempt, x.Ordinal)
 			}
-			st := inv[x.Invocation]
-			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result || st.Terminal == nil || st.Terminal.State != x.Terminal {
-				return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result and terminal", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
-			}
-			// the execute request must be the step prompt over this goal,
-			// plan, and prior results, with the recall block the attempt's
-			// selection renders — the interpretation of "which step ran"
-			// is re-derived, never trusted
-			want, err := stepRequest(get(x.RunID), a, x.Ordinal, learned, store)
-			if err != nil {
-				return err
-			}
-			if st.Invocation.Request != want {
-				return fmt.Errorf("run: %s attempt %d step %d invocation %s was not asked step %d's prompt", x.RunID, x.Attempt, x.Ordinal, x.Invocation, x.Ordinal)
+			if x.Fork != "" {
+				// a fork step: its result is the composition of the settled
+				// fork's selected members, re-derived
+				fs := forks[x.Fork]
+				if fs == nil || fs.Fork.RunID != x.RunID || fs.Fork.Step != x.Ordinal || fs.Settled == nil || a.Plan.ParallelAt(x.Ordinal) == nil {
+					return fmt.Errorf("run: %s attempt %d step %d cites fork %s that is not its settled fork", x.RunID, x.Attempt, x.Ordinal, x.Fork)
+				}
+				composed, err := composeFork(fs, &Ledger{Runs: runs}, store)
+				if err != nil {
+					return err
+				}
+				if x.Result != thought.Address(thought.Response, composed) || x.Terminal != invoke.TerminalComplete {
+					return fmt.Errorf("run: %s attempt %d step %d result is not the fork's composition", x.RunID, x.Attempt, x.Ordinal)
+				}
+			} else {
+				st := inv[x.Invocation]
+				if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result || st.Terminal == nil || st.Terminal.State != x.Terminal {
+					return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result and terminal", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
+				}
+				if a.Plan.ParallelAt(x.Ordinal) != nil {
+					return fmt.Errorf("run: %s attempt %d step %d is a parallel step but was executed", x.RunID, x.Attempt, x.Ordinal)
+				}
+				// the execute request must be the step prompt over this goal,
+				// plan, and prior results, with the recall block the attempt's
+				// selection renders — the interpretation of "which step ran"
+				// is re-derived, never trusted
+				want, err := stepRequest(get(x.RunID), a, x.Ordinal, learned, store)
+				if err != nil {
+					return err
+				}
+				if st.Invocation.Request != want {
+					return fmt.Errorf("run: %s attempt %d step %d invocation %s was not asked step %d's prompt", x.RunID, x.Attempt, x.Ordinal, x.Invocation, x.Ordinal)
+				}
 			}
 			if x.Verdict != "" {
 				v := verdicts[x.Verdict]
@@ -536,7 +710,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks}
+	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)
@@ -576,6 +750,19 @@ func boundaryPossible(a *AttemptState, boundary string) bool {
 		return k == len(a.Steps)+1 && k <= len(a.Plan.Steps)
 	}
 	return false
+}
+
+// goal returns a goal record by id (a child goal may have no run yet).
+func (led *Ledger) goal(id record.RecordID) *Goal { return led.goals[id] }
+
+// forkAt returns the fork a run's latest attempt made at step k, if any.
+func (led *Ledger) forkAt(run record.RunID, k int) *ForkState {
+	for _, fs := range led.Forks {
+		if fs.Fork.RunID == run && fs.Fork.Step == k {
+			return fs
+		}
+	}
+	return nil
 }
 
 // attemptNoErr finds an attempt or nil.
@@ -659,7 +846,7 @@ func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, st
 // verdict of the run: its invocation is a tool-less judge call of the run
 // whose request is the judge prompt for its subject and whose response
 // parses to the verdict's outcome and confidence, with the receipt as basis.
-func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, store *thought.Store) error {
+func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, store *thought.Store, forks map[record.RecordID]*ForkState, runs map[record.RunID]*RunState) error {
 	if v.Source.Standing != verdict.StandingJudge {
 		return nil
 	}
@@ -702,6 +889,21 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 			if partial[k-1] {
 				term = invoke.TerminalPartial
 			}
+		} else if a.Plan.ParallelAt(k) != nil {
+			var fs *ForkState
+			for _, f := range forks {
+				if f.Fork.RunID == rs.Run && f.Fork.Step == k {
+					fs = f
+				}
+			}
+			if fs == nil || fs.Settled == nil {
+				return fmt.Errorf("run: %s attempt %d step verdict %s judges parallel step %d before its fork settled", rs.Run, v.Attempt, v.ID, k)
+			}
+			b, err := composeFork(fs, &Ledger{Runs: runs}, store)
+			if err != nil {
+				return err
+			}
+			judged = b
 		} else {
 			wantReq, err := stepRequest(rs, a, k, learned, store)
 			if err != nil {
@@ -723,16 +925,40 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 				return fmt.Errorf("run: %s attempt %d step verdict %s judges step %d before any execute of it", rs.Run, v.Attempt, v.ID, k)
 			}
 		}
-		want, allowed = stepJudgePrompt(goal, steps[k-1], judged, term), []string{"done", "blocked", "unclear"}
+		want, allowed = stepJudgePrompt(goal, steps[k-1], judged, term, a.Plan.ParallelAt(k) != nil), []string{"done", "blocked", "unclear"}
 	case verdict.KindClosure:
-		if a.Plan == nil {
-			return fmt.Errorf("run: %s attempt %d closure verdict %s without a plan", rs.Run, v.Attempt, v.ID)
+		allowed = []string{"achieved", "not_achieved", "unknown"}
+		if a.Plan != nil {
+			steps, results, partial, err := planTexts(a, store)
+			if err != nil {
+				return err
+			}
+			want = closurePrompt(goal, steps, results, partial)
+		} else {
+			// a NOW run with the model judge: the goal is its own one step and
+			// the judged result is the newest execute receipt of the run
+			var judged []byte
+			var term invoke.TerminalState
+			found := false
+			for _, p := range rs.Attempts {
+				if p.Attempt.Attempt > a.Attempt.Attempt {
+					break
+				}
+				for _, es := range p.Invocations {
+					if es.Invocation.Purpose == invoke.PurposeExecute && es.Receipt != nil {
+						b, err := store.Get(es.Receipt.Response)
+						if err != nil {
+							return err
+						}
+						judged, term, found = b, es.Terminal.State, true
+					}
+				}
+			}
+			if !found {
+				return fmt.Errorf("run: %s attempt %d closure verdict %s before any execute receipt", rs.Run, v.Attempt, v.ID)
+			}
+			want = closurePrompt(goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial})
 		}
-		steps, results, partial, err := planTexts(a, store)
-		if err != nil {
-			return err
-		}
-		want, allowed = closurePrompt(goal, steps, results, partial), []string{"achieved", "not_achieved", "unknown"}
 	default:
 		return nil
 	}
@@ -764,6 +990,15 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			}
 			if st.Invocation.Backend.Model != o.Model {
 				return fmt.Errorf("run: %s attempt %d recorded model %q but the invocation ran %q", rs.Run, x.Attempt, o.Model, st.Invocation.Backend.Model)
+			}
+			if a.Attempt.Config.Confined {
+				for _, p := range rs.Attempts {
+					for _, is := range p.Invocations {
+						if is.Invocation.Tools {
+							return fmt.Errorf("run: %s attempt %d is confined but invocation %s offered tools", rs.Run, x.Attempt, is.Invocation.ID)
+						}
+					}
+				}
 			}
 			if o.Receipt != "" {
 				if st.Receipt == nil || st.Receipt.ID != o.Receipt || o.Response == nil || *o.Response != st.Receipt.Response {

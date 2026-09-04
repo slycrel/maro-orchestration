@@ -184,6 +184,7 @@ type ConfigSnapshot struct {
 	TimeoutMillis   int64               `json:"timeout_ms"`
 	FamilyRule      string              `json:"family_rule"`
 	ResolverVer     string              `json:"resolver_ver"`
+	Confined        bool                `json:"confined,omitempty"` // every invocation tool-less (a fork child)
 }
 
 // RunAttempt starts an attempt generation of a goal. Attempt 1 is the first
@@ -220,8 +221,8 @@ func (r *RunAttempt) ValidateWire() error {
 	}
 	switch r.Config.Lane {
 	case LaneNow:
-		if r.Config.PlanCardinality != 1 || r.Config.Judge != JudgeSelf {
-			return errors.New("run_attempt: now = one execute with the self judge")
+		if r.Config.PlanCardinality != 1 || (r.Config.Judge == JudgeModel && r.Config.JudgeBackend.Name == "") {
+			return errors.New("run_attempt: now = one execute with the self judge, or the model judge on a named backend")
 		}
 	case LaneAgenda:
 		if r.Config.PlanCardinality != 0 || r.Config.Judge != JudgeModel || r.Config.JudgeBackend.Name == "" {

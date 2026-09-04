@@ -91,12 +91,20 @@ func (s *sink) Observe(ev EffectEvent) (int, string, error) {
 	ord := s.next
 	key := DeriveKey(s.inv.EffectToken, ord)
 	te := &ToolEffect{Header: s.sh.header(subj(s.inv.ID)), Invocation: s.inv.ID, Ordinal: ord, Op: ev.Op, Class: ClassOf(ev.Op), Key: key, Announced: s.inv.Backend.OutwardReconcilable, Input: in}
+	// a tool-less request is CONFINED: whatever the backend reports it
+	// did, the effect is recorded as refused and the invocation fails —
+	// the record is the evidence, the failure is the enforcement
+	te.Refused = !s.inv.Tools
 	if _, err := s.sh.commit(s.ctx, fmt.Sprintf("%s:effect:%d", s.inv.ID, ord), te); err != nil {
 		s.err = err
 		return 0, "", err
 	}
 	s.effects = append(s.effects, te.ID)
 	s.next++
+	if te.Refused {
+		s.err = fmt.Errorf("%w: effect %s reported on a tool-less request (confined)", ErrBackendContract, ev.Op)
+		return 0, "", s.err
+	}
 	return ord, key, nil
 }
 
@@ -203,7 +211,7 @@ func (sh *Shell) Invoke(ctx context.Context, b Backend, req Request, target *Tar
 	if err != nil {
 		return nil, err
 	}
-	inv := &Invocation{Header: sh.header(record.Ref{Kind: "prompt", ID: reqRef.Hash}), Purpose: req.Purpose, Request: reqRef, Backend: caps, EffectToken: token}
+	inv := &Invocation{Header: sh.header(record.Ref{Kind: "prompt", ID: reqRef.Hash}), Purpose: req.Purpose, Request: reqRef, Backend: caps, Tools: req.Tools, EffectToken: token}
 	if target != nil {
 		inv.TargetName, inv.TargetLimit, inv.TargetWhy = target.Name, target.Limit, target.Why
 	}

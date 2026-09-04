@@ -95,7 +95,14 @@
       "name": "Invocation",
       "wire": "invocation",
       "go_type": "record.RecordID",
-      "omittable": false,
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Fork",
+      "wire": "fork",
+      "go_type": "record.RecordID",
+      "omittable": true,
       "is_thought": false
     },
     {
@@ -127,6 +134,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "9d511bfa",
+  "source_ref": "bb72b699",
   "generator": "maro-go contracts gen v1"
 }

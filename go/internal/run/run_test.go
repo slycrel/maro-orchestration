@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ type harness struct {
 	st     *thought.Store
 	out    *bytes.Buffer
 	events []Event
+	evMu   sync.Mutex
 }
 
 func open(t *testing.T) *harness {
@@ -83,7 +85,11 @@ func (h *harness) driver(b invoke.Backend, o Origin) *Driver {
 	if o == nil {
 		o = CLIOrigin{W: h.out}
 	}
-	return &Driver{J: h.j, Store: h.st, Backend: b, Origin: o, Events: func(e Event) { h.events = append(h.events, e) }, Timeout: time.Minute}
+	return &Driver{J: h.j, Store: h.st, Backend: b, Origin: o, Events: func(e Event) {
+		h.evMu.Lock()
+		h.events = append(h.events, e)
+		h.evMu.Unlock()
+	}, Timeout: time.Minute}
 }
 
 func (h *harness) ledger() *Ledger {

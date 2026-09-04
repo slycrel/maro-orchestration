@@ -85,6 +85,13 @@ type Driver struct {
 	// Health, when set, is the supervisor's degraded line; every delivery
 	// carries it while it is non-empty (§10).
 	Health func() []string
+	// Confined: every invocation runs tool-less (fork children).
+	Confined bool
+	// ChildOf: the fork this driver's run is a member of (child drivers).
+	ChildOf record.RecordID
+	// ModelJudge: a NOW run asks the closure judge (tool-less) after its
+	// execute, so its closure can be established by a judge.
+	ModelJudge bool
 	// MaxDeliveryAttempts bounds the outbox. Why 3: a CLI origin fails only
 	// when its writer is gone (closed pipe), which a retry never repairs; the
 	// bound exists so a dead origin becomes delivery_failed with a reason
@@ -148,9 +155,11 @@ func (d *Driver) validate() error {
 }
 
 func (d *Driver) config(lane Lane) ConfigSnapshot {
-	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer}
+	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined}
 	if lane == LaneAgenda {
 		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, d.Judge.Capabilities()
+	} else if d.ModelJudge {
+		c.Judge, c.JudgeBackend = JudgeModel, d.Judge.Capabilities()
 	}
 	return c
 }
@@ -295,6 +304,15 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 // finish judges, records, and delivers an attempt's execution outcome.
 func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out *Outcome, candidates []*verdict.Verdict) (*Report, error) {
 	n := a.Attempt.Attempt
+	if rs.Goal.Lane == LaneNow && a.Attempt.Config.Judge == JudgeModel && out.Terminal != invoke.TerminalFailed && len(candidates) == 0 {
+		v, err := d.nowClosureJudge(ctx, rs, a, out)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			candidates = append(candidates, v)
+		}
+	}
 	// Judge — the self claim (NOW), or the closure judge's verdict plus the
 	// self claim (AGENDA); observations arrive with the deterministic checks.
 	self := SelfVerdict(rs.Run, n, out)
@@ -415,7 +433,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		sh.CrashAt = ""
 	}
 	prompt := append(append([]byte{}, text...), block...)
-	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: d.Backend.Capabilities().ActsOutward, Timeout: d.Timeout}, nil)
+	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: d.Backend.Capabilities().ActsOutward && !d.Confined, Timeout: d.Timeout}, nil)
 	var inc *invoke.Incapable
 	if errors.As(err, &inc) {
 		// a refusal the shell makes BEFORE writing anything (input over the
@@ -424,11 +442,8 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		// thought is never sliced to fit; the route is what is lacking)
 		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error(), Recall: sel.ID}, nil
 	}
-	if err != nil {
+	if err != nil && !recordedFailure(o, err) {
 		return nil, err
-	}
-	if o.Err != nil {
-		return nil, o.Err
 	}
 	if err := d.applications(ctx, rs, n, o.Invocation, reps); err != nil {
 		return nil, err
@@ -466,6 +481,7 @@ func scope(g *Goal) []learn.ScopePath {
 func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState, boundary string) (*Outcome, error) {
 	var pending *Interrupt
 	all, acked := []*Interrupt{}, map[record.RecordID]bool{}
+	var cancel *CancellationIssued
 	err := d.J.Production().Scan(0, func(r record.Record) error {
 		switch x := r.(type) {
 		case *Interrupt:
@@ -474,11 +490,21 @@ func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState,
 			}
 		case *InterruptAck:
 			acked[x.Interrupt] = true
+		case *CancellationIssued:
+			if x.Child.Run == rs.Run && cancel == nil {
+				cancel = x
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cancel != nil {
+		// a join decision cancelled this child: it stops here, no ack record
+		// (the ChildTerminal{cancelled} is the acknowledgement)
+		d.emit(rs, a.Attempt.Attempt, "cancelled", Executing, boundary+": "+cancel.Reason)
+		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "cancelled by join at " + boundary + ": " + cancel.Reason}, nil
 	}
 	for _, it := range all { // the earliest still unacknowledged one
 		if !acked[it.ID] {
@@ -547,9 +573,71 @@ func LatestPayload(led *Ledger, store *thought.Store, handle string) ([]byte, *M
 	return nil, nil, fmt.Errorf("no run with handle %s", handle)
 }
 
+// recordedFailure says whether an Invoke error is the backend's own failure
+// with its terminal committed (a recorded fact the run continues from as a
+// failed execution), as opposed to a crash seam or a bookkeeping failure.
+func recordedFailure(o *invoke.Outcome, err error) bool {
+	return o != nil && o.Invocation != "" && o.Terminal == invoke.TerminalFailed && o.Err == nil && !errors.Is(err, invoke.ErrCrashed)
+}
+
 // cancelled reports a terminal reason the process's own shutdown produced.
 func cancelled(reason string) bool {
 	return strings.Contains(reason, "context canceled") || strings.Contains(reason, "context deadline exceeded")
+}
+
+// nowClosureJudge asks the closure judge about a NOW run's one response
+// (the goal is its own single step) and returns the judge verdict.
+func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptState, out *Outcome) (*verdict.Verdict, error) {
+	n := a.Attempt.Attempt
+	if v := priorVerdictOf(a, verdict.KindClosure, runRef(rs.Run)); v != nil {
+		return v, nil
+	}
+	goal, err := d.Store.Get(rs.Goal.Text)
+	if err != nil {
+		return nil, err
+	}
+	var resp []byte
+	if out.Response != nil {
+		resp, err = d.Store.Get(*out.Response)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
+	jo, err := sh.Invoke(ctx, d.Judge, invoke.Request{Purpose: invoke.PurposeJudge, Prompt: closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), Tools: false, Timeout: d.Timeout}, nil)
+	if err != nil || jo.Err != nil || jo.Terminal == invoke.TerminalFailed {
+		return nil, err
+	}
+	jr, perr := ParseJudge(jo.Response, "achieved", "not_achieved", "unknown")
+	if perr != nil {
+		d.emit(rs, n, "closure_unjudged", Executing, perr.Error())
+		return nil, nil
+	}
+	v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+	for _, f := range jr.Falsifiers {
+		if strings.TrimSpace(f) == "" {
+			continue
+		}
+		ref, err := d.Store.Put(thought.Response, []byte(f))
+		if err != nil {
+			return nil, err
+		}
+		v.Falsifiers = append(v.Falsifiers, ref)
+	}
+	if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/closure", rs.Run, n), v); err != nil {
+		return nil, err
+	}
+	a.Verdicts = append(a.Verdicts, v)
+	return v, nil
+}
+
+func priorVerdictOf(a *AttemptState, kind verdict.VerdictKind, subject record.Ref) *verdict.Verdict {
+	for _, v := range a.Verdicts {
+		if v.VerdictKind == kind && v.Source.Standing == verdict.StandingJudge && v.Subject == subject {
+			return v
+		}
+	}
+	return nil
 }
 
 // invoked reports whether an attempt made an execute invocation.
@@ -816,6 +904,9 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	// goals taken in whose run never started: start one (the goal and its
 	// assessment are the committed intake; nothing outcome-bearing ran)
 	for _, g := range led.Unstarted {
+		if g.Parent != "" {
+			continue // a fork's child goal is started by the parent
+		}
 		fam := led.Families[g.ID]
 		if fam == nil {
 			return reports, fmt.Errorf("run: goal %s has no family assessment", g.ID)
@@ -834,8 +925,8 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		rs := led.Runs[record.RunID(id)]
-		if rs.Terminal() {
-			continue
+		if rs.Terminal() || rs.Goal.Parent != "" {
+			continue // a child run is driven by its parent's fork step
 		}
 		a := rs.Latest()
 		var rep *Report

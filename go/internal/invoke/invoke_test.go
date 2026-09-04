@@ -721,3 +721,34 @@ func TestLiveSubprocessSmoke(t *testing.T) {
 	raw, _ := json.Marshal(out.Usage)
 	t.Logf("live usage: %s", raw)
 }
+
+// Confinement is structural at the shell: a backend that reports an
+// effect on a tool-less request has the effect recorded as REFUSED and
+// the invocation fails — no receipt, no retry, whatever the backend says.
+func TestToolLessRequestsRefuseEffects(t *testing.T) {
+	sh, _ := newShell(t)
+	b := &Scripted{Caps: outward, Calls: []ScriptedCall{{Response: []byte("wrote it"), Effects: []ScriptedEffect{{Op: "Write", Input: []byte(`{"path":"x"}`), Output: []byte("ok")}}}}}
+	out, err := sh.Invoke(ctxBg, b, Request{Purpose: PurposeExecute, Prompt: []byte("do"), Tools: false}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Terminal != TerminalFailed || !strings.Contains(out.Reason, "confined") || out.Receipt != "" {
+		t.Fatalf("%+v", out)
+	}
+	s := foldOne(t, sh, out.Invocation)
+	if len(s.Effects) != 1 || !s.Effects[0].Refused || s.Invocation.Tools {
+		t.Fatalf("effect not recorded as refused: %+v tools=%v", s.Effects, s.Invocation.Tools)
+	}
+	// a query effect on a tool-less request is refused too: confined means no effects at all
+	b2 := &Scripted{Caps: outward, Calls: []ScriptedCall{{Response: []byte("read it"), Effects: []ScriptedEffect{{Op: "Read", Input: []byte(`{}`), Output: []byte("x")}}}}}
+	out2, _ := sh.Invoke(ctxBg, b2, Request{Purpose: PurposeExecute, Prompt: []byte("do"), Tools: false}, nil)
+	if out2.Terminal != TerminalFailed {
+		t.Fatalf("query effect accepted under confinement: %+v", out2)
+	}
+	// the same backend with tools offered succeeds
+	b3 := &Scripted{Caps: outward, Calls: []ScriptedCall{{Response: []byte("wrote it"), Effects: []ScriptedEffect{{Op: "Write", Input: []byte(`{"path":"x"}`), Output: []byte("ok")}}}}}
+	out3, _ := sh.Invoke(ctxBg, b3, Request{Purpose: PurposeExecute, Prompt: []byte("do"), Tools: true}, nil)
+	if out3.Terminal != TerminalComplete || len(out3.Effects) != 1 {
+		t.Fatalf("%+v", out3)
+	}
+}

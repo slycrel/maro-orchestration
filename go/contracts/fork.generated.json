@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lane_heartbeat",
-  "envelope": "control",
-  "schema": "lane_heartbeat/1",
-  "go_type": "supervise.LaneHeartbeat",
+  "kind": "fork",
+  "envelope": "production",
+  "schema": "fork/1",
+  "go_type": "run.Fork",
   "fields": [
     {
       "name": "header.ID",
@@ -78,23 +78,30 @@
       "from_header": true
     },
     {
-      "name": "Lane",
-      "wire": "lane",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Generation",
-      "wire": "generation",
+      "name": "Step",
+      "wire": "step",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Watermark",
-      "wire": "watermark",
-      "go_type": "uint64",
+      "name": "Goals",
+      "wire": "goals",
+      "go_type": "[]record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Members",
+      "wire": "members",
+      "go_type": "[]record.AttemptRef",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Policy",
+      "wire": "policy",
+      "go_type": "run.JoinPolicy",
       "omittable": false,
       "is_thought": false
     }

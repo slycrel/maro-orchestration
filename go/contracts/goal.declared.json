@@ -31,7 +31,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(cli|socket)$",
+      "pattern": "^(cli|socket|fork)$",
       "rejects": "telegram",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
     },

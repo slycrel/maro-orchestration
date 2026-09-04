@@ -72,6 +72,17 @@ type Plan struct {
 	record.Header `json:"header"`
 	Invocation    record.RecordID `json:"invocation"`
 	Steps         []thought.Ref   `json:"steps"`
+	Parallel      []ParallelStep  `json:"parallel,omitempty"` // steps that fork: their sub-goals and join policy
+}
+
+// ParallelAt returns the parallel spec of step k, if it forks.
+func (r *Plan) ParallelAt(k int) *ParallelStep {
+	for i := range r.Parallel {
+		if r.Parallel[i].Ordinal == k {
+			return &r.Parallel[i]
+		}
+	}
+	return nil
 }
 
 func (r *Plan) Head() *record.Header { return &r.Header }
@@ -95,6 +106,21 @@ func (r *Plan) ValidateWire() error {
 		}
 		if s.Kind != thought.Step || s.Bytes == 0 {
 			return fmt.Errorf("plan: step %d must be a non-empty step thought", i+1)
+		}
+	}
+	seen := map[int]bool{}
+	for _, p := range r.Parallel {
+		if p.Ordinal < 1 || p.Ordinal > len(r.Steps) || seen[p.Ordinal] {
+			return fmt.Errorf("plan: parallel step %d is not a distinct step of the plan", p.Ordinal)
+		}
+		seen[p.Ordinal] = true
+		if len(p.Goals) < 2 || !joinPolicies[p.Policy] {
+			return fmt.Errorf("plan: parallel step %d needs two or more sub-goals and a registered join policy", p.Ordinal)
+		}
+		for j, g := range p.Goals {
+			if err := g.Validate(); err != nil || g.Kind != thought.Step || g.Bytes == 0 {
+				return fmt.Errorf("plan: parallel step %d sub-goal %d must be a non-empty step thought", p.Ordinal, j+1)
+			}
 		}
 	}
 	return nil
@@ -122,8 +148,9 @@ type StepDone struct {
 	record.Header `json:"header"`
 	Ordinal       int                  `json:"ordinal"`
 	Step          thought.Ref          `json:"step"`
-	Invocation    record.RecordID      `json:"invocation"`
-	Terminal      invoke.TerminalState `json:"terminal"` // complete | partial — how the executor's stream ended (a failed one is never a done step)
+	Invocation    record.RecordID      `json:"invocation,omitempty"` // the execute call; absent for a fork step
+	Fork          record.RecordID      `json:"fork,omitempty"`       // the settled fork; absent for an executed step
+	Terminal      invoke.TerminalState `json:"terminal"`             // complete | partial — how the executor's stream ended (a failed one is never a done step)
 	Result        thought.Ref          `json:"result"`
 	Verdict       record.RecordID      `json:"verdict,omitempty"`
 	Outcome       StepOutcome          `json:"outcome"`
@@ -141,8 +168,18 @@ func (r *StepDone) ValidateWire() error {
 	if r.Ordinal < 1 {
 		return errors.New("step_done: ordinal starts at 1")
 	}
-	if err := record.ValidateID(r.Invocation); err != nil {
-		return fmt.Errorf("step_done: invocation: %w", err)
+	if (r.Invocation == "") == (r.Fork == "") {
+		return errors.New("step_done: exactly one of invocation (an executed step) or fork (a parallel step)")
+	}
+	if r.Invocation != "" {
+		if err := record.ValidateID(r.Invocation); err != nil {
+			return fmt.Errorf("step_done: invocation: %w", err)
+		}
+	}
+	if r.Fork != "" {
+		if err := record.ValidateID(r.Fork); err != nil {
+			return fmt.Errorf("step_done: fork: %w", err)
+		}
 	}
 	if err := r.Step.Validate(); err != nil || r.Step.Kind != thought.Step {
 		return errors.New("step_done: step must be a step thought")
@@ -219,11 +256,19 @@ func ParseIntent(response []byte) (IntentResult, error) {
 	return r, nil
 }
 
-// ParsePlan validates the plan response once: a non-empty list of
-// non-empty step texts.
-func ParsePlan(response []byte) ([]string, error) {
+// PlannedStep is one parsed step: a text, or a parallel step (sub-goals
+// run as child runs, joined under a policy) whose text is derived.
+type PlannedStep struct {
+	Text     string
+	Parallel []string
+	Policy   JoinPolicy
+}
+
+// ParsePlan validates the plan response once: a non-empty list of steps,
+// each a non-empty string or {"parallel": [<2+ sub-goals>], "join": "all"|"first_verdict"}.
+func ParsePlan(response []byte) ([]PlannedStep, error) {
 	var r struct {
-		Steps []string `json:"steps"`
+		Steps []json.RawMessage `json:"steps"`
 	}
 	if err := decodeStrict(response, &r); err != nil {
 		return nil, err
@@ -231,13 +276,44 @@ func ParsePlan(response []byte) ([]string, error) {
 	if len(r.Steps) == 0 {
 		return nil, fmt.Errorf("%w: a plan needs at least one step", ErrBoundary)
 	}
-	for i := range r.Steps {
-		r.Steps[i] = strings.TrimSpace(r.Steps[i])
-		if r.Steps[i] == "" {
-			return nil, fmt.Errorf("%w: step %d is empty", ErrBoundary, i+1)
+	var out []PlannedStep
+	for i, raw := range r.Steps {
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return nil, fmt.Errorf("%w: step %d is empty", ErrBoundary, i+1)
+			}
+			out = append(out, PlannedStep{Text: text})
+			continue
 		}
+		var par struct {
+			Parallel []string `json:"parallel"`
+			Join     string   `json:"join"`
+		}
+		if err := decodeStrict(raw, &par); err != nil {
+			return nil, fmt.Errorf("%w: step %d is neither a text nor a parallel step: %v", ErrBoundary, i+1, err)
+		}
+		if len(par.Parallel) < 2 {
+			return nil, fmt.Errorf("%w: parallel step %d needs two or more sub-goals", ErrBoundary, i+1)
+		}
+		for j := range par.Parallel {
+			par.Parallel[j] = strings.TrimSpace(par.Parallel[j])
+			if par.Parallel[j] == "" {
+				return nil, fmt.Errorf("%w: parallel step %d sub-goal %d is empty", ErrBoundary, i+1, j+1)
+			}
+		}
+		if !joinPolicies[JoinPolicy(par.Join)] {
+			return nil, fmt.Errorf("%w: parallel step %d join %q is not all|first_verdict", ErrBoundary, i+1, par.Join)
+		}
+		out = append(out, PlannedStep{Text: parallelText(par.Parallel, JoinPolicy(par.Join)), Parallel: par.Parallel, Policy: JoinPolicy(par.Join)})
 	}
-	return r.Steps, nil
+	return out, nil
+}
+
+// parallelText is the derived step text of a parallel step.
+func parallelText(goals []string, policy JoinPolicy) string {
+	return fmt.Sprintf("In parallel (%s): %s", policy, strings.Join(goals, " | "))
 }
 
 // JudgeResult is the Judge boundary's product for one verdict kind.
@@ -281,8 +357,9 @@ func intentPrompt(goal []byte) []byte {
 }
 
 func planPrompt(goal []byte, interpretation string, block []byte) []byte {
-	return []byte("You are the planner of an orchestration engine. Decompose the goal into the ordered steps an executor will carry out one at a time; each step must be self-contained and verifiable.\n" +
-		"Reply with ONE JSON object and nothing else: {\"steps\": [\"<step 1>\", \"<step 2>\", ...]}\n\n## Goal\n" + string(goal) + "\n\n## Interpretation\n" + interpretation + "\n" + string(block))
+	return []byte("You are the planner of an orchestration engine. Decompose the goal into the ordered steps an executor will carry out one at a time; each step must be self-contained and verifiable. " +
+		"Independent sub-questions that need no tools may run in parallel as one step: {\"parallel\": [\"<sub-goal>\", ...], \"join\": \"all\"} (or \"first_verdict\" when any one good answer suffices).\n" +
+		"Reply with ONE JSON object and nothing else: {\"steps\": [\"<step 1>\", {\"parallel\": [\"<a>\", \"<b>\"], \"join\": \"all\"}, ...]}\n\n## Goal\n" + string(goal) + "\n\n## Interpretation\n" + interpretation + "\n" + string(block))
 }
 
 func stepPrompt(goal []byte, steps []string, ordinal int, prior [][]byte, block []byte) []byte {
@@ -303,12 +380,16 @@ func stepPrompt(goal []byte, steps []string, ordinal int, prior [][]byte, block 
 	return []byte(b.String())
 }
 
-func stepJudgePrompt(goal []byte, step string, result []byte, terminal invoke.TerminalState) []byte {
+func stepJudgePrompt(goal []byte, step string, result []byte, terminal invoke.TerminalState, fork bool) []byte {
 	note := ""
 	if terminal == invoke.TerminalPartial {
 		note = "\n\nNOTE: the executor's stream ended PARTIAL — the result below may be truncated.\n"
 	}
-	return []byte("You are a judge. Given the goal, one planned step, and the executor's result for that step, decide whether the step is done.\n" +
+	if fork {
+		note += "\n\nNOTE: this step ran its sub-goals in parallel; the result lists each member's whole answer under a '### Member' heading. The step is done when the sub-goals were answered.\n"
+	}
+	return []byte("You are a judge. Given the goal, one planned step, and the executor's result for that step, decide whether THIS STEP is done. " +
+		"Judge only this step: later steps of the plan handle the rest of the goal, and a step that does its own part is done even when the goal is not yet complete.\n" +
 		"Reply with ONE JSON object and nothing else: {\"outcome\": \"done\"|\"blocked\"|\"unclear\", \"confidence\": <0..1>, \"why\": \"<one sentence>\"}\n\n## Goal\n" + string(goal) + "\n\n## Step\n" + step + "\n\n## Result" + note + "\n" + string(result) + "\n")
 }
 
