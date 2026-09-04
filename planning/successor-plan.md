@@ -136,6 +136,18 @@ why it has that shape.
     ~30 mutation batteries do not — they stay behind with the branch.
 
 ### Phase 2 — Backbone slice (the weave, in Go)
+**Design note starts from the vision, not the contracts** (Jeremy
+2026-09-04: "that's still zoomed in too closely. We have the vision, laid out
+in a number of iterations within our repo, goal brain, and related
+documents"). The holistic drift review at
+`docs/history/2026-09-04-holistic-drift-review.md` (main) is the input: its §8
+lists the nine vision-level commitments the successor carries and what it
+sheds; §5 lists the seven things the prototype never closed, which the backbone
+designs FOR (self-improvement seam with a measurable effect contract; fork with
+a join; scoped memory seam; in-app background lanes; cost/latency as an
+acceptance number; removal as a first-class deliverable). `docs/CONTRACTS.md`
++ the behavior suite are how §8 is checked, not what it is.
+
 New branch. Goal → intent/route → plan → execute steps (one-call-per-
 step spine, subprocess agents as backends) → record outcome → closure/
 verdict → report. Kernel-first per fan-in: config, runs, the adapter
