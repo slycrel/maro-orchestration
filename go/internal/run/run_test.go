@@ -1306,7 +1306,7 @@ func TestScopeAndPolicyAreHonored(t *testing.T) {
 			second = rs
 		}
 	}
-	if c := second.Latest().Recall.ExcludedCounts; c["kind:policy"] != 1 || c["scope"] != 1 {
+	if c := second.Latest().Recall.ExcludedCounts; c["kind:policy"] != 3 || c["scope"] != 1 { // the two seeds and the test policy
 		t.Fatalf("policy/scope not excluded as such: %+v", c)
 	}
 	// the goal-scoped lesson IS recalled for a resumed attempt of its own goal:
@@ -1377,7 +1377,7 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := h.only().Latest()
-	if !bytes.Contains(h.requestOf(t, a), []byte("Cite sources.")) || len(a.Recall.Included) != 1 || len(a.Policy.Considered) != 1 || len(a.Policy.Enabled) != 0 || !a.Attempt.Config.Mechanisms[learn.MechRecall] {
+	if !bytes.Contains(h.requestOf(t, a), []byte("Cite sources.")) || len(a.Recall.Included) != 1 || len(a.Policy.Considered) != 3 || len(a.Policy.Enabled) != 2 || !a.Attempt.Config.Mechanisms[learn.MechRecall] || len(a.Policy.Excluded) != 1 || a.Policy.Excluded[0].Revision != off.Revision {
 		t.Fatalf("candidate policy changed the attempt: recall %+v policy %+v", a.Recall, a.Policy)
 	}
 	h.stage(t, off, learn.Candidate, learn.Provisional)
@@ -1396,13 +1396,13 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	if got := h.requestOf(t, a); string(got) != "q again?" {
 		t.Fatalf("request under recall=off: %q", got)
 	}
-	if a.Attempt.Config.Mechanisms[learn.MechRecall] || a.Attempt.Config.Policy != a.Policy.ID || len(a.Policy.Enabled) != 1 || a.Policy.Enabled[0] != off {
+	if a.Attempt.Config.Mechanisms[learn.MechRecall] || a.Attempt.Config.Policy != a.Policy.ID || len(a.Policy.Enabled) != 3 || a.Policy.Enabled[2] != off {
 		t.Fatalf("config %+v policy %+v", a.Attempt.Config, a.Policy)
 	}
-	if len(a.Recall.Included) != 0 || a.Recall.ExcludedCounts["policy:recall_off"] != 2 || a.Recall.Policy != a.Policy.ID {
+	if len(a.Recall.Included) != 0 || a.Recall.ExcludedCounts["policy:recall_off"] != 4 || a.Recall.Policy != a.Policy.ID { // lesson, off, two seeds
 		t.Fatalf("recall under recall=off: %+v", a.Recall)
 	}
-	if apps := led.Learned.PolicyApps[a.Policy.ID]; len(apps) != 1 || apps[0].Revision != off.Revision || !apps[0].Rule.Enabled == false && apps[0].Rule.Mechanism != learn.MechRecall {
+	if apps := led.Learned.PolicyApps[a.Policy.ID]; len(apps) != 3 || apps[2].Revision != off.Revision || apps[2].Rule.Enabled || apps[2].Rule.Mechanism != learn.MechRecall {
 		t.Fatalf("policy application: %+v", apps)
 	}
 	for _, st := range a.Invocations {
@@ -1430,6 +1430,9 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	}
 	// forged: an attempt whose config disagrees with its policy selection
 	h3 := open(t)
+	if err := learn.EnsureSeeds(ctxBg, h3.j); err != nil {
+		t.Fatal(err)
+	}
 	ref, _ := h3.st.Put(thought.Goal, []byte("q?"))
 	goal, fam := Intake([]byte("q?"), ref, OriginCLI, LaneNow, DeliveryPolicy{Required: TransportAccepted})
 	if _, err := h3.j.Submit(ctxBg, journal.Command{IdempotencyKey: "goal", Epoch: h3.j.Epoch(), Records: []record.Record{goal, fam}}); err != nil {
@@ -1444,7 +1447,12 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	cfg := d3.config(LaneNow, pol)
 	cfg.Mechanisms[learn.MechRecall] = false // the snapshot says on
 	att := &RunAttempt{Header: header(runRef(run), run, 1, "run_attempt/1"), Goal: goal.ID, Family: fam.ID, Config: cfg}
-	if _, err := h3.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged", Epoch: h3.j.Epoch(), Records: []record.Record{pol, att, &Transition{Header: header(runRef(run), run, 1, "run_transition/1"), To: Created}}}); err != nil {
+	recs := []record.Record{pol}
+	for i, rule := range lled.PolicyRules(pol) { // the seeds' applications, so the fold reaches the config
+		recs = append(recs, &learn.PolicyApplication{Header: header(record.Ref{Kind: "policy_selection", ID: string(pol.ID)}, run, 1, "policy_application/1"), Item: pol.Enabled[i].Item, Revision: pol.Enabled[i].Revision, Selection: pol.ID, Rule: rule})
+	}
+	recs = append(recs, att, &Transition{Header: header(runRef(run), run, 1, "run_transition/1"), To: Created})
+	if _, err := h3.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged", Epoch: h3.j.Epoch(), Records: recs}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Fold(h3.j.Production(), h3.st); err == nil || !strings.Contains(err.Error(), "config says recall=false") {

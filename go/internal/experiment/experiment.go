@@ -119,6 +119,9 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 	if it == nil || !hasRevision(it, spec.Hypothesis.Revision) {
 		return nil, fmt.Errorf("%w: hypothesis %s/%s is not a learned revision", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision)
 	}
+	if spec.Relation == AblateItem && !learn.Selectable[it.StageOf(spec.Hypothesis.Revision)] {
+		return nil, fmt.Errorf("%w: ablate withholds a selectable revision; %s/%s is %s, so both arms would run without it", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision, it.StageOf(spec.Hypothesis.Revision))
+	}
 	// the fishing guard, as the fold applies it
 	if prior := st.openFor(spec.Hypothesis, family); prior != nil {
 		return nil, fmt.Errorf("%w: experiment %s on %s/%s over %s is open; close it first", ErrRefused, prior.ID, spec.Hypothesis.Item, spec.Hypothesis.Revision, family)

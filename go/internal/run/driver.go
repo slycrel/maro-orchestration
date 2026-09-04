@@ -264,7 +264,12 @@ func (d *Driver) judge(a *AttemptState) invoke.Backend {
 // policy is the attempt's policy decision: the selection over the learned
 // fold as it stands and one application per enabled revision. Committed in
 // the attempt's own command, so an attempt never exists without it.
-func (d *Driver) policy(rs *RunState, n uint32) (*learn.PolicySelection, []record.Record, error) {
+func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.PolicySelection, []record.Record, error) {
+	// the harness defaults are data: seeded once per workspace, here,
+	// before the first selection that could read them
+	if err := learn.EnsureSeeds(ctx, d.J); err != nil {
+		return nil, nil, err
+	}
 	led, err := learn.Fold(d.J.Production())
 	if err != nil {
 		return nil, nil, err
@@ -379,7 +384,7 @@ func Intake(text []byte, ref thought.Ref, origin GoalOrigin, lane Lane, policy D
 // prev is the attempt being recovered from (nil for attempt 1).
 func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, forced *Outcome) (*Report, error) {
 	n := uint32(len(rs.Attempts) + 1)
-	pol, papps, err := d.policy(rs, n)
+	pol, papps, err := d.policy(ctx, rs, n)
 	if err != nil {
 		return nil, err
 	}

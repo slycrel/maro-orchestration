@@ -276,6 +276,20 @@ func (st *State) experiment(x *Experiment, store *thought.Store) error {
 	if it == nil || !hasRevision(it, x.Hypothesis.Revision) {
 		return fmt.Errorf("experiment: %s hypothesis %s/%s is not a learned revision", x.ID, x.Hypothesis.Item, x.Hypothesis.Revision)
 	}
+	// ablate withholds: the revision must have been selectable when the
+	// experiment opened, or the arms did not differ (the learned ledger is
+	// folded whole, so the stage at open is read off the transition seqs)
+	if x.Relation == AblateItem {
+		stage := learn.Candidate
+		for _, tr := range it.Transitions[x.Hypothesis.Revision] {
+			if tr.Seq < x.Seq {
+				stage = tr.To
+			}
+		}
+		if !learn.Selectable[stage] {
+			return fmt.Errorf("experiment: %s ablates %s/%s, which was %s, not selectable, when it opened", x.ID, x.Hypothesis.Item, x.Hypothesis.Revision, stage)
+		}
+	}
 	// the fishing guard (§19.4): one open experiment per hypothesis and
 	// population; a re-open is the next version citing the prior attestation
 	if open := st.openFor(x.Hypothesis, x.Population); open != nil {

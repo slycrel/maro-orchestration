@@ -1516,3 +1516,82 @@ one was out of scope:
 
 Refuted: none. What the stricter fold found in the existing scenarios:
 nothing.
+
+## Step 11b — seed mechanisms as policy items, `ablate(m)` by evidence (2026-09-05)
+
+D17 inside the process for the harness's own mechanisms: a mechanism is
+on because a canon policy item says so, and that item goes through the
+same experiment door a lesson does. `ablate_item` on a seed withholds
+the mechanism from the treatment arm; an equivalent measurement
+tombstones the seed; the next production run's `PolicySelection` turns
+the mechanism off, carrying the tombstone transition as its absence
+proof. The driver never reads a config flag for this — it reads the
+ledger.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| Harness defaults as data | D17, §7 | kept: `learn.Mechanisms` defaults are all OFF; `learn.SeedRecords()` is one canon policy item per mechanism (`recall=on`, `model_judge=on`), provenance source `seed`, actor `seed` moving candidate→effective→canon citing the revision itself; `EnsureSeeds` commits them idempotently (`learn/seeds/1`) at `Driver.policy`, the CLI learn verbs, and `experiment open`. An unseeded workspace is a workspace with every mechanism off — honest, not broken |
+| Seed rules the fold executes | §7 | kept: a seed is first, unrevised, workspace-scoped, any-family, `Enabled: true`, one per mechanism; a seed is never revised; the seed actor may only make the two seed moves; a seed transition cites its own revision. Forgeries in `TestSeedsAreTheHarnessDefaultsAsData` (second seed, seed off, seed revised, seed actor on an operator revision, seed transition on the wrong edge) |
+| The absence proof | §7 "the selection says why" | kept: `PolicySelection.Excluded []Exclusion{Item, Revision, Stage, Basis, Reason}` — `standing` (basis = the transition that left it unselectable) or `arm:withheld` (basis = the assignment). The fold re-derives the list; dropped, misplaced, or restaged proofs are refused |
+| Precedence between policy items | §7 | changed: `SelectPolicy` walks seeds first, then by the seq of each revision's deciding transition, arm-applied last — later decisions win, and a seed loses to any other selectable policy on its mechanism whenever either was created (a lazily-seeded workspace must not let the seed override an older operator policy). The door's "considered in item order" rule became "no item twice" |
+| `ablate(m)` | §9, D17 | kept: `experiment open --mechanism recall\|model_judge --relation ablate --live ...` resolves the seed; `Open` refuses ablating a revision that is not selectable (both arms would run without it); the fold checks the same rule point-in-time off the transition seqs (the learned ledger folds whole, so "stage at open" is read from `Seq`) |
+| Harmful ablation | §9 | kept: `TreatmentHarmful` under `ablate_item` normalizes to `ItemHelpful`; `StageFor(canon, helpful)` is none — the seed stays, the next run carries the mechanism |
+| Shadow arms, `HarnessChallenger` | D17 | cut from v1 (11a) |
+
+**Built.** `learn/seed.go` (`ActorSeed`, `SourceSeed`, `SeedKey`,
+`SeedRecords`, `EnsureSeeds`, `Ledger.Seed`, `IsSeed`,
+`checkSeedRevision`, `checkSeedTransition`); `records.go` actor/source
+sets + the seed edge rule; `fold.go` `Ledger.seeds`; `policy.go`
+`Exclusion`, `Excluded`, precedence sort, `samePolicy` over exclusions;
+`run/driver.go` seeds before the policy selection; `experiment.go`
+ablate-selectable rule; `experiment/fold.go` point-in-time twin; CLI
+`learn list src=`, `experiment open --mechanism`. Contracts:
+`learned_transition.actor` + `learned_revision.provenance.source` widened,
+`policy_selection.excluded` (must-reject `reason: vibes`; measured_by
+`TestSeedsAreTheHarnessDefaultsAsData`), report 0/0.
+
+**Edge tests.** `learn`: `TestSeedsAreTheHarnessDefaultsAsData`
+(unseeded ⇒ all off; `EnsureSeeds` idempotent, head unchanged; seeds
+canon with two transitions; selection basis = the seed's canon
+transition; operator tombstones the recall seed ⇒ `Excluded[0] ==
+{seed, rev, tombstone, that transition, standing}`; forged selections
+and forged seed histories refused). `experiment`:
+`TestAblateMechanismByEvidence` — seeded production shows the effective
+lesson in the request; under the ablation the treatment arm runs
+`recall=false`, request == goal text, `Excluded` carries the seed
+`arm:withheld` with the assignment as basis, `policy:recall_off` counted;
+control carries the lesson; either-form judge ⇒ `equivalent →
+item_redundant` ⇒ seed tombstoned by `measurement` citing the
+measurement; next production run: recall off, request == goal text,
+deliverable in feet, `Excluded == [{seed, rev, tombstone, the
+measurement's transition, standing}]`; re-ablating the tombstoned seed
+refused. Second harness: meters-asking goals + meters judge ⇒
+`treatment_harmful → item_helpful`, seed stays canon, next run recalls.
+Existing tests adapted for seeds in the population (`Considered` 3/4,
+`kind:policy` 3, tail counts skip seeds via `learn.IsSeed`).
+
+**Live.** Scratch workspace: `learn list` shows the two seeds canon
+`src=seed` before any run. `learn add` a meters-only lesson, staged
+effective; `experiment open --mechanism recall --relation ablate --live
+--population answer --n 4`; `serve --model haiku --judge-model haiku`;
+four submits (Everest, K2, Kilimanjaro, Denali): control runs `policy 2
+of 2 enabled · recall 1 included of 3 · applied 1`, treatment runs
+`policy 1 of 2 enabled · recall 0 included of 3`, alternating c/t/c/t.
+The evaluator lane closed unprompted: `equivalent → item_redundant
+(assigned 4, analyzed 4, exposed 2/2, delta_pp 0.000)`; `learn list`
+shows the recall seed `tombstone`, the lesson still `effective`. A fifth
+submit (Mont Blanc) ran `policy 1 of 2 enabled · recall 0 included of
+3` with no arm and answered in both units — the lesson is in the ledger
+and unreachable, because the mechanism that would carry it was switched
+off by evidence.
+
+**Residuals.** The harness's judge has the same model family as the
+executor (11a residual, unchanged). `runs show` prints the payload, not
+the selection — the absence proof is readable in the journal, not the
+CLI. A seed is per workspace; a fresh workspace re-seeds from the
+binary's defaults, so a "learned off" does not travel (portable learning
+is a later step). Only two mechanisms exist; the seed set grows with
+`learn.Mechanisms`, and the samples check pins that every mechanism has
+a seed.

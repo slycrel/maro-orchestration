@@ -61,6 +61,16 @@
       "rejects": "{\"teleport\":true}",
       "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
     },
+    "excluded": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "\"reason\":\"(standing|arm:withheld)\"",
+      "rejects": "[{\"item\":\"x\",\"revision\":\"x\",\"stage\":\"tombstone\",\"reason\":\"vibes\"}]",
+      "measured_by": "internal/learn:TestSeedsAreTheHarnessDefaultsAsData"
+    },
     "arm": {
       "absence": "omitted",
       "on_absence": "tolerated",

@@ -37,6 +37,7 @@ type Ledger struct {
 	Exposures    map[record.RecordID][]Exposure           // by revision, in Seq order: applications + policy applications
 	byID         map[record.RecordID]*RecallSelection
 	policyByID   map[record.RecordID]*PolicySelection
+	seeds        map[Mechanism]LearnedID
 }
 
 // PolicyOf returns a policy selection by id.
@@ -127,7 +128,7 @@ func RecallKey(run record.RunID, attempt uint32) string { return fmt.Sprintf("%s
 // an unknown revision, two recalls for one attempt.
 func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	pr = pr.Pin() // one prefix for every scan this fold composes
-	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, Policies: map[string]*PolicySelection{}, PolicyApps: map[record.RecordID][]*PolicyApplication{}, Exposures: map[record.RecordID][]Exposure{}, byID: map[record.RecordID]*RecallSelection{}, policyByID: map[record.RecordID]*PolicySelection{}}
+	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, Policies: map[string]*PolicySelection{}, PolicyApps: map[record.RecordID][]*PolicyApplication{}, Exposures: map[record.RecordID][]Exposure{}, byID: map[record.RecordID]*RecallSelection{}, policyByID: map[record.RecordID]*PolicySelection{}, seeds: map[Mechanism]LearnedID{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}
 	evidence := map[record.RecordID]EffectEvidence{}
@@ -149,6 +150,9 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 				return fmt.Errorf("learn: revision %s is scoped to goal %s, which is not an earlier record", x.ID, strings.TrimPrefix(string(x.Scope), "goal:"))
 			}
 			it := led.Items[x.Item]
+			if err := led.checkSeedRevision(x, it); err != nil {
+				return err
+			}
 			if it == nil {
 				if x.Predecessor != "" {
 					return fmt.Errorf("learn: first revision %s of item %s names a predecessor", x.ID, x.Item)
@@ -175,6 +179,9 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			}
 			if x.Evidence != "" && !seen[x.Evidence] {
 				return fmt.Errorf("learn: transition %s cites evidence %s that is not an earlier record", x.ID, x.Evidence)
+			}
+			if err := checkSeedTransition(x, revisionOf(it, x.Revision)); err != nil {
+				return err
 			}
 			if x.Actor == ActorMeasurement {
 				// a measurement transition is DERIVED from its evidence: the

@@ -20,6 +20,7 @@ import (
 //
 //	experiment open --item <id> [--revision <rev>] --relation apply|ablate --unit <goal>=<expected> ... [--margin f] [--why text]
 //	experiment open --item <id> [--revision <rev>] --relation apply|ablate --live --population <family> --n <k> [--min-per-arm k] [--margin f] [--why text]
+//	experiment open --mechanism recall|model_judge --relation ablate --live ...   (the mechanism's seed is the hypothesis)
 //	experiment run <exp> [--model m] [--judge-model m]           (paired replay)
 //	experiment close <exp> [--judge-model m]                     (a live cohort is scored by the judge)
 //	experiment list | show <exp>
@@ -179,7 +180,7 @@ func firstLine(s string) string {
 
 func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io.Writer) error {
 	spec := experiment.Spec{Relation: experiment.ApplyItem, Why: "maro-go experiment open"}
-	var item, rev string
+	var item, rev, mechanism string
 	intFlag := func(v string, dst *int) error {
 		_, err := fmt.Sscanf(v, "%d", dst)
 		return err
@@ -195,6 +196,8 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 		switch args[i] {
 		case "--item":
 			item = next()
+		case "--mechanism":
+			mechanism = next()
 		case "--revision":
 			rev = next()
 		case "--relation":
@@ -238,15 +241,22 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
 	}
-	if item == "" {
-		return fmt.Errorf("experiment open needs --item <learned id>")
+	if (item == "") == (mechanism == "") {
+		return fmt.Errorf("experiment open needs --item <learned id> or --mechanism <m>")
+	}
+	if err := learn.EnsureSeeds(context.Background(), j); err != nil {
+		return err
 	}
 	led, err := learn.Fold(j.Production())
 	if err != nil {
 		return err
 	}
-	it := led.Items[learn.LearnedID(item)]
-	if it == nil {
+	var it *learn.Item
+	if mechanism != "" {
+		if it = led.Seed(learn.Mechanism(mechanism)); it == nil {
+			return fmt.Errorf("no seed for mechanism %q (vocabulary: recall, model_judge)", mechanism)
+		}
+	} else if it = led.Items[learn.LearnedID(item)]; it == nil {
 		return fmt.Errorf("no learned item %s", item)
 	}
 	if rev == "" {

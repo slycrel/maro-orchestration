@@ -37,11 +37,13 @@ const (
 	MechModelJudge Mechanism = "model_judge"
 )
 
-// Mechanisms is the vocabulary with its defaults: everything on until a
-// policy says otherwise. Why on by default: the harness IS these
-// mechanisms; a policy exists to switch one off on evidence (§8a
-// item_redundant → tombstone → disabled), not to opt in.
-var Mechanisms = map[Mechanism]bool{MechRecall: true, MechModelJudge: true}
+// Mechanisms is the vocabulary with its fallback: everything OFF until a
+// selectable policy revision says on. The harness's defaults are the
+// SEEDS (seed.go) — canon policy items that say on — so that a mechanism
+// is on because data says so, and an experiment can withhold that data
+// (§8a item_redundant → tombstone → disabled, with the tombstone as the
+// next selection's absence proof).
+var Mechanisms = map[Mechanism]bool{MechRecall: false, MechModelJudge: false}
 
 // Defaults is a fresh copy of the default snapshot.
 func Defaults() map[Mechanism]bool {
@@ -81,12 +83,30 @@ type PolicySelection struct {
 	Scope         []ScopePath        `json:"scope"`
 	Family        string             `json:"family,omitempty"`
 	Standing      []Stage            `json:"standing"`
-	Considered    []ItemRev          `json:"considered,omitempty"` // policy items in scope, item order
+	Considered    []ItemRev          `json:"considered,omitempty"` // policy items in scope, precedence order (seeds first, then by deciding transition)
 	Enabled       []ItemRev          `json:"enabled,omitempty"`    // the selectable subset, same order
 	Basis         []record.RecordID  `json:"basis,omitempty"`      // per enabled revision, the transition that made it selectable
 	Snapshot      map[Mechanism]bool `json:"snapshot"`             // defaults, then each enabled rule in order
+	Excluded      []Exclusion        `json:"excluded,omitempty"`   // the absence proof: every considered revision not enabled, and why
 	Arm           *ArmRef            `json:"arm,omitempty"`        // an experiment arm's forced sets (goal origin replay only)
 }
+
+// Exclusion is one considered revision that did not reach the boundary:
+// its standing and the transition that put it there (the absence proof —
+// a mechanism is off BECAUSE this record says the seed is at tombstone),
+// or the arm that withheld it.
+type Exclusion struct {
+	Item     LearnedID       `json:"item"`
+	Revision record.RecordID `json:"revision"`
+	Stage    Stage           `json:"stage"`
+	Basis    record.RecordID `json:"basis,omitempty"` // the last transition of the revision, or the withholding assignment
+	Reason   string          `json:"reason"`          // standing | arm:withheld
+}
+
+const (
+	ExcludedStanding = "standing"
+	ExcludedWithheld = "arm:withheld"
+)
 
 func (r *PolicySelection) Head() *record.Header { return &r.Header }
 func (r *PolicySelection) Kind() record.Kind    { return KindPolicySelection }
@@ -117,8 +137,10 @@ func (r *PolicySelection) ValidateWire() error {
 		if err := record.ValidateID(ir.Revision); err != nil {
 			return fmt.Errorf("policy_selection: considered: %w", err)
 		}
-		if i > 0 && r.Considered[i-1].Item >= ir.Item {
-			return errors.New("policy_selection: considered is not in item order")
+		for _, prior := range r.Considered[:i] {
+			if prior.Item == ir.Item {
+				return errors.New("policy_selection: considered names an item twice")
+			}
 		}
 	}
 	if len(r.Basis) != len(r.Enabled) {
@@ -134,6 +156,25 @@ func (r *PolicySelection) ValidateWire() error {
 	}
 	if err := validSnapshot(r.Snapshot); err != nil {
 		return fmt.Errorf("policy_selection: %w", err)
+	}
+	for _, e := range r.Excluded {
+		if err := record.ValidateID(record.RecordID(e.Item)); err != nil {
+			return fmt.Errorf("policy_selection: excluded: %w", err)
+		}
+		if err := record.ValidateID(e.Revision); err != nil {
+			return fmt.Errorf("policy_selection: excluded: %w", err)
+		}
+		if !stages[e.Stage] {
+			return fmt.Errorf("policy_selection: excluded stage %q out of vocabulary", e.Stage)
+		}
+		if e.Reason != ExcludedStanding && e.Reason != ExcludedWithheld {
+			return fmt.Errorf("policy_selection: excluded reason %q out of vocabulary", e.Reason)
+		}
+		if e.Basis != "" {
+			if err := record.ValidateID(e.Basis); err != nil {
+				return fmt.Errorf("policy_selection: excluded basis: %w", err)
+			}
+		}
 	}
 	if err := r.Arm.validate(); err != nil {
 		return fmt.Errorf("policy_selection: %w", err)
@@ -201,8 +242,9 @@ func PolicyKey(run record.RunID, attempt uint32) string { return RecallKey(run, 
 // SelectPolicy is pure over the ledger: every policy item in scope and of
 // the family is considered; its current revision is enabled only if that
 // revision's own standing is selectable. Rules apply over the defaults in
-// item order — deterministic, content-independent, and the same order the
-// fold re-derives.
+// precedence order (seeds, then by the seq of each revision's deciding
+// transition, an arm-applied revision last) — deterministic,
+// content-independent, and the same order the fold re-derives.
 func SelectPolicy(led *Ledger, q Query) *PolicySelection {
 	ids := make([]LearnedID, 0, len(led.Items))
 	for id := range led.Items {
@@ -219,6 +261,18 @@ func SelectPolicy(led *Ledger, q Query) *PolicySelection {
 	}
 	sort.Slice(standing, func(i, j int) bool { return standing[i] < standing[j] })
 	sel := &PolicySelection{Scope: q.Scope, Family: q.Family, Standing: standing, Snapshot: Defaults(), Arm: q.Arm}
+	// precedence: later decisions win. Items are walked seeds first, then
+	// by the seq of the transition that last moved the current revision,
+	// then by id; an arm-applied revision goes last (the arm decided it).
+	// A seed is the harness default as data: any other selectable policy
+	// on its mechanism supersedes it, whenever either was created.
+	type considered struct {
+		id     LearnedID
+		forced string
+		seed   bool
+		seq    uint64
+	}
+	var cs []considered
 	for _, id := range ids {
 		it := led.Items[id]
 		cur := it.Current
@@ -230,14 +284,45 @@ func SelectPolicy(led *Ledger, q Query) *PolicySelection {
 		if forced == "" && (!inScope[cur.Scope] || (cur.Family != "" && cur.Family != q.Family)) {
 			continue
 		}
+		c := considered{id: id, forced: forced, seed: IsSeed(cur)}
+		if trs := it.Transitions[cur.ID]; len(trs) > 0 {
+			c.seq = trs[len(trs)-1].Seq
+		}
+		if forced == "apply" {
+			c.seq = ^uint64(0)
+		}
+		cs = append(cs, c)
+	}
+	sort.SliceStable(cs, func(i, j int) bool {
+		a, b := cs[i], cs[j]
+		if a.seed != b.seed {
+			return a.seed
+		}
+		if a.seq != b.seq {
+			return a.seq < b.seq
+		}
+		return a.id < b.id
+	})
+	for _, c := range cs {
+		id, forced := c.id, c.forced
+		it := led.Items[id]
+		cur := it.Current
+		ir := ItemRev{Item: id, Revision: cur.ID}
 		sel.Considered = append(sel.Considered, ir)
 		switch {
 		case forced == "withhold":
+			sel.Excluded = append(sel.Excluded, Exclusion{Item: id, Revision: cur.ID, Stage: it.StageOf(cur.ID), Basis: q.Arm.Assignment, Reason: ExcludedWithheld})
 			continue
 		case forced == "apply":
 			// the arm decided it: its assignment is the basis
 			sel.Basis = append(sel.Basis, q.Arm.Assignment)
 		case !q.Standing[it.StageOf(cur.ID)]:
+			// the absence proof: the transition that left it unselectable
+			e := Exclusion{Item: id, Revision: cur.ID, Stage: it.StageOf(cur.ID), Reason: ExcludedStanding}
+			if trs := it.Transitions[cur.ID]; len(trs) > 0 {
+				e.Basis = trs[len(trs)-1].ID
+			}
+			sel.Excluded = append(sel.Excluded, e)
 			continue
 		default:
 			trs := it.Transitions[cur.ID]
@@ -325,6 +410,14 @@ func samePolicy(a, b *PolicySelection) bool {
 	}
 	for m, v := range a.Snapshot {
 		if w, ok := b.Snapshot[m]; !ok || w != v {
+			return false
+		}
+	}
+	if len(a.Excluded) != len(b.Excluded) {
+		return false
+	}
+	for i := range a.Excluded {
+		if a.Excluded[i] != b.Excluded[i] {
 			return false
 		}
 	}

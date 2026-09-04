@@ -449,6 +449,9 @@ func cmdLearn(args []string, out io.Writer) error {
 		return fmt.Errorf("learn needs add|stage|list")
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		if err := learn.EnsureSeeds(context.Background(), j); err != nil {
+			return err
+		}
 		head := j.Head() // the fold below reads exactly this much; a transition is submitted against it
 		led, err := learn.Fold(j.Production())
 		if err != nil {
@@ -544,7 +547,7 @@ func cmdLearn(args []string, out io.Writer) error {
 				} else {
 					body, _ = st.Get(it.Current.Text)
 				}
-				fmt.Fprintf(out, "%s  rev %d/%s  %-11s  %-9s scope=%s family=%q  %s\n", id, len(it.Revisions), it.Current.ID, it.StageOf(it.Current.ID), it.Current.LearnedKind, it.Current.Scope, it.Current.Family, string(body))
+				fmt.Fprintf(out, "%s  rev %d/%s  %-11s  %-9s src=%-8s scope=%s family=%q  %s\n", id, len(it.Revisions), it.Current.ID, it.StageOf(it.Current.ID), it.Current.LearnedKind, it.Current.Provenance.Source, it.Current.Scope, it.Current.Family, string(body))
 			}
 			return nil
 		}

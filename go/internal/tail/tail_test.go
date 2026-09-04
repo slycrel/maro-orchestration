@@ -117,10 +117,13 @@ func TestTailDiagnosesAndProposes(t *testing.T) {
 	if d.Class != ClassIncompleteAnswer || d.LensRule != "lens" || d.Lens == "" || len(d.Signals) != 1 || d.Signals[0] != SignalUnjudged {
 		t.Fatalf("diagnosis: %+v", d)
 	}
-	if len(ll.Items) != 2 {
-		t.Fatalf("proposals: %d items", len(ll.Items))
+	if learned(ll) != 2 {
+		t.Fatalf("proposals: %d items", learned(ll))
 	}
 	for _, it := range ll.Items {
+		if learn.IsSeed(it.Current) {
+			continue
+		}
 		if it.StageOf(it.Current.ID) != learn.Candidate || it.Current.Provenance.Source != "tail" || it.Current.Provenance.Ref != d.ID || it.Current.Family != "answer" {
 			t.Fatalf("proposal: %+v", it.Current)
 		}
@@ -620,8 +623,8 @@ func TestTailSkipsCancelledArms(t *testing.T) {
 	if skipped != 1 || diagnosed < 2 || tail.Done[key(winner, 1)].Diagnosis == "" {
 		t.Fatalf("skipped %d diagnosed %d", skipped, diagnosed)
 	}
-	if len(ll.Items) != 0 {
-		t.Fatalf("a cancelled arm produced learning: %d items", len(ll.Items))
+	if learned(ll) != 0 {
+		t.Fatalf("a cancelled arm produced learning: %d items", learned(ll))
 	}
 }
 
@@ -691,12 +694,23 @@ func TestAgendaFoldsAfterTheTailsReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	led, tld, ll := h.ledgers(t) // run.Fold inside: the recorded usage must still re-derive
-	if len(tld.Done) != 1 || len(ll.Items) != 1 || lens.Calls() != 1 {
-		t.Fatalf("done=%d items=%d lens=%d", len(tld.Done), len(ll.Items), lens.Calls())
+	if len(tld.Done) != 1 || learned(ll) != 1 || lens.Calls() != 1 {
+		t.Fatalf("done=%d items=%d lens=%d", len(tld.Done), learned(ll), lens.Calls())
 	}
 	for _, rs := range led.Runs {
 		if rs.Latest().Has(run.Recorded).Outcome.Usage.InputTokens == 0 {
 			t.Fatalf("agenda usage not recorded: %+v", rs.Latest().Has(run.Recorded).Outcome)
 		}
 	}
+}
+
+// learned counts the ledger's items that are not harness seeds.
+func learned(ll *learn.Ledger) int {
+	n := 0
+	for _, it := range ll.Items {
+		if !learn.IsSeed(it.Current) {
+			n++
+		}
+	}
+	return n
 }

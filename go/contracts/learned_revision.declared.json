@@ -60,7 +60,7 @@
       "used_for": "display-only",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "\"source\":\"(operator|tail)\"",
+      "pattern": "\"source\":\"(operator|tail|seed)\"",
       "rejects": "{\"source\":\"oracle\",\"why\":\"x\"}",
       "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
     },

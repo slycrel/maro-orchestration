@@ -153,7 +153,7 @@ const (
 	ActorMeasurement Actor = "measurement" // evidence = an EffectEvidence record (step 10)
 )
 
-var actors = map[Actor]bool{ActorOperator: true, ActorTenure: true, ActorMeasurement: true}
+var actors = map[Actor]bool{ActorOperator: true, ActorTenure: true, ActorMeasurement: true, ActorSeed: true}
 
 // ScopePath is where an item applies: the workspace, or one goal's subtree.
 // Recall walks a run's goal ancestry (own → parents → root → workspace).
@@ -182,7 +182,7 @@ type Provenance struct {
 	Why    string          `json:"why"`
 }
 
-var sources = map[string]bool{"operator": true, "tail": true}
+var sources = map[string]bool{"operator": true, "tail": true, SourceSeed: true}
 
 // LearnedRevision is one immutable revision of an item. The first revision
 // has no predecessor; every later one names the item's then-current
@@ -306,6 +306,9 @@ func (r *LifecycleTransition) ValidateWire() error {
 	}
 	if r.From == Candidate && r.To == Observed && r.Actor != ActorTenure {
 		return errors.New("learned_transition: candidate → observed is tenure's alone")
+	}
+	if r.Actor == ActorSeed && !((r.From == Candidate && r.To == Effective) || (r.From == Effective && r.To == Canon)) {
+		return fmt.Errorf("learned_transition: seed may only move candidate → effective → canon, not %s → %s", r.From, r.To)
 	}
 	if r.Actor == ActorMeasurement && r.To != Effective && r.To != Provisional && r.To != Quarantined && r.To != Tombstone {
 		return fmt.Errorf("learned_transition: measurement may not move to %s (effective, provisional, quarantined, or tombstone)", r.To)
