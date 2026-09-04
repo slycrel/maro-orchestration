@@ -115,3 +115,37 @@ contract-directory writes are repo files, not workspace state, and are not
 fsynced; `Status` reports a held lock with an unreadable `lease.json` as
 "held" without naming the holder; a forged `lease.json` cannot deny
 admission any more (the lock decides), which retires that reviewer concern.
+
+## Step 2 — journal, sequencer, typed readers, cursors, projector (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| One append-only log of framed, CRC-checked envelopes; torn tail discarded on open | §2 (r2-H, S2 framing) | kept |
+| Sequencer = the `Submit` critical section: validation, precondition, contiguous Seq, registry-stamped population, fsync, ack | §2 | kept — a mutex, not a goroutine: same serialization, no channel plumbing until a lane needs async submission |
+| Idempotency index rebuilt from the log on open | §2 | kept (in memory; a snapshot is a later Finding when the log is large) |
+| Epoch stamped on every frame; stale epoch refused | §2, D12 | kept |
+| Preconditions | §2 | ONE kind (`ExpectHead`) — the only precondition any step-1..5 caller needs; richer preconditions arrive with the state machines that need them |
+| Three typed readers filtered by the REGISTRY's envelope | §1a, §9 (r4-4) | kept; poisoning test: a mis-stamped frame is refused at decode |
+| Durable per-lane cursor; never backwards, never past head, malformed refuses | §2 | kept |
+| Projector: full-rebuild generation dir, atomic `current` swap, watermark, cursor | §2 (r2-H publication) | kept; incremental append is a later Finding with a measured reason |
+| B3/B4/B6 projection mappings | design §16 step 2 | **deferred to the steps that register those kinds** (3, 5) — there is no run/call/outcome kind yet; a mapping for a kind that does not exist would be a placeholder. The mapping TABLE (`contracts/VIEWS.md`) and the first real view (`thoughts.jsonl`) exist now. |
+| Multi-file view generations as a directory | §2 | kept |
+| Backpressure/bounded queues | §2 | nothing to bound yet: the only lane is the projector and it pulls from its cursor |
+
+**Built.** `internal/journal` (frame, journal+sequencer, readers, cursor),
+`internal/projector` (generation publish, `ThoughtsView`), `maro-go journal
+status|publish`, `contracts/VIEWS.md`.
+
+**Edge tests.** Contiguous Seq and idempotent replay; refusals (no key, empty,
+stale epoch, lane-supplied Seq, invalid record, failed precondition) write
+nothing; three readers see only their population and a mis-stamped frame is
+refused; torn tail truncated on open with head and index rebuilt and the next
+submit continuing; a corrupted byte inside a committed frame drops that frame
+and everything after; kill between every 7 bytes of a 5-frame log still opens
+to a contiguous prefix; cursor durable/bounded/strict; committed vs published
+(nothing at the view edge before Publish; watermark = head after); a leftover
+`.building` dir from a dead process never becomes `current`; a greedy
+production view cannot see control rows; path-traversing view names refused;
+CLI status/publish.

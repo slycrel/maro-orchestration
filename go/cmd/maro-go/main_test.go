@@ -53,3 +53,18 @@ func TestCLIWorkspaceAnnouncesFirst(t *testing.T) {
 		t.Fatalf("Ensure did not create thoughts/: %v", err)
 	}
 }
+
+func TestCLIJournalStatusAndPublish(t *testing.T) {
+	t.Setenv(workspace.EnvOverride, filepath.Join(t.TempDir(), "ws"))
+	var out, errw bytes.Buffer
+	if code := run([]string{"journal", "status"}, &out, &errw); code != 0 {
+		t.Fatalf("exit %d: %s", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "journal: head=0 frames=0") {
+		t.Fatalf("%s", out.String())
+	}
+	out.Reset()
+	if code := run([]string{"journal", "publish"}, &out, &errw); code != 0 || !strings.Contains(out.String(), "published: 0") {
+		t.Fatalf("publish: %d %s %s", code, out.String(), errw.String())
+	}
+}

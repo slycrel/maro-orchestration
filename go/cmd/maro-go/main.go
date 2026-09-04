@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
+	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
 
@@ -29,6 +31,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdWorkspace(stdout)
 	case "contracts":
 		err = cmdContracts(args[1:], stdout, stderr)
+	case "journal":
+		err = cmdJournal(args[1:], stdout)
 	default:
 		usage(stderr)
 		return 2
@@ -41,7 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir]")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -71,6 +75,61 @@ func cmdWorkspace(out io.Writer) error {
 		fmt.Fprintf(out, "lease: STALE (pid %d, lock free) epoch %d\n", cur.PID, cur.Epoch)
 	}
 	return nil
+}
+
+// cmdJournal opens the workspace under the lease, reports the journal's
+// state, and (publish) runs the projector once. It holds the lease only for
+// the duration of the command.
+func cmdJournal(args []string, out io.Writer) error {
+	if len(args) < 1 {
+		return fmt.Errorf("journal needs status|publish")
+	}
+	r, err := workspace.Resolve()
+	if err != nil {
+		return err
+	}
+	a, err := r.Announce(out)
+	if err != nil {
+		return err
+	}
+	if err := a.Ensure(); err != nil {
+		return err
+	}
+	l, err := workspace.Acquire(a)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	j, err := journal.Open(a, l)
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+	rec := j.Recovered()
+	pub, err := projector.Published(a)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "journal: head=%d frames=%d epoch=%d published=%d\n", rec.Head, rec.Frames, j.Epoch(), pub)
+	if rec.Discarded > 0 {
+		fmt.Fprintf(out, "journal: RECOVERED — discarded %d bytes of torn tail (%s)\n", rec.Discarded, rec.Reason)
+	}
+	switch args[0] {
+	case "status":
+		return nil
+	case "publish":
+		p, err := projector.New(a, j, projector.ThoughtsView{})
+		if err != nil {
+			return err
+		}
+		w, err := p.Publish()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "published: %d → %s\n", w, projector.Current(a))
+		return nil
+	}
+	return fmt.Errorf("unknown journal subcommand %q", args[0])
 }
 
 func cmdContracts(args []string, out, errw io.Writer) error {
