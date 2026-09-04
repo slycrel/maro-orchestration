@@ -459,3 +459,72 @@ secret against a journal reader — a remote origin needs an HMAC secret
 outside the journal. `recorded_at` format is RFC3339 micro-Z; B6 does not
 pin one. `Outcome.ClosureSrc` is read from the single candidate (step 7 reads
 the effective verdict's standing from the resolution).
+
+**Review round (Skeptic + Expert QA, codex; 23 findings, deduplicated to 14,
+each verified in the tree before fixing).** Every HIGH was real:
+
+- *Pre-dispatch refusal looped forever* (both, HIGH). A `MaxInputBytes`
+  refusal is made by the shell before anything is written, so the attempt
+  died at `executing`, Resume marked it recoverable, and attempt N+1 hit the
+  same refusal, forever. Now: `invoke.Incapable` is a recorded honest
+  failure (`backend_incapable`, no invocation, no provenance) and Resume is
+  a no-op after it. Plus a general recovery bound (`MaxAttempts` 3, why in
+  the code): past it the next attempt records the loop as its failure.
+- *Reused receipt attributed to the resuming backend* (both, HIGH).
+  `Outcome.Model` came from the recovering attempt's config. Now provenance
+  is the producing invocation's (`Produced` attempt + its `Backend.Model`),
+  and the fold refuses a recorded model that disagrees with the invocation.
+  Test resumes under a different model and checks the row.
+- *Forged acks and cross-scope delivery records folded* (both, HIGH). The
+  door checked shape only; the fold attached attempts/acks by delivery id.
+  Now `checkAck` is ONE rule shared by the writer (`Ack`) and the reader
+  (`Fold`): a start must exist, the token must be the bound one, the hash
+  the payload's, the scope the owner's; attempts and starts must be owned,
+  in order, and never after acceptance; a prepared delivery must match the
+  goal's origin and policy. Ten forged-history fixtures, each wire-valid
+  record by record, each refused with its reason.
+- *Transitions claimed delivery without evidence* (both, HIGH). `delivered:
+  transport_accepted` needs an accepted presentation; `user_acknowledged`
+  needs the ack; delivered→delivered may only promote transport→user;
+  `delivery_failed` needs exhausted, all-failed presentations. The fold
+  executes these; `transition()` is the driver's one writer.
+- *Recorded outcome could lie* (QA HIGH). The fold now checks the outcome
+  against the run: goal thought, invocation/receipt/response/usage against
+  the invocation state, closure against the resolution (outcome, confidence,
+  effective standing), and — new instrument — `verdict.Check` RECOMPUTES
+  every journaled resolution from its named candidates and refuses any
+  disagreement. Fixtures: other goal, other model, other usage, promoted
+  closure, invented source, foreign closure, a resolution that does not
+  re-derive.
+- *Negative delivery bound panicked* (both). Bounds < 0 are `ErrConfig`;
+  the exhausted branch no longer indexes an empty slice.
+- *Presentation not atomic; duplicates invisible; ack race* (both, MEDIUM).
+  New kind `delivery_started`, committed BEFORE the outward write (the same
+  shape as a ToolEffect before its action). On restart a start without a
+  result is resolved `unknown` ("the user may have seen it"), the next
+  presentation says so out loud, and the mission fold carries
+  `MayDuplicate`. An ack is valid from the start on — the token only
+  reaches a client through a presentation — so the ack race is gone: the
+  crash-after-display test acks from the first display and is NOT presented
+  again. Origin panics are contained as failed presentations. The CLI origin
+  composes once and writes once (short write = failed presentation).
+- *`lane` is not a B6 key* (both). Removed; `task_type` carries it. The row
+  was then read through the Python readers themselves on a scratch
+  `MARO_WORKSPACE` (never the live one): `load_outcomes` → `Outcome` with
+  `goal_achieved None`, `verdict_trust` → `neutral`; a judged self row →
+  `full`. Recorded here as a probe, not a test (the Go suite does not run
+  Python).
+- *Second assessment overwrote the first* (Skeptic). The fold refuses a
+  second `FamilyAssessment` for a goal; Resume reads the fold's map.
+- *Empty goal accepted by the driver* (both). `ErrEmptyGoal` before
+  anything is stored. *Ack while `now` holds the lease* (both): a specific
+  message; the token stays valid.
+
+Not done, recorded: a presentation-intent record for REMOTE origins needs
+an HMAC secret outside the journal (same-box CLI is fine with the nonce);
+`endpoint_accepted` still has no producer. Tightening `run_transition/1`
+(produced_by) and `delivery_attempted/1` (`unknown`) happened inside this
+unlanded step, so no version bump; the pre-fix scratch journal is refused
+by the new rule, which is the rule working. Test count in `internal/run`
+10 → 16 (+ 7 forged-history subtests, + 15 kill seams); registry at 20
+kinds; contracts report 0 errors / 0 warnings.

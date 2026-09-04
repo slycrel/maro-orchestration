@@ -1,10 +1,11 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "f639ecdc",
+  "source_ref": "970601ef",
   "kinds": {
     "delivery_acked": "261d54b5a58c86b22bc492c977ecc0e34249b94890f2e8982e7119f6c8eb12c9",
     "delivery_attempted": "bc3aaee593730b05360ba6e86b7b92c645f347a68ce73ac96d72f67db6689925",
     "delivery_prepared": "1568c6f7898371acf8241845bdd9d13083823b0c4b3da150bff43e040cf5edaf",
+    "delivery_started": "688e331b4df2d8ed6d356d1f98c7d0659d6b56640e30dc0cf9de80f9174673e3",
     "family_assessment": "58236866fac4561129151109f0cacc0d6c3371db845a746e03bc02ca794f4bd1",
     "goal": "b2051b411286c356b3a480d0e6efa8df502ef08072607f17ed5a29e632e31398",
     "invocation": "ff3c0e41c2ddbf0c14b6fd8687d7eaf7fb0868c524ed63978b3eaac8bde7075b",

@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "tool_effect_result",
+  "kind": "delivery_started",
   "envelope": "production",
-  "schema": "tool_effect_result/1",
-  "go_type": "invoke.ToolEffectResult",
+  "schema": "delivery_started/1",
+  "go_type": "run.DeliveryStarted",
   "fields": [
     {
       "name": "header.ID",
@@ -78,32 +78,18 @@
       "from_header": true
     },
     {
-      "name": "Invocation",
-      "wire": "invocation",
+      "name": "Delivery",
+      "wire": "delivery",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Ordinal",
-      "wire": "ordinal",
+      "name": "N",
+      "wire": "n",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
-    },
-    {
-      "name": "IsError",
-      "wire": "is_error",
-      "go_type": "bool",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Output",
-      "wire": "output",
-      "go_type": "thought.Ref",
-      "omittable": false,
-      "is_thought": true
     }
   ],
   "source_ref": "970601ef",

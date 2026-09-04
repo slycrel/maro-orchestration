@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -177,7 +178,7 @@ func TestNowRunDeliversAndRecords(t *testing.T) {
 	}
 	// the B6 row
 	row := h.outcomesRow(t, d)
-	want := []string{"outcome_id", "goal", "summary", "task_type", "status", "lessons", "tokens_in", "tokens_out", "elapsed_ms", "cost_usd", "model", "recorded_at", "handle_id", "lane"}
+	want := []string{"outcome_id", "goal", "summary", "task_type", "status", "lessons", "tokens_in", "tokens_out", "elapsed_ms", "cost_usd", "model", "recorded_at", "handle_id"}
 	var keys []string
 	for k := range row {
 		keys = append(keys, k)
@@ -187,7 +188,7 @@ func TestNowRunDeliversAndRecords(t *testing.T) {
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("B6 keys: %v", keys)
 	}
-	if row["goal"] != "What is the capital of France?" || row["status"] != "done" || row["lane"] != "now" || row["model"] != "m" || row["handle_id"] != rep.Handle || row["tokens_in"].(float64) != 10 || row["cost_usd"].(float64) != 0.01 {
+	if row["goal"] != "What is the capital of France?" || row["status"] != "done" || row["task_type"] != "now" || row["model"] != "m" || row["handle_id"] != rep.Handle || row["tokens_in"].(float64) != 10 || row["cost_usd"].(float64) != 0.01 {
 		t.Fatalf("B6 row: %v", row)
 	}
 	if _, present := row["goal_achieved"]; present {
@@ -303,6 +304,31 @@ func TestAckProtocol(t *testing.T) {
 	if _, _, err := Ack(ctxBg, h2.j, p.ID, TokenFor(p.ID, p.Payload.Hash, p.Nonce)); !errors.Is(err, ErrNotPresented) {
 		t.Fatalf("ack before presentation: %v", err)
 	}
+	// crash-after-display, before the result landed: the start is the
+	// evidence the token could have reached the client — the ack from the
+	// first display is accepted, and no second presentation happens
+	h3 := open(t)
+	d3 := h3.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+	d3.CrashAt = "after_present"
+	if _, err := d3.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: UserAcknowledged}); !errors.Is(err, ErrCrashed) {
+		t.Fatalf("seam: %v", err)
+	}
+	shown := regexp.MustCompile(`maro-go ack (\S+) (\S+)`).FindStringSubmatch(h3.out.String())
+	if shown == nil {
+		t.Fatal("token not shown")
+	}
+	h3.restart()
+	if _, replayed, err := Ack(ctxBg, h3.j, record.RecordID(shown[1]), shown[2]); err != nil || replayed {
+		t.Fatalf("ack from the first display: %v", err)
+	}
+	d3 = h3.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+	if _, err := d3.Resume(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	rs3 := h3.only()
+	if m := MissionOf(rs3); m.Outcome != MissionDelivered || m.Delivery != UserAcknowledged || strings.Count(h3.out.String(), "\n---\n") != 1 {
+		t.Fatalf("acked delivery was presented again or not delivered: %+v\n%s", m, h3.out.String())
+	}
 }
 
 // Kill matrix: a crash after every stage commit, then Resume on a fresh
@@ -316,21 +342,23 @@ func TestKillMatrixResumesExactlyOnce(t *testing.T) {
 		dispatch  int    // backend Complete calls in total
 		terminal  string // execution terminal after resume
 		presented int    // presentations in total
+		unknown   int    // presentations the process died inside (may have reached the user)
 	}
 	seams := []seam{
-		{"after_intake", toolless, 1, 1, "complete", 1},
-		{"after_start", toolless, 2, 1, "complete", 1},
-		{"after_executing", toolless, 2, 1, "complete", 1},
-		{"invoke:prepared", toolless, 2, 1, "complete", 1},   // invocation prepared, never dispatched: run again
-		{"invoke:dispatched", toolless, 2, 1, "complete", 1}, // died after `dispatched` landed, before the backend ran; tool-less: abandoned → run again
-		{"invoke:dispatched", outward, 2, 0, "failed", 1},    // outward-capable: indeterminate → honest failure, NO replay
-		{"invoke:terminal", toolless, 2, 1, "complete", 1},   // terminal without receipt: reconcile finalizes, the work is reused
-		{"after_execute", toolless, 2, 1, "complete", 1},
-		{"after_judged", toolless, 2, 1, "complete", 1},
-		{"after_recorded", toolless, 1, 1, "complete", 1},
-		{"after_prepared", toolless, 1, 1, "complete", 1},
-		{"after_present", toolless, 1, 1, "complete", 2}, // presented but unrecorded: presented again, honestly
-		{"after_attempted", toolless, 1, 1, "complete", 1},
+		{"after_intake", toolless, 1, 1, "complete", 1, 0},
+		{"after_start", toolless, 2, 1, "complete", 1, 0},
+		{"after_executing", toolless, 2, 1, "complete", 1, 0},
+		{"invoke:prepared", toolless, 2, 1, "complete", 1, 0},   // invocation prepared, never dispatched: run again
+		{"invoke:dispatched", toolless, 2, 1, "complete", 1, 0}, // died after `dispatched` landed, before the backend ran; tool-less: abandoned → run again
+		{"invoke:dispatched", outward, 2, 0, "failed", 1, 0},    // outward-capable: indeterminate → honest failure, NO replay
+		{"invoke:terminal", toolless, 2, 1, "complete", 1, 0},   // terminal without receipt: reconcile finalizes, the work is reused
+		{"after_execute", toolless, 2, 1, "complete", 1, 0},
+		{"after_judged", toolless, 2, 1, "complete", 1, 0},
+		{"after_recorded", toolless, 1, 1, "complete", 1, 0},
+		{"after_prepared", toolless, 1, 1, "complete", 1, 0},
+		{"after_started", toolless, 1, 1, "complete", 1, 1}, // start on record, nothing shown: resolved unknown, presented again and SAID so
+		{"after_present", toolless, 1, 1, "complete", 2, 1}, // shown, result not recorded: same
+		{"after_attempted", toolless, 1, 1, "complete", 1, 0},
 	}
 	for _, s := range seams {
 		t.Run(s.at+"/"+s.caps.Name, func(t *testing.T) {
@@ -369,6 +397,16 @@ func TestKillMatrixResumesExactlyOnce(t *testing.T) {
 			}
 			if n := strings.Count(h.out.String(), "\n---\n"); n != s.presented {
 				t.Fatalf("presented %d times, want %d", n, s.presented)
+			}
+			m := MissionOf(rs)
+			if m.MayDuplicate != s.unknown {
+				t.Fatalf("may_duplicate %d, want %d: %+v", m.MayDuplicate, s.unknown, m)
+			}
+			if s.unknown > 0 && (!strings.Contains(h.out.String(), "re-presented: 1 earlier") || rs.Latest().Delivery.Attempts[0].Result != DeliveryUnknown) {
+				t.Fatalf("duplicate presentation not visible: %+v\n%s", m, h.out.String())
+			}
+			if got := rs.Latest().Has(Recorded).Outcome; got.Invocation != "" && (got.Produced == 0 || got.Model != "m") {
+				t.Fatalf("provenance: %+v", got)
 			}
 			if s.attempts == 2 {
 				first := rs.Attempts[0]
@@ -508,6 +546,17 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 			x.Schema, x.ID = "delivery_prepared/1", id
 			return x
 		}(), "nonce"},
+		{"attempted unknown without reason", func() record.Record {
+			id := record.NewID()
+			x := &DeliveryAttempted{Header: hd(record.Ref{Kind: "delivery", ID: string(id)}), Delivery: id, N: 1, Result: DeliveryUnknown}
+			x.Schema = "delivery_attempted/1"
+			return x
+		}(), "carries a reason"},
+		{"outcome with invocation but no producer", func() record.Record {
+			x := tr(Judged, Recorded)
+			x.Outcome = &Outcome{Terminal: invoke.TerminalFailed, Reason: "r", Invocation: record.NewID(), GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
+			return x
+		}(), "produced"},
 		{"attempted n zero", func() record.Record {
 			id := record.NewID()
 			x := &DeliveryAttempted{Header: hd(record.Ref{Kind: "delivery", ID: string(id)}), Delivery: id, N: 0, Result: TransportAccepted}
@@ -567,7 +616,7 @@ func TestRecordedOutcomeIsAFold(t *testing.T) {
 	}
 	rc := inv[0].Receipt
 	resp := rc.Response
-	re := &Outcome{Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+	re := &Outcome{Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Produced: 1, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 	a, _ := json.Marshal(stamped)
 	b, _ := json.Marshal(re)
 	if string(a) != string(b) {
@@ -595,4 +644,319 @@ func TestLiveNowDelivery(t *testing.T) {
 		t.Fatalf("%+v %q", rep.Mission, rep.Payload)
 	}
 	t.Logf("live: handle %s usage %+v\n%s", rep.Handle, h.only().Latest().Has(Recorded).Outcome.Usage, h.out.String())
+}
+
+// forge submits hand-built records straight to the journal (they pass the
+// door: each is wire-valid on its own) and returns Fold's verdict.
+func forge(t *testing.T, h *harness, key string, recs ...record.Record) error {
+	t.Helper()
+	for _, r := range recs {
+		if r.Head().Schema == "" {
+			spec, _ := record.Lookup(r.Kind())
+			r.Head().Schema = record.SchemaVer(fmt.Sprintf("%s/%d", r.Kind(), spec.Version))
+		}
+	}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: key, Epoch: h.j.Epoch(), Records: recs}); err != nil {
+		t.Fatalf("forged record refused at the door (fixture bug): %v", err)
+	}
+	_, err := Fold(h.j.Production())
+	return err
+}
+
+// Must-detect fixtures for the fold: every cross-record rule the journal
+// door cannot execute. Each forged history is wire-valid record by record
+// and must still be refused, with the reason named.
+func TestFoldRefusesForgedHistories(t *testing.T) {
+	type fix struct {
+		name string
+		mk   func(h *harness, rs *RunState) []record.Record
+		want string
+	}
+	hd := func(rs *RunState, subj record.Ref) record.Header {
+		return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: rs.Latest().Attempt.Attempt, Subject: subj, At: time.Now().UTC()}
+	}
+	fixes := []fix{
+		{"ack without a start", func(h *harness, rs *RunState) []record.Record {
+			p := rs.Latest().Delivery.Prepared
+			return []record.Record{&DeliveryAcked{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, Token: TokenFor(p.ID, p.Payload.Hash, p.Nonce), PayloadHash: p.Payload.Hash}}
+		}, "no presentation was started"},
+		{"ack with a foreign token", func(h *harness, rs *RunState) []record.Record {
+			p := rs.Latest().Delivery.Prepared
+			return []record.Record{&DeliveryStarted{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, N: 1},
+				&DeliveryAcked{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, Token: strings.Repeat("0", 32), PayloadHash: p.Payload.Hash}}
+		}, "not bound"},
+		{"ack with a foreign payload hash", func(h *harness, rs *RunState) []record.Record {
+			p := rs.Latest().Delivery.Prepared
+			other := "s256v1:" + strings.Repeat("ff", 32)
+			return []record.Record{&DeliveryStarted{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, N: 1},
+				&DeliveryAcked{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, Token: TokenFor(p.ID, p.Payload.Hash, p.Nonce), PayloadHash: other}}
+		}, "not bound"},
+		{"attempt from another run", func(h *harness, rs *RunState) []record.Record {
+			p := rs.Latest().Delivery.Prepared
+			x := &DeliveryAttempted{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, N: 1, Result: TransportAccepted}
+			x.RunID = record.RunID(record.NewID())
+			return []record.Record{&DeliveryStarted{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, N: 1}, x}
+		}, "scoped to"},
+		{"attempt without its start", func(h *harness, rs *RunState) []record.Record {
+			p := rs.Latest().Delivery.Prepared
+			return []record.Record{&DeliveryAttempted{Header: hd(rs, deliveryRef(p.ID)), Delivery: p.ID, N: 1, Result: TransportAccepted}}
+		}, "without its start"},
+		{"delivered with no accepted presentation", func(h *harness, rs *RunState) []record.Record {
+			return []record.Record{&Transition{Header: hd(rs, runRef(rs.Run)), From: Recorded, To: Delivered, Delivery: TransportAccepted}}
+		}, "no accepted presentation"},
+		{"user_acknowledged with no ack", func(h *harness, rs *RunState) []record.Record {
+			return []record.Record{&Transition{Header: hd(rs, runRef(rs.Run)), From: Recorded, To: Delivered, Delivery: UserAcknowledged}}
+		}, "no ack"},
+		{"delivery_failed after nothing", func(h *harness, rs *RunState) []record.Record {
+			return []record.Record{&Transition{Header: hd(rs, runRef(rs.Run)), From: Recorded, To: DeliveryFailedS, Reason: "gave up"}}
+		}, "exhausted"},
+		{"delivery for another policy", func(h *harness, rs *RunState) []record.Record {
+			id := record.NewID()
+			x := &DeliveryPrepared{Header: hd(rs, deliveryRef(id)), Payload: rs.Latest().Delivery.Prepared.Payload, Origin: OriginCLI, Required: UserAcknowledged, Nonce: strings.Repeat("ab", 16)}
+			x.ID = id
+			x.Attempt = 99 // an attempt that does not exist would fail earlier; use attempt 1 on a fresh run below instead
+			return []record.Record{x}
+		}, "never started"},
+		{"second assessment", func(h *harness, rs *RunState) []record.Record {
+			return []record.Record{&FamilyAssessment{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "goal", ID: string(rs.Goal.ID)}, At: time.Now().UTC()}, Goal: rs.Goal.ID, Family: FamilyWriteLocal, Rule: FamilyRule, Reason: "revised"}}
+		}, "assessed twice"},
+	}
+	for _, f := range fixes {
+		t.Run(f.name, func(t *testing.T) {
+			h := open(t)
+			d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+			d.CrashAt = "after_prepared" // recorded + prepared, nothing presented
+			if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+				t.Fatal(err)
+			}
+			rs := h.only()
+			err := forge(t, h, "forge", f.mk(h, rs)...)
+			if err == nil || !strings.Contains(err.Error(), f.want) {
+				t.Fatalf("forged history folded: %v (want %q)", err, f.want)
+			}
+		})
+	}
+	// delivered → delivered may only promote; a repeat or a downgrade is refused
+	t.Run("delivered repeat and downgrade", func(t *testing.T) {
+		h := open(t)
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+		rep, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: UserAcknowledged})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rs := h.only()
+		if err := forge(t, h, "repeat", &Transition{Header: hd(rs, runRef(rs.Run)), From: Delivered, To: Delivered, Delivery: TransportAccepted}); err == nil || !strings.Contains(err.Error(), "only promote") {
+			t.Fatalf("repeat folded: %v", err)
+		}
+		h2 := open(t)
+		d2 := h2.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+		rep, err = d2.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: UserAcknowledged})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Ack(ctxBg, h2.j, rep.Delivery, rep.Token); err != nil {
+			t.Fatal(err)
+		}
+		rs = h2.only()
+		if err := forge(t, h2, "downgrade", &Transition{Header: hd(rs, runRef(rs.Run)), From: Delivered, To: Delivered, Delivery: TransportAccepted}); err == nil || !strings.Contains(err.Error(), "only promote") {
+			t.Fatalf("downgrade folded: %v", err)
+		}
+	})
+	// a recorded outcome that lies: wrong goal thought, wrong model, a
+	// closure that does not re-derive, a source the resolution does not name
+	t.Run("recorded outcome lies", func(t *testing.T) {
+		mk := func(t *testing.T, mut func(o *Outcome, rs *RunState, h *harness)) error {
+			h := open(t)
+			d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+			d.CrashAt = "after_judged"
+			if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+				t.Fatal(err)
+			}
+			rs := h.only()
+			a := rs.Latest()
+			inv := a.Invocations[0]
+			// the honest outcome, then the lie
+			res, err := verdict.Commit(ctxBg, h.j, rs.Run, 1, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: h.verdicts(t, rs.Run)}, verdict.DefaultThresholds)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := inv.Receipt.Response
+			o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+			mut(o, rs, h)
+			return forge(t, h, "lie", &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o})
+		}
+		otherGoal := thought.Ref{Hash: "s256v1:" + strings.Repeat("ee", 32), Kind: thought.Goal, Bytes: 2, Encoding: thought.UTF8}
+		cases := []struct {
+			name string
+			mut  func(o *Outcome, rs *RunState, h *harness)
+			want string
+		}{
+			{"honest", func(o *Outcome, rs *RunState, h *harness) {}, ""},
+			{"other goal", func(o *Outcome, rs *RunState, h *harness) { o.GoalText = otherGoal }, "different goal"},
+			{"other model", func(o *Outcome, rs *RunState, h *harness) { o.Model = "gpt-9" }, "recorded model"},
+			{"other usage", func(o *Outcome, rs *RunState, h *harness) { o.Usage.InputTokens = 999 }, "disagrees with invocation"},
+			{"promoted closure", func(o *Outcome, rs *RunState, h *harness) { o.ClosureOut = "achieved" }, "resolution says"},
+			{"invented source", func(o *Outcome, rs *RunState, h *harness) { o.ClosureSrc = "operator" }, "effective verdict"},
+			{"foreign closure", func(o *Outcome, rs *RunState, h *harness) { o.Closure = record.NewID() }, "not this attempt's closure"},
+		}
+		for _, c := range cases {
+			err := mk(t, c.mut)
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("honest outcome refused: %v", err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("%s: folded: %v (want %q)", c.name, err, c.want)
+			}
+		}
+	})
+	// a resolution that does not re-derive from its named candidates
+	t.Run("forged resolution", func(t *testing.T) {
+		h := open(t)
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+		d.CrashAt = "after_judged"
+		if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		rs := h.only()
+		vs := h.verdicts(t, rs.Run)
+		inv := rs.Latest().Invocations[0]
+		res := &verdict.Resolution{Header: hd(rs, runRef(rs.Run)), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: vs[0].ID, Candidates: []record.RecordID{vs[0].ID}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:self", Confidence: 0.5}
+		resp := inv.Receipt.Response
+		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: "achieved", ClosureCnf: 0.5, ClosureSrc: "self"}
+		if err := forge(t, h, "forged-res", res, &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o}); err == nil || !strings.Contains(err.Error(), "disagrees with its recompute") {
+			t.Fatalf("forged resolution folded: %v", err)
+		}
+	})
+}
+
+func (h *harness) verdicts(t *testing.T, run record.RunID) []*verdict.Verdict {
+	t.Helper()
+	var vs []*verdict.Verdict
+	h.j.Production().Scan(0, func(r record.Record) error {
+		if v, ok := r.(*verdict.Verdict); ok && v.RunID == run {
+			vs = append(vs, v)
+		}
+		return nil
+	})
+	return vs
+}
+
+// A refusal the shell makes before writing (input over the backend's
+// maximum) is deterministic: the attempt records it as an honest failure
+// and delivers it; Resume does not start a fourth, fifth, ... attempt.
+func TestPreDispatchRefusalIsRecordedNotRetried(t *testing.T) {
+	h := open(t)
+	tiny := &invoke.Scripted{Caps: invoke.Capabilities{Name: "tiny", Model: "t", MaxInputBytes: 8}, Calls: []invoke.ScriptedCall{{Response: []byte("x")}}}
+	d := h.driver(tiny, nil)
+	rep, err := d.Run(ctxBg, []byte("a goal far longer than eight bytes"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Mission.Outcome != MissionFailedExec || !strings.Contains(rep.Mission.Reason, "backend_incapable") || len(tiny.Seen) != 0 {
+		t.Fatalf("%+v seen=%d", rep.Mission, len(tiny.Seen))
+	}
+	rs := h.only()
+	if o := rs.Latest().Has(Recorded).Outcome; o.Invocation != "" || o.Model != "" {
+		t.Fatalf("a refusal with no invocation must carry no provenance: %+v", o)
+	}
+	head := h.j.Head()
+	if reps, err := d.Resume(ctxBg); err != nil || len(reps) != 0 || h.j.Head() != head {
+		t.Fatalf("resume retried a recorded refusal: %v %d", err, len(reps))
+	}
+}
+
+// A crash that repeats on every restart is bounded: past MaxAttempts the
+// next attempt records an honest failure naming the loop and delivers it.
+func TestRecoveryIsBounded(t *testing.T) {
+	h := open(t)
+	b := scripted(toolless, invoke.ScriptedCall{Panic: true}, invoke.ScriptedCall{Panic: true}, invoke.ScriptedCall{Panic: true}, invoke.ScriptedCall{Panic: true})
+	d := h.driver(b, nil)
+	d.CrashAt = "after_executing"
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		h.restart()
+		d = h.driver(b, nil)
+		d.CrashAt = "after_executing"
+		if _, err := d.Resume(ctxBg); !errors.Is(err, ErrCrashed) {
+			t.Fatalf("restart %d: %v", i, err)
+		}
+	}
+	h.restart()
+	d = h.driver(b, nil)
+	reps, err := d.Resume(ctxBg)
+	if err != nil || len(reps) != 1 {
+		t.Fatalf("%v %d", err, len(reps))
+	}
+	rs := h.only()
+	if len(rs.Attempts) != 4 || reps[0].Mission.Outcome != MissionFailedExec || !strings.Contains(reps[0].Mission.Reason, "attempt bound 3 reached") || len(b.Seen) != 0 {
+		t.Fatalf("attempts=%d %+v seen=%d", len(rs.Attempts), reps[0].Mission, len(b.Seen))
+	}
+}
+
+// A recovered attempt that reuses the earlier attempt's receipt keeps the
+// PRODUCING invocation's provenance, whatever backend the resuming process
+// was configured with.
+func TestReusedEvidenceKeepsItsProvenance(t *testing.T) {
+	h := open(t)
+	d := h.driver(scripted(invoke.Capabilities{Name: "scripted", Model: "original"}, invoke.ScriptedCall{Response: []byte("answer")}), nil)
+	d.CrashAt = "after_execute"
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	h.restart()
+	other := scripted(invoke.Capabilities{Name: "scripted", Model: "resumer"}, invoke.ScriptedCall{Response: []byte("different")})
+	d = h.driver(other, nil)
+	reps, err := d.Resume(ctxBg)
+	if err != nil || len(reps) != 1 {
+		t.Fatalf("%v", err)
+	}
+	rs := h.only()
+	o := rs.Latest().Has(Recorded).Outcome
+	if o.Model != "original" || o.Produced != 1 || len(other.Seen) != 0 || string(reps[0].Payload) != "answer" || rs.Latest().Attempt.Config.Backend.Model != "resumer" {
+		t.Fatalf("provenance: %+v payload=%q seen=%d", o, reps[0].Payload, len(other.Seen))
+	}
+	row := h.outcomesRow(t, d)
+	if row["model"] != "original" {
+		t.Fatalf("B6 model: %v", row["model"])
+	}
+}
+
+type panickingOrigin struct{ calls int }
+
+func (panickingOrigin) Name() GoalOrigin { return OriginCLI }
+func (o *panickingOrigin) Present(context.Context, Presentation) error {
+	o.calls++
+	panic("writer gone")
+}
+
+// Driver misconfiguration and boundary inputs err closed: negative bounds
+// and empty goals are refused before anything is written; an origin panic
+// is a failed presentation, not a crash.
+func TestDriverBoundaries(t *testing.T) {
+	h := open(t)
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+	d.MaxDeliveryAttempts = -1
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrConfig) {
+		t.Fatalf("negative bound: %v", err)
+	}
+	d.MaxDeliveryAttempts = 0
+	for _, g := range []string{"", "   \n\t"} {
+		if _, err := d.Run(ctxBg, []byte(g), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrEmptyGoal) {
+			t.Fatalf("empty goal %q: %v", g, err)
+		}
+	}
+	if h.j.Head() != 0 {
+		t.Fatal("a refused run wrote records")
+	}
+	o := &panickingOrigin{}
+	d = h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), o)
+	rep, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil || rep.Mission.Outcome != MissionFailedDelivery || o.calls != 3 || !strings.Contains(rep.Mission.Reason, "origin panicked") {
+		t.Fatalf("%v %+v calls=%d", err, rep.Mission, o.calls)
+	}
 }

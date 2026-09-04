@@ -411,3 +411,54 @@ func includes(a, b *Resolution) bool {
 	}
 	return true
 }
+
+// Check recomputes a journaled Resolution from the candidate and
+// observation records it names and refuses any disagreement: a resolution
+// that cannot be re-derived from committed standing is a record that lies.
+// byID must hold every named record (a missing one is a refusal, not a
+// skip). Pure; the run fold calls it on every recorded outcome's closure.
+func Check(res *Resolution, verdicts map[record.RecordID]*Verdict, observations map[record.RecordID]*Observation) error {
+	c := Candidates{Subject: res.Subject, VerdictKind: res.VerdictKind}
+	for _, id := range res.Candidates {
+		v := verdicts[id]
+		if v == nil {
+			return fmt.Errorf("verdict: resolution %s names candidate %s that is not committed", res.ID, id)
+		}
+		c.Verdicts = append(c.Verdicts, v)
+	}
+	for _, id := range res.Observations {
+		o := observations[id]
+		if o == nil {
+			return fmt.Errorf("verdict: resolution %s names observation %s that is not committed", res.ID, id)
+		}
+		c.Observations = append(c.Observations, o)
+	}
+	if res.ResolverVer != ResolverVer {
+		return fmt.Errorf("verdict: resolution %s is from %s; this resolver is %s", res.ID, res.ResolverVer, ResolverVer)
+	}
+	re, err := Resolve(c, res.Thresholds)
+	if err != nil {
+		return fmt.Errorf("verdict: resolution %s does not re-derive: %w", res.ID, err)
+	}
+	if re.Outcome != res.Outcome || re.Effective != res.Effective || re.Rule != res.Rule || re.Contested != res.Contested || re.Confidence != res.Confidence || !sameIDs(re.Decisive, res.Decisive) {
+		return fmt.Errorf("verdict: resolution %s disagrees with its recompute (%s/%s/%s vs %s/%s/%s)", res.ID, res.Outcome, res.Effective, res.Rule, re.Outcome, re.Effective, re.Rule)
+	}
+	return nil
+}
+
+func sameIDs(a, b []record.RecordID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[record.RecordID]int{}
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		if seen[x] == 0 {
+			return false
+		}
+		seen[x]--
+	}
+	return true
+}

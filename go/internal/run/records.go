@@ -28,6 +28,7 @@ const (
 	KindRunAttempt        record.Kind = "run_attempt"
 	KindTransition        record.Kind = "run_transition"
 	KindDeliveryPrepared  record.Kind = "delivery_prepared"
+	KindDeliveryStarted   record.Kind = "delivery_started"
 	KindDeliveryAttempted record.Kind = "delivery_attempted"
 	KindDeliveryAcked     record.Kind = "delivery_acked"
 )
@@ -59,11 +60,12 @@ const (
 	TransportAccepted DeliveryState = "transport_accepted" // the transport took the payload
 	UserAcknowledged  DeliveryState = "user_acknowledged"  // a client-generated, payload-bound ack arrived
 	DeliveryFailed    DeliveryState = "failed"             // this attempt did not get the payload out
+	DeliveryUnknown   DeliveryState = "unknown"            // the process died after the presentation started; the user may have seen it
 )
 
 // requiredStates is what a DeliveryPolicy may demand in v1 (CLI origin).
 var requiredStates = map[DeliveryState]bool{TransportAccepted: true, UserAcknowledged: true}
-var attemptResults = map[DeliveryState]bool{TransportAccepted: true, DeliveryFailed: true}
+var attemptResults = map[DeliveryState]bool{TransportAccepted: true, DeliveryFailed: true, DeliveryUnknown: true}
 
 // DeliveryPolicy is captured at intake per origin: the state that counts as
 // delivered for THIS goal.
@@ -253,11 +255,12 @@ var next = map[State]map[State]bool{
 type Outcome struct {
 	Terminal   invoke.TerminalState `json:"terminal"` // complete | partial | failed
 	Reason     string               `json:"reason,omitempty"`
-	Invocation record.RecordID      `json:"invocation,omitempty"` // the execute invocation (absent when none was made)
+	Invocation record.RecordID      `json:"invocation,omitempty"`  // the execute invocation (absent when none was made)
+	Produced   uint32               `json:"produced_by,omitempty"` // the attempt whose invocation produced the evidence (a recovered attempt reuses an earlier one's)
 	Receipt    record.RecordID      `json:"receipt,omitempty"`
 	Response   *thought.Ref         `json:"response,omitempty"`
 	Usage      invoke.Usage         `json:"usage"`
-	Model      string               `json:"model,omitempty"` // the backend model the attempt ran under (from the config snapshot)
+	Model      string               `json:"model,omitempty"` // the model of the invocation that produced the evidence (never the recovering attempt's config)
 	GoalText   thought.Ref          `json:"goal"`            // the goal thought this attempt ran (whole)
 	Closure    record.RecordID      `json:"closure"`         // the closure Resolution
 	ClosureOut string               `json:"closure_outcome"`
@@ -333,6 +336,11 @@ func (o *Outcome) validate() error {
 		if err := record.ValidateID(o.Invocation); err != nil {
 			return err
 		}
+		if o.Produced == 0 {
+			return errors.New("an invocation names the attempt that produced it")
+		}
+	} else if o.Produced != 0 || o.Receipt != "" {
+		return errors.New("produced_by and receipt need an invocation")
 	}
 	if o.Receipt != "" {
 		if err := record.ValidateID(o.Receipt); err != nil {
@@ -408,6 +416,33 @@ func (r *DeliveryPrepared) ValidateWire() error {
 	return nil
 }
 
+// DeliveryStarted is committed BEFORE the outward presentation (the same
+// shape as a ToolEffect before its action): after a crash, a start without a
+// result says "the user may have seen it", which the next presentation
+// then says out loud. An ack is valid from the start on — the token only
+// ever reaches a client through a presentation.
+type DeliveryStarted struct {
+	record.ProductionRecord
+	record.Header `json:"header"`
+	Delivery      record.RecordID `json:"delivery"`
+	N             int             `json:"n"`
+}
+
+func (r *DeliveryStarted) Head() *record.Header { return &r.Header }
+func (r *DeliveryStarted) Kind() record.Kind    { return KindDeliveryStarted }
+func (r *DeliveryStarted) ValidateWire() error {
+	if err := r.Header.ValidateWire(); err != nil {
+		return err
+	}
+	if err := deliveryScoped(&r.Header, r.Delivery, "delivery_started"); err != nil {
+		return err
+	}
+	if r.N < 1 {
+		return errors.New("delivery_started: n starts at 1")
+	}
+	return nil
+}
+
 // DeliveryAttempted is one outbox attempt's result.
 type DeliveryAttempted struct {
 	record.ProductionRecord
@@ -433,8 +468,8 @@ func (r *DeliveryAttempted) ValidateWire() error {
 	if !attemptResults[r.Result] {
 		return fmt.Errorf("delivery_attempted: result %q out of vocabulary", r.Result)
 	}
-	if r.Result == DeliveryFailed && r.Reason == "" {
-		return errors.New("delivery_attempted: a failure carries a reason")
+	if r.Result != TransportAccepted && r.Reason == "" {
+		return errors.New("delivery_attempted: a failure or unknown carries a reason")
 	}
 	return nil
 }
@@ -531,9 +566,12 @@ func init() {
 	reg(KindDeliveryPrepared, DeliveryPrepared{}, "the driver's Deliver stage",
 		"the outbox (what is owed); Ack (token derivation)",
 		"which payload is owed to which origin under which policy; the ack token")
-	reg(KindDeliveryAttempted, DeliveryAttempted{}, "the outbox",
-		"the outbox (bounded retry); Mission fold; Ack (an ack needs a presentation first)",
-		"retry, or give up with delivery_failed")
+	reg(KindDeliveryStarted, DeliveryStarted{}, "the outbox, before each outward presentation",
+		"the outbox (a start without a result = outcome unknown, re-present and say so); Ack (a start is the evidence a token could have reached the client)",
+		"whether a presentation may have happened; whether an ack can be accepted")
+	reg(KindDeliveryAttempted, DeliveryAttempted{}, "the outbox (result of a started presentation; `unknown` stamped on restart for a start the process died inside)",
+		"the outbox (bounded retry); Mission fold; the run fold (delivered needs an accepted attempt)",
+		"retry, or give up with delivery_failed; how many presentations may have duplicated")
 	reg(KindDeliveryAcked, DeliveryAcked{}, "Ack (the CLI ack command, from a client-presented token)",
 		"Mission fold; the outcomes view",
 		"user_acknowledged — the only state labelled user delivery")

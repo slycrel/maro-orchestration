@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -268,7 +269,7 @@ func cmdAck(args []string, out io.Writer) error {
 	if len(args) != 2 {
 		return fmt.Errorf("ack needs <delivery-id> <token>")
 	}
-	return withJournal(out, func(j *journal.Journal, _ *thought.Store) error {
+	err := withJournal(out, func(j *journal.Journal, _ *thought.Store) error {
 		ack, replayed, err := spine.Ack(context.Background(), j, record.RecordID(args[0]), args[1])
 		if err != nil {
 			return err
@@ -280,6 +281,10 @@ func cmdAck(args []string, out io.Writer) error {
 		}
 		return nil
 	})
+	if errors.Is(err, workspace.ErrLeaseHeld) {
+		return fmt.Errorf("%w — the run that presented this is still holding the workspace; the token stays valid, retry once it exits", err)
+	}
+	return err
 }
 
 // cmdRuns lists every run's mission fold; `resume` first finishes what a
@@ -315,7 +320,11 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 		}
 		sort.Slice(rows, func(i, k int) bool { return rows[i].Run < rows[k].Run })
 		for _, m := range rows {
-			fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required)
+			dup := ""
+			if m.MayDuplicate > 0 {
+				dup = fmt.Sprintf(" may_duplicate=%d", m.MayDuplicate)
+			}
+			fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required, dup)
 		}
 		return nil
 	})

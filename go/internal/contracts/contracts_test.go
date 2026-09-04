@@ -96,6 +96,7 @@ func samples() map[record.Kind]any {
 		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneNow, Backend: caps, Judge: run.JudgeSelf, PlanCardinality: 1, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer}, RecoversFrom: 1},
 		run.KindTransition:          &run.Transition{Header: withSchema(h, "run_transition/1"), From: run.Recorded, To: run.Delivered, Reason: "transport took it", Delivery: run.TransportAccepted, Evidence: []record.Ref{{Kind: "delivery_attempted", ID: "x"}}},
 		run.KindDeliveryPrepared:    &run.DeliveryPrepared{Header: withSubject(withSchema(h, "delivery_prepared/1"), record.Ref{Kind: "delivery", ID: string(h.ID)}), Payload: deliverable, Origin: run.OriginCLI, Required: run.UserAcknowledged, Nonce: strings.Repeat("0f", 16)},
+		run.KindDeliveryStarted:     &run.DeliveryStarted{Header: withSubject(withSchema(h, "delivery_started/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1},
 		run.KindDeliveryAttempted:   &run.DeliveryAttempted{Header: withSubject(withSchema(h, "delivery_attempted/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1, Result: run.DeliveryFailed, Reason: "pipe closed"},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}

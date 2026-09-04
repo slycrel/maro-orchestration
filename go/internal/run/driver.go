@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -18,8 +19,9 @@ import (
 )
 
 var (
-	ErrConfig  = errors.New("run: driver misconfigured")
-	ErrCrashed = errors.New("run: crashed at test seam")
+	ErrConfig    = errors.New("run: driver misconfigured")
+	ErrCrashed   = errors.New("run: crashed at test seam")
+	ErrEmptyGoal = errors.New("run: a goal needs text")
 )
 
 // Event is one lifecycle event per stage boundary (§5, FINDINGS #9). Events
@@ -49,6 +51,9 @@ type Presentation struct {
 	Token    string // shown only when the policy wants user_acknowledged
 	Closure  string
 	Terminal string
+	// MayDuplicate counts earlier presentations of this payload the process
+	// died inside; the origin says so, because the user may have seen it.
+	MayDuplicate int
 }
 
 // Origin is the user-facing edge for a goal's origin. Present returns nil
@@ -73,6 +78,11 @@ type Driver struct {
 	// instead of a busy loop. A remote origin will register its own with
 	// its own why.
 	MaxDeliveryAttempts int
+	// MaxAttempts bounds recovery. Why 3: a crash that repeats identically on
+	// every restart (a deterministic backend panic, a refusal the shell
+	// cannot record) never repairs itself; past the bound the next attempt
+	// records an honest failure naming the loop instead of starting a fourth.
+	MaxAttempts int
 	// CrashAt stops the driver dead (as if the process died) immediately
 	// AFTER the named stage commits; "invoke:<stage>" is forwarded to the
 	// invocation shell's seam. Test seam for the kill matrix; production
@@ -92,19 +102,6 @@ type Report struct {
 	Payload  []byte
 }
 
-// familyOf finds the assessment for an unstarted goal (the fold indexes
-// families by run; an unstarted goal has none, so read it directly).
-func (d *Driver) familyOf(led *Ledger, g *Goal) *FamilyAssessment {
-	var fam *FamilyAssessment
-	d.J.Production().Scan(0, func(r record.Record) error {
-		if f, ok := r.(*FamilyAssessment); ok && f.Goal == g.ID {
-			fam = f
-		}
-		return nil
-	})
-	return fam
-}
-
 func (d *Driver) validate() error {
 	switch {
 	case d.J == nil || d.Store == nil:
@@ -116,8 +113,14 @@ func (d *Driver) validate() error {
 	case d.Backend.Capabilities().Name == "":
 		return fmt.Errorf("%w: backend declares no name", ErrConfig)
 	}
+	if d.MaxDeliveryAttempts < 0 || d.MaxAttempts < 0 {
+		return fmt.Errorf("%w: bounds must be positive (0 = default)", ErrConfig)
+	}
 	if d.MaxDeliveryAttempts == 0 {
 		d.MaxDeliveryAttempts = 3
+	}
+	if d.MaxAttempts == 0 {
+		d.MaxAttempts = 3
 	}
 	return nil
 }
@@ -166,6 +169,9 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if !requiredStates[policy.Required] {
 		return nil, fmt.Errorf("%w: delivery policy %q", ErrConfig, policy.Required)
 	}
+	if len(bytes.TrimSpace(goalText)) == 0 {
+		return nil, ErrEmptyGoal
+	}
 	// Intake: store the thought, THEN the records that claim it (§1b).
 	ref, err := d.Store.Put(thought.Goal, goalText)
 	if err != nil {
@@ -180,7 +186,7 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if err := d.crash("after_intake"); err != nil {
 		return nil, err
 	}
-	return d.drive(ctx, rs, nil)
+	return d.drive(ctx, rs, nil, nil)
 }
 
 // Intake is pure: the goal record and its treatment-blind assessment. The
@@ -195,7 +201,7 @@ func Intake(text []byte, ref thought.Ref, origin GoalOrigin, policy DeliveryPoli
 
 // drive runs one attempt of rs from the last committed idempotent stage.
 // prev is the attempt being recovered from (nil for attempt 1).
-func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState) (*Report, error) {
+func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, forced *Outcome) (*Report, error) {
 	n := uint32(len(rs.Attempts) + 1)
 	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config()}
 	if prev != nil {
@@ -219,7 +225,7 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState) (*
 	}
 	// Execute — from the previous attempt's evidence when it exists (§5a:
 	// a new attempt starts from the last committed idempotent stage).
-	out, err := d.execute(ctx, rs, n, prev)
+	out, err := d.execute(ctx, rs, n, prev, forced)
 	if err != nil {
 		return nil, err
 	}
@@ -244,9 +250,11 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState) (*
 		return nil, err
 	}
 	rs.Closure = res
-	out.GoalText, out.Model, out.Closure, out.ClosureOut, out.ClosureCnf = rs.Goal.Text, att.Config.Backend.Model, res.ID, res.Outcome, res.Confidence
-	if res.Effective != "" {
-		out.ClosureSrc = string(self.Source.Standing) // v1: the only candidate; step 7 reads the effective verdict's standing
+	out.GoalText, out.Closure, out.ClosureOut, out.ClosureCnf = rs.Goal.Text, res.ID, res.Outcome, res.Confidence
+	if res.Effective == self.ID {
+		out.ClosureSrc = string(self.Source.Standing)
+	} else if res.Effective != "" {
+		return nil, fmt.Errorf("run: resolution %s names an effective verdict %s this driver did not commit", res.ID, res.Effective)
 	}
 	if err := d.transition(ctx, rs, a, Recorded, "", nil, out); err != nil {
 		return nil, err
@@ -261,24 +269,30 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState) (*
 // a receipt from the recovered attempt is reused (the work happened); an
 // indeterminate reconciliation is an honest failure, never a replay; else
 // a fresh invocation.
-func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *AttemptState) (*Outcome, error) {
+func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *AttemptState, forced *Outcome) (*Outcome, error) {
 	if prev != nil {
+		p := prev.Attempt.Attempt
 		for i := len(prev.Invocations) - 1; i >= 0; i-- {
 			st := prev.Invocations[i]
 			if st.Invocation.Purpose != invoke.PurposeExecute {
 				continue
 			}
+			// provenance is the invocation's, never the recovering attempt's
+			model := st.Invocation.Backend.Model
 			switch {
 			case st.Receipt != nil:
 				resp := st.Receipt.Response
-				return &Outcome{Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Response: &resp, Usage: st.Receipt.Usage}, nil
+				return &Outcome{Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Receipt: st.Receipt.ID, Response: &resp, Usage: st.Receipt.Usage, Model: model}, nil
 			case st.Terminal != nil && st.Terminal.State == invoke.TerminalFailed:
-				return &Outcome{Terminal: invoke.TerminalFailed, Reason: "attempt " + fmt.Sprint(prev.Attempt.Attempt) + ": " + st.Terminal.Reason, Invocation: st.Invocation.ID, Usage: st.Terminal.Usage}, nil
+				return &Outcome{Terminal: invoke.TerminalFailed, Reason: "attempt " + fmt.Sprint(p) + ": " + st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Usage: st.Terminal.Usage, Model: model}, nil
 			case st.Reconciled != nil && st.Reconciled.Disposition == invoke.DispositionIndeterminate:
-				return &Outcome{Terminal: invoke.TerminalFailed, Reason: string(invoke.DispositionIndeterminate) + ": " + st.Reconciled.Evidence, Invocation: st.Invocation.ID}, nil
+				return &Outcome{Terminal: invoke.TerminalFailed, Reason: string(invoke.DispositionIndeterminate) + ": " + st.Reconciled.Evidence, Invocation: st.Invocation.ID, Produced: p, Model: model}, nil
 			}
 			// abandoned (or never dispatched): safe to run again
 		}
+	}
+	if forced != nil {
+		return forced, nil
 	}
 	text, err := d.Store.Get(rs.Goal.Text)
 	if err != nil {
@@ -289,13 +303,21 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		sh.CrashAt = ""
 	}
 	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: text, Tools: d.Backend.Capabilities().ActsOutward, Timeout: d.Timeout}, nil)
+	var inc *invoke.Incapable
+	if errors.As(err, &inc) {
+		// a refusal the shell makes BEFORE writing anything (input over the
+		// backend's declared maximum): deterministic, so a retry can only
+		// repeat it — record it as the attempt's honest failure (D16: the
+		// thought is never sliced to fit; the route is what is lacking)
+		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error()}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	if o.Err != nil {
 		return nil, o.Err
 	}
-	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Receipt: o.Receipt, Usage: o.Usage}
+	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Produced: n, Receipt: o.Receipt, Usage: o.Usage, Model: d.Backend.Capabilities().Model}
 	if o.Terminal != invoke.TerminalFailed {
 		ref, err := receiptResponse(d.J, o.Receipt)
 		if err != nil {
@@ -342,17 +364,27 @@ func SelfVerdict(run record.RunID, n uint32, out *Outcome) *verdict.Verdict {
 	return v
 }
 
-func (d *Driver) transition(ctx context.Context, rs *RunState, a *AttemptState, to State, reason string, ev []record.Ref, outcome ...*Outcome) error {
+// transition is the ONE writer of run transitions in the driver (drain and
+// Ack included, except Ack's, which is committed atomically with its ack):
+// extra is the outcome (recorded) or the delivery state (delivered).
+func (d *Driver) transition(ctx context.Context, rs *RunState, a *AttemptState, to State, reason string, ev []record.Ref, extra ...any) error {
 	n := a.Attempt.Attempt
 	t := &Transition{Header: header(runRef(rs.Run), rs.Run, n, "run_transition/1"), From: a.Current(), To: to, Reason: reason, Evidence: ev}
-	if len(outcome) > 0 {
-		t.Outcome = outcome[0]
+	key := fmt.Sprintf("run/%s/%d/%s", rs.Run, n, to)
+	for _, x := range extra {
+		switch v := x.(type) {
+		case *Outcome:
+			t.Outcome = v
+		case DeliveryState:
+			t.Delivery = v
+			key += "/" + string(v)
+		}
 	}
-	if err := d.commit(ctx, fmt.Sprintf("run/%s/%d/%s", rs.Run, n, to), t); err != nil {
+	if err := d.commit(ctx, key, t); err != nil {
 		return err
 	}
 	a.Transitions = append(a.Transitions, t)
-	d.emit(rs, n, string(to), to, reason)
+	d.emit(rs, n, string(to), to, reason+string(t.Delivery))
 	return nil
 }
 
@@ -446,12 +478,12 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	// goals taken in whose run never started: start one (the goal and its
 	// assessment are the committed intake; nothing outcome-bearing ran)
 	for _, g := range led.Unstarted {
-		fam := d.familyOf(led, g)
+		fam := led.Families[g.ID]
 		if fam == nil {
 			return reports, fmt.Errorf("run: goal %s has no family assessment", g.ID)
 		}
 		rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam}
-		rep, err := d.drive(ctx, rs, nil)
+		rep, err := d.drive(ctx, rs, nil, nil)
 		if err != nil {
 			return reports, err
 		}
@@ -477,7 +509,11 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 					return reports, err
 				}
 			}
-			rep, err = d.drive(ctx, rs, a)
+			var forced *Outcome
+			if len(rs.Attempts) >= d.MaxAttempts {
+				forced = &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("attempt bound %d reached: %d attempts died before recorded", d.MaxAttempts, len(rs.Attempts))}
+			}
+			rep, err = d.drive(ctx, rs, a, forced)
 		}
 		if err != nil {
 			return reports, err

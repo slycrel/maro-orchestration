@@ -1,0 +1,23 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "delivery_started",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestKillMatrixResumesExactlyOnce",
+  "fields": {
+    "delivery": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    },
+    "n": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
+    }
+  }
+}

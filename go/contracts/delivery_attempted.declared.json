@@ -25,7 +25,7 @@
       "used_for": "authorization",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(transport_accepted|failed)$",
+      "pattern": "^(transport_accepted|failed|unknown)$",
       "rejects": "user_acknowledged",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
     },

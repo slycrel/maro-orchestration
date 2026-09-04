@@ -11,8 +11,9 @@ import (
 // OutcomesView projects every `recorded` transition to one row of the
 // shared outcomes ledger (CONTRACTS B6, `memory/outcomes.jsonl`), EXACT to
 // the wire contract: required keys present, `goal_achieved` ABSENT when
-// unjudged (rule A6, never null), closed vocabularies honoured, unknown
-// keys none. It is a lossy view of a richer source (contracts/VIEWS.md).
+// unjudged (rule A6, never null), closed vocabularies honoured, no keys B6
+// does not define (`lane` is a B3 key; B6 carries the lane in `task_type`).
+// It is a lossy view of a richer source (contracts/VIEWS.md).
 type OutcomesView struct{ Store *thought.Store }
 
 func (OutcomesView) Name() string                { return "outcomes.jsonl" }
@@ -37,7 +38,6 @@ type outcomeRow struct {
 	Model      string   `json:"model"`
 	RecordedAt string   `json:"recorded_at"`
 	HandleID   string   `json:"handle_id"`
-	Lane       string   `json:"lane"`
 	// tri-state verdict: ABSENT when unjudged
 	GoalAchieved   *bool    `json:"goal_achieved,omitempty"`
 	VerdictSource  string   `json:"goal_verdict_source,omitempty"`
@@ -48,7 +48,7 @@ type outcomeRow struct {
 func (v OutcomesView) Line(r record.Record) ([]byte, error) {
 	t := r.(*Transition)
 	o := t.Outcome
-	row := outcomeRow{OutcomeID: HandleOf(record.RunID(t.ID)), TaskType: string(LaneNow), Lane: string(LaneNow), Lessons: []string{},
+	row := outcomeRow{OutcomeID: HandleOf(record.RunID(t.ID)), TaskType: string(LaneNow), Lessons: []string{},
 		TokensIn: o.Usage.InputTokens, TokensOut: o.Usage.OutputTokens, ElapsedMS: o.Usage.WallMillis, CostUSD: o.Usage.CostUSD, Model: o.Model,
 		RecordedAt: t.At.UTC().Format("2006-01-02T15:04:05.000000Z"), HandleID: HandleOf(t.RunID)}
 	// the goal text is a thought; the view reads it whole
