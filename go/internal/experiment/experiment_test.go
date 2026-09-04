@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -512,6 +513,17 @@ func TestFoldRefusesForgedExperiments(t *testing.T) {
 		{"a unit that is not in the protocol", func(h *harness) []record.Record {
 			return []record.Record{&Assignment{Header: record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}, Experiment: x.ID, Unit: s2.k2[0], Ordinal: 0, Seed: Seed(x.ID, s2.k2[0])}}
 		}, "not the protocol's"},
+		{"an experiment with a blank fixture", func(h *harness) []record.Record {
+			y := *x
+			id := record.NewID()
+			y.Header = record.Header{ID: id, Schema: "experiment/1", Subject: record.Ref{Kind: "experiment", ID: string(id)}, At: time.Now().UTC()}
+			y.Protocol.Experiment = id
+			y.Hypothesis = s2.harmful // another hypothesis: no fishing refusal first
+			y.Arms = Arms(y.Hypothesis, y.Relation)
+			y.Units = append([]UnitSpec{}, x.Units...)
+			y.Units[2].Fixture = h.fixture(" ")
+			return []record.Record{&y}
+		}, "fixture is blank"},
 		{"a unit assigned twice", func(h *harness) []record.Record {
 			return []record.Record{&Assignment{Header: record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}, Experiment: x.ID, Unit: pas.Unit, Ordinal: 0, Seed: pas.Seed}}
 		}, "assigned twice"},
@@ -641,6 +653,8 @@ func TestOpenRefusesBadUnits(t *testing.T) {
 		{"unknown hypothesis", Spec{Hypothesis: learn.ItemRev{Item: learn.LearnedID(record.NewID()), Revision: record.NewID()}, Relation: ApplyItem, Units: []UnitSpec{{Goal: s.everest[0], Fixture: fx}}, Why: "w"}},
 		{"no units", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Why: "w"}},
 		{"not a goal", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: []UnitSpec{{Goal: record.NewID(), Fixture: fx}}, Why: "w"}},
+		{"blank fixture", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: []UnitSpec{{Goal: s.everest[0], Fixture: h.fixture("  \n ")}}, Why: "w"}},
+		{"two units with one goal text", Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: []UnitSpec{{Goal: s.everest[0], Fixture: fx}, {Goal: h.production("What is the height of Everest?"), Fixture: fx}}, Why: "w"}},
 	}
 	for _, c := range bad {
 		if _, err := Open(ctxBg, h.j, h.st, c.spec); !errors.Is(err, ErrConfig) {
@@ -666,5 +680,268 @@ func TestOpenRefusesBadUnits(t *testing.T) {
 	x2 := s.open(t, s.helpful, s.everest, "8,849 meters")
 	if x2.Version != 2 || x2.Prior != h.state().Attestations[x.ID].ID {
 		t.Fatalf("re-open: %+v", x2)
+	}
+}
+
+// revise commits a new revision of a lesson (predecessor = the current one).
+func (h *harness) revise(ir learn.ItemRev, text string) learn.ItemRev {
+	h.t.Helper()
+	ref, err := h.st.Put(thought.LessonText, []byte(text))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(ir.Item)}, At: time.Now().UTC()}, Item: ir.Item, Predecessor: ir.Revision, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	h.submit("revise/"+string(r.ID), r)
+	return learn.ItemRev{Item: ir.Item, Revision: r.ID}
+}
+
+// assign commits an honest assignment of the protocol's unit i.
+func (h *harness) assign(x *Experiment, i int) *Assignment {
+	h.t.Helper()
+	a := &Assignment{Header: record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}, Experiment: x.ID, Unit: x.Units[i].Goal, Ordinal: i, Seed: Seed(x.ID, x.Units[i].Goal)}
+	h.submit(fmt.Sprintf("experiment/%s/assign/%d", x.ID, i), a)
+	return h.state().assignment(x.ID, x.Units[i].Goal)
+}
+
+// driveArm drives one arm run with the given forced sets, as an honest
+// driver would — the records all re-derive; only the arm's contract with
+// the protocol can refuse it.
+func (h *harness) driveArm(as *Assignment, arm string, apply, withhold []learn.ItemRev) {
+	h.t.Helper()
+	unit := h.state().RunOf(as.Unit)
+	text, _ := h.st.Get(unit.Goal.Text)
+	d := &run.Driver{J: h.j, Store: h.st, Backend: h.exec, Origin: run.ReplayOrigin{}, Timeout: time.Minute,
+		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm, Unit: as.Unit, Root: unit.Goal.Root, Apply: apply, Withhold: withhold}}
+	if _, err := d.Run(ctxBg, text, unit.Goal.Delivery); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// The arms differ by exactly the hypothesis: an arm run whose selections
+// force anything else — an extra applied item on the treatment, a
+// withheld item on the control, a swapped relation — is refused by the
+// fold even though every one of its records re-derives (the request, the
+// applications, the evidence are all honest about what it did).
+func TestFoldRefusesArmsThatForceMoreThanTheHypothesis(t *testing.T) {
+	s := build(t)
+	h := s.h
+	other := h.lesson("Always answer in one sentence.", learn.Candidate)
+	x := s.open(t, s.helpful, s.everest, "8,849 meters")
+	cases := []struct {
+		name            string
+		arm             string
+		apply, withhold []learn.ItemRev
+	}{
+		{"treatment applying a second item", Treatment, []learn.ItemRev{s.helpful, other}, nil},
+		{"treatment applying another item instead", Treatment, []learn.ItemRev{other}, nil},
+		{"control withholding the hypothesis", Control, nil, []learn.ItemRev{s.helpful}},
+		{"control applying the hypothesis", Control, []learn.ItemRev{s.helpful}, nil},
+		{"treatment withholding instead of applying", Treatment, nil, []learn.ItemRev{s.helpful}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := h.snapshot()
+			defer g.close()
+			as := g.assign(x, 0)
+			g.driveArm(as, c.arm, c.apply, c.withhold)
+			if _, err := run.Fold(g.j.Production(), g.st); err != nil {
+				t.Fatalf("the run fold refused an honest arm run: %v", err)
+			}
+			_, err := Fold(g.j, g.st)
+			if err == nil || !strings.Contains(err.Error(), "not the protocol's") {
+				t.Fatalf("arm forcing %v/%v folded: %v", c.apply, c.withhold, err)
+			}
+		})
+	}
+	// the honest arm folds
+	as := h.assign(x, 0)
+	h.driveArm(as, Treatment, []learn.ItemRev{s.helpful}, nil)
+	if _, err := Fold(h.j, h.st); err != nil {
+		t.Fatal(err)
+	}
+	// an arm run taken in before its assignment: refused
+	g := h.snapshot()
+	defer g.close()
+	unit := g.state().RunOf(x.Units[1].Goal)
+	fake := record.NewID()
+	text, _ := g.st.Get(unit.Goal.Text)
+	d := &run.Driver{J: g.j, Store: g.st, Backend: g.exec, Origin: run.ReplayOrigin{}, Timeout: time.Minute,
+		Replay: &run.ReplayContext{Assignment: fake, Arm: Treatment, Unit: unit.Goal.ID, Root: unit.Goal.Root, Apply: []learn.ItemRev{s.helpful}}}
+	if _, err := d.Run(ctxBg, text, unit.Goal.Delivery); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(g.j, g.st); err == nil || !strings.Contains(err.Error(), "not a record") {
+		t.Fatalf("arm run citing a non-assignment folded: %v", err)
+	}
+}
+
+// A superseded hypothesis is a stale experiment: the runner refuses to
+// start an arm, and the fold refuses an arm that started anyway (recall
+// forces an item at its current revision, so the arm would administer
+// nothing and measure noise).
+func TestStaleHypothesisIsRefused(t *testing.T) {
+	s := build(t)
+	h := s.h
+	x := s.open(t, s.helpful, s.everest, "8,849 meters")
+	as := h.assign(x, 0)
+	h.revise(s.helpful, "Answer in metres.")
+	if err := h.runner().Run(ctxBg, x.ID); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("runner on a stale experiment: %v", err)
+	}
+	h.driveArm(as, Treatment, []learn.ItemRev{s.helpful}, nil)
+	if _, err := Fold(h.j, h.st); err == nil || !strings.Contains(err.Error(), "superseded") {
+		t.Fatalf("stale arm folded: %v", err)
+	}
+}
+
+// The first record of each production kind, forged: snapshots taken at the
+// runner's and the closer's crash seams hold the honest history up to but
+// not including that record, so the forgery is the first of its kind and
+// the fold's re-derivation branches are what refuse it. The same seams
+// prove Close resumes at every commit boundary.
+func TestFoldRefusesFirstForgedRecordsAndCloseResumes(t *testing.T) {
+	s := build(t)
+	h := s.h
+	x := s.open(t, s.helpful, s.everest, "8,849 meters")
+	// seam 1: the treatment arm of unit 0 is terminal, its evidence not yet committed
+	r := h.runner()
+	r.CrashAt = "before_evidence"
+	if err := r.Run(ctxBg, x.ID); !errors.Is(err, run.ErrCrashed) {
+		t.Fatalf("want a crash: %v", err)
+	}
+	{
+		g := h.snapshot()
+		st := g.state()
+		if len(st.Evidence) != 0 || len(st.Runs.Replays) != 1 {
+			t.Fatalf("seam 1: %d evidence, %d replays", len(st.Evidence), len(st.Runs.Replays))
+		}
+		as := st.assignment(x.ID, x.Units[0].Goal)
+		rs := st.Runs.Replays[as.ID][Treatment]
+		forged := EvidenceOf(rs, x.Hypothesis, x.ID, as.ID, as.Unit, Treatment)
+		forged.Exposed = !forged.Exposed
+		g.submit("forge/evidence", forged)
+		if _, err := Fold(g.j, g.st); err == nil || !strings.Contains(err.Error(), "does not re-derive") {
+			t.Fatalf("first forged evidence folded: %v", err)
+		}
+		g.close()
+	}
+	if err := h.runner().Run(ctxBg, x.ID); err != nil {
+		t.Fatal(err)
+	}
+	// seam 2: closed and committed, not attested
+	// (snapshot reopens h's journal, so each seam builds its closer fresh)
+	if _, err := (&Closer{J: h.j, Store: h.st, CrashAt: "close"}).Close(ctxBg, x.ID); !errors.Is(err, run.ErrCrashed) {
+		t.Fatalf("want a crash: %v", err)
+	}
+	if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: x.Units, Why: "re-open"}); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "not attested") {
+		t.Fatalf("open after an unattested close: %v", err)
+	}
+	if err := h.runner().Run(ctxBg, x.ID); !errors.Is(err, ErrRefused) {
+		t.Fatalf("run after close: %v", err)
+	}
+	{
+		g := h.snapshot()
+		st := g.state()
+		cm := st.Commitments[x.ID]
+		att := &EffectAttestation{Header: record.Header{ID: record.NewID(), Schema: "effect_attestation/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}, Experiment: x.ID, Cohort: cm.ID, Closure: st.Closed[x.ID].ID, Protocol: cm.Protocol, Evaluator: Evaluator, Estimator: Estimator}
+		for i, u := range cm.Units {
+			row, err := st.row(g.st, cm.Protocol, i, u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			att.Units = append(att.Units, row)
+		}
+		att.Units[1].ControlScore = 1 // the evaluator "saw" the fixture in a control answer that lacks it
+		g.submit("forge/attest", att)
+		if _, err := Fold(g.j, g.st); err == nil || !strings.Contains(err.Error(), "does not recompute") {
+			t.Fatalf("first forged attestation folded: %v", err)
+		}
+		g.close()
+	}
+	// seam 3: attested, not measured
+	if _, err := (&Closer{J: h.j, Store: h.st, CrashAt: "attest"}).Close(ctxBg, x.ID); !errors.Is(err, run.ErrCrashed) {
+		t.Fatalf("want a crash: %v", err)
+	}
+	{
+		g := h.snapshot()
+		st := g.state()
+		m := Measure(st.Attestations[x.ID])
+		m.Header = record.Header{ID: record.NewID(), Schema: "effect_measurement/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}
+		m.Verdict, m.ItemEffect = TreatmentHarmful, learn.ItemHarmful
+		g.submit("forge/measure", m)
+		if _, err := Fold(g.j, g.st); err == nil || !strings.Contains(err.Error(), "not the estimator's fold") {
+			t.Fatalf("first forged measurement folded: %v", err)
+		}
+		g.close()
+	}
+	// seam 4: measured, no transition; then the plain Close finishes
+	if _, err := (&Closer{J: h.j, Store: h.st, CrashAt: "measure"}).Close(ctxBg, x.ID); !errors.Is(err, run.ErrCrashed) {
+		t.Fatalf("want a crash: %v", err)
+	}
+	st := h.state()
+	if st.Measurements[x.ID] == nil || len(st.Runs.Learned.Items[s.helpful.Item].Transitions[s.helpful.Revision]) != 0 {
+		t.Fatal("seam 4: measurement without transition expected")
+	}
+	m, err := Close(ctxBg, h.j, h.st, x.ID)
+	if err != nil || m.ID != st.Measurements[x.ID].ID || m.Verdict != TreatmentHelpful {
+		t.Fatalf("%v %+v", err, m)
+	}
+	st = h.state()
+	if n := len(st.Runs.Learned.Items[s.helpful.Item].Transitions[s.helpful.Revision]); n != 1 || st.Runs.Learned.Items[s.helpful.Item].StageOf(s.helpful.Revision) != learn.Effective {
+		t.Fatalf("after resume: %d transitions", n)
+	}
+	// and a closure whose commitment was not in the same command is refused
+	{
+		s2 := build(t)
+		x2 := s2.open(t, s2.helpful, s2.everest, "8,849 meters")
+		if err := s2.h.runner().Run(ctxBg, x2.ID); err != nil {
+			t.Fatal(err)
+		}
+		pre := s2.h.state()
+		var units []AssignedUnit
+		for i, u := range x2.Units {
+			as := pre.assignment(x2.ID, u.Goal)
+			units = append(units, AssignedUnit{Unit: u.Goal, Assignment: as.ID, Ordinal: i, Seed: as.Seed})
+		}
+		sub := record.Ref{Kind: "experiment", ID: string(x2.ID)}
+		cm := &CohortCommitment{Header: record.Header{ID: record.NewID(), Schema: "cohort_commitment/1", Subject: sub, At: time.Now().UTC()}, Experiment: x2.ID, Protocol: x2.Protocol, Units: units, Root: CohortRoot(units), Count: len(units)}
+		cl := &Closed{Header: record.Header{ID: record.NewID(), Schema: "cohort_closed/1", Subject: sub, At: time.Now().UTC()}, Experiment: x2.ID, Commitment: cm.ID, Count: 3}
+		s2.h.submit("forge/close-1", cl)
+		s2.h.submit("forge/close-2", cm)
+		if _, err := Fold(s2.h.j, s2.h.st); err == nil || !strings.Contains(err.Error(), "not one command") {
+			t.Fatalf("split closure folded: %v", err)
+		}
+	}
+}
+
+// A failed arm delivers the framework's envelope, which the oracle must
+// never score (a fixture of "failed" would match it): the evidence marks
+// the arm missing and the pair leaves the analysis.
+func TestFailedArmIsMissingNotScored(t *testing.T) {
+	s := build(t)
+	h := s.h
+	x := s.open(t, s.helpful, s.everest[:1], "failed")
+	r := h.runner()
+	r.Backend = &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{FailBefore: true}, {Response: []byte("29,032 feet")}}}
+	if err := r.Run(ctxBg, x.ID); err != nil {
+		t.Fatal(err)
+	}
+	st := h.state()
+	as := st.assignment(x.ID, x.Units[0].Goal)
+	tr, ct := st.Evidence[as.ID][Treatment], st.Evidence[as.ID][Control]
+	if tr.Missing != MissingNotComplete || tr.Deliverable != nil || ct.Deliverable == nil {
+		t.Fatalf("evidence %+v %+v", tr, ct)
+	}
+	// the envelope the treatment delivered does contain the fixture
+	payload := h.deliverable(st.Runs.Replays[as.ID][Treatment])
+	if Score([]byte(payload), []byte("failed")) != 1 {
+		t.Fatalf("the failure envelope %q does not contain the fixture; the test no longer shows the hazard", payload)
+	}
+	m, err := Close(ctxBg, h.j, h.st, x.ID)
+	if err != nil || m.Assigned != 1 || m.Analyzed != 0 || m.Verdict != Insufficient {
+		t.Fatalf("%v %+v", err, m)
+	}
+	if row := h.state().Attestations[x.ID].Units[0]; row.TreatmentMissing != MissingNotComplete || row.TreatmentScore != 0 {
+		t.Fatalf("row %+v", row)
 	}
 }

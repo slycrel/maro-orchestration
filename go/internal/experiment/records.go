@@ -364,7 +364,7 @@ func (r *UnitEvidence) ValidateWire() error {
 			return errors.New("unit_evidence: deliverable must be a deliverable thought")
 		}
 	}
-	if r.Missing != "" && r.Missing != MissingNoDeliverable {
+	if r.Missing != "" && r.Missing != MissingNoDeliverable && r.Missing != MissingNotComplete {
 		return fmt.Errorf("unit_evidence: missing %q out of vocabulary", r.Missing)
 	}
 	if len(r.ArtifactRoot) != 64 {
@@ -373,9 +373,14 @@ func (r *UnitEvidence) ValidateWire() error {
 	return nil
 }
 
-// MissingNoDeliverable: the arm run ended without a deliverable (a failed
-// or undelivered attempt); the pair is excluded from analysis.
-const MissingNoDeliverable = "no_deliverable"
+// Missing reasons: the arm's recorded outcome was not complete (a failed
+// or partial run delivers the framework's envelope, never a scoreable
+// answer), or a complete run prepared no delivery. Either excludes the
+// pair from analysis.
+const (
+	MissingNoDeliverable = "no_deliverable"
+	MissingNotComplete   = "not_complete"
+)
 
 // AssignedUnit is one cohort row: the unit, its assignment, its ordinal
 // and seed — the authenticated denominator.

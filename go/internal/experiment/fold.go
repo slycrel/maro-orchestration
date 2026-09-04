@@ -115,7 +115,7 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 		var err error
 		switch x := r.(type) {
 		case *Experiment:
-			err = st.experiment(x)
+			err = st.experiment(x, store)
 		case *Assignment:
 			err = st.assign(x)
 		case *Closed:
@@ -138,8 +138,86 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 		if cm == nil || cm.ID != cl.Commitment {
 			return nil, fmt.Errorf("experiment: closure of %s names commitment %s, which is not the experiment's", exp, cl.Commitment)
 		}
+		if !j.SameCommand(cl.Seq, cm.Seq) {
+			return nil, fmt.Errorf("experiment: closure of %s and its commitment were not one command (seq %d, %d)", exp, cl.Seq, cm.Seq)
+		}
+	}
+	// every arm run, evidence or not: its assignment is known and its
+	// selections force exactly the protocol's sets
+	for asID, byArm := range led.Replays {
+		as := st.Assignments[asID]
+		if as == nil {
+			return nil, fmt.Errorf("experiment: arm runs cite assignment %s, which is not a record", asID)
+		}
+		for arm, rs := range byArm {
+			if err := st.checkArm(as, arm, rs); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return st, nil
+}
+
+// checkArm executes the arm's contract on a replay run: its goal was taken
+// in after the assignment, while the hypothesis was still the item's
+// current revision (recall forces an item at its current revision, so a
+// stale arm administers nothing), and every attempt's recall and policy
+// selection carries EXACTLY the protocol's forced sets for the arm — the
+// two arms differ by the hypothesis and nothing else.
+func (st *State) checkArm(as *Assignment, arm string, rs *run.RunState) error {
+	x := st.Experiments[as.Experiment]
+	if rs.Goal.Seq < as.Seq {
+		return fmt.Errorf("experiment: arm run %s was taken in before its assignment %s", rs.Run, as.ID)
+	}
+	it := st.Runs.Learned.Items[x.Hypothesis.Item]
+	if cur := currentAt(it, rs.Goal.Seq); cur == nil || cur.ID != x.Hypothesis.Revision {
+		return fmt.Errorf("experiment: arm run %s started after hypothesis %s/%s was superseded", rs.Run, x.Hypothesis.Item, x.Hypothesis.Revision)
+	}
+	var spec *ArmSpec
+	for i := range x.Arms {
+		if x.Arms[i].Arm == arm {
+			spec = &x.Arms[i]
+		}
+	}
+	if spec == nil {
+		return fmt.Errorf("experiment: arm %q is not in the protocol of %s", arm, x.ID)
+	}
+	want := &learn.ArmRef{Assignment: as.ID, Arm: arm, Apply: spec.Apply, Withhold: spec.Withhold}
+	for _, a := range rs.Attempts {
+		if a.Policy != nil && !sameArm(a.Policy.Arm, want) {
+			return fmt.Errorf("experiment: arm run %s attempt %d policy selection forces %s, not the protocol's %s arm", rs.Run, a.Attempt.Attempt, describeArm(a.Policy.Arm), arm)
+		}
+		if a.Recall != nil && !sameArm(a.Recall.Arm, want) {
+			return fmt.Errorf("experiment: arm run %s attempt %d recall selection forces %s, not the protocol's %s arm", rs.Run, a.Attempt.Attempt, describeArm(a.Recall.Arm), arm)
+		}
+	}
+	return nil
+}
+
+func sameArm(got, want *learn.ArmRef) bool {
+	if got == nil || got.Assignment != want.Assignment || got.Arm != want.Arm {
+		return false
+	}
+	return sameRevs(got.Apply, want.Apply) && sameRevs(got.Withhold, want.Withhold)
+}
+
+func sameRevs(a, b []learn.ItemRev) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func describeArm(a *learn.ArmRef) string {
+	if a == nil {
+		return "nothing"
+	}
+	return fmt.Sprintf("apply %v withhold %v", a.Apply, a.Withhold)
 }
 
 func (st *State) closed(x *Closed) error {
@@ -157,12 +235,21 @@ func (st *State) closed(x *Closed) error {
 	return nil
 }
 
-func (st *State) experiment(x *Experiment) error {
-	// the units: terminal production runs of the population, before this
+func (st *State) experiment(x *Experiment, store *thought.Store) error {
+	// the units: terminal production runs of the population, before this,
+	// no two with the same goal text, each with a fixture an oracle can match
+	texts := map[string]bool{}
 	for i, u := range x.Units {
 		rs := st.byGoal[u.Goal]
 		if rs == nil || rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork {
 			return fmt.Errorf("experiment: %s unit %d (%s) is not a production run's goal", x.ID, i, u.Goal)
+		}
+		if texts[rs.Goal.Text.Hash] {
+			return fmt.Errorf("experiment: %s unit %d (%s) repeats another unit's goal text", x.ID, i, u.Goal)
+		}
+		texts[rs.Goal.Text.Hash] = true
+		if err := checkFixture(store, u.Fixture); err != nil {
+			return fmt.Errorf("experiment: %s unit %d (%s): %w", x.ID, i, u.Goal, err)
 		}
 		if ts := terminalSeq(rs); ts == 0 || ts > x.Seq {
 			return fmt.Errorf("experiment: %s unit %d (%s) was not terminal when the experiment opened", x.ID, i, u.Goal)
@@ -229,7 +316,7 @@ func (st *State) evidence(x *UnitEvidence) error {
 	if ts := terminalSeq(rs); ts == 0 || ts > x.Seq {
 		return fmt.Errorf("experiment: evidence %s before its arm run %s was terminal", x.ID, rs.Run)
 	}
-	want := EvidenceOf(rs, st.Runs.Learned, x0.Hypothesis, x.Experiment, as.ID, as.Unit, x.Arm)
+	want := EvidenceOf(rs, x0.Hypothesis, x.Experiment, as.ID, as.Unit, x.Arm)
 	if x.Attempt != want.Attempt || x.Exposed != want.Exposed || !reflect.DeepEqual(x.Deliverable, want.Deliverable) || x.Missing != want.Missing || x.ArtifactRoot != want.ArtifactRoot {
 		return fmt.Errorf("experiment: evidence %s does not re-derive from run %s (exposed %v/%v, deliverable %v/%v, missing %q/%q, root %s/%s)", x.ID, rs.Run,
 			x.Exposed, want.Exposed, x.Deliverable != nil, want.Deliverable != nil, x.Missing, want.Missing, x.ArtifactRoot[:8], want.ArtifactRoot[:8])

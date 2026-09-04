@@ -1277,3 +1277,56 @@ attestation+measurement pair passes `learn.Fold` alone
 that would make this one reader is the §19.5 cut); the experimental
 envelope stays unused until shadow arms (step 11); the runner is
 sequential and one experiment at a time (D6).
+
+**Review round (codex Skeptic + Expert QA, one pass, every finding
+verified in the tree before fixing).** Nine real findings, all fixed
+in the round:
+
+- **A (high) — the arm's forced sets were never checked against the
+  protocol.** A `ReplayContext` could apply a second item on the
+  treatment or withhold the hypothesis on the control, every record
+  re-derived, and the evidence read as an honest paired replay. The
+  fold now walks every arm run (evidence or not) and requires each
+  attempt's recall and policy selections to carry exactly the
+  protocol's `ArmRef` — assignment, arm, apply set, withhold set —
+  and the assignment to be a record that precedes the run.
+- **B (high) — `Open` dereferenced nil** when the prior experiment on
+  the hypothesis was closed but not yet attested (a crash between the
+  closer's commits). It now refuses with "closed but not attested;
+  finish its close first".
+- **C — exposure was aggregated over all attempts** while the
+  deliverable came from the terminal one; a lesson applied on attempt
+  1 and dropped on attempt 2 counted as exposed. Evidence now reads
+  the terminal attempt's selections only.
+- **D — a superseded hypothesis ran silently unexposed** (recall
+  forces items at their current revision, so the arm administered
+  nothing). The runner refuses a stale experiment; the fold refuses an
+  arm that started after the hypothesis was superseded.
+- **E — a blank fixture** scored 0 on both arms and walked the item
+  to tombstone through `item_redundant`. `Open` and the fold refuse
+  blank fixtures.
+- **F — closure and commitment "in one command" was asserted, not
+  verified.** The first fix used Seq adjacency, which the test
+  immediately showed is not the same thing (two back-to-back commands
+  also produce adjacent seqs); the journal now answers
+  `SameCommand(a, b)` from its tx acks and the fold asks it.
+- **G — the oracle scored the failure envelope.** A failed arm
+  delivers `Render(failed)`; a fixture of "failed" matched it. Evidence
+  for a non-complete outcome now carries `missing: not_complete` and
+  the pair leaves the analysis.
+- **H — two units with identical goal text** shared a request hash;
+  refused at `Open` and in the fold.
+- **I — the forged-record tests never reached the fold's re-derive
+  branches** (every forgery was caught by an earlier ordering check).
+  Fixed with crash seams: the runner's `before_evidence` and the
+  closer's `close|attest|measure|transition` snapshots hold the honest
+  history up to but not including a record, so the forged first
+  evidence / attestation / measurement is refused by "does not
+  re-derive", "does not recompute", "not the estimator's fold". The
+  same seams prove `Close` resumes at every commit boundary with the
+  same measurement id and one transition.
+
+Five new tests, two extended; `unit_evidence.missing` contract now
+`^(no_deliverable|not_complete)$`. What the stricter fold found in the
+existing scenarios: nothing — the honest runner's arms already carried
+exactly the protocol's sets, which is the point of checking.

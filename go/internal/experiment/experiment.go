@@ -51,10 +51,18 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 		return nil, fmt.Errorf("%w: at least one unit", ErrConfig)
 	}
 	family := ""
+	texts := map[string]bool{}
 	for _, u := range spec.Units {
 		rs := st.RunOf(u.Goal)
 		if rs == nil {
 			return nil, fmt.Errorf("%w: unit %s is not a run's goal", ErrConfig, u.Goal)
+		}
+		if texts[rs.Goal.Text.Hash] {
+			return nil, fmt.Errorf("%w: unit %s repeats another unit's goal text (one observation, not two)", ErrConfig, u.Goal)
+		}
+		texts[rs.Goal.Text.Hash] = true
+		if err := checkFixture(store, u.Fixture); err != nil {
+			return nil, fmt.Errorf("%w: unit %s: %v", ErrConfig, u.Goal, err)
 		}
 		if rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork {
 			return nil, fmt.Errorf("%w: unit %s is a %s goal, not production", ErrConfig, u.Goal, rs.Goal.Origin)
@@ -91,8 +99,12 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 		return nil, fmt.Errorf("%w: experiment %s on %s/%s over %s is open; close it first", ErrRefused, prior.ID, spec.Hypothesis.Item, spec.Hypothesis.Revision, family)
 	}
 	if last := st.lastClosedFor(spec.Hypothesis, family); last != nil {
+		att := st.Attestations[last.ID]
+		if att == nil {
+			return nil, fmt.Errorf("%w: experiment %s is closed but not attested; finish its close first", ErrRefused, last.ID)
+		}
 		x.Version = last.Version + 1
-		x.Prior = st.Attestations[last.ID].ID
+		x.Prior = att.ID
 	}
 	if err := x.ValidateWire(); err != nil {
 		return nil, err
@@ -101,6 +113,31 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 		return nil, err
 	}
 	return x, nil
+}
+
+// checkFixture reads the fixture and refuses one the oracle could never
+// match: a blank fixture scores every arm 0, and 0 = 0 is "equivalent".
+func checkFixture(store *thought.Store, ref thought.Ref) error {
+	b, err := store.Get(ref)
+	if err != nil {
+		return fmt.Errorf("fixture: %w", err)
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return errors.New("fixture is blank")
+	}
+	return nil
+}
+
+// currentAt is the item's current revision at a journal prefix: the last
+// revision committed before seq.
+func currentAt(it *learn.Item, seq uint64) *learn.LearnedRevision {
+	var cur *learn.LearnedRevision
+	for _, r := range it.Revisions {
+		if r.Seq < seq {
+			cur = r
+		}
+	}
+	return cur
 }
 
 func hasRevision(it *learn.Item, rev record.RecordID) bool {
@@ -177,6 +214,12 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if unit == nil {
 		return fmt.Errorf("%w: unit %s has no run", ErrConfig, as.Unit)
 	}
+	// the hypothesis must still be the item's current revision: recall
+	// forces an item at its current revision, so a superseded hypothesis
+	// would run an arm that administers nothing (the fold refuses one)
+	if it := st.Runs.Learned.Items[x.Hypothesis.Item]; it == nil || it.Current.ID != x.Hypothesis.Revision {
+		return fmt.Errorf("%w: hypothesis %s/%s is no longer the item's current revision; the experiment is stale", ErrRefused, x.Hypothesis.Item, x.Hypothesis.Revision)
+	}
 	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt,
 		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm.Arm, Unit: as.Unit, Root: unit.Goal.Root, Apply: arm.Apply, Withhold: arm.Withhold}}
 	if err := d.Validate(); err != nil {
@@ -219,47 +262,54 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if rs == nil || !rs.Terminal() {
 		return fmt.Errorf("%w: arm %s of %s did not reach terminal", ErrRefused, arm.Arm, as.ID)
 	}
-	ev := EvidenceOf(rs, led.Learned, x.Hypothesis, x.ID, as.ID, as.Unit, arm.Arm)
+	if r.CrashAt == "before_evidence" {
+		return fmt.Errorf("%w: before_evidence", run.ErrCrashed)
+	}
+	ev := EvidenceOf(rs, x.Hypothesis, x.ID, as.ID, as.Unit, arm.Arm)
 	_, err = r.J.Submit(ctx, journal.Command{IdempotencyKey: fmt.Sprintf("experiment/%s/evidence/%s/%s", x.ID, as.ID, arm.Arm), Epoch: r.J.Epoch(), Records: []record.Record{ev}})
 	return err
 }
 
-// EvidenceOf derives an arm run's evidence from the run fold (§19.1): the
-// hypothesis revision's exposure (an application or policy application in
-// the terminal attempt's run), the deliverable the run prepared, and the
-// artifact root. The verifier recomputes it the same way.
-func EvidenceOf(rs *run.RunState, learned *learn.Ledger, hyp learn.ItemRev, exp, as, unit record.RecordID, arm string) *UnitEvidence {
+// EvidenceOf derives an arm run's evidence from the run fold (§19.1), all
+// of it over the TERMINAL attempt: exposure (the attempt's recall selection
+// included the hypothesis revision, or its policy selection enabled it —
+// both selections are what the fold verified the request against), the
+// deliverable (only a complete outcome's: a failed or partial run's
+// payload is the framework's envelope, which no oracle may score), and
+// the artifact root. The verifier recomputes it the same way.
+func EvidenceOf(rs *run.RunState, hyp learn.ItemRev, exp, as, unit record.RecordID, arm string) *UnitEvidence {
 	a := rs.Latest()
 	n := a.Attempt.Attempt
 	ev := &UnitEvidence{Header: record.Header{ID: record.NewID(), Schema: "unit_evidence/1", RunID: rs.Run, Attempt: n, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: now()},
-		Assignment: as, Experiment: exp, Unit: unit, Arm: arm, Exposed: exposed(rs, learned, hyp)}
-	if a.Delivery != nil && a.Delivery.Prepared != nil {
+		Assignment: as, Experiment: exp, Unit: unit, Arm: arm, Exposed: exposed(a, hyp)}
+	rec := a.Has(run.Recorded)
+	switch {
+	case rec == nil || rec.Outcome == nil || rec.Outcome.Terminal != invoke.TerminalComplete:
+		ev.Missing = MissingNotComplete
+	case a.Delivery != nil && a.Delivery.Prepared != nil:
 		p := a.Delivery.Prepared.Payload
 		ev.Deliverable = &p
-	} else {
+	default:
 		ev.Missing = MissingNoDeliverable
 	}
 	ev.ArtifactRoot = artifactRoot(rs, a, ev)
 	return ev
 }
 
-// exposed: the hypothesis revision reached the run — an Application on any
-// of its invocations, or a PolicyApplication on any of its policy
-// selections.
-func exposed(rs *run.RunState, learned *learn.Ledger, hyp learn.ItemRev) bool {
-	for _, a := range rs.Attempts {
-		for _, st := range a.Invocations {
-			for _, ap := range learned.Applications[st.Invocation.ID] {
-				if ap.Item == hyp.Item && ap.Revision == hyp.Revision {
-					return true
-				}
+// exposed: the terminal attempt ran under a recall selection that included
+// the hypothesis revision, or a policy selection that enabled it.
+func exposed(a *run.AttemptState, hyp learn.ItemRev) bool {
+	if a.Recall != nil {
+		for _, ir := range a.Recall.Included {
+			if ir == hyp {
+				return true
 			}
 		}
-		if a.Policy != nil {
-			for _, pa := range learned.PolicyApps[a.Policy.ID] {
-				if pa.Item == hyp.Item && pa.Revision == hyp.Revision {
-					return true
-				}
+	}
+	if a.Policy != nil {
+		for _, ir := range a.Policy.Enabled {
+			if ir == hyp {
+				return true
 			}
 		}
 	}
@@ -267,7 +317,7 @@ func exposed(rs *run.RunState, learned *learn.Ledger, hyp learn.ItemRev) bool {
 }
 
 func artifactRoot(rs *run.RunState, a *run.AttemptState, ev *UnitEvidence) string {
-	var term, rec record.RecordID
+	var term, rec, recall, policy record.RecordID
 	for _, t := range a.Transitions {
 		if t.To == run.Delivered || t.To == run.DeliveryFailedS {
 			term = t.ID
@@ -277,6 +327,12 @@ func artifactRoot(rs *run.RunState, a *run.AttemptState, ev *UnitEvidence) strin
 	var o run.Outcome
 	if t := a.Has(run.Recorded); t != nil && t.Outcome != nil {
 		rec, o = t.ID, *t.Outcome
+	}
+	if a.Recall != nil {
+		recall = a.Recall.ID
+	}
+	if a.Policy != nil {
+		policy = a.Policy.ID
 	}
 	deliverable := ""
 	if ev.Deliverable != nil {
@@ -290,9 +346,12 @@ func artifactRoot(rs *run.RunState, a *run.AttemptState, ev *UnitEvidence) strin
 		Invocation  record.RecordID `json:"invocation"`
 		Receipt     record.RecordID `json:"receipt"`
 		Closure     record.RecordID `json:"closure"`
+		Recall      record.RecordID `json:"recall"`
+		Policy      record.RecordID `json:"policy"`
 		Deliverable string          `json:"deliverable"`
 		Exposed     bool            `json:"exposed"`
-	}{rs.Run, a.Attempt.Attempt, term, rec, o.Invocation, o.Receipt, o.Closure, deliverable, ev.Exposed})
+		Missing     string          `json:"missing"`
+	}{rs.Run, a.Attempt.Attempt, term, rec, o.Invocation, o.Receipt, o.Closure, recall, policy, deliverable, ev.Exposed, ev.Missing})
 	return digest("artifact", string(raw))
 }
 
@@ -327,6 +386,20 @@ func intended(rel Relation, arm string) bool {
 // revision). Every commit is keyed, so a Close killed midway finishes on
 // the next call.
 func Close(ctx context.Context, j *journal.Journal, store *thought.Store, exp record.RecordID) (*EffectMeasurement, error) {
+	return (&Closer{J: j, Store: store}).Close(ctx, exp)
+}
+
+// Closer is Close with the kill matrix's seam: CrashAt stops it dead after
+// the named commit (close | attest | measure). Production never sets it.
+type Closer struct {
+	J       *journal.Journal
+	Store   *thought.Store
+	CrashAt string
+}
+
+// Close: see the package function.
+func (c *Closer) Close(ctx context.Context, exp record.RecordID) (*EffectMeasurement, error) {
+	j, store := c.J, c.Store
 	st, err := Fold(j, store)
 	if err != nil {
 		return nil, err
@@ -337,8 +410,13 @@ func Close(ctx context.Context, j *journal.Journal, store *thought.Store, exp re
 	}
 	sub := record.Ref{Kind: "experiment", ID: string(exp)}
 	commit := func(key string, recs ...record.Record) error {
-		_, err := j.Submit(ctx, journal.Command{IdempotencyKey: "experiment/" + string(exp) + "/" + key, Epoch: j.Epoch(), Records: recs})
-		return err
+		if _, err := j.Submit(ctx, journal.Command{IdempotencyKey: "experiment/" + string(exp) + "/" + key, Epoch: j.Epoch(), Records: recs}); err != nil {
+			return err
+		}
+		if c.CrashAt == key {
+			return fmt.Errorf("%w: %s", run.ErrCrashed, key)
+		}
+		return nil
 	}
 	refold := func() error {
 		st, err = Fold(j, store)

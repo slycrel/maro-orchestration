@@ -174,6 +174,21 @@ func (j *Journal) Head() uint64 {
 // Epoch is the lease epoch this journal stamps on frames.
 func (j *Journal) Epoch() uint64 { return j.lease.Epoch }
 
+// SameCommand reports whether two committed seqs were stamped by one
+// command (one frame, one fsync). A fold that requires two records to have
+// been written atomically asks this rather than testing Seq adjacency: two
+// back-to-back commands also produce adjacent seqs.
+func (j *Journal) SameCommand(a, b uint64) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, ack := range j.acks {
+		if a >= ack.FirstSeq && a <= ack.LastSeq {
+			return b >= ack.FirstSeq && b <= ack.LastSeq
+		}
+	}
+	return false
+}
+
 // Root is the journal's workspace root (from the lease).
 func (j *Journal) Root() *workspace.Announced { return j.root }
 

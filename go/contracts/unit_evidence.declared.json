@@ -69,9 +69,9 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^no_deliverable$",
+      "pattern": "^(no_deliverable|not_complete)$",
       "rejects": "lost",
-      "measured_by": "internal/experiment:TestEstimatorAndOracle"
+      "measured_by": "internal/experiment:TestFailedArmIsMissingNotScored"
     }
   }
 }
