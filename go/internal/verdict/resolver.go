@@ -22,14 +22,18 @@ const ResolverVer = "resolver/1"
 // Thresholds are the registered numbers the resolver consults, each with a
 // Why (D13: reported, never magic). Validated before any fold.
 type Thresholds struct {
-	Refute    float64 `json:"refute"`
-	RefuteWhy string  `json:"refute_why"`
+	Refute     float64 `json:"refute"`
+	RefuteWhy  string  `json:"refute_why"`
+	Promote    float64 `json:"promote"`
+	PromoteWhy string  `json:"promote_why"`
 }
 
 // DefaultThresholds is the v1 registration.
 var DefaultThresholds = Thresholds{
-	Refute:    0.9,
-	RefuteWhy: "a deterministic check that is 90%+ sure a claim is false outranks a model judge that has not seen the check; below that the judge decides (v1 registration; re-measure against observation accuracy once live)",
+	Refute:     0.9,
+	RefuteWhy:  "a deterministic check that is 90%+ sure a claim is false outranks a model judge that has not seen the check; below that the judge decides (v1 registration; re-measure against observation accuracy once live)",
+	Promote:    0.5,
+	PromoteWhy: "a judge that claims success at under even odds is abstaining, not judging: standing alone must not turn a zero-confidence 'achieved' into a settled success; demotions stand at any confidence (v1 registration; re-measure against closure accuracy once live)",
 }
 
 func (t Thresholds) validate() error {
@@ -38,6 +42,12 @@ func (t Thresholds) validate() error {
 	}
 	if t.RefuteWhy == "" {
 		return fmt.Errorf("%w: refute threshold has no why", ErrCandidates)
+	}
+	if math.IsNaN(t.Promote) || t.Promote < 0 || t.Promote > 1 {
+		return fmt.Errorf("%w: promote threshold %v not in [0,1]", ErrCandidates, t.Promote)
+	}
+	if t.PromoteWhy == "" {
+		return fmt.Errorf("%w: promote threshold has no why", ErrCandidates)
 	}
 	return nil
 }
@@ -242,9 +252,15 @@ func Resolve(c Candidates, th Thresholds) (Resolution, error) {
 	default:
 		res.Effective, res.Outcome, res.Rule = top.ID, top.Outcome, "standing:"+string(top.Source.Standing)
 	}
-	// rule 4
+	// rule 4: success needs standing — self cannot promote
 	if top.Source.Standing == StandingSelf && top.Outcome == successOutcomes[c.VerdictKind] {
 		res.Effective, res.Decisive, res.Outcome, res.Rule = "", nil, unknownFor(c.VerdictKind), "self_cannot_promote"
+		return res, nil
+	}
+	// rule 5: success needs confidence — a judge or check claiming success
+	// below the promote threshold is abstaining; an operator is not
+	if top.Outcome == successOutcomes[c.VerdictKind] && top.Source.Standing != StandingOperator && top.Confidence < th.Promote {
+		res.Effective, res.Decisive, res.Outcome, res.Rule = "", nil, unknownFor(c.VerdictKind), fmt.Sprintf("below_promote_threshold:%v<%v", top.Confidence, th.Promote)
 	}
 	return res, nil
 }

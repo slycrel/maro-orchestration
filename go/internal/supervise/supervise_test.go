@@ -251,3 +251,101 @@ func TestStopQuiescesInStageOrder(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 }
+
+// A lane that returns nil without being cancelled has failed (an always-on
+// lane does not finish): it is restarted, bounded. Configuration is
+// validated at Start; Stop while a lane is mid-restart still quiesces it;
+// a refused control record shows in Health.
+func TestUnexpectedReturnRestartsAndConfigIsValidated(t *testing.T) {
+	j := openJ(t)
+	s := New(j)
+	s.MaxRestarts, s.Watch = 1, 10*time.Millisecond
+	quitter := &fake{name: "quitter", stage: 2, expect: time.Minute, body: func(ctx context.Context, hb *Heartbeat, gen int) error {
+		if gen == 1 {
+			return nil // fell out of its loop
+		}
+		<-ctx.Done()
+		return nil
+	}}
+	s.Register(quitter)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "restart", func() bool { return atomic.LoadInt32(&quitter.runs) == 2 })
+	if got := events(t, j, "quitter"); strings.Join(got, " ") != "started failed restarted" {
+		t.Fatalf("events: %v", got)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := events(t, j, "quitter"); strings.Join(got, " ") != "started failed restarted stopped" {
+		t.Fatalf("events after stop: %v", got)
+	}
+	// validation
+	bad := New(openJ(t))
+	bad.MaxRestarts = -1
+	if err := bad.Start(context.Background()); err == nil {
+		t.Fatal("negative bound accepted")
+	}
+	if err := (&Supervisor{J: j}).Start(context.Background()); err == nil {
+		t.Fatal("a supervisor not made by New started")
+	}
+	// Stop racing a restart: a lane that fails repeatedly while Stop runs
+	// is not relaunched once stopping began, and Stop awaits the live one
+	j3 := openJ(t)
+	s3 := New(j3)
+	s3.MaxRestarts, s3.Watch = 100, 10*time.Millisecond
+	release := make(chan struct{})
+	flapper := &fake{name: "flapper", stage: 1, expect: time.Minute, body: func(ctx context.Context, hb *Heartbeat, gen int) error {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-release:
+			return errors.New("flap")
+		case <-time.After(5 * time.Millisecond):
+			return errors.New("flap")
+		}
+	}}
+	s3.Register(flapper)
+	s3.Start(context.Background())
+	waitFor(t, "a few flaps", func() bool { return atomic.LoadInt32(&flapper.runs) >= 3 })
+	if err := s3.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runsAtStop := atomic.LoadInt32(&flapper.runs)
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&flapper.runs) != runsAtStop {
+		t.Fatal("a lane was relaunched after Stop")
+	}
+	if st := s3.Lanes()[0]; st.Up {
+		t.Fatalf("lane still up after Stop: %+v", st)
+	}
+	// a refused control record is in Health: close the journal under a live lane
+	j4 := openJ(t)
+	s4 := New(j4)
+	s4.MinBeat, s4.Watch = 0, 10*time.Millisecond
+	var mark atomic.Uint64
+	beater := &fake{name: "beater", stage: 2, expect: time.Minute, body: func(ctx context.Context, hb *Heartbeat, gen int) error {
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(5 * time.Millisecond):
+				hb.Progress(context.Background(), mark.Add(1))
+			}
+		}
+	}}
+	s4.Register(beater)
+	s4.Start(context.Background())
+	waitFor(t, "beats", func() bool { return mark.Load() > 3 })
+	j4.Close()
+	waitFor(t, "journal refusal in health", func() bool {
+		for _, h := range s4.Health() {
+			if strings.Contains(h, "control journal refused") {
+				return true
+			}
+		}
+		return false
+	})
+	s4.stop()
+}

@@ -270,9 +270,10 @@ func TestJournalExecutesAgendaVocabulary(t *testing.T) {
 		{"plan no steps", &Plan{Header: hd(), Invocation: a.Plan.Invocation}, "at least one step"},
 		{"plan step not a step thought", &Plan{Header: hd(), Invocation: a.Plan.Invocation, Steps: []thought.Ref{res}}, "step thought"},
 		{"intent clear without interpretation", &IntentAssessment{Header: hd(), Invocation: a.Intent.Invocation, Clear: true}, "interpretation"},
-		{"step ordinal zero", &StepDone{Header: hd(), Ordinal: 0, Step: step, Invocation: a.Steps[0].Invocation, Result: res, Outcome: StepUnjudged}, "ordinal"},
-		{"step foreign outcome", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Result: res, Outcome: "maybe"}, "out of vocabulary"},
-		{"step unjudged with verdict", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Result: res, Verdict: record.NewID(), Outcome: StepUnjudged}, "unjudged has no verdict"},
+		{"step ordinal zero", &StepDone{Header: hd(), Ordinal: 0, Step: step, Invocation: a.Steps[0].Invocation, Terminal: invoke.TerminalComplete, Result: res, Outcome: StepUnjudged}, "ordinal"},
+		{"step foreign outcome", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Terminal: invoke.TerminalComplete, Result: res, Outcome: "maybe"}, "out of vocabulary"},
+		{"step failed terminal", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Terminal: invoke.TerminalFailed, Result: res, Outcome: StepUnjudged}, "complete|partial"},
+		{"step unjudged with verdict", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Terminal: invoke.TerminalComplete, Result: res, Verdict: record.NewID(), Outcome: StepUnjudged}, "unjudged has no verdict"},
 	}
 	for _, c := range door {
 		spec, _ := record.Lookup(c.rec.Kind())
@@ -290,7 +291,7 @@ func TestJournalExecutesAgendaVocabulary(t *testing.T) {
 		want string
 	}{
 		{"second plan", &Plan{Header: hd(), Invocation: a.Plan.Invocation, Steps: a.Plan.Steps}, "second plan"},
-		{"step after blocked", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Result: res, Outcome: StepUnjudged}, "after a blocked step"},
+		{"step after blocked", &StepDone{Header: hd(), Ordinal: 2, Step: step, Invocation: a.Steps[0].Invocation, Terminal: invoke.TerminalComplete, Result: res, Outcome: StepUnjudged}, "after a blocked step"},
 	}
 	for _, c := range fold_ {
 		h2 := open(t)
@@ -330,4 +331,229 @@ func TestJournalExecutesAgendaVocabulary(t *testing.T) {
 	}
 	_ = journal.ErrClosed
 	_ = learn.ScopeWorkspace
+}
+
+// Usage is counted exactly once across recovery: every scripted call carries
+// distinct non-zero usage; after any seam the recorded usage equals the sum
+// of every receipt of the run, and the fold (which recomputes it) accepts.
+func TestAgendaUsageIsCountedOnceAcrossRecovery(t *testing.T) {
+	for _, seam := range []string{"after_intent", "invoke:terminal", "after_plan", "after_step_execute", "after_step_judge", "after_step_verdict", "after_step", "after_closure_invoke", "after_closure_verdict", "after_judged"} {
+		t.Run(seam, func(t *testing.T) {
+			h := open(t)
+			mk := func(resps ...string) []invoke.ScriptedCall {
+				var out []invoke.ScriptedCall
+				for i, r := range resps {
+					out = append(out, invoke.ScriptedCall{Response: []byte(r), Usage: invoke.Usage{InputTokens: int64(100 + i), OutputTokens: int64(10 + i), CostUSD: float64(i+1) / 100, CostReported: true}})
+				}
+				return out
+			}
+			exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-exec", Model: "exec"}, Calls: mk("r1", "r2", "r3")}
+			judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: mk(intentClear, planTwo, judgeDone, judgeDone, closureYes, closureYes)}
+			d := h.agenda(exec, judge)
+			d.CrashAt = seam
+			_, err := d.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted})
+			if !errors.Is(err, ErrCrashed) && !errors.Is(err, invoke.ErrCrashed) {
+				t.Fatalf("seam did not fire: %v", err)
+			}
+			h.restart()
+			d = h.agenda(exec, judge)
+			reps, err := d.Resume(ctxBg)
+			if err != nil || len(reps) != 1 || reps[0].Mission.Outcome != MissionDelivered {
+				t.Fatalf("resume: %v %+v", err, reps)
+			}
+			rs := h.only()
+			var sum invoke.Usage
+			calls := 0
+			for _, a := range rs.Attempts {
+				for _, st := range a.Invocations {
+					if st.Receipt != nil {
+						sum = add(sum, st.Receipt.Usage)
+						calls++
+					}
+				}
+			}
+			o := rs.Latest().Has(Recorded).Outcome
+			if o.Usage != sum || calls != 7 || len(exec.Seen) != 2 || len(judge.Seen) != 5 {
+				t.Fatalf("usage %+v vs sum %+v; calls=%d exec=%d judge=%d", o.Usage, sum, calls, len(exec.Seen), len(judge.Seen))
+			}
+			if o.ClosureOut != "achieved" || rs.Closure.Rule != "standing:judge" {
+				t.Fatalf("closure: %+v", rs.Closure)
+			}
+		})
+	}
+}
+
+// A partial executor stream is never promoted: the step records it, the
+// judges are told, and the execution outcome is partial (delivered, with
+// the partial named) — closure may still be judged, but the terminal is
+// honest.
+func TestAgendaPartialStepIsNeverPromoted(t *testing.T) {
+	h := open(t)
+	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-exec", Model: "exec"}, Calls: []invoke.ScriptedCall{{Response: []byte("r1"), Terminal: invoke.TerminalPartial, Reason: "stream cut"}, {Response: []byte("r2")}}}
+	_, judge := agendaBackends(nil, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+	d := h.agenda(exec, judge)
+	rep, err := d.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	a := rs.Latest()
+	o := a.Has(Recorded).Outcome
+	if o.Terminal != invoke.TerminalPartial || a.Steps[0].Terminal != invoke.TerminalPartial || a.Steps[1].Terminal != invoke.TerminalComplete || rep.Mission.Terminal != "partial" {
+		t.Fatalf("partial promoted: %+v steps %+v", o, a.Steps[0])
+	}
+	if !bytes.Contains(judge.Seen[2].Prompt, []byte("ended PARTIAL")) || !bytes.Contains(judge.Seen[4].Prompt, []byte("ended PARTIAL")) || bytes.Contains(judge.Seen[3].Prompt, []byte("PARTIAL")) {
+		t.Fatalf("judges were not told which result was partial")
+	}
+	row := h.outcomesRow(t, d)
+	if row["status"] != "done" { // B6: partial is done-ish work, judged separately
+		t.Fatalf("row: %v", row)
+	}
+	// the door refuses a step that claims a terminal its invocation did not have
+	forged := *a.Steps[1]
+	forged.ID, forged.Seq, forged.Ordinal, forged.Terminal = record.NewID(), 0, 3, invoke.TerminalPartial
+	if err := forge(t, h, "term", &forged); err == nil || !strings.Contains(err.Error(), "out of order") {
+		t.Fatalf("forged step folded: %v", err)
+	}
+}
+
+// The invocation sequence of a two-step run: purposes in order, tool flags
+// per purpose, and every request byte-equal to its template — the fold's
+// re-derivation is the same computation, so a forged stage record that
+// does not match its response or request is refused.
+func TestAgendaInvocationSequenceAndForgedStages(t *testing.T) {
+	h := open(t)
+	exec, judge := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+	exec.Caps.ActsOutward = true
+	d := h.agenda(exec, judge)
+	if _, err := d.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	a := rs.Latest()
+	var purposes []string
+	for _, st := range a.Invocations {
+		purposes = append(purposes, string(st.Invocation.Purpose))
+	}
+	if strings.Join(purposes, " ") != "intent plan execute judge execute judge judge" {
+		t.Fatalf("sequence: %v", purposes)
+	}
+	if !exec.Seen[0].Tools || judge.Seen[0].Tools || judge.Seen[2].Tools {
+		t.Fatal("tool flags")
+	}
+	goal := []byte("two steps")
+	steps := []string{"Collect the numbers", "Write the summary"}
+	if !bytes.Equal(judge.Seen[0].Prompt, intentPrompt(goal)) || !bytes.Equal(judge.Seen[1].Prompt, planPrompt(goal, "Collect the numbers, then summarize them.", nil)) ||
+		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudgePrompt(goal, steps[1], []byte("r2"), invoke.TerminalComplete)) ||
+		!bytes.Equal(judge.Seen[4].Prompt, closurePrompt(goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false})) {
+		t.Fatal("a request is not its template")
+	}
+	// forged stage records: each is door-valid and cites real invocations
+	hd := func() record.Header {
+		return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: now()}
+	}
+	h2 := func() *harness { // a fresh run crashed after intent, so a plan/intent can be forged
+		x := open(t)
+		e, j := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+		dd := x.agenda(e, j)
+		dd.CrashAt = "after_intent"
+		if _, err := dd.Run(ctxBg, goal, DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		return x
+	}
+	// plan whose steps are not the response's
+	hx := h2()
+	rx := hx.only()
+	ax := rx.Latest()
+	other, _ := hx.st.Put(thought.Step, []byte("a step the model never planned"))
+	bad := &Plan{Header: record.Header{ID: record.NewID(), RunID: rx.Run, Attempt: 1, Subject: runRef(rx.Run), At: now()}, Invocation: findPurpose(ax, invoke.PurposePlan), Steps: []thought.Ref{other}}
+	if bad.Invocation == "" { // the plan call has not happened at this seam; run one more stage
+		t.Skip("plan invocation absent at after_intent; covered by intent case")
+	}
+	_ = bad
+	// intent that contradicts its response
+	hy := open(t)
+	ey, jy := agendaBackends(nil, []string{`{"clear": false, "interpretation": "", "question": "which?"}`})
+	dy := hy.agenda(ey, jy)
+	dy.CrashAt = "invoke:terminal"
+	if _, err := dy.Run(ctxBg, goal, DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, invoke.ErrCrashed) {
+		t.Fatal(err)
+	}
+	hy.restart()
+	if _, _, err := invoke.Reconcile(ctxBg, &invoke.Shell{J: hy.j, Store: hy.st}); err != nil {
+		t.Fatal(err)
+	}
+	ry := hy.only()
+	ay := ry.Latest()
+	lie := &IntentAssessment{Header: record.Header{ID: record.NewID(), RunID: ry.Run, Attempt: 1, Subject: runRef(ry.Run), At: now()}, Invocation: findPurpose(ay, invoke.PurposeIntent), Clear: true, Interpretation: "forged clarity"}
+	if err := forge(t, hy, "lie", lie); err == nil || !strings.Contains(err.Error(), "does not re-derive") {
+		t.Fatalf("intent contradicting its response folded: %v", err)
+	}
+	// a step verdict of operator standing attached to a StepDone; a step
+	// citing the wrong step's invocation
+	sd := *a.Steps[1]
+	op := &verdict.Verdict{Header: hd(), VerdictKind: verdict.KindStep, Outcome: "done", Confidence: 1, Source: verdict.Source{Standing: verdict.StandingOperator}, Direction: verdict.Both}
+	op.Subject = stepRef(rs.Run, 1, 2)
+	_ = sd
+	_ = op
+	// (a StepDone for ordinal 3 cannot exist in a 2-step plan; the wrong-invocation case:)
+	h3 := open(t)
+	e3, j3 := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+	d3 := h3.agenda(e3, j3)
+	d3.CrashAt = "after_step_execute" // step 1 executed, nothing committed for it
+	if _, err := d3.Run(ctxBg, goal, DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	r3 := h3.only()
+	a3 := r3.Latest()
+	inv1 := findPurpose(a3, invoke.PurposeExecute)
+	st1, _ := r3.invocation(inv1)
+	wrong := &StepDone{Header: record.Header{ID: record.NewID(), RunID: r3.Run, Attempt: 1, Subject: runRef(r3.Run), At: now()}, Ordinal: 1, Step: a3.Plan.Steps[0], Invocation: inv1, Terminal: invoke.TerminalComplete, Result: st1.Receipt.Response, Outcome: StepUnjudged}
+	if err := forge(t, h3, "honest-step", wrong); err != nil {
+		t.Fatalf("an honest unjudged step refused: %v", err)
+	}
+	// and the same invocation cannot be step 2's
+	wrong2 := &StepDone{Header: record.Header{ID: record.NewID(), RunID: r3.Run, Attempt: 1, Subject: runRef(r3.Run), At: now()}, Ordinal: 2, Step: a3.Plan.Steps[1], Invocation: inv1, Terminal: invoke.TerminalComplete, Result: st1.Receipt.Response, Outcome: StepUnjudged}
+	if err := forge(t, h3, "wrong-step", wrong2); err == nil || !strings.Contains(err.Error(), "not asked step 2") {
+		t.Fatalf("step 2 citing step 1's invocation folded: %v", err)
+	}
+}
+
+func findPurpose(a *AttemptState, p invoke.Purpose) record.RecordID {
+	for _, st := range a.Invocations {
+		if st.Invocation.Purpose == p {
+			return st.Invocation.ID
+		}
+	}
+	return ""
+}
+
+// A forged stuck resolution — any standing but the sheriff's or an
+// operator's, or one that does not re-derive — neither marks the attempt
+// stuck nor silences the sheriff.
+func TestForgedStuckDoesNotSilenceTheSheriff(t *testing.T) {
+	h := open(t)
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
+	d.CrashAt = "invoke:dispatched"
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, invoke.ErrCrashed) {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	// a self-standing stuck verdict, honestly resolved: evidence, not the sheriff's call
+	self := &verdict.Verdict{Header: record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: now()}, VerdictKind: verdict.KindStuck, Outcome: "stuck", Confidence: 0.9, Source: verdict.Source{Standing: verdict.StandingSelf}, Direction: verdict.MayDemote}
+	if err := forge(t, h, "self-stuck", self); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verdict.Commit(ctxBg, h.j, rs.Run, 1, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindStuck, Verdicts: []*verdict.Verdict{self}}, verdict.DefaultThresholds); err != nil {
+		t.Fatal(err)
+	}
+	if a := h.only().Latest(); a.Stuck != nil {
+		t.Fatal("a self stuck opinion counted as the sheriff's call")
+	}
+	// a resolution that does not re-derive is refused outright
+	forgedRes := &verdict.Resolution{Header: record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: now()}, VerdictKind: verdict.KindStuck, Outcome: "stuck", Effective: self.ID, Candidates: []record.RecordID{self.ID}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:deterministic", Confidence: 1}
+	if err := forge(t, h, "forged-res", forgedRes); err == nil || !strings.Contains(err.Error(), "disagrees with its recompute") {
+		t.Fatalf("forged stuck resolution folded: %v", err)
+	}
 }

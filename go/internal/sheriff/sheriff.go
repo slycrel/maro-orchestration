@@ -129,14 +129,14 @@ func (s *Sheriff) Evaluate(ctx context.Context) (uint64, error) {
 }
 
 // lastActivity is the newest committed record about the attempt — the
-// last transition, or the last invocation-side record if later — and the
-// refs a stuck verdict names as its basis.
+// fold's last attached attempt-scoped record (transition, stage, delivery,
+// verdict), or the last invocation-side record if later — and the ref a
+// stuck verdict names as its basis.
 func lastActivity(a *run.AttemptState) (time.Time, []record.Ref) {
 	last := a.Attempt.At
 	basis := []record.Ref{{Kind: run.KindRunAttempt, ID: string(a.Attempt.ID)}}
-	if n := len(a.Transitions); n > 0 {
-		t := a.Transitions[n-1]
-		last, basis = t.At, []record.Ref{{Kind: run.KindTransition, ID: string(t.ID)}}
+	if !a.LastAt.IsZero() && !a.LastAt.Before(last) {
+		last, basis = a.LastAt, []record.Ref{a.LastRef}
 	}
 	for _, st := range a.Invocations {
 		at, ref := st.Invocation.At, record.Ref{Kind: st.Invocation.Kind(), ID: string(st.Invocation.ID)}

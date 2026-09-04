@@ -49,6 +49,16 @@
       "pattern": "^(done|blocked|unclear|unjudged)$",
       "rejects": "maybe",
       "measured_by": "internal/run:TestAgendaBlockedStepIsHonest"
+    },
+    "terminal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(complete|partial)$",
+      "rejects": "failed",
+      "measured_by": "internal/run:TestAgendaPartialStepIsNeverPromoted"
     }
   }
 }

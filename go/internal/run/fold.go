@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
@@ -85,6 +86,25 @@ type AttemptState struct {
 	Intent *IntentAssessment
 	Plan   *Plan
 	Steps  []*StepDone // by ordinal, dense from 1
+	// Verdicts this attempt committed (run-scoped), in Seq order.
+	Verdicts []*verdict.Verdict
+	// LastAt/LastRef: the newest attempt-scoped record the fold attached —
+	// the sheriff's "last committed activity", with invocation-side records
+	// considered by the sheriff itself.
+	LastAt  time.Time
+	LastRef record.Ref
+}
+
+// touch records an attempt-scoped record as activity: the ref is the
+// newest record by journal order (the scan's order), the time the latest
+// observation time seen — a record built before a call and committed after
+// it carries an earlier At than the call's own records.
+func (a *AttemptState) touch(r record.Record) {
+	h := r.Head()
+	a.LastRef = record.Ref{Kind: r.Kind(), ID: string(h.ID)}
+	if h.At.After(a.LastAt) {
+		a.LastAt = h.At
+	}
 }
 
 // Current is the attempt's latest state.
@@ -172,7 +192,7 @@ type Ledger struct {
 // claims, a recorded outcome that names evidence from another run or a
 // resolution that does not re-derive). A reader must not paper over these:
 // the mission and the shared ledger are folds of exactly this.
-func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
+func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	goals := map[record.RecordID]*Goal{}
 	var goalOrder []*Goal
 	started := map[record.RecordID]bool{}
@@ -227,13 +247,32 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			fams[x.Goal] = x
 		case *verdict.Verdict:
 			verdicts[x.ID] = x
+			if x.RunID != "" {
+				if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
+					if err := checkJudgeVerdict(runs[x.RunID], a, x, inv, learned, store); err != nil {
+						return err
+					}
+					a.Verdicts = append(a.Verdicts, x)
+					a.touch(x)
+				}
+			}
 		case *verdict.Observation:
 			observations[x.ID] = x
 		case *verdict.Resolution:
+			// every resolution is a derived record: it must re-derive from
+			// the candidates it names, whoever wrote it
+			if err := verdict.Check(x, verdicts, observations); err != nil {
+				return err
+			}
 			resolutions[x.ID] = x
 			if x.VerdictKind == verdict.KindStuck && x.Outcome == "stuck" && x.RunID != "" {
-				if rs := runs[x.RunID]; rs != nil && x.Attempt > 0 && int(x.Attempt) <= len(rs.Attempts) {
-					rs.Attempts[x.Attempt-1].Stuck = x
+				// only a deterministic (the sheriff's) or operator stuck verdict
+				// counts as "called stuck"; a self or judge opinion is evidence,
+				// not the sheriff's decision, and must not silence it
+				if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil && x.Effective != "" && x.Subject == runRef(x.RunID) {
+					if eff := verdicts[x.Effective]; eff != nil && (eff.Source.Standing == verdict.StandingDeterministic || eff.Source.Standing == verdict.StandingOperator) && len(eff.Basis) > 0 {
+						a.Stuck = x
+					}
 				}
 			}
 		case *invoke.Invocation:
@@ -280,7 +319,7 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			if cur := a.Current(); cur != x.From {
 				return fmt.Errorf("run: %s attempt %d transition %s→%s but the attempt is at %q", x.RunID, x.Attempt, x.From, x.To, cur)
 			}
-			if err := checkTransition(rs, a, x, inv, learned, st, resolutions, verdicts, observations); err != nil {
+			if err := checkTransition(rs, a, x, inv, learned, store, resolutions, verdicts, observations); err != nil {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
@@ -292,10 +331,30 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			if a.Intent != nil || a.Attempt.Config.Lane != LaneAgenda || a.Current() != Executing {
 				return fmt.Errorf("run: %s attempt %d intent out of place (lane %s, state %s, prior intent %v)", x.RunID, x.Attempt, a.Attempt.Config.Lane, a.Current(), a.Intent != nil)
 			}
-			if st := inv[x.Invocation]; st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeIntent {
+			st := inv[x.Invocation]
+			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeIntent || st.Receipt == nil {
 				return fmt.Errorf("run: %s attempt %d intent cites invocation %s that is not its intent call", x.RunID, x.Attempt, x.Invocation)
 			}
+			// the interpretation boundary, re-executed on read: the record
+			// must be what the cited response parses to, and the request
+			// must be the intent prompt over this goal
+			goal, err := store.Get(get(x.RunID).Goal.Text)
+			if err != nil {
+				return err
+			}
+			if st.Invocation.Request != thought.Address(thought.Prompt, intentPrompt(goal)) {
+				return fmt.Errorf("run: %s attempt %d intent invocation %s was not asked the intent prompt", x.RunID, x.Attempt, x.Invocation)
+			}
+			resp, err := store.Get(st.Receipt.Response)
+			if err != nil {
+				return err
+			}
+			ir, perr := ParseIntent(resp)
+			if perr != nil || ir.Clear != x.Clear || ir.Interpretation != x.Interpretation || ir.Question != x.Question {
+				return fmt.Errorf("run: %s attempt %d intent record does not re-derive from response %s (%v)", x.RunID, x.Attempt, st.Receipt.Response.Hash, perr)
+			}
 			a.Intent = x
+			a.touch(x)
 		case *Plan:
 			a, err := attempt(get(x.RunID), x.Attempt, "plan")
 			if err != nil {
@@ -304,10 +363,25 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			if a.Plan != nil || a.Intent == nil || !a.Intent.Clear {
 				return fmt.Errorf("run: %s attempt %d plan without a clear intent before it (or a second plan)", x.RunID, x.Attempt)
 			}
-			if st := inv[x.Invocation]; st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposePlan {
+			st := inv[x.Invocation]
+			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposePlan || st.Receipt == nil {
 				return fmt.Errorf("run: %s attempt %d plan cites invocation %s that is not its plan call", x.RunID, x.Attempt, x.Invocation)
 			}
+			resp, err := store.Get(st.Receipt.Response)
+			if err != nil {
+				return err
+			}
+			steps, perr := ParsePlan(resp)
+			if perr != nil || len(steps) != len(x.Steps) {
+				return fmt.Errorf("run: %s attempt %d plan does not re-derive from response %s (%v)", x.RunID, x.Attempt, st.Receipt.Response.Hash, perr)
+			}
+			for i, text := range steps {
+				if x.Steps[i] != thought.Address(thought.Step, []byte(text)) {
+					return fmt.Errorf("run: %s attempt %d plan step %d is not the response's step", x.RunID, x.Attempt, i+1)
+				}
+			}
 			a.Plan = x
+			a.touch(x)
 		case *StepDone:
 			a, err := attempt(get(x.RunID), x.Attempt, "step")
 			if err != nil {
@@ -320,16 +394,28 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: %s attempt %d step %d after a blocked step", x.RunID, x.Attempt, x.Ordinal)
 			}
 			st := inv[x.Invocation]
-			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result {
-				return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
+			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result || st.Terminal == nil || st.Terminal.State != x.Terminal {
+				return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result and terminal", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
+			}
+			// the execute request must be the step prompt over this goal,
+			// plan, and prior results, with the recall block the attempt's
+			// selection renders — the interpretation of "which step ran"
+			// is re-derived, never trusted
+			want, err := stepRequest(get(x.RunID), a, x.Ordinal, learned, store)
+			if err != nil {
+				return err
+			}
+			if st.Invocation.Request != want {
+				return fmt.Errorf("run: %s attempt %d step %d invocation %s was not asked step %d's prompt", x.RunID, x.Attempt, x.Ordinal, x.Invocation, x.Ordinal)
 			}
 			if x.Verdict != "" {
 				v := verdicts[x.Verdict]
-				if v == nil || v.VerdictKind != verdict.KindStep || string(v.Outcome) != string(x.Outcome) || v.RunID != x.RunID || v.Attempt != x.Attempt {
-					return fmt.Errorf("run: %s attempt %d step %d cites verdict %s that does not say %s", x.RunID, x.Attempt, x.Ordinal, x.Verdict, x.Outcome)
+				if v == nil || v.VerdictKind != verdict.KindStep || string(v.Outcome) != string(x.Outcome) || v.RunID != x.RunID || v.Attempt > x.Attempt || v.Subject != stepRef(x.RunID, v.Attempt, x.Ordinal) {
+					return fmt.Errorf("run: %s attempt %d step %d cites verdict %s that does not judge it as %s", x.RunID, x.Attempt, x.Ordinal, x.Verdict, x.Outcome)
 				}
 			}
 			a.Steps = append(a.Steps, x)
+			a.touch(x)
 		case *DeliveryPrepared:
 			rs := get(x.RunID)
 			a, err := attempt(rs, x.Attempt, "delivery")
@@ -347,6 +433,7 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			}
 			a.Delivery = &Delivery{Prepared: x}
 			deliveries[x.ID] = a.Delivery
+			a.touch(x)
 		case *DeliveryStarted:
 			d := deliveries[x.Delivery]
 			if d == nil {
@@ -377,6 +464,9 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: delivery %s attempted again after acceptance", x.Delivery)
 			}
 			d.Attempts = append(d.Attempts, x)
+			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
+				a.touch(x)
+			}
 		case *DeliveryAcked:
 			d := deliveries[x.Delivery]
 			if d == nil {
@@ -412,6 +502,174 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 		}
 	}
 	return led, nil
+}
+
+// attemptNoErr finds an attempt or nil.
+func attemptNoErr(runs map[record.RunID]*RunState, run record.RunID, n uint32) *AttemptState {
+	rs := runs[run]
+	if rs == nil || n == 0 || int(n) > len(rs.Attempts) {
+		return nil
+	}
+	return rs.Attempts[n-1]
+}
+
+// stepRef is the subject of a step verdict.
+func stepRef(run record.RunID, attempt uint32, ordinal int) record.Ref {
+	return record.Ref{Kind: "step", ID: fmt.Sprintf("%s/%d/%d", run, attempt, ordinal)}
+}
+
+// planTexts and results read an attempt's plan and done results whole.
+func planTexts(a *AttemptState, store *thought.Store) ([]string, [][]byte, []bool, error) {
+	steps := make([]string, len(a.Plan.Steps))
+	for i, ref := range a.Plan.Steps {
+		b, err := store.Get(ref)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		steps[i] = string(b)
+	}
+	var results [][]byte
+	var partial []bool
+	for _, sd := range a.Steps {
+		b, err := store.Get(sd.Result)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		results = append(results, b)
+		partial = append(partial, sd.Terminal == invoke.TerminalPartial)
+	}
+	return steps, results, partial, nil
+}
+
+// recallBlock renders the attempt's selection (continued or own).
+func recallBlock(rs *RunState, a *AttemptState, learned *learn.Ledger, store *thought.Store) ([]byte, error) {
+	if a.Recall == nil {
+		return nil, fmt.Errorf("run: %s attempt %d has no recall selection", rs.Run, a.Attempt.Attempt)
+	}
+	block, _, err := learn.Render(a.Recall, func(ir learn.ItemRev) ([]byte, error) {
+		it := learned.Items[ir.Item]
+		if it == nil {
+			return nil, fmt.Errorf("recall names unknown item %s", ir.Item)
+		}
+		for _, r := range it.Revisions {
+			if r.ID == ir.Revision {
+				return store.Get(r.Text)
+			}
+		}
+		return nil, fmt.Errorf("recall names unknown revision %s", ir.Revision)
+	})
+	return block, err
+}
+
+// stepRequest re-derives the execute request for step k of the attempt.
+func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, store *thought.Store) (thought.Ref, error) {
+	goal, err := store.Get(rs.Goal.Text)
+	if err != nil {
+		return thought.Ref{}, err
+	}
+	steps, results, _, err := planTexts(a, store)
+	if err != nil {
+		return thought.Ref{}, err
+	}
+	if k-1 > len(results) {
+		return thought.Ref{}, fmt.Errorf("run: step %d before its predecessors", k)
+	}
+	block, err := recallBlock(rs, a, learned, store)
+	if err != nil {
+		return thought.Ref{}, err
+	}
+	return thought.Address(thought.Prompt, stepPrompt(goal, steps, k, results[:k-1], block)), nil
+}
+
+// checkJudgeVerdict re-executes the judge boundary for a judge-standing
+// verdict of the run: its invocation is a tool-less judge call of the run
+// whose request is the judge prompt for its subject and whose response
+// parses to the verdict's outcome and confidence, with the receipt as basis.
+func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, store *thought.Store) error {
+	if v.Source.Standing != verdict.StandingJudge {
+		return nil
+	}
+	st := inv[v.Source.Ref]
+	if st == nil || st.Invocation.RunID != rs.Run || st.Invocation.Purpose != invoke.PurposeJudge || st.Receipt == nil {
+		return fmt.Errorf("run: %s attempt %d judge verdict %s cites %s, which is not a judge call of the run with a receipt", rs.Run, v.Attempt, v.ID, v.Source.Ref)
+	}
+	if len(v.Basis) != 1 || v.Basis[0].ID != string(st.Receipt.ID) {
+		return fmt.Errorf("run: %s attempt %d judge verdict %s does not cite its receipt as basis", rs.Run, v.Attempt, v.ID)
+	}
+	goal, err := store.Get(rs.Goal.Text)
+	if err != nil {
+		return err
+	}
+	resp, err := store.Get(st.Receipt.Response)
+	if err != nil {
+		return err
+	}
+	var want []byte
+	var allowed []string
+	switch v.VerdictKind {
+	case verdict.KindStep:
+		var n uint32
+		var k int
+		var runID string
+		if _, err := fmt.Sscanf(v.Subject.ID, "%26s/%d/%d", &runID, &n, &k); err != nil || v.Subject.Kind != "step" || runID != string(rs.Run) || a.Plan == nil || k < 1 || k > len(a.Plan.Steps) {
+			return fmt.Errorf("run: %s attempt %d step verdict %s has subject %v that is not a step of its plan", rs.Run, v.Attempt, v.ID, v.Subject)
+		}
+		steps, results, partial, err := planTexts(a, store)
+		if err != nil {
+			return err
+		}
+		// the judged result is step k's: committed as a StepDone already, or
+		// (the verdict lands before its StepDone) the receipt of the execute
+		// invocation whose request re-derives as step k's prompt
+		var judged []byte
+		var term invoke.TerminalState = invoke.TerminalComplete
+		if k-1 < len(results) {
+			judged = results[k-1]
+			if partial[k-1] {
+				term = invoke.TerminalPartial
+			}
+		} else {
+			wantReq, err := stepRequest(rs, a, k, learned, store)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, p := range rs.Attempts {
+				for _, es := range p.Invocations {
+					if es.Invocation.Purpose == invoke.PurposeExecute && es.Receipt != nil && es.Invocation.Request == wantReq {
+						b, err := store.Get(es.Receipt.Response)
+						if err != nil {
+							return err
+						}
+						judged, term, found = b, es.Terminal.State, true
+					}
+				}
+			}
+			if !found {
+				return fmt.Errorf("run: %s attempt %d step verdict %s judges step %d before any execute of it", rs.Run, v.Attempt, v.ID, k)
+			}
+		}
+		want, allowed = stepJudgePrompt(goal, steps[k-1], judged, term), []string{"done", "blocked", "unclear"}
+	case verdict.KindClosure:
+		if a.Plan == nil {
+			return fmt.Errorf("run: %s attempt %d closure verdict %s without a plan", rs.Run, v.Attempt, v.ID)
+		}
+		steps, results, partial, err := planTexts(a, store)
+		if err != nil {
+			return err
+		}
+		want, allowed = closurePrompt(goal, steps, results, partial), []string{"achieved", "not_achieved", "unknown"}
+	default:
+		return nil
+	}
+	if st.Invocation.Request != thought.Address(thought.Prompt, want) {
+		return fmt.Errorf("run: %s attempt %d judge verdict %s: invocation %s was not asked this judgement's prompt", rs.Run, v.Attempt, v.ID, v.Source.Ref)
+	}
+	jr, perr := ParseJudge(resp, allowed...)
+	if perr != nil || jr.Outcome != v.Outcome || jr.Confidence != v.Confidence {
+		return fmt.Errorf("run: %s attempt %d judge verdict %s does not re-derive from response %s (%v)", rs.Run, v.Attempt, v.ID, st.Receipt.Response.Hash, perr)
+	}
+	return nil
 }
 
 // checkTransition executes the cross-record rules a transition claims.

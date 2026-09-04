@@ -50,8 +50,8 @@ func (h *Heartbeat) Progress(ctx context.Context, watermark uint64) {
 	}
 	h.last = now()
 	h.mu.Unlock()
-	if !moved {
-		return
+	if !moved || ctx.Err() != nil {
+		return // a cancelled lane's progress is liveness only; the journal may be closing
 	}
 	h.s.mu.Lock()
 	write := h.last.Sub(h.s.lastBeat[h.lane]) >= h.s.MinBeat
@@ -120,6 +120,10 @@ type Supervisor struct {
 	root     context.Context
 	stop     context.CancelFunc
 	watching chan struct{}
+	stopping bool
+	// journalErr is the last refusal of a control record; surfaced in
+	// Health because a heartbeat that did not commit is not evidence.
+	journalErr string
 }
 
 // New prepares a supervisor over the journal; nothing runs until Start.
@@ -149,12 +153,28 @@ func (s *Supervisor) Register(l Lane) error {
 	return nil
 }
 
-// Start launches every lane under ctx and begins the stall watch.
+// Start validates the configuration, launches every lane under ctx, and
+// begins the stall watch. Zero values mean the defaults New sets; negative
+// bounds are refused; a supervisor not made by New is refused.
 func (s *Supervisor) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.root != nil {
 		s.mu.Unlock()
 		return errors.New("supervise: already started")
+	}
+	if s.lanes == nil || s.J == nil {
+		s.mu.Unlock()
+		return errors.New("supervise: use New")
+	}
+	if s.MaxRestarts < 0 || s.MinBeat < 0 || s.Watch < 0 {
+		s.mu.Unlock()
+		return errors.New("supervise: bounds must be positive (0 = default)")
+	}
+	if s.MaxRestarts == 0 {
+		s.MaxRestarts = 3
+	}
+	if s.Watch == 0 {
+		s.Watch = time.Second
 	}
 	s.root, s.stop = context.WithCancel(ctx)
 	names := append([]string{}, s.order...)
@@ -184,7 +204,9 @@ func (s *Supervisor) launch(name string, gen int, why string) {
 
 // supervise runs one generation and decides what its end means.
 func (s *Supervisor) supervise(ctx context.Context, st *laneState) {
-	name, gen := st.lane.Name(), st.gen
+	s.mu.Lock()
+	name, gen, done := st.lane.Name(), st.gen, st.done // this generation's own channel; launch replaces st.done
+	s.mu.Unlock()
 	var err error
 	func() {
 		defer func() {
@@ -199,11 +221,16 @@ func (s *Supervisor) supervise(ctx context.Context, st *laneState) {
 	st.up = false
 	quiesced := ctx.Err() != nil
 	s.mu.Unlock()
+	if err == nil && !quiesced {
+		// an always-on lane that returns without being asked to has
+		// failed, whatever it returned: restart it, bounded
+		err = errors.New("returned without cancellation")
+	}
 	// the generation's last event lands BEFORE done is closed: whoever
 	// waits on done (Stop) sees the record, not a promise of it
 	restart := false
 	switch {
-	case quiesced || err == nil:
+	case quiesced:
 		s.mu.Lock()
 		st.reason = ""
 		s.mu.Unlock()
@@ -219,13 +246,17 @@ func (s *Supervisor) supervise(ctx context.Context, st *laneState) {
 			s.mu.Unlock()
 			s.event(s.root, name, LaneGaveUp, gen, reason)
 		} else {
-			restart = s.root.Err() == nil
+			s.mu.Lock()
+			restart = s.root.Err() == nil && !s.stopping
+			s.mu.Unlock()
 		}
 	}
-	close(st.done)
 	if restart {
+		// the next generation is registered BEFORE this one's done closes,
+		// so Stop, which re-reads the lane after every wait, sees it
 		s.launch(name, gen+1, firstLines(err.Error(), 1))
 	}
+	close(done)
 }
 
 // watch marks lanes whose heartbeat is older than their declared silence.
@@ -267,14 +298,16 @@ func (s *Supervisor) watch() {
 }
 
 // Stop quiesces in stage order: every lane of the lowest stage is
-// cancelled and awaited before the next stage. Returns when all lanes have
-// returned or ctx expires.
+// cancelled and awaited before the next stage; no restart is launched once
+// stopping began, and a generation that replaced a finished one is awaited
+// in its turn. Returns when all lanes have returned or ctx expires.
 func (s *Supervisor) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	if s.root == nil {
+	if s.root == nil || s.stopping {
 		s.mu.Unlock()
 		return nil
 	}
+	s.stopping = true
 	byStage := map[int][]*laneState{}
 	var stages []int
 	for _, name := range s.order {
@@ -288,13 +321,14 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	s.mu.Unlock()
 	for _, stage := range stages {
 		for _, st := range byStage[stage] {
-			s.mu.Lock()
-			cancel, done, up := st.cancel, st.done, st.up
-			s.mu.Unlock()
-			if cancel != nil {
+			for {
+				s.mu.Lock()
+				cancel, done, up := st.cancel, st.done, st.up
+				s.mu.Unlock()
+				if !up || done == nil {
+					break
+				}
 				cancel()
-			}
-			if up && done != nil {
 				select {
 				case <-done:
 				case <-ctx.Done():
@@ -313,6 +347,11 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 // while it is non-empty (§10).
 func (s *Supervisor) Health() []string {
 	var out []string
+	s.mu.Lock()
+	if s.journalErr != "" {
+		out = append(out, "control journal refused a lane record: "+s.journalErr)
+	}
+	s.mu.Unlock()
 	for _, st := range s.Lanes() {
 		switch {
 		case st.GaveUp:
@@ -354,15 +393,23 @@ func (s *Supervisor) event(ctx context.Context, lane string, ev LaneEventKind, g
 	}
 }
 
-// commit writes a control record; a refusal after the journal closed (the
-// last events of a shutdown) is not an error the process can act on.
+// commit writes a control record. A refusal is not an error the lane can
+// act on, but it is not swallowed either: it is the health line's first
+// item until a later record commits.
 func (s *Supervisor) commit(ctx context.Context, key string, r record.Record) {
 	spec, _ := record.Lookup(r.Kind())
 	r.Head().Schema = record.SchemaVer(fmt.Sprintf("%s/%d", r.Kind(), spec.Version))
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
-	_, _ = s.J.Submit(ctx, journal.Command{IdempotencyKey: key, Epoch: s.J.Epoch(), Records: []record.Record{r}})
+	_, err := s.J.Submit(ctx, journal.Command{IdempotencyKey: key, Epoch: s.J.Epoch(), Records: []record.Record{r}})
+	s.mu.Lock()
+	if err != nil {
+		s.journalErr = err.Error()
+	} else {
+		s.journalErr = ""
+	}
+	s.mu.Unlock()
 }
 
 func firstLines(s string, n int) string {

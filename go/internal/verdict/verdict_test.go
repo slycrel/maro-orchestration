@@ -485,3 +485,38 @@ func TestJournalExecutesWireRules(t *testing.T) {
 		t.Fatal("refused records were written")
 	}
 }
+
+// Success needs confidence as well as standing: a judge (or check) that
+// claims the success outcome below the promote threshold is abstaining and
+// resolves to unknown; a demotion stands at any confidence; an operator is
+// exempt; the boundary at exactly the threshold promotes.
+func TestPromotionNeedsConfidence(t *testing.T) {
+	th := DefaultThresholds
+	low := v(KindClosure, "achieved", StandingJudge, 0.2)
+	self := v(KindClosure, "not_achieved", StandingSelf, 0.9)
+	r := must(t, cands(KindClosure, []*Verdict{low, self}))
+	if r.Outcome != "unknown" || r.Effective != "" || !strings.HasPrefix(r.Rule, "below_promote_threshold") {
+		t.Fatalf("a 0.2 judge promoted: %+v", r)
+	}
+	at := v(KindClosure, "achieved", StandingJudge, th.Promote)
+	if r := must(t, cands(KindClosure, []*Verdict{at})); r.Outcome != "achieved" || r.Effective != at.ID {
+		t.Fatalf("boundary: %+v", r)
+	}
+	demote := v(KindClosure, "not_achieved", StandingJudge, 0)
+	if r := must(t, cands(KindClosure, []*Verdict{demote})); r.Outcome != "not_achieved" {
+		t.Fatalf("a zero-confidence demotion did not stand: %+v", r)
+	}
+	op := v(KindClosure, "achieved", StandingOperator, 0)
+	if r := must(t, cands(KindClosure, []*Verdict{op, self})); r.Outcome != "achieved" {
+		t.Fatalf("operator at 0 did not promote: %+v", r)
+	}
+	step := v(KindStep, "done", StandingJudge, 0)
+	if r := must(t, cands(KindStep, []*Verdict{step})); r.Outcome != "unclear" {
+		t.Fatalf("a zero-confidence done completed a step: %+v", r)
+	}
+	bad := DefaultThresholds
+	bad.Promote = 1.5
+	if _, err := Resolve(cands(KindClosure, []*Verdict{at}), bad); err == nil {
+		t.Fatal("promote threshold out of range accepted")
+	}
+}

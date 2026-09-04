@@ -689,3 +689,74 @@ clear → 6-step plan → 6 steps each judged done → closure `achieved` 0.98
 (judge) → delivered; B6 row `task_type agenda`, `goal_achieved true`,
 source `closure`, cost 0.40 over 14 calls. The first judged-achieved run
 of the successor.
+
+**Review round (Skeptic + Expert QA, codex; 31 findings, deduplicated to 17,
+each verified in the tree before fixing).** The HIGHs were real:
+
+- *Usage double-counted on recovery* (both, HIGH; masked by zero scripted
+  usage). `reuse()` added a receipt the earlier-attempts sum already held.
+  Now one accumulator: earlier attempts' receipts + this attempt's new
+  calls. Test: every scripted call carries distinct non-zero usage and every
+  seam (10) resumes to an outcome equal to the fold's sum of receipts.
+- *Judge invocations and verdicts never reused* (both, HIGH). A crash after
+  a step judge's receipt (or verdict), or after the closure judge's receipt
+  (or verdict), re-asked the model and orphaned the committed evidence —
+  and a replayed idempotency key returned the OLD record while the driver
+  cited a NEW id. Now the recovered attempt reuses the in-flight judge
+  invocation by ordinal and inherits a committed step/closure verdict
+  (`priorVerdict`); seams `after_step_judge`, `after_step_verdict`,
+  `after_closure_invoke`, `after_closure_verdict`, `after_judged` are in
+  the matrix with exact executor and judge call counts.
+- *`failed()` mislabelled provenance* (Skeptic HIGH): the judge model and
+  the recovering attempt were stamped on executor and reused invocations.
+  Now provenance is the invocation's (this attempt's `made` map, or the
+  fold's).
+- *Stage records trusted without their responses* (both, HIGH). The fold
+  now RE-EXECUTES every interpretation boundary on read: an
+  IntentAssessment must re-parse from its cited response and its request
+  must be the intent prompt over the goal; a Plan's step thoughts must be
+  the addresses of the re-parsed steps; a StepDone's invocation must have
+  been asked exactly step k's prompt (goal + plan + prior results + recall
+  block, re-rendered) with this result and terminal; a judge-standing
+  verdict must cite a judge call whose request is the judgement's prompt
+  and whose response parses to its outcome and confidence, with the
+  receipt as basis. Fixtures: an intent contradicting its response, step 2
+  citing step 1's invocation (refused: "not asked step 2's prompt"), an
+  honest unjudged step (accepted).
+- *Forged stuck resolutions silenced the sheriff* (both, HIGH). Every
+  Resolution now passes `verdict.Check` at scan time; an attempt is
+  "called stuck" only when the effective verdict is deterministic or
+  operator standing with a basis. A self stuck opinion is evidence, not
+  the sheriff's call.
+- *Partial executor streams promoted to complete* (both). `StepDone.Terminal`
+  (complete|partial, equal to the invocation's); the judges are TOLD which
+  results ended partial; the execution outcome is partial if any step was.
+- *Zero-confidence judge promoted* (QA HIGH, Skeptic LOW). Resolver rule 5:
+  a success claim below `Thresholds.Promote` (0.5, why in code) by anyone
+  but an operator is an abstention → unknown; demotions stand at any
+  confidence; the boundary promotes. Registered in the resolution contract.
+- *Sheriff ignored stage records* (both). The fold tracks each attempt's
+  newest committed record (by journal order; time = latest At seen); the
+  sheriff's basis names it. Test: newest evidence a StepDone.
+- *Supervisor semantics* (both): a lane returning nil while live is a
+  failure (bounded restart), not "stopped"; `Start` validates (negative
+  bounds refused, 0 = default, a supervisor not made by `New` refused);
+  `Stop` sets a stopping flag under the mutex (no relaunch once stopping)
+  and re-reads the lane after every wait so a generation that replaced a
+  finished one is awaited; a refused control record is the health line's
+  first item; a cancelled lane's heartbeat is liveness only. Side-find
+  while fixing: the restart path closed the NEW generation's done channel
+  (close of closed channel) — each generation now closes its own.
+- *Pre-dispatch refusal inside AGENDA* (both MEDIUM on uncapped plans): an
+  `Incapable` from a step whose composed prompt is over the backend's
+  maximum is a recorded honest failure of that step, delivered with the
+  done steps named. Plan cardinality stays uncapped (D13/D15); the
+  quadratic prompt growth is a STATED consequence of whole results (D16),
+  to be routed by reference when a backend that reads by reference is the
+  executor — not chopped.
+
+Tests: run +4, supervise +1, sheriff +1, verdict +1 (13 packages green
+under `-race`; contracts 0/0). Not done, recorded: the shutdown DAG beyond
+lanes (sequencer freeze, projector, journal close) is 7b's `serve`; the
+CLI path supervises nothing until 7b wires the supervisor into the
+process; an early-failed step's receipt output is not in the deliverable.

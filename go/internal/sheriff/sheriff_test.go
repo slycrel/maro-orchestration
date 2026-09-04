@@ -137,3 +137,30 @@ func TestSheriffIsASupervisedLane(t *testing.T) {
 		t.Fatalf("health after stop: %v", h)
 	}
 }
+
+// The sheriff's "last committed activity" includes stage records: an
+// AGENDA attempt whose newest evidence is a StepDone is measured from it,
+// and the stuck verdict's basis names it.
+func TestSheriffBasisNamesTheNewestStageRecord(t *testing.T) {
+	j, st := open(t)
+	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-exec", Model: "exec"}, Calls: []invoke.ScriptedCall{{Response: []byte("r1")}, {Response: []byte("r2")}}}
+	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{
+		{Response: []byte(`{"clear": true, "interpretation": "do it", "question": ""}`)},
+		{Response: []byte(`{"steps": ["one", "two"]}`)},
+		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
+	}}
+	d := &run.Driver{J: j, Store: st, Backend: exec, Judge: judge, Lane: run.LaneAgenda, Origin: run.CLIOrigin{W: io.Discard}}
+	d.CrashAt = "after_step" // step 1 done; nothing after
+	if _, err := d.Run(ctxBg, []byte("two steps"), run.DeliveryPolicy{Required: run.TransportAccepted}); !errors.Is(err, run.ErrCrashed) {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC().Add(time.Hour)
+	s := &Sheriff{J: j, Store: st, StallAfter: 10 * time.Minute, Clock: func() time.Time { return clock }}
+	if _, err := s.Evaluate(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	vs := stuckVerdicts(t, j)
+	if len(vs) != 1 || vs[0].Basis[0].Kind != run.KindStepDone {
+		t.Fatalf("basis: %+v", vs[0].Basis)
+	}
+}

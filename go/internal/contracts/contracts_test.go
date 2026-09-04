@@ -111,7 +111,7 @@ func samples() map[record.Kind]any {
 		supervise.KindLaneHeartbeat: &supervise.LaneHeartbeat{Header: record.Header{ID: record.NewID(), Seq: 7, Schema: "lane_heartbeat/1", Subject: record.Ref{Kind: "lane", ID: "sheriff"}, Supersedes: record.NewID(), At: time.Now().UTC()}, Lane: "sheriff", Generation: 1, Watermark: 99},
 		run.KindIntentAssessment:    &run.IntentAssessment{Header: withSchema(h, "intent_assessment/1"), Invocation: inv, Clear: true, Interpretation: "summarize", Question: "which quarter?"},
 		run.KindPlan:                &run.Plan{Header: withSchema(h, "plan/1"), Invocation: inv, Steps: []thought.Ref{step}},
-		run.KindStepDone:            &run.StepDone{Header: withSchema(h, "step_done/1"), Ordinal: 1, Step: step, Invocation: inv, Result: resp, Verdict: inv, Outcome: run.StepDoneOK},
+		run.KindStepDone:            &run.StepDone{Header: withSchema(h, "step_done/1"), Ordinal: 1, Step: step, Invocation: inv, Terminal: invoke.TerminalComplete, Result: resp, Verdict: inv, Outcome: run.StepDoneOK},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

@@ -95,9 +95,9 @@
       "on_absence": "rejected",
       "used_for": "routing",
       "constraint": "defined",
-      "pattern": "\"refute\":(0(\\.[0-9]+)?|1(\\.0+)?),\"refute_why\":\"[^\"]+\"",
-      "rejects": "{\"refute\":2}",
-      "measured_by": "internal/verdict:TestRefutationSettlesFailure"
+      "pattern": "\"promote\":(0(\\.[0-9]+)?|1(\\.0+)?),\"promote_why\":\"[^\"]+\",\"refute\":(0(\\.[0-9]+)?|1(\\.0+)?),\"refute_why\":\"[^\"]+\"",
+      "rejects": "{\"promote\":2,\"promote_why\":\"y\",\"refute\":0.9,\"refute_why\":\"x\"}",
+      "measured_by": "internal/verdict:TestPromotionNeedsConfidence"
     }
   }
 }

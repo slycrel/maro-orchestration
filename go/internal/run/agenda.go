@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
@@ -119,12 +120,13 @@ var stepOutcomes = map[StepOutcome]bool{StepDoneOK: true, StepBlocked: true, Ste
 type StepDone struct {
 	record.ProductionRecord
 	record.Header `json:"header"`
-	Ordinal       int             `json:"ordinal"`
-	Step          thought.Ref     `json:"step"`
-	Invocation    record.RecordID `json:"invocation"`
-	Result        thought.Ref     `json:"result"`
-	Verdict       record.RecordID `json:"verdict,omitempty"`
-	Outcome       StepOutcome     `json:"outcome"`
+	Ordinal       int                  `json:"ordinal"`
+	Step          thought.Ref          `json:"step"`
+	Invocation    record.RecordID      `json:"invocation"`
+	Terminal      invoke.TerminalState `json:"terminal"` // complete | partial — how the executor's stream ended (a failed one is never a done step)
+	Result        thought.Ref          `json:"result"`
+	Verdict       record.RecordID      `json:"verdict,omitempty"`
+	Outcome       StepOutcome          `json:"outcome"`
 }
 
 func (r *StepDone) Head() *record.Header { return &r.Header }
@@ -147,6 +149,9 @@ func (r *StepDone) ValidateWire() error {
 	}
 	if err := r.Result.Validate(); err != nil || r.Result.Kind != thought.Response {
 		return errors.New("step_done: result must be a response thought")
+	}
+	if r.Terminal != invoke.TerminalComplete && r.Terminal != invoke.TerminalPartial {
+		return fmt.Errorf("step_done: terminal %q is not complete|partial", r.Terminal)
 	}
 	if !stepOutcomes[r.Outcome] {
 		return fmt.Errorf("step_done: outcome %q out of vocabulary", r.Outcome)
@@ -298,18 +303,25 @@ func stepPrompt(goal []byte, steps []string, ordinal int, prior [][]byte, block 
 	return []byte(b.String())
 }
 
-func stepJudgePrompt(goal []byte, step string, result []byte) []byte {
+func stepJudgePrompt(goal []byte, step string, result []byte, terminal invoke.TerminalState) []byte {
+	note := ""
+	if terminal == invoke.TerminalPartial {
+		note = "\n\nNOTE: the executor's stream ended PARTIAL — the result below may be truncated.\n"
+	}
 	return []byte("You are a judge. Given the goal, one planned step, and the executor's result for that step, decide whether the step is done.\n" +
-		"Reply with ONE JSON object and nothing else: {\"outcome\": \"done\"|\"blocked\"|\"unclear\", \"confidence\": <0..1>, \"why\": \"<one sentence>\"}\n\n## Goal\n" + string(goal) + "\n\n## Step\n" + step + "\n\n## Result\n" + string(result) + "\n")
+		"Reply with ONE JSON object and nothing else: {\"outcome\": \"done\"|\"blocked\"|\"unclear\", \"confidence\": <0..1>, \"why\": \"<one sentence>\"}\n\n## Goal\n" + string(goal) + "\n\n## Step\n" + step + "\n\n## Result" + note + "\n" + string(result) + "\n")
 }
 
-func closurePrompt(goal []byte, steps []string, results [][]byte) []byte {
+func closurePrompt(goal []byte, steps []string, results [][]byte, partial []bool) []byte {
 	var b strings.Builder
 	b.WriteString("You are the closure judge. Given the goal and every step's result, decide whether the GOAL was achieved — not whether work happened. Name what would prove you wrong.\n" +
 		"Reply with ONE JSON object and nothing else: {\"outcome\": \"achieved\"|\"not_achieved\"|\"unknown\", \"confidence\": <0..1>, \"why\": \"<one sentence>\", \"falsifiers\": [\"<observation that would refute this verdict>\", ...]}\n\n## Goal\n")
 	b.Write(goal)
 	for i, s := range steps {
 		fmt.Fprintf(&b, "\n## Step %d: %s\n", i+1, s)
+		if i < len(partial) && partial[i] {
+			b.WriteString("(the executor's stream ended PARTIAL; this result may be truncated)\n")
+		}
 		if i < len(results) {
 			b.Write(results[i])
 			b.WriteString("\n")
