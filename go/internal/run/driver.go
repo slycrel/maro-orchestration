@@ -147,9 +147,9 @@ func (d *Driver) validate() error {
 	return nil
 }
 
-func (d *Driver) config() ConfigSnapshot {
-	c := ConfigSnapshot{Lane: d.Lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer}
-	if d.Lane == LaneAgenda {
+func (d *Driver) config(lane Lane) ConfigSnapshot {
+	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer}
+	if lane == LaneAgenda {
 		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, d.Judge.Capabilities()
 	}
 	return c
@@ -203,7 +203,7 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if err != nil {
 		return nil, err
 	}
-	goal, fam := Intake(goalText, ref, d.Origin.Name(), policy)
+	goal, fam := Intake(goalText, ref, d.Origin.Name(), d.Lane, policy)
 	if err := d.commit(ctx, "goal/"+string(goal.ID), goal, fam); err != nil {
 		return nil, err
 	}
@@ -217,10 +217,10 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 
 // Intake is pure: the goal record and its treatment-blind assessment. The
 // classifier sees the goal bytes and nothing else.
-func Intake(text []byte, ref thought.Ref, origin GoalOrigin, policy DeliveryPolicy) (*Goal, *FamilyAssessment) {
+func Intake(text []byte, ref thought.Ref, origin GoalOrigin, lane Lane, policy DeliveryPolicy) (*Goal, *FamilyAssessment) {
 	id := record.NewID()
 	subj := record.Ref{Kind: "goal", ID: string(id)}
-	g := &Goal{Header: record.Header{ID: id, Schema: "goal/1", Subject: subj, At: now()}, Root: id, Text: ref, Origin: origin, Delivery: policy}
+	g := &Goal{Header: record.Header{ID: id, Schema: "goal/1", Subject: subj, At: now()}, Root: id, Text: ref, Origin: origin, Lane: lane, Delivery: policy}
 	fam, why := Classify(string(text))
 	return g, &FamilyAssessment{Header: record.Header{ID: record.NewID(), Schema: "family_assessment/1", Subject: subj, At: now()}, Goal: id, Family: fam, Rule: FamilyRule, Reason: why}
 }
@@ -229,7 +229,7 @@ func Intake(text []byte, ref thought.Ref, origin GoalOrigin, policy DeliveryPoli
 // prev is the attempt being recovered from (nil for attempt 1).
 func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, forced *Outcome) (*Report, error) {
 	n := uint32(len(rs.Attempts) + 1)
-	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config()}
+	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config(rs.Goal.Lane)}
 	if prev != nil {
 		att.RecoversFrom = prev.Attempt.Attempt
 	}
@@ -251,10 +251,17 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	}
 	// Execute — from the previous attempt's evidence when it exists (§5a:
 	// a new attempt starts from the last committed idempotent stage).
+	// an interrupt pending at this boundary stops the run here, honestly
+	if out, err := d.interrupted(ctx, rs, a, "before_execute"); err != nil || out != nil {
+		if err != nil {
+			return nil, err
+		}
+		return d.finish(ctx, rs, a, out, nil)
+	}
 	var out *Outcome
 	var candidates []*verdict.Verdict
 	var err error
-	if d.Lane == LaneAgenda {
+	if rs.Goal.Lane == LaneAgenda {
 		out, candidates, err = d.agenda(ctx, rs, a, prev, forced)
 	} else {
 		out, err = d.execute(ctx, rs, n, prev, forced)
@@ -266,6 +273,12 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	if err := d.crash("after_execute"); err != nil {
 		return nil, err
 	}
+	return d.finish(ctx, rs, a, out, candidates)
+}
+
+// finish judges, records, and delivers an attempt's execution outcome.
+func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out *Outcome, candidates []*verdict.Verdict) (*Report, error) {
+	n := a.Attempt.Attempt
 	// Judge — the self claim (NOW), or the closure judge's verdict plus the
 	// self claim (AGENDA); observations arrive with the deterministic checks.
 	self := SelfVerdict(rs.Run, n, out)
@@ -289,7 +302,7 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 		return nil, err
 	}
 	rs.Closure = res
-	out.Lane, out.GoalText, out.Closure, out.ClosureOut, out.ClosureCnf = d.Lane, rs.Goal.Text, res.ID, res.Outcome, res.Confidence
+	out.Lane, out.GoalText, out.Closure, out.ClosureOut, out.ClosureCnf = rs.Goal.Lane, rs.Goal.Text, res.ID, res.Outcome, res.Confidence
 	if res.Effective != "" {
 		found := false
 		for _, v := range candidates {
@@ -421,6 +434,38 @@ func scope(g *Goal) []learn.ScopePath {
 		chain = append(chain, learn.ScopeGoal(g.Root))
 	}
 	return append(chain, learn.ScopeWorkspace)
+}
+
+// interrupted consumes a pending interrupt for the run at a boundary: it
+// acknowledges it and returns the honest failed outcome the run stops with.
+// Nil when none is pending.
+func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState, boundary string) (*Outcome, error) {
+	var pending *Interrupt
+	acked := map[record.RecordID]bool{}
+	err := d.J.Production().Scan(0, func(r record.Record) error {
+		switch x := r.(type) {
+		case *Interrupt:
+			if x.Target == rs.Run && pending == nil {
+				pending = x
+			}
+		case *InterruptAck:
+			acked[x.Interrupt] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pending == nil || acked[pending.ID] {
+		return nil, nil
+	}
+	n := a.Attempt.Attempt
+	ack := &InterruptAck{Header: header(record.Ref{Kind: "interrupt", ID: string(pending.ID)}, rs.Run, n, "interrupt_ack/1"), Interrupt: pending.ID, Result: "consumed", Boundary: boundary}
+	if err := d.commit(ctx, "interrupt/"+string(pending.ID)+"/ack", ack); err != nil {
+		return nil, err
+	}
+	d.emit(rs, n, "interrupted", Executing, boundary+": "+pending.Why)
+	return &Outcome{Terminal: invoke.TerminalFailed, Reason: "interrupted at " + boundary + ": " + pending.Why}, nil
 }
 
 // invoked reports whether an attempt made an execute invocation.

@@ -760,3 +760,48 @@ under `-race`; contracts 0/0). Not done, recorded: the shutdown DAG beyond
 lanes (sequencer freeze, projector, journal close) is 7b's `serve`; the
 CLI path supervises nothing until 7b wires the supervisor into the
 process; an early-failed step's receipt output is not in the deliverable.
+
+## Step 7b — the always-on process: socket intake, executor lane, interrupts, quiesce (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `maro-go serve`: one lease, one supervisor, lanes intake (1) / sheriff (2) / executor (3) / publisher (4); SIGINT/SIGTERM → quiesce in stage order → final publish → journal close → lease release | §10, §2, D12 | kept |
+| Submission = the CLI writing a Goal into the running process's journal through its socket | §10 | kept: Unix socket `<workspace>/maro.sock`, one JSON request line, JSON event lines back; the presentation goes to the submitting connection (origin `socket`) |
+| `Goal.Lane` (explicit routing recorded on the goal; the attempt's config must equal it) | §5 "routes it", D10 (the edge is the record) | kept; the driver reads the goal's lane, `Driver.Lane` is only the in-process verbs' default |
+| Interrupts consumed at stage boundaries, acknowledged, expired when the target is terminal | §5, behavior-suite FINDINGS #1 (make interrupt intake a registered contract) | kept: `interrupt` / `interrupt_ack` records; boundaries `before_execute` (NOW), `before_step_k` (AGENDA); an interrupt for a terminal run is acknowledged `expired` in the same command |
+| One heavy job at a time | D6 | kept: the executor is one goroutine of `Resume` loops, woken by intake or a poll |
+| A client that is gone | §12 | a failed presentation → the outbox's bound → `delivery_failed` with the reason; the payload stays in the store (a re-deliver verb is a later Finding) |
+| Backpressure via durable lane cursors | §2 | **not yet** — lanes fold the journal per pass (fine at this scale); cursors when a lane's pass is no longer the whole journal |
+| Sequencer freeze / final watermark as explicit records | §2 | **not yet** — the journal's close after the lanes quiesce is the freeze; a `final watermark` record when a second front end attaches |
+| Socket auth | §10 | **not in v1** — the socket lives in the workspace; the file mode is the boundary |
+
+**Built.** `internal/process` (`Serve`, `Stop`, four lanes, the socket
+protocol, the socket origin, `Dial`/`Submit`/`One`); run: `Goal.Lane`,
+origin `socket`, `Interrupt`/`InterruptAck` (31 kinds; contracts 0/0),
+`Driver.interrupted`, `finish()` split out of `drive()`. CLI: `serve`,
+`submit`, `interrupt`, `status`; `ack` goes through the socket when a
+process is up. Side-fix from the live run: the listener closed before the
+intake lane was cancelled, so its quiesce read as a failure — now
+cancellation closes the listener.
+
+**Edge tests.** submit → presentation on the submitting connection → done;
+ack over the socket (bad token refused, replay); two goals in sequence;
+status (4 lanes, missions, no degraded line); socket-origin runs in the
+journal; every lane's events end `started stopped` after Stop; the socket
+refuses after Stop. An AGENDA run gated between steps: interrupt lands
+while step 1 is in flight → consumed at `before_step_2`, step 2 never
+runs, the deliverable carries step 1, names step 2 unexecuted and the
+reason; a second interrupt on the terminal run expires; the fold holds
+both with their acks. Stop mid-run → Serve again → the orphaned run is
+resumed; with no client its presentation fails within the bound →
+`delivery_failed` ("no client"); a new goal on the new process delivers.
+Door rules for interrupts and the goal lane (6 refusals).
+
+**Live.** `serve --model haiku` → `submit` (now): delivered; `submit
+--lane agenda --ack`: a 5-step plan, closure achieved, `accepted_
+unacknowledged` → `ack` through the socket → `user_acknowledged`;
+`status` shows 4 lanes up and both runs; `interrupt` on a terminal run
+→ expired; SIGTERM → lanes quiesce in order, views published (2 B6
+rows), socket removed, lease released.

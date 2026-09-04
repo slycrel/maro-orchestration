@@ -8,20 +8,21 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
+	"github.com/slycrel/maro-orchestration/go/internal/process"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
-	_ "github.com/slycrel/maro-orchestration/go/internal/sheriff"   // registers nothing yet; the lane is wired by serve (step 7b)
-	_ "github.com/slycrel/maro-orchestration/go/internal/supervise" // registers the lane kinds
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
@@ -56,6 +57,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdRuns(args[1:], stdout, stderr)
 	case "learn":
 		err = cmdLearn(args[1:], stdout)
+	case "serve":
+		err = cmdServe(args[1:], stdout, stderr)
+	case "submit":
+		err = cmdSubmit(args[1:], stdout, stderr)
+	case "interrupt":
+		err = cmdInterrupt(args[1:], stdout)
+	case "status":
+		err = cmdStatus(stdout)
 	default:
 		usage(stderr)
 		return 2
@@ -68,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -288,6 +297,22 @@ func cmdAck(args []string, out io.Writer) error {
 	if len(args) != 2 {
 		return fmt.Errorf("ack needs <delivery-id> <token>")
 	}
+	// a running process holds the lease: acknowledge through it
+	if sock, err := socketPath(io.Discard); err == nil {
+		if cl, err := process.Dial(sock); err == nil {
+			defer cl.Close()
+			ev, err := cl.One(process.Request{Op: "ack", Delivery: args[0], Token: args[1]})
+			if err != nil {
+				return err
+			}
+			if ev.Replayed {
+				fmt.Fprintf(out, "acknowledged (already, delivery %s)\n", ev.Delivery)
+			} else {
+				fmt.Fprintf(out, "acknowledged: delivery %s\n", ev.Delivery)
+			}
+			return nil
+		}
+	}
 	err := withJournal(out, func(j *journal.Journal, st *thought.Store) error {
 		ack, replayed, err := spine.Ack(context.Background(), j, st, record.RecordID(args[0]), args[1])
 		if err != nil {
@@ -475,4 +500,185 @@ func cmdLearn(args []string, out io.Writer) error {
 		}
 		return fmt.Errorf("unknown learn subcommand %q", args[0])
 	})
+}
+
+// cmdServe is the always-on process: lease, journal, supervisor, lanes,
+// socket. It runs until SIGINT/SIGTERM, then quiesces in stage order.
+func cmdServe(args []string, out, errw io.Writer) error {
+	model, judgeModel := "haiku", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--model":
+			i++
+			if i < len(args) {
+				model = args[i]
+			}
+		case "--judge-model":
+			i++
+			if i < len(args) {
+				judgeModel = args[i]
+			}
+		}
+	}
+	r, err := workspace.Resolve()
+	if err != nil {
+		return err
+	}
+	a, err := r.Announce(out)
+	if err != nil {
+		return err
+	}
+	b, err := invoke.NewSubprocess(model)
+	if err != nil {
+		return err
+	}
+	var jb invoke.Backend
+	if judgeModel != "" {
+		js, err := invoke.NewSubprocess(judgeModel)
+		if err != nil {
+			return err
+		}
+		jb = js
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "serving on %s\n", srv.Socket())
+	<-ctx.Done()
+	fmt.Fprintln(errw, "quiescing…")
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer stopCancel()
+	return srv.Stop(stopCtx)
+}
+
+// socketPath is the workspace's socket, announced.
+func socketPath(out io.Writer) (string, error) {
+	r, err := workspace.Resolve()
+	if err != nil {
+		return "", err
+	}
+	a, err := r.Announce(out)
+	if err != nil {
+		return "", err
+	}
+	return a.Path(process.SocketName), nil
+}
+
+// cmdSubmit sends a goal to the running process and prints what comes back.
+func cmdSubmit(args []string, out, errw io.Writer) error {
+	req := process.Request{Lane: string(spine.LaneNow)}
+	var text []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--lane":
+			i++
+			if i < len(args) {
+				req.Lane = args[i]
+			}
+		case "--ack":
+			req.Ack = true
+		default:
+			text = append(text, args[i])
+		}
+	}
+	req.Text = strings.TrimSpace(strings.Join(text, " "))
+	if req.Text == "" {
+		return fmt.Errorf("submit needs a goal: maro-go submit [--lane now|agenda] [--ack] <goal text>")
+	}
+	sock, err := socketPath(out)
+	if err != nil {
+		return err
+	}
+	cl, err := process.Dial(sock)
+	if err != nil {
+		return fmt.Errorf("%w — start one with `maro-go serve`, or use `now`/`agenda` in-process", err)
+	}
+	defer cl.Close()
+	return cl.Submit(context.Background(), req, func(ev process.Event) {
+		switch ev.Type {
+		case "accepted":
+			fmt.Fprintf(errw, "accepted goal %s\n", ev.Goal)
+		case "presentation":
+			fmt.Fprint(out, ev.Payload)
+			fmt.Fprintf(out, "\n---\nrun %s · terminal %s · closure %s · delivery %s\n", ev.Handle, ev.Terminal, ev.Closure, ev.Delivery)
+			if ev.MayDuplicate > 0 {
+				fmt.Fprintf(out, "(re-presented: %d earlier presentation(s) ended with the process dying)\n", ev.MayDuplicate)
+			}
+			for _, h := range ev.Health {
+				fmt.Fprintf(out, "degraded: %s\n", h)
+			}
+			if ev.Token != "" {
+				fmt.Fprintf(out, "acknowledge with: maro-go ack %s %s\n", ev.Delivery, ev.Token)
+			}
+		case "done":
+			fmt.Fprintf(errw, "mission: %s (execution %s, closure %s)\n", ev.Mission, ev.Terminal, ev.Closure)
+		}
+	})
+}
+
+// cmdInterrupt asks the running process to stop a run at its next boundary.
+func cmdInterrupt(args []string, out io.Writer) error {
+	if len(args) < 1 {
+		return fmt.Errorf("interrupt <handle> --why <text>")
+	}
+	why := ""
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--why" && i+1 < len(args) {
+			why = args[i+1]
+		}
+	}
+	if strings.TrimSpace(why) == "" {
+		return fmt.Errorf("interrupt needs --why")
+	}
+	sock, err := socketPath(out)
+	if err != nil {
+		return err
+	}
+	cl, err := process.Dial(sock)
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	ev, err := cl.One(process.Request{Op: "interrupt", Handle: args[0], Why: why})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "interrupt %s: %s\n", ev.Handle, ev.Result)
+	return nil
+}
+
+// cmdStatus prints the running process's lanes and runs.
+func cmdStatus(out io.Writer) error {
+	sock, err := socketPath(out)
+	if err != nil {
+		return err
+	}
+	cl, err := process.Dial(sock)
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	ev, err := cl.One(process.Request{Op: "status"})
+	if err != nil {
+		return err
+	}
+	for _, l := range ev.Lanes {
+		state := "up"
+		switch {
+		case l.GaveUp:
+			state = "DOWN"
+		case !l.Up:
+			state = "down"
+		case l.Stalled:
+			state = "stalled"
+		}
+		fmt.Fprintf(out, "lane %-10s gen=%d %-7s watermark=%d %s\n", l.Lane, l.Generation, state, l.Watermark, l.Reason)
+	}
+	for _, m := range ev.Runs {
+		fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required)
+	}
+	return nil
 }

@@ -181,6 +181,9 @@ type Ledger struct {
 	Unstarted []*Goal                               // in Seq order
 	Families  map[record.RecordID]*FamilyAssessment // by goal; exactly one per goal
 	Learned   *learn.Ledger                         // the learned population, folded alongside
+	// Interrupts by target run, with their acks; a pending one has no ack.
+	Interrupts map[record.RunID][]*Interrupt
+	Acks       map[record.RecordID]*InterruptAck
 }
 
 // Fold folds the production population into per-run state and REFUSES any
@@ -202,6 +205,8 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	resolutions := map[record.RecordID]*verdict.Resolution{}
 	verdicts := map[record.RecordID]*verdict.Verdict{}
 	observations := map[record.RecordID]*verdict.Observation{}
+	interrupts := map[record.RunID][]*Interrupt{}
+	acks := map[record.RecordID]*InterruptAck{}
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -245,6 +250,31 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: goal %s assessed twice (%s, %s) — an assessment is never revised", x.Goal, fams[x.Goal].ID, x.ID)
 			}
 			fams[x.Goal] = x
+		case *Interrupt:
+			if runs[x.Target] == nil {
+				return fmt.Errorf("run: interrupt %s targets unknown run %s", x.ID, x.Target)
+			}
+			interrupts[x.Target] = append(interrupts[x.Target], x)
+		case *InterruptAck:
+			var it *Interrupt
+			for _, list := range interrupts {
+				for _, i := range list {
+					if i.ID == x.Interrupt {
+						it = i
+					}
+				}
+			}
+			if it == nil || acks[x.Interrupt] != nil {
+				return fmt.Errorf("run: ack %s for an unknown or already acknowledged interrupt %s", x.ID, x.Interrupt)
+			}
+			if x.Result == "consumed" {
+				a := attemptNoErr(runs, x.RunID, x.Attempt)
+				if a == nil || x.RunID != it.Target || a.Current() != Executing {
+					return fmt.Errorf("run: ack %s consumed outside an executing attempt of its target", x.ID)
+				}
+				a.touch(x)
+			}
+			acks[x.Interrupt] = x
 		case *verdict.Verdict:
 			verdicts[x.ID] = x
 			if x.RunID != "" {
@@ -296,6 +326,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				}
 			} else if rs.Goal.ID != x.Goal || rs.Family.ID != x.Family {
 				return fmt.Errorf("run: %s attempt %d cites a different goal or assessment than attempt 1", x.RunID, x.Attempt)
+			}
+			if x.Config.Lane != rs.Goal.Lane {
+				return fmt.Errorf("run: %s attempt %d ran lane %s but the goal is routed to %s", x.RunID, x.Attempt, x.Config.Lane, rs.Goal.Lane)
 			}
 			if x.Attempt > 1 && rs.Attempts[x.Attempt-2].Current() != Recoverable {
 				return fmt.Errorf("run: %s attempt %d started but attempt %d is at %q, not recoverable", x.RunID, x.Attempt, x.Attempt-1, rs.Attempts[x.Attempt-2].Current())
@@ -485,7 +518,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Learned: learned}
+	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)

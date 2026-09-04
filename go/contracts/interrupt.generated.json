@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "run_transition",
+  "kind": "interrupt",
   "envelope": "production",
-  "schema": "run_transition/1",
-  "go_type": "run.Transition",
+  "schema": "interrupt/1",
+  "go_type": "run.Interrupt",
   "fields": [
     {
       "name": "header.ID",
@@ -78,45 +78,24 @@
       "from_header": true
     },
     {
-      "name": "From",
-      "wire": "from",
-      "go_type": "run.State",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "To",
-      "wire": "to",
-      "go_type": "run.State",
+      "name": "Target",
+      "wire": "target",
+      "go_type": "record.RunID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Reason",
-      "wire": "reason",
+      "name": "Action",
+      "wire": "action",
       "go_type": "string",
-      "omittable": true,
+      "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Delivery",
-      "wire": "delivery",
-      "go_type": "run.DeliveryState",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Outcome",
-      "wire": "outcome",
-      "go_type": "*run.Outcome",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Evidence",
-      "wire": "evidence",
-      "go_type": "[]record.Ref",
-      "omittable": true,
+      "name": "Why",
+      "wire": "why",
+      "go_type": "string",
+      "omittable": false,
       "is_thought": false
     }
   ],

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
@@ -47,9 +48,12 @@ var lanes = map[Lane]bool{LaneNow: true}
 // GoalOrigin says where a goal entered. v1: the CLI.
 type GoalOrigin string
 
-const OriginCLI GoalOrigin = "cli"
+const (
+	OriginCLI    GoalOrigin = "cli"    // an in-process verb: the payload is written to the verb's stdout
+	OriginSocket GoalOrigin = "socket" // a client of the always-on process: the payload goes back over its connection
+)
 
-var origins = map[GoalOrigin]bool{OriginCLI: true}
+var origins = map[GoalOrigin]bool{OriginCLI: true, OriginSocket: true}
 
 // DeliveryState names what a delivery step PROVED (§12). `endpoint_accepted`
 // has no v1 producer (it needs a program origin) and is not in the
@@ -83,6 +87,7 @@ type Goal struct {
 	Root          record.RecordID `json:"root"`
 	Text          thought.Ref     `json:"text"`
 	Origin        GoalOrigin      `json:"origin"`
+	Lane          Lane            `json:"lane"` // the driver configuration this goal is routed to (explicit in v1)
 	Delivery      DeliveryPolicy  `json:"delivery"`
 }
 
@@ -109,6 +114,9 @@ func (r *Goal) ValidateWire() error {
 	}
 	if !origins[r.Origin] {
 		return fmt.Errorf("goal: origin %q out of vocabulary", r.Origin)
+	}
+	if !lanes[r.Lane] {
+		return fmt.Errorf("goal: lane %q out of vocabulary", r.Lane)
 	}
 	if !requiredStates[r.Delivery.Required] {
 		return fmt.Errorf("goal: delivery.required %q out of vocabulary", r.Delivery.Required)
@@ -524,6 +532,80 @@ func (r *DeliveryAcked) ValidateWire() error {
 	return nil
 }
 
+// Interrupt asks the driver to stop a run at its next stage boundary (§5).
+// It is consumed only there, acknowledged by a record, and expired when
+// the target attempt is already terminal. v1 action: cancel.
+type Interrupt struct {
+	record.ProductionRecord
+	record.Header `json:"header"`
+	Target        record.RunID `json:"target"`
+	Action        string       `json:"action"` // cancel
+	Why           string       `json:"why"`
+}
+
+func (r *Interrupt) Head() *record.Header { return &r.Header }
+func (r *Interrupt) Kind() record.Kind    { return KindInterrupt }
+func (r *Interrupt) ValidateWire() error {
+	if err := r.Header.ValidateWire(); err != nil {
+		return err
+	}
+	if r.Target == "" || r.Subject != runRef(r.Target) {
+		return errors.New("interrupt: subject must be the target run")
+	}
+	if r.RunID != "" || r.Attempt != 0 {
+		return errors.New("interrupt: an interrupt is not scoped to an attempt; it names its target")
+	}
+	if r.Action != "cancel" {
+		return fmt.Errorf("interrupt: action %q out of vocabulary", r.Action)
+	}
+	if strings.TrimSpace(r.Why) == "" {
+		return errors.New("interrupt: needs a why")
+	}
+	return nil
+}
+
+// InterruptAck is the driver's answer: consumed at a boundary of the named
+// attempt (the run stops there), or expired because the run was terminal.
+type InterruptAck struct {
+	record.ProductionRecord
+	record.Header `json:"header"`
+	Interrupt     record.RecordID `json:"interrupt"`
+	Result        string          `json:"result"`             // consumed | expired
+	Boundary      string          `json:"boundary,omitempty"` // where it was consumed
+}
+
+func (r *InterruptAck) Head() *record.Header { return &r.Header }
+func (r *InterruptAck) Kind() record.Kind    { return KindInterruptAck }
+func (r *InterruptAck) ValidateWire() error {
+	if err := r.Header.ValidateWire(); err != nil {
+		return err
+	}
+	if err := record.ValidateID(r.Interrupt); err != nil {
+		return fmt.Errorf("interrupt_ack: %w", err)
+	}
+	if r.Subject.Kind != "interrupt" || r.Subject.ID != string(r.Interrupt) {
+		return errors.New("interrupt_ack: subject must be the interrupt")
+	}
+	switch r.Result {
+	case "consumed":
+		if r.RunID == "" || r.Attempt == 0 || r.Boundary == "" {
+			return errors.New("interrupt_ack: consumed names the attempt and the boundary")
+		}
+	case "expired":
+		if r.Boundary != "" {
+			return errors.New("interrupt_ack: expired has no boundary")
+		}
+	default:
+		return fmt.Errorf("interrupt_ack: result %q out of vocabulary", r.Result)
+	}
+	return nil
+}
+
+const (
+	KindInterrupt    record.Kind = "interrupt"
+	KindInterruptAck record.Kind = "interrupt_ack"
+)
+
 const tokenLen = 32
 
 // TokenFor derives the ack token: bound to the delivery ID and the payload
@@ -594,6 +676,12 @@ func init() {
 	reg(KindDeliveryAttempted, DeliveryAttempted{}, "the outbox (result of a started presentation; `unknown` stamped on restart for a start the process died inside)",
 		"the outbox (bounded retry); Mission fold; the run fold (delivered needs an accepted attempt)",
 		"retry, or give up with delivery_failed; how many presentations may have duplicated")
+	reg(KindInterrupt, Interrupt{}, "a client of the process (`maro-go interrupt`), via the intake lane",
+		"the driver at every stage boundary; the run fold (pending vs acknowledged)",
+		"whether the run stops at its next boundary")
+	reg(KindInterruptAck, InterruptAck{}, "the driver (consumed at a boundary) or the intake lane (expired: the run was terminal)",
+		"clients (`maro-go status`); the run fold",
+		"that an interrupt was honoured, where, or why not")
 	reg(KindDeliveryAcked, DeliveryAcked{}, "Ack (the CLI ack command, from a client-presented token)",
 		"Mission fold; the outcomes view",
 		"user_acknowledged — the only state labelled user delivery")

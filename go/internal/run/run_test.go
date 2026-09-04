@@ -498,7 +498,7 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 	goalRef := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Goal, Bytes: 1, Encoding: thought.UTF8}
 	gid := record.NewID()
 	goodGoal := func() *Goal {
-		return &Goal{Header: record.Header{ID: gid, Schema: "goal/1", Subject: record.Ref{Kind: "goal", ID: string(gid)}, At: time.Now().UTC()}, Root: gid, Text: goalRef, Origin: OriginCLI, Delivery: DeliveryPolicy{Required: TransportAccepted}}
+		return &Goal{Header: record.Header{ID: gid, Schema: "goal/1", Subject: record.Ref{Kind: "goal", ID: string(gid)}, At: time.Now().UTC()}, Root: gid, Text: goalRef, Origin: OriginCLI, Lane: LaneNow, Delivery: DeliveryPolicy{Required: TransportAccepted}}
 	}
 	goodAttempt := func() *RunAttempt {
 		x := &RunAttempt{Header: hd(runRef(run)), Goal: gid, Family: record.NewID(), Config: ConfigSnapshot{Lane: LaneNow, Backend: toolless, Judge: JudgeSelf, PlanCardinality: 1}}
@@ -517,6 +517,11 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 	}{
 		{"goal wrong subject", func() record.Record { g := goodGoal(); g.Subject.ID = "other"; return g }(), "subject must be the goal"},
 		{"goal foreign policy", func() record.Record { g := goodGoal(); g.Delivery.Required = "endpoint_accepted"; return g }(), "out of vocabulary"},
+		{"goal foreign lane", func() record.Record { g := goodGoal(); g.Lane = "later"; return g }(), "lane"},
+		{"interrupt foreign action", &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(run), At: time.Now().UTC()}, Target: run, Action: "pause", Why: "x"}, "action"},
+		{"interrupt without why", &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(run), At: time.Now().UTC()}, Target: run, Action: "cancel", Why: " "}, "why"},
+		{"interrupt ack foreign result", &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", Subject: record.Ref{Kind: "interrupt", ID: string(gid)}, At: time.Now().UTC()}, Interrupt: gid, Result: "ignored"}, "out of vocabulary"},
+		{"interrupt ack consumed without boundary", &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", RunID: run, Attempt: 1, Subject: record.Ref{Kind: "interrupt", ID: string(gid)}, At: time.Now().UTC()}, Interrupt: gid, Result: "consumed"}, "boundary"},
 		{"goal text not a goal thought", func() record.Record { g := goodGoal(); g.Text.Kind = thought.Prompt; return g }(), "goal thought"},
 		{"root goal must be its own root", func() record.Record { g := goodGoal(); g.Root = record.NewID(); return g }(), "root"},
 		{"attempt foreign lane", func() record.Record { a := goodAttempt(); a.Config.Lane = "later"; return a }(), "lane"},

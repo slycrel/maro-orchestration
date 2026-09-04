@@ -96,7 +96,7 @@ func samples() map[record.Kind]any {
 		verdict.KindVerdict:         &verdict.Verdict{Header: withSchema(h, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Confidence: 0.7, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: inv}, Basis: []record.Ref{{Kind: "receipt", ID: "r"}}, Falsifiers: []thought.Ref{ref}, Direction: verdict.Both},
 		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
-		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginCLI, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}},
+		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginCLI, Lane: run.LaneNow, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}},
 		run.KindFamilyAssessment:    &run.FamilyAssessment{Header: withSubject(withSchema(h, "family_assessment/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Family: run.FamilyAnswer, Rule: run.FamilyRule, Reason: "question shape"},
 		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneAgenda, Backend: caps, Judge: run.JudgeModel, JudgeBackend: caps, PlanCardinality: 0, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer}, RecoversFrom: 1},
 		run.KindTransition:          &run.Transition{Header: withSchema(h, "run_transition/1"), From: run.Recorded, To: run.Delivered, Reason: "transport took it", Delivery: run.TransportAccepted, Evidence: []record.Ref{{Kind: "delivery_attempted", ID: "x"}}},
@@ -112,6 +112,8 @@ func samples() map[record.Kind]any {
 		run.KindIntentAssessment:    &run.IntentAssessment{Header: withSchema(h, "intent_assessment/1"), Invocation: inv, Clear: true, Interpretation: "summarize", Question: "which quarter?"},
 		run.KindPlan:                &run.Plan{Header: withSchema(h, "plan/1"), Invocation: inv, Steps: []thought.Ref{step}},
 		run.KindStepDone:            &run.StepDone{Header: withSchema(h, "step_done/1"), Ordinal: 1, Step: step, Invocation: inv, Terminal: invoke.TerminalComplete, Result: resp, Verdict: inv, Outcome: run.StepDoneOK},
+		run.KindInterrupt:           &run.Interrupt{Header: record.Header{ID: record.NewID(), Seq: 7, Schema: "interrupt/1", Subject: record.Ref{Kind: "run", ID: "run-1"}, Supersedes: record.NewID(), At: time.Now().UTC()}, Target: "run-1", Action: "cancel", Why: "operator asked"},
+		run.KindInterruptAck:        &run.InterruptAck{Header: withSubject(withSchema(h, "interrupt_ack/1"), record.Ref{Kind: "interrupt", ID: string(inv)}), Interrupt: inv, Result: "consumed", Boundary: "before_step_2"},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

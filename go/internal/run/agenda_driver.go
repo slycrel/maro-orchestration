@@ -234,6 +234,16 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	}
 	resumeAt := len(done) + 1 // only the first new step can have an in-flight invocation to reuse
 	for k := resumeAt; k <= len(steps); k++ {
+		if io, err := d.interrupted(ctx, rs, a, fmt.Sprintf("before_step_%d", k)); err != nil || io != nil {
+			if err != nil {
+				return nil, nil, err
+			}
+			io.Usage, io.Recall, io.Steps = usage, sel.ID, len(done)
+			if lastExec != "" {
+				io.Invocation, io.Produced, io.Receipt, io.Response, io.Model = lastExec, lastBy, lastReceipt, lastResp, d.Backend.Capabilities().Model
+			}
+			return io, nil, nil
+		}
 		var o *invoke.Outcome
 		var resp []byte
 		by := n
