@@ -33,6 +33,28 @@ Standing rules). Inputs: `python-arch-map.md` and `go-tree-triage.md`
   the design-review and adversarial-review lane, and a candidate
   second implementer.
 
+### Decisions 2026-09-04 (Jeremy — the three phase-2 gates)
+
+- **D7 — v1 scope.** *"Backbone + memory recording, along with the
+  proper hooks for the self-improvement (that we add later). Design
+  should be modular and anti-fragile, with the expectation that we are
+  updating the processing over time (forwards compatible for our
+  internal systems, allowing for rewriting processes and keeping
+  contracts stable)."* Read: v1 = the Phase 2 backbone plus the
+  memory/knowledge recording strand; self-improvement ships as v2 BUT
+  its seams (where the inspector/evolver/graduation loop plugs in, what
+  it reads, what it may write) are designed into v1 — hooks first,
+  processing later. Internal processes are expected to be rewritten;
+  the contracts they sit behind are not. This is the design brief for
+  the Phase 2 backbone note.
+- **D8 — Python lift while the successor builds.** Contract-sharpening
+  PLUS real defects the behavior suite or reviews surface (the
+  unmetered pre-flight `build_adapter` bypass is the model case). No
+  behavior redesign on the Python side. Python stays production.
+- **D9 — Home.** Branch `successor`, Go code in this repo's `go/`,
+  rebuilt fresh on the new branch. `go-port` stays frozen and reachable
+  for mining (D4). Shared land.sh / test-safe / review ledger / CI.
+
 ## The framing that generates the structure
 
 Maro's spine is one structured LLM call per step, with agency pushed
@@ -155,6 +177,26 @@ boundary. Then decide what the successor becomes.
   is the default DONE. Batteries, derivation guards, and differential
   sweeps are decree-only upgrades, never the default.
 - **Work queue lives here.** A `## Queue` section below carries
+  ordered work with status; each session reads it first, takes the top
+  item, updates it. The queue is this doc — no machinery unless the
+  doc demonstrably fails at it.
+- **Half-complete code is disposable by design.** Abandoning a strand
+  mid-build to change direction is a sanctioned move, not a failure —
+  the contracts are what accumulate.
+
+## Open questions — RESOLVED 2026-09-04 (Phase 2 commit UNBLOCKED)
+
+All three answered by Jeremy in one sitting; recorded as D7–D9 above.
+The section is kept so the questions stay readable next to their answers.
+
+- **Q-scope** → D7. v1 = backbone + memory recording, with the
+  self-improvement HOOKS designed in now and the processing added later.
+- **Q-python-lift** → D8. Contract-sharpening plus real defects the
+  suite or reviews surface; no Python behavior redesign.
+- **Q-name/branch** → D9. Branch `successor`, code in this repo's `go/`,
+  rebuilt fresh; `go-port` stays frozen for mining.
+
+## Queue` section below carries
   ordered work with status; each session reads it first, takes the top
   item, updates it. The queue is this doc — no machinery unless the
   doc demonstrably fails at it.
