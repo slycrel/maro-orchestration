@@ -333,6 +333,13 @@ func (d *Driver) forkStep(ctx context.Context, rs *RunState, a *AttemptState, k 
 			return nil, nil, err
 		}
 	}
+	// a restart after a decision: its consequences (the cancellations) are
+	// repaired BEFORE any member is driven, or a loser would run again
+	if dec := fs.decision(); dec != nil && len(dec.Cancel) > 0 {
+		if err := d.commitDecision(ctx, rs, fs, dec); err != nil {
+			return nil, nil, err
+		}
+	}
 	// drive the members that are not terminal, concurrently, under the
 	// parent's context; each child's driver writes its own ChildTerminal
 	if err := d.driveChildren(ctx, rs, fs); err != nil {
@@ -350,11 +357,6 @@ func (d *Driver) forkStep(ctx context.Context, rs *RunState, a *AttemptState, k 
 			return nil, nil, fmt.Errorf("run: fork %s: no decision possible with every member terminal", fs.Fork.ID)
 		}
 		if err := d.commitDecision(ctx, rs, fs, dec); err != nil {
-			return nil, nil, err
-		}
-	} else if len(fs.decision().Cancel) > 0 {
-		// a restart after the decision: its cancellations may not all have landed
-		if err := d.commitDecision(ctx, rs, fs, fs.decision()); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -454,9 +456,17 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 		live[m.Run] = running{cancel: cancel, run: m.Run}
 		mu.Unlock()
 		wg.Add(1)
-		go func(crs *RunState, cctx context.Context) {
+		go func(crs *RunState, cctx context.Context, member int) {
 			defer wg.Done()
-			err := d.driveChild(cctx, crs, fs)
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						err = fmt.Errorf("run: fork %s member %d (%s) panicked: %v", fs.Fork.ID, member, crs.Run, r)
+					}
+				}()
+				err = d.driveChild(cctx, crs, fs, member)
+			}()
 			mu.Lock()
 			wasStopped := stopped
 			mu.Unlock()
@@ -478,7 +488,7 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 				mu.Unlock()
 			}
 			errs <- err
-		}(crs, cctx)
+		}(crs, cctx, i+1)
 	}
 	wg.Wait()
 	close(errs)
@@ -502,7 +512,7 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 		if err != nil {
 			return err
 		}
-		if err := d.driveChild(ctx, crs, fs); err != nil {
+		if err := d.driveChild(ctx, crs, fs, i+1); err != nil {
 			return err
 		}
 	}
@@ -553,11 +563,22 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 // driveChild is the child's own driver: confined (tool-less), fork origin,
 // NOW lane with the parent's judge when the policy needs a verdict. It
 // writes the ChildTerminal from the child attempt's own scope.
-func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState) error {
+func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, member int) error {
 	cd := &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events,
 		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts}
+	// crash seams: "child:<seam>" fires in every child, "child:<n>:<seam>"
+	// only in member n (1-based)
 	if strings.HasPrefix(d.CrashAt, "child:") {
-		cd.CrashAt = strings.TrimPrefix(d.CrashAt, "child:")
+		rest := strings.TrimPrefix(d.CrashAt, "child:")
+		var n int
+		var seam string
+		if _, err := fmt.Sscanf(rest, "%d:%s", &n, &seam); err == nil {
+			if n == member {
+				cd.CrashAt = seam
+			}
+		} else {
+			cd.CrashAt = rest
+		}
 	}
 	if err := cd.validate(); err != nil {
 		return err
@@ -632,14 +653,24 @@ func selected(dec *JoinDecision, r record.RunID) bool {
 // select it, cancel the rest; if every member is terminal and none
 // achieved ⇒ select the completed ones (the parent judges), cancel none.
 func decide(fs *ForkState, led *Ledger) *JoinDecision {
+	return decideWith(fs, func(r record.RunID) string {
+		if crs := led.Runs[r]; crs != nil && crs.Closure != nil {
+			return crs.Closure.Outcome
+		}
+		return ""
+	})
+}
+
+// decideWith is the pure join rule with the closure outcome of each member
+// supplied by the caller (the fold supplies it from the journal prefix).
+func decideWith(fs *ForkState, closure func(record.RunID) string) *JoinDecision {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	dec := &JoinDecision{Fork: fs.Fork.ID}
 	switch fs.Fork.Policy {
 	case JoinFirstVerdict:
 		for _, m := range fs.Fork.Members {
-			crs := led.Runs[m.Run]
-			if crs != nil && crs.Closure != nil && crs.Closure.Outcome == "achieved" {
+			if closure(m.Run) == "achieved" {
 				dec.Selected = []record.AttemptRef{m}
 				for _, o := range fs.Fork.Members {
 					if o.Run != m.Run && fs.Terminals[o.Run] == nil {
@@ -665,6 +696,24 @@ func decide(fs *ForkState, led *Ledger) *JoinDecision {
 		return dec
 	}
 	return nil
+}
+
+// sameDecision: the same members, in the same order, selected and cancelled.
+func sameDecision(a, b *JoinDecision) bool {
+	if len(a.Selected) != len(b.Selected) || len(a.Cancel) != len(b.Cancel) {
+		return false
+	}
+	for i := range a.Selected {
+		if a.Selected[i] != b.Selected[i] {
+			return false
+		}
+	}
+	for i := range a.Cancel {
+		if a.Cancel[i] != b.Cancel[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // forkResult composes the fork step's result from the selected members'

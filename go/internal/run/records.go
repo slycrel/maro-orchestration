@@ -280,7 +280,7 @@ type Outcome struct {
 	Usage      invoke.Usage         `json:"usage"`
 	Model      string               `json:"model,omitempty"`  // the model of the invocation that produced the evidence (never the recovering attempt's config)
 	Recall     record.RecordID      `json:"recall,omitempty"` // the RecallSelection the invocation's request was rendered from
-	Steps      int                  `json:"steps,omitempty"`  // AGENDA: steps executed (usage is the sum over the attempt's invocations)
+	Steps      int                  `json:"steps,omitempty"`  // AGENDA: steps executed (usage is the sum over THIS RUN's invocations; a fork's children account their own)
 	GoalText   thought.Ref          `json:"goal"`             // the goal thought this attempt ran (whole)
 	Closure    record.RecordID      `json:"closure"`          // the closure Resolution
 	ClosureOut string               `json:"closure_outcome"`

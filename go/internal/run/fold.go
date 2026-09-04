@@ -288,37 +288,22 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if fs == nil || fs.Decision != nil || fs.Fork.RunID != x.RunID {
 				return fmt.Errorf("run: join decision %s for a fork that does not exist, is decided, or is not this run's", x.ID)
 			}
-			for _, m := range append(append([]record.AttemptRef{}, x.Selected...), x.Cancel...) {
-				if !fs.isMember(m.Run) {
-					return fmt.Errorf("run: join decision %s names %s, not a member", x.ID, m.Run)
+			// a decision is a DERIVED record: it must equal the join rule over
+			// the fork as it stood (terminals and closures at this point)
+			want := decideWith(fs, func(r record.RunID) string {
+				crs := runs[r]
+				if crs == nil || crs.Latest() == nil {
+					return ""
 				}
-			}
-			switch fs.Fork.Policy {
-			case JoinAll:
-				if !fs.Complete() || len(x.Cancel) != 0 {
-					return fmt.Errorf("run: join decision %s: `all` decides only when every member is terminal, cancelling none", x.ID)
-				}
-			case JoinFirstVerdict:
-				if len(x.Selected) != 1 && !fs.Complete() {
-					return fmt.Errorf("run: join decision %s: first_verdict selects one member, or every completed one once all are terminal", x.ID)
-				}
-				if len(x.Selected) == 1 && !fs.Complete() {
-					// the selected member's closure must be achieved by now (its
-					// resolution precedes its recorded transition; the run's
-					// Closure field is filled after the scan, so read it here)
-					crs := runs[x.Selected[0].Run]
-					achieved := false
-					if crs != nil && crs.Latest() != nil {
-						if rec := crs.Latest().Has(Recorded); rec != nil {
-							if res := resolutions[rec.Outcome.Closure]; res != nil && res.Outcome == "achieved" {
-								achieved = true
-							}
-						}
-					}
-					if !achieved {
-						return fmt.Errorf("run: join decision %s selected %s whose closure is not achieved", x.ID, x.Selected[0].Run)
+				if rec := crs.Latest().Has(Recorded); rec != nil {
+					if res := resolutions[rec.Outcome.Closure]; res != nil {
+						return res.Outcome
 					}
 				}
+				return ""
+			})
+			if want == nil || !sameDecision(want, x) {
+				return fmt.Errorf("run: join decision %s does not re-derive from the join rule over the fork's state", x.ID)
 			}
 			fs.Decision = x
 			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
@@ -337,6 +322,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			if !named {
 				return fmt.Errorf("run: cancellation %s of %s, which the decision did not cancel", x.ID, x.Child.Run)
+			}
+			if fs.Terminals[x.Child.Run] != nil {
+				return fmt.Errorf("run: cancellation %s of %s, which is already terminal", x.ID, x.Child.Run)
 			}
 			fs.Cancelled[x.Child.Run] = x
 		case *ChildTerminal:

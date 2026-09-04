@@ -912,3 +912,39 @@ join settled, the step judged done, step 2 combined the answers, closure
 achieved; cost 0.16 for the parent + 0.02 per child. B6: one row per
 child run (task_type now, unjudged) beside the parent's — B6 has no
 parent column; the relation lives in the journal.
+
+**Review round (Skeptic + Expert QA, codex; 14 findings, deduplicated to 9,
+each verified in the tree before fixing).** The HIGHs:
+
+- *A crash between the decision and its cancellations re-executed a loser
+  on resume* (both, HIGH): the repair of missing cancellations ran AFTER
+  the children were driven. Now a decision's consequences are repaired
+  BEFORE any member is driven. Test: member B held in flight, crash after
+  the decision, resume — B executed once, ends `cancelled`.
+- *The fold trusted the join decision* (both, HIGH). A `join_decision` is a
+  DERIVED record: the fold recomputes the join rule over the fork as it
+  stood (terminals, closures from the journal prefix) and refuses any
+  difference — subsets, duplicates, wrong attempt refs, cancelling a
+  terminal member all refused; `cancellation_issued` for an already
+  terminal member refused.
+- *Identical sub-goals collide* (QA HIGH) — REFUTED: goal ids are minted,
+  not content-derived; the text is one thought. Pinned by a twins test.
+- *No recover in child goroutines* (Skeptic): a child panic is now a
+  contained error naming the member; every live child is cancelled; the
+  parent's pass ends; resume completes.
+- *Crash injection could not target one child* (both): `child:<n>:<seam>`
+  fires in member n only; asymmetric kills and a three-member first_verdict
+  (member order decides) are tested.
+- *Parent usage excludes children* (both, MEDIUM): kept run-local and
+  said so in the record's comment and here — each run's B6 row is its own
+  receipts; a goal-tree total is a later fold.
+- *A parent interrupt cannot stop an in-flight fork* (Skeptic, MEDIUM):
+  stated as v1 behaviour — a fork settles before the parent's next
+  boundary; the children can be interrupted individually by handle.
+- *"completed_late is never learned from"* (Skeptic, LOW): reworded — it is
+  never composed; no learner consumes fork results yet (step 9).
+
+Tests: run +3 (decision/cancellation gap; asymmetric and three-member
+forks; twins, forged decisions, cancellation of a terminal member, a child
+panic). 14 packages green under `-race`; contracts 36 kinds, 0 errors / 0
+warnings.
