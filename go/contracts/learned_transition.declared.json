@@ -27,7 +27,7 @@
       "constraint": "defined",
       "pattern": "^(candidate|observed|provisional|effective|canon|contested|quarantined|tombstone)$",
       "rejects": "blessed",
-      "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
+      "measured_by": "internal/learn:TestLegalEdgesMatchTheDesign"
     },
     "to": {
       "absence": "never",
@@ -37,7 +37,7 @@
       "constraint": "defined",
       "pattern": "^(candidate|observed|provisional|effective|canon|contested|quarantined|tombstone)$",
       "rejects": "blessed",
-      "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
+      "measured_by": "internal/learn:TestLegalEdgesMatchTheDesign"
     },
     "actor": {
       "absence": "never",

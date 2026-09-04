@@ -88,7 +88,7 @@ func (h *harness) driver(b invoke.Backend, o Origin) *Driver {
 
 func (h *harness) ledger() *Ledger {
 	h.t.Helper()
-	led, err := Fold(h.j.Production())
+	led, err := Fold(h.j.Production(), h.st)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -265,24 +265,24 @@ func TestAckProtocol(t *testing.T) {
 	}
 	rs := h.only()
 	dl := rs.Latest().Delivery
-	if _, _, err := Ack(ctxBg, h.j, rep.Delivery, strings.Repeat("0", 32)); !errors.Is(err, ErrBadToken) {
+	if _, _, err := Ack(ctxBg, h.j, h.st, rep.Delivery, strings.Repeat("0", 32)); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("wrong token: %v", err)
 	}
 	other := TokenFor(rep.Delivery, "s256v1:"+strings.Repeat("ff", 32), dl.Prepared.Nonce)
-	if _, _, err := Ack(ctxBg, h.j, rep.Delivery, other); !errors.Is(err, ErrBadToken) {
+	if _, _, err := Ack(ctxBg, h.j, h.st, rep.Delivery, other); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("wrong-payload token: %v", err)
 	}
-	if _, _, err := Ack(ctxBg, h.j, record.NewID(), rep.Token); !errors.Is(err, ErrNoDelivery) {
+	if _, _, err := Ack(ctxBg, h.j, h.st, record.NewID(), rep.Token); !errors.Is(err, ErrNoDelivery) {
 		t.Fatalf("unknown delivery: %v", err)
 	}
 	if h.count(KindDeliveryAcked) != 0 {
 		t.Fatal("a refused ack wrote a record")
 	}
-	ack, replayed, err := Ack(ctxBg, h.j, rep.Delivery, rep.Token)
+	ack, replayed, err := Ack(ctxBg, h.j, h.st, rep.Delivery, rep.Token)
 	if err != nil || replayed || ack.PayloadHash != dl.Prepared.Payload.Hash {
 		t.Fatalf("ack: %v %v %+v", err, replayed, ack)
 	}
-	ack2, replayed, err := Ack(ctxBg, h.j, rep.Delivery, rep.Token)
+	ack2, replayed, err := Ack(ctxBg, h.j, h.st, rep.Delivery, rep.Token)
 	if err != nil || !replayed || ack2.ID != ack.ID {
 		t.Fatalf("duplicate ack: %v %v", err, replayed)
 	}
@@ -302,7 +302,7 @@ func TestAckProtocol(t *testing.T) {
 	}
 	rs2 := h2.only()
 	p := rs2.Latest().Delivery.Prepared
-	if _, _, err := Ack(ctxBg, h2.j, p.ID, TokenFor(p.ID, p.Payload.Hash, p.Nonce)); !errors.Is(err, ErrNotPresented) {
+	if _, _, err := Ack(ctxBg, h2.j, h2.st, p.ID, TokenFor(p.ID, p.Payload.Hash, p.Nonce)); !errors.Is(err, ErrNotPresented) {
 		t.Fatalf("ack before presentation: %v", err)
 	}
 	// crash-after-display, before the result landed: the start is the
@@ -319,7 +319,7 @@ func TestAckProtocol(t *testing.T) {
 		t.Fatal("token not shown")
 	}
 	h3.restart()
-	if _, replayed, err := Ack(ctxBg, h3.j, record.RecordID(shown[1]), shown[2]); err != nil || replayed {
+	if _, replayed, err := Ack(ctxBg, h3.j, h3.st, record.RecordID(shown[1]), shown[2]); err != nil || replayed {
 		t.Fatalf("ack from the first display: %v", err)
 	}
 	d3 = h3.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("x")}), nil)
@@ -461,7 +461,7 @@ func TestOutboxIsBounded(t *testing.T) {
 		t.Fatalf("resume retried a failed delivery: %v %d %d", err, len(reps), o.n)
 	}
 	p := rs.Latest().Delivery.Prepared
-	if _, _, err := Ack(ctxBg, h.j, p.ID, TokenFor(p.ID, p.Payload.Hash, p.Nonce)); !errors.Is(err, ErrNotPresented) {
+	if _, _, err := Ack(ctxBg, h.j, h.st, p.ID, TokenFor(p.ID, p.Payload.Hash, p.Nonce)); !errors.Is(err, ErrNotPresented) {
 		t.Fatalf("ack on a failed delivery: %v", err)
 	}
 }
@@ -594,7 +594,7 @@ func TestFoldRefusesIllegalHistory(t *testing.T) {
 	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "orphan", Epoch: h.j.Epoch(), Records: []record.Record{x}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Fold(h.j.Production()); err == nil || !strings.Contains(err.Error(), "never started") {
+	if _, err := Fold(h.j.Production(), h.st); err == nil || !strings.Contains(err.Error(), "never started") {
 		t.Fatalf("orphan transition folded: %v", err)
 	}
 }
@@ -666,7 +666,7 @@ func forge(t *testing.T, h *harness, key string, recs ...record.Record) error {
 	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: key, Epoch: h.j.Epoch(), Records: recs}); err != nil {
 		t.Fatalf("forged record refused at the door (fixture bug): %v", err)
 	}
-	_, err := Fold(h.j.Production())
+	_, err := Fold(h.j.Production(), h.st)
 	return err
 }
 
@@ -761,7 +761,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := Ack(ctxBg, h2.j, rep.Delivery, rep.Token); err != nil {
+		if _, _, err := Ack(ctxBg, h2.j, h2.st, rep.Delivery, rep.Token); err != nil {
 			t.Fatal(err)
 		}
 		rs = h2.only()
@@ -1070,7 +1070,7 @@ func TestRecallReachesTheRequestOnlyWhenSelectable(t *testing.T) {
 	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged-app", Epoch: h.j.Epoch(), Records: []record.Record{forged}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Fold(h.j.Production()); err == nil || !strings.Contains(err.Error(), "applications on invocation") {
+	if _, err := Fold(h.j.Production(), h.st); err == nil || !strings.Contains(err.Error(), "applications on invocation") {
 		t.Fatalf("forged application folded: %v", err)
 	}
 }
@@ -1112,5 +1112,220 @@ func TestReplayKey(t *testing.T) {
 	k = keys()
 	if k[2] == k[0] {
 		t.Fatal("a different applied set has the same replay key")
+	}
+}
+
+// A forged Application that names the right revision but the wrong bytes,
+// or a request that is not exactly goal+recall, is refused by the fold: the
+// exposure proof is re-derived from the goal thought, the selection's
+// rendering, and the invocation's request thought.
+func TestFoldRefusesForgedExposure(t *testing.T) {
+	h := open(t)
+	h.lesson(t, "cite the file", learn.Provisional)
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	d.CrashAt = "after_execute" // invocation + honest applications landed; nothing recorded yet
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	a := rs.Latest()
+	inv := a.Invocations[0]
+	record_ := func(t *testing.T, h *harness, rs *RunState, a *AttemptState, inv *invoke.State) error {
+		res, err := verdict.Commit(ctxBg, h.j, rs.Run, 1, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: h.verdicts(t, rs.Run)}, verdict.DefaultThresholds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := inv.Receipt.Response
+		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+		hd := func() record.Header {
+			return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: time.Now().UTC()}
+		}
+		if err := forge(t, h, "judged", &Transition{Header: hd(), From: Executing, To: Judged}); err != nil {
+			t.Fatalf("judged transition refused: %v", err)
+		}
+		return forge(t, h, "rec", &Transition{Header: hd(), From: Judged, To: Recorded, Outcome: o})
+	}
+	// honest: folds
+	if err := record_(t, h, rs, a, inv); err != nil {
+		t.Fatalf("honest exposure refused: %v", err)
+	}
+	// forged representation bytes on the right revision
+	h2 := open(t)
+	ir2 := h2.lesson(t, "cite the file", learn.Provisional)
+	d2 := h2.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	d2.CrashAt = "invoke:terminal" // invocation exists, applications NOT yet committed
+	if _, err := d2.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, invoke.ErrCrashed) {
+		t.Fatal(err)
+	}
+	h2.restart()
+	rs2 := h2.only()
+	a2 := rs2.Latest()
+	inv2 := a2.Invocations[0]
+	ref, _ := h2.st.Put(thought.LessonText, []byte("- something else entirely\n"))
+	forgedApp := &learn.Application{Header: record.Header{ID: record.NewID(), RunID: rs2.Run, Attempt: 1, Subject: record.Ref{Kind: "invocation", ID: string(inv2.Invocation.ID)}, At: time.Now().UTC()}, Item: ir2.Item, Revision: ir2.Revision, Invocation: inv2.Invocation.ID, Representation: ref}
+	if err := forge(t, h2, "fapp", forgedApp); err != nil {
+		t.Fatalf("an application alone must fold (the outcome carries the exposure claim): %v", err)
+	}
+	// finalize the receipt (reconcile) so an outcome can cite it, then record
+	if _, _, err := invoke.Reconcile(ctxBg, &invoke.Shell{J: h2.j, Store: h2.st}); err != nil {
+		t.Fatal(err)
+	}
+	rs2 = h2.only()
+	a2 = rs2.Latest()
+	inv2 = a2.Invocations[0]
+	if err := record_(t, h2, rs2, a2, inv2); err == nil || !strings.Contains(err.Error(), "not the recall's rendering") {
+		t.Fatalf("forged representation folded: %v", err)
+	}
+	// and Resume refuses to "repair" around it: the wrong application is
+	// journal evidence the driver could not have written
+	d2 = h2.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	if _, err := d2.Resume(ctxBg); !errors.Is(err, ErrIntegrity) && (err == nil || !strings.Contains(err.Error(), "not the recall's rendering")) {
+		t.Fatalf("resume papered over forged evidence: %v", err)
+	}
+}
+
+// A refusal before dispatch keeps the recall it was rendered from, and the
+// replay key carries the selection: two refusals with different recalled
+// revisions are not the same run.
+func TestPreDispatchRefusalKeepsItsRecall(t *testing.T) {
+	h := open(t)
+	tiny := &invoke.Scripted{Caps: invoke.Capabilities{Name: "tiny", Model: "t", MaxInputBytes: 40}, Calls: []invoke.ScriptedCall{{Response: []byte("x")}}}
+	key := func() string {
+		d := h.driver(tiny, nil)
+		rep, err := d.Run(ctxBg, []byte("short goal"), DeliveryPolicy{Required: TransportAccepted})
+		if err != nil || rep.Mission.Outcome != MissionFailedExec {
+			t.Fatalf("%v %+v", err, rep)
+		}
+		led := h.ledger()
+		var newest *RunState
+		for _, rs := range led.Runs {
+			if newest == nil || rs.Latest().Attempt.Seq > newest.Latest().Attempt.Seq {
+				newest = rs
+			}
+		}
+		o := newest.Latest().Has(Recorded).Outcome
+		if o.Recall == "" || o.Recall != newest.Latest().Recall.ID || o.Invocation != "" {
+			t.Fatalf("refusal lost its recall: %+v", o)
+		}
+		k, err := ReplayKey(newest, newest.Latest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	ir := h.lesson(t, strings.Repeat("a long lesson that overflows the tiny backend ", 3), learn.Provisional)
+	k1 := key()
+	h.stage(t, ir, learn.Provisional, learn.Quarantined)
+	h.lesson(t, strings.Repeat("another long lesson that overflows the tiny backend ", 3), learn.Provisional)
+	k2 := key()
+	if k1 == k2 {
+		t.Fatal("refusals with different recalled revisions share a replay key")
+	}
+}
+
+// A crash after the recall decision, before any request: the next attempt
+// CONTINUES the committed selection rather than deciding again, even when
+// the ledger moved in between.
+func TestRecoveredAttemptContinuesItsSelection(t *testing.T) {
+	h := open(t)
+	ir := h.lesson(t, "decided before the crash", learn.Provisional)
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	d.CrashAt = "after_recall"
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	h.stage(t, ir, learn.Provisional, learn.Quarantined) // the ledger moves while the process is down
+	h.restart()
+	d = h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	if _, err := d.Resume(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	a := rs.Latest()
+	if a.Attempt.Attempt != 2 || a.Recall == nil || a.Recall.Continues != rs.Attempts[0].Recall.ID || len(a.Recall.Included) != 1 || a.Recall.Included[0] != ir {
+		t.Fatalf("attempt 2 did not continue attempt 1's selection: %+v", a.Recall)
+	}
+	if !bytes.Contains(h.requestOf(t, a), []byte("decided before the crash")) {
+		t.Fatal("the continued selection was not rendered into the request")
+	}
+	if apps := h.ledger().Learned.Applications[a.Has(Recorded).Outcome.Invocation]; len(apps) != 1 || apps[0].Revision != ir.Revision {
+		t.Fatalf("applications: %d", len(apps))
+	}
+}
+
+// Scope: a lesson scoped to one goal is recalled for that goal only; a
+// policy item at effective is never injected by the driver.
+func TestScopeAndPolicyAreHonored(t *testing.T) {
+	h := open(t)
+	// first run makes a goal we can scope to
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	rep, err := d.Run(ctxBg, []byte("first?"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := h.st.Put(thought.LessonText, []byte("only for the first goal"))
+	item := learn.LearnedID(record.NewID())
+	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeGoal(rep.Goal), Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	pref, _ := h.st.Put(thought.LessonText, []byte("a policy: judge twice"))
+	pitem := learn.LearnedID(record.NewID())
+	p := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(pitem)}, At: time.Now().UTC()}, Item: pitem, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Text: pref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "scoped", Epoch: h.j.Epoch(), Records: []record.Record{r, p}}); err != nil {
+		t.Fatal(err)
+	}
+	h.stage(t, learn.ItemRev{Item: item, Revision: r.ID}, learn.Candidate, learn.Provisional)
+	h.stage(t, learn.ItemRev{Item: pitem, Revision: p.ID}, learn.Candidate, learn.Effective)
+	d = h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+	if _, err := d.Run(ctxBg, []byte("second?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	led := h.ledger()
+	var second *RunState
+	for _, rs := range led.Runs {
+		a := rs.Latest()
+		req := h.requestOf(t, a)
+		if bytes.Contains(req, []byte("only for the first goal")) || bytes.Contains(req, []byte("judge twice")) {
+			t.Fatalf("scoped lesson or policy reached a request it must not: %q", req)
+		}
+		if second == nil || a.Attempt.Seq > second.Latest().Attempt.Seq {
+			second = rs
+		}
+	}
+	if c := second.Latest().Recall.ExcludedCounts; c["kind:policy"] != 1 || c["scope"] != 1 {
+		t.Fatalf("policy/scope not excluded as such: %+v", c)
+	}
+	// the goal-scoped lesson IS recalled for a resumed attempt of its own goal:
+	// re-run the first goal through an unstarted-goal path is not possible;
+	// instead check the query directly over the fold
+	sel := learn.Recall(led.Learned, learn.Query{Purpose: "execute", Scope: scope(led.Runs[record.RunID(rep.Run)].Goal), Family: "answer", Standing: learn.Selectable})
+	if len(sel.Included) != 1 || sel.Included[0].Item != item {
+		t.Fatalf("goal-scoped lesson not selected for its goal: %+v", sel)
+	}
+}
+
+// The real subprocess adapter receives the composed request: a fake CLI
+// captures its stdin, which must equal the invocation's request thought —
+// goal bytes plus the rendered recall block.
+func TestSubprocessReceivesGoalAndRecall(t *testing.T) {
+	h := open(t)
+	h.lesson(t, "Answer in one word.", learn.Provisional)
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "stdin.txt")
+	bin := filepath.Join(dir, "fake")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ncat > "+capture+"\necho '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"PARIS\",\"total_cost_usd\":0.0001,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := &invoke.Subprocess{Bin: bin, Model: "fake", DefaultTimeout: 10 * time.Second}
+	d := h.driver(b, nil)
+	rep, err := d.Run(ctxBg, []byte("Capital of France?"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil || string(rep.Payload) != "PARIS" {
+		t.Fatalf("%v %q", err, rep.Payload)
+	}
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := h.requestOf(t, h.only().Latest())
+	if !bytes.Equal(got, want) || !bytes.HasPrefix(got, []byte("Capital of France?\n\n## Recalled lessons\n- Answer in one word.\n")) {
+		t.Fatalf("subprocess stdin:\n%q\nrequest thought:\n%q", got, want)
 	}
 }

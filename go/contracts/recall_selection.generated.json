@@ -127,8 +127,8 @@
       "is_thought": false
     },
     {
-      "name": "ExcludedTop",
-      "wire": "excluded_top",
+      "name": "ExcludedSample",
+      "wire": "excluded_sample",
       "go_type": "[]learn.Excluded",
       "omittable": true,
       "is_thought": false
@@ -139,8 +139,15 @@
       "go_type": "int64",
       "omittable": false,
       "is_thought": false
+    },
+    {
+      "name": "Continues",
+      "wire": "continues",
+      "go_type": "record.RecordID",
+      "omittable": true,
+      "is_thought": false
     }
   ],
-  "source_ref": "7cb6b555",
+  "source_ref": "083d8b5a",
   "generator": "maro-go contracts gen v1"
 }

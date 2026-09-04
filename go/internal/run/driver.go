@@ -23,6 +23,7 @@ var (
 	ErrConfig    = errors.New("run: driver misconfigured")
 	ErrCrashed   = errors.New("run: crashed at test seam")
 	ErrEmptyGoal = errors.New("run: a goal needs text")
+	ErrIntegrity = errors.New("run: journal holds evidence the driver could not have written")
 )
 
 // Event is one lifecycle event per stage boundary (§5, FINDINGS #9). Events
@@ -316,8 +317,13 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	// Recall — one query over the learned fold, committed as the decision
 	// BEFORE the request exists; the request is the goal plus the rendered
 	// block, and every included revision becomes an Application once the
-	// invocation it reached has an id.
-	sel, block, reps, err := d.recall(ctx, rs, n)
+	// invocation it reached has an id. A recovered attempt that decided
+	// but never invoked is CONTINUED: the same selection, not a new one.
+	var continues *learn.RecallSelection
+	if prev != nil && prev.Recall != nil && !invoked(prev) {
+		continues = prev.Recall
+	}
+	sel, block, reps, err := d.recall(ctx, rs, n, continues)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +342,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		// backend's declared maximum): deterministic, so a retry can only
 		// repeat it — record it as the attempt's honest failure (D16: the
 		// thought is never sliced to fit; the route is what is lacking)
-		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error()}, nil
+		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error(), Recall: sel.ID}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -374,18 +380,36 @@ func scope(g *Goal) []learn.ScopePath {
 	return append(chain, learn.ScopeWorkspace)
 }
 
-// recall runs the one query for attempt n, commits the selection, and
-// renders the block. Idempotent by (run, attempt).
-func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32) (*learn.RecallSelection, []byte, []learn.Rendered, error) {
+// invoked reports whether an attempt made an execute invocation.
+func invoked(a *AttemptState) bool {
+	for _, st := range a.Invocations {
+		if st.Invocation.Purpose == invoke.PurposeExecute {
+			return true
+		}
+	}
+	return false
+}
+
+// recall runs the one query for attempt n (or continues an earlier
+// attempt's committed selection), commits it, and renders the block.
+// Idempotent by (run, attempt).
+func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *learn.RecallSelection) (*learn.RecallSelection, []byte, []learn.Rendered, error) {
 	led, err := learn.Fold(d.J.Production())
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	family := ""
-	if rs.Family.Family != FamilyNone {
-		family = string(rs.Family.Family)
+	var sel *learn.RecallSelection
+	if continues != nil {
+		c := *continues
+		sel = &c
+		sel.Continues = continues.ID
+	} else {
+		family := ""
+		if rs.Family.Family != FamilyNone {
+			family = string(rs.Family.Family)
+		}
+		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
 	}
-	sel := learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
 	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
 	sel.Purpose = invoke.PurposeExecute
 	if err := d.commit(ctx, fmt.Sprintf("recall/%s/%d", rs.Run, n), sel); err != nil {
@@ -432,22 +456,34 @@ func (d *Driver) applications(ctx context.Context, rs *RunState, n uint32, inv r
 	return nil
 }
 
-// apply re-derives and commits the applications for a recovered attempt's
-// invocation from its committed recall selection (the render is
-// deterministic, so the representations are the same bytes).
+// apply re-derives the applications for a recovered attempt's invocation
+// from its committed recall selection (the render is deterministic, so the
+// representations are the same bytes) and commits them if absent. Present
+// applications must be exactly the re-derivation — item, revision, and
+// representation, in order; anything else is journal evidence the driver
+// could not have written, refused as such rather than repaired around.
 func (d *Driver) apply(ctx context.Context, rs *RunState, n uint32, sel *learn.RecallSelection, inv record.RecordID) error {
 	led, err := learn.Fold(d.J.Production())
 	if err != nil {
 		return err
 	}
-	if len(led.Applications[inv]) == len(sel.Included) {
-		return nil
-	}
 	_, reps, err := d.render(led, sel)
 	if err != nil {
 		return err
 	}
-	return d.applications(ctx, rs, n, inv, reps)
+	have := led.Applications[inv]
+	if len(have) == 0 {
+		return d.applications(ctx, rs, n, inv, reps)
+	}
+	if len(have) != len(reps) {
+		return fmt.Errorf("%w: invocation %s has %d applications, its selection rendered %d", ErrIntegrity, inv, len(have), len(reps))
+	}
+	for i, r := range reps {
+		if have[i].Item != r.Item || have[i].Revision != r.Revision || have[i].Representation != thought.Address(thought.LessonText, r.Representation) {
+			return fmt.Errorf("%w: application %d on invocation %s is not the selection's rendering", ErrIntegrity, i, inv)
+		}
+	}
+	return nil
 }
 
 // receiptResponse reads the response ref off the committed receipt: the
@@ -592,7 +628,7 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	if _, _, err := invoke.Reconcile(ctx, &invoke.Shell{J: d.J, Store: d.Store}); err != nil {
 		return nil, err
 	}
-	led, err := Fold(d.J.Production())
+	led, err := Fold(d.J.Production(), d.Store)
 	if err != nil {
 		return nil, err
 	}

@@ -104,6 +104,13 @@ func digestOf(hash string) (string, bool) {
 	return d, true
 }
 
+// Address is the content address a body WOULD have if stored: the same
+// hash domain as Put, computed without storing. Readers use it to check
+// that a claimed ref is the ref of known bytes.
+func Address(k Kind, body []byte) Ref {
+	return Ref{Hash: hashOf(k, body), Kind: k, Bytes: int64(len(body)), Encoding: encodingOf(body)}
+}
+
 func hashOf(k Kind, body []byte) string {
 	h := sha256.New()
 	h.Write([]byte("maro-thought/v1\x00"))

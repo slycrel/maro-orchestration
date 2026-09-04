@@ -572,3 +572,64 @@ stage provisional` → `now --model haiku "chemical symbol for gold"` →
 recall 1 of 1, applied 1, answer `AU`. The lesson reached the request and
 the answer followed it: the first measured-by-eye behavior change from
 learned data (D11 is still owed its measurement, steps 10–11).
+
+**Review round (Skeptic + Expert QA, codex; 24 findings, deduplicated to 15,
+each verified in the tree before fixing).** The HIGHs were all real and all
+of one family — derived records trusted on identity alone:
+
+- *Applications proved the right revision with the wrong bytes* (both,
+  HIGH) and *the request was never checked against the selection*. The run
+  fold now RE-DERIVES exposure from committed evidence: the goal thought
+  plus the selection's deterministic rendering must be byte-equal to the
+  invocation's request thought (`thought.Address`, no substring check), and
+  every application must be that rendering's bullet for its item, scoped to
+  the producing attempt. Fixture: a forged representation on the right
+  revision is refused at `recorded`, and Resume refuses to repair around it
+  (`ErrIntegrity`) instead of appending.
+- *Forged RecallSelection injected anything* (both, HIGH). A selection is a
+  DERIVED record: the learn fold recomputes `Recall` over the ledger as it
+  stood at that Seq and refuses any field that differs; execute recalls must
+  use exactly the selectable set. Fixtures: old effective revision, candidate
+  current, policy, wrong standing, false projection, a continuation that
+  differs.
+- *`apply` compared counts* (both, HIGH). Exact ordered compare of item,
+  revision, and representation address; a mismatch is journal evidence the
+  driver could not have written, refused as such.
+- *Two extra lifecycle edges* (both): candidate→contested and
+  observed→contested let unmeasured data become selectable. Removed; the
+  whole 8×8 matrix is now tested against the design's prose in both
+  directions.
+- *Self-evidence passed* (Skeptic). A record is "seen" only after its own
+  checks. (The rule has no producer until step 9's actors; kept, not
+  claimed tested end to end.)
+- *A pre-dispatch refusal dropped its recall; ReplayKey mixed outcome into
+  identity* (both). The refusal outcome names its selection; the fold
+  requires a refusal's recall to be its own attempt's; the replay key is
+  inputs only (terminal removed) and carries the selection whenever the
+  outcome names one.
+- *Crash after recall re-decided over a moved ledger* (Skeptic MEDIUM). One
+  rule now: a recovered attempt that committed its selection and never
+  invoked CONTINUES it (`RecallSelection.Continues`, checked for equality
+  with what it continues); tested with a quarantine landing between crash
+  and resume — the continued lesson is still rendered and applied.
+- *Whitespace why; operator evidence that looks authoritative* (both).
+  Trimmed checks; an operator transition carries a why and NO evidence.
+- *Goal-scoped lessons to nonexistent goals* (Skeptic): the fold requires an
+  earlier goal record. *Family "none"* reserved at the door.
+- *Multiline lessons forged bullets/headings* (both). Continuation lines are
+  indented under the bullet (`Frame`); bullet count equals included count;
+  bytes otherwise untouched.
+- *"Top"-k was a sample* (both): renamed `excluded_sample`, defined as the
+  first K excluded in item order. *Determinism test proved sorting* (both):
+  now two journals, same records, different arrival orders, byte-equal
+  render and field-equal selection, sample identities and reasons asserted.
+- *CLI stage race* (both): `learn stage` submits with `ExpectHead` = the
+  head its fold read, so a concurrent transition is refused unwritten.
+- *No subprocess assertion* (QA): a fake CLI captures its stdin, which must
+  equal the request thought (goal + block) byte for byte.
+
+Tests: learn 3 → 7; run 21 → 26 (+ forged-exposure, refusal-recall,
+continuation, scope/policy, subprocess). Contracts 0 errors / 0 warnings.
+Not done, recorded: byte-level exposure needs the thought store, so
+`run.Fold` now takes it (every caller has one); an evidence vocabulary for
+non-operator transitions arrives with their producers.

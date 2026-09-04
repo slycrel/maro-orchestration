@@ -44,7 +44,7 @@
       "on_absence": "tolerated",
       "used_for": "routing",
       "constraint": "unconstrained",
-      "measured_by": "internal/learn:TestRecallIsDeterministicAndBounded",
+      "measured_by": "internal/run:TestScopeAndPolicyAreHonored",
       "unknown_value": "accepted-unchanged"
     },
     "text": {

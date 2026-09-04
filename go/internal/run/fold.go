@@ -10,6 +10,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
 
@@ -166,7 +167,7 @@ type Ledger struct {
 // claims, a recorded outcome that names evidence from another run or a
 // resolution that does not re-derive). A reader must not paper over these:
 // the mission and the shared ledger are folds of exactly this.
-func Fold(pr *journal.ProductionReader) (*Ledger, error) {
+func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 	goals := map[record.RecordID]*Goal{}
 	var goalOrder []*Goal
 	started := map[record.RecordID]bool{}
@@ -261,7 +262,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			if cur := a.Current(); cur != x.From {
 				return fmt.Errorf("run: %s attempt %d transition %s→%s but the attempt is at %q", x.RunID, x.Attempt, x.From, x.To, cur)
 			}
-			if err := checkTransition(rs, a, x, inv, learned, resolutions, verdicts, observations); err != nil {
+			if err := checkTransition(rs, a, x, inv, learned, st, resolutions, verdicts, observations); err != nil {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
@@ -350,7 +351,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 }
 
 // checkTransition executes the cross-record rules a transition claims.
-func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, resolutions map[record.RecordID]*verdict.Resolution, verdicts map[record.RecordID]*verdict.Verdict, observations map[record.RecordID]*verdict.Observation) error {
+func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, store *thought.Store, resolutions map[record.RecordID]*verdict.Resolution, verdicts map[record.RecordID]*verdict.Verdict, observations map[record.RecordID]*verdict.Observation) error {
 	switch x.To {
 	case Recorded:
 		o := x.Outcome
@@ -365,28 +366,32 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			if st.Invocation.Backend.Model != o.Model {
 				return fmt.Errorf("run: %s attempt %d recorded model %q but the invocation ran %q", rs.Run, x.Attempt, o.Model, st.Invocation.Backend.Model)
 			}
-			// exposure: the applications on the invocation are exactly the
-			// recall's included set (the selection the request was rendered from)
+			// exposure: the request is EXACTLY the goal plus the recall's
+			// rendering, and the applications on the invocation are exactly
+			// that rendering — item, revision, and representation bytes
 			sel := learned.Recalls[learn.RecallKey(rs.Run, o.Produced)]
 			if sel == nil || sel.ID != o.Recall {
 				return fmt.Errorf("run: %s attempt %d recorded recall %s that attempt %d did not make", rs.Run, x.Attempt, o.Recall, o.Produced)
 			}
-			apps := learned.Applications[o.Invocation]
-			if len(apps) != len(sel.Included) {
-				return fmt.Errorf("run: %s attempt %d: %d applications on invocation %s but the recall included %d", rs.Run, x.Attempt, len(apps), o.Invocation, len(sel.Included))
-			}
-			for i, ir := range sel.Included {
-				if apps[i].Item != ir.Item || apps[i].Revision != ir.Revision {
-					return fmt.Errorf("run: %s attempt %d: application %d is %s/%s, the recall included %s/%s", rs.Run, x.Attempt, i, apps[i].Item, apps[i].Revision, ir.Item, ir.Revision)
-				}
+			if err := checkExposure(rs, sel, store.Get, learned, store.Get, o.Invocation, st.Invocation, o.Produced); err != nil {
+				return fmt.Errorf("run: %s attempt %d: %w", rs.Run, x.Attempt, err)
 			}
 			if o.Receipt != "" {
 				if st.Receipt == nil || st.Receipt.ID != o.Receipt || o.Response == nil || *o.Response != st.Receipt.Response || o.Usage != st.Receipt.Usage {
 					return fmt.Errorf("run: %s attempt %d recorded receipt %s that disagrees with invocation %s", rs.Run, x.Attempt, o.Receipt, o.Invocation)
 				}
 			}
-		} else if o.Model != "" {
-			return fmt.Errorf("run: %s attempt %d recorded a model with no invocation", rs.Run, x.Attempt)
+		} else {
+			if o.Model != "" {
+				return fmt.Errorf("run: %s attempt %d recorded a model with no invocation", rs.Run, x.Attempt)
+			}
+			// a refusal after recall names this attempt's own selection
+			if o.Recall != "" {
+				sel := learned.Recalls[learn.RecallKey(rs.Run, x.Attempt)]
+				if sel == nil || sel.ID != o.Recall {
+					return fmt.Errorf("run: %s attempt %d recorded recall %s that it did not make", rs.Run, x.Attempt, o.Recall)
+				}
+			}
 		}
 		res := resolutions[o.Closure]
 		if res == nil || res.RunID != rs.Run || res.Attempt != x.Attempt || res.VerdictKind != verdict.KindClosure || res.Subject != runRef(rs.Run) {
@@ -524,27 +529,64 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 			return "", fmt.Errorf("run: invocation %s not in the run", o.Invocation)
 		}
 		request = st.Invocation.Request.Hash
-		if a.Recall != nil && a.Recall.ID == o.Recall {
-			included = a.Recall.Included
-		} else {
-			for _, p := range rs.Attempts {
-				if p.Recall != nil && p.Recall.ID == o.Recall {
-					included = p.Recall.Included
-				}
-			}
+	}
+	for _, p := range rs.Attempts {
+		if p.Recall != nil && p.Recall.ID == o.Recall {
+			included = p.Recall.Included
 		}
 	}
+	// inputs only: the outcome is what a replay compares, not what names it
 	raw, err := json.Marshal(struct {
 		Ver      string          `json:"ver"`
 		Goal     string          `json:"goal"`
 		Config   ConfigSnapshot  `json:"config"`
 		Included []learn.ItemRev `json:"included"`
 		Request  string          `json:"request"`
-		Terminal string          `json:"terminal"`
-	}{"replay/1", rs.Goal.Text.Hash, a.Attempt.Config, included, request, string(o.Terminal)})
+	}{"replay/1", rs.Goal.Text.Hash, a.Attempt.Config, included, request})
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// checkExposure re-derives the request from committed evidence: the goal
+// thought plus the selection's deterministic rendering must be BYTE-EQUAL
+// to the invocation's request thought, and each application must be that
+// rendering's bullet for its item, scoped to the producing attempt.
+func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Ref) ([]byte, error), learned *learn.Ledger, text func(thought.Ref) ([]byte, error), invID record.RecordID, invRec *invoke.Invocation, produced uint32) error {
+	goal, err := get(rs.Goal.Text)
+	if err != nil {
+		return err
+	}
+	block, reps, err := learn.Render(sel, func(ir learn.ItemRev) ([]byte, error) {
+		it := learned.Items[ir.Item]
+		if it == nil {
+			return nil, fmt.Errorf("recall names unknown item %s", ir.Item)
+		}
+		for _, r := range it.Revisions {
+			if r.ID == ir.Revision {
+				return text(r.Text)
+			}
+		}
+		return nil, fmt.Errorf("recall names unknown revision %s", ir.Revision)
+	})
+	if err != nil {
+		return err
+	}
+	want := thought.Address(thought.Prompt, append(append([]byte{}, goal...), block...))
+	if invRec.Request != want {
+		return fmt.Errorf("invocation %s request is not goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
+	}
+	apps := learned.Applications[invID]
+	if len(apps) != len(reps) {
+		return fmt.Errorf("%d applications on invocation %s but the recall rendered %d", len(apps), invID, len(reps))
+	}
+	for i, r := range reps {
+		a := apps[i]
+		if a.Item != r.Item || a.Revision != r.Revision || a.Representation != thought.Address(thought.LessonText, r.Representation) || a.RunID != rs.Run || a.Attempt != produced {
+			return fmt.Errorf("application %d on invocation %s is not the recall's rendering of %s/%s", i, invID, r.Item, r.Revision)
+		}
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package learn
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -31,6 +32,72 @@ type Ledger struct {
 	Items        map[LearnedID]*Item
 	Applications map[record.RecordID][]*Application // by invocation, in Seq order
 	Recalls      map[string]*RecallSelection        // by "<run>/<attempt>"
+	byID         map[record.RecordID]*RecallSelection
+}
+
+// Selection returns a recall selection by id.
+func (led *Ledger) Selection(id record.RecordID) *RecallSelection { return led.byID[id] }
+
+// checkRecall executes the derived-record rule for a selection against the
+// ledger as it stands (the scan is in Seq order, so "as it stood" holds).
+func (led *Ledger) checkRecall(x *RecallSelection) error {
+	if x.Continues != "" {
+		prior := led.byID[x.Continues]
+		if prior == nil || prior.RunID != x.RunID || prior.Attempt >= x.Attempt {
+			return fmt.Errorf("learn: recall %s continues %s, which is not an earlier selection of the same run", x.ID, x.Continues)
+		}
+		if !sameSelection(prior, x) {
+			return fmt.Errorf("learn: recall %s claims to continue %s but its content differs", x.ID, x.Continues)
+		}
+		return nil
+	}
+	standing := map[Stage]bool{}
+	for _, s := range x.Standing {
+		standing[s] = true
+	}
+	if x.Purpose == "execute" && !sameStages(standing, Selectable) {
+		return fmt.Errorf("learn: recall %s for execute used standing %v, not the selectable set", x.ID, x.Standing)
+	}
+	want := Recall(led, Query{Purpose: string(x.Purpose), Scope: x.Scope, Family: x.Family, Standing: standing})
+	if !sameSelection(want, x) {
+		return fmt.Errorf("learn: recall %s does not re-derive from the ledger (included %v vs %v; considered %d vs %d; excluded %v vs %v)", x.ID, x.Included, want.Included, x.Considered, want.Considered, x.ExcludedCounts, want.ExcludedCounts)
+	}
+	return nil
+}
+
+func sameStages(a, b map[Stage]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for s := range a {
+		if !b[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSelection compares every derived field.
+func sameSelection(a, b *RecallSelection) bool {
+	if a.Considered != b.Considered || a.ProjectedBytes != b.ProjectedBytes || len(a.Included) != len(b.Included) || len(a.ExcludedCounts) != len(b.ExcludedCounts) || len(a.ExcludedSample) != len(b.ExcludedSample) {
+		return false
+	}
+	for i := range a.Included {
+		if a.Included[i] != b.Included[i] {
+			return false
+		}
+	}
+	for k, v := range a.ExcludedCounts {
+		if b.ExcludedCounts[k] != v {
+			return false
+		}
+	}
+	for i := range a.ExcludedSample {
+		if a.ExcludedSample[i] != b.ExcludedSample[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RecallKey names an attempt's recall selection in the ledger.
@@ -43,12 +110,20 @@ func RecallKey(run record.RunID, attempt uint32) string { return fmt.Sprintf("%s
 // transition whose evidence is not an earlier record, an application for
 // an unknown revision, two recalls for one attempt.
 func Fold(pr *journal.ProductionReader) (*Ledger, error) {
-	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}}
+	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, byID: map[record.RecordID]*RecallSelection{}}
 	seen := map[record.RecordID]bool{}
+	goals := map[record.RecordID]bool{}
 	err := pr.Scan(0, func(r record.Record) error {
-		seen[r.Head().ID] = true
+		// a record is "seen" only AFTER its own checks: nothing may cite itself
+		defer func() { seen[r.Head().ID] = true }()
+		if r.Kind() == "goal" {
+			goals[r.Head().ID] = true
+		}
 		switch x := r.(type) {
 		case *LearnedRevision:
+			if strings.HasPrefix(string(x.Scope), "goal:") && !goals[record.RecordID(strings.TrimPrefix(string(x.Scope), "goal:"))] {
+				return fmt.Errorf("learn: revision %s is scoped to goal %s, which is not an earlier record", x.ID, strings.TrimPrefix(string(x.Scope), "goal:"))
+			}
 			it := led.Items[x.Item]
 			if it == nil {
 				if x.Predecessor != "" {
@@ -95,13 +170,14 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			if led.Recalls[k] != nil {
 				return fmt.Errorf("learn: two recall selections for attempt %s", k)
 			}
-			for _, ir := range x.Included {
-				it := led.Items[ir.Item]
-				if it == nil || !hasRevision(it, ir.Revision) {
-					return fmt.Errorf("learn: recall %s includes unknown revision %s of item %s", x.ID, ir.Revision, ir.Item)
-				}
+			// a selection is a DERIVED record: it must equal the query's
+			// result over the ledger as it stood, or equal the earlier
+			// selection it continues
+			if err := led.checkRecall(x); err != nil {
+				return err
 			}
 			led.Recalls[k] = x
+			led.byID[x.ID] = x
 		}
 		return nil
 	})
@@ -167,12 +243,12 @@ func Recall(led *Ledger, q Query) *RecallSelection {
 		}
 		if reason == "" {
 			sel.Included = append(sel.Included, ItemRev{Item: id, Revision: cur.ID})
-			sel.ProjectedBytes += cur.Text.Bytes + int64(len(bullet)+1)
+			sel.ProjectedBytes += cur.Text.Bytes + int64(len(bullet)+1) // continuation indents are not projected: a projection, not a cap
 			continue
 		}
 		sel.ExcludedCounts[reason]++
-		if len(sel.ExcludedTop) < TopK {
-			sel.ExcludedTop = append(sel.ExcludedTop, Excluded{ItemRev: ItemRev{Item: id, Revision: cur.ID}, Reason: reason})
+		if len(sel.ExcludedSample) < SampleK {
+			sel.ExcludedSample = append(sel.ExcludedSample, Excluded{ItemRev: ItemRev{Item: id, Revision: cur.ID}, Reason: reason})
 		}
 	}
 	if len(sel.Included) > 0 {
@@ -195,7 +271,10 @@ type Rendered struct {
 // Render composes the recall block appended to a request: the heading and
 // one bullet per included revision, each bullet being that revision's
 // representation — the bytes an Application proves are in the request.
-// Empty selection → empty block (nothing appended, nothing applied).
+// A lesson's continuation lines are indented under its bullet, so a text
+// that contains "- " or "## " lines cannot pose as further bullets or a
+// new section: one item, one bullet, whatever the text holds. Empty
+// selection → empty block (nothing appended, nothing applied).
 func Render(sel *RecallSelection, text func(ItemRev) ([]byte, error)) ([]byte, []Rendered, error) {
 	if len(sel.Included) == 0 {
 		return nil, nil, nil
@@ -207,9 +286,16 @@ func Render(sel *RecallSelection, text func(ItemRev) ([]byte, error)) ([]byte, [
 		if err != nil {
 			return nil, nil, err
 		}
-		rep := append(append([]byte(bullet), t...), '\n')
+		rep := append([]byte(bullet), Frame(t)...)
+		rep = append(rep, '\n')
 		block = append(block, rep...)
 		reps = append(reps, Rendered{ItemRev: ir, Representation: rep})
 	}
 	return block, reps, nil
+}
+
+// Frame indents every line after the first so the text stays inside its
+// bullet. Bytes are otherwise untouched (D16).
+func Frame(t []byte) []byte {
+	return []byte(strings.ReplaceAll(strings.TrimRight(string(t), "\n"), "\n", "\n  "))
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
 
 var (
@@ -121,8 +122,8 @@ func present(ctx context.Context, o Origin, p Presentation) (err error) {
 // the same rule the fold executes on every journaled ack). A repeat with
 // the same token replays. The run's transition to user_acknowledged is
 // committed with the ack, from recorded or from delivered:transport.
-func Ack(ctx context.Context, j *journal.Journal, id record.RecordID, token string) (*DeliveryAcked, bool, error) {
-	led, err := Fold(j.Production())
+func Ack(ctx context.Context, j *journal.Journal, st *thought.Store, id record.RecordID, token string) (*DeliveryAcked, bool, error) {
+	led, err := Fold(j.Production(), st)
 	if err != nil {
 		return nil, false, err
 	}

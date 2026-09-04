@@ -74,8 +74,8 @@ var Selectable = map[Stage]bool{Provisional: true, Effective: true, Canon: true,
 // in v1; measurement and tenure actors arrive with their producers
 // (steps 9–11), additively.
 var legal = map[Stage]map[Stage]bool{
-	Candidate:   {Observed: true, Provisional: true, Effective: true, Contested: true, Quarantined: true},
-	Observed:    {Provisional: true, Effective: true, Contested: true, Quarantined: true, Tombstone: true},
+	Candidate:   {Observed: true, Provisional: true, Effective: true, Quarantined: true},
+	Observed:    {Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
 	Provisional: {Effective: true, Contested: true, Quarantined: true},
 	Effective:   {Canon: true, Contested: true, Quarantined: true},
 	Canon:       {Contested: true, Quarantined: true},
@@ -172,8 +172,11 @@ func (r *LearnedRevision) ValidateWire() error {
 	if !sources[r.Provenance.Source] {
 		return fmt.Errorf("learned_revision: provenance source %q out of vocabulary", r.Provenance.Source)
 	}
-	if r.Provenance.Why == "" {
+	if strings.TrimSpace(r.Provenance.Why) == "" {
 		return errors.New("learned_revision: provenance needs a why")
+	}
+	if r.Family == "none" {
+		return errors.New("learned_revision: family \"none\" is the unassessed goal, not a family; leave family empty for any")
 	}
 	return nil
 }
@@ -213,7 +216,13 @@ func (r *LifecycleTransition) ValidateWire() error {
 	if !actors[r.Actor] {
 		return fmt.Errorf("learned_transition: actor %q out of vocabulary", r.Actor)
 	}
-	if r.Actor != ActorOperator && r.Evidence == "" {
+	if r.Actor == ActorOperator {
+		// the operator's why IS the evidence; a cited record would only look
+		// authoritative without being checked (v1 has no typed evidence yet)
+		if r.Evidence != "" {
+			return errors.New("learned_transition: an operator transition carries a why, not evidence")
+		}
+	} else if r.Evidence == "" {
 		return errors.New("learned_transition: a non-operator transition names its evidence")
 	}
 	if r.Evidence != "" {
@@ -221,7 +230,7 @@ func (r *LifecycleTransition) ValidateWire() error {
 			return fmt.Errorf("learned_transition: evidence: %w", err)
 		}
 	}
-	if r.Why == "" {
+	if strings.TrimSpace(r.Why) == "" {
 		return errors.New("learned_transition: needs a why")
 	}
 	return nil
@@ -284,14 +293,23 @@ type RecallSelection struct {
 	Considered     int            `json:"considered"`
 	Included       []ItemRev      `json:"included"`
 	ExcludedCounts map[string]int `json:"excluded_counts"`
-	ExcludedTop    []Excluded     `json:"excluded_top,omitempty"` // at most TopK
+	ExcludedSample []Excluded     `json:"excluded_sample,omitempty"` // the first SampleK excluded, in item order
 	ProjectedBytes int64          `json:"projected_bytes"`
+	// Continues names an earlier attempt's selection of the same run that
+	// this attempt executes unchanged: the recovered attempt committed its
+	// decision and died before any request existed, so the new attempt
+	// starts from that committed stage instead of deciding again over a
+	// ledger that may have moved (§5a). The fold checks equality with it
+	// instead of recomputing.
+	Continues record.RecordID `json:"continues,omitempty"`
 }
 
-// TopK bounds the exclusion projection (§14: counts by reason + top-k, not a
-// row per excluded item). Why 5: enough to see WHICH items an operator
-// expected and did not get; the counts carry the rest.
-const TopK = 5
+// SampleK bounds the exclusion projection (§14: counts by reason + a
+// sample, not a row per excluded item). The sample is the first K excluded
+// items in item-id order — a deterministic sample, not a ranking. Why 5:
+// enough to see WHICH items an operator expected and did not get; the
+// counts carry the rest.
+const SampleK = 5
 
 func (r *RecallSelection) Head() *record.Header { return &r.Header }
 func (r *RecallSelection) Kind() record.Kind    { return KindRecall }
@@ -339,8 +357,13 @@ func (r *RecallSelection) ValidateWire() error {
 	if r.Considered != len(r.Included)+excluded {
 		return fmt.Errorf("recall_selection: considered %d ≠ included %d + excluded %d", r.Considered, len(r.Included), excluded)
 	}
-	if len(r.ExcludedTop) > TopK || len(r.ExcludedTop) > excluded {
-		return errors.New("recall_selection: excluded_top exceeds its bound")
+	if len(r.ExcludedSample) > SampleK || len(r.ExcludedSample) > excluded {
+		return errors.New("recall_selection: excluded_sample exceeds its bound")
+	}
+	if r.Continues != "" {
+		if err := record.ValidateID(r.Continues); err != nil {
+			return fmt.Errorf("recall_selection: continues: %w", err)
+		}
 	}
 	for i := 1; i < len(r.Included); i++ {
 		if r.Included[i-1].Item >= r.Included[i].Item {

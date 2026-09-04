@@ -272,8 +272,8 @@ func cmdAck(args []string, out io.Writer) error {
 	if len(args) != 2 {
 		return fmt.Errorf("ack needs <delivery-id> <token>")
 	}
-	err := withJournal(out, func(j *journal.Journal, _ *thought.Store) error {
-		ack, replayed, err := spine.Ack(context.Background(), j, record.RecordID(args[0]), args[1])
+	err := withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		ack, replayed, err := spine.Ack(context.Background(), j, st, record.RecordID(args[0]), args[1])
 		if err != nil {
 			return err
 		}
@@ -310,7 +310,7 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 				return err
 			}
 		}
-		led, err := spine.Fold(j.Production())
+		led, err := spine.Fold(j.Production(), st)
 		if err != nil {
 			return err
 		}
@@ -375,6 +375,7 @@ func cmdLearn(args []string, out io.Writer) error {
 		return fmt.Errorf("learn needs add|stage|list")
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		head := j.Head() // the fold below reads exactly this much; a transition is submitted against it
 		led, err := learn.Fold(j.Production())
 		if err != nil {
 			return err
@@ -435,7 +436,7 @@ func cmdLearn(args []string, out io.Writer) error {
 			from := it.StageOf(it.Current.ID)
 			x := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()},
 				Item: item, Revision: it.Current.ID, From: from, To: to, Actor: learn.ActorOperator, Why: why}
-			if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "learn/stage/" + string(x.ID), Epoch: j.Epoch(), Records: []record.Record{x}}); err != nil {
+			if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "learn/stage/" + string(x.ID), Epoch: j.Epoch(), ExpectHead: &head, Records: []record.Record{x}}); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "%s revision %s: %s → %s\n", item, it.Current.ID, from, to)
