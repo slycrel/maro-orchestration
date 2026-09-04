@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "observation",
+  "envelope": "production",
+  "schema": "observation/1",
+  "go_type": "verdict.Observation",
   "fields": [
     {
       "name": "header.ID",
@@ -78,24 +78,38 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
+      "name": "Check",
+      "wire": "check",
+      "go_type": "verdict.CheckKind",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
+      "name": "Claim",
+      "wire": "claim",
+      "go_type": "thought.Ref",
+      "omittable": false,
+      "is_thought": true
+    },
+    {
+      "name": "Result",
+      "wire": "result",
+      "go_type": "verdict.ObsResult",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Host",
-      "wire": "host",
-      "go_type": "string",
+      "name": "Confidence",
+      "wire": "confidence",
+      "go_type": "float64",
       "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Evidence",
+      "wire": "evidence",
+      "go_type": "[]record.Ref",
+      "omittable": true,
       "is_thought": false
     }
   ],

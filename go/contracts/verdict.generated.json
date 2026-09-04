@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "verdict",
+  "envelope": "production",
+  "schema": "verdict/1",
+  "go_type": "verdict.Verdict",
   "fields": [
     {
       "name": "header.ID",
@@ -78,23 +78,51 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
+      "name": "VerdictKind",
+      "wire": "verdict_kind",
+      "go_type": "verdict.VerdictKind",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Host",
-      "wire": "host",
+      "name": "Outcome",
+      "wire": "outcome",
       "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Confidence",
+      "wire": "confidence",
+      "go_type": "float64",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Source",
+      "wire": "source",
+      "go_type": "verdict.Source",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Basis",
+      "wire": "basis",
+      "go_type": "[]record.Ref",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Falsifiers",
+      "wire": "falsifiers",
+      "go_type": "[]thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
+      "name": "Direction",
+      "wire": "direction",
+      "go_type": "verdict.Direction",
       "omittable": false,
       "is_thought": false
     }

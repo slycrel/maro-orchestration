@@ -12,6 +12,7 @@ import (
 	_ "github.com/slycrel/maro-orchestration/go/internal/invoke" // registers the invocation kinds
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
+	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
 

@@ -1,15 +1,18 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "d0afa11c",
+  "source_ref": "d7ac94d7",
   "kinds": {
     "invocation": "ff3c0e41c2ddbf0c14b6fd8687d7eaf7fb0868c524ed63978b3eaac8bde7075b",
     "invocation_dispatched": "f9277d84d50aa6f4ffddc8a6b16c58a3514684adc897c77853bc90214752c5a2",
     "invocation_reconciled": "2f92a10602f8f0cc0cd963bf8ce0aff2f9f53ed9d6f435891ca3f9906bd7abb5",
     "lease": "e7fe2d8c53af8a54ff530269c2a3ed2893b6cfdce933b9ec63c09d2051c01a7e",
+    "observation": "2c6cd406a86d780b75ab1f591fca0e1dcdf42211e9e6c92c70f5262ea370aace",
     "receipt": "99af36863095c2df0b351b941eba62378a4b4b500ba19417d178fd262cf74e37",
+    "resolution": "e48bbe0548524d816528d645a921b84705a83532332aeb59f3938c3d69950725",
     "terminal_observed": "075264189503e3b028a9e6e2b1eb79e9f0fe6b0fca5fc5419e8e44a3b3977d1d",
     "thought_stored": "8b946bbe24976cde610f332abff58feeac59eb19699cbb12d08e761f0b16c7cd",
     "tool_effect": "5aa913ee1555d6aea71135abc9397d308a4c4da87efc591d230f9c1f08f1a804",
-    "tool_effect_result": "70d08afa1c3b73c5a7b302e119ed48f84318d62569b898b96375f96d0cd104b9"
+    "tool_effect_result": "70d08afa1c3b73c5a7b302e119ed48f84318d62569b898b96375f96d0cd104b9",
+    "verdict": "d2c4043cec8ae3c35737755274a9851b456aa5cd113a8614b12f5bd13decd0d1"
   }
 }

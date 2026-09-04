@@ -325,3 +325,37 @@ Not applied (recorded): the rename window (alias → deprecated → removed,
 ≥ 90 days) has no instrument yet — nothing has been renamed; `Change` is the
 place it plugs in. Vendored-pair reading under an older answer-key SHA is a
 consumer concern that arrives with the pack (step 12).
+
+## Step 4 — observations, verdicts, resolver (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `Observation` (deterministic checks; refuted / supported / could_not_observe) | §6 (r2-L) | kept; five check kinds registered, the checks themselves arrive with the judges in step 7 |
+| `Verdict` with closed per-kind outcome vocabularies, standing, direction fixed by standing, falsifiers on closure | §6, §8.2 | kept |
+| `Resolution` as a journaled record naming every candidate, the rule, and the resolver version | §6 (r2-L, r3 partial order) | kept |
+| Resolver as a pure fold over the SET (sorted by id, never Seq); supersession as the only use of journal linkage | §6 | kept; permutation test over every arrival order |
+| Refutation threshold | D13 (numbers carry a Why, reported not enforced) | kept as `Thresholds{Refute, RefuteWhy}`; v1 registration 0.9 with its why; re-measure once live |
+| Sheriff | §6 | **step 7** (needs the supervisor) |
+| Judges that PRODUCE verdicts (closure judge, provenance) | §5/§7 | **step 7** (need the AGENDA driver); step 4 is the vocabulary and the fold |
+| Confidence combination across candidates | reviewer suggestion r2 | **not in v1** — rank, then confidence, incomparable ⇒ contested; combining confidences is a modelling choice with no measured basis yet |
+
+**Built.** `internal/verdict`: three kinds with `ValidateWire`; `Resolve`
+(supersession → refutation → standing/confidence → self-cannot-promote);
+`Fold` grouping by (subject, kind); `Commit` idempotent per candidate set.
+Declared contracts for all three; registry at 12 kinds.
+
+**Edge tests.** Every permutation of three candidate sets (with observations
+reversed) yields an identical resolution; operator outranks a more confident
+judge; within a rank confidence decides; equal rank + confidence + different
+outcomes ⇒ contested with no effective verdict; agreeing peers are not
+contested; a self success claim resolves to the kind's unknown while a self
+demotion stands and a judge establishes success over it; supersession drops
+the named verdict but keeps it as a candidate; a refuting observation at the
+threshold settles failure without a judge, weak/unobservable/supporting ones
+do not, an operator outranks the check, kinds without a failure outcome
+ignore observations; closed vocabularies, direction fixed by standing, judge
+needs an invocation, confidence in [0,1], falsifiers closure-only, contested
+never has an effective verdict, foreign resolver version refused; journaled
+resolutions fold and are idempotent per candidate set.

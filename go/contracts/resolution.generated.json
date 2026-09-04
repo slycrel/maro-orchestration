@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lease",
-  "envelope": "control",
-  "schema": "lease/1",
-  "go_type": "record.LeaseRecord",
+  "kind": "resolution",
+  "envelope": "production",
+  "schema": "resolution/1",
+  "go_type": "verdict.Resolution",
   "fields": [
     {
       "name": "header.ID",
@@ -78,23 +78,65 @@
       "from_header": true
     },
     {
-      "name": "PID",
-      "wire": "pid",
-      "go_type": "int",
+      "name": "VerdictKind",
+      "wire": "verdict_kind",
+      "go_type": "verdict.VerdictKind",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Epoch",
-      "wire": "epoch",
-      "go_type": "uint64",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Host",
-      "wire": "host",
+      "name": "Outcome",
+      "wire": "outcome",
       "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Effective",
+      "wire": "effective",
+      "go_type": "record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Candidates",
+      "wire": "candidates",
+      "go_type": "[]record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Observations",
+      "wire": "observations",
+      "go_type": "[]record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "ResolverVer",
+      "wire": "resolver_ver",
+      "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Rule",
+      "wire": "rule",
+      "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Contested",
+      "wire": "contested",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Confidence",
+      "wire": "confidence",
+      "go_type": "float64",
       "omittable": false,
       "is_thought": false
     }
