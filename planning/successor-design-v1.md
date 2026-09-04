@@ -2,175 +2,208 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.1
+# Successor v1 — design note (Phase 2, the whole system) — v1.2
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
 §8 (`docs/history/2026-09-04-holistic-drift-review.md`, main) as amended by
 D7–D17 in `successor-plan.md`; contract practice =
 `contract-testing-input.md`; boundary spec = `docs/CONTRACTS.md` + the Phase 1
-behavior suite. v1.1 = v1.0 rewritten against the r1 design review (codex,
-three lenses, ledger at the review dir's `verdict-r1.md`; converged findings
-listed in §17). Where a shape is inherited, the justifying sentence is beside
-it (anti-lift rule).*
+behavior suite. v1.2 = v1.1 rewritten against the r2 design review (codex,
+Architect + Skeptic, whole document, fix layer first; ledgers `verdict-r1.md`,
+`verdict-r2.md` in the review dir). §18 lists what changed. Inherited shapes
+carry their justifying sentence beside them (anti-lift).*
 
 ## 0. What v1 is
 
 One process, in Go, that takes a goal and: routes it, plans it, executes it
 through backends, judges what came back, records what happened, learns from
 it in a way the next run is **measured** against, and tells the user the
-outcome where they asked. The learn loop is closed in v1 (D14). Recursion is
-designed in and exercised one level deep. No process code truncates, aborts,
-or "corrects" a thought (D13, D15, D16). Removal is a deliverable from the
-first commit (§8 item 9).
+outcome where they asked — and treats "the user did not hear it" as a failed
+mission, whatever the artifacts say. The learn loop is closed in v1 (D14).
+Recursion is designed in and exercised one level deep. No process code
+truncates, aborts, or "corrects" a thought (D13, D15, D16). Removal is a
+deliverable from the first commit (§8 item 9).
 
 The prototype's never-closed items are design targets: cost envelope as a
 measured target; learning that measurably changes behavior; fork with a join
 and scoped memory; findings that close; state that is re-read or not written;
-always-on inside one process. Worker isolation is deferred (D12, revisit
-later).
+always-on inside one process. Worker isolation is deferred (D12).
 
 **Home (D9):** branch `successor`, source under this repo's `go/`, landed via
-the shared `scripts/land.sh`, tested with the shared suites, reviewed the
-house way. The frozen `go-port` branch is read, never edited (D4). **Python
-lift (D8):** every shared-contract change states whether Python needs a
-provider-side repair (allowed) or a behavior redesign (forbidden; rejected or
-separately authorized). **Work posture (D6):** one build lane at a time on
-this box; a second lane only in its own worktree.
+the shared `scripts/land.sh`, reviewed the house way; `go-port` is read, never
+edited (D4). **Python lift (D8):** every shared-contract change is classified
+*provider repair* (allowed; lands on main through the normal Python chunk
+discipline as its own work item) or *behavior redesign* (forbidden unless
+separately authorized). **Work posture (D6):** one heavy lane on this box at
+a time — build OR battery OR review, never two; a second worktree is for
+isolation, not for a second concurrent heavy job.
 
-## 1. Foundations — records, identity, the two populations
+## 1. Foundations
 
-### 1a. Everything durable is an immutable, versioned record
+### 1a. Records: immutable, versioned, ordered, and framed
 
 ```go
 type RecordHeader struct {
-    ID        RecordID     // ULID: time-ordered, unique, allocated by the sequencer
-    Schema    SchemaVer    // "outcome/2" — contract version of THIS record kind (D3)
-    Seq       uint64       // per-workspace monotonic; the happens-before order
-    RunID     RunID        // zero for workspace-scope records
-    Subject   Ref          // what this record is about (a goal, run, thought, learned item)
-    Supersedes RecordID    // zero unless this record overrules an earlier one
-    At        time.Time    // observation time; never used for ordering (Seq is)
-    Origin    Origin       // production | experiment — see §9
+    ID         RecordID    // ULID, allocated by the sequencer
+    Schema     SchemaVer   // "outcome/2": the contract version of this record kind (D3)
+    Seq        uint64      // per-workspace monotonic; happens-before
+    RunID      RunID       // zero for workspace scope
+    Attempt    uint32      // run attempt generation (a retried run is a new attempt)
+    Subject    Ref         // what this record is about
+    Supersedes RecordID    // set ONLY when this record replaces an earlier assertion of the same subject+kind
+    At         time.Time   // observation time; never an ordering key
 }
 ```
 
-Status, standing, and "current verdict" are **folds** over records, never
-fields something mutates. Compaction can never change semantics because
-nothing depends on file position.
+Records come in two **disjoint envelope types**, `ProductionRecord` and
+`ExperimentalRecord` (§9); a reader API is typed to one or the other, so a
+production query cannot return experimental rows by construction.
 
-### 1b. Thoughts are content-addressed, immutable, and opaque to process code (D16)
+Status, standing, "current verdict", and lifecycle stage are **folds** over
+records. No record carries a mutable status field.
+
+### 1b. Thoughts (D16)
 
 ```go
-type ThoughtRef struct {           // what every other record carries
-    Hash    Hash                   // blake3, domain-separated by Kind, versioned ("b3v1:…")
-    Kind    ThoughtKind            // goal | prompt | response | step_result | deliverable | lesson_text | chunk
-    Bytes   int64                  // derived at store time from the body, never caller-supplied
+type ThoughtRef struct {
+    Hash  Hash        // blake3, domain-separated by Kind, versioned ("b3v1:…"); computed and verified by the thought store
+    Kind  ThoughtKind // goal | prompt | response | step_result | deliverable | lesson_text
+    Bytes int64       // derived at store time
+    Text  Encoding    // utf8 | bytes — what a text backend may be handed vs what only a file transport may carry
 }
-// Construction is private to the thought store: bytes in → ThoughtRef out, hash
-// computed and verified at that boundary; on read the hash is re-verified.
 ```
 
-The engine stores, routes, hashes, renders, and hands thoughts to judges and
-backends. It never slices one. Interpretation happens only at **declared
-interpretation boundaries**, each a typed function from a ThoughtRef to a
-process artifact, validated once: `Intent(goal) → IntentAssessment`,
-`Claims(deliverable) → ClaimSet`, `Plan(goal, …) → Plan`, `Judge(…) →
-Verdict`. A model call is such a boundary; so is a deterministic parser.
+Construction is private to the thought store (bytes in → ThoughtRef out). The
+engine stores, hashes, routes, renders, and hands thoughts to judges and
+backends. **It never slices one.** Interpretation happens only at declared
+interpretation boundaries — typed functions from ThoughtRef to a process
+artifact, validated once: `Intent`, `Claims`, `Plan`, `Judge`. A model call
+is such a boundary; so is a deterministic parser; each owns validation and
+error translation for what it produces.
 
-**Overflow is a boundary decision, never a slice.** When a thought exceeds a
-backend's declared `MaxInputBytes` the engine does exactly one of: hand it
-**by reference** (the backend can read the artifact — subprocess agents can),
-produce **derived chunk thoughts** (Kind `chunk`, each with byte-range
-provenance and a completeness manifest, so the whole is reconstructable and
-the receipt says which chunks the backend saw), or return a typed
-`backend_incapable` outcome. Which happened is a recorded routing event.
+**Overflow.** When a thought exceeds a backend's declared `MaxInputBytes`,
+the engine does one of exactly two things: hands it **by reference** (the
+backend can read the artifact; subprocess agents can) or returns a typed
+`backend_incapable` outcome with the thought intact. There is no
+engine-generated chunking in v1. Semantic decomposition of a large artifact,
+if ever needed, is an explicit interpretation producing a new artifact with
+its own completeness verdict — a later Finding, not an overflow path.
 
-Thought fields in every contract are declared `unconstrained` (someone
-looked; any value of the type is legal) and the suite feeds an oversized,
-an empty, and a non-UTF-8 body through every boundary.
+Thought fields in every contract are declared `unconstrained`; the suite
+feeds oversized, empty, and `bytes`-encoded bodies through every boundary
+and asserts that what reached the backend was the whole thought or a typed
+refusal.
 
-### 1c. Process artifacts
+### 1c. Contracts are built first, not later (D3; contract input §1–§2, §16)
 
-Every artifact in §2–§10 is a record with a `RecordHeader` and a registered
-contract. v1 hand-writes the declared schema and reference reader for the
-edges the shared spec covers; a generator for the derived half arrives when
-hand-maintained types demonstrably drift (contract input §1 — deferred, not
-dropped).
+Every record kind and every shared edge has, from build step 1: a
+**generated** file derived from the Go type at a pinned ref, a **declared**
+file (absence semantics, unknown-value handling, used-for, retry guidance,
+fail-soft collapse sets, `unconstrained` on thought fields, `measured-by:` on
+any measured claim — `not-re-runnable-here` is a legal value), a
+**lifecycle**, an **answer key**, and a **reference reader**. Regeneration
+diff is the review. Warnings for undefined dimensions are never silenced.
+The independent-pair check (§15) runs on representative edges in CI, not
+once at exit.
 
-## 2. The workspace journal — one writer, many lanes
+## 2. The workspace journal
 
-All durable state is **one append-only journal** of records plus the
-content-addressed thought store. One goroutine, the **sequencer**, owns the
-journal: lanes submit `Command`s (idempotency key + records to append +
-preconditions), the sequencer validates preconditions, allocates `Seq`,
-appends, fsyncs, and acknowledges. Multi-record invariants (outcome + run
-card + delivery receipt; verdict + supersedes; fork + join settlement) are
-one command and therefore atomic. Readers see only acknowledged records.
+**Transactions are framed.** A lane submits a `Command{IdempotencyKey,
+Preconditions, Records}`. The sequencer (one goroutine) validates
+preconditions, allocates `Seq` to every record, and writes **one framed,
+checksummed envelope** containing all of the command's records; the envelope
+is durable (fsync) before acknowledgement. A torn tail on recovery is a
+partial envelope with a bad checksum and is discarded; nothing inside an
+unacknowledged envelope is ever visible. Command IDs are deduplicated on
+replay. Multi-record invariants that are genuinely simultaneous (verdict +
+supersedes; outcome + run card; join decision + cancellation issuance) are
+one envelope. Things that are *not* simultaneous (delivery) are their own
+transitions (§5a).
 
-The registered ledgers of the shared spec (`memory/outcomes.jsonl`,
-`lessons.jsonl`, `captains_log.jsonl`, `events.jsonl`, `handle_inputs.jsonl`,
-`build/calls/*.json`, `run_card.json`) are **materialized views** the
-projector writes from the journal, byte-compatible with `docs/CONTRACTS.md`
-B-entries, so the pack moves learning both ways (D10). Lanes never write
-them. Any index (in-memory, SQLite later) is a rebuildable projection with a
-committed source offset.
+**Two durable states at the edge.** *Committed* = in the journal. *Published*
+= the projector has written the shared-spec views for it and advanced a
+durable watermark. External readers of the workspace read views and the
+watermark; the contract guarantee at the workspace edge is stated per view
+in terms of *published*, never *committed*. Multi-file view generations are
+replaced atomically (write to a generation dir, rename). The projector
+recovers from its watermark.
 
-**Admission:** one process per workspace root, enforced by a lease file with
-PID + monotonic process epoch; a second process refuses to start. Every
-command carries an idempotency key, so restart replay cannot duplicate a
-mutation. Locked read-modify-write exists only for the lease and for view
-files the spec requires to be rewritten whole.
+**Backpressure and shutdown.** Every lane has a bounded, durable work cursor
+over the journal (no in-memory queues of unbounded work); overload means the
+cursor lags, never memory growth. Shutdown order: intake closes → executor
+drains to its next committed transition → delivery flushes its outbox →
+projector publishes to the last commit → sequencer closes.
+
+**Admission:** one process per root, enforced by a lease file with PID and a
+monotonic process epoch; every command carries the epoch, and the sequencer
+refuses commands from a stale epoch.
+
+Locked read-modify-write exists only for the lease and for view files the
+spec requires to be rewritten whole.
 
 ## 3. Goals, runs, fork, join
 
 ```go
-type Goal struct { RecordHeader; Parent GoalID; Root GoalID; Text ThoughtRef; Lane Lane; Origin GoalOrigin }
-type RunAttempt struct { RecordHeader; Goal GoalID; Attempt int; Config ConfigSnapshot }
+type Goal struct { RecordHeader; Parent GoalID; Root GoalID; Text ThoughtRef; Origin GoalOrigin; Delivery DeliveryPolicy }
+type RunAttempt struct { RecordHeader; Goal GoalID; Config ConfigSnapshot; Family *FamilyAssessment }
 type Fork struct { RecordHeader; Parent RunID; Step StepID; Children []GoalID /* fixed at creation */; Policy JoinPolicy }
-type Join struct { RecordHeader; Fork RecordID; Winner GoalID; Terminal map[GoalID]ChildState; Cancelled []GoalID }
+type JoinDecision          struct { RecordHeader; Fork RecordID; Winner GoalID; Losers []GoalID }
+type CancellationIssued    struct { RecordHeader; Child GoalID; Reason Ref }        // idempotent by Child+Fork
+type ChildTerminal         struct { RecordHeader; Child GoalID; State ChildState }  // written by the child's own driver
+type JoinSettled           struct { RecordHeader; Fork RecordID }                   // legal only when every child has a ChildTerminal
 ```
 
-A fork's membership is fixed when written. A join is one settlement record:
-which child satisfied the policy, the terminal state of every child, which
-were cancelled and acknowledged. Cancellation executes a **persisted**
-decision: the sequencer writes the Join, then the executor cancels losers'
-contexts and waits for their drain acknowledgement before the parent step
-continues. Late results from a cancelled child are recorded as
-`late_result` and ignored by the parent (they remain evidence).
+The order is causal and each step survives a crash between it and the next:
+the parent commits `JoinDecision` (winner fixed); the executor issues
+cancellations idempotently *from that record*; each loser's driver commits its
+own `ChildTerminal` (cancelled | completed_late | failed); `JoinSettled` is
+computed by a fold and committed only when the drain barrier is provably met;
+the parent step continues only after `JoinSettled`. A child that completes
+after `JoinDecision` records `completed_late`; its records remain evidence
+and it may not enter the tail (no learning from a cancelled arm). Kill tests
+sit between every pair of these transitions.
 
-v1 join policies: `all`, and `first_verdict` (first child whose closure
-verdict says achieved, others cancelled). Nothing else until a scenario needs
-it. Memory scope walks Goal ancestry (own → parents → root → workspace).
-v1 runs one level deep in production; the suite pins a two-level scripted
-tree for both policies including crash-before-settlement and
-crash-after-settlement restarts.
+v1 join policies: `all`, and `first_verdict` (first child whose effective
+closure verdict is *achieved*; others cancelled) — kept because the
+two-level scenario needs one early-return policy to exercise cancellation;
+`any`/quorum have no scenario and are not in the enum. Memory scope walks
+Goal ancestry (own → parents → root → workspace). Child runs are goroutines
+under the parent's context; cancellation *executes* a committed decision.
 
-## 4. Backends — one invocation boundary, recording on it
+## 4. Backends — effectful boundary components, one invocation state machine
 
 ```go
-type Invocation struct {            // allocated by the run shell before any backend runs
-    RecordHeader
-    Purpose   Purpose               // enum, queried on receipts (why this call exists)
-    Request   ThoughtRef            // the exact backend-visible request, hashed
-    Backend   BackendSnapshot       // name, model, version, capabilities AS SEEN at decision time
-    Target    *Budget               // optional {Name, Limit, Why}; only when a target applies (D13)
-}
-type Receipt struct { RecordHeader; Invocation RecordID; Response ThoughtRef; Attempts []Attempt; Usage Usage; ToolEvents []ToolEvent; Terminal TerminalState }
+type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef }
+// states, each a record:  prepared → dispatched → terminal_observed → receipt_committed
+type Attempt   struct { RecordHeader; Invocation RecordID; N int; Terminal TerminalState }
+type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Seq int; Class EffectClass /* read | write_local | outward */; EffectID string; Evidence ThoughtRef }
+type Receipt   struct { RecordHeader; Invocation RecordID; Response ThoughtRef; Usage Usage }
 ```
 
-The **run shell** owns the invocation boundary: it writes the Invocation,
-calls a *pure* adapter (`Complete(ctx, req) (Response, error)` — no store
-access), records every attempt and stream terminal state, and commits the
-Receipt. There is no adapter to inject that bypasses this, because adapters
-never record; the shell does (FINDINGS #6, restated at the right layer).
-Capability and model are snapshotted into the Invocation so a routing
-decision and its receipt agree.
+Adapters are **effectful boundary components**, not pure: a subprocess agent
+does I/O, tool actions, and retries. The run shell owns the invocation state
+machine: it commits `prepared`, dispatches, commits every `Attempt` and every
+`ToolEffect` as the stream reports them, commits `terminal_observed`, then
+the `Receipt`. Partial-stream semantics are declared once per backend (a
+malformed tool-event frame after a valid response = `terminal_observed` with
+`Terminal=partial`, receipt committed with the response, the frame recorded
+as evidence — never a silent retry, never a rejected receipt).
 
-v1 backends: `subprocess` (claude / codex CLIs, agentic, `tool_events`
-receipts) and `scripted` (tests, replay). One judge path rides subprocess in
-v1. Anthropic API, Fireworks and others are later additions through the same
-seam; none is in v1.
+**Restart.** An Invocation found `dispatched` without `terminal_observed`
+yields `indeterminate_external_effect` unless every committed ToolEffect is
+`read`-class; reconciliation is evidence-based per effect class (a `write_local`
+is re-checked against the filesystem; an `outward` effect with a stable
+`EffectID` is queried where the tool supports it, otherwise escalated). Blind
+replay never happens. Kill tests: after dispatch, after each tool effect,
+after response, before receipt.
+
+`Purpose` is a receipt enum, queried; `Target` is optional and present only
+when a registered target applies (D13). v1 backends: `subprocess` (claude /
+codex CLIs — kept because the agentic executor with `tool_events` receipts is
+the only backend class that can do real work on this box today, and its
+receipts are the evidence the contracts need) and `scripted` (tests, replay).
+Others attach through the same seam later.
 
 ## 5. The spine — pure decisions, one shell
 
@@ -178,340 +211,358 @@ seam; none is in v1.
 Intake → Intent → Plan → Execute → Judge → Record → Deliver ⟶ (tail) Learn
 ```
 
-Each stage is a **pure decision function** over validated, immutable inputs
-returning an output plus a list of declarative effects (records to commit,
-invocations to make). The **run driver** is the shell: it runs stages, makes
-invocations through §4, submits effects to the sequencer as commands, and
-emits one lifecycle event per stage boundary carrying `handle_id`, `run_id`,
-`goal_id` (FINDINGS #9). Control flow — early exits, deferrals, retries — is
-written in the driver in the open. Tests exercise decisions without a store.
+Stages are pure decision functions over validated immutable inputs returning
+an output plus a typed **effect list** (`Commit{records}`, `Invoke{intent}`,
+`Fork{…}`); the **run driver** is the shell that makes invocations (§4),
+submits commits, and emits one lifecycle event per boundary carrying
+`handle_id`, `run_id`, `goal_id`, `attempt` (FINDINGS #9). Control flow is
+written in the driver in the open. Validation ownership is one table
+(§13): CLI args, config, subprocess frames, journal replay, imported records,
+model-produced `Plan`/`ClaimSet`/`IntentAssessment` — each validated once at
+its boundary.
 
-Lanes are **configurations** of the driver: NOW = single-step plan, one
-invocation, self-verdict or provenance judge, slim outcome; AGENDA = full
-decomposition, per-step judge, closure with restart. The driver is one
-function with plan-cardinality and judge configuration as parameters; there
-is no second driver.
+**NOW / AGENDA** are configurations of the one driver (plan cardinality and
+judge selection as parameters; no second driver) — the names are kept because
+the shared spec registers `lane` as a vocabulary on the outcomes ledger and
+the behavior suite drives both by name; the engine keeps the vocabulary, not
+the prototype's code split.
 
-**Interrupts** are a registered record (`Interrupt{Target RunID, Action,
-IssuedSeq}`) consumed only by the run driver at stage boundaries, acknowledged
-by a record, idempotent by ID, expired when their target reaches a terminal
-state. Completion-vs-pause races resolve by `Seq` (FINDINGS #1).
+**Intake commits, before any outcome-bearing work:** the Goal, its
+`DeliveryPolicy` (what counts as delivered for this origin), and a
+`FamilyAssessment` produced by a *treatment-blind, deterministic* classifier
+(registered rule version; ambiguous or unmatched goals get `family=none` and
+are ineligible for experiments). `Intent` (the model interpretation) runs
+after and may not revise the assessment for the current run. This is what
+makes randomized assignment (§8) an intake invariant.
 
-### 5a. Run state machine (the owner of "finished")
+**Interrupts:** `Interrupt{RecordHeader; Target RunID; Attempt; Action;
+Expires}` consumed only by the driver at stage boundaries, acknowledged by a
+record, expired when the target attempt reaches a terminal state
+(FINDINGS #1).
+
+### 5a. Run state machine — execution outcome vs mission outcome
 
 ```
-created → executing → judged → recorded → delivered(attempted|accepted|acknowledged) → post_run_done
-                                   ↘ undeliverable (retryable, never re-executes the goal)
+created → executing → judged → recorded ──→ delivered{transport_accepted | user_acknowledged}
+                                        └─→ delivery_failed (after bounded retry/escalation)
+post-run:  tail_done   (learning, curation; enqueued after `recorded`)
 ```
 
-Each transition is one sequencer command with a named owner: executor
-produces facts; judges produce verdicts; the driver commits Record; the
-delivery lane commits delivery states; the tail commits `post_run_done`.
-Learning becomes eligible at `recorded`, never earlier. A run's product
-status is settled at `recorded`; delivery and post-run states do not change
-it. Shutdown drains under a deadline; anything past `recorded` resumes from
-its last committed transition; anything before it is marked `recoverable`
-and restarts from the last committed idempotent stage (no mid-call resume).
+Two outcomes, both folds: **execution outcome** settles at `recorded` (what
+the run produced and how it was judged). **Mission outcome** = execution
+outcome ⊗ delivery state under the goal's `DeliveryPolicy`: a run whose
+required delivery state was not reached is `mission_failed(delivery)` even
+when execution succeeded (§8 item 1). Learning eligibility is `recorded`.
+Restart: past `recorded`, resume from the last committed transition; before
+it, the attempt is marked `recoverable` and a new attempt starts from the
+last committed idempotent stage, subject to §4's external-effect
+reconciliation.
 
-## 6. Judges and verdicts
+## 6. Judges, verdicts, resolution
 
 ```go
-type Verdict struct {
-    RecordHeader                    // Subject = the run/step/claim judged; Supersedes when overruling
-    Kind       VerdictKind          // step | closure | provenance | fabrication | stuck | delivery
-    Outcome    Outcome              // per-Kind registered vocabulary
-    Confidence float64
-    Source     Source               // deterministic(check) | judge(invocation) | self | operator
-    Basis      []Ref                // thoughts, receipts, events looked at
-    Falsifiers []ThoughtRef         // closure only
-    Direction  Direction            // may_demote | may_promote | both — replaces a bare Recoverable bool
-}
+type Observation struct { RecordHeader; Check CheckKind; Result ObsResult /* refuted | supported | could_not_observe */; Confidence float64; Evidence []Ref }
+type Verdict     struct { RecordHeader; Kind VerdictKind; Outcome Outcome; Confidence float64; Source Source; Basis []Ref; Falsifiers []ThoughtRef; Direction Direction }
+type Resolution  struct { RecordHeader; Subject Ref; Effective RecordID; Candidates []RecordID; ResolverVer string }
 ```
 
-Verdicts are append-only assertions. The **effective verdict** for a subject
-is a pure fold `Effective([]Verdict)` over a registered resolver table
-(source standing × kind applicability × direction × Seq); every resolution
-writes a `Resolution` record naming the candidates. Deterministic checks
-(provenance, existence, fabrication diff, receipt completeness) **contribute
-evidence records with confidence and observation time**; they short-circuit
-only a final-success verdict, never the judge's view of the claim — an
-observation failure (a check that could not run) is a distinct outcome from a
-refutation.
+Deterministic checks produce **Observations**, not verdicts; a judge sees
+every claim together with its observations. An observation that could not run
+is distinct from a refutation. The **resolver** is versioned data defining a
+*partial order* over (source standing, kind applicability, direction) with
+explicit incomparable cases and tie results; `Seq` orders only genuine
+supersession (same subject, same kind, `Supersedes` set), never independent
+evidence, so arrival order cannot change the effective verdict — the
+pairwise-order tests assert exactly that. A sufficient set of refuting
+observations may settle *failure* without a judge (so a dead judge backend
+cannot block forever); success always needs a judge or an operator.
 
-**Sheriff** is a lane with a *separate evaluator* reading only committed
-records (its own state machine, no shared interpretation code with the
-executor). It emits `stuck` verdicts that name the evidence (repeated
-closure fingerprint, no new artifacts past a watermark while the backend
-reports idle, backend refusing). Thresholds are config carrying a Why and are
-reported, not enforced as stops; the caller's recovery state machine acts on
-the reason (contract input §11). Tests: stalled executor, stalled store,
-stalled Sheriff, slow-but-live backend, reordered events, Sheriff restart.
+**Sheriff** runs under the process **supervisor** (§10): a separate lane with
+its own evaluator over committed records, a heartbeat record with a progress
+watermark, and a bounded restart policy. It emits `stuck` verdicts naming the
+evidence; thresholds are config with a Why and are reported, not enforced.
+Whole-process death is not detectable from inside and is stated as such: the
+launching edge checks the lease.
 
-## 7. Memory — recording and recall
-
-Learned data:
+## 7. Memory — learned data, recall, application
 
 ```go
-type Learned struct {
-    RecordHeader                    // one record per REVISION; Supersedes links revisions
-    Kind       LearnedKind          // lesson | mechanism   (v1: exactly these two — §8)
-    Stage      Stage                // candidate | observed | provisional | effective | canon | contested | tombstone
-    Scope      ScopePath            // goal-ancestry path or workspace
-    Family     FamilyKey            // registered goal family (§9)
-    Text       ThoughtRef
-    Provenance Provenance           // minted_from run/receipt/model, quarantine flags
-}
-type LifecycleTransition struct { RecordHeader; Learned RecordID; From, To Stage; Evidence RecordID /* an EffectMeasurement, or a tenure observation */ }
-type Application struct { RecordHeader; Learned RecordID; Invocation RecordID; Representation ThoughtRef /* exactly what the backend saw */ }
+type Learned    struct { RecordHeader; Kind LearnedKind /* lesson | policy */; Scope ScopePath; Family FamilyKey; Text ThoughtRef; Provenance Provenance }
+type LifecycleTransition struct { RecordHeader; Learned RecordID /* stable item id */; Revision RecordID; From, To Stage; Evidence RecordID }
+type Application struct { RecordHeader; Learned RecordID; Invocation RecordID; Representation ThoughtRef }          // recall injection
+type PolicyApplication struct { RecordHeader; Learned RecordID; RunID RunID; Snapshot PolicySnapshot }              // orchestration policy
 ```
 
-**Recall is one query**, `Recall(purpose, scope, standing) → RecallSelection`,
-where `RecallSelection` records every candidate considered, the deterministic
-ordering, each inclusion or exclusion with its reason, and the projected
-size. The three prototype "slices" are three purposes passed to this one
-query; no separate subsystems (anti-lift: the contract does not force three,
-and Go's typed query does not want them). A learned item counts as
-**applied** only when an `Application` record links it to an Invocation whose
-request hash contains its representation. A budget on recall is a target
-with a Why; exclusion is recorded, never silent; excluded items remain
-discoverable by reference.
+Stage is a fold over `LifecycleTransition`s for the stable item ID (a content
+revision never carries a stage). Stages: `candidate | observed | provisional |
+effective | canon | contested | tombstone`.
 
-## 8. Self-improvement — closed and measured, with a valid experimental unit
+**Two apply surfaces in v1**, because D17 needs the second: (1) **recall
+injection** — a `lesson` reaches a backend request, proven by an
+`Application` whose representation is in the request hash; (2) **orchestration
+policy** — a `policy` item is versioned data (which mechanisms are enabled,
+decomposition depth, judge configuration) consumed at one policy boundary in
+the driver, proven by a `PolicyApplication` snapshot on the run. Mechanisms are
+therefore data the engine reads (D17, engine/data decree), and decaying a
+mechanism changes what the driver does.
+
+**Recall is one query**, `Recall(purpose, scope, standing) → RecallSelection`
+(candidates, deterministic order, each inclusion/exclusion with reason,
+projected size). One query, not three subsystems: the contract does not force
+three and a typed query serves all three purposes. Exclusions are recorded as
+a bounded projection (counts by reason + the top-k excluded refs), not one row
+per excluded item (§14 census).
+
+## 8. Self-improvement — the closed, measured loop
 
 ```
-Observe   committed receipts, verdicts, usage, friction signals (tail lane, after `recorded`)
-Diagnose  deterministic classifiers first, a model lens second → FailureClass records
-Propose   a Learned revision at stage `candidate` (v1 kinds: lesson, mechanism)
-Apply     through ONE v1 apply surface: recall injection (an Application record per use)
-Measure   an Experiment → EffectMeasurement
-Lifecycle a transition whose Evidence is an EffectMeasurement (or a tenure observation that
-          can reach `observed` only — never an efficacy-bearing stage)
+Observe   committed receipts, verdicts, usage, friction (tail lane, after `recorded`)
+Diagnose  deterministic classifiers → Observations; a model lens second → FailureClass
+Propose   a Learned revision at `candidate` (v1 kinds: lesson, policy)
+Apply     recall injection (Application) | orchestration policy (PolicyApplication)
+Measure   Experiment → Assignment → ArmObservation → OutcomeAssessment → EffectMeasurement
+Lifecycle a transition whose Evidence is an EffectMeasurement; tenure reaches `observed` only
 ```
 
-### 8a. The experimental unit
+### 8a. The experimental unit — immutable protocol, derived counts
 
 ```go
-type Experiment struct {
+type Experiment struct {           // immutable protocol; nothing in it accrues
     RecordHeader
-    Hypothesis  Learned RecordID            // exactly one item under test (one-item ablation)
-    Population  FamilyKey                   // registered BEFORE assignment
-    Assignment  Assignment                  // paired_replay | randomized_live | shadow_arm
-    Treatment, Control Snapshot             // backend/model/version, config, applied-item SET, seed where available
-    Outcome     OutcomeSpec                 // predeclared: which verdict/usage dimensions, direction, margin
-    MinSamples  int; Denominator int
-    Evaluator   EvaluatorRef                // identity + version of whatever scores outcomes
-    Exclusions  []Rule                      // fixed before observation
+    Hypothesis   RecordID          // exactly one learned item (one-item ablation)
+    Population   FamilyKey         // from FamilyAssessment (intake, treatment-blind)
+    Assignment   AssignmentKind    // paired_replay | randomized_live | shadow_arm
+    Arms         []ArmSpec         // treatment/control snapshots: backend, model, version, config, applied-item SET, seed
+    Outcome      OutcomeSpec       // predeclared dimensions, direction, equivalence margin
+    Analysis     AnalysisSpec      // intention_to_treat AND per_protocol; missing-outcome policy; stopping rule; estimator; uncertainty threshold
+    Oracle       OracleClass       // deterministic_fixture | external_observed | blinded_evaluator
+    Exclusions   []Rule            // fixed before observation
 }
-type EffectMeasurement struct { RecordHeader; Experiment RecordID; Delta Delta; N int; Uncertainty Unc; Verdict EffectVerdict /* helpful | harmful | null | insufficient */ }
+type Assignment        struct { RecordHeader; Experiment RecordID; Unit RunAttemptID; Arm ArmID; Probability float64 }   // committed at intake, before outcome-bearing work
+type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool /* Application/PolicyApplication present */; Outcome OutcomeVec; Missing MissingReason }
+type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Ref /* provably exclude the hypothesis */ }
+type EffectMeasurement struct { RecordHeader; Experiment RecordID; AssignedN, ExposedN int; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* helpful | harmful | equivalent | insufficient */ }
 ```
 
-Two instruments in v1:
+Counts are **derived from Assignment records**, never stored on the
+experiment. Both intention-to-treat (all assigned) and per-protocol (exposed
+only) are computed and reported; a promotion requires the predeclared one.
 
-1. **Paired replay (plumbing + first evidence).** The same decision-bearing
-   invocation is re-issued twice under an identical captured environment,
-   treatment with the item applied and control without, both scored by the
-   predeclared outcome spec against an **outcome oracle** (the run's closure
-   verdict, a deterministic check, or a scripted oracle) — never against the
-   historical receipt. Action-match against the old receipt is retained only
-   as a diagnostic ("did the injection change the request at all").
-2. **Randomized live.** Eligible production runs in the item's family are
-   assigned treatment/control at intake; outcomes accrue under the
-   experiment's denominator. This is where D11's "measured behavior change"
-   is actually established.
+**Oracles are typed, and the historical closure verdict is not one.** A
+historical verdict was produced under the historical treatment path and may
+share its judge; it is inadmissible for efficacy. Admissible: a deterministic
+task fixture, an externally observed outcome, or a blinded evaluator over the
+complete arm artifacts whose `Inputs` provably exclude the hypothesis item.
+Paired replay therefore proves **exposure and decision difference** (did the
+request change; did the decision change) and may carry efficacy only when the
+call's outcome has a deterministic fixture. Randomized live is where D11 is
+established.
 
-The loop is **closed** when a `candidate` from run A has an Application in a
-later run, an Experiment with a valid control, an EffectMeasurement, and a
-LifecycleTransition citing it. **v1 exit for the loop:** a blinded scripted
-scenario in which a planted helpful item is promoted and a planted harmful
-item is demoted by the same machinery; then one live experiment on this box
-with a predeclared outcome spec, real receipts, and n ≥ MinSamples. Tenure
-(exposure without regression) may move `candidate → observed` and may trigger
-re-measurement, expiry, or tombstoning; it never promotes to `effective`.
+**Loop closed** = `candidate` (run A) → Assignment → Application or
+PolicyApplication (run B) → OutcomeAssessment with an independent evaluator →
+EffectMeasurement → LifecycleTransition citing it. **v1 exit:** a blinded
+scripted scenario where a planted helpful item is promoted and a planted
+harmful item is demoted by the same machinery; then one live randomized
+experiment on this box reaching its stopping rule with a **non-`insufficient`**
+verdict. Tenure may move `candidate → observed` and may trigger
+re-measurement, expiry, or tombstoning; never `effective`.
 
-**Apply surfaces:** v1 has one, recall injection, because the causal proof
-needs one and the second surface (backend selection) has no learned item yet
-that cannot use the first. Adding a surface is a Finding with a concrete
-item, not an enum edit. Proposals that would act outward or change authority
-config are held on the escalation surface (autonomy boundary unchanged).
+Proposals that would act outward or change authority config are held on the
+escalation surface (autonomy boundary unchanged).
 
 ## 9. Experiments are a separate population (D17 without contamination)
 
-Records carry `Origin: production | experiment`. **Experimental records live
-in their own journal segment** with their own reader capability; the
-production readers (recall, diagnose, propose, pack export, cost reports)
-are typed so they cannot return experimental records. The only artifact
-that crosses from experiment to production is an `EffectMeasurement`, written
-by the evaluator lane. This replaces the impossible "stamped and never
-ingested" with a rule a type checker and a test can hold: every production
-reader is contract-tested with poisonous experimental rows.
+`ExperimentalRecord` envelopes share the sequencer and the physical log with
+production (one `Seq` space, one crash story) but are a distinct Go type with
+a distinct reader capability; every production reader is typed
+`ProductionRecord`-only and is contract-tested with poisonous experimental
+rows before the first replay runs. The only records the evaluator lane may
+write into production are `OutcomeAssessment` and `EffectMeasurement`, which
+carry references, never experimental artifacts.
 
-**Champion–challenger (D17).** The `mechanism` learned kind represents a
-harness mechanism (recall injection, decomposition, a judge). A shadow arm
-(`plain`: bare goal; `star`: orchestration-as-prompt; `ablate(m)`: harness
-without mechanism m) is an Experiment with `Assignment = shadow_arm`, run
-post-hoc, black-box, in a scratch workspace, eligible only for goals whose
-registered family is read-only. "Matches" = the predeclared outcome vector
-within the family's margin at n ≥ MinSamples. A matching challenger yields an
-EffectMeasurement of `null` for the mechanism, and the mechanism's standing
-decays through the same lifecycle as any learned item. No up-front sort of
-what ages well; the engine measures it.
+**Attribution (D17).** `plain` and `star` shadow arms compare the *whole
+harness* to a 1-shot; a match updates a `HarnessChallenger` record only. An
+individual mechanism's standing changes solely from a predeclared
+`ablate(m)` experiment (harness with everything else fixed), and
+"redundant" requires an **equivalence test** at the family's margin with the
+stopping rule met — failure to reject a difference is `insufficient`, not
+`equivalent`. Shadow arms run post-hoc, black-box, in a scratch workspace,
+only for families whose `FamilyAssessment` classifies them read-only.
 
-## 10. One process — lanes, timers, lifecycle (D12)
+## 10. One process — supervisor, lanes, timers
 
-One binary, one root context, one workspace lease. Lanes: **intake** (CLI
-only in v1; the typed intake seam is the one place other front ends will
-attach), **executor** (bounded concurrency, child runs under parent
-contexts), **sequencer** (§2), **projector** (views), **tail** (post-run:
-observe/diagnose/propose/measure, enqueued after `recorded`), **sheriff**,
-**evaluator** (experiments), **timers** (in-process periodic sweeps —
-consolidation, decay, experiment scheduling — with intervals in config
-carrying a Why; no cron, no systemd timers), **delivery** (outbox with
-idempotency keys). Shutdown and restart per §5a.
+One binary, one root context, one lease. A **supervisor** owns lane
+registration, heartbeat/progress watermarks per lane, panic capture, bounded
+restart, and a degraded-health line in every delivery while any lane is
+down. Lanes: intake (CLI in v1 — the always-on submission path is the CLI
+writing a Goal into the journal of the running process via the lease's
+socket; a second front end attaches at the same seam), executor, sequencer,
+projector, tail, sheriff, evaluator, timers (in-process periodic sweeps with
+intervals carrying a Why; no cron, no systemd timers), delivery (outbox).
+Shutdown and restart per §2 and §5a.
 
-## 11. Budget and metering — targets, never constraints (D13, D15)
+## 11. Budget and metering (D13, D15)
 
-Every Invocation and Receipt carries usage; budgets are optional targets
-with a Why; an overage is an event and a line in the delivery, and the run
-continues. Subscription ceilings are **external**: the engine does not
-estimate remaining allowance and never stops on cost. The authority gate
-covers exactly two things: outward acts in the registered authority classes,
-and a provider's hard refusal (surfaced as a backend outcome, not a cost
-decision). Malformed authority config fails closed for outward acts only.
+Every Invocation and Receipt carries usage; budgets are optional targets with
+a Why; overage is an event and a delivery line; the run continues.
+Subscription ceilings are external; the engine never estimates remaining
+allowance and never stops on cost. The authority gate covers registered
+outward-act classes and provider hard refusals only; malformed authority
+config fails closed for outward acts only.
 
-## 12. Delivery — proven at the user's edge (§8 item 1)
+## 12. Delivery — honest at the user's edge (§8 item 1)
 
-Delivery states per origin: `attempted` (rendered, handed to transport),
-`accepted` (transport confirmed — for CLI, written to the terminal and the
-process still alive), `acknowledged` (the origin's own ack where one exists:
-a message id, a read receipt). Only the highest state an origin supports
-counts as delivered. Pending or failed delivery is retried from the outbox
-without re-running the goal. Rendering is plain words first: outcome, the
-effective verdict with confidence, cost against targets, what is uncertain,
-detail by reference.
+`DeliveryPolicy` is captured at intake per origin and names the required
+state. States: `transport_accepted` (the transport confirmed it took the
+payload) and `user_acknowledged` (the origin's own ack: a message id, a read
+receipt, an explicit CLI ack protocol). CLI in v1 supports
+`transport_accepted` only and is *declared* `accepted_unacknowledged`; the
+mission outcome carries that uncertainty rather than claiming delivery. The
+v1 acceptance uses an origin with an explicit ack (a file-drop front end that
+acks, or Hermes) to prove `user_acknowledged` end to end. Bounded retry from
+the outbox, then `delivery_failed` with an escalation row.
 
-## 13. Workspace and contracts (D10, D3)
+## 13. Workspace, contracts, compatibility (D10, D3)
 
-Own root: `~/.maro-go/workspace`, `MARO_GO_WORKSPACE` override, resolved
-path printed before any write. The shared spec's families appear as
-projector-written views (§2). Every record kind carries its `Schema`
-version; a contract change ships a migration function, a supported-reader
-range, and golden fixtures in both directions (newer row reads by an older
-reader with declared absence semantics; older row reads by the newer). The
-pack has a versioned envelope, per-record schema versions, an import
-transaction ID, duplicate detection by record ID, a quarantine stage for
-imported learned items (they enter at `candidate`, never higher), and
-vocabulary mapping. Renames are delete + add.
+Own root (`~/.maro-go/workspace`, `MARO_GO_WORKSPACE` override, path printed
+before any write). **Compatibility is a mapping, not byte equality.** For
+every shared B-entry the projector has a mapping table: source fields,
+projection fields, intentionally lost fields, absence semantics, vocabulary
+conversions, and the promise level (`readable | meaning-preserving |
+round-trip`). Go-only causal history (revisions, transitions, applications,
+effects) travels in a **native pack envelope**; the legacy B7 lesson row is a
+readable projection. `Go → Python reader` and `Python → Go quarantine`
+(imports enter at `candidate`) are tested separately; no round-trip is
+claimed where only readability is proven.
 
-Contract registry per shared edge: a hand-written declared file (absence
-semantics, unknown-value handling, used-for, retry guidance, fail-soft
-collapse sets, `unconstrained` on every thought field), a lifecycle
-(`stable | transitional | internal-loose | hardened-legacy+design-flag |
-design-pending`), and an answer key. Every reader that degrades a failure to
-a legitimate value is declared fail-soft with its collapse set or does not
-exist.
+Validation ownership table (one row per boundary: CLI, config, subprocess
+frames, journal replay, imported pack, model-produced artifacts, thought
+store integrity) is part of the registry.
 
-**Personas as lenses (§8 item 8):** a lens is a judge/render configuration
-over immutable artifact references — a `LensRef` on an Invocation of Purpose
-`judge` or `render`. It never changes what was recorded and is never an
-execution path. v1 ships the neutral lens and the seam.
+**Personas as lenses (§8 item 8):** a `LensRef` on `judge`/`render`
+invocations — a configuration over immutable references, never an execution
+path. v1 ships the neutral lens plus one non-trivial lens and a test that
+swaps them on the same facts. **Action-bias, structurally:** the falsifiable
+criterion is that no prompt text can widen authority — outward acts pass the
+registered authority classes (§11) regardless of what the model was told; the
+must-detect battery includes "prompt instructs an outward act; gate still
+holds".
 
-## 14. Subtraction and findings (§8 item 9)
+## 14. Records that are re-read, and removal (§8 items 5, 9)
 
-`Finding{RecordHeader; Kind: add|remove|change; Subject; Evidence; Owner;
-Closure criterion}` is a workspace record. Removal acceptance = an absence
-test (the behavior no longer reachable), a census of references/config/store
-rows, migration disposition, and the same review as an addition. **Step 0 of
-every build step below is subtraction**: enumerate what the step proposes and
-delete what no decree, edge contract, or named scenario requires.
+A **record census** is part of the registry: for every record kind — writer,
+authoritative reader/query, the decision it affects, retention/compaction
+rule, and `audit-only` where that is the honest answer with its operator
+read surface named. A must-detect mutation disables each required reader and
+must fail an edge scenario. Records with no consumer are not written;
+diagnostic traces are bounded projections.
+
+`Finding{RecordHeader; Kind add|remove|change; Subject; Evidence; Owner;
+Closure}` is a record. Removal acceptance = absence test + reference/config/
+store census + migration disposition + the same review as an addition.
+**Step 0 of every build step is subtraction, and it produces a reviewable
+artifact**: the list of proposed items with the decree/edge/scenario that
+requires each, and the deletions.
 
 ## 15. Verification — falsifiable system outcomes
 
-The Phase 1 behavior suite is the shared spec; a Go harness maps its driver.
-v1 adds, red first: fork/join with both crash points; the closed-loop
-discrimination scenario (§8); experimental-row poisoning of every production
-reader; oversized/empty/non-UTF-8 thoughts through every boundary; two
-processes on one root (admission); kill/restart at every state-machine
-transition; concurrent verdict arrival in all pairwise orders; delivery
-outbox under dropped transport and restart; pack import idempotency with
-unknown fields and malformed rows; removal of one mechanism with absence
-proof.
+Shared spec = the Phase 1 behavior suite; the Go harness maps its driver.
+Added red-first: fork/join kills between every transition; the blinded
+discrimination scenario; experimental-row poisoning of every production
+reader; oversized/empty/bytes thoughts through every boundary; two processes
+on one root; kill/restart at every state transition and at every invocation
+state; concurrent verdict arrival in all pairwise orders (order-independence);
+delivery outbox under dropped transport and restart with a real ack origin;
+pack import idempotency; removal with absence proof; lens swap on the same
+facts; authority gate under an instructing prompt.
 
-A named **must-detect battery** replaces "mutation kill-proof": drop a
-receipt, ingest an experimental row, reorder a lifecycle transition, bypass
-Application, falsely mark delivered, slice a thought — each must fail a
-test. DONE for a vertical slice = its named edge behaviors green plus the
-must-detects that touch it red-when-mutated; codex review is evidence
-discovery on risky slices, not a completion ritual. The registry's declared
-half is checked once against an independently written pair before v1 exit.
+**Must-detect battery** (named, finite): drop a receipt; ingest an
+experimental row; reorder a lifecycle transition; bypass Application; falsely
+mark delivered; slice a thought; disable a required reader; widen authority by
+prompt. DONE for a vertical slice = its edge behaviors green and its
+must-detects red-when-mutated; codex review is evidence discovery on risky
+slices. The independent-pair contract check runs in CI on representative
+edges.
 
-## 16. Build order (by fan-in; each step: subtract → build → edge tests → land)
+## 16. Build order (by fan-in; each step: subtraction artifact → build → edge tests → land)
 
-1. Records, identity, schema versions; thought store with hashing at the
-   boundary; the workspace lease.
-2. Journal + sequencer + projector (views byte-compatible with the shared
-   spec); idempotent commands; restart from committed offsets.
-3. Invocation boundary: Invocation/Receipt records, `scripted` backend, the
-   run shell's recording path.
-4. Run state machine + driver with pure stages; NOW configuration end to
-   end; lifecycle events; delivery outbox with CLI acceptance. First real
-   delivered answer.
-5. Verdict records, resolver, deterministic checks as evidence; Sheriff lane
-   with its own evaluator.
-6. Recall query + RecallSelection + Application; re-run identity.
-7. AGENDA configuration: plan, per-step judge, closure with restart;
-   `subprocess` backend live.
-8. Fork/join durable records, two-level scenario, cancellation barrier.
-9. Tail lane and timers; observe → diagnose → propose at `candidate`.
-10. Experiment + EffectMeasurement + paired replay; lifecycle transitions;
-    the blinded discrimination scenario.
-11. Experimental journal segment + poisoning tests; randomized live
-    assignment; shadow arms and mechanism standing.
-12. Pack envelope + import quarantine; import the Python workspace's learned
-    data at `candidate`.
-13. Live acceptance on this box: one goal family, one experiment to
-    MinSamples, the Manti target measured and reported, one mechanism
-    removed with absence proof.
+1. Records, identity, schema versions, envelope types; thought store; lease;
+   **contracts foundation** (generator, declared, answer key, reference
+   reader, record census) for the step-1 types.
+2. Journal with framed transactions, sequencer, projector with watermark and
+   atomic view generations, lane cursors, restart; production/experimental
+   separation and poisoning tests; the B3/B4/B6 projection mappings for the
+   first slice.
+3. Invocation state machine with Attempt/ToolEffect/Receipt records;
+   `scripted` and `subprocess` backends; restart reconciliation.
+4. Observations, verdicts, resolver (order-independence tests).
+5. Run state machine + driver with pure stages; Intake with DeliveryPolicy
+   and FamilyAssessment; NOW configuration; lifecycle events; delivery outbox
+   with an acking origin. **First real delivered answer** (subprocess live).
+6. Recall query, RecallSelection, Application; re-run identity.
+7. AGENDA configuration: plan, per-step judge, closure with restart; Sheriff
+   under the supervisor.
+8. Fork/join transitions; two-level scenario with kills.
+9. Tail lane, timers, supervisor heartbeats; observe → diagnose → propose.
+10. Experiment protocol records; paired replay (exposure/decision proof);
+    lifecycle transitions; policy apply surface; the blinded discrimination
+    scenario.
+11. Randomized live assignment; evaluator lane; shadow arms; `ablate(m)`
+    equivalence; HarnessChallenger.
+12. Native pack envelope, projection mapping table complete, import
+    quarantine; import the Python workspace's learned data at `candidate`.
+13. Live acceptance: one goal family, one live experiment to its stopping
+    rule with a non-`insufficient` verdict, the Manti target measured and
+    reported, one mechanism removed with absence proof, one lens swap.
 
-## 17. Conformance appendix (binding; each row names its mechanism and its evidence)
+## 17. Conformance appendix (status is honest; each row names the observable edge, the test whose failure condition is stated, and the build step)
 
-| Decree / commitment | Mechanism | Evidence (test or artifact) |
-|---|---|---|
-| D1 contract-not-port | pure stages, records, journal; no Python structure without a sentence | anti-lift sentences in §5, §7 |
-| D2/D10 formats shared, roots separate | projector views byte-compatible; own root | view fixtures vs CONTRACTS.md; root printed |
-| D3 versioned contracts | `Schema` on every record; migrations; golden fixtures both directions | §13 fixtures |
-| D4 go-port frozen | read-only mining; §0 | no commits on go-port |
-| D5 clean-room to intent | §8 loop designed from VISION intent; §7 one recall query | this note |
-| D6 serialized work | §0 work posture | worktree-per-lane |
-| D8 Python lift rule | §0 change rule | each shared-contract change states its class |
-| D9 home | §0 | branch/path |
-| D11 measured behavior change | Experiment + EffectMeasurement; tenure ≤ `observed` | §8 discrimination scenario; live n ≥ MinSamples |
-| D12 one process, no cron | §10 lanes + lease | two-process admission test; no cron in tree |
-| D13 targets not constraints | §11; thresholds reported not enforced | overage-continues test |
-| D14 full loop in v1 | §8, steps 9–11 | closed-loop record chain exists |
-| D15 no cost aborts; ceilings external | §11 | no cost-stop path in code |
-| D16 thoughts unconstrained | §1b; overflow is reference/chunk/incapable | boundary tests; must-detect "slice a thought" |
-| D17 bitter lesson inside the process | §9 mechanism kind + shadow arms; no up-front sort | mechanism decay via the same lifecycle |
-| §8.1 delivery is the product | §12 states; run not finished before delivery | outbox + restart tests |
-| §8.2 done is a claim | §6 verdicts, resolver, direction | pairwise-order tests |
-| §8.3 learn measurably | §8 | as D11 |
-| §8.4 validator not counter | §6 Sheriff evidence; thresholds are reports | Sheriff test set |
-| §8.5 artifacts truth, path kept | journal append-only; late results kept; excluded recall discoverable | must-detect "drop a receipt" |
-| §8.6 recursion | §3 durable fork/join, scoped recall | two-level scenario |
-| §8.7 program not OS, always-on | §10 | as D12 |
-| §8.8 swappable substrate/model/persona | §4 seam; §13 lens seam | scripted ↔ subprocess; neutral lens |
-| §8.9 edges + removal | §14 Finding; step-0 subtraction | one mechanism removed with absence proof |
+| Item | Status now | Observable edge / failing condition | Step |
+|---|---|---|---|
+| D1 contract-not-port | honored | inherited shapes each carry a sentence (§3–§5, §7) | — |
+| D2/D10 formats shared, roots separate | partial | per-B-entry mapping table with promise level; view fixtures fail on a lost field not declared lost | 2, 12 |
+| D3 versioned contracts | honored in design | generated/declared pair from step 1; regeneration diff fails CI unreviewed | 1 |
+| D4 go-port frozen | honored | no commits on go-port | — |
+| D5 clean-room to intent | honored | §8 from VISION intent; one recall query; one driver | — |
+| D6 serialized heavy work | honored | one heavy lane at a time (§0) | — |
+| D8 Python lift rule | honored, plan-only | each shared-contract change classified; provider repairs are their own main-branch items | 2, 12 |
+| D9 home | honored | branch/path | — |
+| D11 measured behavior change | partial until step 11 | live experiment reaches stopping rule with non-`insufficient` verdict; fails if only `insufficient` | 10–11 |
+| D12 one process, no cron | honored in design | two-process admission test; no cron in tree; supervisor heartbeats | 2, 9 |
+| D13 targets not constraints | honored | overage-continues test; thresholds reported | 3, 11 |
+| D14 full loop in v1 | partial until step 11 | discrimination scenario + live loop | 10–11 |
+| D15 no cost aborts | honored | no cost-stop path; grep + test | 3 |
+| D16 thoughts unconstrained | honored in design | boundary tests assert whole-thought-or-typed-refusal; must-detect "slice" | 1, 3 |
+| D17 bitter lesson inside | partial until step 11 | ablate(m) equivalence; policy apply surface changes driver behavior | 10–11 |
+| §8.1 delivery is the product | honored in design | mission outcome folds delivery; CLI declared unacknowledged; acking origin proves `user_acknowledged` | 5 |
+| §8.2 done is a claim | honored in design | order-independence tests on the resolver | 4 |
+| §8.3 learn measurably | as D11 | | |
+| §8.4 validator not counter | honored in design | Sheriff evidence tests; supervisor detects lane stall | 7, 9 |
+| §8.5 artifacts truth, re-read | partial | record census with required readers; must-detect "disable a reader" | 1, 14 |
+| §8.6 recursion | honored in design | join transitions survive kills between each | 8 |
+| §8.7 always-on, not OS | honored in design | as D12; whole-process death is external, stated | 10 |
+| §8.8 swappable + lenses + action-bias | partial | lens swap test; authority-under-prompt must-detect | 5, 13 |
+| §8.9 edges + removal | honored in design | subtraction artifact per step; one removal with absence proof | every step, 13 |
 
-## 18. What v1.1 changed from v1.0 (r1 review)
+## 18. What v1.2 changed from v1.1 (r2 review)
 
-Experiment as the unit of measurement; tenure capped at `observed`;
-experimental journal segment instead of "stamped, never ingested"; ThoughtRef
-with boundary hashing and explicit overflow behaviors; RecordHeader identity/
-version/order on everything; one sequencer and materialized views instead of
-per-file RMW; durable Fork/Join; pure stages + one driver instead of `*Run`
-mutation; run state machine with delivery states; subscription gate removed;
-recall as one query; one apply surface; backends cut to subprocess +
-scripted; join policies cut to two; generator deferred; per-module review
-gate replaced by slice gates and a must-detect battery; Finding record and
-step-0 subtraction; D6/D8/D9 stated; lens seam; interrupts in the lifecycle;
-Sheriff independence defined; deterministic checks as evidence not
-suppression; build order re-sequenced by fan-in; conformance appendix.
+Experiment split into immutable protocol + Assignment/ArmObservation/
+OutcomeAssessment with derived counts, ITT and per-protocol, typed oracles
+(historical verdict inadmissible), non-vacuous live exit; production/
+experimental as disjoint envelope types built before the first replay;
+engine chunking removed (reference or `backend_incapable`); join as four
+transitions with kills between each; execution vs mission outcome with
+DeliveryPolicy and honest CLI `accepted_unacknowledged`; `Stage` removed from
+Learned (fold over transitions on a stable ID); `policy` learned kind and the
+orchestration-policy apply surface so D17 has a mechanism; FamilyAssessment
+at intake, treatment-blind, before Intent; framed transactions with checksum
+and torn-tail recovery, committed vs published, bounded lane cursors,
+shutdown order, epoch on every command; invocation state machine with
+Attempt/ToolEffect records and evidence-based restart reconciliation;
+contracts foundation moved to step 1 with `measured-by`; Observation vs
+Verdict and a partial-order resolver; supervisor with heartbeats; record
+census and bounded exclusion projection; per-B-entry mapping table with loss
+declaration and a native pack envelope; whole-harness vs `ablate(m)`
+attribution with an equivalence test; anti-lift sentences for subprocess,
+NOW/AGENDA, first_verdict; conformance appendix with honest statuses and
+steps; build order re-sequenced.
