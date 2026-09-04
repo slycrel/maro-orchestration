@@ -19,10 +19,19 @@ func TestULIDShapeAndOrder(t *testing.T) {
 	}
 	// Same millisecond: still strictly increasing.
 	now := time.UnixMilli(1_800_000_000_000)
-	x := newIDAt(now)
-	y := newIDAt(now)
+	x, _ := newIDAt(now)
+	y, _ := newIDAt(now)
 	if !(x < y) {
 		t.Fatalf("same-ms ids must increase: %s %s", x, y)
+	}
+	if _, err := newIDAt(time.UnixMilli(-1)); !errors.Is(err, ErrTimeRange) {
+		t.Fatalf("pre-epoch accepted: %v", err)
+	}
+	if _, err := newIDAt(time.UnixMilli(maxULIDms + 1)); !errors.Is(err, ErrTimeRange) {
+		t.Fatalf("48-bit overflow accepted: %v", err)
+	}
+	if z, err := newIDAt(time.UnixMilli(maxULIDms)); err != nil || ValidateID(z) != nil {
+		t.Fatalf("max timestamp: %v %v", z, err)
 	}
 	if err := ValidateID("not-an-id"); !errors.Is(err, ErrBadID) {
 		t.Fatal("malformed id accepted")
@@ -37,7 +46,7 @@ func TestSchemaVerParse(t *testing.T) {
 	if err != nil || k != "outcome" || n != 2 {
 		t.Fatalf("%v %v %v", k, n, err)
 	}
-	for _, bad := range []SchemaVer{"outcome", "outcome/", "/2", "outcome/0", "outcome/x"} {
+	for _, bad := range []SchemaVer{"outcome", "outcome/", "/2", "outcome/0", "outcome/x", "outcome/01", "outcome/+1", "Outcome/1", "out-come/1"} {
 		if _, _, err := bad.Parse(); err == nil {
 			t.Fatalf("%q parsed", bad)
 		}
@@ -165,4 +174,28 @@ func TestValidateHeader(t *testing.T) {
 	if err := Validate(bogus, false); !errors.Is(err, ErrUnregisteredKind) {
 		t.Fatalf("unregistered kind accepted: %v", err)
 	}
+	// An impostor: a registered type whose Kind() claims another kind.
+	imp := &impostor{ThoughtStored: ThoughtStored{Header: r.Header}}
+	if err := Validate(imp, false); !errors.Is(err, ErrUnregisteredKind) {
+		t.Fatalf("a wrapper type is not the registered type: %v", err)
+	}
+	// Kind derived from the concrete type, pointer or value.
+	if k, ok := KindOf(&ThoughtStored{}); !ok || k != KindThoughtStored {
+		t.Fatalf("KindOf pointer: %v %v", k, ok)
+	}
+	if k, ok := KindOf(ThoughtStored{}); !ok || k != KindThoughtStored {
+		t.Fatalf("KindOf value: %v %v", k, ok)
+	}
+	// Subject is required.
+	r2 := *r
+	r2.Supersedes = ""
+	r2.Subject = Ref{}
+	if err := Validate(&r2, false); !errors.Is(err, ErrSubject) {
+		t.Fatalf("empty subject accepted: %v", err)
+	}
 }
+
+// impostor wraps a registered type; it is NOT the registered type.
+type impostor struct{ ThoughtStored }
+
+func (i *impostor) Kind() Kind { return KindLease }

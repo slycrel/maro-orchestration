@@ -1,0 +1,8 @@
+{
+  "generator": "maro-go contracts gen v1",
+  "source_ref": "d176b9f9",
+  "kinds": {
+    "lease": "e0266d5f557991e3605c6384036254f84743026e00afe1a4129cca07583df2b4",
+    "thought_stored": "3bdddc92fbf3adae0637154599564d8bde4d701223d5243f81c55eae6fecde8e"
+  }
+}

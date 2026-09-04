@@ -7,12 +7,15 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 )
 
 // Lifecycle is the one non-executable declaration: it gates whether tests
@@ -20,17 +23,14 @@ import (
 type Lifecycle string
 
 const (
-	Stable         Lifecycle = "stable"          // a new consumer could adopt as-is
-	Transitional   Lifecycle = "transitional"    // meant to die; tripwire only
-	InternalLoose  Lifecycle = "internal-loose"  // deliberately unformalized; warnings stand
-	HardenedLegacy Lifecycle = "hardened-legacy" // wrong-but-shipping; guard like stable + design flag
-	DesignPending  Lifecycle = "design-pending"  // shape contested; suppress generation, escalate
+	Stable         Lifecycle = "stable"
+	Transitional   Lifecycle = "transitional"
+	InternalLoose  Lifecycle = "internal-loose"
+	HardenedLegacy Lifecycle = "hardened-legacy"
+	DesignPending  Lifecycle = "design-pending"
 )
 
-var lifecycles = map[Lifecycle]bool{Stable: true, Transitional: true, InternalLoose: true, HardenedLegacy: true, DesignPending: true}
-
-// Provenance says whether a declaration was stated by the owner or read off
-// the implementation.
+// Provenance: stated by the owner, or read off the implementation.
 type Provenance string
 
 const (
@@ -38,10 +38,8 @@ const (
 	Inferred Provenance = "inferred"
 )
 
-// Constraint tri-state for a field's VALUE (the third flavour): defined /
-// unconstrained (someone looked; any value of the type is legal — executable)
-// / undefined (nobody looked → warning). Thought fields are declared
-// unconstrained on purpose (D16).
+// Constraint tri-state for a field's VALUE: defined / unconstrained (someone
+// looked; any value of the type is legal) / undefined (nobody looked).
 type Constraint string
 
 const (
@@ -50,82 +48,120 @@ const (
 	Undefined     Constraint = "undefined"
 )
 
+// Closed vocabularies. A declared value outside its vocabulary is an error at
+// load time — a typo is never silently "undefined".
+var (
+	lifecycles  = set(Stable, Transitional, InternalLoose, HardenedLegacy, DesignPending)
+	provenances = set(Supplied, Inferred)
+	constraints = set(Defined, Unconstrained, Undefined)
+	absences    = set("omitted", "null", "empty", "never")
+	onAbsences  = set("tolerated", "rejected")          // or default:<v>
+	unknownVals = set("accepted-unchanged", "rejected") // or replaced-with:<v>
+	usedFors    = set("display-only", "routing", "authorization", "money", "storage-key", "identity")
+)
+
+func set[T ~string](vs ...T) map[string]bool {
+	m := map[string]bool{}
+	for _, v := range vs {
+		m[string(v)] = true
+	}
+	return m
+}
+
 // Generated is derived from the Go type; never hand-edited. If regeneration
 // changes it, the contract changed: the diff is the review.
 type Generated struct {
-	Kind     string           `json:"kind"`
-	Envelope string           `json:"envelope"`
-	Schema   string           `json:"schema"` // "<kind>/<version>"
-	GoType   string           `json:"go_type"`
-	Fields   []GeneratedField `json:"fields"`
-	// SourceRef is the git ref the file was generated at; "unknown" when git is unavailable.
-	SourceRef string `json:"source_ref"`
-	Generator string `json:"generator"` // "maro-go contracts gen v1"
+	Kind      string           `json:"kind"`
+	Envelope  string           `json:"envelope"`
+	Schema    string           `json:"schema"`
+	GoType    string           `json:"go_type"`
+	Fields    []GeneratedField `json:"fields"`
+	SourceRef string           `json:"source_ref"`
+	Generator string           `json:"generator"`
 }
 
-// GeneratedField is what reflection can know: name, wire name, Go type,
-// whether omission is representable (omitempty / pointer / slice / map),
-// and whether the field is a thought reference (→ unconstrained by decree).
+// GeneratedField is what reflection can know.
 type GeneratedField struct {
 	Name       string `json:"name"`
 	Wire       string `json:"wire"`
 	GoType     string `json:"go_type"`
-	Omittable  bool   `json:"omittable"`  // absence representable on the wire
-	IsThought  bool   `json:"is_thought"` // thought.Ref or a thought hash field
+	Omittable  bool   `json:"omittable"`
+	IsThought  bool   `json:"is_thought"`
 	Embedded   bool   `json:"embedded,omitempty"`
 	FromHeader bool   `json:"from_header,omitempty"`
 }
 
-// Declared is the human file. Every line is executable — it drives a test
-// that can fail — except Lifecycle, which gates whether tests exist.
+// Declared is the human file. Every line is executable except Lifecycle,
+// which gates whether tests exist. Header fields are declared ONCE in
+// _header.declared.json and merged into every kind.
 type Declared struct {
 	Kind       string                   `json:"kind"`
 	Lifecycle  Lifecycle                `json:"lifecycle"`
 	Provenance Provenance               `json:"provenance"`
-	DesignFlag string                   `json:"design_flag,omitempty"` // required for hardened-legacy
-	MeasuredBy string                   `json:"measured_by,omitempty"` // required on any measured claim; "not-re-runnable-here" is legal
+	DesignFlag string                   `json:"design_flag,omitempty"`
+	MeasuredBy string                   `json:"measured_by,omitempty"` // "<pkg>:<TestName>" resolvable in the tree; "not-re-runnable-here" is legal
 	Fields     map[string]DeclaredField `json:"fields"`
 }
 
 // DeclaredField carries the dimensions no generator can derive.
 type DeclaredField struct {
-	Absence      string     `json:"absence,omitempty"`       // omitted | null | empty | never
-	OnAbsence    string     `json:"on_absence,omitempty"`    // tolerated | default:<v> | rejected
-	UnknownValue string     `json:"unknown_value,omitempty"` // accepted-unchanged | rejected | replaced-with:<v>
-	UsedFor      string     `json:"used_for,omitempty"`      // display-only | authorization | routing | money | storage-key | identity
-	Constraint   Constraint `json:"constraint,omitempty"`    // defined | unconstrained | undefined
-	Pattern      string     `json:"pattern,omitempty"`       // when defined
+	Absence      string     `json:"absence,omitempty"`
+	OnAbsence    string     `json:"on_absence,omitempty"`
+	UnknownValue string     `json:"unknown_value,omitempty"`
+	UsedFor      string     `json:"used_for,omitempty"`
+	Constraint   Constraint `json:"constraint,omitempty"`
+	Pattern      string     `json:"pattern,omitempty"`
 	MeasuredBy   string     `json:"measured_by,omitempty"`
+	Rejects      string     `json:"rejects,omitempty"` // a value that must NOT match Pattern (the negative fixture); required when Pattern is set
 }
 
 var (
 	ErrDeclaredFieldUnknown = errors.New("contracts: declared field not in generated contract")
 	ErrIllegal              = errors.New("contracts: illegal combination")
 	ErrLifecycle            = errors.New("contracts: bad lifecycle")
+	ErrVocabulary           = errors.New("contracts: value outside its closed vocabulary")
+	ErrStrict               = errors.New("contracts: file does not decode strictly")
+	ErrPattern              = errors.New("contracts: pattern")
 )
 
-// Dir is the committed contracts directory: <dir>/<kind>.generated.json,
-// <dir>/<kind>.declared.json, <dir>/README.md (answer key), <dir>/CENSUS.md.
+// Dir is the committed contracts directory.
 type Dir string
+
+const headerDeclared = "_header"
 
 func (d Dir) genPath(kind string) string { return filepath.Join(string(d), kind+".generated.json") }
 func (d Dir) decPath(kind string) string { return filepath.Join(string(d), kind+".declared.json") }
 
-// ReadGenerated loads a committed generated file.
+// decodeStrict rejects unknown keys and trailing content: a typo in a key is
+// an error, never a silently dropped line.
+func decodeStrict(path string, raw []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrStrict, path, err)
+	}
+	if dec.More() {
+		return fmt.Errorf("%w: %s: trailing content", ErrStrict, path)
+	}
+	return nil
+}
+
+// ReadGenerated loads a committed generated file strictly.
 func (d Dir) ReadGenerated(kind string) (*Generated, error) {
 	raw, err := os.ReadFile(d.genPath(kind))
 	if err != nil {
 		return nil, err
 	}
 	var g Generated
-	if err := json.Unmarshal(raw, &g); err != nil {
-		return nil, fmt.Errorf("contracts: %s: %w", d.genPath(kind), err)
+	if err := decodeStrict(d.genPath(kind), raw, &g); err != nil {
+		return nil, err
 	}
 	return &g, nil
 }
 
-// ReadDeclared loads a declared file; absent is normal and returns (nil, nil):
-// "nothing declared yet", every underivable dimension is a warning.
+// ReadDeclared loads a kind's declared file, validates every vocabulary,
+// compiles every pattern, and merges the shared header declaration. Absent
+// is normal and returns (nil, nil).
 func (d Dir) ReadDeclared(kind string) (*Declared, error) {
 	raw, err := os.ReadFile(d.decPath(kind))
 	if errors.Is(err, os.ErrNotExist) {
@@ -135,32 +171,132 @@ func (d Dir) ReadDeclared(kind string) (*Declared, error) {
 		return nil, err
 	}
 	var dc Declared
-	if err := json.Unmarshal(raw, &dc); err != nil {
-		return nil, fmt.Errorf("contracts: %s: %w", d.decPath(kind), err)
+	if err := decodeStrict(d.decPath(kind), raw, &dc); err != nil {
+		return nil, err
 	}
-	if !lifecycles[dc.Lifecycle] {
-		return nil, fmt.Errorf("%w: %q in %s", ErrLifecycle, dc.Lifecycle, d.decPath(kind))
+	if err := dc.validate(d.decPath(kind)); err != nil {
+		return nil, err
 	}
-	if dc.Lifecycle == HardenedLegacy && dc.DesignFlag == "" {
-		return nil, fmt.Errorf("%w: hardened-legacy requires design_flag in %s", ErrLifecycle, d.decPath(kind))
-	}
-	if dc.Provenance != Supplied && dc.Provenance != Inferred {
-		return nil, fmt.Errorf("contracts: provenance must be supplied|inferred in %s", d.decPath(kind))
+	if kind != headerDeclared {
+		hdr, err := d.readHeaderDeclared()
+		if err != nil {
+			return nil, err
+		}
+		if dc.Fields == nil {
+			dc.Fields = map[string]DeclaredField{}
+		}
+		for name, f := range hdr {
+			if _, own := dc.Fields[name]; !own {
+				dc.Fields[name] = f
+			}
+		}
 	}
 	return &dc, nil
 }
 
+func (d Dir) readHeaderDeclared() (map[string]DeclaredField, error) {
+	raw, err := os.ReadFile(d.decPath(headerDeclared))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var h Declared
+	if err := decodeStrict(d.decPath(headerDeclared), raw, &h); err != nil {
+		return nil, err
+	}
+	if err := h.validate(d.decPath(headerDeclared)); err != nil {
+		return nil, err
+	}
+	for name := range h.Fields {
+		if !strings.HasPrefix(name, "header.") {
+			return nil, fmt.Errorf("%w: %s declares non-header field %q", ErrVocabulary, d.decPath(headerDeclared), name)
+		}
+	}
+	return h.Fields, nil
+}
+
+func (dc *Declared) validate(path string) error {
+	if !lifecycles[string(dc.Lifecycle)] {
+		return fmt.Errorf("%w: %q in %s", ErrLifecycle, dc.Lifecycle, path)
+	}
+	if dc.Lifecycle == HardenedLegacy && dc.DesignFlag == "" {
+		return fmt.Errorf("%w: hardened-legacy requires design_flag in %s", ErrLifecycle, path)
+	}
+	if !provenances[string(dc.Provenance)] {
+		return fmt.Errorf("%w: provenance %q in %s", ErrVocabulary, dc.Provenance, path)
+	}
+	for name, f := range dc.Fields {
+		where := fmt.Sprintf("%s field %q", path, name)
+		if f.Absence != "" && !absences[f.Absence] {
+			return fmt.Errorf("%w: absence %q (%s)", ErrVocabulary, f.Absence, where)
+		}
+		if f.OnAbsence != "" && !onAbsences[f.OnAbsence] && !strings.HasPrefix(f.OnAbsence, "default:") {
+			return fmt.Errorf("%w: on_absence %q (%s)", ErrVocabulary, f.OnAbsence, where)
+		}
+		if f.UnknownValue != "" && !unknownVals[f.UnknownValue] && !strings.HasPrefix(f.UnknownValue, "replaced-with:") {
+			return fmt.Errorf("%w: unknown_value %q (%s)", ErrVocabulary, f.UnknownValue, where)
+		}
+		if f.UsedFor != "" && !usedFors[f.UsedFor] {
+			return fmt.Errorf("%w: used_for %q (%s)", ErrVocabulary, f.UsedFor, where)
+		}
+		if f.Constraint != "" && !constraints[string(f.Constraint)] {
+			return fmt.Errorf("%w: constraint %q (%s)", ErrVocabulary, f.Constraint, where)
+		}
+		if f.Pattern != "" {
+			re, err := regexp.Compile(f.Pattern)
+			if err != nil {
+				return fmt.Errorf("%w: %q does not compile (%s): %v", ErrPattern, f.Pattern, where, err)
+			}
+			if f.Rejects == "" {
+				return fmt.Errorf("%w: %q has no `rejects` negative fixture (%s) — a pattern nothing can fail is not executable", ErrPattern, f.Pattern, where)
+			}
+			if re.MatchString(f.Rejects) {
+				return fmt.Errorf("%w: `rejects` value %q MATCHES %q (%s) — the negative fixture must fail the pattern", ErrPattern, f.Rejects, f.Pattern, where)
+			}
+		}
+	}
+	return nil
+}
+
+// CompiledPattern returns the field's compiled pattern or nil.
+func (f DeclaredField) CompiledPattern() *regexp.Regexp {
+	if f.Pattern == "" {
+		return nil
+	}
+	return regexp.MustCompile(f.Pattern) // validated at load
+}
+
 func writeJSON(path string, v any) error {
-	raw, err := json.MarshalIndent(v, "", "  ")
+	raw, err := canonical(v)
 	if err != nil {
 		return err
 	}
-	raw = append(raw, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// canonical is the one serialization of a contract file: indented JSON, a
+// trailing newline. Drift compares these bytes.
+func canonical(v any) ([]byte, error) {
+	raw, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(raw, '\n'), nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

@@ -4,67 +4,85 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run is the testable entry: args in, exit code out, everything written to
+// the given writers. Exit 2 = usage, 1 = failure, 0 = ok.
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		usage(stderr)
+		return 2
 	}
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
 	case "workspace":
-		err = cmdWorkspace()
+		err = cmdWorkspace(stdout)
 	case "contracts":
-		err = cmdContracts(os.Args[2:])
+		err = cmdContracts(args[1:], stdout, stderr)
 	default:
-		usage()
-		os.Exit(2)
+		usage(stderr)
+		return 2
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "maro-go:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "maro-go:", err)
+		return 1
 	}
+	return 0
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: maro-go workspace | contracts gen|report|check [dir]")
+func usage(w io.Writer) {
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir]")
 }
 
-func cmdWorkspace() error {
+func cmdWorkspace(out io.Writer) error {
 	r, err := workspace.Resolve()
 	if err != nil {
 		return err
 	}
-	r.Announce(os.Stdout)
-	cur, live, err := workspace.Current(r)
+	a, err := r.Announce(out)
+	if err != nil {
+		return err
+	}
+	if err := a.Ensure(); err != nil {
+		return err
+	}
+	cur, live, err := workspace.Status(a)
 	if err != nil {
 		return err
 	}
 	switch {
-	case cur == nil:
-		fmt.Println("lease: none")
+	case cur == nil && !live:
+		fmt.Fprintln(out, "lease: none")
+	case cur == nil && live:
+		fmt.Fprintln(out, "lease: held (lease.json unreadable)")
 	case live:
-		fmt.Printf("lease: held by pid %d epoch %d since %s\n", cur.PID, cur.Epoch, cur.Started)
+		fmt.Fprintf(out, "lease: held by pid %d epoch %d on %s since %s\n", cur.PID, cur.Epoch, cur.Host, cur.Started)
 	default:
-		fmt.Printf("lease: STALE (pid %d dead) epoch %d\n", cur.PID, cur.Epoch)
+		fmt.Fprintf(out, "lease: STALE (pid %d, lock free) epoch %d\n", cur.PID, cur.Epoch)
 	}
 	return nil
 }
 
-func cmdContracts(args []string) error {
+func cmdContracts(args []string, out, errw io.Writer) error {
 	if len(args) < 1 {
-		usage()
+		usage(errw)
 		return fmt.Errorf("contracts needs a subcommand")
 	}
 	dir := contracts.Dir("contracts")
 	if len(args) > 1 {
 		dir = contracts.Dir(args[1])
 	}
+	repoRoot, _ := filepath.Abs(filepath.Join(string(dir), ".."))
 	gens := contracts.GenerateAll(contracts.SourceRef())
 	switch args[0] {
 	case "gen":
@@ -74,14 +92,15 @@ func cmdContracts(args []string) error {
 		if err := contracts.WriteAnswerKey(dir); err != nil {
 			return err
 		}
-		fmt.Printf("generated %d contracts + README.md + CENSUS.md into %s\n", len(gens), dir)
+		fmt.Fprintf(out, "generated %d contracts + MANIFEST.json + README.md + CENSUS.md into %s\n", len(gens), dir)
 		return nil
 	case "report":
-		fs, err := contracts.Report(dir, gens)
+		fs, err := contracts.Report(dir, gens, repoRoot)
 		if err != nil {
 			return err
 		}
-		fmt.Print(contracts.Render(fs))
+		fmt.Fprint(out, contracts.Render(fs))
+		fmt.Fprintf(out, "report: %d error(s), %d warning(s)\n", len(contracts.Errors(fs)), len(contracts.Warnings(fs)))
 		if e := contracts.Errors(fs); len(e) > 0 {
 			return fmt.Errorf("%d contract error(s)", len(e))
 		}
@@ -92,14 +111,14 @@ func cmdContracts(args []string) error {
 			return err
 		}
 		for _, d := range drift {
-			fmt.Println("DRIFT:", d)
+			fmt.Fprintln(out, "DRIFT:", d)
 		}
 		if len(drift) > 0 {
 			return fmt.Errorf("%d generated contract(s) drifted — regenerate and commit in the same change", len(drift))
 		}
-		fmt.Println("contracts: no drift")
+		fmt.Fprintln(out, "contracts: no drift")
 		return nil
 	}
-	usage()
+	usage(errw)
 	return fmt.Errorf("unknown contracts subcommand %q", args[0])
 }

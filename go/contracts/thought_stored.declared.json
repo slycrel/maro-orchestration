@@ -2,11 +2,42 @@
   "kind": "thought_stored",
   "lifecycle": "stable",
   "provenance": "supplied",
-  "measured_by": "internal/thought/thought_test.go (round trip, unconstrained bodies, kind-in-address, idempotent put, tamper refused)",
+  "measured_by": "internal/thought:TestUnconstrainedBodies",
   "fields": {
-    "hash": {"absence": "never", "on_absence": "rejected", "used_for": "identity", "unknown_value": "rejected", "constraint": "unconstrained", "measured_by": "the hash is the content address of an UNCONSTRAINED body; its own shape is s256v1:<64 hex> and is re-verified on every read (ErrTampered)"},
-    "thought_kind": {"absence": "never", "on_absence": "rejected", "used_for": "routing", "unknown_value": "rejected", "constraint": "defined", "pattern": "^(goal|prompt|response|step_result|deliverable|lesson_text)$", "measured_by": "thought.Put refuses unknown kinds (ErrKind); 'chunk' is deliberately NOT a kind in v1"},
-    "bytes": {"absence": "never", "on_absence": "rejected", "used_for": "display-only", "constraint": "unconstrained", "measured_by": "derived at store time; 8 MiB, empty and non-UTF-8 bodies all round-trip whole"},
-    "encoding": {"absence": "never", "on_absence": "rejected", "used_for": "routing", "unknown_value": "rejected", "constraint": "defined", "pattern": "^(utf8|bytes)$", "measured_by": "derived by utf8.Valid at store time, re-checked on read"}
+    "hash": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "unknown_value": "rejected",
+      "constraint": "unconstrained",
+      "measured_by": "internal/thought:TestMalformedRefsAreRefusedNotConflated"
+    },
+    "thought_kind": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(goal|prompt|response|step_result|deliverable|lesson_text)$",
+      "rejects": "chunk",
+      "measured_by": "internal/thought:TestAbsentAndUnknownKind"
+    },
+    "bytes": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/thought:TestUnconstrainedBodies"
+    },
+    "encoding": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(utf8|bytes)$",
+      "rejects": "latin1",
+      "measured_by": "internal/thought:TestGetRefusesLies"
+    }
   }
 }

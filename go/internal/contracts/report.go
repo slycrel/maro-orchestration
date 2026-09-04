@@ -2,12 +2,14 @@ package contracts
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
 
-// State is the three-state severity model: derived (asserted automatically),
-// declared (asserted; fails if the system disagrees), undefined (warning).
+// State is the three-state severity model.
 type State string
 
 const (
@@ -19,19 +21,20 @@ const (
 // Finding is one report line.
 type Finding struct {
 	Kind     string
-	Field    string // "" for kind-level
-	Dim      string // absence | unknown_value | used_for | constraint | lifecycle | measured_by | generated
+	Field    string
+	Dim      string
 	State    State
 	Severity string // error | warning | info
 	Msg      string
 }
 
 // Report computes the three-state report from the committed pair for every
-// kind in gens. Errors are exactly: a declared field the generated contract
-// does not have; an illegal combination; a lifecycle that suppresses
-// generation while a generated file exists (design-pending). Everything
-// underivable-and-undeclared is a warning. Nobody types "undefined".
-func Report(dir Dir, gens []Generated) ([]Finding, error) {
+// kind. Errors: a declared field the generated contract lacks; an illegal
+// combination; design-pending with generation present; a thought field not
+// declared unconstrained; a defined constraint without a pattern; a
+// measured_by that does not resolve (when repoRoot is given). Everything
+// underivable-and-undeclared is a warning — header fields included.
+func Report(dir Dir, gens []Generated, repoRoot string) ([]Finding, error) {
 	var out []Finding
 	for _, g := range gens {
 		dc, err := dir.ReadDeclared(g.Kind)
@@ -41,9 +44,6 @@ func Report(dir Dir, gens []Generated) ([]Finding, error) {
 		if dc == nil {
 			out = append(out, Finding{Kind: g.Kind, Dim: "lifecycle", State: UndefinedS, Severity: "warning", Msg: "no declared file: lifecycle, provenance and every field dimension are undefined"})
 			for _, f := range g.Fields {
-				if f.FromHeader {
-					continue
-				}
 				out = append(out, undefinedField(g.Kind, f)...)
 			}
 			continue
@@ -51,14 +51,19 @@ func Report(dir Dir, gens []Generated) ([]Finding, error) {
 		if dc.Kind != g.Kind {
 			out = append(out, Finding{Kind: g.Kind, Dim: "generated", Severity: "error", Msg: fmt.Sprintf("declared file names kind %q", dc.Kind)})
 		}
-		if dc.Lifecycle == DesignPending {
+		switch dc.Lifecycle {
+		case DesignPending:
 			out = append(out, Finding{Kind: g.Kind, Dim: "lifecycle", State: DeclaredS, Severity: "error", Msg: "design-pending: shape unowned or contested — generation must be suppressed and an escalation file written beside the pair"})
-		}
-		if dc.Lifecycle == HardenedLegacy {
+		case HardenedLegacy:
 			out = append(out, Finding{Kind: g.Kind, Dim: "lifecycle", State: DeclaredS, Severity: "warning", Msg: "hardened-legacy: " + dc.DesignFlag})
 		}
 		if dc.Provenance == Inferred {
 			out = append(out, Finding{Kind: g.Kind, Dim: "provenance", State: DeclaredS, Severity: "info", Msg: "inferred from the implementation, not supplied by the owner — evidence of what IS, not what was MEANT"})
+		}
+		if dc.MeasuredBy != "" && repoRoot != "" {
+			if err := MeasuredByResolves(repoRoot, dc.MeasuredBy); err != nil {
+				out = append(out, Finding{Kind: g.Kind, Dim: "measured_by", State: DeclaredS, Severity: "error", Msg: err.Error()})
+			}
 		}
 		byWire := map[string]GeneratedField{}
 		for _, f := range g.Fields {
@@ -80,13 +85,18 @@ func Report(dir Dir, gens []Generated) ([]Finding, error) {
 			if d.Constraint == Defined && d.Pattern == "" {
 				out = append(out, Finding{Kind: g.Kind, Field: name, Dim: "constraint", State: DeclaredS, Severity: "error", Msg: "constraint defined without a pattern — a defined constraint must be executable"})
 			}
+			if d.MeasuredBy != "" && repoRoot != "" {
+				if err := MeasuredByResolves(repoRoot, d.MeasuredBy); err != nil {
+					out = append(out, Finding{Kind: g.Kind, Field: name, Dim: "measured_by", State: DeclaredS, Severity: "error", Msg: err.Error()})
+				}
+			}
 			if f.Omittable && d.Absence == "" {
 				out = append(out, Finding{Kind: g.Kind, Field: name, Dim: "absence", State: UndefinedS, Severity: "warning", Msg: "absence representable on the wire but its wire form is undeclared"})
 			}
 			if f.Omittable && d.OnAbsence == "" {
 				out = append(out, Finding{Kind: g.Kind, Field: name, Dim: "on_absence", State: UndefinedS, Severity: "warning", Msg: "observable behaviour on absence undeclared"})
 			}
-			if d.UnknownValue == "" && strings.HasSuffix(f.GoType, "string") && d.UsedFor != "" {
+			if d.UnknownValue == "" && strings.HasSuffix(f.GoType, "string") && d.UsedFor != "" && d.UsedFor != "display-only" {
 				out = append(out, Finding{Kind: g.Kind, Field: name, Dim: "unknown_value", State: UndefinedS, Severity: "warning", Msg: "string field with a use but no unknown-value handling"})
 			}
 			if d.Constraint == "" || d.Constraint == Undefined {
@@ -94,9 +104,6 @@ func Report(dir Dir, gens []Generated) ([]Finding, error) {
 			}
 		}
 		for _, f := range g.Fields {
-			if f.FromHeader {
-				continue
-			}
 			if _, declared := dc.Fields[f.Wire]; !declared {
 				out = append(out, undefinedField(g.Kind, f)...)
 			}
@@ -106,7 +113,10 @@ func Report(dir Dir, gens []Generated) ([]Finding, error) {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
 		}
-		return out[i].Field < out[j].Field
+		if out[i].Field != out[j].Field {
+			return out[i].Field < out[j].Field
+		}
+		return out[i].Dim < out[j].Dim
 	})
 	return out, nil
 }
@@ -119,6 +129,34 @@ func undefinedField(kind string, f GeneratedField) []Finding {
 	return fs
 }
 
+// MeasuredByResolves checks that a measured_by claim points at something
+// runnable: "<dir>:<TestName>" where <dir>/*_test.go declares func TestName.
+// "not-re-runnable-here" is the one legal non-pointer.
+var testDecl = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
+
+func MeasuredByResolves(repoRoot, claim string) error {
+	if claim == "not-re-runnable-here" {
+		return nil
+	}
+	dir, name, ok := strings.Cut(claim, ":")
+	if !ok || name == "" || !strings.HasPrefix(name, "Test") {
+		return fmt.Errorf("measured_by %q is not \"<dir>:<TestName>\" or \"not-re-runnable-here\"", claim)
+	}
+	matches, _ := filepath.Glob(filepath.Join(repoRoot, dir, "*_test.go"))
+	for _, m := range matches {
+		raw, err := os.ReadFile(m)
+		if err != nil {
+			continue
+		}
+		for _, sm := range testDecl.FindAllStringSubmatch(string(raw), -1) {
+			if sm[1] == name {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("measured_by %q does not resolve to a test function in %s/*_test.go", claim, dir)
+}
+
 // Errors filters a report to its errors.
 func Errors(fs []Finding) []Finding {
 	var e []Finding
@@ -128,6 +166,17 @@ func Errors(fs []Finding) []Finding {
 		}
 	}
 	return e
+}
+
+// Warnings filters a report to its warnings.
+func Warnings(fs []Finding) []Finding {
+	var w []Finding
+	for _, f := range fs {
+		if f.Severity == "warning" {
+			w = append(w, f)
+		}
+	}
+	return w
 }
 
 // Render prints a report as text.

@@ -63,3 +63,55 @@ derived from omitempty/pointer/slice/map only — `absence-possible:
 by-construction` (contract input §9) is not yet expressible; `measured_by`
 is free text, not a resolvable pointer; the drift gate ignores field ORDER
 (a reorder is not a contract change, but it is not proven harmless either).
+
+**Review round (one pass, Skeptic + Expert QA, codex; ledger and reviews in
+the review dir as `step1-*.md`).** 10 + 13 findings, every cited line real.
+All fixed in one round, same commit series:
+
+- Lease: exclusivity is now an OS advisory lock (`flock`) on `lease.lock`
+  held for the process lifetime — the kernel releases it on death, so
+  "stale" is never inferred from PIDs. Epoch parses strictly (malformed →
+  refuse, `MaxUint64` → refuse, read back after write). Malformed
+  `lease.json` under a FREE lock is a dead holder's debris: taken over with
+  the recovery recorded on the lease; a directory or unreadable file
+  refuses. Six real processes race in a test; exactly one wins and its
+  durable lease equals the returned one.
+- Durability: every workspace write is unique-temp + fsync file + rename +
+  fsync directory (`WriteFileDurable`).
+- Announce: returns an error; only a successful write yields the
+  `Announced` capability, and `thought.Open` takes ONLY that — there is no
+  way to open a store on an arbitrary path.
+- Thought: `Put` reads and verifies an existing body before vouching for it
+  and verifies after its own write; `Ref.Validate` (known kind, exact
+  prefix, 64 lowercase hex, non-negative bytes, closed encoding) runs on
+  every public operation; `Has` returns `(bool, error)` so malformed is
+  never "absent"; JSON round-trip across a store reopen.
+- Records: kind derived from the CONCRETE registered type (pointer or
+  value), a wrapper claiming another kind is refused; `Subject` required;
+  canonical `<kind>/<n>` (no `01`); ULID timestamp range-checked; `Header`
+  gained `ValidateWire`.
+- Contracts: strict decode (unknown keys, trailing content); closed
+  vocabularies validated at load; patterns compiled AND required to carry a
+  `rejects` negative fixture that must fail them; `measured_by` must resolve
+  to `<dir>:<TestName>` in the tree (or `not-re-runnable-here`); header
+  fields declared once in `_header.declared.json` and merged into every
+  kind, reported and exercised like any other; the reference reader now
+  EXECUTES each declared rule (accepted-unchanged → byte-identical survival;
+  rejected → the type's `ValidateWire` refuses; default → the decoded
+  value; tolerated → decodes) and refuses a fixture that exercised nothing;
+  drift compares canonical bytes, censuses orphans, and checks a
+  `MANIFEST.json` written last; the committed pair's warning set is a
+  durable expectation; the CLI prints counts on success and is tested.
+
+**The instrument paid for itself during the fix round:** the reference
+reader found that the header declared unknown IDs/schemas as `rejected`
+while neither record type executed it on the wire — fixed by
+`Header.ValidateWire`. That is the finding class the contracts foundation
+exists to produce.
+
+**Residuals (recorded, not blocking):** `flock` semantics on network
+filesystems are not those of a local disk — the root is declared local;
+contract-directory writes are repo files, not workspace state, and are not
+fsynced; `Status` reports a held lock with an unreadable `lease.json` as
+"held" without naming the holder; a forged `lease.json` cannot deny
+admission any more (the lock decides), which retires that reviewer concern.

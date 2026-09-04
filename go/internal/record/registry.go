@@ -97,7 +97,11 @@ func Lookup(k Kind) (Spec, bool) {
 func KindOf(r any) (Kind, bool) {
 	regMu.RLock()
 	defer regMu.RUnlock()
-	k, ok := regByTy[reflect.TypeOf(r)]
+	t := reflect.TypeOf(r)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	k, ok := regByTy[t]
 	return k, ok
 }
 

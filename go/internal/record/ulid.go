@@ -7,6 +7,7 @@ package record
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -21,19 +22,33 @@ const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 var (
 	ulidMu   sync.Mutex
-	ulidLast int64
+	ulidLast int64 = -1 // so millisecond 0 takes the fresh-randomness branch
 	ulidRand [10]byte
 )
+
+// ErrTimeRange: a ULID timestamp must fit 48 bits and not precede the epoch.
+var ErrTimeRange = errors.New("record: ULID timestamp out of range")
+
+const maxULIDms = int64(1)<<48 - 1
 
 // NewID allocates a ULID. Within one millisecond IDs stay monotonic by
 // incrementing the random tail, so allocation order is preserved even when
 // the clock does not advance.
-func NewID() RecordID { return newIDAt(time.Now()) }
+func NewID() RecordID {
+	id, err := newIDAt(time.Now())
+	if err != nil {
+		panic(err) // the wall clock is outside 1970..10889: not a runtime condition
+	}
+	return id
+}
 
-func newIDAt(now time.Time) RecordID {
+func newIDAt(now time.Time) (RecordID, error) {
 	ulidMu.Lock()
 	defer ulidMu.Unlock()
 	ms := now.UnixMilli()
+	if ms < 0 || ms > maxULIDms {
+		return "", fmt.Errorf("%w: %d ms", ErrTimeRange, ms)
+	}
 	if ms <= ulidLast {
 		ms = ulidLast
 		for i := 9; i >= 0; i-- {
@@ -54,7 +69,7 @@ func newIDAt(now time.Time) RecordID {
 		ms >>= 8
 	}
 	copy(b[6:], ulidRand[:])
-	return RecordID(encodeULID(b))
+	return RecordID(encodeULID(b)), nil
 }
 
 func encodeULID(b [16]byte) string {

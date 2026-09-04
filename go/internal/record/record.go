@@ -20,11 +20,18 @@ func (v SchemaVer) Parse() (Kind, int, error) {
 	if i <= 0 || i == len(v)-1 {
 		return "", 0, fmt.Errorf("record: malformed SchemaVer %q", string(v))
 	}
-	n, err := strconv.Atoi(string(v[i+1:]))
-	if err != nil || n < 1 {
-		return "", 0, fmt.Errorf("record: malformed SchemaVer %q", string(v))
+	suffix := string(v[i+1:])
+	n, err := strconv.Atoi(suffix)
+	if err != nil || n < 1 || strconv.Itoa(n) != suffix {
+		return "", 0, fmt.Errorf("record: malformed SchemaVer %q (canonical form is <kind>/<n>)", string(v))
 	}
-	return Kind(v[:i]), n, nil
+	kind := Kind(v[:i])
+	for _, c := range kind {
+		if !(c >= 'a' && c <= 'z' || c == '_' || c >= '0' && c <= '9') {
+			return "", 0, fmt.Errorf("record: malformed SchemaVer %q (kind must be [a-z0-9_])", string(v))
+		}
+	}
+	return kind, n, nil
 }
 
 // Kind names a record kind ("outcome", "verdict", ...). Kinds are registered
@@ -60,6 +67,28 @@ type Header struct {
 	At         time.Time `json:"at"`                   // observation time; never an ordering key
 }
 
+// ValidateWire executes the header's declared vocabulary on a decoded value:
+// ID and Supersedes are ULIDs, Schema is canonical, Subject is present. It
+// does not consult the registry (that is Validate's job) — this is the
+// shape check every registered type's ValidateWire delegates to.
+func (h *Header) ValidateWire() error {
+	if err := ValidateID(h.ID); err != nil {
+		return fmt.Errorf("header.id: %w", err)
+	}
+	if _, _, err := h.Schema.Parse(); err != nil {
+		return fmt.Errorf("header.schema: %w", err)
+	}
+	if h.Supersedes != "" {
+		if err := ValidateID(h.Supersedes); err != nil {
+			return fmt.Errorf("header.supersedes: %w", err)
+		}
+	}
+	if h.Subject.Kind == "" || h.Subject.ID == "" {
+		return ErrSubject
+	}
+	return nil
+}
+
 // Record is implemented by every durable record type. Envelope() is derived
 // from the registry, not chosen by the record, so a type cannot lie about
 // its population.
@@ -71,6 +100,8 @@ type Record interface {
 var (
 	ErrUnregisteredKind = errors.New("record: unregistered kind")
 	ErrSchemaMismatch   = errors.New("record: header schema does not match registered kind")
+	ErrImpostor         = errors.New("record: value's Kind() disagrees with its registered type")
+	ErrSubject          = errors.New("record: subject must name a kind and an id")
 )
 
 // Validate checks a header against the registry: the kind is registered, the
@@ -83,10 +114,16 @@ func Validate(r Record, stored bool) error {
 	if h == nil {
 		return errors.New("record: nil header")
 	}
-	spec, ok := Lookup(r.Kind())
+	// The kind is derived from the CONCRETE registered type, never from the
+	// value's own Kind() — a type cannot lie about its population.
+	kind, ok := KindOf(r)
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrUnregisteredKind, r.Kind())
+		return fmt.Errorf("%w: type %T", ErrUnregisteredKind, r)
 	}
+	if kind != r.Kind() {
+		return fmt.Errorf("%w: type %T is registered as %q but claims %q", ErrImpostor, r, kind, r.Kind())
+	}
+	spec, _ := Lookup(kind)
 	k, n, err := h.Schema.Parse()
 	if err != nil {
 		return err
@@ -101,6 +138,9 @@ func Validate(r Record, stored bool) error {
 		if err := ValidateID(h.Supersedes); err != nil {
 			return fmt.Errorf("record: Supersedes: %w", err)
 		}
+	}
+	if h.Subject.Kind == "" || h.Subject.ID == "" {
+		return ErrSubject
 	}
 	if stored && h.Seq == 0 {
 		return errors.New("record: stored record has no Seq")
