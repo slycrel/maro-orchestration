@@ -4233,3 +4233,36 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   harness's reason to exist is living in probability and fuzzy judgement —
   graded, recoverable verdicts by construction. Recorded D11–D13 in
   `planning/successor-plan.md` (successor). READING_QUEUE row moved to Done.
+
+- **2026-09-04 (D14–D17 — answers to the drift review's pushback — Jeremy):**
+  **D14 (amends D7):** *"I'm fine if we want to implement these instead of do
+  hooks; your recommendation was to wait, that was my compromise... I'm fine
+  proceeding with the full system rather than leaving that hanging."* → v1 =
+  backbone + memory + FULL self-improvement with the loop closed and
+  measured. **D15 budget posture:** *"until we 'know what we're doing /
+  confident' all the things are on the table; tokens, models, 'spend' is
+  limited by what I'm throwing at this; currently it's $200/mo anthropic,
+  $100/mo openAI, and whatever's left of our fireworks.ai grok tokens. We
+  want to figure this out, then make it optimal... we're still fighting
+  that a bit with chopped input lengths and aborted runs due to 'cost'."* →
+  no cost-driven chopping or aborts in the successor during figure-it-out;
+  meter and report against targets. **D16 thought process vs thoughts:**
+  *"maro's goals are not math, and are never going to be 'correct'. it's
+  processes and patterns can be... we don't want to mix our processing
+  edges (which can be deterministic) with our _output_. Maro is the thought
+  process, the data that flows through it the thoughts; connected, related,
+  and inevitably intertwined, but discrete and meaningfully separate."* →
+  process artifacts are contract-tested hard; thought payloads are declared
+  UNCONSTRAINED on purpose; verdicts are process facts about thoughts (exact
+  in shape, graded in value). The prototype's caps fragility = process
+  constraints leaking onto thoughts. **D17 bitter lesson inside the
+  process:** *"the bitter lesson is within our process, not part of it...
+  where a 1-shot can get better and possibly even replace our learned
+  subsystems; that is itself a learning that should be allowed and
+  organically improved, rather than controlled up front... That's sort of
+  the star skill in action."* → no up-front ages-well/at-risk sort in the
+  engine; a standing champion–challenger against the 1-shot, redundancy
+  recorded as a learning, standing decays organically. D12 stands; worker
+  isolation revisited later. Work-side contract-testing practice distilled
+  (own words, no copies) into `planning/contract-testing-input.md` on
+  `successor`. Recorded D14–D17 in `planning/successor-plan.md`.
